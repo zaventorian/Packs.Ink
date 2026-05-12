@@ -1,0 +1,61 @@
+name: ETL
+
+on:
+  schedule:
+    # Daily prices: 21:00 UTC (1h after TCGCSV's ~20:00 UTC refresh)
+    - cron: "0 21 * * *"
+    # Weekly metadata refresh from Lorcast: Sundays 22:00 UTC
+    - cron: "0 22 * * 0"
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Which ETL to run"
+        required: true
+        default: "prices"
+        type: choice
+        options:
+          - prices
+          - metadata
+          - both
+
+jobs:
+  prices:
+    name: TCGCSV daily prices
+    runs-on: ubuntu-latest
+    # Run on the daily 21:00 cron, OR manual with job in {prices, both}
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      - name: Run TCGCSV daily ETL
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/etl_tcgcsv_daily.py
+
+  metadata:
+    name: Lorcast metadata refresh
+    runs-on: ubuntu-latest
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '0 22 * * 0') ||
+      (github.event_name == 'workflow_dispatch' && (inputs.job == 'metadata' || inputs.job == 'both'))
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      - name: Run Lorcast loader
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/load_lorcast.py

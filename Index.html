@@ -1,0 +1,792 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lorcana Expected Value Calculator — Ink & Lore</title>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f4f1eb;
+  --bg-surface: rgba(0,0,0,0.03);
+  --bg-surface-hover: rgba(0,0,0,0.05);
+  --bg-card: #fff;
+  --border: rgba(0,0,0,0.08);
+  --border-accent: rgba(160,130,60,0.2);
+  --text: #1a1a1a;
+  --text-muted: rgba(0,0,0,0.35);
+  --text-dim: rgba(0,0,0,0.55);
+  --accent: #8a6d1b;
+  --accent-glow: rgba(138,109,27,0.08);
+  --green: #166534;
+  --red: #991b1b;
+  --stat-bg: rgba(0,0,0,0.03);
+  --table-header: rgba(0,0,0,0.02);
+  --table-row-hover: rgba(0,0,0,0.02);
+  --btn-bg: transparent;
+  --btn-border: rgba(0,0,0,0.12);
+  --btn-text: rgba(0,0,0,0.55);
+  --btn-active-bg: rgba(138,109,27,0.1);
+  --btn-active-text: #8a6d1b;
+  --btn-active-border: rgba(138,109,27,0.3);
+  --mode: light;
+  --tooltip-bg: #fff;
+  --tooltip-border: rgba(0,0,0,0.12);
+  --tooltip-shadow: 0 4px 16px rgba(0,0,0,0.12);
+  --heatmap-text-hi: #412402;
+  --heatmap-text-lo: rgba(0,0,0,0.3);
+  --heatmap-color: rgba(138,109,27,VAL);
+}
+html[data-theme="dark"] {
+  --bg: #0d0f14;
+  --bg-surface: rgba(255,255,255,0.04);
+  --bg-surface-hover: rgba(255,255,255,0.07);
+  --bg-card: rgba(255,255,255,0.06);
+  --border: rgba(255,255,255,0.08);
+  --border-accent: rgba(200,170,100,0.25);
+  --text: #e8e4dc;
+  --text-muted: rgba(255,255,255,0.35);
+  --text-dim: rgba(255,255,255,0.5);
+  --accent: #c8a846;
+  --accent-glow: rgba(200,168,70,0.15);
+  --green: #5cb87a;
+  --red: #d45c5c;
+  --stat-bg: rgba(255,255,255,0.05);
+  --table-header: rgba(255,255,255,0.03);
+  --table-row-hover: rgba(255,255,255,0.03);
+  --btn-bg: transparent;
+  --btn-border: rgba(255,255,255,0.12);
+  --btn-text: rgba(255,255,255,0.6);
+  --btn-active-bg: rgba(200,168,70,0.12);
+  --btn-active-text: #c8a846;
+  --btn-active-border: rgba(200,168,70,0.3);
+  --mode: dark;
+  --tooltip-bg: #1a1c22;
+  --tooltip-border: rgba(255,255,255,0.1);
+  --tooltip-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  --heatmap-text-hi: #f0e0a0;
+  --heatmap-text-lo: rgba(255,255,255,0.25);
+  --heatmap-color: rgba(200,168,70,VAL);
+}
+*,*::before,*::after{box-sizing:border-box;}
+body{margin:0;font-family:'Nunito Sans',sans-serif;font-size:14px;color:var(--text);background:var(--bg);padding:1.5rem;max-width:1300px;margin:0 auto;min-height:100vh;position:relative;}
+body::before{content:'';position:fixed;inset:0;z-index:-2;background:var(--bg);}
+body::after{content:'';position:fixed;inset:0;z-index:-1;opacity:0.5;background:
+  radial-gradient(ellipse 600px 600px at 10% 20%, rgba(200,168,70,0.04) 0%, transparent 70%),
+  radial-gradient(ellipse 500px 500px at 85% 70%, rgba(100,140,220,0.04) 0%, transparent 70%),
+  radial-gradient(ellipse 400px 400px at 50% 50%, rgba(160,80,180,0.03) 0%, transparent 70%);pointer-events:none;}
+.ink-bg{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden;}
+h1,h2,h3,.title-font{font-family:'Cinzel',serif;}
+table{border-collapse:collapse;width:100%;}
+th,td{padding:8px 12px;border-bottom:1px solid var(--border);font-size:13px;}
+th{font-weight:500;color:var(--text-muted);font-size:11px;text-transform:uppercase;letter-spacing:0.5px;background:var(--table-header);text-align:right;}
+th:first-child,td:first-child{text-align:left;}
+td{text-align:right;}
+tr:hover{background:var(--table-row-hover);}
+button{cursor:pointer;border:1px solid var(--btn-border);background:var(--btn-bg);border-radius:6px;padding:6px 14px;font-size:12px;color:var(--btn-text);font-family:'Nunito Sans',sans-serif;transition:all 0.15s ease;}
+button:hover{background:var(--bg-surface-hover);}
+button.active{background:var(--btn-active-bg);color:var(--btn-active-text);border-color:var(--btn-active-border);}
+button:disabled{opacity:0.3;cursor:not-allowed;}
+select{border:1px solid var(--btn-border);border-radius:6px;padding:6px 10px;font-size:13px;background:var(--bg);color:var(--text);font-family:'Nunito Sans',sans-serif;}
+select option{background:var(--bg);color:var(--text);}
+input[type="checkbox"]{accent-color:var(--accent);}
+.tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:1.5rem;align-items:center;}
+.stat{background:var(--stat-bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;}
+.stat .lbl{font-size:11px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.3px;}
+.stat .val{font-size:16px;font-weight:600;}
+.card{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;padding:9px;display:flex;flex-direction:column;gap:4px;transition:border-color 0.15s;}
+.card:hover{border-color:var(--border-accent);}
+.badge{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;display:inline-block;white-space:nowrap;letter-spacing:0.3px;}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:1rem;}
+.scr{overflow-x:auto;}
+.green{color:var(--green);} .red{color:var(--red);} .muted{color:var(--text-muted);}
+.card-img{width:100%;border-radius:6px;aspect-ratio:5/7;object-fit:cover;background:var(--bg-surface);}
+.card-img-placeholder{width:100%;border-radius:6px;aspect-ratio:5/7;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:10px;}
+.progress-bar{width:100%;height:4px;background:var(--bg-surface);border-radius:2px;overflow:hidden;margin-top:8px;}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--accent),#d4b85a);transition:width 0.3s ease;border-radius:2px;}
+@keyframes glimmer{0%{background-position:-200% center;}100%{background-position:200% center;}}
+.glimmer-text{background:linear-gradient(90deg,var(--accent) 0%,#f0d878 25%,var(--accent) 50%,#f0d878 75%,var(--accent) 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:glimmer 3s linear infinite;}
+@keyframes float{0%,100%{transform:translateY(0) rotate(0deg);opacity:0;}10%{opacity:1;}90%{opacity:1;}100%{transform:translateY(-100vh) rotate(360deg);opacity:0;}}
+.glimmer-particle{position:fixed;width:3px;height:3px;background:var(--accent);border-radius:50%;pointer-events:none;z-index:-1;box-shadow:0 0 6px var(--accent),0 0 12px rgba(200,168,70,0.3);}
+.footer{margin-top:3rem;padding:1.5rem 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:flex-end;gap:16px;}
+.footer-logo{height:36px;opacity:0.85;border-radius:4px;}
+.footer-text{text-align:right;line-height:1.6;}
+.footer-brand{font-family:'Cinzel',serif;font-size:13px;color:var(--accent);font-weight:600;}
+.footer-credit{font-size:11px;color:var(--text-muted);}
+.footer-social a{font-size:11px;color:var(--accent);text-decoration:none;opacity:0.8;}
+.footer-social a:hover{opacity:1;text-decoration:underline;}
+.theme-toggle{cursor:pointer;background:none;border:1px solid var(--btn-border);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-dim);padding:0;transition:all 0.15s;}
+.theme-toggle:hover{border-color:var(--accent);color:var(--accent);}
+/* Tooltip */
+.tip-wrap{position:relative;display:inline-flex;align-items:center;cursor:help;}
+.tip-icon{display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;border:1px solid var(--btn-border);font-size:10px;font-weight:600;color:var(--text-muted);margin-left:4px;flex-shrink:0;}
+.tip-wrap:hover .tip-icon{border-color:var(--accent);color:var(--accent);}
+.tip-box{display:none;position:absolute;top:calc(100% + 8px);left:50%;transform:translateX(-50%);width:240px;padding:10px 12px;background:var(--tooltip-bg);border:1px solid var(--tooltip-border);border-radius:8px;box-shadow:var(--tooltip-shadow);font-size:12px;line-height:1.5;color:var(--text);z-index:100;pointer-events:none;text-align:left;font-weight:400;}
+.tip-wrap:hover .tip-box{display:block;}
+@media(max-width:600px){.tip-box{left:auto;right:0;transform:none;width:200px;}}
+/* Best card highlight */
+.best-card-display{background:var(--bg-card);border:1px solid var(--border-accent);border-radius:10px;padding:12px;text-align:center;max-width:180px;}
+.best-card-display img{width:100%;border-radius:6px;margin-bottom:6px;}
+/* FAQ */
+.faq-section{max-width:720px;}
+.faq-section h2{font-size:16px;font-weight:600;color:var(--accent);margin:1.5rem 0 0.5rem;}
+.faq-section p,.faq-section li{font-size:13px;line-height:1.7;color:var(--text-dim);}
+.faq-section strong{color:var(--text);font-weight:600;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
+<script>
+const LOGO_B64 = "data:image/jpeg;base64,/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCADhAZADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD5/ooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAoqza6de3qO1razThPveUhbb9cVJY6bPeatb6fsdJZpVjwVwRk9cUuZDsyrJFJCVEiFSyhhkdQRkGmV638cPCsehXWhXVvCE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VQIPyAApqLfxIG0tj2DW/jnba9ZiC68NbJI23wXEV2VkgfsynHB/nVyy/aJuLezihutFF3Mgw05l2F/cgDGa8Nop+yiHOz3sftIY/wCZbH/gT/8AWrP1r472fiDTZdOv/C6vbydf9JyR7jj3NeKUUeziHOye8Ns15KbNZVtixMaykFgPQkdagoorQgKKKKAClBKkEEgjkEUlFAHc+Gvir4h8OxpbmUXlop/1U3OB7HtXQ3/x31aaEpZabb2zkY3s2/H6V5LRWEsNSk7uJoqs0rXNTWPEWra9cNNqd9NcMezN8o+g6Vl0UVsoqKsiG29WFFFFMQUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAdr8OfEmn+FdQ1LU7piLxLJ1shsyDL1GfToK5K9vrrUryW7vJ5J7iVizySNksTVeipUUm2O+lgrZ0HxVrfhq6WfSdRnt2HVVb5W+o6Gsaim0nuCbWx7v4O+Lekah4sj1bxQ0sF4LUWsThAYYjn5mGORn6cZNe9Wd7a6hapc2dxFcQOMrJEwZT+Ir4Ora0HxbrvhmcS6RqU9se6K2Vb6qeDWfs7bFc99z7eor5u0v8AaK1u3iVNS0q0vCOsiMYyfwHFakv7STeWfJ8NKH7b7o4/QVNn2HdHvuT6mvPviJ8VNK8FWz2sDpeawwwlujcRf7Tnt9OteI+Ivjf4u1yJ4IJ4tMt34K2ikOR/vnn8sV5xJI8sjSSOzuxyzMckn3NUoN7i5ktia/vrjUr+e9u5WluJ3MkjsclietV6KK1ICiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigD//2Q==";
+
+// ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
+const SUPABASE_URL = "https://umwqowkiatjjltologrd.supabase.co";
+const SUPABASE_KEY = "sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0";
+const SB_HEADERS = {apikey:SUPABASE_KEY,Authorization:"Bearer "+SUPABASE_KEY};
+
+// PostgREST paginates at ~1000 rows by default. fetchAll loops with Range
+// headers until we've drained the table.
+async function sbFetchAll(path, params){
+  const out=[]; const pageSize=1000; let start=0;
+  while(true){
+    const url = SUPABASE_URL+"/rest/v1/"+path+"?"+(new URLSearchParams(params)).toString();
+    const r = await fetch(url,{headers:{...SB_HEADERS,"Range-Unit":"items","Range":start+"-"+(start+pageSize-1)}});
+    if(!r.ok && r.status!==206) throw new Error("Supabase "+r.status+": "+await r.text());
+    const chunk = await r.json();
+    out.push(...chunk);
+    if(chunk.length<pageSize) return out;
+    start += pageSize;
+  }
+}
+
+const {useState,useEffect,useMemo,useCallback,useRef} = React;
+const html = htm.bind(React.createElement);
+
+const SET_ORDER = [
+  "The First Chapter","Rise of the Floodborn","Into the Inklands",
+  "Ursula's Return","Shimmering Skies","Azurite Sea","Archazia's Island",
+  "Reign of Jafar","Fabled","Whispers in the Well","Winterspell",
+  "Wilds Unknown","Attack of the Vines"
+];
+// Excluded set names — uses substring matching for robustness
+const EXCLUDED_EXACT = new Set([
+  "D23 Promos","Disney Lorcana Promo Cards","Disney100 Promos","Disney 100",
+  "Illumineer's Quest: Deep Trouble","Illumineer's Quest: Palace Heist",
+  "D23 Collection","Promo Set 2","Promo set 2"
+]);
+const EXCLUDED_SUBSTR = ["epcot","promo set","promo cards","promos","d23","disney 100","illumineer"];
+const isExcluded = name => {
+  if(EXCLUDED_EXACT.has(name)) return true;
+  const lower = name.toLowerCase();
+  // Also exclude anything not in SET_ORDER that contains promo-like keywords
+  if(!SET_ORDER.includes(name)){
+    for(const sub of EXCLUDED_SUBSTR) if(lower.includes(sub)) return true;
+  }
+  return false;
+};
+
+const PULL = {
+  "Common":144,"Uncommon":72,"Rare":31.75,"Super Rare":12,"Legendary":4,
+  "Common Foil":13,"Uncommon Foil":6,"Rare Foil":3,"Super Rare Foil":1,
+  "Legendary Foil":0.5,"Enchanted":0.25,"Epic":1.5,"Iconic":0.0141
+};
+const PULL_V2 = {
+  "Common":144,"Uncommon":72,"Rare":29.75,"Super Rare":12,"Legendary":6,
+  "Common Foil":12.259,"Uncommon Foil":5.658,"Rare Foil":3,"Super Rare Foil":1,
+  "Legendary Foil":0.5,"Enchanted":0.333,"Epic":2.5,"Iconic":0.0141
+};
+const NEW_PULL_START = SET_ORDER.indexOf("Wilds Unknown");
+const getPull = set => {const idx=SET_ORDER.indexOf(set); return (idx===-1||idx>=NEW_PULL_START)?PULL_V2:PULL;};
+const RARS = [
+  "Common","Uncommon","Rare","Super Rare","Legendary",
+  "Common Foil","Uncommon Foil","Rare Foil","Super Rare Foil","Legendary Foil",
+  "Enchanted","Epic","Iconic"
+];
+const NO_ENCH = new Set(["Enchanted","Iconic"]);
+const SET_RARS = ["Common","Uncommon","Rare","Super Rare","Legendary"];
+const INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
+const BDGE_LIGHT = {
+  "Common":{bg:"#E8E7E0",fg:"#2C2C2A"},"Uncommon":{bg:"#C0DD97",fg:"#173404"},
+  "Rare":{bg:"#B5D4F4",fg:"#042C53"},"Super Rare":{bg:"#CECBF6",fg:"#26215C"},
+  "Legendary":{bg:"#FAC775",fg:"#412402"},"Enchanted":{bg:"#F4C0D1",fg:"#4B1528"},
+  "Epic":{bg:"#F5C4B3",fg:"#4A1B0C"},"Iconic":{bg:"#F7C1C1",fg:"#501313"}
+};
+const BDGE_DARK = {
+  "Common":{bg:"rgba(180,175,160,0.15)",fg:"#b0ab9c"},
+  "Uncommon":{bg:"rgba(120,180,80,0.18)",fg:"#8ec860"},
+  "Rare":{bg:"rgba(100,160,220,0.18)",fg:"#6aadde"},
+  "Super Rare":{bg:"rgba(140,120,210,0.2)",fg:"#a090e0"},
+  "Legendary":{bg:"rgba(210,170,60,0.2)",fg:"#d4aa3c"},
+  "Enchanted":{bg:"rgba(220,120,170,0.2)",fg:"#e080b0"},
+  "Epic":{bg:"rgba(220,150,100,0.2)",fg:"#dc9664"},
+  "Iconic":{bg:"rgba(220,100,100,0.2)",fg:"#dc7070"}
+};
+const getBadgeStyle = (r,t) => (t==="dark"?BDGE_DARK:BDGE_LIGHT)[r] || (t==="dark"?BDGE_DARK:BDGE_LIGHT)["Common"];
+
+const normalizeRarity = r => {
+  if(!r) return r;
+  const m={"super_rare":"Super Rare","Super_rare":"Super Rare","common":"Common","Common":"Common","uncommon":"Uncommon","Uncommon":"Uncommon","rare":"Rare","Rare":"Rare","legendary":"Legendary","Legendary":"Legendary","enchanted":"Enchanted","Enchanted":"Enchanted","epic":"Epic","Epic":"Epic","iconic":"Iconic","Iconic":"Iconic","promo":"Promo","Promo":"Promo"};
+  return m[r]||r;
+};
+
+const getInk = n => { if(!n||isNaN(n)) return null; const i=Math.floor((n-1)/34); return i>=0&&i<6?INKS[i]:null; };
+const getRarKey = (r,p) => {
+  if(!r) return null; r=r.trim(); p=(p||"").trim();
+  if(["Enchanted","Epic","Iconic"].includes(r)) return r;
+  if(p==="Cold Foil"||p==="Foil") return r+" Foil";
+  if(p==="Normal") return r;
+  return null;
+};
+const parseP = s => { if(s==null||s===undefined) return null; if(typeof s==="number") return s; const n=parseFloat(String(s).replace(/[^0-9.]/g,"")); return isNaN(n)?null:n; };
+const fmt = n => n==null?"\u2014":"$"+n.toFixed(2);
+const pick = a => a?.length?a[Math.floor(Math.random()*a.length)]:null;
+const wPick = opts => {
+  const av=opts.filter(o=>o.p?.length); if(!av.length) return null;
+  let r=Math.random()*av.reduce((s,o)=>s+o.w,0);
+  for(const o of av){r-=o.w; if(r<=0) return o.p;} return av[av.length-1].p;
+};
+
+// Map a TCGCSV printing label to the site's expected printing string.
+// For Enchanted/Epic/Iconic the site only expects "Cold Foil" rows.
+const mapPrinting = (rar, tcgPrinting) => {
+  if(["Enchanted","Epic","Iconic"].includes(rar)) return "Cold Foil";
+  if(tcgPrinting==="Normal") return "Normal";
+  return "Cold Foil"; // covers both "Cold Foil" and "Holofoil"
+};
+
+// Build site-shape rows from Supabase card_prices_latest view + set name lookup.
+// Output row shape matches the legacy Lorcast transform so downstream code
+// doesn't need to change.
+const transformSupabaseData = (priceRows, setNameById) => {
+  const rows = [];
+  for(const r of priceRows) {
+    const rar = normalizeRarity(r.rarity);
+    if(rar==="Promo") continue;
+    const setName = setNameById[r.set_id] || "";
+    if(!setName) continue;
+    const name = r.version ? r.name+" - "+r.version : r.name;
+    // Primary price = Low (live ask). Fall back to Market if Low is null.
+    const price = parseP(r.low_price) ?? parseP(r.market_price);
+    if(price==null) continue;
+    rows.push({
+      "Set":setName,
+      "Product Name":name,
+      "Rarity":rar,
+      "Printing":mapPrinting(rar, r.printing),
+      "Market Price":price,
+      "Low Price":parseP(r.low_price),
+      "TCGPlayer Market":parseP(r.market_price),
+      "Number":r.collector_number||"",
+      "img_small":r.image_small,
+      "img_normal":r.image_normal,
+      "img_large":r.image_large,
+      "ink":r.ink||null,
+    });
+  }
+  return rows;
+};
+
+const buildPools = (data, set) => {
+  const p={byInk:{Amber:[],Amethyst:[],Emerald:[],Ruby:[],Sapphire:[],Steel:[]},unc:[],rar:[],sr:[],leg:[],cF:[],uF:[],rF:[],srF:[],lF:[],enc:[],epi:[],ico:[]};
+  for(const row of data){
+    if((row["Set"]||"").trim()!==set) continue;
+    const name=(row["Product Name"]||"").trim(),rar=(row["Rarity"]||"").trim(),pr=(row["Printing"]||"").trim(),price=parseP(row["Market Price"]);
+    const num=parseInt((row["Number"]||"").split("/")[0]),ink=row["ink"]||null;
+    const c={name,rarity:rar,printing:pr,price,num,img_small:row["img_small"],img_normal:row["img_normal"],img_large:row["img_large"],ink:ink};
+    if(rar==="Enchanted"){p.enc.push(c);continue;} if(rar==="Epic"){p.epi.push(c);continue;} if(rar==="Iconic"){p.ico.push(c);continue;}
+    if(pr==="Normal"){
+      const ci=ink||getInk(num);
+      if(rar==="Common"&&ci) p.byInk[ci].push(c); else if(rar==="Uncommon") p.unc.push(c); else if(rar==="Rare") p.rar.push(c); else if(rar==="Super Rare") p.sr.push(c); else if(rar==="Legendary") p.leg.push(c);
+    } else if(pr==="Cold Foil"||pr==="Foil"){
+      if(rar==="Common") p.cF.push(c); else if(rar==="Uncommon") p.uF.push(c); else if(rar==="Rare") p.rF.push(c); else if(rar==="Super Rare") p.srF.push(c); else if(rar==="Legendary") p.lF.push(c);
+    }
+  }
+  return p;
+};
+
+const simPack = (pools,pull) => {
+  const cards=[];
+  for(const ink of INKS){const c=pick(pools.byInk[ink]);if(c) cards.push(c);}
+  for(let i=0;i<3;i++){const c=pick(pools.unc);if(c) cards.push(c);}
+  for(let i=0;i<2;i++){const pool=wPick([{p:pools.rar,w:pull["Rare"]},{p:pools.sr,w:pull["Super Rare"]},{p:pools.leg,w:pull["Legendary"]}]);const c=pick(pool);if(c) cards.push(c);}
+  const fp=wPick([{p:pools.cF,w:pull["Common Foil"]},{p:pools.uF,w:pull["Uncommon Foil"]},{p:pools.rF,w:pull["Rare Foil"]},{p:pools.srF,w:pull["Super Rare Foil"]},{p:pools.lF,w:pull["Legendary Foil"]},{p:pools.enc,w:pull["Enchanted"]},{p:pools.epi,w:pull["Epic"]},{p:pools.ico,w:pull["Iconic"]}]);
+  const fc=pick(fp);if(fc) cards.push(fc);
+  return cards;
+};
+
+const processData = raw => {
+  const grp={},sSet=new Set();
+  for(const row of raw){
+    const set=(row["Set"]||"").trim(),rar=(row["Rarity"]||"").trim(),pr=(row["Printing"]||"").trim(),price=parseP(row["Market Price"]);
+    if(!set||!rar||price==null) continue;
+    const key=getRarKey(rar,pr);if(!key) continue;
+    sSet.add(set);
+    if(!grp[set]) grp[set]={};if(!grp[set][key]) grp[set][key]=[];grp[set][key].push(price);
+  }
+  const avgs={};
+  for(const [s,rm] of Object.entries(grp)){avgs[s]={};for(const [r,prices] of Object.entries(rm)){avgs[s][r]={avg:prices.reduce((a,b)=>a+b,0)/prices.length,avgNC:prices.map(p=>p<1?0:p).reduce((a,b)=>a+b,0)/prices.length};}}
+  const filt=Array.from(sSet).filter(s=>!isExcluded(s));
+  const sets=[...SET_ORDER.filter(s=>filt.includes(s)),...filt.filter(s=>!SET_ORDER.includes(s)).sort()];
+  return {sets,avgs};
+};
+
+const calcEV = (avgs,set,nc,ne) => {
+  const d=avgs[set]||{},pull=getPull(set);let ev=0;
+  for(const r of RARS){const rate=pull[r],rd=d[r];if(!rd) continue;if(ne&&NO_ENCH.has(r)) continue;ev+=(nc?rd.avgNC:rd.avg)*rate;}
+  return ev;
+};
+
+// ── Components ──────────────────────────────────────────────────────────
+const Stat=({label,value,accent})=>html`<div class="stat"><div class="lbl">${label}</div><div class="val" style=${{color:accent||"inherit"}}>${value}</div></div>`;
+const Badge=({rarity,foil,theme})=>{const s=getBadgeStyle(rarity,theme);return html`<span class="badge" style=${{background:s.bg,color:s.fg}}>${foil?"\u2726 ":""}${rarity}${foil?" Foil":""}</span>`;};
+const SetSel=({val,onChange,placeholder,sets})=>html`<select value=${val} onChange=${e=>onChange(e.target.value)} style=${{maxWidth:280,flex:1}}><option value="">${placeholder}</option>${sets.map(s=>html`<option key=${s} value=${s}>${s}</option>`)}</select>`;
+const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span class="tip-icon">?</span><span class="tip-box">${text}</span></span>`;
+
+const GlimmerParticles = () => {
+  const p=useMemo(()=>{const a=[];for(let i=0;i<12;i++) a.push({left:Math.random()*100+"%",dur:8+Math.random()*12+"s",del:Math.random()*10+"s",sz:2+Math.random()*3+"px"});return a;},[]);
+  return html`<div>${p.map((x,i)=>html`<div key=${i} class="glimmer-particle" style=${{left:x.left,bottom:"-10px",width:x.sz,height:x.sz,animation:"float "+x.dur+" "+x.del+" infinite ease-in"}}/>`)}</div>`;
+};
+
+const Footer = ()=>html`<div class="footer">
+  <div class="footer-text">
+    <div class="footer-credit">a Zaven Torian project</div>
+    <div class="footer-social"><a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">follow @HighScoreZAP</a></div>
+  </div>
+  <img class="footer-logo" src=${LOGO_B64} alt="Ink & Lore"/>
+</div>`;
+
+// ── Views ──────────────────────────────────────────────────────────────
+const EVView=({sets,avgs,nc,ne})=>html`<div class="scr">
+  <table><thead><tr><th>Set</th><th>Expected Value / Box</th><th>Expected Value / Pack</th></tr></thead>
+  <tbody>${sets.map(s=>{const ev=calcEV(avgs,s,nc,ne);return html`<tr key=${s}><td style=${{fontWeight:500}}>${s}</td><td>${fmt(ev)}</td><td>${fmt(ev/24)}</td></tr>`;})}</tbody></table>
+  <p class="muted" style=${{fontSize:11,marginTop:8}}>Prices via Lorcast (updated daily from TCGPlayer)</p>
+</div>`;
+
+const AvgView=({sets,avgs,nc})=>html`<div class="scr">
+  <table><thead><tr><th style=${{minWidth:100}}>Rarity</th><th style=${{minWidth:60}}>Pull rate</th>${sets.map(s=>html`<th key=${s} style=${{minWidth:90,whiteSpace:"nowrap"}}>${s}</th>`)}</tr></thead>
+  <tbody>${RARS.map(r=>html`<tr key=${r}><td style=${{fontWeight:500}}>${r}</td><td class="muted">${PULL[r]}</td>
+    ${sets.map(s=>{const d=(avgs[s]||{})[r],v=d?(nc?d.avgNC:d.avg):null;return html`<td key=${s} style=${{color:v!=null&&v<0.5?"var(--text-muted)":"inherit"}}>${fmt(v)}</td>`;})}</tr>`)}</tbody></table>
+  <p class="muted" style=${{fontSize:11,marginTop:8}}>Pull rates shown are for Sets 1–11. Starting with Wilds Unknown (Set 12), rates differ: 6 Legendaries, ~30 Rares, 0.333 Enchanteds, 2.5 Epics per box.</p>
+</div>`;
+
+const CardGrid=({cards,showImages,theme})=>html`<div style=${{display:"grid",gridTemplateColumns:showImages?"repeat(auto-fill,minmax(140px,1fr))":"repeat(auto-fill,minmax(115px,1fr))",gap:6}}>
+  ${cards.map((c,i)=>{const foil=c.printing==="Cold Foil"||c.printing==="Foil",ink=c.ink||getInk(c.num),p=c.price||0;
+    const imgSrc=c.img_small||c.img_normal||null;
+    return html`<div class="card" key=${i}>
+      ${showImages&&imgSrc?html`<img class="card-img" src=${imgSrc} alt=${c.name} loading="lazy"/>`:showImages?html`<div class="card-img-placeholder">${c.name?.substring(0,12)}</div>`:null}
+      <${Badge} rarity=${c.rarity} foil=${foil} theme=${theme}/><div style=${{fontSize:11,fontWeight:500,lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",minHeight:26}}>${c.name}</div>
+      ${!showImages&&ink&&html`<div class="muted" style=${{fontSize:10}}>${ink}</div>`}
+      <div style=${{fontSize:12,fontWeight:600,marginTop:"auto",color:p>=5?"var(--green)":p>=1?"inherit":"var(--text-muted)"}}>${fmt(c.price)}</div>
+    </div>`;
+  })}</div>`;
+
+function PackSim({rawData,sets,theme}){
+  const [s,setS]=useState("");const [pack,setPack]=useState(null);const [hist,setHist]=useState([]);const [showImg,setShowImg]=useState(true);
+  const pools=useMemo(()=>s?buildPools(rawData,s):null,[rawData,s]);
+  const pull=useMemo(()=>s?getPull(s):PULL,[s]);
+  const open=()=>{if(!pools) return;const c=simPack(pools,pull);setPack(c);setHist(h=>[...h,c.reduce((t,x)=>t+(x.price||0),0)]);};
+  const total=pack?pack.reduce((t,c)=>t+(c.price||0),0):0;
+  return html`<div>
+    <div class="row">
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setPack(null);setHist([]);}} placeholder="Select a set..." sets=${sets}/>
+      <button onClick=${open} disabled=${!s} class=${s?"active":""}>${hist.length===0?"Open pack":"Open another"}</button>
+      ${hist.length>0&&html`<button onClick=${()=>{setPack(null);setHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
+      <label style=${{display:"flex",alignItems:"center",gap:5,fontSize:12,cursor:"pointer",color:"var(--text-dim)",marginLeft:6}}><input type="checkbox" checked=${showImg} onChange=${e=>setShowImg(e.target.checked)}/> Show images</label>
+    </div>
+    ${hist.length>0&&html`<div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
+      <${Stat} label="Packs" value=${hist.length}/><${Stat} label="Avg" value=${fmt(hist.reduce((a,b)=>a+b,0)/hist.length)}/><${Stat} label="Best pack" value=${fmt(Math.max(...hist))} accent="var(--green)"/><${Stat} label=${"Hits \u2265$5"} value=${(hist.filter(p=>p>=5).length/hist.length*100).toFixed(0)+"%"}/>
+    </div>`}
+    ${pack&&html`<div>
+      <div class="muted" style=${{fontSize:11,marginBottom:8}}>Pack #${hist.length} \u2014 ${s}</div>
+      <${CardGrid} cards=${pack} showImages=${showImg} theme=${theme}/>
+      <div style=${{display:"flex",justifyContent:"space-between",padding:"8px 14px",background:"var(--stat-bg)",border:"1px solid var(--border)",borderRadius:8,marginTop:10}}>
+        <span style=${{color:"var(--text-dim)"}}>Pack total</span>
+        <span style=${{fontWeight:600,fontSize:15,color:total>=5?"var(--green)":"inherit"}}>${fmt(total)}</span>
+      </div>
+    </div>`}
+  </div>`;
+}
+
+function Histogram({data}){
+  const ents=Object.entries(data.buckets).sort(([a],[b])=>+a-+b);const maxC=Math.max(...ents.map(([,c])=>c));
+  const bw=Math.max(4,Math.min(22,Math.floor(560/ents.length))),H=100,skip=Math.max(1,Math.ceil(ents.length/10));
+  return html`<div><div class="muted" style=${{fontSize:11,marginBottom:6}}>Distribution across ${data.n.toLocaleString()} simulated boxes</div>
+    <div class="scr"><svg width=${ents.length*(bw+2)+10} height=${H+28} style=${{display:"block"}}>
+      ${ents.map(([b,c],i)=>{const bh=Math.max(2,(c/maxC)*H),x=i*(bw+2),near=Math.abs(+b-data.mean)<15;
+        return html`<g key=${b}><rect x=${x} y=${H-bh} width=${bw} height=${bh} fill=${near?"var(--accent)":"rgba(200,168,70,0.25)"} rx="2"/>
+          ${i%skip===0&&html`<text x=${x+bw/2} y=${H+18} textAnchor="middle" fontSize="9" fill="var(--text-muted)">$${b}</text>`}</g>`;})}
+      <line x1="0" y1=${H} x2=${ents.length*(bw+2)} y2=${H} stroke="var(--border)" strokeWidth="0.5"/></svg></div>
+    <div class="muted" style=${{fontSize:11,marginTop:4}}>Dark = near mean (${fmt(data.mean)}). ${((data.totals.filter(t=>t>=100).length/data.n)*100).toFixed(1)}% of boxes hit $100+.</div></div>`;
+}
+
+function BoxSim({rawData,sets,theme}){
+  const [s,setS]=useState("");const [res,setRes]=useState(null);const [boxHist,setBoxHist]=useState([]);
+  const [n,setN]=useState(1000);const [running,setRunning]=useState(false);const [dist,setDist]=useState(null);
+  const pools=useMemo(()=>s?buildPools(rawData,s):null,[rawData,s]);
+  const bestBox = useMemo(()=>boxHist.length?boxHist.reduce((best,b)=>b.total>best.total?b:best,boxHist[0]):null,[boxHist]);
+  const openBox=()=>{
+    if(!pools) return;
+    const pull=getPull(s);
+    const all=[];for(let i=0;i<24;i++) all.push(...simPack(pools,pull));
+    const total=all.reduce((t,c)=>t+(c.price||0),0);
+    const best=all.reduce((b,c)=>(!b||(c.price||0)>(b.price||0))?c:b,null);
+    const rc={};for(const c of all){const k=c.printing==="Cold Foil"||c.printing==="Foil"?c.rarity+" Foil":c.rarity;rc[k]=(rc[k]||0)+1;}
+    const entry={total,best,rc,num:boxHist.length+1};
+    setRes(entry);setBoxHist(h=>[...h,entry]);setDist(null);
+  };
+  const runSim=()=>{
+    if(!pools) return;setRunning(true);
+    setTimeout(()=>{
+      const pull=getPull(s);
+      const tots=[];for(let b=0;b<n;b++){let t=0;for(let p=0;p<24;p++) for(const c of simPack(pools,pull)) t+=(c.price||0);tots.push(t);}
+      tots.sort((a,b)=>a-b);
+      const mean=tots.reduce((a,b)=>a+b,0)/tots.length,median=tots[Math.floor(tots.length/2)];
+      const bs=10,minB=Math.floor(tots[0]/bs)*bs,maxB=Math.ceil(tots[tots.length-1]/bs)*bs;
+      const bkts={};for(let b=minB;b<=maxB;b+=bs) bkts[b]=0;
+      for(const t of tots){const b=Math.floor(t/bs)*bs;bkts[b]=(bkts[b]||0)+1;}
+      setDist({totals:tots,mean,median,min:tots[0],max:tots[tots.length-1],buckets:bkts,n});setRunning(false);
+    },50);
+  };
+  return html`<div>
+    <div class="row">
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);setDist(null);}} placeholder="Select a set..." sets=${sets}/>
+      <button onClick=${openBox} disabled=${!s} class=${s?"active":""}>${boxHist.length===0?"Open a box":"Open another"}</button>
+      ${boxHist.length>0&&html`<button onClick=${()=>{setRes(null);setBoxHist([]);setDist(null);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
+    </div>
+    ${boxHist.length>0&&html`<div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
+      <${Stat} label="Boxes opened" value=${boxHist.length}/>
+      <${Stat} label="Avg box" value=${fmt(boxHist.reduce((a,b)=>a+b.total,0)/boxHist.length)}/>
+      <${Stat} label="Best box" value=${fmt(bestBox?.total)} accent="var(--green)"/>
+      <${Stat} label="Total spent" value=${fmt(boxHist.length*109.99)}/>
+    </div>`}
+    ${res&&html`<div style=${{marginBottom:"1.5rem"}}>
+      <div class="muted" style=${{fontSize:11,marginBottom:8}}>Box #${res.num} \u2014 ${s}</div>
+      <div style=${{display:"flex",gap:16,flexWrap:"wrap"}}>
+        <div style=${{flex:1,minWidth:200}}>
+          <div style=${{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12}}>
+            <${Stat} label="Box total" value=${fmt(res.total)} accent=${res.total>=100?"var(--green)":null}/>
+            <${Stat} label="Best pull" value=${(res.best?.name||"").substring(0,24)}/>
+            <${Stat} label="Best card $" value=${fmt(res.best?.price)} accent=${res.best?.price>=10?"var(--green)":null}/>
+          </div>
+          <div style=${{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(145px,1fr))",gap:5}}>
+            ${RARS.flatMap(r=>[r,r+" Foil"]).filter(k=>res.rc[k]).map(k=>{
+              const b=k.replace(" Foil",""),st=getBadgeStyle(b,theme),foil=k.includes("Foil");
+              return html`<div class="card" key=${k} style=${{flexDirection:"row",alignItems:"center",padding:"5px 10px"}}>
+                <span class="badge" style=${{background:st.bg,color:st.fg,fontSize:9}}>${foil?"\u2726 ":""}${k}</span>
+                <span style=${{marginLeft:"auto",fontWeight:600}}>${res.rc[k]}</span>
+              </div>`;
+            })}
+          </div>
+        </div>
+        ${res.best&&(res.best.img_small||res.best.img_normal)&&html`<div class="best-card-display">
+          <div style=${{fontSize:10,color:"var(--text-muted)",textTransform:"uppercase",letterSpacing:0.5,marginBottom:6}}>Best Pull</div>
+          <img src=${res.best.img_normal||res.best.img_small} alt=${res.best.name} style=${{width:"100%",borderRadius:6}}/>
+          <div style=${{fontSize:12,fontWeight:600,marginTop:6}}>${res.best.name}</div>
+          <div style=${{fontSize:14,fontWeight:600,color:"var(--green)"}}>${fmt(res.best.price)}</div>
+          <${Badge} rarity=${res.best.rarity} foil=${res.best.printing==="Cold Foil"} theme=${theme}/>
+        </div>`}
+      </div>
+    </div>`}
+    ${boxHist.length>1&&html`<div style=${{marginBottom:"1.5rem"}}>
+      <div style=${{fontWeight:600,fontSize:13,marginBottom:8,fontFamily:"'Cinzel',serif"}}>Box History</div>
+      <div class="scr"><table>
+        <thead><tr><th>Box #</th><th>Total</th><th>Best Pull</th><th>Best Card $</th></tr></thead>
+        <tbody>${boxHist.slice().reverse().map(b=>html`<tr key=${b.num} style=${{background:b===bestBox?"var(--accent-glow)":"inherit"}}>
+          <td style=${{fontWeight:500}}>Box #${b.num}${b===bestBox?" \u2B50":""}</td>
+          <td style=${{color:b.total>=100?"var(--green)":"inherit"}}>${fmt(b.total)}</td>
+          <td style=${{textAlign:"left",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${b.best?.name||"\u2014"}</td>
+          <td style=${{color:b.best?.price>=10?"var(--green)":"inherit"}}>${fmt(b.best?.price)}</td>
+        </tr>`)}</tbody>
+      </table></div>
+    </div>`}
+    ${s&&html`<div style=${{borderTop:"1px solid var(--border)",paddingTop:"1.5rem"}}>
+      <div style=${{fontWeight:600,marginBottom:"0.75rem",fontFamily:"'Cinzel',serif"}}>Monte Carlo Simulation</div>
+      <div class="row">
+        <select value=${n} onChange=${e=>setN(+e.target.value)} style=${{width:160}}>
+          ${[100,500,1000,5000].map(v=>html`<option key=${v} value=${v}>${v.toLocaleString()} boxes</option>`)}
+        </select>
+        <button onClick=${runSim} disabled=${running} class="active">${running?"Running...":"Run simulation"}</button>
+      </div>
+      ${dist&&html`<div>
+        <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
+          <${Stat} label="Mean" value=${fmt(dist.mean)}/><${Stat} label="Median" value=${fmt(dist.median)}/>
+          <${Stat} label="Min" value=${fmt(dist.min)}/><${Stat} label="Max" value=${fmt(dist.max)} accent="var(--green)"/>
+        </div>
+        <${Histogram} data=${dist}/>
+      </div>`}
+    </div>`}
+  </div>`;
+}
+
+function CompareView({sets,avgs}){
+  const [a,setA]=useState("");const [b,setB]=useState("");
+  return html`<div><div class="row"><${SetSel} val=${a} onChange=${setA} placeholder="Set A..." sets=${sets}/><span class="muted">vs</span><${SetSel} val=${b} onChange=${setB} placeholder="Set B..." sets=${sets}/></div>
+    ${a&&b&&html`<div class="scr"><table>
+      <thead><tr><th>Rarity</th><th>Pull rate</th><th style=${{minWidth:90,whiteSpace:"nowrap"}}>${a}</th><th style=${{minWidth:90,whiteSpace:"nowrap"}}>${b}</th><th>Diff (A\u2212B)</th></tr></thead>
+      <tbody>
+        ${RARS.map(r=>{const dA=(avgs[a]||{})[r],dB=(avgs[b]||{})[r],vA=dA?.avg,vB=dB?.avg,diff=vA!=null&&vB!=null?vA-vB:null;
+          return html`<tr key=${r}><td style=${{fontWeight:500,textAlign:"left"}}>${r}</td><td class="muted">${PULL[r]}</td>
+            <td style=${{fontWeight:diff>0?600:400,color:diff>0?"var(--green)":diff<0?"var(--red)":"inherit"}}>${fmt(vA)}</td>
+            <td style=${{fontWeight:diff<0?600:400,color:diff<0?"var(--green)":diff>0?"var(--red)":"inherit"}}>${fmt(vB)}</td>
+            <td style=${{color:diff==null?"var(--text-muted)":diff>0?"var(--green)":"var(--red)"}}>${diff==null?"\u2014":diff>0?"+"+fmt(diff):fmt(diff)}</td></tr>`;
+        })}
+        ${(()=>{const evA=calcEV(avgs,a,false,false),evB=calcEV(avgs,b,false,false),diff=evA-evB;
+          return html`<tr style=${{borderTop:"2px solid var(--border)"}}><td style=${{fontWeight:600,color:"var(--text-dim)",textAlign:"left"}}>EV / box</td><td class="muted">\u2014</td>
+            <td style=${{fontWeight:600,color:diff>0?"var(--green)":"inherit"}}>${fmt(evA)}</td>
+            <td style=${{fontWeight:600,color:diff<0?"var(--green)":"inherit"}}>${fmt(evB)}</td>
+            <td style=${{fontWeight:600,color:diff>0?"var(--green)":"var(--red)"}}>${diff>0?"+"+fmt(diff):fmt(diff)}</td></tr>`;})()}
+      </tbody></table></div>`}
+  </div>`;
+}
+
+function HeatmapView({sets,avgs}){
+  const rows=useMemo(()=>sets.map(s=>{const d=avgs[s]||{},tot=RARS.reduce((t,r)=>t+(d[r]?.avg||0)*PULL[r],0);const c={};for(const r of RARS) c[r]=tot>0?((d[r]?.avg||0)*PULL[r]/tot)*100:0;return {s,c};}),[sets,avgs]);
+  const cs={padding:"5px 7px",fontSize:11,textAlign:"center",border:"1px solid var(--border)"};
+  return html`<div>
+    <p class="muted" style=${{fontSize:12,marginBottom:"1rem"}}>% of box EV from each rarity. Darker = higher contribution.</p>
+    <div class="scr"><table style=${{borderCollapse:"collapse"}}><thead><tr>
+      <th style=${{...cs,textAlign:"left",minWidth:100,whiteSpace:"nowrap"}}>Set</th>
+      ${RARS.map(r=>html`<th key=${r} style=${{...cs,minWidth:52,fontSize:10}}>${r}</th>`)}</tr></thead>
+      <tbody>${rows.map(({s,c})=>html`<tr key=${s}>
+        <td style=${{...cs,textAlign:"left",fontWeight:500,whiteSpace:"nowrap",background:"var(--table-header)"}}>${s}</td>
+        ${RARS.map(r=>{const pct=c[r]||0,int=Math.min(1,pct/40);
+          return html`<td key=${r} style=${{...cs,background:pct<0.5?"transparent":"rgba(200,168,70,"+(0.08+int*0.55).toFixed(2)+")",
+            color:int>0.5?"var(--heatmap-text-hi)":"var(--heatmap-text-lo)",fontWeight:int>0.6?600:400}}>${pct<0.5?"":pct.toFixed(1)+"%"}</td>`;})}
+      </tr>`)}</tbody></table></div></div>`;
+}
+
+function FAQView(){
+  return html`<div class="faq-section">
+    <h2>What is this?</h2>
+    <p>This tool calculates the <strong>Expected Value (EV)</strong> of opening Disney Lorcana booster boxes and packs. It uses live market prices from <strong>TCGPlayer</strong> (via the Lorcast API, updated daily) and known pull rates to estimate how much value you can expect from a box or pack on average.</p>
+
+    <h2>How does it work?</h2>
+    <p>Each booster pack contains 12 cards with a specific distribution: 6 commons (one per ink color), 3 uncommons, 2 rare-or-higher cards, and 1 foil slot. The EV is calculated by multiplying the <strong>average market price</strong> of each rarity by the <strong>number of cards of that rarity per box</strong> (24 packs), then summing everything up.</p>
+    <p>For example, if the average Legendary card in a set is worth $5.00 and you pull 4 Legendaries per box on average, that rarity contributes $20 to the box EV.</p>
+
+    <h2>What do the tabs do?</h2>
+    <p><strong>EV / Box</strong> \u2014 Shows the total expected value per box and per pack for each set, side by side.</p>
+    <p><strong>Average Card Prices</strong> \u2014 Shows the average market price of each rarity across all sets. Useful for seeing which sets have the most valuable commons, rares, enchanteds, etc.</p>
+    <p><strong>Pack Sim</strong> \u2014 Simulates opening a single pack using real pull rate probabilities. Shows card images and tracks stats across multiple openings.</p>
+    <p><strong>Box Sim</strong> \u2014 Simulates opening an entire box (24 packs). Shows your best pull with card art, tracks your box history, and highlights your best box. Also includes a Monte Carlo simulation that runs thousands of box openings to show the statistical distribution of outcomes.</p>
+    <p><strong>Compare</strong> \u2014 Compare two sets side-by-side to see which has higher average card values at each rarity and overall EV.</p>
+    <p><strong>Heatmap</strong> \u2014 Shows what percentage of each set's total EV comes from each rarity tier. Helps you understand where the value is concentrated\u2014for example, whether a set's value is driven by Enchanteds or spread across lower rarities.</p>
+
+    <h2>What does the "${" <$1\u2192$0"}" checkbox do?</h2>
+    <p>When enabled, any card worth less than $1.00 is treated as worth $0.00 in the EV calculation. This gives a more realistic picture of "sellable" value, since bulk cards under a dollar are often not worth listing individually. Most collectors and sellers use this view to see the "real" EV after ignoring penny cards.</p>
+
+    <h2>What does "No Ench/Iconic" do?</h2>
+    <p>This removes Enchanted and Iconic cards from the EV calculation. Since these ultra-rare cards are extremely hard to pull (Enchanted: ~1 per 4 boxes, Iconic: ~1 per 71 boxes), they can inflate the EV significantly even though most box openings won't contain one. Toggling this on shows you the "base" EV you can expect without relying on hitting a jackpot card.</p>
+
+    <h2>What are the pull rates?</h2>
+    <p><strong>Sets 1–11</strong> (The First Chapter through Winterspell) per box (24 packs): 144 Commons, 72 Uncommons, ~32 Rares, 12 Super Rares, 4 Legendaries, 13 Common Foils, 6 Uncommon Foils, 3 Rare Foils, 1 Super Rare Foil, 0.5 Legendary Foils, 0.25 Enchanteds, 1.5 Epics, and ~0.014 Iconics.</p>
+    <p><strong>Sets 12+</strong> (Wilds Unknown onward) per box (24 packs): 144 Commons, 72 Uncommons, ~30 Rares, 12 Super Rares, <strong>6 Legendaries</strong>, ~12.3 Common Foils, ~5.7 Uncommon Foils, 3 Rare Foils, 1 Super Rare Foil, 0.5 Legendary Foils, <strong>0.333 Enchanteds</strong>, <strong>2.5 Epics</strong>, and ~0.014 Iconics. The extra Legendaries come from the Rare slot, while the increased Enchanted and Epic rates are offset proportionally from Common and Uncommon Foil pulls.</p>
+    <p>These are community-estimated averages and may vary.</p>
+
+    <h2>Where does the pricing data come from?</h2>
+    <p>All prices come from TCGPlayer market prices via the <strong>Lorcast API</strong> (lorcast.com). Prices are updated once per day. The prices shown are TCGPlayer "market price" which represents the recent average sale price.</p>
+
+    <h2>About</h2>
+    <p>This is an <strong>Ink & Lore</strong> project by <strong>Zaven Torian</strong>. Follow <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a> on X for updates.</p>
+  </div>`;
+}
+
+function SetDetail({data,mult,activeRars,theme}){
+  const [rf,setRf]=useState(null);
+  const cards=useMemo(()=>{
+    let list=data.cards.filter(c=>activeRars.has(c.rarity));
+    if(rf) list=list.filter(c=>c.rarity===rf);
+    return list.sort((a,b)=>(b.price||0)-(a.price||0));
+  },[data,activeRars,rf]);
+  return html`<div style=${{padding:"12px 16px",background:"var(--bg-surface)",borderTop:"1px solid var(--border)"}}>
+    <div style=${{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
+      <button onClick=${()=>setRf(null)} class=${rf===null?"active":""} style=${{fontSize:11,padding:"3px 8px"}}>All</button>
+      ${SET_RARS.filter(r=>activeRars.has(r)).map(r=>{const s=getBadgeStyle(r,theme);
+        return html`<button key=${r} onClick=${()=>setRf(rf===r?null:r)}
+          style=${{background:rf===r?s.bg:"transparent",color:rf===r?s.fg:"var(--btn-text)",
+            border:rf===r?"1px solid "+(s.fg+"40"):"1px solid var(--btn-border)",fontSize:11,padding:"3px 8px",borderRadius:6}}>${r} (${data.byRar[r]?.count||0})</button>`;
+      })}
+    </div>
+    <div style=${{maxHeight:400,overflowY:"auto"}}>
+      <table><thead><tr><th style=${{textAlign:"left"}}>Card</th><th>Rarity</th><th>${mult===4?"Playset (4x)":"Price (1x)"}</th><th>Each</th></tr></thead>
+        <tbody>${cards.map((c,i)=>html`<tr key=${i}>
+          <td style=${{textAlign:"left",maxWidth:280,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            ${c.img_small?html`<img src=${c.img_small} alt="" style=${{width:24,height:34,borderRadius:3,verticalAlign:"middle",marginRight:6,objectFit:"cover"}}/>`:null}${c.name}
+          </td>
+          <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
+          <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
+          <td class="muted">${fmt(c.price)}</td>
+        </tr>`)}</tbody></table>
+    </div>
+    <div style=${{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--stat-bg)",border:"1px solid var(--border)",borderRadius:6,marginTop:8}}>
+      <span style=${{color:"var(--text-dim)",fontSize:12}}>${cards.length} cards${rf?" ("+rf+")":""}</span>
+      <span style=${{fontWeight:600}}>${fmt(cards.reduce((t,c)=>t+(c.price||0),0)*mult)}</span>
+    </div>
+  </div>`;
+}
+
+function SetValuesView({rawData,sets,theme}){
+  const [mode,setMode]=useState("playset");
+  const [activeRars,setActiveRars]=useState(()=>new Set(SET_RARS));
+  const [expanded,setExpanded]=useState(null);
+  const mult=mode==="playset"?4:1;
+  const setData=useMemo(()=>{
+    const result={};
+    for(const set of sets){
+      const cards={};
+      for(const row of rawData){
+        if((row["Set"]||"").trim()!==set) continue;
+        const rar=(row["Rarity"]||"").trim(),pr=(row["Printing"]||"").trim();
+        if(pr!=="Normal"||!SET_RARS.includes(rar)) continue;
+        const name=(row["Product Name"]||"").trim(),price=parseP(row["Market Price"]);
+        if(!cards[name]) cards[name]={name,rarity:rar,price,img_small:row["img_small"],img_normal:row["img_normal"],num:row["Number"]};
+      }
+      const cardList=Object.values(cards);
+      const byRar={};
+      for(const r of SET_RARS){const rc=cardList.filter(c=>c.rarity===r);byRar[r]={cards:rc,total:rc.reduce((t,c)=>t+(c.price||0),0),count:rc.length};}
+      result[set]={cards:cardList,byRar};
+    }
+    return result;
+  },[rawData,sets]);
+  const toggleRar=r=>{setActiveRars(prev=>{const next=new Set(prev);if(next.has(r)) next.delete(r); else next.add(r);return next;});};
+  const getTotal=s=>{const d=setData[s];if(!d) return 0;let t=0;for(const r of SET_RARS) if(activeRars.has(r)) t+=(d.byRar[r]?.total||0);return t*mult;};
+  return html`<div>
+    <div class="row" style=${{gap:12}}>
+      <div style=${{display:"flex",gap:4}}>
+        <button onClick=${()=>setMode("playset")} class=${mode==="playset"?"active":""}>Playset (4x)</button>
+        <button onClick=${()=>setMode("master")} class=${mode==="master"?"active":""}>Master Set (1x)</button>
+      </div>
+      <div style=${{display:"flex",gap:4,flexWrap:"wrap"}}>
+        ${SET_RARS.map(r=>{const s=getBadgeStyle(r,theme),on=activeRars.has(r);
+          return html`<button key=${r} onClick=${()=>toggleRar(r)} style=${{background:on?s.bg:"transparent",color:on?s.fg:"var(--text-muted)",
+            border:on?"1px solid "+(s.fg+"40"):"1px solid var(--border)",borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:600,
+            opacity:on?1:0.4,transition:"all 0.15s"}}>${r}</button>`;
+        })}
+      </div>
+    </div>
+    <div class="scr"><table>
+      <thead><tr>
+        <th style=${{textAlign:"left",minWidth:160}}>Set</th><th style=${{minWidth:90}}>Total</th>
+        ${SET_RARS.map(r=>html`<th key=${r} style=${{minWidth:70,opacity:activeRars.has(r)?1:0.3}}>${r}</th>`)}
+        <th style=${{width:40}}>Cards</th>
+      </tr></thead>
+      <tbody>${sets.map(s=>{const d=setData[s];if(!d) return null;const total=getTotal(s),isExp=expanded===s;
+        return html`<${React.Fragment} key=${s}>
+          <tr onClick=${()=>setExpanded(isExp?null:s)} style=${{cursor:"pointer",background:isExp?"var(--accent-glow)":"inherit"}}>
+            <td style=${{fontWeight:500,textAlign:"left"}}><span style=${{marginRight:6,fontSize:10,color:"var(--text-muted)"}}>${isExp?"▼":"▶"}</span>${s}</td>
+            <td style=${{fontWeight:600}}>${fmt(total)}</td>
+            ${SET_RARS.map(r=>{const rv=(d.byRar[r]?.total||0)*mult;
+              return html`<td key=${r} style=${{opacity:activeRars.has(r)?1:0.3}}>${fmt(rv)}</td>`;})}
+            <td class="muted">${d.cards.length}</td>
+          </tr>
+          ${isExp&&html`<tr><td colspan=${SET_RARS.length+3} style=${{padding:0,border:"none"}}>
+            <${SetDetail} data=${d} mult=${mult} activeRars=${activeRars} theme=${theme}/>
+          </td></tr>`}
+        <//>`;})}</tbody>
+    </table></div>
+    <p class="muted" style=${{fontSize:11,marginTop:8}}>Normal printings only (excludes foils, Enchanted, Epic, Iconic). ${mode==="playset"?"Playset = 4 copies of each card.":"Master Set = 1 copy of each card."} Prices via Lorcast (TCGPlayer).</p>
+  </div>`;
+}
+
+// ── Main App ────────────────────────────────────────────────────────────
+function App(){
+  const [raw,setRaw]=useState([]);const [loading,setLoading]=useState(false);const [err,setErr]=useState(null);const [loaded,setLoaded]=useState(false);
+  const [nc,setNc]=useState(false);const [ne,setNe]=useState(false);const [view,setView]=useState("ev");
+  const [loadProgress,setLoadProgress]=useState({loaded:0,total:0,current:""});
+  const [theme,setTheme]=useState("light");
+  const [particles,setParticles]=useState(true);
+
+  const toggleTheme = useCallback(()=>{const next=theme==="dark"?"light":"dark";setTheme(next);document.documentElement.setAttribute("data-theme",next);},[theme]);
+  const {sets,avgs}=useMemo(()=>raw.length?processData(raw):{sets:[],avgs:{}},[raw]);
+
+  const loadFromSupabase = useCallback(async ()=>{
+    setLoading(true);setErr(null);setLoadProgress({loaded:0,total:0,current:"Connecting..."});
+    try {
+      setLoadProgress({loaded:0,total:3,current:"Fetching sets"});
+      const setsData = await sbFetchAll("sets",{select:"id,name"});
+      const setNameById = Object.fromEntries(setsData.map(s=>[s.id,s.name]));
+
+      setLoadProgress({loaded:1,total:3,current:"Fetching prices"});
+      const priceRows = await sbFetchAll("card_prices_latest",{select:"*"});
+
+      setLoadProgress({loaded:2,total:3,current:"Building view"});
+      const allRows = transformSupabaseData(priceRows, setNameById);
+
+      setRaw(allRows);setLoaded(true);setLoading(false);
+      setLoadProgress({loaded:3,total:3,current:"Done!"});
+    } catch(e){setErr("Supabase error: "+e.message);setLoading(false);}
+  },[]);
+
+  useEffect(()=>{loadFromSupabase();},[loadFromSupabase]);
+
+  const TABS=[["ev","Expected Value"],["setval","Set Values"],["avg","Average Card Prices"],["sim","Pack Sim"],["box","Box Sim"],["compare","Compare"],["heatmap","Heatmap"],["faq","How It Works"]];
+
+  if(!loaded) return html`${particles&&html`<${GlimmerParticles}/>`}
+    <div style=${{maxWidth:480,margin:"4rem auto",textAlign:"center"}}>
+      <img src=${LOGO_B64} alt="Ink & Lore" style=${{height:60,marginBottom:"1.5rem",opacity:0.9,borderRadius:4}}/>
+      <h1 class="title-font glimmer-text" style=${{fontSize:22,fontWeight:600,marginBottom:"0.5rem",letterSpacing:1}}>Lorcana Expected Value Calculator</h1>
+      <p style=${{fontSize:12,color:"var(--text-muted)",marginBottom:"0.25rem"}}>a Zaven Torian project</p>
+      <p style=${{fontSize:12,marginBottom:"2rem"}}><a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)",textDecoration:"none"}}>follow @HighScoreZAP</a></p>
+      ${loading&&html`<div style=${{marginBottom:"1rem"}}>
+        <p style=${{fontSize:13,color:"var(--text-dim)",marginBottom:10}}>${loadProgress.total>0?loadProgress.current+" ("+loadProgress.loaded+"/"+loadProgress.total+")":loadProgress.current||"Connecting..."}</p>
+        ${loadProgress.total>0&&html`<div class="progress-bar"><div class="progress-fill" style=${{width:(loadProgress.loaded/loadProgress.total*100)+"%"}}/></div>`}
+      </div>`}
+      ${err&&html`<div><p style=${{fontSize:13,color:"var(--red)",marginBottom:"1rem"}}>${err}</p><button class="active" onClick=${loadFromSupabase} style=${{padding:"10px 24px",fontSize:14}}>Retry</button></div>`}
+    </div>`;
+
+  return html`<div>
+    ${particles&&html`<${GlimmerParticles}/>`}
+    <div class="tabs">
+      <span class="title-font" style=${{fontWeight:600,fontSize:15,marginRight:8,color:"var(--accent)"}}>Lorcana Expected Value</span>
+      ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>setView(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
+      ${(view==="ev"||view==="avg")&&html`
+        <${Tooltip} text="Treats any card worth less than $1.00 as $0. Gives a more realistic 'sellable' EV by ignoring bulk penny cards.">
+          <label style=${{display:"flex",alignItems:"center",gap:5,fontSize:12,cursor:"pointer",color:"var(--text-dim)",marginLeft:6}}>
+            <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1\u2192$0"}
+          </label>
+        <//>
+        <${Tooltip} text="Removes Enchanted and Iconic cards from the EV calculation. Shows your expected return without relying on ultra-rare jackpot pulls.">
+          <label style=${{display:"flex",alignItems:"center",gap:5,fontSize:12,cursor:"pointer",color:"var(--text-dim)"}}>
+            <input type="checkbox" checked=${ne} onChange=${e=>setNe(e.target.checked)}/> No Ench/Iconic
+          </label>
+        <//>`}
+      <div style=${{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+        <button class="theme-toggle" onClick=${()=>setParticles(p=>!p)} title=${particles?"Hide particles":"Show particles"}>
+          ${particles?"\u2728":"\u2B50"}
+        </button>
+        <button class="theme-toggle" onClick=${toggleTheme} title=${theme==="dark"?"Switch to light":"Switch to dark"}>
+          ${theme==="dark"?"\u2600":"\uD83C\uDF19"}
+        </button>
+        <button onClick=${()=>{setLoaded(false);setRaw([]);setTimeout(loadFromSupabase,100);}} style=${{fontSize:11,color:"var(--text-muted)",border:"1px solid var(--border)",padding:"5px 10px"}}>${"\u21A9"} reload</button>
+      </div>
+    </div>
+    ${view==="ev"&&html`<${EVView} sets=${sets} avgs=${avgs} nc=${nc} ne=${ne}/>`}
+    ${view==="setval"&&html`<${SetValuesView} rawData=${raw} sets=${sets} theme=${theme}/>`}
+    ${view==="avg"&&html`<${AvgView} sets=${sets} avgs=${avgs} nc=${nc}/>`}
+    ${view==="sim"&&html`<${PackSim} rawData=${raw} sets=${sets} theme=${theme}/>`}
+    ${view==="box"&&html`<${BoxSim} rawData=${raw} sets=${sets} theme=${theme}/>`}
+    ${view==="compare"&&html`<${CompareView} sets=${sets} avgs=${avgs}/>`}
+    ${view==="heatmap"&&html`<${HeatmapView} sets=${sets} avgs=${avgs}/>`}
+    ${view==="faq"&&html`<${FAQView}/>`}
+    <${Footer}/>
+  </div>`;
+}
+
+class ErrorBoundary extends React.Component {
+  constructor(p){super(p);this.state={error:null};}
+  static getDerivedStateFromError(e){return {error:e};}
+  render(){
+    if(this.state.error) return React.createElement('div',{style:{padding:'2rem',maxWidth:600,margin:'2rem auto',color:'var(--text)'}},
+      React.createElement('h2',{style:{color:'var(--red)',fontSize:16,fontFamily:'Cinzel,serif'}},'Something went wrong'),
+      React.createElement('pre',{style:{fontSize:12,color:'var(--text-muted)',whiteSpace:'pre-wrap',marginTop:8}},this.state.error.toString()),
+      React.createElement('button',{onClick:()=>this.setState({error:null}),style:{marginTop:12,padding:'8px 16px',cursor:'pointer',background:'transparent',border:'1px solid var(--btn-border)',color:'var(--text)',borderRadius:6}},'Retry'));
+    return this.props.children;
+  }
+}
+ReactDOM.createRoot(document.getElementById("root")).render(html`<${ErrorBoundary}><${App}/><//>`);
+</script>
+</body>
+</html>
