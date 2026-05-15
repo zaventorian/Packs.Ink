@@ -1252,11 +1252,17 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 
 /* Ink swatch shown next to a deck row's card name. Single circle for single-
    ink cards, half-and-half for dual-ink cards. Visual cue that this card
-   contributes to one (or two) ink slices in the pie. */
-.deck-row-ink{display:inline-block;width:10px;height:10px;border-radius:50%;
-  flex-shrink:0;margin-right:4px;vertical-align:middle;
-  border:1px solid rgba(0,0,0,0.25);}
-html[data-theme="dark"] .deck-row-ink{border-color:rgba(255,255,255,0.18);}
+   contributes to one (or two) ink slices in the pie. Sized large enough
+   that the dual gradient is clearly readable. */
+.deck-row-ink{display:inline-block;width:14px;height:14px;border-radius:50%;
+  flex-shrink:0;margin-right:6px;vertical-align:middle;
+  border:1px solid rgba(0,0,0,0.35);box-sizing:border-box;}
+html[data-theme="dark"] .deck-row-ink{border-color:rgba(255,255,255,0.25);}
+/* Hard mid-line on dual swatches so the two colors read instantly. */
+.deck-row-ink.dual{position:relative;overflow:hidden;}
+.deck-row-ink.dual::after{content:"";position:absolute;top:0;bottom:0;left:50%;
+  width:1px;background:rgba(0,0,0,0.4);}
+html[data-theme="dark"] .deck-row-ink.dual::after{background:rgba(255,255,255,0.3);}
 
 /* View mode: deck list on the left, stats/charts sidebar on the right
    (mirrors edit mode's CardBrowser-left + panel-right shape). */
@@ -3060,7 +3066,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
     ${deckMode && html`<div class="deck-tile-counter" onClick=${e=>e.stopPropagation()}>
       <button onClick=${bump(-1)} disabled=${(deckQty||0)<=0}>−</button>
       <span class=${"deck-tile-qty"+((deckQty||0)>0?" has":"")}>${deckQty||0}</span>
-      <button onClick=${bump(+1)} disabled=${(deckQty||0)>=4}>+</button>
+      <button onClick=${bump(+1)} disabled=${(deckQty||0)>=cardMax}>+</button>
     </div>`}
   </div>`;
 };
@@ -9173,7 +9179,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         }
         const inkList = (meta.inks && meta.inks.length) ? meta.inks : (meta.ink ? [meta.ink] : []);
         const inkSwatch = inkList.length === 2
-          ? html`<span class="deck-row-ink" title=${inkList.join(" / ")}
+          ? html`<span class="deck-row-ink dual" title=${inkList.join(" / ")}
               style=${{background: `linear-gradient(90deg, ${INK_COLORS[inkList[0]]?.border || "#888"} 0 50%, ${INK_COLORS[inkList[1]]?.border || "#888"} 50% 100%)`}}></span>`
           : inkList.length === 1
             ? html`<span class="deck-row-ink" title=${inkList[0]}
