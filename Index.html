@@ -7084,6 +7084,11 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   // All hooks run unconditionally.
   const [decks, setDecks] = useState(null); // null = loading, [] = empty, [...] = loaded
   const [selectedDeckId, setSelectedDeckId] = useState(null);
+  const [editMode, setEditMode] = useState(false);
+  const openDeckInMode = useCallback((id, mode) => {
+    setSelectedDeckId(id);
+    setEditMode(mode === "edit");
+  }, []);
   // Decks owned by someone else — fetched on demand from incomingDeckId or
   // a future "view this public deck" click. Shape: {deck, creator} | {error}.
   const [externalDeck, setExternalDeck] = useState(null);
@@ -7633,7 +7638,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         return;
       }
       if(user && deckRow.user_id === user.id){
-        setSelectedDeckId(deckRow.id);
+        openDeckInMode(deckRow.id, "view");
         setExternalDeck(null);
         onConsumedIncomingDeckId && onConsumedIncomingDeckId();
         onConsumedIncomingShareToken && onConsumedIncomingShareToken();
@@ -7791,7 +7796,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const bg = deckGradient(s.inks);
     return html`<div key=${d.id} class="deck-card"
         style=${bg ? {background: bg} : null}
-        onClick=${()=>setSelectedDeckId(d.id)}>
+        onClick=${()=>openDeckInMode(d.id, "view")}>
       <div class="deck-card-header">
         <div class="deck-card-name">${d.name}</div>
         ${visibilityPill(d.visibility)}
@@ -7878,8 +7883,8 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       .select("id").single();
     if(error){ alert("Couldn't create deck: " + error.message); return; }
     await refreshDecks();
-    setSelectedDeckId(data.id);
-  }, [user, refreshDecks]);
+    openDeckInMode(data.id, "edit");
+  }, [user, refreshDecks, openDeckInMode]);
 
   // Inline rename used by the deck-editor title click. No prompt — pass
   // the new name directly. Returns true on success so callers can revert
@@ -7917,9 +7922,9 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       }
     }
     await refreshDecks();
-    setSelectedDeckId(data.id);
+    openDeckInMode(data.id, "view");
     showToast(`Duplicated as "${newName}"`);
-  }, [decks, user, refreshDecks]);
+  }, [decks, user, refreshDecks, openDeckInMode]);
 
   // Deep-copy a deck the current user doesn't own (someone else's shared deck)
   // into their own collection. Mirrors duplicateDeck but sources the rows
@@ -7945,9 +7950,9 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     }
     await refreshDecks();
     setExternalDeck(null);
-    setSelectedDeckId(data.id);
+    openDeckInMode(data.id, "view");
     showToast(`Duplicated as "${newName}"`);
-  }, [user, refreshDecks, showToast]);
+  }, [user, refreshDecks, showToast, openDeckInMode]);
 
   const deleteDeck = useCallback(async (deckId) => {
     if(!confirm("Delete this deck? This can't be undone.")) return;
@@ -8141,6 +8146,9 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         collection=${collection} raw=${raw} theme=${theme}
         pending=${pending}
         favoriteCount=${favoriteCounts[deck.id] || 0}
+        readOnly=${!editMode}
+        isOwnDeck=${true}
+        onToggleEditMode=${()=>setEditMode(m=>!m)}
         onBack=${()=>setSelectedDeckId(null)}
         onRename=${(newName)=>renameDeckInline(deck.id, newName)}
         onDelete=${()=>deleteDeck(deck.id)}
@@ -8507,7 +8515,7 @@ const DeckPie = ({title, data, colorOf}) => {
 // each card row update the current deck's quantity (max 4 per card).
 const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
                      onBack, onRename, onDelete, onDuplicate,
-                     onUpdateCard, onUpdateMeta,
+                     onUpdateCard, onUpdateMeta, onToggleEditMode,
                      readOnly, creator, creatorId, isOwnDeck, canAct,
                      isFavorited, onToggleFavorite,
                      isFollowingCreator, onToggleFollowCreator,
@@ -8770,7 +8778,13 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         ★ ${favoriteCount}
       </span>`}
       <div style=${{marginLeft:"auto",display:"flex",gap:6,position:"relative"}}>
-        ${!readOnly && html`<div ref=${shareRef} style=${{position:"relative",display:"inline-flex"}}>
+        ${isOwnDeck && onToggleEditMode && html`<button onClick=${onToggleEditMode}
+          class=${!readOnly ? "active" : ""}
+          style=${{fontSize:12,padding:"5px 10px"}}
+          title=${readOnly ? "Edit this deck — open the card browser" : "Done editing — back to view"}>
+          ${readOnly ? "✎ Edit" : "✓ Done"}
+        </button>`}
+        ${isOwnDeck && html`<div ref=${shareRef} style=${{position:"relative",display:"inline-flex"}}>
           <button onClick=${()=>setShareOpen(o=>!o)}
             class=${visibility==="public" || visibility==="unlisted" ? "active" : ""}
             style=${{fontSize:12,padding:"5px 10px"}}
@@ -8823,8 +8837,8 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         </div>`}
         ${!readOnly && html`<button onClick=${handleImport} style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
         <button onClick=${handleExport} style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export</button>
-        ${!readOnly && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
-        ${!readOnly && html`<button onClick=${onDelete} style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
+        ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
+        ${isOwnDeck && onDelete && html`<button onClick=${onDelete} style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
       </div>
     </div>
     ${legality.format === "invalid" && html`<div class="deck-legal-issues">
