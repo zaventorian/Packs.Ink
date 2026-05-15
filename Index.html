@@ -9217,6 +9217,17 @@ function App(){
   const onTabClick = useCallback((v) => {
     setView(v);
     setTabClickNonce(n => n + 1);
+    // Strip deck/token/user params when leaving Decks so a hard refresh
+    // doesn't deep-link the user back into a deck they navigated away from.
+    if(v !== "decks"){
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete("deck");
+        url.searchParams.delete("token");
+        url.searchParams.delete("user");
+        window.history.replaceState({}, "", url);
+      } catch {}
+    }
   }, []);
   // User settings — persisted to localStorage and (when signed in) synced
   // to Supabase user_metadata so they follow the user across devices.
