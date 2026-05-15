@@ -2968,15 +2968,20 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
   // The dedicated expand button (bottom-left) opens the detail modal. Outside
   // deck mode, tile click opens the modal as before.
   const openModal = onSelectGroup ? () => onSelectGroup(group) : null;
+  // Per-card max for the +/- UI. Most cards = 4, exceptions (Dalmatian Puppy
+  // - Tail Wagger = 99, Microbots = unlimited capped at 99 for sanity) come
+  // from SPECIAL_DECK_LIMITS. Variant-sharing for Dalmatian Puppy is enforced
+  // at the deck level in checkDeckLegality, not here.
+  const cardMax = getDeckLimitForUI(group["Product Name"]);
   const addOne = () => {
-    const next = Math.min(4, (deckQty || 0) + 1);
+    const next = Math.min(cardMax, (deckQty || 0) + 1);
     if(next !== (deckQty || 0)) onDeckQtyChange(group, next);
   };
   const onClick = deckMode ? addOne : openModal;
   const onExpand = (e) => { e.stopPropagation(); if(openModal) openModal(); };
   const bump = (delta) => (e) => {
     e.stopPropagation();
-    const next = Math.max(0, Math.min(4, (deckQty || 0) + delta));
+    const next = Math.max(0, Math.min(cardMax, (deckQty || 0) + delta));
     if(next !== (deckQty || 0)) onDeckQtyChange(group, next);
   };
 
@@ -3013,7 +3018,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
       ${deckMode && html`<div class="card-row-counter" onClick=${e=>e.stopPropagation()}>
         <button onClick=${bump(-1)} disabled=${(deckQty||0)<=0}>−</button>
         <span class=${"deck-tile-qty"+((deckQty||0)>0?" has":"")}>${deckQty||0}</span>
-        <button onClick=${bump(+1)} disabled=${(deckQty||0)>=4}>+</button>
+        <button onClick=${bump(+1)} disabled=${(deckQty||0)>=cardMax}>+</button>
       </div>`}
     </div>`;
   }
@@ -7116,6 +7121,24 @@ const HomeView = ({raw, theme, user, collection, collectionLoading, updateQty, o
 // v1 scope: name + 60-card deck of mainline cards, owned-from-collection
 // math, save/load via Supabase. Charts / sharing / advanced UX deferred.
 
+// Lorcana cards that bypass the standard 4-copy deck-building limit.
+// Keyed by "Product Name" (the full "<Name> - <Version>" string in our raw
+// rows). Lorcana grants these exceptions via card text — Dalmatian Puppy's
+// "Puppy Power" sets the cap to 99 and variants share that total; Microbots'
+// rules text removes the cap entirely. Update this map as new exception
+// cards are printed.
+const SPECIAL_DECK_LIMITS = {
+  "Dalmatian Puppy - Tail Wagger": 99,
+  "Microbots":                     Infinity,
+};
+const getDeckLimit = (productName) => SPECIAL_DECK_LIMITS[productName] ?? 4;
+// Hard cap used by the +/- UI when a card has no theoretical max (Microbots).
+const SPECIAL_LIMIT_UI_CAP = 99;
+const getDeckLimitForUI = (productName) => {
+  const lim = getDeckLimit(productName);
+  return lim === Infinity ? SPECIAL_LIMIT_UI_CAP : lim;
+};
+
 // Lorcana card-type groups used by the editor's sectioning.
 const DECK_SECTIONS = [
   {key:"Character", label:"Characters", match: t => t === "Character"},
@@ -8402,13 +8425,20 @@ function checkDeckLegality(deck, cardById){
   }
   if(inks.size > 2) issues.push(`${inks.size} inks (${Array.from(inks).join(", ")}) — limit is 2`);
 
-  // Quantity cap (UI enforces ≤4 but a paste-import or stale row could
-  // sneak past, so we re-check here).
+  // Quantity cap — Lorcana's default is 4-of-any-card, but a handful of cards
+  // (Dalmatian Puppy - Tail Wagger: 99, Microbots: unlimited) bypass it via
+  // card text. Variants count toward the same total, so we sum by Product
+  // Name across card_ids before comparing.
+  const qtyByName = {};
   for(const c of deck.cards||[]){
-    if(c.quantity > 4){
-      const meta = (cardById[c.card_id]||[])[0];
-      const name = meta?.["Product Name"] || c.card_id;
-      issues.push(`${c.quantity}× ${name} — limit is 4`);
+    const meta = (cardById[c.card_id]||[])[0];
+    const name = meta?.["Product Name"] || c.card_id;
+    qtyByName[name] = (qtyByName[name] || 0) + c.quantity;
+  }
+  for(const [name, qty] of Object.entries(qtyByName)){
+    const limit = getDeckLimit(name);
+    if(qty > limit){
+      issues.push(`${qty}× ${name} — limit is ${limit === Infinity ? "unlimited" : limit}`);
     }
   }
 
@@ -9123,10 +9153,13 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
-          ${!readOnly && html`<div class="deck-row-counter">
-            <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
-            <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(4, item.quantity + 1))} disabled=${item.quantity>=4}>+</button>
-          </div>`}
+          ${!readOnly && (() => {
+            const cardMax = getDeckLimitForUI(meta["Product Name"]);
+            return html`<div class="deck-row-counter">
+              <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
+              <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(cardMax, item.quantity + 1))} disabled=${item.quantity>=cardMax}>+</button>
+            </div>`;
+          })()}
         </div>`;
       };
 
