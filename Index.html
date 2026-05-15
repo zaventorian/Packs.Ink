@@ -1332,6 +1332,21 @@ a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08)
   text-decoration:none;}
 .deck-grid-tile-price:hover{background:rgba(22,163,74,1);}
 
+/* +/- counter overlaid on grid + stacked deck-list tiles. Bottom-left so
+   it doesn't collide with the price chip in the bottom-right. */
+.deck-grid-tile-counter,
+.deck-stack-counter{position:absolute;bottom:5px;left:5px;z-index:3;
+  display:flex;gap:2px;background:rgba(0,0,0,0.78);border-radius:5px;
+  padding:2px;box-shadow:0 1px 3px rgba(0,0,0,0.3);}
+.deck-grid-tile-counter button,
+.deck-stack-counter button{width:20px;height:20px;border:none;background:transparent;
+  color:#fff;font-size:13px;font-weight:700;cursor:pointer;border-radius:3px;
+  padding:0;line-height:1;display:inline-flex;align-items:center;justify-content:center;}
+.deck-grid-tile-counter button:hover:not(:disabled),
+.deck-stack-counter button:hover:not(:disabled){background:rgba(255,255,255,0.15);}
+.deck-grid-tile-counter button:disabled,
+.deck-stack-counter button:disabled{opacity:0.35;cursor:not-allowed;}
+
 /* Stacked-pile layout — each qty renders as a peek-strip above the top card.
    Each peek looks like a real card edge: rounded top corners, border, drop
    shadow under it so the next card "sits" on the one below. Hover lifts the
@@ -9155,6 +9170,22 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         const groups = groupCards(rows);
         if(groups[0]) setSelectedGroup(groups[0]);
       };
+      // Counter shared across all three layouts. e.preventDefault prevents
+      // any browser-default click behavior (which was scrolling the page
+      // when the row re-rendered); stopPropagation keeps the parent tile's
+      // open-modal click from also firing.
+      const makeCounter = (item, cardMax, cls) => {
+        if(readOnly) return null;
+        const dec = (e) => { e.preventDefault(); e.stopPropagation();
+          onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1)); };
+        const inc = (e) => { e.preventDefault(); e.stopPropagation();
+          onUpdateCard(item.card_id, item.printing, Math.min(cardMax, item.quantity + 1)); };
+        return html`<div class=${cls} onClick=${e=>e.stopPropagation()}>
+          <button type="button" onClick=${dec} disabled=${item.quantity<=0}>−</button>
+          <button type="button" onClick=${inc} disabled=${item.quantity>=cardMax}>+</button>
+        </div>`;
+      };
+
       const renderItem = (item) => {
         const meta = item.meta || {};
         const price = cheapestCardPrice(cardById[item.card_id] || []);
@@ -9163,6 +9194,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
         const short = ownedShortByKey[k]?.short || 0;
         const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
+        const cardMax = getDeckLimitForUI(meta["Product Name"]);
         if(viewLayout === "grid"){
           return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
             ${meta.img_small
@@ -9170,6 +9202,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             <span class="deck-grid-tile-qty">${item.quantity}×</span>
             ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+            ${makeCounter(item, cardMax, "deck-grid-tile-counter")}
           </div>`;
         }
         if(viewLayout === "stacked"){
@@ -9185,6 +9218,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
                 ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy"/>`
                 : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
               ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+              ${makeCounter(item, cardMax, "deck-stack-counter")}
             </div>
           </div>`;
         }
@@ -9205,13 +9239,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
-          ${!readOnly && (() => {
-            const cardMax = getDeckLimitForUI(meta["Product Name"]);
-            return html`<div class="deck-row-counter">
-              <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
-              <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(cardMax, item.quantity + 1))} disabled=${item.quantity>=cardMax}>+</button>
-            </div>`;
-          })()}
+          ${makeCounter(item, cardMax, "deck-row-counter")}
         </div>`;
       };
 
