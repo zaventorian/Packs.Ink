@@ -9719,7 +9719,21 @@ function App(){
       // demand when the detail modal opens. Explicit ORDER BY is REQUIRED so
       // PostgREST returns deterministic slices across parallel range requests.
       const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price";
-      const CARDS_COLS = "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id";
+      // Probe whether the `inks` column has been deployed yet. If not (the
+      // migration in supabase/27_card_inks_array.sql hasn't been run), fall
+      // back to the legacy column list so the site keeps working — dual-ink
+      // cards will still show under their single legacy `ink` until the
+      // migration lands.
+      let hasInksColumn = true;
+      try {
+        await sbFetchAll("cards", {select:"inks", limit:1});
+      } catch {
+        hasInksColumn = false;
+        console.warn("cards.inks column missing — run supabase/27_card_inks_array.sql for dual-ink support.");
+      }
+      const CARDS_COLS = hasInksColumn
+        ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id"
+        : "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id";
       const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
       const [setsData, priceRows, cardsRows, sealedRows] = await Promise.all([
         sbFetchAll("sets",  {select:"id,name", order:"id.asc"}),
