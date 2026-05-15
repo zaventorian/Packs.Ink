@@ -1585,7 +1585,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v18";
+const CACHE_KEY = "packsink:catalog:v19";
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour — short window, we always background-refresh anyway
 // Minimum row count we'd ever expect. If cache has fewer than this it's
 // almost certainly from a partial fetch or older era — treat as missing.
@@ -1987,6 +1987,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     "img_small":c.image_small,
     "img_normal":c.image_normal,
     "ink":c.ink||null,
+    "inks":Array.isArray(c.inks) && c.inks.length ? c.inks : (c.ink ? [c.ink] : null),
     "cost":c.cost!=null?c.cost:null,
     "inkable":c.inkable,
     "card_type":c.card_type||null,
@@ -8418,10 +8419,14 @@ function checkDeckLegality(deck, cardById){
   const issues = [];
   const total = (deck.cards||[]).reduce((s,c)=>s+c.quantity, 0);
   if(total !== 60) issues.push(`${total} / 60 cards — ${total < 60 ? "need "+(60-total)+" more" : (total-60)+" over"}`);
+  // Dual-ink cards contribute BOTH colors to the deck's ink set. A deck with
+  // an Emerald/Sapphire dual + an Amber single uses 3 inks (Amber, Emerald,
+  // Sapphire) — over the 2-ink cap.
   const inks = new Set();
   for(const c of deck.cards||[]){
     const meta = (cardById[c.card_id]||[])[0];
-    if(meta?.ink) inks.add(meta.ink);
+    const inksList = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
+    for(const i of inksList) inks.add(i);
   }
   if(inks.size > 2) issues.push(`${inks.size} inks (${Array.from(inks).join(", ")}) — limit is 2`);
 
@@ -8651,7 +8656,7 @@ const DeckPie = ({title, data, colorOf}) => {
       ${slices.map(s => html`<div key=${s.k} class="deck-pie-legend-row">
         <span class="deck-pie-swatch" style=${{background:s.color}}></span>
         <span class="deck-pie-legend-name">${s.k}</span>
-        <span class="deck-pie-legend-val">${s.v}</span>
+        <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
       </div>`)}
     </div>
   </div>`;
@@ -8782,7 +8787,8 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
     const inks = new Set();
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0];
-      if(meta?.ink) inks.add(meta.ink);
+      const list = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
+      for(const i of list) inks.add(i);
     }
     return Array.from(inks);
   }, [deck.cards, cardById]);
@@ -8790,6 +8796,9 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const legality = useMemo(() => checkDeckLegality(deck, cardById), [deck, cardById]);
 
   // Aggregate per-cost / per-ink / inkable / per-type counts for the charts.
+  // Dual-ink cards split their quantity 50/50 across both colors so the
+  // pie/cost-curve totals still sum to the deck size (e.g. 4x Ink Geyser
+  // = 2 Emerald + 2 Sapphire instead of 4 Emerald + 4 Sapphire = 8 phantom).
   const aggregates = useMemo(() => {
     const costByInk = {};   // cost (capped at 9) -> {ink: count}
     const inkCount = {};    // ink -> count
@@ -8799,11 +8808,15 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
       const meta = (cardById[c.card_id]||[])[0] || {};
       const q = c.quantity;
       const costBucket = Math.min(9, Math.max(1, meta.cost ?? 1));
-      const ink = meta.ink || "Unknown";
+      const inkList = (meta.inks && meta.inks.length) ? meta.inks
+                    : (meta.ink ? [meta.ink] : ["Unknown"]);
+      const share = q / inkList.length;
       const t = meta.card_type || "Other";
       if(!costByInk[costBucket]) costByInk[costBucket] = {};
-      costByInk[costBucket][ink] = (costByInk[costBucket][ink] || 0) + q;
-      inkCount[ink] = (inkCount[ink] || 0) + q;
+      for(const ink of inkList){
+        costByInk[costBucket][ink] = (costByInk[costBucket][ink] || 0) + share;
+        inkCount[ink] = (inkCount[ink] || 0) + share;
+      }
       typeCount[t] = (typeCount[t] || 0) + q;
       if(meta.inkable) inkable += q; else nonInkable += q;
     }
@@ -9706,7 +9719,7 @@ function App(){
       // demand when the detail modal opens. Explicit ORDER BY is REQUIRED so
       // PostgREST returns deterministic slices across parallel range requests.
       const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price";
-      const CARDS_COLS = "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id";
+      const CARDS_COLS = "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id";
       const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
       const [setsData, priceRows, cardsRows, sealedRows] = await Promise.all([
         sbFetchAll("sets",  {select:"id,name", order:"id.asc"}),

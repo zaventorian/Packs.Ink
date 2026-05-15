@@ -60,6 +60,17 @@ def transform_card(c: dict, set_id: str) -> dict:
         card_type = raw_type[0] if raw_type else None
     else:
         card_type = raw_type
+    # Inks: Lorcast returns `inks: ["Emerald", "Sapphire"]` for dual-ink
+    # cards (with `ink: null`) and `inks: ["Amber"]` (or similar) for
+    # single-ink. We store the full array under `inks` and keep the
+    # legacy scalar `ink` populated with the first entry for backwards
+    # compatibility with code that hasn't migrated yet.
+    inks = c.get("inks")
+    if not inks:
+        single = c.get("ink")
+        inks = [single] if single else None
+    primary_ink = inks[0] if inks else None
+
     return {
         "id": c["id"],
         "set_id": set_id,
@@ -67,7 +78,8 @@ def transform_card(c: dict, set_id: str) -> dict:
         "version": c.get("version"),
         "collector_number": c.get("collector_number"),
         "rarity": c.get("rarity"),
-        "ink": c.get("ink"),
+        "ink": primary_ink,
+        "inks": inks,
         "cost": c.get("cost"),
         "inkable": c.get("inkwell"),  # Lorcast's field name; we store it as `inkable`
         "card_type": card_type,
