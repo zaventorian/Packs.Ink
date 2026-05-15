@@ -1250,6 +1250,14 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .deck-row-counter button:disabled{opacity:0.3;cursor:not-allowed;}
 
+/* Ink swatch shown next to a deck row's card name. Single circle for single-
+   ink cards, half-and-half for dual-ink cards. Visual cue that this card
+   contributes to one (or two) ink slices in the pie. */
+.deck-row-ink{display:inline-block;width:10px;height:10px;border-radius:50%;
+  flex-shrink:0;margin-right:4px;vertical-align:middle;
+  border:1px solid rgba(0,0,0,0.25);}
+html[data-theme="dark"] .deck-row-ink{border-color:rgba(255,255,255,0.18);}
+
 /* View mode: deck list on the left, stats/charts sidebar on the right
    (mirrors edit mode's CardBrowser-left + panel-right shape). */
 .deck-editor-grid.readonly{grid-template-columns:minmax(0,1fr) 340px;max-width:none;}
@@ -2811,14 +2819,20 @@ const parseSearchQuery = (input) => {
     }
   }
 
-  // Standalone digit → cost (if not already set)
+  // Standalone digit → cost (if not already set). Only treat as a cost
+  // filter when the number falls in Lorcana's actual cost range (≤12) —
+  // otherwise it's part of a card name (e.g. "99 Puppies", "101 Dalmatians")
+  // and should pass through to the name search.
   if(out.filters.cost == null){
     for(let i=0; i<tokens.length; i++){
       if(used.has(i)) continue;
       if(/^\d+$/.test(tokens[i])){
-        out.filters.cost = parseInt(tokens[i],10);
-        used.add(i);
-        break;
+        const n = parseInt(tokens[i],10);
+        if(n <= 12){
+          out.filters.cost = n;
+          used.add(i);
+          break;
+        }
       }
     }
   }
@@ -9157,12 +9171,20 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             </div>
           </div>`;
         }
+        const inkList = (meta.inks && meta.inks.length) ? meta.inks : (meta.ink ? [meta.ink] : []);
+        const inkSwatch = inkList.length === 2
+          ? html`<span class="deck-row-ink" title=${inkList.join(" / ")}
+              style=${{background: `linear-gradient(90deg, ${INK_COLORS[inkList[0]]?.border || "#888"} 0 50%, ${INK_COLORS[inkList[1]]?.border || "#888"} 50% 100%)`}}></span>`
+          : inkList.length === 1
+            ? html`<span class="deck-row-ink" title=${inkList[0]}
+                style=${{background: INK_COLORS[inkList[0]]?.border || "#888"}}></span>`
+            : null;
         return html`<div key=${k} class=${"deck-row"+dimClass}>
           <span class="deck-row-qty">${item.quantity}×</span>
           <span class="deck-row-cost">${meta.cost ?? "—"}</span>
           <span class="deck-row-name" title=${meta["Product Name"]}
             onClick=${()=>openCardModal(item.card_id)}
-            style=${{cursor:"pointer"}}>${meta["Product Name"] || "(unknown card)"}</span>
+            style=${{cursor:"pointer"}}>${inkSwatch}${meta["Product Name"] || "(unknown card)"}</span>
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
