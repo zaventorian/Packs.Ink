@@ -1250,11 +1250,11 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .deck-row-counter button:disabled{opacity:0.3;cursor:not-allowed;}
 
-/* View mode (readOnly && isOwnDeck): the right panel IS the page content, so
-   don't pin it as a scrollable sidebar. */
-.deck-editor-grid.readonly .deck-editor-panel{position:static;max-height:none;overflow:visible;}
-.deck-editor-grid.readonly{max-width:none;}
-.deck-editor-grid.readonly .deck-editor-panel{padding:0;background:transparent;border:none;}
+/* View mode: deck list on the left, stats/charts sidebar on the right
+   (mirrors edit mode's CardBrowser-left + panel-right shape). */
+.deck-editor-grid.readonly{grid-template-columns:minmax(0,1fr) 340px;max-width:none;}
+@media (max-width: 1100px){ .deck-editor-grid.readonly{grid-template-columns:1fr;} }
+.deck-view-list{min-width:0;}
 
 /* Missing tile becomes a Shop CTA. */
 .deck-stat.shop-cta{background:linear-gradient(180deg,#16a34a 0%,#15803d 100%);
@@ -1317,6 +1317,29 @@ a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08)
   color:#fff;font-size:10px;font-weight:700;padding:2px 5px;border-radius:3px;
   text-decoration:none;}
 .deck-grid-tile-price:hover{background:rgba(22,163,74,1);}
+
+/* Stacked-pile layout — each qty renders as a peek-strip above the top card. */
+.deck-section-stack{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;}
+.deck-stack-tile{position:relative;display:flex;flex-direction:column;cursor:pointer;}
+.deck-stack-tile.owned-dim{opacity:0.4;}
+.deck-stack-peek{width:96%;margin:0 auto;height:14px;overflow:hidden;
+  border-radius:5px 5px 0 0;border:1px solid var(--border);border-bottom:none;
+  box-shadow:0 -1px 2px rgba(0,0,0,0.06);}
+.deck-stack-peek img{width:100%;height:auto;display:block;}
+.deck-stack-top{position:relative;border:1px solid var(--border);border-radius:6px;
+  overflow:hidden;background:var(--bg-card);}
+.deck-stack-top img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
+.deck-stack-top.missing-pop{border-color:var(--red);box-shadow:0 0 0 1px var(--red);}
+.deck-stack-qty{position:absolute;top:5px;left:5px;background:rgba(0,0,0,0.78);
+  color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;z-index:2;}
+.deck-stack-price{position:absolute;bottom:5px;right:5px;background:rgba(22,163,74,0.95);
+  color:#fff;font-size:11px;font-weight:700;padding:3px 7px;border-radius:4px;
+  text-decoration:none;z-index:2;}
+.deck-stack-price:hover{background:rgba(22,163,74,1);}
+
+/* Charts inside the right-side view-mode panel: keep the SVG to the panel
+   width so it doesn't stretch and pixelate. */
+.deck-editor-grid.readonly .deck-charts svg{max-width:100%;height:auto;}
 
 /* View toggle in the CardBrowser toolbar — image grid vs compact list. */
 .card-view-toggle{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
@@ -8988,130 +9011,147 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
       ${legality.issues.map((i,idx) => html`<div key=${idx}>${i}</div>`)}
     </div>`}
 
-    <div class=${"deck-editor-grid"+(readOnly?" readonly":"")}>
-      ${!readOnly && html`<div class="deck-editor-browser">
-        <${CardBrowser} raw=${deckRaw} collection=${collection}
-          onSelectGroup=${onSelectGroupStable}
-          deckQty=${deckQtyForGroup}
-          onDeckQtyChange=${onDeckQtyChangeStable}/>
-      </div>`}
-
-      <aside class="deck-editor-panel">
-        <div class="deck-stat-row">
-          <div class="deck-stat">
-            <div class="deck-stat-lbl">Total value</div>
-            <div class="deck-stat-val green">$${totalValue.toFixed(2)}</div>
-            <div class="deck-stat-sub">${totalCount} / 60 cards</div>
-          </div>
-          <div class="deck-stat">
-            <div class="deck-stat-lbl">Owned</div>
-            <div class="deck-stat-val">${ownedPct.toFixed(0)}%</div>
-            <div class="deck-stat-sub">${ownedCount} / ${totalCount}</div>
-          </div>
-          ${massEntryUrl
-            ? html`<a class="deck-stat shop-cta" href=${massEntryUrl} target="_blank" rel="noopener nofollow sponsored"
-                title="Open all missing cards on TCGPlayer in one mass-entry cart (affiliate link)">
-                <div class="deck-stat-lbl">Missing</div>
-                <div class="deck-stat-val">$${missingValue.toFixed(2)}</div>
-                <div class="deck-stat-sub">Shop on TCGPlayer ↗</div>
-              </a>`
-            : html`<div class="deck-stat">
-                <div class="deck-stat-lbl">Missing</div>
-                <div class="deck-stat-val red">$${missingValue.toFixed(2)}</div>
-                <div class="deck-stat-sub">to complete</div>
-              </div>`}
+    ${(() => {
+      const statsBlock = html`<div class="deck-stat-row">
+        <div class="deck-stat">
+          <div class="deck-stat-lbl">Total value</div>
+          <div class="deck-stat-val green">$${totalValue.toFixed(2)}</div>
+          <div class="deck-stat-sub">${totalCount} / 60 cards</div>
         </div>
-
-        ${totalCount > 0 && html`<div class="deck-charts">
-          <${DeckCostChart} costByInk=${aggregates.costByInk}/>
-          <div class="deck-pie-row">
-            <${DeckPie} title="Colors" data=${aggregates.inkCount}
-              colorOf=${name => (INK_COLORS[name]?.border) || "var(--text-muted)"}/>
-            <${DeckPie} title="Inkable" data=${{Inkable:aggregates.inkable, "Non-Inkable":aggregates.nonInkable}}
-              colorOf=${name => name==="Inkable" ? "var(--accent)" : "var(--text-muted)"}/>
-            <${DeckPie} title="Types" data=${aggregates.typeCount}
-              colorOf=${TYPE_PIE_COLOR}/>
-          </div>
-        </div>`}
-
-        ${sectioned.length > 0 && html`<div class="deck-view-toolbar">
-          <span class=${"deck-highlight-pill"+(highlightMissing?" on":"")}
-            onClick=${()=>setHighlightMissing(v=>!v)}
-            title="Dim cards you already own so the missing ones stand out">
-            <span class="dot"></span>${highlightMissing?"Highlighting missing":"Highlight missing"}
-          </span>
-          <div ref=${viewDropRef} style=${{position:"relative",marginLeft:"auto"}}>
-            <button class="deck-view-trigger" onClick=${()=>setViewDropOpen(o=>!o)}>View ▾</button>
-            ${viewDropOpen && html`<div class="deck-view-popover">
-              <div>
-                <div class="deck-view-section-title">Layout</div>
-                <div class="deck-view-layout-row">
-                  <button class=${viewLayout==="list"?"active":""} onClick=${()=>setViewLayout("list")} title="Compact list">☰</button>
-                  <button class=${viewLayout==="grid"?"active":""} onClick=${()=>setViewLayout("grid")} title="Image grid">▦</button>
-                </div>
-              </div>
-              <div>
-                <div class="deck-view-section-title">Sort by</div>
-                <select class="deck-view-select" value=${sortBy} onChange=${e=>setSortBy(e.target.value)}>
-                  <option value="cost-asc">Cost: Low to High</option>
-                  <option value="cost-desc">Cost: High to Low</option>
-                  <option value="name">Name (A→Z)</option>
-                  <option value="price-desc">Price: High to Low</option>
-                  <option value="price-asc">Price: Low to High</option>
-                </select>
-              </div>
+        <div class="deck-stat">
+          <div class="deck-stat-lbl">Owned</div>
+          <div class="deck-stat-val">${ownedPct.toFixed(0)}%</div>
+          <div class="deck-stat-sub">${ownedCount} / ${totalCount}</div>
+        </div>
+        ${massEntryUrl
+          ? html`<a class="deck-stat shop-cta" href=${massEntryUrl} target="_blank" rel="noopener nofollow sponsored"
+              title="Open all missing cards on TCGPlayer in one mass-entry cart (affiliate link)">
+              <div class="deck-stat-lbl">Missing</div>
+              <div class="deck-stat-val">$${missingValue.toFixed(2)}</div>
+              <div class="deck-stat-sub">Shop on TCGPlayer ↗</div>
+            </a>`
+          : html`<div class="deck-stat">
+              <div class="deck-stat-lbl">Missing</div>
+              <div class="deck-stat-val red">$${missingValue.toFixed(2)}</div>
+              <div class="deck-stat-sub">to complete</div>
             </div>`}
-          </div>
-        </div>`}
+      </div>
+      ${totalCount > 0 && html`<div class="deck-charts">
+        <${DeckCostChart} costByInk=${aggregates.costByInk}/>
+        <div class="deck-pie-row">
+          <${DeckPie} title="Colors" data=${aggregates.inkCount}
+            colorOf=${name => (INK_COLORS[name]?.border) || "var(--text-muted)"}/>
+          <${DeckPie} title="Inkable" data=${{Inkable:aggregates.inkable, "Non-Inkable":aggregates.nonInkable}}
+            colorOf=${name => name==="Inkable" ? "var(--accent)" : "var(--text-muted)"}/>
+          <${DeckPie} title="Types" data=${aggregates.typeCount}
+            colorOf=${TYPE_PIE_COLOR}/>
+        </div>
+      </div>`}`;
 
-        ${sectioned.length === 0
-          ? html`<div class="muted" style=${{fontSize:12,padding:"20px 4px",textAlign:"center"}}>
-              ${readOnly ? "This deck is empty." : html`Deck is empty. Click <strong>+</strong> on any card in the browser to add it.`}</div>`
-          : sectioned.map(section => html`<div key=${section.key} class="deck-section">
-              <div class="deck-section-title">${section.label} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
-              ${viewLayout === "grid"
-                ? html`<div class="deck-section-grid">${section.items.map(item => {
-                    const meta = item.meta || {};
-                    const price = cheapestCardPrice(cardById[item.card_id] || []);
-                    const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
-                    const k = item.card_id+":"+item.printing;
-                    const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
-                    const short = ownedShortByKey[k]?.short || 0;
-                    const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
-                    return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
-                      ${meta.img_small
-                        ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}/>`
-                        : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
-                      <span class="deck-grid-tile-qty">${item.quantity}×</span>
-                      ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
-                    </div>`;
-                  })}</div>`
-                : section.items.map(item => {
-                    const meta = item.meta || {};
-                    const price = cheapestCardPrice(cardById[item.card_id] || []);
-                    const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
-                    const k = item.card_id+":"+item.printing;
-                    const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
-                    const short = ownedShortByKey[k]?.short || 0;
-                    const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
-                    return html`<div key=${k} class=${"deck-row"+dimClass}>
-                      <span class="deck-row-qty">${item.quantity}×</span>
-                      <span class="deck-row-cost">${meta.cost ?? "—"}</span>
-                      <span class="deck-row-name" title=${meta["Product Name"]}
-                        onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}
-                        style=${{cursor:"pointer"}}>${meta["Product Name"] || "(unknown card)"}</span>
-                      ${price!=null && aff
-                        ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
-                        : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
-                      ${!readOnly && html`<div class="deck-row-counter">
-                        <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
-                        <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(4, item.quantity + 1))} disabled=${item.quantity>=4}>+</button>
-                      </div>`}
-                    </div>`;
-                  })}
+      const renderItem = (item) => {
+        const meta = item.meta || {};
+        const price = cheapestCardPrice(cardById[item.card_id] || []);
+        const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
+        const k = item.card_id+":"+item.printing;
+        const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
+        const short = ownedShortByKey[k]?.short || 0;
+        const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
+        if(viewLayout === "grid"){
+          return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
+            ${meta.img_small
+              ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}/>`
+              : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+            <span class="deck-grid-tile-qty">${item.quantity}×</span>
+            ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+          </div>`;
+        }
+        if(viewLayout === "stacked"){
+          const peeks = Math.max(0, item.quantity - 1);
+          return html`<div key=${k} class=${"deck-stack-tile"+(highlightMissing && owned?" owned-dim":"")}
+            onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}>
+            ${Array.from({length: peeks}).map((_, i) => html`<div key=${i} class="deck-stack-peek">
+              ${meta.img_small ? html`<img src=${meta.img_small} alt=""/>` : null}
             </div>`)}
-      </aside>
-    </div>
+            <div class=${"deck-stack-top"+(highlightMissing && short>0?" missing-pop":"")}>
+              <span class="deck-stack-qty">${item.quantity}×</span>
+              ${meta.img_small
+                ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy"/>`
+                : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+              ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+            </div>
+          </div>`;
+        }
+        return html`<div key=${k} class=${"deck-row"+dimClass}>
+          <span class="deck-row-qty">${item.quantity}×</span>
+          <span class="deck-row-cost">${meta.cost ?? "—"}</span>
+          <span class="deck-row-name" title=${meta["Product Name"]}
+            onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}
+            style=${{cursor:"pointer"}}>${meta["Product Name"] || "(unknown card)"}</span>
+          ${price!=null && aff
+            ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
+            : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
+          ${!readOnly && html`<div class="deck-row-counter">
+            <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
+            <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(4, item.quantity + 1))} disabled=${item.quantity>=4}>+</button>
+          </div>`}
+        </div>`;
+      };
+
+      const listBlock = html`${sectioned.length > 0 && html`<div class="deck-view-toolbar">
+        <span class=${"deck-highlight-pill"+(highlightMissing?" on":"")}
+          onClick=${()=>setHighlightMissing(v=>!v)}
+          title="Dim cards you already own so the missing ones stand out">
+          <span class="dot"></span>${highlightMissing?"Highlighting missing":"Highlight missing"}
+        </span>
+        <div ref=${viewDropRef} style=${{position:"relative",marginLeft:"auto"}}>
+          <button class="deck-view-trigger" onClick=${()=>setViewDropOpen(o=>!o)}>View ▾</button>
+          ${viewDropOpen && html`<div class="deck-view-popover">
+            <div>
+              <div class="deck-view-section-title">Layout</div>
+              <div class="deck-view-layout-row">
+                <button class=${viewLayout==="list"?"active":""} onClick=${()=>setViewLayout("list")} title="Compact list">☰</button>
+                <button class=${viewLayout==="grid"?"active":""} onClick=${()=>setViewLayout("grid")} title="Image grid">▦</button>
+                <button class=${viewLayout==="stacked"?"active":""} onClick=${()=>setViewLayout("stacked")} title="Stacked pile">▤</button>
+              </div>
+            </div>
+            <div>
+              <div class="deck-view-section-title">Sort by</div>
+              <select class="deck-view-select" value=${sortBy} onChange=${e=>setSortBy(e.target.value)}>
+                <option value="cost-asc">Cost: Low to High</option>
+                <option value="cost-desc">Cost: High to Low</option>
+                <option value="name">Name (A→Z)</option>
+                <option value="price-desc">Price: High to Low</option>
+                <option value="price-asc">Price: Low to High</option>
+              </select>
+            </div>
+          </div>`}
+        </div>
+      </div>`}
+      ${sectioned.length === 0
+        ? html`<div class="muted" style=${{fontSize:12,padding:"20px 4px",textAlign:"center"}}>
+            ${readOnly ? "This deck is empty." : html`Deck is empty. Click <strong>+</strong> on any card in the browser to add it.`}</div>`
+        : sectioned.map(section => html`<div key=${section.key} class="deck-section">
+            <div class="deck-section-title">${section.label} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
+            ${viewLayout === "grid"
+              ? html`<div class="deck-section-grid">${section.items.map(renderItem)}</div>`
+              : viewLayout === "stacked"
+                ? html`<div class="deck-section-stack">${section.items.map(renderItem)}</div>`
+                : section.items.map(renderItem)}
+          </div>`)}`;
+
+      return html`<div class=${"deck-editor-grid"+(readOnly?" readonly":"")}>
+        ${readOnly
+          ? html`<div class="deck-view-list">${listBlock}</div>
+                 <aside class="deck-editor-panel">${statsBlock}</aside>`
+          : html`<div class="deck-editor-browser">
+                   <${CardBrowser} raw=${deckRaw} collection=${collection}
+                     onSelectGroup=${onSelectGroupStable}
+                     deckQty=${deckQtyForGroup}
+                     onDeckQtyChange=${onDeckQtyChangeStable}/>
+                 </div>
+                 <aside class="deck-editor-panel">${statsBlock}${listBlock}</aside>`}
+      </div>`;
+    })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${null} collection=${collection} updateQty=${null} onSignIn=${()=>{}}/>`}
