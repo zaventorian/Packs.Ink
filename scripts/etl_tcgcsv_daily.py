@@ -82,8 +82,15 @@ def update_set_group_mapping(sb: Supabase, groups: list[dict]) -> None:
         updates.append({"id": match["id"], "tcgplayer_group_id": g.get("groupId")})
     if updates:
         print(f"  updating tcgplayer_group_id on {len(updates)} sets")
+        failed = 0
         for u in updates:
-            sb.update("sets", match={"id": u["id"]}, patch={"tcgplayer_group_id": u["tcgplayer_group_id"]})
+            try:
+                sb.update("sets", match={"id": u["id"]}, patch={"tcgplayer_group_id": u["tcgplayer_group_id"]})
+            except Exception as e:
+                failed += 1
+                print(f"  set group update failed for {u['id']}: {e}")
+        if failed:
+            print(f"  WARNING: {failed}/{len(updates)} set group updates failed")
 
 
 def main() -> None:
@@ -125,6 +132,30 @@ def main() -> None:
         all_rows,
         on_conflict="tcgplayer_product_id,date,printing,source,grade",
     )
+
+    # Refresh derived materialized views so the site reflects today's
+    # snapshot. Failures here mean the site serves stale derived data while
+    # raw prices_daily is fresh — track them and exit non-zero so cron
+    # surfaces the breakage instead of silently succeeding.
+    refresh_failures: list[str] = []
+    for fn, hint in (
+        ("refresh_card_prices_latest",   "supabase/12_card_prices_latest_matview.sql"),
+        ("refresh_rarity_avg_daily",     "supabase/07_refresh_rpc.sql"),
+        ("refresh_price_movers",         "supabase/10_price_movers_matview.sql"),
+        ("refresh_sealed_prices_latest", "supabase/16_sealed_prices_latest.sql"),
+    ):
+        try:
+            sb.rpc(fn)
+            print(f"Refreshed via {fn}().")
+        except Exception as e:
+            refresh_failures.append(fn)
+            print(f"Could not call {fn} (run {hint} to enable): {e}")
+
+    if refresh_failures:
+        sys.exit(
+            f"\nFAIL: matview refresh failed for: {', '.join(refresh_failures)}. "
+            "Raw prices_daily is up to date but derived views are stale."
+        )
     print("\nDone.")
 
 

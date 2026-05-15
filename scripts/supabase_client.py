@@ -36,9 +36,24 @@ class Supabase:
         return h
 
     def upsert(self, table: str, rows: list[dict], on_conflict: str | None = None, batch: int = 100) -> None:
-        """Upsert rows into a table. on_conflict is the PK column(s) for merging."""
+        """Upsert rows into a table. on_conflict is the PK column(s) for merging.
+
+        Dedupes by the on_conflict key before sending: PostgREST's
+        ON CONFLICT DO UPDATE rejects batches with duplicate conflict-target
+        rows ("cannot affect row a second time"), so we keep the last
+        occurrence of each key.
+        """
         if not rows:
             return
+        if on_conflict:
+            key_cols = [c.strip() for c in on_conflict.split(",") if c.strip()]
+            seen: dict[tuple, dict] = {}
+            for row in rows:
+                seen[tuple(row.get(c) for c in key_cols)] = row
+            deduped = list(seen.values())
+            if len(deduped) != len(rows):
+                print(f"  deduped {table}: {len(rows)} -> {len(deduped)} rows by ({on_conflict})")
+            rows = deduped
         endpoint = f"{self.url}/rest/v1/{table}"
         params = {}
         if on_conflict:
@@ -98,6 +113,19 @@ class Supabase:
             raise RuntimeError(
                 f"Patch {table} {match} failed ({r.status_code}): {r.text[:500]}"
             )
+
+    def rpc(self, name: str, args: dict | None = None) -> dict | list | None:
+        """Call a Postgres function exposed via PostgREST RPC."""
+        endpoint = f"{self.url}/rest/v1/rpc/{name}"
+        r = requests.post(endpoint, headers=self._headers(), json=args or {}, timeout=120)
+        if not r.ok:
+            raise RuntimeError(f"RPC {name} failed ({r.status_code}): {r.text[:500]}")
+        if not r.text:
+            return None
+        try:
+            return r.json()
+        except Exception:
+            return r.text
 
     def select(
         self,

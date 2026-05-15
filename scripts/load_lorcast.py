@@ -69,7 +69,7 @@ def transform_card(c: dict, set_id: str) -> dict:
         "rarity": c.get("rarity"),
         "ink": c.get("ink"),
         "cost": c.get("cost"),
-        "inkable": c.get("inkable"),
+        "inkable": c.get("inkwell"),  # Lorcast's field name; we store it as `inkable`
         "card_type": card_type,
         "classifications": c.get("classifications"),
         "text": c.get("text"),
