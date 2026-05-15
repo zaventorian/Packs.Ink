@@ -1250,6 +1250,74 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .deck-row-counter button:disabled{opacity:0.3;cursor:not-allowed;}
 
+/* View mode (readOnly && isOwnDeck): the right panel IS the page content, so
+   don't pin it as a scrollable sidebar. */
+.deck-editor-grid.readonly .deck-editor-panel{position:static;max-height:none;overflow:visible;}
+.deck-editor-grid.readonly{max-width:none;}
+.deck-editor-grid.readonly .deck-editor-panel{padding:0;background:transparent;border:none;}
+
+/* Missing tile becomes a Shop CTA. */
+.deck-stat.shop-cta{background:linear-gradient(180deg,#16a34a 0%,#15803d 100%);
+  border-color:#15803d;color:#fff;text-decoration:none;display:flex;flex-direction:column;
+  cursor:pointer;transition:transform 0.05s,box-shadow 0.1s;}
+.deck-stat.shop-cta:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(21,128,61,0.25);}
+.deck-stat.shop-cta .deck-stat-lbl,
+.deck-stat.shop-cta .deck-stat-val,
+.deck-stat.shop-cta .deck-stat-sub{color:#fff;}
+.deck-stat.shop-cta .deck-stat-sub{opacity:0.85;text-decoration:underline;}
+
+/* View dropdown trigger + popover. */
+.deck-view-toolbar{display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;}
+.deck-view-trigger{padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);}
+.deck-view-trigger:hover{border-color:var(--accent);}
+.deck-view-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
+  width:240px;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  padding:12px;display:flex;flex-direction:column;gap:10px;}
+.deck-view-section-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;color:var(--text-muted);}
+.deck-view-layout-row{display:flex;gap:6px;}
+.deck-view-layout-row button{flex:1;padding:8px;font-size:14px;cursor:pointer;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;color:var(--text);}
+.deck-view-layout-row button.active{background:var(--accent-glow);border-color:var(--border-accent);color:var(--accent);}
+.deck-view-select{padding:6px 8px;font-size:12px;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:5px;color:var(--text);}
+
+/* Highlight-missing toggle pill. */
+.deck-highlight-pill{display:inline-flex;align-items:center;gap:6px;
+  padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:14px;
+  color:var(--text-muted);user-select:none;}
+.deck-highlight-pill.on{background:var(--accent-glow);border-color:var(--border-accent);color:var(--accent);}
+.deck-highlight-pill .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:0.6;}
+.deck-highlight-pill.on .dot{opacity:1;}
+
+/* Owned rows dim when highlightMissing is on; missing rows pop. */
+.deck-row.owned-dim{opacity:0.4;}
+.deck-row.missing-pop{background:linear-gradient(90deg,rgba(220,38,38,0.07),transparent);
+  border-left:2px solid var(--red);padding-left:6px;}
+
+/* Per-card price chip becomes an affiliate link. */
+a.deck-row-price{color:var(--green);text-decoration:none;
+  padding:2px 6px;border-radius:4px;background:var(--bg-card);border:1px solid var(--border);}
+a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08);}
+
+/* Image-grid layout for the card list. */
+.deck-section-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;}
+.deck-grid-tile{position:relative;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:6px;overflow:hidden;display:flex;flex-direction:column;}
+.deck-grid-tile.owned-dim{opacity:0.4;}
+.deck-grid-tile.missing-pop{border-color:var(--red);}
+.deck-grid-tile img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
+.deck-grid-tile-qty{position:absolute;top:4px;left:4px;background:rgba(0,0,0,0.75);
+  color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;}
+.deck-grid-tile-price{position:absolute;bottom:4px;right:4px;background:rgba(22,163,74,0.92);
+  color:#fff;font-size:10px;font-weight:700;padding:2px 5px;border-radius:3px;
+  text-decoration:none;}
+.deck-grid-tile-price:hover{background:rgba(22,163,74,1);}
+
 /* View toggle in the CardBrowser toolbar — image grid vs compact list. */
 .card-view-toggle{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
 .card-view-toggle button{background:transparent;color:var(--text-muted);border:none;
@@ -8527,6 +8595,30 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const shareRef = useRef(null);
+  // View-mode preferences (layout, sort, highlight-missing). Persist to
+  // localStorage so the user's choice survives reloads.
+  const [viewLayout, setViewLayout] = useState(() => {
+    try { return localStorage.getItem("packsink:deckview:layout") || "list"; } catch { return "list"; }
+  });
+  const [sortBy, setSortBy] = useState(() => {
+    try { return localStorage.getItem("packsink:deckview:sort") || "cost-asc"; } catch { return "cost-asc"; }
+  });
+  const [highlightMissing, setHighlightMissing] = useState(() => {
+    try { return localStorage.getItem("packsink:deckview:highlight") === "true"; } catch { return false; }
+  });
+  const [viewDropOpen, setViewDropOpen] = useState(false);
+  const viewDropRef = useRef(null);
+  useEffect(()=>{ try { localStorage.setItem("packsink:deckview:layout", viewLayout); } catch{} }, [viewLayout]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:deckview:sort", sortBy); } catch{} }, [sortBy]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:deckview:highlight", String(highlightMissing)); } catch{} }, [highlightMissing]);
+  useEffect(()=>{
+    if(!viewDropOpen) return;
+    const onDoc = (e) => {
+      if(viewDropRef.current && !viewDropRef.current.contains(e.target)) setViewDropOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [viewDropOpen]);
   useEffect(()=>{
     if(!shareOpen) return;
     const onDoc = (e) => {
@@ -8695,6 +8787,39 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   }, 0);
   const ownedPct = totalCount ? (ownedCount/totalCount*100) : 0;
 
+  // Per-row owned/missing counts. Used by the highlight toggle, the missing
+  // tile, and the mass-entry affiliate URL.
+  const ownedShortByKey = useMemo(() => {
+    const out = {};
+    for(const c of deck.cards||[]){
+      const have = (collection[c.card_id+":Normal"] || 0)
+                 + (collection[c.card_id+":Cold Foil"] || 0)
+                 + (collection[c.card_id+":Foil"] || 0)
+                 + (collection[c.card_id+":Holofoil"] || 0);
+      out[c.card_id+":"+c.printing] = {have, short: Math.max(0, c.quantity - have)};
+    }
+    return out;
+  }, [deck.cards, collection]);
+
+  // Sort comparator for items inside each section.
+  const sortItems = useCallback((items) => {
+    const get = (it, k) => {
+      if(k === "cost") return it.meta?.cost ?? 99;
+      if(k === "name") return (it.meta?.["Product Name"] || "").toLowerCase();
+      if(k === "price") return cheapestCardPrice(cardById[it.card_id] || []) || 0;
+      return 0;
+    };
+    const copy = items.slice();
+    switch(sortBy){
+      case "cost-asc":  copy.sort((a,b) => get(a,"cost") - get(b,"cost")); break;
+      case "cost-desc": copy.sort((a,b) => get(b,"cost") - get(a,"cost")); break;
+      case "name":      copy.sort((a,b) => get(a,"name").localeCompare(get(b,"name"))); break;
+      case "price-desc":copy.sort((a,b) => get(b,"price") - get(a,"price")); break;
+      case "price-asc": copy.sort((a,b) => get(a,"price") - get(b,"price")); break;
+    }
+    return copy;
+  }, [sortBy, cardById]);
+
   // Group deck rows into sections by card_type.
   const sectioned = useMemo(() => {
     const out = DECK_SECTIONS.map(s => ({...s, items: []}));
@@ -8706,8 +8831,26 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
       section.items.push({...c, meta});
     }
     if(fallback.items.length) out.push(fallback);
-    return out.filter(s => s.items.length);
-  }, [deck.cards, cardById]);
+    return out.filter(s => s.items.length).map(s => ({...s, items: sortItems(s.items)}));
+  }, [deck.cards, cardById, sortItems]);
+
+  // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
+  // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
+  const massEntryUrl = useMemo(() => {
+    const lines = [];
+    for(const c of deck.cards||[]){
+      const meta = (cardById[c.card_id]||[])[0];
+      const k = c.card_id+":"+c.printing;
+      const short = ownedShortByKey[k]?.short || 0;
+      if(short > 0 && meta){
+        const name = meta["Product Name"] || meta.name || "";
+        if(name) lines.push(`${short} ${name}`);
+      }
+    }
+    if(!lines.length) return null;
+    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+  }, [deck.cards, cardById, ownedShortByKey]);
 
   return html`<div>
     ${readOnly && !isOwnDeck && html`<div class="deck-readonly-banner">
@@ -8865,11 +9008,18 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             <div class="deck-stat-val">${ownedPct.toFixed(0)}%</div>
             <div class="deck-stat-sub">${ownedCount} / ${totalCount}</div>
           </div>
-          <div class="deck-stat">
-            <div class="deck-stat-lbl">Missing</div>
-            <div class="deck-stat-val red">$${missingValue.toFixed(2)}</div>
-            <div class="deck-stat-sub">to complete</div>
-          </div>
+          ${massEntryUrl
+            ? html`<a class="deck-stat shop-cta" href=${massEntryUrl} target="_blank" rel="noopener nofollow sponsored"
+                title="Open all missing cards on TCGPlayer in one mass-entry cart (affiliate link)">
+                <div class="deck-stat-lbl">Missing</div>
+                <div class="deck-stat-val">$${missingValue.toFixed(2)}</div>
+                <div class="deck-stat-sub">Shop on TCGPlayer ↗</div>
+              </a>`
+            : html`<div class="deck-stat">
+                <div class="deck-stat-lbl">Missing</div>
+                <div class="deck-stat-val red">$${missingValue.toFixed(2)}</div>
+                <div class="deck-stat-sub">to complete</div>
+              </div>`}
         </div>
 
         ${totalCount > 0 && html`<div class="deck-charts">
@@ -8883,27 +9033,82 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
               colorOf=${TYPE_PIE_COLOR}/>
           </div>
         </div>`}
+
+        ${sectioned.length > 0 && html`<div class="deck-view-toolbar">
+          <span class=${"deck-highlight-pill"+(highlightMissing?" on":"")}
+            onClick=${()=>setHighlightMissing(v=>!v)}
+            title="Dim cards you already own so the missing ones stand out">
+            <span class="dot"></span>${highlightMissing?"Highlighting missing":"Highlight missing"}
+          </span>
+          <div ref=${viewDropRef} style=${{position:"relative",marginLeft:"auto"}}>
+            <button class="deck-view-trigger" onClick=${()=>setViewDropOpen(o=>!o)}>View ▾</button>
+            ${viewDropOpen && html`<div class="deck-view-popover">
+              <div>
+                <div class="deck-view-section-title">Layout</div>
+                <div class="deck-view-layout-row">
+                  <button class=${viewLayout==="list"?"active":""} onClick=${()=>setViewLayout("list")} title="Compact list">☰</button>
+                  <button class=${viewLayout==="grid"?"active":""} onClick=${()=>setViewLayout("grid")} title="Image grid">▦</button>
+                </div>
+              </div>
+              <div>
+                <div class="deck-view-section-title">Sort by</div>
+                <select class="deck-view-select" value=${sortBy} onChange=${e=>setSortBy(e.target.value)}>
+                  <option value="cost-asc">Cost: Low to High</option>
+                  <option value="cost-desc">Cost: High to Low</option>
+                  <option value="name">Name (A→Z)</option>
+                  <option value="price-desc">Price: High to Low</option>
+                  <option value="price-asc">Price: Low to High</option>
+                </select>
+              </div>
+            </div>`}
+          </div>
+        </div>`}
+
         ${sectioned.length === 0
           ? html`<div class="muted" style=${{fontSize:12,padding:"20px 4px",textAlign:"center"}}>
-              Deck is empty. Click <strong>+</strong> on any card in the browser to add it.</div>`
+              ${readOnly ? "This deck is empty." : html`Deck is empty. Click <strong>+</strong> on any card in the browser to add it.`}</div>`
           : sectioned.map(section => html`<div key=${section.key} class="deck-section">
               <div class="deck-section-title">${section.label} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
-              ${section.items
-                .sort((a,b) => (a.meta?.cost ?? 99) - (b.meta?.cost ?? 99))
-                .map(item => {
-                  const meta = item.meta || {};
-                  const price = cheapestCardPrice(cardById[item.card_id] || []);
-                  return html`<div key=${item.card_id+":"+item.printing} class="deck-row">
-                    <span class="deck-row-qty">${item.quantity}×</span>
-                    <span class="deck-row-cost">${meta.cost ?? "—"}</span>
-                    <span class="deck-row-name" title=${meta["Product Name"]}>${meta["Product Name"] || "(unknown card)"}</span>
-                    <span class="deck-row-price">${price!=null ? "$"+price.toFixed(2) : "—"}</span>
-                    <div class="deck-row-counter">
-                      <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
-                      <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(4, item.quantity + 1))} disabled=${item.quantity>=4}>+</button>
-                    </div>
-                  </div>`;
-                })}
+              ${viewLayout === "grid"
+                ? html`<div class="deck-section-grid">${section.items.map(item => {
+                    const meta = item.meta || {};
+                    const price = cheapestCardPrice(cardById[item.card_id] || []);
+                    const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
+                    const k = item.card_id+":"+item.printing;
+                    const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
+                    const short = ownedShortByKey[k]?.short || 0;
+                    const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
+                    return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
+                      ${meta.img_small
+                        ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}/>`
+                        : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
+                      <span class="deck-grid-tile-qty">${item.quantity}×</span>
+                      ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
+                    </div>`;
+                  })}</div>`
+                : section.items.map(item => {
+                    const meta = item.meta || {};
+                    const price = cheapestCardPrice(cardById[item.card_id] || []);
+                    const aff = tcgUrl(meta.tcgplayer_product_id, item.printing);
+                    const k = item.card_id+":"+item.printing;
+                    const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
+                    const short = ownedShortByKey[k]?.short || 0;
+                    const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
+                    return html`<div key=${k} class=${"deck-row"+dimClass}>
+                      <span class="deck-row-qty">${item.quantity}×</span>
+                      <span class="deck-row-cost">${meta.cost ?? "—"}</span>
+                      <span class="deck-row-name" title=${meta["Product Name"]}
+                        onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}
+                        style=${{cursor:"pointer"}}>${meta["Product Name"] || "(unknown card)"}</span>
+                      ${price!=null && aff
+                        ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
+                        : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
+                      ${!readOnly && html`<div class="deck-row-counter">
+                        <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.max(0, item.quantity - 1))}>−</button>
+                        <button onClick=${()=>onUpdateCard(item.card_id, item.printing, Math.min(4, item.quantity + 1))} disabled=${item.quantity>=4}>+</button>
+                      </div>`}
+                    </div>`;
+                  })}
             </div>`)}
       </aside>
     </div>
