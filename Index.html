@@ -8619,14 +8619,25 @@ const EditableDeckName = ({name, onSave}) => {
 
 // Stable color picker for the card-type pie — mirrors common deckbuilder
 // palettes (characters dominate so we use the accent gold for them).
+// Pie-chart palettes that intentionally avoid the six ink colors so the
+// Inkable / Types pies don't get visually confused with the Colors pie.
 const TYPE_PIE_COLOR = (name) => ({
-  "Character": "var(--accent)",
-  "Action":    "#5b8def",
-  "Item":      "#d97f3b",
-  "Location":  "#7fb27f",
-  "Action - Song": "#5b8def",
-  "Other":     "var(--text-muted)",
+  "Character":     "#ec4899",  // pink-500
+  "Action":        "#06b6d4",  // cyan-500
+  "Item":          "#f97316",  // orange-500
+  "Location":      "#84cc16",  // lime-500
+  "Action - Song": "#0891b2",  // cyan-600 (slightly darker so songs read as a sub-variant)
+  "Other":         "var(--text-muted)",
 }[name] || "var(--text-muted)");
+const INKABLE_PIE_COLOR = (name) =>
+  name === "Inkable" ? "#14b8a6" :        // teal-500 (positive, not amber)
+  name === "Non-Inkable" ? "#fb7185" :    // rose-400 (negative, not ruby)
+  "var(--text-muted)";
+// Neutral charcoal for the dual-ink slice in the Colors pie. The bar chart
+// keeps the diagonal gradient (visible at the larger sizes), but pie slices
+// can be tiny (2/60 = 3% of pie) where the gradient becomes confusing — a
+// flat neutral lets it read as "this is the dual category" instead.
+const DUAL_INK_PIE_COLOR = "#475569";  // slate-600
 
 // Cost curve — stacked bar chart, one column per cost bucket 1..9+,
 // each column stacked by ink color. Heights normalized to the tallest bar.
@@ -8729,15 +8740,16 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
     <div class="deck-pie-title">${title}</div>
     <div class="deck-pie-empty">—</div>
   </div>`;
-  // Pre-resolve slice fills. If gradientPrefix is set, dual-ink keys like
-  // "Emerald/Sapphire" get a gradient fill; otherwise we fall back to the
-  // colorOf callback (used for Inkable / Types pies that don't have duals).
+  // When gradientPrefix is set (Colors pie), dual-ink keys like
+  // "Emerald/Sapphire" render as a flat neutral charcoal so a 3%-of-pie
+  // slice doesn't disappear into the diagonal gradient. The bar chart
+  // keeps its diagonal gradient (different visual context, larger blocks).
+  // Inkable / Types pies don't have dual buckets and use colorOf directly.
   const defsList = [];
   const colorFor = (k) => {
     if(gradientPrefix){
-      const {fill, defs} = resolveInkFill(k, gradientPrefix);
-      if(defs) defsList.push(defs);
-      return fill;
+      if((k||"").includes("/")) return DUAL_INK_PIE_COLOR;
+      return INK_COLORS[k]?.border || "var(--text-muted)";
     }
     return colorOf(k);
   };
@@ -8752,13 +8764,7 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
     <div class="deck-pie-title">${title}</div>
     <svg viewBox="0 0 80 80" width="80" height="80">
       <defs>${defsList}</defs>
-      ${slices.map(s => {
-        const isDual = (s.k||"").includes("/");
-        return html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)}
-          fill=${s.color}
-          stroke=${isDual ? "rgba(0,0,0,0.85)" : "none"}
-          stroke-width=${isDual ? 1.2 : 0}/>`;
-      })}
+      ${slices.map(s => html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)} fill=${s.color}/>`)}
     </svg>
     <div class="deck-pie-legend">
       ${slices.map(s => {
@@ -8783,11 +8789,8 @@ const swatchStyle = (inkKey, gradientPrefix) => {
   if(parts.length === 1){
     return {background: INK_COLORS[parts[0]]?.border || "var(--text-muted)"};
   }
-  const colors = parts.map(p => INK_COLORS[p]?.border || "#888");
-  const stops = colors.map((c, i) =>
-    `${c} ${(i*100/colors.length).toFixed(0)}% ${((i+1)*100/colors.length).toFixed(0)}%`
-  ).join(", ");
-  return {background: `linear-gradient(135deg, ${stops})`};
+  // Dual swatch uses the neutral pie color too so legend + slice match.
+  return {background: DUAL_INK_PIE_COLOR};
 };
 
 // Deck editor: card browser on the left, deck summary on the right. The
@@ -9242,7 +9245,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             gradientPrefix="colors-pie"
             colorOf=${name => (INK_COLORS[name]?.border) || "var(--text-muted)"}/>
           <${DeckPie} title="Inkable" data=${{Inkable:aggregates.inkable, "Non-Inkable":aggregates.nonInkable}}
-            colorOf=${name => name==="Inkable" ? "var(--accent)" : "var(--text-muted)"}/>
+            colorOf=${INKABLE_PIE_COLOR}/>
           <${DeckPie} title="Types" data=${aggregates.typeCount}
             colorOf=${TYPE_PIE_COLOR}/>
         </div>
