@@ -1318,24 +1318,48 @@ a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08)
   text-decoration:none;}
 .deck-grid-tile-price:hover{background:rgba(22,163,74,1);}
 
-/* Stacked-pile layout — each qty renders as a peek-strip above the top card. */
-.deck-section-stack{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:14px;}
-.deck-stack-tile{position:relative;display:flex;flex-direction:column;cursor:pointer;}
+/* Stacked-pile layout — each qty renders as a peek-strip above the top card.
+   Each peek looks like a real card edge: rounded top corners, border, drop
+   shadow under it so the next card "sits" on the one below. Hover lifts the
+   whole stack slightly so it feels interactive. */
+.deck-section-stack{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px;}
+.deck-stack-tile{position:relative;display:flex;flex-direction:column;cursor:pointer;
+  transition:transform 0.12s ease-out;}
+.deck-stack-tile:hover{transform:translateY(-3px);}
 .deck-stack-tile.owned-dim{opacity:0.4;}
-.deck-stack-peek{width:96%;margin:0 auto;height:14px;overflow:hidden;
-  border-radius:5px 5px 0 0;border:1px solid var(--border);border-bottom:none;
-  box-shadow:0 -1px 2px rgba(0,0,0,0.06);}
-.deck-stack-peek img{width:100%;height:auto;display:block;}
-.deck-stack-top{position:relative;border:1px solid var(--border);border-radius:6px;
-  overflow:hidden;background:var(--bg-card);}
+.deck-stack-peek{position:relative;width:100%;height:16px;overflow:hidden;
+  border-radius:9px 9px 0 0;
+  border:1px solid rgba(0,0,0,0.18);border-bottom:none;
+  background:var(--bg-card);
+  box-shadow:0 2px 4px -1px rgba(0,0,0,0.18);
+  margin-bottom:-2px;}
+html[data-theme="dark"] .deck-stack-peek{border-color:rgba(255,255,255,0.08);
+  box-shadow:0 2px 4px -1px rgba(0,0,0,0.5);}
+.deck-stack-peek img{width:100%;height:auto;display:block;
+  object-fit:cover;object-position:0 0;}
+/* Inset highlight along the top of each peek — sells the "real card" look. */
+.deck-stack-peek::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent);
+  pointer-events:none;}
+.deck-stack-top{position:relative;border:1px solid rgba(0,0,0,0.22);border-radius:10px;
+  overflow:hidden;background:var(--bg-card);
+  box-shadow:0 6px 14px -4px rgba(0,0,0,0.25),0 2px 4px -1px rgba(0,0,0,0.15);
+  transition:box-shadow 0.12s ease-out;}
+html[data-theme="dark"] .deck-stack-top{border-color:rgba(255,255,255,0.1);
+  box-shadow:0 6px 14px -4px rgba(0,0,0,0.6),0 2px 4px -1px rgba(0,0,0,0.4);}
+.deck-stack-tile:hover .deck-stack-top{box-shadow:0 10px 22px -4px rgba(0,0,0,0.32),0 3px 6px -1px rgba(0,0,0,0.2);}
 .deck-stack-top img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
-.deck-stack-top.missing-pop{border-color:var(--red);box-shadow:0 0 0 1px var(--red);}
-.deck-stack-qty{position:absolute;top:5px;left:5px;background:rgba(0,0,0,0.78);
-  color:#fff;font-size:11px;font-weight:700;padding:2px 7px;border-radius:4px;z-index:2;}
-.deck-stack-price{position:absolute;bottom:5px;right:5px;background:rgba(22,163,74,0.95);
-  color:#fff;font-size:11px;font-weight:700;padding:3px 7px;border-radius:4px;
-  text-decoration:none;z-index:2;}
-.deck-stack-price:hover{background:rgba(22,163,74,1);}
+.deck-stack-top.missing-pop{border-color:var(--red);box-shadow:0 0 0 2px rgba(220,38,38,0.4),0 6px 14px -4px rgba(0,0,0,0.25);}
+.deck-stack-qty{position:absolute;top:7px;left:7px;
+  background:linear-gradient(180deg,rgba(0,0,0,0.85),rgba(0,0,0,0.7));
+  color:#fff;font-size:12px;font-weight:700;padding:3px 9px;border-radius:5px;z-index:2;
+  box-shadow:0 1px 3px rgba(0,0,0,0.4);letter-spacing:0.3px;}
+.deck-stack-price{position:absolute;bottom:7px;right:7px;
+  background:linear-gradient(180deg,#16a34a,#15803d);
+  color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;
+  text-decoration:none;z-index:2;box-shadow:0 1px 3px rgba(0,0,0,0.3);
+  transition:transform 0.08s,box-shadow 0.1s;}
+.deck-stack-price:hover{transform:translateY(-1px);box-shadow:0 3px 8px rgba(21,128,61,0.4);}
 
 /* Charts inside the right-side view-mode panel: keep the SVG to the panel
    width so it doesn't stretch and pixelate. */
