@@ -8197,6 +8197,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     return html`<${React.Fragment}>
       <${DeckEditor} deck=${d} cardById=${cardById}
         collection=${collection} raw=${raw} theme=${theme}
+        user=${user} onSignIn=${onSignIn}
         pending=${0}
         favoriteCount=${favoriteCounts[d.id] || 0}
         readOnly=${true}
@@ -8235,6 +8236,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     return html`<${React.Fragment}>
       <${DeckEditor} deck=${deck} cardById=${cardById}
         collection=${collection} raw=${raw} theme=${theme}
+        user=${user} onSignIn=${onSignIn}
         pending=${pending}
         favoriteCount=${favoriteCounts[deck.id] || 0}
         readOnly=${!editMode}
@@ -8605,6 +8607,7 @@ const DeckPie = ({title, data, colorOf}) => {
 // browser is a slimmer version of CardsView's filter UI; +/- buttons on
 // each card row update the current deck's quantity (max 4 per card).
 const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
+                     user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
                      onUpdateCard, onUpdateMeta, onToggleEditMode,
                      readOnly, creator, creatorId, isOwnDeck, canAct,
@@ -9048,6 +9051,12 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         </div>
       </div>`}`;
 
+      const openCardModal = (cardId) => {
+        const rows = cardById[cardId] || [];
+        if(!rows.length) return;
+        const groups = groupCards(rows);
+        if(groups[0]) setSelectedGroup(groups[0]);
+      };
       const renderItem = (item) => {
         const meta = item.meta || {};
         const price = cheapestCardPrice(cardById[item.card_id] || []);
@@ -9059,7 +9068,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         if(viewLayout === "grid"){
           return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
             ${meta.img_small
-              ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}/>`
+              ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             <span class="deck-grid-tile-qty">${item.quantity}×</span>
             ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
@@ -9068,7 +9077,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         if(viewLayout === "stacked"){
           const peeks = Math.max(0, item.quantity - 1);
           return html`<div key=${k} class=${"deck-stack-tile"+(highlightMissing && owned?" owned-dim":"")}
-            onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}>
+            onClick=${()=>openCardModal(item.card_id)}>
             ${Array.from({length: peeks}).map((_, i) => html`<div key=${i} class="deck-stack-peek">
               ${meta.img_small ? html`<img src=${meta.img_small} alt=""/>` : null}
             </div>`)}
@@ -9085,7 +9094,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
           <span class="deck-row-qty">${item.quantity}×</span>
           <span class="deck-row-cost">${meta.cost ?? "—"}</span>
           <span class="deck-row-name" title=${meta["Product Name"]}
-            onClick=${()=>setSelectedGroup({card_id:item.card_id, rows: cardById[item.card_id]||[]})}
+            onClick=${()=>openCardModal(item.card_id)}
             style=${{cursor:"pointer"}}>${meta["Product Name"] || "(unknown card)"}</span>
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
@@ -9154,7 +9163,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
     })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
-      user=${null} collection=${collection} updateQty=${null} onSignIn=${()=>{}}/>`}
+      user=${user} collection=${collection} updateQty=${null} onSignIn=${onSignIn || (()=>{})}/>`}
   </div>`;
 };
 
