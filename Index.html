@@ -8632,10 +8632,21 @@ const DeckCostChart = ({costByInk}) => {
         let yCursor = padT + innerH - barH;
         const x = padL + i * colW + 2;
         const w = Math.max(4, colW - 4);
-        const stack = Object.entries(row).sort((a,b) => INKS.indexOf(a[0]) - INKS.indexOf(b[0]));
+        // Sort smallest-first so dual-ink half-contributions get rendered
+        // on top and won't get visually buried. Also enforce a 4px minimum
+        // segment height so a single 0.5-share from a dual card (typically
+        // ~3-4px tall) stays visible.
+        const stack = Object.entries(row).sort((a,b) => a[1] - b[1]);
+        const raw = stack.map(([,n]) => (n / max) * innerH);
+        const adjusted = raw.map(h => h > 0 ? Math.max(4, h) : 0);
+        const sumAdj = adjusted.reduce((s,h)=>s+h, 0);
+        const sumRaw = raw.reduce((s,h)=>s+h, 0);
+        // Scale back so the visually-padded stack still fits inside barH.
+        const scale = sumAdj > 0 ? Math.min(1, barH / sumAdj) : 1;
+        const segHs = adjusted.map(h => h * scale);
         return html`<g key=${c}>
           ${stack.map(([ink, n], j) => {
-            const segH = (n / max) * innerH;
+            const segH = segHs[j];
             const y = yCursor;
             yCursor += segH;
             const color = INK_COLORS[ink]?.border || "var(--text-muted)";
