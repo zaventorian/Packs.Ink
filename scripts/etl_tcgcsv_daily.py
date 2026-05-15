@@ -15,7 +15,7 @@ from __future__ import annotations
 import argparse
 import sys
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 import requests
@@ -93,9 +93,53 @@ def update_set_group_mapping(sb: Supabase, groups: list[dict]) -> None:
             print(f"  WARNING: {failed}/{len(updates)} set group updates failed")
 
 
+def detect_duplicate_snapshot(
+    sb: Supabase, snapshot: date, new_rows: list[dict], threshold: float = 0.95
+) -> tuple[float, int]:
+    """Compare the fetched snapshot against the prior day's prices_daily rows.
+    Returns (match_ratio, matched_count). A match_ratio > threshold indicates
+    TCGCSV likely served stale data (or hadn't published today's snapshot yet)
+    and we'd be polluting prices_daily with a duplicate that silently zeros
+    out 1D movers downstream.
+    """
+    prior = sb.select(
+        "prices_daily",
+        columns="tcgplayer_product_id,printing,low_price,market_price",
+        filters={
+            "source": "eq.tcgcsv",
+            "grade": "eq.raw",
+            "date": f"eq.{(snapshot - timedelta(days=1)).isoformat()}",
+        },
+    )
+    prior_by_key: dict[tuple, tuple] = {}
+    for r in prior:
+        key = (r["tcgplayer_product_id"], r["printing"])
+        prior_by_key[key] = (r.get("low_price"), r.get("market_price"))
+    if not prior_by_key:
+        return (0.0, 0)
+    matched = 0
+    compared = 0
+    for r in new_rows:
+        key = (r["tcgplayer_product_id"], r["printing"])
+        if key not in prior_by_key:
+            continue
+        compared += 1
+        if (r.get("low_price"), r.get("market_price")) == prior_by_key[key]:
+            matched += 1
+    if compared == 0:
+        return (0.0, 0)
+    return (matched / compared, matched)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--date", help="Snapshot date YYYY-MM-DD (default: today UTC)")
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="Skip the duplicate-snapshot guard. Use when you really want to "
+             "write a snapshot that matches the prior day (rare).",
+    )
     args = ap.parse_args()
 
     snapshot = (
@@ -126,6 +170,20 @@ def main() -> None:
     print(f"\nTotal price rows to upsert: {len(all_rows)}")
     if not all_rows:
         sys.exit("No price rows — aborting.")
+
+    # Duplicate-snapshot guard. TCGCSV publishes their daily file ~20:00 UTC;
+    # if the ETL runs before that, the API may serve yesterday's snapshot.
+    # Writing it under today's date would silently zero out every 1D mover.
+    # If >95% of fetched rows match yesterday's prices_daily exactly, abort.
+    ratio, matched = detect_duplicate_snapshot(sb, snapshot, all_rows)
+    print(f"Duplicate-snapshot check: {ratio:.1%} of rows match prior day ({matched} exact matches).")
+    if ratio > 0.95 and not args.force:
+        sys.exit(
+            f"\nABORTED: {ratio:.1%} of fetched rows are byte-identical to "
+            f"{(snapshot - timedelta(days=1)).isoformat()}. TCGCSV likely "
+            "served a stale snapshot (their daily file lands ~20:00 UTC). "
+            "Re-run after that, or pass --force to write anyway."
+        )
 
     sb.upsert(
         "prices_daily",
