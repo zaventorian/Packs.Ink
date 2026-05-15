@@ -8625,6 +8625,27 @@ const TYPE_PIE_COLOR = (name) => ({
 
 // Cost curve — stacked bar chart, one column per cost bucket 1..9+,
 // each column stacked by ink color. Heights normalized to the tallest bar.
+// Resolve an inkKey ("Amber" or "Amber/Sapphire") to either a solid color or
+// a gradient definition. Returns {fill, defs} where `defs` is an optional
+// <linearGradient> element to inject into the SVG <defs>. Caller dedupes.
+const resolveInkFill = (inkKey, idPrefix) => {
+  if(!inkKey) return {fill:"var(--text-muted)", defs:null};
+  const parts = inkKey.split("/");
+  if(parts.length === 1){
+    return {fill: INK_COLORS[parts[0]]?.border || "var(--text-muted)", defs:null};
+  }
+  // Dual (or more): horizontal stripes for clarity.
+  const id = `${idPrefix}-${parts.join("-")}`;
+  const colors = parts.map(p => INK_COLORS[p]?.border || "#888");
+  const stopPct = 100 / colors.length;
+  const stops = colors.map((c, i) => html`
+    <stop offset="${i*stopPct}%" stop-color=${c}/>
+    <stop offset="${(i+1)*stopPct}%" stop-color=${c}/>
+  `);
+  const defs = html`<linearGradient id=${id} x1="0%" y1="0%" x2="100%" y2="0%">${stops}</linearGradient>`;
+  return {fill: `url(#${id})`, defs};
+};
+
 const DeckCostChart = ({costByInk}) => {
   const buckets = [1,2,3,4,5,6,7,8,9];
   const totals = buckets.map(c => {
@@ -8637,9 +8658,24 @@ const DeckCostChart = ({costByInk}) => {
   const innerW = W - padL - 6;
   const innerH = H - padT - padB;
   const colW = innerW / buckets.length;
+  // Pre-resolve fills for every inkKey present, dedupe gradient defs.
+  // Must compute defs BEFORE rendering the template (htm evaluates expressions
+  // left-to-right, so defsList has to be fully populated before the <defs>
+  // expression is evaluated).
+  const allInkKeys = new Set();
+  for(const c of buckets){ const row = costByInk[c] || {}; for(const k of Object.keys(row)) allInkKeys.add(k); }
+  const fillCache = {};
+  const defsList = [];
+  for(const inkKey of allInkKeys){
+    const {fill, defs} = resolveInkFill(inkKey, "cc-grad");
+    fillCache[inkKey] = fill;
+    if(defs) defsList.push(defs);
+  }
+  const getFill = (inkKey) => fillCache[inkKey] || "var(--text-muted)";
   return html`<div class="deck-chart">
     <div class="deck-chart-title">Cost curve</div>
     <svg viewBox="0 0 ${W} ${H}" width="100%" height=${H} preserveAspectRatio="none">
+      <defs>${defsList}</defs>
       ${buckets.map((c, i) => {
         const row = costByInk[c] || {};
         const total = totals[i];
@@ -8664,7 +8700,7 @@ const DeckCostChart = ({costByInk}) => {
             const segH = segHs[j];
             const y = yCursor;
             yCursor += segH;
-            const color = INK_COLORS[ink]?.border || "var(--text-muted)";
+            const color = getFill(ink);
             return html`<rect key=${ink+":"+j} x=${x} y=${y} width=${w} height=${segH}
               fill=${color} rx=${j === stack.length - 1 ? 2 : 0}/>`;
           })}
@@ -8678,7 +8714,7 @@ const DeckCostChart = ({costByInk}) => {
 };
 
 // Pie chart with title + inline legend. Slices sized by `data` values.
-const DeckPie = ({title, data, colorOf}) => {
+const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
   const entries = Object.entries(data || {}).filter(([,v]) => v > 0);
   const total = entries.reduce((s,[,v])=>s+v, 0);
   const R = 36, CX = 40, CY = 40;
@@ -8686,26 +8722,55 @@ const DeckPie = ({title, data, colorOf}) => {
     <div class="deck-pie-title">${title}</div>
     <div class="deck-pie-empty">—</div>
   </div>`;
-  let cursor = -Math.PI / 2; // start at top
+  // Pre-resolve slice fills. If gradientPrefix is set, dual-ink keys like
+  // "Emerald/Sapphire" get a gradient fill; otherwise we fall back to the
+  // colorOf callback (used for Inkable / Types pies that don't have duals).
+  const defsList = [];
+  const colorFor = (k) => {
+    if(gradientPrefix){
+      const {fill, defs} = resolveInkFill(k, gradientPrefix);
+      if(defs) defsList.push(defs);
+      return fill;
+    }
+    return colorOf(k);
+  };
+  let cursor = -Math.PI / 2;
   const slices = entries.map(([k, v]) => {
     const frac = v / total;
     const start = cursor;
     cursor += frac * 2 * Math.PI;
-    return {k, v, start, end: cursor, color: colorOf(k)};
+    return {k, v, start, end: cursor, color: colorFor(k), swatch: swatchStyle(k, gradientPrefix)};
   });
   return html`<div class="deck-pie">
     <div class="deck-pie-title">${title}</div>
     <svg viewBox="0 0 80 80" width="80" height="80">
+      <defs>${defsList}</defs>
       ${slices.map(s => html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)} fill=${s.color}/>`)}
     </svg>
     <div class="deck-pie-legend">
       ${slices.map(s => html`<div key=${s.k} class="deck-pie-legend-row">
-        <span class="deck-pie-swatch" style=${{background:s.color}}></span>
+        <span class="deck-pie-swatch" style=${s.swatch}></span>
         <span class="deck-pie-legend-name">${s.k}</span>
         <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
       </div>`)}
     </div>
   </div>`;
+};
+
+// Background-style swatch for the legend (CSS doesn't share SVG gradient ids
+// across an <svg> and a <span>, so we use a linear-gradient CSS image for
+// dual-ink swatches and a solid color for single-ink).
+const swatchStyle = (inkKey, gradientPrefix) => {
+  if(!gradientPrefix) return null;
+  const parts = (inkKey||"").split("/");
+  if(parts.length === 1){
+    return {background: INK_COLORS[parts[0]]?.border || "var(--text-muted)"};
+  }
+  const colors = parts.map(p => INK_COLORS[p]?.border || "#888");
+  const stops = colors.map((c, i) =>
+    `${c} ${(i*100/colors.length).toFixed(0)}% ${((i+1)*100/colors.length).toFixed(0)}%`
+  ).join(", ");
+  return {background: `linear-gradient(90deg, ${stops})`};
 };
 
 // Deck editor: card browser on the left, deck summary on the right. The
@@ -8842,13 +8907,16 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const legality = useMemo(() => checkDeckLegality(deck, cardById), [deck, cardById]);
 
   // Aggregate per-cost / per-ink / inkable / per-type counts for the charts.
-  // Dual-ink cards split their quantity 50/50 across both colors so the
-  // pie/cost-curve totals still sum to the deck size (e.g. 4x Ink Geyser
-  // = 2 Emerald + 2 Sapphire instead of 4 Emerald + 4 Sapphire = 8 phantom).
+  // Dual-ink cards form their own bucket keyed by the joined ink names
+  // (e.g. "Emerald/Sapphire"), so they render as a distinct gradient slice
+  // in the pie and a distinct gradient block in the cost curve. Single-ink
+  // cards stay in their single-color buckets. Quantity is not split — the
+  // dual bucket gets the card's full quantity, and totals still sum to the
+  // deck size.
   const aggregates = useMemo(() => {
-    const costByInk = {};   // cost (capped at 9) -> {ink: count}
-    const inkCount = {};    // ink -> count
-    const typeCount = {};   // card_type -> count
+    const costByInk = {};   // cost (capped at 9) -> {inkKey: count}
+    const inkCount = {};    // inkKey -> count  (inkKey = single ink name OR "InkA/InkB")
+    const typeCount = {};
     let inkable = 0, nonInkable = 0;
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0] || {};
@@ -8856,13 +8924,11 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
       const costBucket = Math.min(9, Math.max(1, meta.cost ?? 1));
       const inkList = (meta.inks && meta.inks.length) ? meta.inks
                     : (meta.ink ? [meta.ink] : ["Unknown"]);
-      const share = q / inkList.length;
+      const inkKey = inkList.slice().sort().join("/");
       const t = meta.card_type || "Other";
       if(!costByInk[costBucket]) costByInk[costBucket] = {};
-      for(const ink of inkList){
-        costByInk[costBucket][ink] = (costByInk[costBucket][ink] || 0) + share;
-        inkCount[ink] = (inkCount[ink] || 0) + share;
-      }
+      costByInk[costBucket][inkKey] = (costByInk[costBucket][inkKey] || 0) + q;
+      inkCount[inkKey] = (inkCount[inkKey] || 0) + q;
       typeCount[t] = (typeCount[t] || 0) + q;
       if(meta.inkable) inkable += q; else nonInkable += q;
     }
@@ -9156,6 +9222,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         <${DeckCostChart} costByInk=${aggregates.costByInk}/>
         <div class="deck-pie-row">
           <${DeckPie} title="Colors" data=${aggregates.inkCount}
+            gradientPrefix="colors-pie"
             colorOf=${name => (INK_COLORS[name]?.border) || "var(--text-muted)"}/>
           <${DeckPie} title="Inkable" data=${{Inkable:aggregates.inkable, "Non-Inkable":aggregates.nonInkable}}
             colorOf=${name => name==="Inkable" ? "var(--accent)" : "var(--text-muted)"}/>
