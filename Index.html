@@ -1528,6 +1528,11 @@ html[data-theme="dark"] .card-row-price.foil{color:#c0a3ef;}
 .deck-pie-legend{display:flex;flex-direction:column;gap:1px;width:100%;font-size:9px;}
 .deck-pie-legend-row{display:grid;grid-template-columns:8px 1fr auto;gap:4px;align-items:center;min-width:0;}
 .deck-pie-swatch{width:8px;height:8px;border-radius:2px;display:inline-block;}
+.deck-pie-swatch.dual{width:10px;height:10px;border:1px solid rgba(0,0,0,0.55);box-sizing:border-box;}
+html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35);}
+.deck-pie-legend-name .dual-tag{font-size:8px;font-weight:700;letter-spacing:0.4px;
+  text-transform:uppercase;color:var(--accent);background:var(--accent-glow);
+  padding:1px 4px;border-radius:3px;margin-left:3px;vertical-align:middle;}
 .deck-pie-legend-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .deck-pie-legend-val{color:var(--text-muted);font-variant-numeric:tabular-nums;}
 </style>
@@ -8628,13 +8633,14 @@ const TYPE_PIE_COLOR = (name) => ({
 // Resolve an inkKey ("Amber" or "Amber/Sapphire") to either a solid color or
 // a gradient definition. Returns {fill, defs} where `defs` is an optional
 // <linearGradient> element to inject into the SVG <defs>. Caller dedupes.
+// The gradient runs diagonally (45°) so dual-ink blocks read as "split"
+// regardless of whether they're tall (pie slice) or short (bar segment).
 const resolveInkFill = (inkKey, idPrefix) => {
   if(!inkKey) return {fill:"var(--text-muted)", defs:null};
   const parts = inkKey.split("/");
   if(parts.length === 1){
     return {fill: INK_COLORS[parts[0]]?.border || "var(--text-muted)", defs:null};
   }
-  // Dual (or more): horizontal stripes for clarity.
   const id = `${idPrefix}-${parts.join("-")}`;
   const colors = parts.map(p => INK_COLORS[p]?.border || "#888");
   const stopPct = 100 / colors.length;
@@ -8642,7 +8648,8 @@ const resolveInkFill = (inkKey, idPrefix) => {
     <stop offset="${i*stopPct}%" stop-color=${c}/>
     <stop offset="${(i+1)*stopPct}%" stop-color=${c}/>
   `);
-  const defs = html`<linearGradient id=${id} x1="0%" y1="0%" x2="100%" y2="0%">${stops}</linearGradient>`;
+  // 45° diagonal: top-left to bottom-right.
+  const defs = html`<linearGradient id=${id} x1="0%" y1="0%" x2="100%" y2="100%">${stops}</linearGradient>`;
   return {fill: `url(#${id})`, defs};
 };
 
@@ -8745,21 +8752,31 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
     <div class="deck-pie-title">${title}</div>
     <svg viewBox="0 0 80 80" width="80" height="80">
       <defs>${defsList}</defs>
-      ${slices.map(s => html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)} fill=${s.color}/>`)}
+      ${slices.map(s => {
+        const isDual = (s.k||"").includes("/");
+        return html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)}
+          fill=${s.color}
+          stroke=${isDual ? "rgba(0,0,0,0.85)" : "none"}
+          stroke-width=${isDual ? 1.2 : 0}/>`;
+      })}
     </svg>
     <div class="deck-pie-legend">
-      ${slices.map(s => html`<div key=${s.k} class="deck-pie-legend-row">
-        <span class="deck-pie-swatch" style=${s.swatch}></span>
-        <span class="deck-pie-legend-name">${s.k}</span>
-        <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
-      </div>`)}
+      ${slices.map(s => {
+        const isDual = (s.k||"").includes("/");
+        return html`<div key=${s.k} class=${"deck-pie-legend-row"+(isDual?" dual":"")}>
+          <span class=${"deck-pie-swatch"+(isDual?" dual":"")} style=${s.swatch}></span>
+          <span class="deck-pie-legend-name">${s.k}${isDual?html` <span class="dual-tag">dual</span>`:""}</span>
+          <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
+        </div>`;
+      })}
     </div>
   </div>`;
 };
 
 // Background-style swatch for the legend (CSS doesn't share SVG gradient ids
 // across an <svg> and a <span>, so we use a linear-gradient CSS image for
-// dual-ink swatches and a solid color for single-ink).
+// dual-ink swatches and a solid color for single-ink). Matches the SVG
+// gradient direction (135° diagonal) so swatch and slice read consistently.
 const swatchStyle = (inkKey, gradientPrefix) => {
   if(!gradientPrefix) return null;
   const parts = (inkKey||"").split("/");
@@ -8770,7 +8787,7 @@ const swatchStyle = (inkKey, gradientPrefix) => {
   const stops = colors.map((c, i) =>
     `${c} ${(i*100/colors.length).toFixed(0)}% ${((i+1)*100/colors.length).toFixed(0)}%`
   ).join(", ");
-  return {background: `linear-gradient(90deg, ${stops})`};
+  return {background: `linear-gradient(135deg, ${stops})`};
 };
 
 // Deck editor: card browser on the left, deck summary on the right. The
