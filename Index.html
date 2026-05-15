@@ -9719,17 +9719,23 @@ function App(){
       // demand when the detail modal opens. Explicit ORDER BY is REQUIRED so
       // PostgREST returns deterministic slices across parallel range requests.
       const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price";
-      // Probe whether the `inks` column has been deployed yet. If not (the
-      // migration in supabase/27_card_inks_array.sql hasn't been run), fall
-      // back to the legacy column list so the site keeps working — dual-ink
-      // cards will still show under their single legacy `ink` until the
-      // migration lands.
+      // Probe whether the `inks` column has been deployed yet. Use a direct
+      // fetch (not sbFetchAll — its count=exact pagination conflicts with
+      // limit:1 and produces a misleading 416 that we'd interpret as "column
+      // missing"). PostgREST returns 400 with code 42703 when the column
+      // really doesn't exist; anything else means the column is present.
       let hasInksColumn = true;
       try {
-        await sbFetchAll("cards", {select:"inks", limit:1});
-      } catch {
-        hasInksColumn = false;
-        console.warn("cards.inks column missing — run supabase/27_card_inks_array.sql for dual-ink support.");
+        const probe = await fetch(SUPABASE_URL+"/rest/v1/cards?select=inks&limit=1", {headers: sbHeaders()});
+        if(probe.status === 400){
+          const body = await probe.text();
+          if(body.includes("42703") || body.includes("does not exist")){
+            hasInksColumn = false;
+            console.warn("cards.inks column missing — run supabase/27_card_inks_array.sql for dual-ink support.");
+          }
+        }
+      } catch(e) {
+        console.warn("inks probe failed (network); assuming column exists", e);
       }
       const CARDS_COLS = hasInksColumn
         ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id"
