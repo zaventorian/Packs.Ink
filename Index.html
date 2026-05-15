@@ -1043,13 +1043,12 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
 .deck-card-chips{display:flex;align-items:center;gap:10px;margin:6px 0 4px;}
 .deck-card-inks{display:inline-flex;gap:3px;}
 .deck-card-inks img{width:16px;height:16px;object-fit:contain;display:block;}
-.deck-card-inkable{font-size:10px;font-weight:700;display:inline-flex;
-  align-items:center;gap:2px;padding:2px 6px;border-radius:5px;
-  background:var(--bg-surface);border:1px solid var(--border);
-  font-variant-numeric:tabular-nums;cursor:default;}
-.deck-card-inkable .ink-yes{color:var(--green);}
-.deck-card-inkable .ink-no{color:var(--text-dim);}
-.deck-card-inkable .ink-sep{color:var(--text-muted);margin:0 2px;}
+.deck-card-inkable{display:inline-flex;align-items:center;gap:6px;}
+.deck-ink-chip{display:inline-flex;align-items:center;gap:3px;
+  font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+  padding:2px 6px;border-radius:5px;
+  background:var(--bg-surface);border:1px solid var(--border);cursor:default;color:var(--text);}
+.deck-ink-chip svg{width:14px;height:14px;flex:0 0 auto;}
 
 /* Favorite-count pill in the deck-editor toolbar. */
 .deck-fav-count{font-size:11px;color:var(--accent);padding:3px 9px;
@@ -1071,6 +1070,39 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
   padding:1px 6px;border-radius:8px;background:var(--bg-surface);
   color:var(--text-muted);font-variant-numeric:tabular-nums;}
 .deck-section-tab.active .deck-section-tab-count{background:var(--accent);color:#fff;}
+
+/* Deck list filter / search / sort row, sits below the section-tab strip. */
+.deck-filter-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;
+  margin-bottom:14px;}
+.deck-ink-filter{display:flex;align-items:center;gap:4px;flex-wrap:wrap;}
+.deck-filter-clear{margin-left:6px;padding:4px 10px;font-size:11px;font-weight:600;
+  background:transparent;color:var(--text-muted);
+  border:1px solid var(--border);border-radius:14px;cursor:pointer;}
+.deck-filter-clear:hover{color:var(--text);border-color:var(--border-accent);}
+.deck-search-sort{margin-left:auto;display:flex;gap:6px;align-items:center;}
+.deck-search-input{font-size:13px;padding:6px 10px;
+  border:1px solid var(--border);background:var(--bg-card);color:var(--text);
+  border-radius:6px;outline:none;min-width:200px;}
+.deck-search-input:focus{border-color:var(--accent);}
+.deck-sort-select{font-size:12px;padding:6px 8px;
+  border:1px solid var(--border);background:var(--bg-card);color:var(--text);
+  border-radius:6px;outline:none;cursor:pointer;}
+
+/* Deck-card header row holding the name + visibility pill side-by-side. */
+.deck-card-header{display:flex;align-items:flex-start;justify-content:space-between;
+  gap:8px;margin-bottom:4px;}
+.deck-card-header .deck-card-name{margin-bottom:0;}
+.deck-card-vis{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;
+  white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:3px;
+  letter-spacing:0.3px;}
+.deck-card-vis.vis-public{background:rgba(22,101,52,0.14);color:var(--green);
+  border:1px solid rgba(22,101,52,0.25);}
+.deck-card-vis.vis-unlisted{background:rgba(196,128,30,0.14);color:#c4801e;
+  border:1px solid rgba(196,128,30,0.30);}
+.deck-card-vis.vis-private{background:var(--bg-surface);color:var(--text-dim);
+  border:1px solid var(--border);}
+html[data-theme="dark"] .deck-card-vis.vis-public{color:#7fd9a5;}
+html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 
 /* "Last updated …" pill in the deck-editor toolbar. */
 .deck-updated{font-size:11px;color:var(--text-muted);padding:3px 9px;
@@ -1161,6 +1193,8 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
 .deck-share-copy.copied{background:var(--green);}
 .deck-share-note{font-size:11px;color:var(--text-muted);line-height:1.4;
   padding:6px 8px;background:var(--bg-surface);border-radius:5px;}
+.deck-share-regen-row{margin-top:8px;display:flex;flex-direction:column;}
+.deck-share-regen-row .settings-action{align-self:flex-start;font-size:12px;color:var(--accent);}
 .deck-editor-filters{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;align-items:center;}
 .deck-search{flex:1;min-width:180px;padding:6px 10px;font-size:13px;
   background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
@@ -7046,7 +7080,7 @@ function cheapestCardPrice(rowsForCardId){
   return lo;
 }
 
-const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onConsumedIncomingDeckId, incomingUserId, onConsumedIncomingUserId, onSignIn, theme}) => {
+const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onConsumedIncomingDeckId, incomingShareToken, onConsumedIncomingShareToken, incomingUserId, onConsumedIncomingUserId, onSignIn, theme}) => {
   // All hooks run unconditionally.
   const [decks, setDecks] = useState(null); // null = loading, [] = empty, [...] = loaded
   const [selectedDeckId, setSelectedDeckId] = useState(null);
@@ -7084,6 +7118,18 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   // deck_favorite_counts() SECURITY DEFINER RPC; merged from every refresh
   // path that fetches decks (own / favorites / following / discover / profile).
   const [favoriteCounts, setFavoriteCounts] = useState({});
+  // Aggregate view counts (unique logged-in users) — same pattern.
+  const [viewCounts, setViewCounts] = useState({});
+  // UI controls scoped to the Your Decks section: search + sort + ink-filter.
+  // Ink filter applies across all sub-sections so e.g. "show me only my
+  // Amber Steel decks AND Amber Steel decks in Discover" works uniformly.
+  const [yourDeckSearch, setYourDeckSearch] = useState("");
+  const [yourDeckSort, setYourDeckSort] = useState(()=>{
+    try { return localStorage.getItem("packsink:decks:sort") || "updated_desc"; }
+    catch { return "updated_desc"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:decks:sort", yourDeckSort); } catch {} }, [yourDeckSort]);
+  const [inkFilter, setInkFilter] = useState(new Set());
   const [err, setErr] = useState(null);
   // In-flight Supabase write counter — drives the "Saved / Saving…" badge.
   // Incremented when a mutation fires, decremented in its finally. Local
@@ -7145,6 +7191,19 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       console.warn("favorite count fetch failed (run supabase/20_*.sql?):", e?.message || e);
     }
   }, []);
+  const mergeViewCounts = useCallback(async (deckIds) => {
+    if(!deckIds || !deckIds.length) return;
+    try {
+      const {data, error} = await sbClient.rpc("deck_view_counts", {deck_ids: deckIds});
+      if(error) throw error;
+      const next = {};
+      for(const id of deckIds) next[id] = 0;
+      for(const row of (data || [])) next[row.deck_id] = Number(row.view_count) || 0;
+      setViewCounts(prev => ({...prev, ...next}));
+    } catch(e){
+      console.warn("view count fetch failed (run supabase/24_*.sql?):", e?.message || e);
+    }
+  }, []);
 
   const refreshDecks = useCallback(async () => {
     if(!user){ setDecks([]); return; }
@@ -7156,7 +7215,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       // — which polluted "Your Decks" with externally-favorited decks and
       // made delete silently fail (RLS rejects deletes of others' rows).
       const {data: deckRows, error: e1} = await sbClient.from("decks")
-        .select("id,name,description,inks,tags,visibility,updated_at,user_id")
+        .select("id,name,description,inks,tags,visibility,share_token,created_at,updated_at,user_id")
         .eq("user_id", user.id)
         .order("updated_at", {ascending:false});
       if(e1) throw e1;
@@ -7183,6 +7242,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       }
       setDecks((deckRows||[]).map(d => ({...d, cards: cardsByDeck[d.id] || []})));
       mergeFavoriteCounts(ids);
+      mergeViewCounts(ids);
     } catch(e){
       console.error("decks fetch failed:", e);
       setErr(e.message || String(e));
@@ -7232,18 +7292,44 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     if(!user){ setFavorites(new Set()); setFavoritedDecks([]); return; }
     try {
       const {data: favRows, error: fErr} = await sbClient.from("deck_favorites")
-        .select("deck_id,followed_at")
+        .select("deck_id,followed_at,share_token")
         .order("followed_at", {ascending:false});
       if(fErr) throw fErr;
       const ids = (favRows||[]).map(r => r.deck_id);
       setFavorites(new Set(ids));
       if(!ids.length){ setFavoritedDecks([]); return; }
-      const entries = await hydrateDecksByIds(ids);
+      const tokenById = Object.fromEntries((favRows||[]).map(r => [r.deck_id, r.share_token || null]));
+      // Two-pass hydration: public + own decks via direct read (existing
+      // helper); unlisted decks via token-gated RPC. RLS denies direct
+      // reads on unlisted decks not owned by the caller, so we have to
+      // route those through get_shared_deck / get_shared_deck_cards.
+      const directIds = ids.filter(id => !tokenById[id]);
+      const tokenIds  = ids.filter(id =>  tokenById[id]);
+      const directEntries = directIds.length ? await hydrateDecksByIds(directIds) : [];
+      const tokenEntries = [];
+      for(const id of tokenIds){
+        const token = tokenById[id];
+        const [deckRes, cardsRes] = await Promise.all([
+          sbClient.rpc("get_shared_deck",       {p_deck_id: id, p_token: token}),
+          sbClient.rpc("get_shared_deck_cards", {p_deck_id: id, p_token: token}),
+        ]);
+        const d = deckRes.data && deckRes.data[0];
+        if(!d) continue; // token rotated or deck went private — silently drop
+        const {data: profile} = await sbClient.from("profiles")
+          .select("display_name,avatar_url").eq("user_id", d.user_id).maybeSingle();
+        tokenEntries.push({
+          deck: {...d, cards: cardsRes.data || []},
+          creator: profile || null,
+          shareToken: token,
+        });
+      }
+      const entries = [...directEntries, ...tokenEntries];
       // Preserve favorite order (newest-favorited first).
       const idOrder = ids.reduce((m, id, i) => (m[id] = i, m), {});
       entries.sort((a, b) => (idOrder[a.deck.id] ?? 999) - (idOrder[b.deck.id] ?? 999));
       setFavoritedDecks(entries);
       mergeFavoriteCounts(ids);
+      mergeViewCounts(ids);
     } catch(e){
       console.warn("favorites fetch failed (run supabase/19_*.sql?):", e?.message || e);
       setFavorites(new Set());
@@ -7278,6 +7364,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
       setFollowingFeed(entries);
       mergeFavoriteCounts(ids);
+      mergeViewCounts(ids);
     } catch(e){
       console.warn("following fetch failed (run supabase/19_*.sql?):", e?.message || e);
       setUserFollows(new Set());
@@ -7289,7 +7376,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   // Toggle a deck favorite (bookmark this specific deck). Optimistic with
   // rollback on error. Calling on a deck you own is allowed by RLS but
   // pointless — guarded client-side at the button level.
-  const toggleFavorite = useCallback(async (deckId) => {
+  const toggleFavorite = useCallback(async (deckId, shareToken) => {
     if(!user || !deckId) return;
     const wasFavorited = favorites.has(deckId);
     setFavorites(prev => {
@@ -7308,12 +7395,17 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         if(error) throw error;
         setFavoritedDecks(prev => prev.filter(e => e.deck.id !== deckId));
       } else {
-        const {error} = await sbClient.from("deck_favorites")
-          .insert({user_id: user.id, deck_id: deckId});
+        // Capture the share_token used to access this deck so the favorites
+        // list can re-fetch it later via the token-gated RPC. Null for
+        // public decks (direct read works). Owner's own decks: skip token
+        // (they don't need one, RLS allows direct read).
+        const insertRow = {user_id: user.id, deck_id: deckId};
+        if(shareToken) insertRow.share_token = shareToken;
+        const {error} = await sbClient.from("deck_favorites").insert(insertRow);
         if(error) throw error;
         if(externalDeck?.deck?.id === deckId){
           setFavoritedDecks(prev => [
-            {deck: externalDeck.deck, creator: externalDeck.creator},
+            {deck: externalDeck.deck, creator: externalDeck.creator, shareToken: shareToken || externalDeck.shareToken || null},
             ...prev.filter(e => e.deck.id !== deckId),
           ]);
         } else {
@@ -7368,6 +7460,21 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     }
   }, [user, userFollows, refreshFollowing]);
 
+  // Record a unique view of someone else's deck. No-op for anon users
+  // (deck_views.insert RLS requires auth.uid()) and for the owner's own
+  // decks (skip client-side so the owner doesn't bump their own counter).
+  // The PK (user_id, deck_id) makes this idempotent — re-viewing the same
+  // deck doesn't change anything.
+  const recordDeckView = useCallback((deckId, ownerId) => {
+    if(!user || !deckId || !ownerId) return;
+    if(user.id === ownerId) return;
+    sbClient.from("deck_views")
+      .upsert({user_id: user.id, deck_id: deckId}, {ignoreDuplicates: true})
+      .then(({error}) => {
+        if(error) console.warn("view record failed (run supabase/24_*.sql?):", error.message);
+      });
+  }, [user]);
+
   // Open a hydrated external-deck entry in the read-only viewer (used by
   // the Favorites and Following sections — entry already has deck + cards
   // + creator, so no fetch round-trip).
@@ -7375,7 +7482,8 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     setExternalDeck(entry);
     setSelectedDeckId(null);
     setCreatorProfile(null);
-  }, []);
+    recordDeckView(entry?.deck?.id, entry?.deck?.user_id);
+  }, [recordDeckView]);
 
   // Discover feed: refresh + load-more. Filters out the current user's own
   // decks (they have Your Decks for those) and excludes any decks the user
@@ -7401,6 +7509,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
       setDiscoverEntries(entries);
       mergeFavoriteCounts(ids);
+      mergeViewCounts(ids);
     } catch(e){
       console.warn("discover fetch failed:", e?.message || e);
       setDiscoverEntries([]);
@@ -7432,6 +7541,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
       setDiscoverEntries(prev => [...prev, ...entries]);
       mergeFavoriteCounts(newIds);
+      mergeViewCounts(newIds);
     } catch(e){
       console.warn("discover load-more failed:", e?.message || e);
     } finally {
@@ -7464,6 +7574,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         entries = await hydrateDecksByIds(ids);
         entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
         mergeFavoriteCounts(ids);
+      mergeViewCounts(ids);
       }
       setCreatorProfile({
         creator: profileRes.data || {user_id: creatorId},
@@ -7477,47 +7588,78 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   }, [hydrateDecksByIds, mergeFavoriteCounts]);
   const closeCreatorProfile = useCallback(() => setCreatorProfile(null), []);
 
-  // Handle deep-linked deck arrival (?deck=<uuid>): fetch the deck by ID
-  // and either select it in the owner list (if it's mine) or stash it as
-  // an external read-only view. RLS gates visibility — private decks I
-  // don't own return null and we render a "not available" notice.
+  // Handle deep-linked deck arrival (?deck=<uuid>&token=<share_token>):
+  // a non-owner viewing an unlisted deck must come through the token-gated
+  // RPC because RLS now restricts direct reads to (owner OR public). Owners
+  // and public decks still go through the regular table read.
   useEffect(() => {
     if(!incomingDeckId) return;
     let cancelled = false;
     (async () => {
-      const {data: deckRow, error} = await sbClient.from("decks")
-        .select("id,user_id,name,description,inks,tags,visibility,updated_at")
-        .eq("id", incomingDeckId).maybeSingle();
-      if(cancelled) return;
-      if(error){
-        setExternalDeck({error: error.message || "Couldn't load deck"});
-        onConsumedIncomingDeckId && onConsumedIncomingDeckId();
-        return;
+      // 1. Resolve the deck row. Token path first if one's in the URL.
+      let deckRow = null;
+      if(incomingShareToken){
+        const {data, error} = await sbClient.rpc("get_shared_deck", {
+          p_deck_id: incomingDeckId, p_token: incomingShareToken,
+        });
+        if(cancelled) return;
+        if(error){
+          setExternalDeck({error: error.message || "Couldn't load deck"});
+          onConsumedIncomingDeckId && onConsumedIncomingDeckId();
+          onConsumedIncomingShareToken && onConsumedIncomingShareToken();
+          return;
+        }
+        deckRow = (data && data.length) ? data[0] : null;
+      }
+      // 2. Fall back to direct read (works for own decks + public; returns
+      //    null for unlisted-without-token or private-not-yours).
+      if(!deckRow){
+        const {data, error} = await sbClient.from("decks")
+          .select("id,user_id,name,description,inks,tags,visibility,share_token,updated_at")
+          .eq("id", incomingDeckId).maybeSingle();
+        if(cancelled) return;
+        if(error){
+          setExternalDeck({error: error.message || "Couldn't load deck"});
+          onConsumedIncomingDeckId && onConsumedIncomingDeckId();
+          onConsumedIncomingShareToken && onConsumedIncomingShareToken();
+          return;
+        }
+        deckRow = data;
       }
       if(!deckRow){
-        setExternalDeck({error: "This deck doesn't exist or is private."});
+        setExternalDeck({error: "This deck is private or the share link has been revoked."});
         onConsumedIncomingDeckId && onConsumedIncomingDeckId();
+        onConsumedIncomingShareToken && onConsumedIncomingShareToken();
         return;
       }
       if(user && deckRow.user_id === user.id){
         setSelectedDeckId(deckRow.id);
         setExternalDeck(null);
         onConsumedIncomingDeckId && onConsumedIncomingDeckId();
+        onConsumedIncomingShareToken && onConsumedIncomingShareToken();
         return;
       }
-      const [cardsResult, profileResult] = await Promise.all([
-        sbClient.from("deck_cards").select("deck_id,card_id,printing,quantity").eq("deck_id", deckRow.id),
-        sbClient.from("profiles").select("display_name,avatar_url").eq("user_id", deckRow.user_id).maybeSingle(),
-      ]);
+      // 3. Fetch cards + creator profile. Cards also go through the RPC
+      //    when the deck was token-gated.
+      const usedToken = incomingShareToken || null;
+      const cardsP = usedToken
+        ? sbClient.rpc("get_shared_deck_cards", {p_deck_id: deckRow.id, p_token: usedToken})
+        : sbClient.from("deck_cards").select("deck_id,card_id,printing,quantity").eq("deck_id", deckRow.id);
+      const profP  = sbClient.from("profiles").select("display_name,avatar_url").eq("user_id", deckRow.user_id).maybeSingle();
+      const [cardsResult, profileResult] = await Promise.all([cardsP, profP]);
       if(cancelled) return;
       setExternalDeck({
         deck: {...deckRow, cards: cardsResult.data || []},
         creator: profileResult.data || null,
+        // Preserve the token so Favorite can capture it for later RPC use.
+        shareToken: usedToken || deckRow.share_token || null,
       });
+      recordDeckView(deckRow.id, deckRow.user_id);
       onConsumedIncomingDeckId && onConsumedIncomingDeckId();
+      onConsumedIncomingShareToken && onConsumedIncomingShareToken();
     })();
     return () => { cancelled = true; };
-  }, [incomingDeckId, user, onConsumedIncomingDeckId]);
+  }, [incomingDeckId, incomingShareToken, user, recordDeckView, onConsumedIncomingDeckId, onConsumedIncomingShareToken]);
 
   // Handle deep-linked creator profile (?user=<uuid>): open the profile
   // page (fetch happens inside openCreatorProfile).
@@ -7527,24 +7669,78 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     onConsumedIncomingUserId && onConsumedIncomingUserId();
   }, [incomingUserId, openCreatorProfile, onConsumedIncomingUserId]);
 
-  // Keep the URL in sync with the currently-open deck (?deck=<id>) or
-  // creator profile (?user=<id>). Only one is active at a time; flipping
-  // the other clears the param. Uses replaceState — no history pollution.
+  // Keep the URL in sync with the currently-open deck (?deck=<id>[&token=<x>])
+  // or creator profile (?user=<id>). Only one is active at a time. The
+  // token is appended only for unlisted decks where it's actually needed
+  // for non-owners to access. Public decks omit the token (cleaner URLs);
+  // private decks omit it (it'd be a no-op anyway since visibility=private
+  // means the share link doesn't work for anyone but the owner).
   useEffect(() => {
     const deckId    = externalDeck?.deck?.id || selectedDeckId || null;
     const profileId = creatorProfile && !deckId ? creatorProfile.creatorId : null;
+    // Resolve the share_token to embed. For an external deck we already
+    // know it (saved in externalDeck.shareToken). For an owned deck we
+    // look it up from the decks list. Token only embedded when the deck
+    // is actually unlisted.
+    let token = null;
+    if(externalDeck?.deck){
+      const v = externalDeck.deck.visibility;
+      if(v === "unlisted") token = externalDeck.shareToken || externalDeck.deck.share_token || null;
+    } else if(selectedDeckId){
+      const own = (decks||[]).find(d => d.id === selectedDeckId);
+      if(own && own.visibility === "unlisted") token = own.share_token || null;
+    }
     try {
       const url = new URL(window.location.href);
       if(deckId)    url.searchParams.set("deck", deckId); else url.searchParams.delete("deck");
+      if(token)     url.searchParams.set("token", token); else url.searchParams.delete("token");
       if(profileId) url.searchParams.set("user", profileId); else url.searchParams.delete("user");
       window.history.replaceState({}, "", url);
     } catch {/* SSR / blocked storage / no-op */}
-  }, [selectedDeckId, externalDeck, creatorProfile]);
+  }, [selectedDeckId, externalDeck, creatorProfile, decks]);
 
   // Clearing the external-deck view returns to the user's own deck list.
   const closeExternalDeck = useCallback(() => {
     setExternalDeck(null);
   }, []);
+
+  // Build a CSS gradient from a deck's ink list. Single ink: tint holds for
+  // most of the card, fades to surface near the end. Two inks: each color
+  // holds ~45% with a narrow blend zone in the middle, so the deck reads
+  // as visibly half-and-half instead of a soft wash. Theme-aware via the
+  // existing INK_TINT_LIGHT / INK_TINT_DARK pairs.
+  const deckGradient = (inks) => {
+    if(!inks || !inks.length) return null;
+    const tints = (theme === "dark" ? INK_TINT_DARK : INK_TINT_LIGHT);
+    const c1 = tints[inks[0]];
+    if(!c1) return null;
+    if(inks.length === 1){
+      return `linear-gradient(135deg, ${c1} 0%, ${c1} 60%, var(--bg-surface) 100%)`;
+    }
+    const c2 = tints[inks[1]];
+    if(!c2) return `linear-gradient(135deg, ${c1} 0%, ${c1} 60%, var(--bg-surface) 100%)`;
+    // 4-stop gradient: solid A → A → B → solid B. The 10% transition
+    // window between 45% and 55% blends cleanly without smearing.
+    return `linear-gradient(135deg, ${c1} 0%, ${c1} 45%, ${c2} 55%, ${c2} 100%)`;
+  };
+
+  // Tiny pill showing a deck's visibility. Owner-facing only; external cards
+  // suppress it (the deck wouldn't be visible to the viewer if it weren't
+  // shareable in the first place).
+  const visibilityPill = (v) => {
+    const map = {
+      public:   {label: "Public",   cls: "vis-public",   icon: "🌐"},
+      unlisted: {label: "Unlisted", cls: "vis-unlisted", icon: "🔗"},
+      private:  {label: "Private",  cls: "vis-private",  icon: "🔒"},
+    };
+    const m = map[v || "private"];
+    return html`<span class=${"deck-card-vis "+m.cls}
+      title=${m.label === "Public" ? "Anyone with the link can view; also appears in Discover."
+             : m.label === "Unlisted" ? "Anyone with the link can view. Not in Discover."
+             : "Only you can view. The share link won't work for others."}>
+      ${m.icon} ${m.label}
+    </span>`;
+  };
 
   // Pre-compute per-deck aggregates: total cards, total value, inks used,
   // inkable / uninkable counts. Returned object is consumed by both card
@@ -7569,12 +7765,19 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     return {total, value, owned, inks: Array.from(inks), inkable, uninkable};
   };
   // Renders the small ink-shield row plus the inkable/uninkable badge.
+  // Uses the site's existing hex glyphs (gold filigree for inkable, empty
+  // hex for uninkable) so the chip reads at a glance instead of as a ratio.
   const renderDeckChips = (s) => html`<div class="deck-card-chips">
     ${s.inks.length > 0 && html`<div class="deck-card-inks">
       ${s.inks.map(ink => html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>`)}
     </div>`}
-    ${(s.inkable + s.uninkable) > 0 && html`<div class="deck-card-inkable" title="Inkable cards (can be used as ink) / Uninkable">
-      <span class="ink-yes">${s.inkable}</span><span class="ink-sep">/</span><span class="ink-no">${s.uninkable}</span>
+    ${(s.inkable + s.uninkable) > 0 && html`<div class="deck-card-inkable">
+      <span class="deck-ink-chip" title=${s.inkable + " inkable card" + (s.inkable===1?"":"s") + " (can be used as ink)"}>
+        <${InkableHex}/><span>${s.inkable}</span>
+      </span>
+      <span class="deck-ink-chip" title=${s.uninkable + " uninkable card" + (s.uninkable===1?"":"s")}>
+        <${UninkableHex}/><span>${s.uninkable}</span>
+      </span>
     </div>`}
   </div>`;
 
@@ -7584,9 +7787,16 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const s = summarizeDeck(d);
     const ownedPct = s.total ? (s.owned/s.total*100) : 0;
     const favCount = favoriteCounts[d.id] || 0;
-    return html`<div key=${d.id} class="deck-card" onClick=${()=>setSelectedDeckId(d.id)}>
-      <div class="deck-card-name">${d.name}</div>
-      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}</div>
+    const viewCount = viewCounts[d.id] || 0;
+    const bg = deckGradient(s.inks);
+    return html`<div key=${d.id} class="deck-card"
+        style=${bg ? {background: bg} : null}
+        onClick=${()=>setSelectedDeckId(d.id)}>
+      <div class="deck-card-header">
+        <div class="deck-card-name">${d.name}</div>
+        ${visibilityPill(d.visibility)}
+      </div>
+      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       <div class="deck-card-actions">
@@ -7601,9 +7811,13 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const s = summarizeDeck(d);
     const creatorName = entry.creator?.display_name || "anonymous";
     const favCount = favoriteCounts[d.id] || 0;
-    return html`<div key=${d.id} class="deck-card external" onClick=${()=>openExternalDeckEntry(entry)}>
+    const viewCount = viewCounts[d.id] || 0;
+    const bg = deckGradient(s.inks);
+    return html`<div key=${d.id} class="deck-card external"
+        style=${bg ? {background: bg} : null}
+        onClick=${()=>openExternalDeckEntry(entry)}>
       <div class="deck-card-name">${d.name}</div>
-      <div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${favCount>0?` · ★ ${favCount}`:""}</div>
+      <div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       <div class="deck-card-actions">
@@ -7613,6 +7827,49 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       </div>
     </div>`;
   };
+
+  // Ink-filter helpers + filtered/sorted Your Decks list. Placed here —
+  // BEFORE all the conditional early-returns below — so React always sees
+  // the same hook count regardless of which view path renders this turn.
+  // Calling useMemo conditionally is the cardinal Rules-of-Hooks sin.
+  const matchesInks = (inks) => {
+    if(inkFilter.size === 0) return true;
+    for(const ink of inkFilter) if(!inks.includes(ink)) return false;
+    return true;
+  };
+  const toggleInkFilter = (ink) => setInkFilter(prev => {
+    const next = new Set(prev);
+    if(next.has(ink)) next.delete(ink); else next.add(ink);
+    return next;
+  });
+  const yourDecksProcessed = useMemo(() => {
+    if(!decks) return [];
+    const enriched = decks.map(d => {
+      const s = summarizeDeck(d);
+      return {d, s, _fav: favoriteCounts[d.id] || 0, _view: viewCounts[d.id] || 0};
+    });
+    const q = yourDeckSearch.trim().toLowerCase();
+    const filtered = enriched.filter(({d, s}) => {
+      if(q && !(d.name||"").toLowerCase().includes(q)) return false;
+      if(inkFilter.size > 0){
+        for(const ink of inkFilter) if(!s.inks.includes(ink)) return false;
+      }
+      return true;
+    });
+    const cmp = (a, b) => {
+      switch(yourDeckSort){
+        case "created_desc":   return new Date(b.d.created_at||b.d.updated_at) - new Date(a.d.created_at||a.d.updated_at);
+        case "value_desc":     return (b.s.value || 0) - (a.s.value || 0);
+        case "favorites_desc": return (b._fav - a._fav) || (new Date(b.d.updated_at) - new Date(a.d.updated_at));
+        case "owned_desc":     return ((b.s.total ? b.s.owned/b.s.total : 0) - (a.s.total ? a.s.owned/a.s.total : 0));
+        case "name_asc":       return (a.d.name||"").localeCompare(b.d.name||"");
+        case "updated_desc":
+        default:               return new Date(b.d.updated_at) - new Date(a.d.updated_at);
+      }
+    };
+    return filtered.sort(cmp).map(({d}) => d);
+  }, [decks, favoriteCounts, viewCounts, yourDeckSearch, yourDeckSort, inkFilter, collection, cardById]);
+  const filterExternal = (entries) => entries.filter(e => matchesInks(summarizeDeck(e.deck).inks));
 
   const createDeck = useCallback(async () => {
     if(!user) return;
@@ -7733,15 +7990,22 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   }, [user, decks]);
 
   // Update deck-level metadata (format/tags/description/etc). Optimistic
-  // local merge + Supabase update with rollback on failure.
+  // local merge + Supabase update with rollback on failure. Reads the
+  // updated row back so trigger-set columns (like share_token, which the
+  // visibility-change trigger rotates) stay in sync locally.
   const updateDeckMeta = useCallback(async (deckId, patch) => {
     if(!user || !patch) return;
     const prev = decks;
     setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...patch} : d));
     setPending(p => p + 1);
     try {
-      const {error} = await sbClient.from("decks").update(patch).eq("id", deckId);
+      const {data, error} = await sbClient.from("decks").update(patch).eq("id", deckId)
+        .select("id,name,description,inks,tags,visibility,share_token,created_at,updated_at,user_id")
+        .maybeSingle();
       if(error) throw error;
+      if(data){
+        setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...data} : d));
+      }
     } catch(e){
       console.error("deck meta update failed:", e);
       setDecks(prev);
@@ -7845,7 +8109,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         isOwnDeck=${false}
         canAct=${!!user}
         isFavorited=${favorites.has(d.id)}
-        onToggleFavorite=${user ? (()=>toggleFavorite(d.id)) : (()=>onSignIn && onSignIn())}
+        onToggleFavorite=${user ? (()=>toggleFavorite(d.id, externalDeck.shareToken || null)) : (()=>onSignIn && onSignIn())}
         isFollowingCreator=${isFollowingCreator}
         onToggleFollowCreator=${user ? (()=>toggleFollowCreator(creatorId)) : (()=>onSignIn && onSignIn())}
         onOpenCreator=${creatorId ? (()=>openCreatorProfile(creatorId)) : null}
@@ -7887,13 +8151,13 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     <//>`;
   }
 
-  // List view with sub-tabs: Your Decks, Favorites, Following, Discover.
   const SECTIONS = [
     ["yours",     "Your Decks", decks.length],
     ["favorites", "Favorites",  favoritedDecks.length],
     ["following", "Following",  followingFeed.length],
     ["discover",  "Discover",   0],
   ];
+  const filtersActive = inkFilter.size > 0 || (deckSection === "yours" && yourDeckSearch.trim().length > 0);
 
   return html`<div>
     <div class="deck-section-tabs">
@@ -7907,40 +8171,85 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       ${err && html`<span style=${{color:"var(--red)",fontSize:12,marginLeft:"auto"}}>${err}</span>`}
     </div>
 
+    <div class="deck-filter-row">
+      <div class="deck-ink-filter">
+        ${INKS.map(ink => html`<button key=${ink}
+          class=${"chip ink ink-icon-chip "+(inkFilter.has(ink)?"active":"")}
+          style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}}
+          title=${ink} aria-label=${ink}
+          onClick=${()=>toggleInkFilter(ink)}>
+          <img src=${INK_ICONS[ink]} alt=${ink}/>
+        </button>`)}
+        ${inkFilter.size > 0 && html`<button class="deck-filter-clear"
+          onClick=${()=>setInkFilter(new Set())}>✕ Clear inks</button>`}
+      </div>
+      ${deckSection === "yours" && html`<div class="deck-search-sort">
+        <input type="search" class="deck-search-input" placeholder="Search your decks…"
+          value=${yourDeckSearch} onInput=${e=>setYourDeckSearch(e.target.value)}/>
+        <select class="deck-sort-select" value=${yourDeckSort} onChange=${e=>setYourDeckSort(e.target.value)}>
+          <option value="updated_desc">Recently updated</option>
+          <option value="created_desc">Recently created</option>
+          <option value="value_desc">Highest value</option>
+          <option value="favorites_desc">Most favorited</option>
+          <option value="owned_desc">Most owned</option>
+          <option value="name_asc">Name (A→Z)</option>
+        </select>
+      </div>`}
+    </div>
+
     ${deckSection === "yours" && (
       decks.length === 0
         ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
             You haven't created any decks yet. Click <strong>+ New Deck</strong> to start.
           </div>`
-        : html`<div class="deck-list">${decks.map(renderOwnedCard)}</div>`
-    )}
-
-    ${deckSection === "favorites" && (
-      favoritedDecks.length === 0
-        ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-            No favorited decks yet. When you find a shared deck you like, click <strong>☆ Favorite</strong> to save it here.
-          </div>`
-        : html`<div class="deck-list">${favoritedDecks.map(entry => renderExternalCard(entry, {showUnfavorite:true}))}</div>`
-    )}
-
-    ${deckSection === "following" && (
-      userFollows.size === 0
-        ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-            You aren't following any creators yet. When you view a shared deck, click <strong>+ Follow</strong> next to the creator's name to see their public decks here.
-          </div>`
-        : followingFeed.length === 0
+        : yourDecksProcessed.length === 0
           ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              You follow ${userFollows.size} creator${userFollows.size===1?"":"s"}, but none have published a public deck yet.
+              No decks match the current filters. ${filtersActive && html`<button class="settings-action link"
+                onClick=${()=>{setYourDeckSearch(""); setInkFilter(new Set());}}>Clear filters</button>`}
             </div>`
-          : html`<div class="deck-list">${followingFeed.map(entry => renderExternalCard(entry, {showUnfollowCreator:true}))}</div>`
+          : html`<div class="deck-list">${yourDecksProcessed.map(renderOwnedCard)}</div>`
     )}
+
+    ${deckSection === "favorites" && (() => {
+      const visible = filterExternal(favoritedDecks);
+      if(favoritedDecks.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+        No favorited decks yet. When you find a shared deck you like, click <strong>☆ Favorite</strong> to save it here.
+      </div>`;
+      if(visible.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+        No favorites match the current ink filter. <button class="settings-action link"
+          onClick=${()=>setInkFilter(new Set())}>Clear inks</button>
+      </div>`;
+      return html`<div class="deck-list">${visible.map(entry => renderExternalCard(entry, {showUnfavorite:true}))}</div>`;
+    })()}
+
+    ${deckSection === "following" && (() => {
+      if(userFollows.size === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+        You aren't following any creators yet. When you view a shared deck, click <strong>+ Follow</strong> next to the creator's name to see their public decks here.
+      </div>`;
+      if(followingFeed.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+        You follow ${userFollows.size} creator${userFollows.size===1?"":"s"}, but none have published a public deck yet.
+      </div>`;
+      const visible = filterExternal(followingFeed);
+      if(visible.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+        No decks in your feed match the current ink filter. <button class="settings-action link"
+          onClick=${()=>setInkFilter(new Set())}>Clear inks</button>
+      </div>`;
+      return html`<div class="deck-list">${visible.map(entry => renderExternalCard(entry, {showUnfollowCreator:true}))}</div>`;
+    })()}
 
     ${deckSection === "discover" && html`<div>
       ${discoverEntries.length === 0 && !discoverLoading
         ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
             No public decks to discover yet. Once someone sets a deck's visibility to Public from its Share menu, it'll show up here.
           </div>`
-        : html`<div class="deck-list">${discoverEntries.map(entry => renderExternalCard(entry, {}))}</div>`}
+        : (() => {
+            const visible = filterExternal(discoverEntries);
+            if(visible.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+              No public decks match the current ink filter. <button class="settings-action link"
+                onClick=${()=>setInkFilter(new Set())}>Clear inks</button>
+            </div>`;
+            return html`<div class="deck-list">${visible.map(entry => renderExternalCard(entry, {}))}</div>`;
+          })()}
       ${discoverLoading && html`<div class="muted" style=${{fontSize:12,padding:"12px 0",textAlign:"center"}}>Loading…</div>`}
       ${!discoverLoading && discoverHasMore && html`<div style=${{display:"flex",justifyContent:"center",margin:"14px 0"}}>
         <button onClick=${loadMoreDiscover} style=${{padding:"7px 18px",fontSize:13}}>Load more</button>
@@ -8221,11 +8530,21 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const shareUrl = useMemo(()=>{
     try {
       const url = new URL(window.location.href);
-      url.searchParams.set("deck", deck.id);
+      // Strip any pre-existing path-level junk; start from origin + path.
+      url.search = "";
       url.hash = "";
+      url.searchParams.set("deck", deck.id);
+      // Unlisted decks need the token; public ones don't (the token is
+      // still in the DB but RLS allows direct access for public, so a
+      // clean URL is friendlier to share). Private decks won't render
+      // anything for non-owners regardless, but we include the token
+      // anyway in case the user flips back to unlisted later.
+      if(deck.visibility !== "public" && deck.share_token){
+        url.searchParams.set("token", deck.share_token);
+      }
       return url.toString();
     } catch { return ""; }
-  }, [deck.id]);
+  }, [deck.id, deck.visibility, deck.share_token]);
   const copyShareUrl = useCallback(()=>{
     if(!shareUrl) return;
     const done = () => { setCopied(true); setTimeout(()=>setCopied(false), 1600); };
@@ -8239,6 +8558,24 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   }, [shareUrl]);
   const visibility = deck.visibility || "private";
   const setVisibility = (v) => { if(onUpdateMeta) onUpdateMeta({visibility: v}); };
+  // Owner-only: rotate the share token via the SECURITY DEFINER RPC. Any
+  // URL that includes the previous token stops working immediately.
+  const [regenerating, setRegenerating] = useState(false);
+  const regenerateShareToken = useCallback(async ()=>{
+    if(!onUpdateMeta || regenerating) return;
+    if(!confirm("Generate a new share link? The current link will stop working for anyone who has it.")) return;
+    setRegenerating(true);
+    try {
+      const {data, error} = await sbClient.rpc("regenerate_deck_share_token", {p_deck_id: deck.id});
+      if(error) throw error;
+      // Reflect locally so the share URL updates without a refetch.
+      onUpdateMeta({share_token: data});
+    } catch(e){
+      alert("Couldn't regenerate: " + (e.message || e));
+    } finally {
+      setRegenerating(false);
+    }
+  }, [deck.id, onUpdateMeta, regenerating]);
 
   // Deck-building = mainline sets only (no Extras / promo sets / weird
   // one-offs). Filter raw before handing it to CardBrowser.
@@ -8470,7 +8807,17 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
                 onClick=${copyShareUrl}>${copied?"Copied ✓":"Copy"}</button>
             </div>
             ${visibility === "private" && html`<div class="deck-share-note">
-              This deck is currently <strong>private</strong>. Set it to Unlisted or Public for the link to work for others.
+              This deck is currently <strong>private</strong>. The link above won't work for anyone but you — switch to Unlisted or Public to share.
+            </div>`}
+            ${visibility === "unlisted" && html`<div class="deck-share-regen-row">
+              <button class="settings-action link" onClick=${regenerateShareToken}
+                disabled=${regenerating}
+                title="Generate a new share link. The current link stops working for anyone who has it.">
+                ${regenerating ? "Regenerating…" : "↻ Regenerate share link"}
+              </button>
+              <div class="deck-share-note" style=${{marginTop:6}}>
+                Switching back to <strong>Private</strong> also rotates the link automatically.
+              </div>
             </div>`}
           </div>`}
         </div>`}
@@ -8583,10 +8930,15 @@ function App(){
   const initialUrlParams = useMemo(() => {
     try {
       const p = new URLSearchParams(window.location.search);
-      return {deck: p.get("deck") || null, user: p.get("user") || null};
-    } catch { return {deck: null, user: null}; }
+      return {
+        deck:  p.get("deck")  || null,
+        token: p.get("token") || null,
+        user:  p.get("user")  || null,
+      };
+    } catch { return {deck: null, token: null, user: null}; }
   }, []);
   const [incomingDeckId, setIncomingDeckId] = useState(initialUrlParams.deck);
+  const [incomingShareToken, setIncomingShareToken] = useState(initialUrlParams.token);
   const [incomingUserId, setIncomingUserId] = useState(initialUrlParams.deck ? null : initialUrlParams.user);
   const [nc,setNc]=useState(false);const [ne,setNe]=useState(false);
   const [view,setView]=useState((initialUrlParams.deck || initialUrlParams.user) ? "decks" : "home");
@@ -9135,6 +9487,8 @@ function App(){
       collection=${collection} tabClickNonce=${tabClickNonce}
       incomingDeckId=${incomingDeckId}
       onConsumedIncomingDeckId=${() => setIncomingDeckId(null)}
+      incomingShareToken=${incomingShareToken}
+      onConsumedIncomingShareToken=${() => setIncomingShareToken(null)}
       incomingUserId=${incomingUserId}
       onConsumedIncomingUserId=${() => setIncomingUserId(null)}
       onSignIn=${signIn} theme=${theme}/>`}
