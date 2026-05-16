@@ -460,16 +460,21 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    a native overflow-scroll region; a JS rAF loop nudges scrollLeft each
    frame. Manual scroll / wheel / swipe just nudges scrollLeft directly and
    the loop resumes from wherever the user left off. */
+/* No mask-image — masks force the wrap into a compositing layer and soften
+   every child <img> at the layer's resolution (visible blur on AVIF cards).
+   Instead, two absolutely-positioned gradient overlays fade the left/right
+   edges, leaving children's pixels untouched. */
 .movers-wrap{overflow-x:auto;overflow-y:hidden;padding:4px 4px 10px;position:relative;
   scrollbar-width:thin;
-  overscroll-behavior-x:contain;
-  -webkit-mask-image:linear-gradient(to right,transparent,#000 1.2%,#000 98.8%,transparent);
-          mask-image:linear-gradient(to right,transparent,#000 1.2%,#000 98.8%,transparent);}
-.movers-wrap.is-paused{-webkit-mask-image:none;mask-image:none;}
+  overscroll-behavior-x:contain;}
+.movers-wrap::before,
+.movers-wrap::after{content:"";position:sticky;top:0;width:30px;height:100%;
+  pointer-events:none;z-index:3;flex-shrink:0;}
+.movers-wrap::before{left:0;background:linear-gradient(to right, var(--bg-page), transparent);}
+.movers-wrap::after{right:0;margin-left:auto;background:linear-gradient(to left, var(--bg-page), transparent);}
+.movers-wrap.is-paused::before,
+.movers-wrap.is-paused::after{display:none;}
 .movers-track{display:flex;width:max-content;gap:6px;}
-@media (prefers-reduced-motion: reduce){
-  .movers-wrap{-webkit-mask-image:none;mask-image:none;}
-}
 /* Mover tile — fixed grid so every section lines up across tiles regardless
    of name length or missing data. Rows: image / name / meta / prices / deltas. */
 .mover-tile{flex:0 0 196px;display:grid;
@@ -480,8 +485,6 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .mover-tile:hover{border-color:var(--accent);}
 .mover-tile .mt-img-wrap{position:relative;}
 .mover-tile .mt-img-wrap img{width:100%;aspect-ratio:5/7;object-fit:cover;border-radius:3px;display:block;
-  image-rendering:auto;-webkit-backface-visibility:hidden;backface-visibility:hidden;
-  transform:translateZ(0);
   image-rendering:-webkit-optimize-contrast;image-rendering:crisp-edges;}
 .mover-tile .mt-img-fallback{width:100%;aspect-ratio:5/7;border-radius:3px;
   background:var(--accent-glow);display:flex;align-items:center;justify-content:center;
