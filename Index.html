@@ -947,7 +947,7 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 /* Home top band — page title + compact EV table side-by-side. The EV
    strip sits above the collection panel and spills back over the banners
    area at narrow widths via flex-wrap. */
-.home-top-band{display:flex;gap:18px;align-items:flex-end;justify-content:space-between;
+.home-top-band{display:flex;gap:18px;align-items:flex-start;justify-content:space-between;
   flex-wrap:wrap;margin-bottom:10px;}
 .home-ev-strip{flex:0 0 360px;width:360px;max-width:100%;box-sizing:border-box;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
@@ -997,9 +997,15 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .home-feed-verb-dot.pub{background:var(--green);}
 .home-feed-verb-dot.upd{background:#d4a93b;}
 .home-feed-main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.home-feed-deckname-line{display:flex;gap:5px;align-items:center;min-width:0;}
 .home-feed-deckname{font-size:12px;font-weight:600;color:var(--text);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;flex:1;}
 .home-feed-link:hover .home-feed-deckname{color:var(--accent);}
+.home-feed-fmt-tag{flex-shrink:0;font-size:8px;font-weight:700;letter-spacing:0.4px;
+  padding:1px 4px;border-radius:3px;text-transform:uppercase;line-height:1.4;}
+.home-feed-fmt-tag.fmt-infinity{background:var(--bg-card);color:var(--text-muted);
+  border:1px solid var(--border);}
+.home-feed-fmt-tag.fmt-core{background:var(--accent);color:#fff;}
 .home-feed-meta{font-size:10px;color:var(--text-muted);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .home-feed-creator{font-weight:600;color:var(--text-dim);}
@@ -8514,7 +8520,7 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
     };
   }, [cards, reducedMotion]);
 
-  return html`<section style=${{margin:"10px 0"}}>
+  return html`<section style=${{margin:"0 0 10px"}}>
     ${(title || subtitle || controls) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
       ${title ? html`<h2 class="title-font" style=${{fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3}}>${title}</h2>` : null}
       ${controls ? html`<span>${controls}</span>` : null}
@@ -9046,26 +9052,56 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
 
         // Some decks have null/empty `inks` in the DB (the editor doesn't
         // always write to that column). Compute inks client-side from
-        // deck_cards + the catalog for any deck missing them, so the feed
-        // can always render the ink shields.
-        const missingInkIds = decks.filter(d => !(d.inks && d.inks.length)).map(d => d.id);
+        // deck_cards + the catalog. For unlisted decks where RLS would
+        // block the direct deck_cards read (e.g. a deck from a creator
+        // I follow but don't own), fall back to the SECURITY DEFINER
+        // get_shared_deck_cards RPC using the deck's own share_token.
         const computedInks = {};
-        if(missingInkIds.length && raw && raw.length){
-          const inkByCardId = new Map();
+        const inkByCardId = new Map();
+        if(raw && raw.length){
           for(const r of raw){
             if(r.card_id && !inkByCardId.has(r.card_id)){
               const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
               if(inks.length) inkByCardId.set(r.card_id, inks);
             }
           }
+        }
+        const collectInks = (deckId, cards) => {
+          const set = computedInks[deckId] || new Set();
+          for(const dc of (cards || [])){
+            const inks = inkByCardId.get(dc.card_id);
+            if(!inks) continue;
+            for(const ink of inks) set.add(ink);
+          }
+          computedInks[deckId] = set;
+        };
+        const needCompute = decks.filter(d => !(d.inks && d.inks.length));
+        if(needCompute.length && inkByCardId.size){
+          const ids = needCompute.map(d => d.id);
+          // First pass — bulk direct query. RLS-visible decks (mine + public)
+          // come back here.
           const {data: dcRows} = await sbClient.from("deck_cards")
-            .select("deck_id,card_id")
-            .in("deck_id", missingInkIds);
-          for(const id of missingInkIds) computedInks[id] = new Set();
+            .select("deck_id,card_id").in("deck_id", ids);
+          for(const id of ids) computedInks[id] = new Set();
+          const seenByDeck = {};
           for(const dc of (dcRows || [])){
+            seenByDeck[dc.deck_id] = true;
             const inks = inkByCardId.get(dc.card_id);
             if(!inks) continue;
             for(const ink of inks) computedInks[dc.deck_id].add(ink);
+          }
+          // Second pass — for decks the direct query couldn't see (RLS),
+          // hit the get_shared_deck_cards RPC with the deck's own
+          // share_token. The RPC is SECURITY DEFINER and validates the
+          // token, so it returns rows regardless of caller ownership.
+          const rpcCandidates = needCompute.filter(d => !seenByDeck[d.id] && d.share_token);
+          if(rpcCandidates.length){
+            const rpcResults = await Promise.all(rpcCandidates.map(d =>
+              sbClient.rpc("get_shared_deck_cards", {p_deck_id: d.id, p_token: d.share_token})
+                .then(({data, error}) => ({deckId: d.id, rows: error ? [] : (data || [])}))
+                .catch(() => ({deckId: d.id, rows: []}))
+            ));
+            for(const {deckId, rows} of rpcResults) collectInks(deckId, rows);
           }
         }
 
@@ -9080,11 +9116,16 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
           const inks = (d.inks && d.inks.length)
             ? d.inks
             : (computedInks[d.id] ? Array.from(computedInks[d.id]) : []);
+          // Format lives in tags[0]. "core" → Core Constructed, anything
+          // else (or missing) → Infinity. Same convention as deckFormatKey.
+          const fmtKey = (d.tags && d.tags[0] === "core") ? "core" : "infinity";
           return {
             deck: {...d, inks},
             creator: profileById[d.user_id] || null,
             isPublish: Math.abs(new Date(d.updated_at) - new Date(d.created_at)) < 3*60*1000,
             shareToken: tokenByDeck[d.id] || null,
+            formatKey: fmtKey,
+            formatLabel: fmtKey === "core" ? "Core" : "Inf",
           };
         }));
       } catch(e){
@@ -9120,7 +9161,7 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
   return html`<aside class="home-feed">
     <div class="home-feed-title">Following</div>
     <ul class="home-feed-list">
-      ${entries.map(({deck, creator, isPublish, shareToken}) => {
+      ${entries.map(({deck, creator, isPublish, shareToken, formatKey, formatLabel}) => {
         const params = new URLSearchParams();
         params.set("deck", deck.id);
         if(deck.visibility !== "public" && shareToken) params.set("token", shareToken);
@@ -9130,7 +9171,10 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
           <a href=${href} class="home-feed-link" title=${(creator?.display_name || "Someone") + " " + (isPublish?"published":"updated") + " " + (deck.name || "Untitled deck")}>
             <span class="home-feed-verb-dot ${isPublish?"pub":"upd"}" aria-hidden="true"></span>
             <span class="home-feed-main">
-              <span class="home-feed-deckname">${deck.name || "Untitled deck"}</span>
+              <span class="home-feed-deckname-line">
+                <span class="home-feed-deckname">${deck.name || "Untitled deck"}</span>
+                <span class=${"home-feed-fmt-tag fmt-"+formatKey} title=${formatKey==="core"?"Core Constructed":"Infinity"}>${formatLabel}</span>
+              </span>
               <span class="home-feed-meta">
                 <span class="home-feed-creator">${creator?.display_name || "Someone"}</span>
                 <span> · ${isPublish ? "new" : "updated"} ${relativeTime(deck.updated_at)}</span>
