@@ -164,6 +164,47 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .price-db-adv-row input[type="number"]{width:90px;}
 .price-db-adv-row input:focus,
 .price-db-adv-row select:focus{border-color:var(--accent);}
+
+/* Batch action bar — surfaces when 1+ rows are selected. Sits above the
+   table count line so the user always sees how many are picked + the
+   action menu without scrolling. */
+.price-db-batchbar{display:flex;align-items:center;gap:8px;padding:8px 12px;
+  background:var(--accent-glow);border:1px solid var(--border-accent);
+  border-radius:8px;}
+.price-db-batchcount{font-size:13px;color:var(--text);}
+.price-db-batchbtn{padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;
+  background:var(--accent);color:#fff;border:none;border-radius:6px;}
+.price-db-batchbtn:hover{filter:brightness(1.1);}
+.price-db-batchmenu{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
+  width:280px;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  padding:4px;display:flex;flex-direction:column;}
+.price-db-batchitem{display:block;padding:9px 12px;font-size:13px;font-weight:500;
+  cursor:pointer;background:transparent;border:none;text-align:left;
+  color:var(--text);text-decoration:none;border-radius:5px;}
+.price-db-batchitem:hover:not(:disabled){background:var(--bg-surface-hover,var(--bg-surface));}
+.price-db-batchitem:disabled{opacity:0.5;cursor:not-allowed;}
+.price-db-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  z-index:500;padding:10px 18px;background:var(--accent);color:#fff;
+  border-radius:8px;font-size:13px;font-weight:600;
+  box-shadow:0 6px 18px rgba(0,0,0,0.3);}
+
+/* Checkbox column + selected-row highlight. */
+.price-db-table th.th-check,
+.price-db-table td.td-check{width:28px;text-align:center;padding-left:6px;padding-right:0;}
+.price-db-table td.td-check input{cursor:pointer;}
+.price-db-table tr.price-db-row-sel{background:var(--accent-glow);}
+.price-db-table tr.price-db-row-sel:hover{background:var(--accent-glow);}
+
+/* Name cell: clickable name + small ↗ TCGPlayer link beside it. */
+.price-db-table .td-name-main{display:flex;align-items:center;gap:6px;
+  font-weight:600;color:var(--text);line-height:1.2;}
+.price-db-table .td-name-link:hover{color:var(--accent);text-decoration:underline;}
+.price-db-table .td-tcg-link{display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;font-size:11px;border-radius:4px;
+  background:var(--bg-surface);color:var(--text-muted);text-decoration:none;
+  border:1px solid var(--border);font-weight:700;flex-shrink:0;}
+.price-db-table .td-tcg-link:hover{background:var(--accent);color:#fff;border-color:var(--accent);}
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
   border:1px solid transparent;border-radius:6px;cursor:pointer;
@@ -6484,7 +6525,7 @@ function rarityLabel(r){
   return String(r).split(/[_\s]+/).map(w => w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : "").join(" ");
 }
 
-function PriceDatabase({raw, sets}){
+function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   const [sortKey, setSortKey] = useState("pct_1d");
   const [sortDesc, setSortDesc] = useState(true);
@@ -6494,6 +6535,38 @@ function PriceDatabase({raw, sets}){
   const [filterInk, setFilterInk] = useState("");
   const [search, setSearch] = useState("");
   const [preset, setPreset] = useState("all");
+  // Card detail modal — clicking a row's image or name opens it.
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  // Multi-select state. Stored as a Set of keys (card_id:printing) so a
+  // single row toggle is O(1). Batch actions appear when any are selected.
+  const [selected, setSelected] = useState(() => new Set());
+  const [batchToast, setBatchToast] = useState(null);
+  const [batchOpen, setBatchOpen] = useState(false);
+  const batchRef = useRef(null);
+  useEffect(() => {
+    if(!batchOpen) return;
+    const onDoc = (e) => {
+      if(batchRef.current && !batchRef.current.contains(e.target)) setBatchOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [batchOpen]);
+  // Index raw by card_id so a row's modal can resolve to a real grouped
+  // card object (CardDetailModal needs the full meta + price rows).
+  const rawByCardId = useMemo(() => {
+    const m = {};
+    for(const r of (raw || [])) {
+      if(!m[r.card_id]) m[r.card_id] = [];
+      m[r.card_id].push(r);
+    }
+    return m;
+  }, [raw]);
+  const openModal = (cardId) => {
+    const rows = rawByCardId[cardId] || [];
+    if(!rows.length) return;
+    const groups = groupCards(rows);
+    if(groups[0]) setSelectedGroup(groups[0]);
+  };
   // Advanced filters: numeric ranges on the active price + each Δ% window.
   // Empty string means "no bound". Keeps things flexible — e.g. find every
   // card under $10 that moved +50% in a month, or only cards trading between
@@ -6605,15 +6678,43 @@ function PriceDatabase({raw, sets}){
 
   const sigOf = (r) => {
     const out = [];
-    if(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1) out.push(["🔥", "Buyout: +30% in 24h from ≥$1 base"]);
-    if(r.pct_7d != null && r.pct_7d <= -20) out.push(["📉", "Crashing: -20% over last week"]);
+    if(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1) out.push(["buyout", "🔥",
+      "Buyout candidate: 1D Δ is +" + r.pct_1d.toFixed(1) + "% from a prior low of $" + (r.low_prev||0).toFixed(2) + ". Pattern often means a single buyer swept the cheap copies — supply quickly thinned, listings jumped overnight."]);
+    if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crashing", "📉",
+      "Crashing: down " + Math.abs(r.pct_7d).toFixed(1) + "% over the last week. Sustained drop, not noise. Common after a spike unwinds or a reprint is announced."]);
     if(r.low_today != null && r.market_today != null && r.market_today > 0){
       const ratio = r.low_today / r.market_today;
-      if(ratio <= 0.85) out.push(["💰", "Discount: low under market"]);
-      if(ratio >= 1.10) out.push(["↑", "Premium: low over market"]);
+      if(ratio <= 0.85) out.push(["discount", "💰",
+        "Discount: NM Low is " + Math.round((1-ratio)*100) + "% under NM Market. Cheapest listing is undercutting recent sale prices — could be a stale low-baller, could be a genuine buy."]);
+      if(ratio >= 1.10) out.push(["premium", "↑",
+        "Premium: NM Low is " + Math.round((ratio-1)*100) + "% over NM Market. Even the floor seller is asking more than recent sales — supply may be tightening."]);
     }
-    if(r.pct_30d != null && r.pct_30d >= 15) out.push(["📈", "Trending up: +15% over last month"]);
+    if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trending", "📈",
+      "Trending up: +" + r.pct_30d.toFixed(1) + "% over the last month. Sustained appreciation across multiple price snapshots."]);
     return out;
+  };
+
+  // Mass-entry URL for the selected cards. TCGPlayer accepts qty + card
+  // name pairs separated by double-pipe; we route through Impact's affiliate
+  // wrapper so the click gets attributed.
+  const buildBatchBuyUrl = (rows) => {
+    if(!rows.length) return null;
+    const lines = rows.map(r => `1 ${(r.name || "") + (r.version ? " - " + r.version : "")}`.trim()).filter(Boolean);
+    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+  };
+
+  const toggleSelect = (k) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if(next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  };
+  const clearSelected = () => setSelected(new Set());
+  const showToast = (msg) => {
+    setBatchToast(msg);
+    setTimeout(() => setBatchToast(null), 2500);
   };
 
   const activePreset = PRICE_DB_PRESETS.find(([k]) => k === preset);
@@ -6677,10 +6778,42 @@ function PriceDatabase({raw, sets}){
         </button>
       </div>
     </div>`}
-    <div class="price-db-count muted">${filtered.length} cards</div>
+    ${selected.size > 0 && html`<div class="price-db-batchbar">
+      <span class="price-db-batchcount"><strong>${selected.size}</strong> selected</span>
+      <button onClick=${clearSelected} class="price-db-advbtn">Clear</button>
+      <div ref=${batchRef} style=${{position:"relative",display:"inline-flex",marginLeft:"auto"}}>
+        <button class="price-db-batchbtn" onClick=${()=>setBatchOpen(o=>!o)}>Actions ▾</button>
+        ${batchOpen && html`<div class="price-db-batchmenu">
+          ${(() => {
+            const selRows = filtered.filter(r => selected.has(r.card_id + ":" + r.printing));
+            const buyUrl = buildBatchBuyUrl(selRows);
+            return html`<a class="price-db-batchitem" href=${buyUrl || "#"} target="_blank"
+              rel="noopener nofollow sponsored"
+              onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
+              🛒 Buy on TCGPlayer (affiliate cart)
+            </a>
+            <button class="price-db-batchitem" onClick=${() => {
+              const lines = selRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
+              if(navigator.clipboard && navigator.clipboard.writeText){
+                navigator.clipboard.writeText(lines).then(() => showToast(`Copied ${selRows.length} cards — paste into a deck's Import.`)).catch(() => showToast("Copy failed."));
+              } else {
+                prompt("Copy this decklist text:", lines);
+              }
+              setBatchOpen(false);
+            }}>📋 Copy as decklist (paste into a deck)</button>
+            <button class="price-db-batchitem" disabled=${true}
+              title="Multi-card price graphing is coming soon — for now use the Price Graphing tab per-card.">
+              📊 Add to Price Graphing <span class="muted" style=${{fontSize:10}}>(soon)</span>
+            </button>`;
+          })()}
+        </div>`}
+      </div>
+    </div>`}
+    <div class="price-db-count muted">${filtered.length} cards${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
     <div class="price-db-tablewrap">
       <table class="price-db-table">
         <thead><tr>
+          <th class="th-check"></th>
           <th></th>
           <th class="sortable" onClick=${() => onSort("name")}>Name${arrow("name")}</th>
           <th>Set</th>
@@ -6702,10 +6835,24 @@ function PriceDatabase({raw, sets}){
           ${filtered.slice(0, 1000).map((r) => {
             const img = r.image_small || r.image_normal;
             const sigs = sigOf(r);
-            return html`<tr key=${r.card_id + ":" + r.printing}>
-              <td class="td-img">${img ? html`<img src=${img} loading="lazy" alt=""/>` : null}</td>
+            const key = r.card_id + ":" + r.printing;
+            const isSel = selected.has(key);
+            const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
+            return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
+              <td class="td-check"><input type="checkbox" checked=${isSel}
+                onChange=${() => toggleSelect(key)}/></td>
+              <td class="td-img">${img
+                ? html`<img src=${img} loading="lazy" alt="" style=${{cursor:"pointer"}}
+                    onClick=${() => openModal(r.card_id)}/>`
+                : null}</td>
               <td>
-                <div class="td-name-main">${r.name}${r.version ? " - " + r.version : ""}</div>
+                <div class="td-name-main">
+                  <span class="td-name-link" onClick=${() => openModal(r.card_id)}
+                    style=${{cursor:"pointer"}}>${r.name}${r.version ? " - " + r.version : ""}</span>
+                  ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
+                    rel="noopener nofollow sponsored"
+                    title="Open on TCGPlayer (affiliate link)">↗</a>`}
+                </div>
                 <div class="td-name-meta">${r.printing} #${r.collector_number || "?"}</div>
               </td>
               <td>${setNameById[r.set_id] || "—"}</td>
@@ -6717,13 +6864,21 @@ function PriceDatabase({raw, sets}){
                 const v = priceMode === "market" ? r[mk] : r[lk];
                 return html`<td key=${lk} class=${"td-num " + pctCls(v)}>${fmtPctV(v)}</td>`;
               })}
-              <td>${sigs.map(([icon, title], i) => html`<span key=${i} class="price-db-sig" title=${title}>${icon}</span>`)}</td>
+              <td>${sigs.map(([sk, icon, title]) => html`<${Tip} key=${sk} text=${title}>
+                <span class=${"price-db-sig sig-"+sk}>${icon}</span>
+              <//>`)}</td>
             </tr>`;
           })}
         </tbody>
       </table>
       ${filtered.length > 1000 && html`<div class="muted" style=${{padding: "10px 6px", textAlign: "center", fontSize: 11}}>Showing first 1,000 of ${filtered.length} — tighten filters to see more.</div>`}
     </div>
+    ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
+    ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
+      onClose=${() => setSelectedGroup(null)}
+      user=${user} collection=${collection}
+      updateQty=${updateQty}
+      onSignIn=${onSignIn || (() => {})}/>`}
   </div>`;
 }
 
@@ -6782,7 +6937,9 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collect
         </label>
       <//>`}
     </div>
-    ${sub==="db"      && html`<${PriceDatabase} raw=${raw} sets=${setsNewest}/>`}
+    ${sub==="db"      && html`<${PriceDatabase} raw=${raw} sets=${setsNewest}
+      theme=${theme} user=${user} collection=${collection}
+      updateQty=${updateQty} onSignIn=${onSignIn}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme} priceMode=${priceMode}/>`}
     ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs} priceMode=${priceMode}/>`}
     ${sub==="ev"      && html`<${EVView} raw=${raw} sets=${setsNewest} avgs=${avgs}
