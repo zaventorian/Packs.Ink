@@ -6659,7 +6659,7 @@ const PRICE_DB_PRESETS = [
   ["all",      "All",       "Every tracked card. Use the filters below to narrow down."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
-  ["buyouts",  "Buyouts",   "Cards whose low_price climbed sharply over a week or month, or is now sitting well above its 30-day baseline."],
+  ["buyouts",  "Buyouts",   "Cards whose floor has jumped meaningfully across any tracked window, or is now sitting well above an earlier baseline. Combines short-term sweeps and long-term squeeze runs."],
   ["crashing", "Crashing",  "Cards down 20% or more on low_price over the past week."],
   ["discount", "Discount",  "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
   ["premium",  "Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
@@ -6741,11 +6741,19 @@ function priceDbSparkline(r){
 
 function priceDbSignals(r){
   const out = [];
-  const fastW    = r.pct_7d  != null && r.pct_7d  >= 25 && (r.low_7d  || 0) >= 1;
-  const sustainM = r.pct_30d != null && r.pct_30d >= 50 && (r.low_30d || 0) >= 1;
-  const aboveBase = r.low_today != null && r.low_30d != null && r.low_30d >= 1
-                    && r.low_today >= 1.5 * r.low_30d && r.low_today >= 2;
-  if(fastW || sustainM || aboveBase) out.push(["buy", "BUY",
+  // Mirrors the buyouts preset row-filter: any window with a meaningful
+  // climb OR current floor well above an older baseline.
+  const winJump =
+    (r.pct_7d   != null && r.pct_7d   >= 20) ||
+    (r.pct_30d  != null && r.pct_30d  >= 35) ||
+    (r.pct_90d  != null && r.pct_90d  >= 60) ||
+    (r.pct_180d != null && r.pct_180d >= 100) ||
+    (r.pct_365d != null && r.pct_365d >= 200);
+  const aboveBase =
+    (r.low_today != null && r.low_30d  && r.low_today >= 1.5 * r.low_30d) ||
+    (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
+    (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
+  if(winJump || aboveBase) out.push(["buy", "BUY",
     "Buyout — supply has thinned and the floor is rising. Either jumped sharply this week, jumped a lot this month, or is sitting well above its 30-day baseline."]);
   if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
     "Crashing — low_price down 20% or more on the week."]);
@@ -6992,12 +7000,24 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       // Buyouts: any of three signals fires. Combination is robust against
       // both fast sweeps (1W) and sustained low-supply price climbs (30D /
       // current vs 30D baseline). $1 floor keeps penny-card noise out.
+      // Buyouts: cards whose floor has climbed significantly over ANY tracked
+      // window OR is now sitting well above an earlier baseline. The min
+      // price filter ($5 default) already screens out penny noise, so we
+      // don't need per-window low_X >= $1 gates that were silently zeroing
+      // legit buyouts (e.g. Snow White Cold Foil +99% 1M, Black Cauldron
+      // +1212% 3M — both real, neither were firing on the old rule).
       if(preset === "buyouts"){
-        const fastW    = r.pct_7d  != null && r.pct_7d  >= 25 && (r.low_7d  || 0) >= 1;
-        const sustainM = r.pct_30d != null && r.pct_30d >= 50 && (r.low_30d || 0) >= 1;
-        const aboveBase = r.low_today != null && r.low_30d != null && r.low_30d >= 1
-                          && r.low_today >= 1.5 * r.low_30d && r.low_today >= 2;
-        if(!(fastW || sustainM || aboveBase)) return false;
+        const winJump =
+          (r.pct_7d   != null && r.pct_7d   >= 20) ||
+          (r.pct_30d  != null && r.pct_30d  >= 35) ||
+          (r.pct_90d  != null && r.pct_90d  >= 60) ||
+          (r.pct_180d != null && r.pct_180d >= 100) ||
+          (r.pct_365d != null && r.pct_365d >= 200);
+        const aboveBase =
+          (r.low_today != null && r.low_30d  && r.low_today >= 1.5 * r.low_30d) ||
+          (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
+          (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
+        if(!(winJump || aboveBase)) return false;
       }
       if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
       if(preset === "discount"){
