@@ -104,6 +104,42 @@ input[type="checkbox"]{accent-color:var(--accent);}
    below the main nav, with a softer treatment so it reads as secondary. */
 .market-subtabs{display:flex;flex-wrap:wrap;gap:4px;align-items:center;
   margin:-4px 0 16px 0;padding-bottom:10px;border-bottom:1px solid var(--border);}
+
+/* ── Price Database ─────────────────────────────────────────────────── */
+.price-db{display:flex;flex-direction:column;gap:10px;}
+.price-db-presets{display:flex;flex-wrap:wrap;gap:6px;}
+.price-db-preset{padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
+  border-radius:14px;}
+.price-db-preset:hover{border-color:var(--accent);}
+.price-db-preset.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.price-db-filters{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.price-db-filters select,
+.price-db-filters input{padding:5px 8px;font-size:12px;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;outline:none;}
+.price-db-search{min-width:180px;flex:1;}
+.price-db-num{width:80px;}
+.price-db-count{font-size:11px;}
+.price-db-tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px;}
+.price-db-table{width:100%;border-collapse:collapse;font-size:12px;}
+.price-db-table thead{background:var(--bg-surface);position:sticky;top:0;z-index:1;}
+.price-db-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;
+  color:var(--text-muted);text-align:left;padding:8px 8px;border-bottom:1px solid var(--border);
+  white-space:nowrap;background:var(--bg-surface);}
+.price-db-table th.sortable{cursor:pointer;user-select:none;}
+.price-db-table th.sortable:hover{color:var(--accent);}
+.price-db-table th.th-num{text-align:right;}
+.price-db-table tbody tr{border-bottom:1px solid var(--border);}
+.price-db-table tbody tr:hover{background:var(--bg-surface);}
+.price-db-table td{padding:5px 8px;vertical-align:middle;}
+.price-db-table .td-img img{width:28px;height:39px;object-fit:cover;border-radius:3px;display:block;}
+.price-db-table .td-name-main{font-weight:600;color:var(--text);line-height:1.2;}
+.price-db-table .td-name-meta{font-size:10px;color:var(--text-muted);margin-top:1px;}
+.price-db-table .td-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.price-db-table .pct-up{color:var(--green);font-weight:600;}
+.price-db-table .pct-down{color:var(--red);font-weight:600;}
+.price-db-sig{display:inline-block;font-size:14px;line-height:1;margin:0 1px;cursor:help;}
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
   border:1px solid transparent;border-radius:6px;cursor:pointer;
@@ -6377,6 +6413,7 @@ function SetValuesView({rawData,sets,theme,priceMode}){
 // Sub-selection + sim kind are persisted to localStorage so re-entering
 // the tab lands where the user left off.
 const MARKET_SUBS = [
+  ["db",      "Price Database"],
   ["ev",      "Expected Value"],
   ["avg",     "Card Averages"],
   ["setval",  "Playset Cost"],
@@ -6384,6 +6421,209 @@ const MARKET_SUBS = [
   ["sealed",  "Sealed"],
   ["sim",     "Simulate"],
 ];
+
+// Morningstar-style financial table of every tracked card, driven by the
+// price_movers matview. Columns: thumb, name, set, rarity, ink, current
+// Low/Market, Δ% across 1D/1W/1M/3M/6M/1Y, signal chips. Sortable on every
+// column. Preset chips jump to common questions (biggest movers, possible
+// buyouts, discounts vs market, etc.).
+const PRICE_DB_WIN = [
+  ["pct_1d",   "mkt_pct_1d",   "1D"],
+  ["pct_7d",   "mkt_pct_7d",   "1W"],
+  ["pct_30d",  "mkt_pct_30d",  "1M"],
+  ["pct_90d",  "mkt_pct_90d",  "3M"],
+  ["pct_180d", "mkt_pct_180d", "6M"],
+  ["pct_365d", "mkt_pct_365d", "1Y"],
+];
+const PRICE_DB_PRESETS = [
+  ["all",       "All"],
+  ["gainers1d", "1D Gainers"],
+  ["losers1d",  "1D Losers"],
+  ["gainers1w", "1W Gainers"],
+  ["losers1w",  "1W Losers"],
+  ["buyouts",   "Buyouts"],
+  ["crashing",  "Crashing"],
+  ["discount",  "Discount"],
+  ["premium",   "Premium"],
+];
+const fmtMoney = (v) => v == null ? "—" : "$" + Number(v).toFixed(2);
+const fmtPctV  = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(1) + "%";
+const pctCls   = (v) => v == null ? "" : v > 0 ? "pct-up" : v < 0 ? "pct-down" : "";
+
+function PriceDatabase({sets}){
+  const [state, setState] = useState({rows: null, loading: true, error: null});
+  const [sortKey, setSortKey] = useState("pct_1d");
+  const [sortDesc, setSortDesc] = useState(true);
+  const [priceMode, setPriceMode] = useState("low");
+  const [filterSet, setFilterSet] = useState("");
+  const [filterRarity, setFilterRarity] = useState("");
+  const [filterInk, setFilterInk] = useState("");
+  const [search, setSearch] = useState("");
+  const [preset, setPreset] = useState("all");
+
+  useEffect(() => {
+    let cancelled = false;
+    sbClient.from("price_movers")
+      .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,market_today,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
+      .limit(10000)
+      .then(({data, error}) => {
+        if(cancelled) return;
+        if(error) setState({rows: null, loading: false, error: error.message});
+        else setState({rows: data || [], loading: false, error: null});
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const setNameById = useMemo(() => {
+    const m = {};
+    for(const s of (sets || [])) m[s.id] = s.name;
+    return m;
+  }, [sets]);
+
+  const filtered = useMemo(() => {
+    const rows = state.rows;
+    if(!rows) return [];
+    const q = search.trim().toLowerCase();
+    const passes = (r) => {
+      if(filterRarity && r.rarity !== filterRarity) return false;
+      if(filterInk && r.ink !== filterInk) return false;
+      if(filterSet && setNameById[r.set_id] !== filterSet) return false;
+      if(q){
+        const nm = ((r.name || "") + " " + (r.version || "")).toLowerCase();
+        if(!nm.includes(q)) return false;
+      }
+      if(preset === "buyouts"  && !(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1)) return false;
+      if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
+      if(preset === "discount"){
+        if(!(r.low_today != null && r.market_today != null && r.market_today > 0 && r.low_today / r.market_today <= 0.85)) return false;
+      }
+      if(preset === "premium"){
+        if(!(r.low_today != null && r.market_today != null && r.market_today > 0 && r.low_today / r.market_today >= 1.10)) return false;
+      }
+      return true;
+    };
+    const out = rows.filter(passes);
+    const presetSort = {
+      gainers1d: ["pct_1d", true],
+      losers1d:  ["pct_1d", false],
+      gainers1w: ["pct_7d", true],
+      losers1w:  ["pct_7d", false],
+    }[preset];
+    const sk = presetSort ? presetSort[0] : sortKey;
+    const sd = presetSort ? presetSort[1] : sortDesc;
+    const getVal = (r, k) => {
+      if(k === "name") return (r.name || "") + " " + (r.version || "");
+      if(k === "price") return priceMode === "market" ? r.market_today : r.low_today;
+      return r[k];
+    };
+    out.sort((a, b) => {
+      const av = getVal(a, sk);
+      const bv = getVal(b, sk);
+      if(sk === "name") return sd ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv));
+      if(av == null && bv == null) return 0;
+      if(av == null) return 1;
+      if(bv == null) return -1;
+      return sd ? bv - av : av - bv;
+    });
+    return out;
+  }, [state.rows, search, filterSet, filterRarity, filterInk, preset, sortKey, sortDesc, priceMode, setNameById]);
+
+  const onSort = (k) => {
+    if(sortKey === k) setSortDesc((d) => !d);
+    else { setSortKey(k); setSortDesc(true); }
+  };
+  const arrow = (k) => sortKey === k ? (sortDesc ? " ▼" : " ▲") : "";
+
+  const rarities = useMemo(() => Array.from(new Set((state.rows || []).map((r) => r.rarity).filter(Boolean))).sort(), [state.rows]);
+  const inks = useMemo(() => Array.from(new Set((state.rows || []).map((r) => r.ink).filter(Boolean))).sort(), [state.rows]);
+
+  if(state.loading) return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center"}}>Loading price database…</div>`;
+  if(state.error)   return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center", color: "var(--red)"}}>${state.error}</div>`;
+
+  const sigOf = (r) => {
+    const out = [];
+    if(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1) out.push(["🔥", "Buyout: +30% in 24h from ≥$1 base"]);
+    if(r.pct_7d != null && r.pct_7d <= -20) out.push(["📉", "Crashing: -20% over last week"]);
+    if(r.low_today != null && r.market_today != null && r.market_today > 0){
+      const ratio = r.low_today / r.market_today;
+      if(ratio <= 0.85) out.push(["💰", "Discount: low under market"]);
+      if(ratio >= 1.10) out.push(["↑", "Premium: low over market"]);
+    }
+    if(r.pct_30d != null && r.pct_30d >= 15) out.push(["📈", "Trending up: +15% over last month"]);
+    return out;
+  };
+
+  return html`<div class="price-db">
+    <div class="price-db-presets">
+      ${PRICE_DB_PRESETS.map(([k, l]) => html`<button key=${k}
+        class=${"price-db-preset" + (preset === k ? " active" : "")}
+        onClick=${() => setPreset(k)}>${l}</button>`)}
+    </div>
+    <div class="price-db-filters">
+      <input class="price-db-search" type="search" placeholder="Search name"
+        value=${search} onInput=${(e) => setSearch(e.target.value)}/>
+      <select value=${filterSet} onChange=${(e) => setFilterSet(e.target.value)}>
+        <option value="">All sets</option>
+        ${(sets || []).slice().reverse().map((s) => html`<option key=${s.id} value=${s.name}>${s.name}</option>`)}
+      </select>
+      <select value=${filterRarity} onChange=${(e) => setFilterRarity(e.target.value)}>
+        <option value="">All rarities</option>
+        ${rarities.map((r) => html`<option key=${r} value=${r}>${r}</option>`)}
+      </select>
+      <select value=${filterInk} onChange=${(e) => setFilterInk(e.target.value)}>
+        <option value="">All inks</option>
+        ${inks.map((i) => html`<option key=${i} value=${i}>${i}</option>`)}
+      </select>
+      <div class="market-sim-kind" role="group" style=${{marginLeft: "auto"}}>
+        <button class=${priceMode === "low" ? "active" : ""} onClick=${() => setPriceMode("low")}>Low</button>
+        <button class=${priceMode === "market" ? "active" : ""} onClick=${() => setPriceMode("market")}>Market</button>
+      </div>
+    </div>
+    <div class="price-db-count muted">${filtered.length} cards</div>
+    <div class="price-db-tablewrap">
+      <table class="price-db-table">
+        <thead><tr>
+          <th></th>
+          <th class="sortable" onClick=${() => onSort("name")}>Name${arrow("name")}</th>
+          <th>Set</th>
+          <th>Rarity</th>
+          <th>Ink</th>
+          <th class="sortable th-num" onClick=${() => onSort("price")}>${priceMode === "market" ? "Market" : "Low"}${arrow("price")}</th>
+          ${PRICE_DB_WIN.map(([lk, mk, lbl]) => {
+            const k = priceMode === "market" ? mk : lk;
+            return html`<th key=${k} class="sortable th-num" onClick=${() => onSort(k)}>${lbl}${arrow(k)}</th>`;
+          })}
+          <th>Signals</th>
+        </tr></thead>
+        <tbody>
+          ${filtered.slice(0, 1000).map((r) => {
+            const px = priceMode === "market" ? r.market_today : r.low_today;
+            const img = r.image_small || r.image_normal;
+            const sigs = sigOf(r);
+            return html`<tr key=${r.card_id + ":" + r.printing}>
+              <td class="td-img">${img ? html`<img src=${img} loading="lazy" alt=""/>` : null}</td>
+              <td>
+                <div class="td-name-main">${r.name}${r.version ? " - " + r.version : ""}</div>
+                <div class="td-name-meta">${r.printing} #${r.collector_number || "?"}</div>
+              </td>
+              <td>${setNameById[r.set_id] || "—"}</td>
+              <td>${r.rarity || "—"}</td>
+              <td>${r.ink || "—"}</td>
+              <td class="td-num">${fmtMoney(px)}</td>
+              ${PRICE_DB_WIN.map(([lk, mk]) => {
+                const v = priceMode === "market" ? r[mk] : r[lk];
+                return html`<td key=${lk} class=${"td-num " + pctCls(v)}>${fmtPctV(v)}</td>`;
+              })}
+              <td>${sigs.map(([icon, title], i) => html`<span key=${i} class="price-db-sig" title=${title}>${icon}</span>`)}</td>
+            </tr>`;
+          })}
+        </tbody>
+      </table>
+      ${filtered.length > 1000 && html`<div class="muted" style=${{padding: "10px 6px", textAlign: "center", fontSize: 11}}>Showing first 1,000 of ${filtered.length} — tighten filters to see more.</div>`}
+    </div>
+  </div>`;
+}
+
 function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collection, updateQty, onSignIn, openSetHistory, sealedPrices}){
   // Market analytics list sets newest-first so the most relevant sets land
   // at the top of every table. Simulators inherit the same ordering — their
@@ -6412,7 +6652,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collect
   const showNc = sub === "avg";
   const showNe = false;
   // Show the price toggle on every analytics sub-tab except Simulate.
-  const showPriceToggle = sub !== "sim";
+  const showPriceToggle = sub !== "sim" && sub !== "db";
   return html`<div>
     <div class="market-subtabs">
       ${MARKET_SUBS.map(([k,l])=>html`<button key=${k}
@@ -6439,6 +6679,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collect
         </label>
       <//>`}
     </div>
+    ${sub==="db"      && html`<${PriceDatabase} sets=${setsNewest}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme} priceMode=${priceMode}/>`}
     ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs} priceMode=${priceMode}/>`}
     ${sub==="ev"      && html`<${EVView} raw=${raw} sets=${setsNewest} avgs=${avgs}
