@@ -5498,8 +5498,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     if(historyTarget && historyTarget.setName){
       setMode("set");
       setSetNameLocal(historyTarget.setName);
+      const item = buildSetCompareItem(historyTarget.setName);
+      if(item){
+        setCompareCards(prev => prev.some(p => p.card_id === item.card_id) ? prev : [...prev, item]);
+      }
     }
-  }, [historyTarget]);
+  }, [historyTarget, buildSetCompareItem]);
   // Consume the Screener -> Price Graphing handoff. Switch to compare mode,
   // load the card list, and clear the App-level state so navigating back
   // and forth doesn't re-trigger.
@@ -5515,7 +5519,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
   // re-fetching the whole list every time the user checks one more box.
   useEffect(()=>{
     if(!compareCards.length) return;
-    const missing = compareCards.filter(c => !compareSeries[c.card_id]);
+    const missing = compareCards.filter(c => c.kind !== "set" && !compareSeries[c.card_id]);
     if(!missing.length) return;
     let cancelled = false;
     setCompareLoading(true);
@@ -5541,6 +5545,98 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     });
     return () => { cancelled = true; };
   }, [compareCards]);
+  // Cache of rarity_avg_daily rows per set_id for set-kind compareCards.
+  // Kept separate from compareSeries because EV needs to be recomputed at
+  // render time when noPenny / noChase toggles change.
+  const [setEvCache, setSetEvCache] = useState({});
+
+  // Fetch raw rarity_avg_daily rows for any set items in compareCards we
+  // don't already have. Mirrors the per-card history fetch — incremental.
+  useEffect(()=>{
+    if(!compareCards.length) return;
+    const needed = compareCards.filter(c => c.kind === "set" && !setEvCache[c.setId]);
+    if(!needed.length) return;
+    let cancelled = false;
+    setCompareLoading(true);
+    const tasks = needed.map(c =>
+      sbFetchAll("rarity_avg_daily", {
+        select: "date,rarity,printing,avg_low,avg_market,avg_low_nc,avg_market_nc",
+        set_id: "eq." + c.setId,
+        order: "date.asc",
+      })
+        .then(rows => ({setId: c.setId, rows}))
+        .catch(() => ({setId: c.setId, rows: []}))
+    );
+    Promise.all(tasks).then(results => {
+      if(cancelled) return;
+      setSetEvCache(prev => {
+        const next = {...prev};
+        for(const {setId, rows} of results) next[setId] = rows;
+        return next;
+      });
+      setCompareLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [compareCards]);
+
+  // Compute EV time-series from raw rarity_avg_daily rows for a given set,
+  // using the current noPenny / noChase toggles. Returns {low, market} where
+  // each is [{x, y}].
+  const computeSetEv = useCallback((rows, setNameForSet, opts) => {
+    const {noPenny, noChase} = opts;
+    if(!rows || !rows.length) return {low: [], market: []};
+    const pull = getPull(setNameForSet);
+    const evForField = (field) => {
+      const byDate = {};
+      for(const r of rows){
+        if(!byDate[r.date]) byDate[r.date] = {};
+        const key = getRarKey(r.rarity, r.printing);
+        if(!key) continue;
+        const v = r[field] != null ? parseFloat(r[field]) : null;
+        if(v == null) continue;
+        byDate[r.date][key] = v;
+      }
+      return Object.keys(byDate).sort().map(date => {
+        const avgs = byDate[date];
+        let ev = 0;
+        for(const r of RARS){
+          if(noChase && NO_ENCH.has(r)) continue;
+          const rate = pull[r];
+          const avg = avgs[r];
+          if(avg != null && rate != null) ev += avg * rate;
+        }
+        return {x: Date.parse(date), y: ev};
+      });
+    };
+    return {
+      low: evForField(noPenny ? "avg_low_nc" : "avg_low"),
+      market: evForField(noPenny ? "avg_market_nc" : "avg_market"),
+    };
+  }, []);
+
+  // set_id ↔ set_name lookup (from raw cards), used by buildSetCompareItem.
+  const setIdByName = useMemo(()=>{
+    const m = {};
+    for(const r of raw){ if(r.Set && r.set_id && !m[r.Set]) m[r.Set] = r.set_id; }
+    return m;
+  }, [raw]);
+
+  const buildSetCompareItem = useCallback((setNameForItem) => {
+    const sid = setIdByName[setNameForItem];
+    if(!sid) return null;
+    return {
+      kind: "set",
+      card_id: "set-" + sid,
+      productId: null,
+      printing: null,
+      setId: sid,
+      setName: setNameForItem,
+      name: setNameForItem + " — EV / Box",
+      sub: "Set EV",
+      image: null,
+    };
+  }, [setIdByName]);
+
   // Distinct colors for the multi-line chart. Stable mapping by index.
   const COMPARE_COLORS = ["#1d8d4a","#7e54c4","#c64c5a","#4d83bf","#d4a93b","#0e6b6b","#787e88","#e07c2a"];
   const [setEv, setSetEv] = useState({rows:null, loading:false, error:null});
@@ -5925,13 +6021,21 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
       </label>`}
     </div>
 
-    ${(mode === "sealed" || mode === "card") ? (() => {
+    ${(mode === "sealed" || mode === "card" || mode === "set") ? (() => {
       const priceLabel = showLow ? "NM Low" : "NM Market";
       const builtSeries = compareCards.map((c, i) => {
-        const rows = compareSeries[c.card_id] || [];
-        const data = rows
-          .filter(p => (showLow ? p.low != null : p.market != null))
-          .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
+        let data = [];
+        if(c.kind === "set"){
+          const rows = setEvCache[c.setId] || [];
+          const ev = computeSetEv(rows, c.setName, {noPenny, noChase});
+          const arr = showLow ? ev.low : ev.market;
+          data = (arr || []).filter(p => Number.isFinite(p.y));
+        } else {
+          const rows = compareSeries[c.card_id] || [];
+          data = rows
+            .filter(p => (showLow ? p.low != null : p.market != null))
+            .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
+        }
         return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
       });
       const startMs = computeChartStartMs(rangeKey, customStart, hidePreorders, null);
@@ -5987,6 +6091,17 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
           if(item) setCompareCards(prev => [...prev, item]);
         }
       };
+      const toggleSetItem = (setNameForToggle) => {
+        const sid = setIdByName[setNameForToggle];
+        if(!sid) return;
+        const key = "set-" + sid;
+        if(isCardInCompare(key)){
+          setCompareCards(prev => prev.filter(p => p.card_id !== key));
+        } else if(!isFull){
+          const item = buildSetCompareItem(setNameForToggle);
+          if(item) setCompareCards(prev => [...prev, item]);
+        }
+      };
       const previewItem = compareCards.length === 1 ? compareCards[0] : null;
       const previewImg = previewItem
         ? (previewItem.kind === "sealed"
@@ -6039,7 +6154,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
                   </div>`)}
             </div>
           </div>`
-        : html`<div class="history-picker">
+        : mode === "sealed"
+        ? html`<div class="history-picker">
             <input type="search" placeholder="Search sealed product..."
               value=${sealedSearch} onInput=${e=>setSealedSearch(e.target.value)}/>
             <div class="history-picker-hint">Click any product to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
@@ -6066,6 +6182,32 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
                     })}
                   </div>`)}
             </div>
+          </div>`
+        : html`<div class="history-picker">
+            <input type="search" placeholder="Search sets..."
+              value=${setSearch} onInput=${e=>setSetSearch(e.target.value)}/>
+            <div class="history-picker-hint">Click any set to add or remove its EV-per-Box line from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-list">
+              ${filteredSetList.length === 0
+                ? html`<div class="history-picker-empty">No sets match "${setSearch}"</div>`
+                : filteredSetList.map(s => {
+                    const sid = setIdByName[s];
+                    const key = sid ? "set-" + sid : null;
+                    const sel = key && isCardInCompare(key);
+                    const dates = SET_RELEASE_DATES[s];
+                    return html`<button key=${s}
+                      class=${"history-picker-item picker-multi "+(sel?"active":"")}
+                      disabled=${!sid || (!sel && isFull)}
+                      title=${!sid ? "No set_id on file for this set" : (!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : "")}
+                      onClick=${()=>toggleSetItem(s)}>
+                      <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
+                      <span class="picker-text">
+                        <span class="hpi-name">${s}${setDataPartial(s)?"*":""}</span>
+                        <span class="hpi-sub">${dates ? "Retail " + fmtIsoDate(dates.retail) : "No release date on file"}</span>
+                      </span>
+                    </button>`;
+                  })}
+            </div>
           </div>`;
 
       return html`<div class="history-card-mode">
@@ -6074,7 +6216,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
           <div class="compare-picker-bar">
             <div class="compare-summary">
               ${compareCards.length === 0
-                ? html`<span class="muted" style=${{fontSize:12}}>${mode === "card" ? "Check off cards on the left to start graphing." : "Check off sealed products on the left to start graphing."}</span>`
+                ? html`<span class="muted" style=${{fontSize:12}}>${mode === "card" ? "Check off cards on the left to start graphing." : mode === "sealed" ? "Check off sealed products on the left to start graphing." : "Check off sets on the left to graph their EV per box."}</span>`
                 : html`<span style=${{fontSize:12,fontWeight:600}}>${compareCards.length} product${compareCards.length===1?"":"s"} on the graph</span>
                        <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
             </div>
@@ -6087,7 +6229,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
           </div>
 
           ${compareCards.length === 0
-            ? html`<div class="chart-empty large">${mode === "card" ? "Pick cards from the list →" : "Pick sealed products from the list →"}</div>`
+            ? html`<div class="chart-empty large">${mode === "card" ? "Pick cards from the list →" : mode === "sealed" ? "Pick sealed products from the list →" : "Pick sets from the list — each one graphs its EV per box →"}</div>`
             : html`<div>
                 ${previewItem && previewImg && html`<div class="history-card-preview">
                   <img class="history-preview-img" src=${previewImg} alt=${previewItem.name}/>
@@ -6105,7 +6247,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
                     style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
                     <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
                     <span class="compare-name">${c.name}</span>
-                    ${c.kind === "sealed" && html`<span class="compare-kind-tag">sealed</span>`}
+                    ${c.kind === "sealed" ? html`<span class="compare-kind-tag">sealed</span>` : c.kind === "set" ? html`<span class="compare-kind-tag">set EV</span>` : null}
                     <button class="compare-remove"
                       onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
                       title="Remove from graph" aria-label="Remove">×</button>
@@ -6148,60 +6290,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
               </div>`}
         </div>
       </div>`;
-    })() : html`<div class="history-card-mode">
-      <div class="history-picker">
-        <input type="search" placeholder="Search sets..."
-          value=${setSearch} onInput=${e=>setSetSearch(e.target.value)}/>
-        <div class="history-picker-list">
-          ${filteredSetList.length === 0
-            ? html`<div class="history-picker-empty">No sets match "${setSearch}"</div>`
-            : filteredSetList.map(s => {
-                const dates = SET_RELEASE_DATES[s];
-                return html`<button key=${s}
-                  class=${"history-picker-item "+(setName===s?"active":"")}
-                  onClick=${()=>setSetNameLocal(s)}>
-                  <div class="hpi-name">${s}${setDataPartial(s)?"*":""}</div>
-                  <div class="hpi-sub">${dates ? "Retail " + fmtIsoDate(dates.retail) : "No release date on file"}</div>
-                </button>`;
-              })}
-        </div>
-      </div>
-      <div class="history-chart-pane">
-        ${!setName ? html`<div class="chart-empty large">Pick a set from the list →</div>`
-          : setEv.loading ? html`<div class="chart-empty large">Loading set EV…</div>`
-          : setEv.error ? html`<div class="chart-empty large">${setEv.error}</div>`
-          : html`<div>
-              <div class="history-card-preview">
-                <div class="history-preview-info">
-                  <div class="history-preview-name">${setName} — EV per Box</div>
-                  <div class="history-preview-meta">
-                    ${SET_RELEASE_DATES[setName] ? html`
-                      <span>Local Game Store Release: <strong>${fmtIsoDate(SET_RELEASE_DATES[setName].lgs)}</strong></span>
-                      <span style=${{marginLeft:14}}>Retail Release: <strong>${fmtIsoDate(SET_RELEASE_DATES[setName].retail)}</strong></span>
-                      ${setDataPartial(setName) && html`<span class="history-preview-asterisk" title="Pricing data only goes back to ${fmtIsoDate(EARLIEST_DATA_DATE)}.">*</span>`}
-                    ` : "Release date unknown"}
-                  </div>
-                  ${setDataPartial(setName) && html`<div class="history-preview-note">* This set released before our data history begins. Pricing is only available from <strong>${fmtIsoDate(EARLIEST_DATA_DATE)}</strong> onwards.</div>`}
-                  <div class="history-preview-type">Markers below show LGS release and Retail release on the timeline — anything before the LGS marker reflects pre-order pricing.</div>
-                </div>
-              </div>
-              <div class="history-chart-controls">
-                <div class="history-chart-legend">
-                  <span class="legend-line-style"><span class="line-solid" style=${{background:"#c8a846"}}/>Low EV</span>
-                  <span class="legend-line-style"><span class="line-dashed" style=${{borderColor:"#c8a846"}}/>Market EV</span>
-                </div>
-                <div class="checkbox-group" style=${{marginLeft:"auto"}}>
-                  <label><input type="checkbox" checked=${showLow} onChange=${e=>setShowLow(e.target.checked)}/> <${Tip} text=${TIP_NM_LOW}>NM Low<//></label>
-                  <label><input type="checkbox" checked=${showMarket} onChange=${e=>setShowMarket(e.target.checked)}/> <${Tip} text=${TIP_MARKET}>Market<//></label>
-                </div>
-              </div>
-              <${LineChart}
-                series=${clipSeriesFrom(setEvSeries, computeChartStartMs(rangeKey, customStart, hidePreorders, setName))}
-                verticalMarkers=${setMarkers}
-                width=900 height=320/>
-            </div>`}
-      </div>
-    </div>`}
+    })() : null}
   </div>`;
 };
 
