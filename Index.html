@@ -121,9 +121,14 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .price-db-search{min-width:180px;flex:1;}
 .price-db-num{width:80px;}
 .price-db-count{font-size:11px;}
-.price-db-tablewrap{overflow-x:auto;border:1px solid var(--border);border-radius:8px;}
+/* Table scrolls in both directions inside its own wrapper so the sticky
+   thead + sticky name column actually work — sticky requires a scrolling
+   ancestor closer than the viewport. */
+.price-db-tablewrap{overflow:auto;max-height:calc(100vh - 280px);
+  border:1px solid var(--border);border-radius:8px;}
 .price-db-table{width:100%;border-collapse:collapse;font-size:12px;}
-.price-db-table thead{background:var(--bg-surface);position:sticky;top:0;z-index:1;}
+.price-db-table thead{position:sticky;top:0;z-index:3;}
+.price-db-table thead th{background:var(--bg-surface);}
 .price-db-table th{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.3px;
   color:var(--text-muted);text-align:left;padding:8px 8px;border-bottom:1px solid var(--border);
   white-space:nowrap;background:var(--bg-surface);}
@@ -263,16 +268,45 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 .price-db-toggle:hover{border-color:var(--accent);color:var(--text);}
 .price-db-toggle input{cursor:pointer;}
 
-/* Mobile: trim padding, hide image column, single-line meta. */
+/* Secondary toolbar (collection chips + signal filter chips) sits below the
+   preset description so the main toolbar stays uncluttered. */
+.price-db-secondary{display:flex;flex-wrap:wrap;gap:12px;align-items:center;
+  padding:4px 2px;}
+.price-db-collchips{display:inline-flex;gap:0;}
+.price-db-collchip{padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;
+  background:var(--bg-surface);color:var(--text-muted);
+  border:1px solid var(--border);letter-spacing:0.3px;}
+.price-db-collchip:first-child{border-radius:14px 0 0 14px;}
+.price-db-collchip:last-child{border-radius:0 14px 14px 0;border-left:none;}
+.price-db-collchip:nth-child(2){border-left:none;border-right:none;}
+.price-db-collchip:hover:not(.active){background:var(--bg-card);color:var(--text);}
+.price-db-collchip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.price-db-sigfilter{display:inline-flex;flex-wrap:wrap;gap:4px;align-items:center;}
+.price-db-sigchip{font-size:10px;font-weight:700;letter-spacing:0.4px;
+  padding:3px 8px;border-radius:4px;cursor:pointer;
+  background:transparent;border:1px solid var(--border);color:var(--text-muted);
+  min-width:42px;text-align:center;}
+.price-db-sigchip:hover{border-color:var(--accent);color:var(--text);}
+.price-db-sigchip.active.sig-buy{   background:rgba(220,38,38,0.18); color:#dc2626; border-color:#dc2626;}
+.price-db-sigchip.active.sig-crash{ background:rgba(220,38,38,0.10); color:#dc2626; border-color:#dc2626;}
+.price-db-sigchip.active.sig-disc{  background:rgba(22,163,74,0.18); color:#15803d; border-color:#15803d;}
+.price-db-sigchip.active.sig-prem{  background:rgba(217,119,6,0.18); color:#b45309; border-color:#b45309;}
+.price-db-sigchip.active.sig-trend{ background:rgba(37,99,235,0.15); color:#1d4ed8; border-color:#1d4ed8;}
+
+/* Highlight the active sort column so users see why a row is at the top. */
+.price-db-table th.sort-active{color:var(--accent);}
+.price-db-table td.sort-active{background:var(--accent-glow);}
+
+/* Mobile: trim padding, hide image / set / rarity columns. Columns now are:
+   [1] checkbox · [2] image · [3] name+meta · [4] set · [5] rarity ·
+   [6] NM Low · [7] NM Market · [8+] Δ% windows · [last] signals */
 @media (max-width: 720px){
   .price-db-table{font-size:11px;}
   .price-db-table th, .price-db-table td{padding:4px 5px;}
   .price-db-table th:nth-child(2), .price-db-table td:nth-child(2){display:none;} /* image */
   .price-db-table th:nth-child(4), .price-db-table td:nth-child(4){display:none;} /* set */
   .price-db-table th:nth-child(5), .price-db-table td:nth-child(5){display:none;} /* rarity */
-  .price-db-table th:nth-child(6), .price-db-table td:nth-child(6){display:none;} /* ink */
   .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:140px;max-width:180px;}
-  .price-db-table .td-img{display:none;}
 }
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
@@ -6573,12 +6607,35 @@ const PRICE_DB_PRESETS = [
   ["all",      "All",       "Every tracked card. Use the filters below to narrow down."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
-  ["buyouts",  "Buyouts",   "1W ≥ +30% from a starting low of at least $1 — a real buyout plays out over multiple days, not a single noisy session."],
-  ["crashing", "Crashing",  "1W ≤ -20%. Sustained decline. Often hits after a spike unwinds or a reprint is announced."],
+  ["buyouts",  "Buyouts",   "Cards whose low_price climbed sharply over a week or month, or is now sitting well above its 30-day baseline."],
+  ["crashing", "Crashing",  "Cards down 20% or more on low_price over the past week."],
   ["discount", "Discount",  "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
   ["premium",  "Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
 ];
 const MOVER_WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
+
+// Set abbreviations for the screener's Set column (audit #15). Compact codes
+// save horizontal space and are the convention used by deckbuilders. Maps
+// Lorcast's full set names to a 2-4 letter shorthand; falls through to the
+// full name when no abbrev is defined (e.g. fan-curated promo sets).
+const SET_ABBREV = {
+  "The First Chapter":             "TFC",
+  "Rise of the Floodborn":         "RotF",
+  "Into the Inklands":             "ItI",
+  "Ursula's Return":               "UrR",
+  "Shimmering Skies":              "ShS",
+  "Azurite Sea":                   "AzS",
+  "Archazia's Island":             "ArI",
+  "Reign of Jafar":                "RoJ",
+  "Fabled":                        "FAB",
+  "Whispers in the Well":          "WitW",
+  "Winterspell":                   "WSp",
+  "Wilds Unknown":                 "WU",
+  "Attack of the Vines":           "AoV",
+  "Disney Lorcana Promo Cards":    "Promo",
+  "D23 Promos":                    "D23",
+  "Disney100 Promos":              "D100",
+};
 const fmtMoney = (v) => v == null ? "—" : "$" + Number(v).toFixed(2);
 const fmtPctV  = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(1) + "%";
 const pctCls   = (v) => v == null ? "" : v > 0 ? "pct-up" : v < 0 ? "pct-down" : "";
@@ -6629,9 +6686,30 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
     try { return localStorage.getItem("packsink:screener:moverwin") || "pct_1d"; } catch { return "pct_1d"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:moverwin", moverWin); } catch{} }, [moverWin]);
+  // When Gainers / Losers is the active preset, the sort follows the window
+  // pick automatically. This is in an effect (instead of overriding the
+  // useMemo sort) so subsequent column-header clicks still work.
+  useEffect(() => {
+    if(preset !== "gainers" && preset !== "losers") return;
+    const winKey = priceMode === "market" ? moverWin.replace("pct_", "mkt_pct_") : moverWin;
+    setSortKey(winKey);
+    setSortDesc(preset === "gainers");
+  }, [preset, moverWin, priceMode]);
+  // Collection-status filter (audit #3) — "all" | "owned" | "missing".
+  // Uses the collection prop (already passed for the modal) so a signed-in
+  // user can screen against their personal inventory in one click.
+  const [collFilter, setCollFilter] = useState("all");
+  // Signal-presence filter (audit #2) — set of signal keys ("buy", "crash",
+  // "disc", "prem", "trend") the row must include at least one of. Empty
+  // set = no signal-based filtering.
+  const [sigFilter, setSigFilter] = useState(() => new Set());
   // Compact column mode hides the 3M/6M/1Y columns by default so the table
   // fits a typical laptop screen. Toggle in the toolbar shows them again.
-  const [showLongWins, setShowLongWins] = useState(false);
+  // "Show every Δ% window" expands the table from the 3 columns centered on
+  // moverWin to all 6 (1D / 1W / 1M / 3M / 6M / 1Y). Replaces the old Long
+  // Term checkbox — column visibility is now primarily driven by the
+  // selected window so users only see windows near what they care about.
+  const [showAllWins, setShowAllWins] = useState(false);
   // Card detail modal — clicking a row's image or name opens it.
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Multi-select state. Stored as a Set of keys (card_id:printing) so a
@@ -6708,6 +6786,26 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       if(filterRarities.size > 0 && !filterRarities.has(r.rarity)) return false;
       if(filterInks.size > 0 && !filterInks.has(r.ink)) return false;
       if(filterSet && setNameById[r.set_id] !== filterSet) return false;
+      // Collection-status filter. Check any printing the user owns of this
+      // card_id — we don't require exact printing match because a "missing"
+      // filter against a chase card would otherwise hide cards where the
+      // user only has the Normal version.
+      if(collFilter !== "all"){
+        const owned = (collection[r.card_id+":Normal"] || 0)
+                    + (collection[r.card_id+":Cold Foil"] || 0)
+                    + (collection[r.card_id+":Foil"] || 0)
+                    + (collection[r.card_id+":Holofoil"] || 0);
+        if(collFilter === "owned"   && owned <= 0) return false;
+        if(collFilter === "missing" && owned >  0) return false;
+      }
+      // Signal-presence filter — row must include at least one of the
+      // checked signals.
+      if(sigFilter.size > 0){
+        const sigKeys = new Set(sigOf(r).map(s => s[0]));
+        let any = false;
+        for(const k of sigFilter) if(sigKeys.has(k)){ any = true; break; }
+        if(!any) return false;
+      }
       if(q){
         const nm = ((r.name || "") + " " + (r.version || "")).toLowerCase();
         if(!nm.includes(q)) return false;
@@ -6722,7 +6820,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         if(minPct !== "" && (v == null || v < +minPct)) return false;
         if(maxPct !== "" && (v == null || v > +maxPct)) return false;
       }
-      if(preset === "buyouts"  && !(r.pct_7d != null && r.pct_7d >= 30 && (r.low_7d || 0) >= 1)) return false;
+      // Buyouts: any of three signals fires. Combination is robust against
+      // both fast sweeps (1W) and sustained low-supply price climbs (30D /
+      // current vs 30D baseline). $1 floor keeps penny-card noise out.
+      if(preset === "buyouts"){
+        const fastW    = r.pct_7d  != null && r.pct_7d  >= 25 && (r.low_7d  || 0) >= 1;
+        const sustainM = r.pct_30d != null && r.pct_30d >= 50 && (r.low_30d || 0) >= 1;
+        const aboveBase = r.low_today != null && r.low_30d != null && r.low_30d >= 1
+                          && r.low_today >= 1.5 * r.low_30d && r.low_today >= 2;
+        if(!(fastW || sustainM || aboveBase)) return false;
+      }
       if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
       if(preset === "discount"){
         if(!(r.low_today != null && r.market_today != null && r.market_today > 0 && r.low_today / r.market_today <= 0.85)) return false;
@@ -6733,15 +6840,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       return true;
     };
     const out = rows.filter(passes);
-    // Gainers / Losers sort by the selected window. The Use Low/Use Market
-    // toggle decides which series (low_pct_* or mkt_pct_*) drives the sort.
-    const winKey = priceMode === "market" ? moverWin.replace("pct_", "mkt_pct_") : moverWin;
-    const presetSort =
-      preset === "gainers" ? [winKey, true]  :
-      preset === "losers"  ? [winKey, false] :
-      null;
-    const sk = presetSort ? presetSort[0] : sortKey;
-    const sd = presetSort ? presetSort[1] : sortDesc;
+    // Sort always follows the user's last column click. Presets that imply
+    // a sort (Gainers / Losers) update sortKey/sortDesc via a useEffect
+    // instead of overriding here, so subsequent column clicks work.
+    const sk = sortKey;
+    const sd = sortDesc;
     const getVal = (r, k) => {
       if(k === "name")        return (r.name || "") + " " + (r.version || "");
       if(k === "low")         return r.low_today;
@@ -6764,7 +6867,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       return sd ? bv - av : av - bv;
     });
     return out;
-  }, [state.rows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin]);
+  }, [state.rows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection]);
 
   const onSort = (k) => {
     if(sortKey === k) setSortDesc((d) => !d);
@@ -6785,10 +6888,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   // market and 1D was over-firing on noise / aggressive single-day undercuts.
   const sigOf = (r) => {
     const out = [];
-    if(r.pct_7d != null && r.pct_7d >= 30 && (r.low_7d || 0) >= 1) out.push(["buy", "BUY",
-      "Buyout — low_price up sharply over the past week from at least a $1 starting point. Pattern of someone sweeping the cheap copies; supply thins, floor rises."]);
+    const fastW    = r.pct_7d  != null && r.pct_7d  >= 25 && (r.low_7d  || 0) >= 1;
+    const sustainM = r.pct_30d != null && r.pct_30d >= 50 && (r.low_30d || 0) >= 1;
+    const aboveBase = r.low_today != null && r.low_30d != null && r.low_30d >= 1
+                      && r.low_today >= 1.5 * r.low_30d && r.low_today >= 2;
+    if(fastW || sustainM || aboveBase) out.push(["buy", "BUY",
+      "Buyout — supply has thinned and the floor is rising. Either jumped sharply this week, jumped a lot this month, or is sitting well above its 30-day baseline."]);
     if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
-      "Crashing — sustained week-over-week drop. Common after a price spike unwinds or a reprint is announced."]);
+      "Crashing — low_price down 20% or more on the week."]);
     if(r.low_today != null && r.market_today != null && r.market_today > 0){
       const ratio = r.low_today / r.market_today;
       if(ratio <= 0.85) out.push(["disc", "DISC",
@@ -6824,8 +6931,50 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
     setTimeout(() => setBatchToast(null), 2500);
   };
 
+  // CSV export of the current filtered view (audit #5). Power-user feature
+  // for slicing further in a spreadsheet. Honors current filters + sort.
+  const exportCsv = () => {
+    const headers = ["Name", "Set", "Rarity", "Ink", "Printing", "Collector #",
+      "NM Low", "NM Market", "1D Δ%", "1W Δ%", "1M Δ%", "3M Δ%", "6M Δ%", "1Y Δ%",
+      "TCGPlayer URL"];
+    const esc = (v) => {
+      const s = v == null ? "" : String(v);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [headers.join(",")];
+    for(const r of filtered){
+      const fullName = r.name + (r.version ? " - " + r.version : "");
+      const setName  = setNameById[r.set_id] || "";
+      lines.push([
+        fullName, setName, rarityLabel(r.rarity), r.ink || "",
+        r.printing || "", r.collector_number || "",
+        r.low_today, r.market_today,
+        r.pct_1d, r.pct_7d, r.pct_30d, r.pct_90d, r.pct_180d, r.pct_365d,
+        tcgUrl(r.tcgplayer_product_id, r.printing) || "",
+      ].map(esc).join(","));
+    }
+    const blob = new Blob([lines.join("\n")], {type: "text/csv"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "packs-ink-screener-" + new Date().toISOString().slice(0,10) + ".csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const activePreset = PRICE_DB_PRESETS.find(([k]) => k === preset);
   const presetDesc = activePreset ? activePreset[2] : "";
+  // Centered window slice + the "is this column the active sort?" helper.
+  const visibleWins = (() => {
+    if(showAllWins) return PRICE_DB_WIN;
+    const cur = PRICE_DB_WIN.findIndex(w => w[0] === moverWin);
+    if(cur < 0) return PRICE_DB_WIN.slice(0, 3);
+    const lo = Math.max(0, Math.min(PRICE_DB_WIN.length - 3, cur - 1));
+    return PRICE_DB_WIN.slice(lo, lo + 3);
+  })();
+  const isSortCol = (k) => sortKey === k;
 
   return html`<div class="price-db">
     <div class="price-db-presets">
@@ -6841,6 +6990,22 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         onClick=${()=>setMoverWin(k)}>${lbl}</button>`)}
     </div>`}
     <div class="price-db-desc muted">${presetDesc}</div>
+    <div class="price-db-secondary">
+      ${user && html`<div class="price-db-collchips" role="group" aria-label="Collection filter">
+        ${[["all","All"],["owned","Owned"],["missing","Missing"]].map(([k,l]) => html`<button key=${k}
+          class=${"price-db-collchip"+(collFilter===k?" active":"")}
+          onClick=${()=>setCollFilter(k)}
+          title=${k==="owned"?"Show only cards you own at least one of":k==="missing"?"Show only cards you don't own":"Show every card regardless of ownership"}>${l}</button>`)}
+      </div>`}
+      <div class="price-db-sigfilter" role="group" aria-label="Filter by signal">
+        ${[["buy","BUY"],["crash","CRSH"],["disc","DISC"],["prem","PREM"],["trend","TRND"]].map(([k,l]) => html`<button key=${k}
+          class=${"price-db-sigchip sig-"+k+(sigFilter.has(k)?" active":"")}
+          onClick=${()=>setSigFilter(prev=>{ const n=new Set(prev); n.has(k)?n.delete(k):n.add(k); return n; })}
+          title=${"Toggle: show only cards with the "+l+" signal"}>${l}</button>`)}
+        ${sigFilter.size > 0 && html`<button class="price-db-multiclear"
+          onClick=${()=>setSigFilter(new Set())} style=${{marginLeft:4}}>Clear signals</button>`}
+      </div>
+    </div>
     <div class="price-db-filters">
       <input class="price-db-search" type="search" placeholder="Search by name"
         value=${search} onInput=${(e) => setSearch(e.target.value)}/>
@@ -6862,28 +7027,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
             onClick=${()=>setFilterRarities(new Set())}>Clear</button>`}
         </div>`}
       </div>
-      <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
-        <button class="price-db-multibtn" onClick=${()=>setInkOpen(o=>!o)}>
-          ${filterInks.size === 0 ? "All inks" : `${filterInks.size} ${filterInks.size===1?"ink":"inks"}`} ▾
-        </button>
-        ${inkOpen && html`<div class="price-db-multimenu">
-          ${inks.map(i => html`<label key=${i} class="price-db-multiitem">
-            <input type="checkbox" checked=${filterInks.has(i)}
-              onChange=${()=>setFilterInks(prev=>{ const n=new Set(prev); n.has(i)?n.delete(i):n.add(i); return n; })}/>
-            ${i}
-          </label>`)}
-          ${filterInks.size > 0 && html`<button class="price-db-multiclear"
-            onClick=${()=>setFilterInks(new Set())}>Clear</button>`}
-        </div>`}
-      </div>
       <button class="price-db-advbtn" onClick=${() => setAdvOpen(o => !o)}
         title="Advanced numeric filters">
         ${advOpen ? "Advanced ▴" : "Advanced ▾"}
       </button>
-      <label class="price-db-toggle" title="Show 3M / 6M / 1Y Δ% columns alongside the short-window ones">
-        <input type="checkbox" checked=${showLongWins} onChange=${e=>setShowLongWins(e.target.checked)}/>
-        Long term
+      <label class="price-db-toggle" title="Show every Δ% window (1D, 1W, 1M, 3M, 6M, 1Y) instead of just the three centered on the selected window">
+        <input type="checkbox" checked=${showAllWins} onChange=${e=>setShowAllWins(e.target.checked)}/>
+        All windows
       </label>
+      <button class="price-db-advbtn" onClick=${exportCsv}
+        title="Download the current filtered + sorted view as CSV">
+        ⇩ CSV
+      </button>
       <div class="market-sim-kind" role="group"
         title="Determines which column drives the preset logic (Buyouts, Discount, etc.) and which prices the advanced range filters apply to. Both columns are always shown in the table."
         style=${{marginLeft: "auto"}}>
@@ -6892,6 +7047,23 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       </div>
     </div>
     ${advOpen && html`<div class="price-db-adv">
+      <div class="price-db-adv-row">
+        <label>Ink</label>
+        <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
+          <button class="price-db-multibtn" onClick=${()=>setInkOpen(o=>!o)}>
+            ${filterInks.size === 0 ? "All inks" : `${filterInks.size} ${filterInks.size===1?"ink":"inks"}`} ▾
+          </button>
+          ${inkOpen && html`<div class="price-db-multimenu">
+            ${inks.map(i => html`<label key=${i} class="price-db-multiitem">
+              <input type="checkbox" checked=${filterInks.has(i)}
+                onChange=${()=>setFilterInks(prev=>{ const n=new Set(prev); n.has(i)?n.delete(i):n.add(i); return n; })}/>
+              ${i}
+            </label>`)}
+            ${filterInks.size > 0 && html`<button class="price-db-multiclear"
+              onClick=${()=>setFilterInks(new Set())}>Clear</button>`}
+          </div>`}
+        </div>
+      </div>
       <div class="price-db-adv-row">
         <label>NM ${priceMode === "market" ? "Market" : "Low"} price</label>
         <input type="number" min="0" step="0.5" placeholder="Min $"
@@ -6955,14 +7127,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
           <th class="sortable" onClick=${() => onSort("name")}>Name${arrow("name")}</th>
           <th>Set</th>
           <th>Rarity</th>
-          <th>Ink</th>
           <th class="sortable th-num" onClick=${() => onSort("low")}
               title="TCGPlayer NM Low — lowest active NM listing">NM Low${arrow("low")}</th>
           <th class="sortable th-num" onClick=${() => onSort("market")}
               title="TCGPlayer NM Market — smoothed average of recent NM sales">NM Market${arrow("market")}</th>
-          ${PRICE_DB_WIN.filter((_, i) => showLongWins || i < 3).map(([lk, mk, lbl]) => {
+          ${visibleWins.map(([lk, mk, lbl]) => {
             const k = priceMode === "market" ? mk : lk;
-            return html`<th key=${k} class="sortable th-num"
+            const active = isSortCol(k) ? " sort-active" : "";
+            return html`<th key=${k} class=${"sortable th-num"+active}
               title=${"Δ% over " + lbl + " (" + (priceMode === "market" ? "Market" : "Low") + " — flip the Use Low / Use Market toggle to switch)"}
               onClick=${() => onSort(k)}>${lbl}${arrow(k)}</th>`;
           })}
@@ -6992,14 +7164,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
                 </div>
                 <div class="td-name-meta">${r.printing} #${r.collector_number || "?"}</div>
               </td>
-              <td>${setNameById[r.set_id] || "—"}</td>
+              <td title=${setNameById[r.set_id] || ""}>${SET_ABBREV[setNameById[r.set_id]] || setNameById[r.set_id] || "—"}</td>
               <td>${rarityLabel(r.rarity)}</td>
-              <td>${r.ink || "—"}</td>
               <td class="td-num">${fmtMoney(r.low_today)}</td>
               <td class="td-num">${fmtMoney(r.market_today)}</td>
-              ${PRICE_DB_WIN.filter((_, i) => showLongWins || i < 3).map(([lk, mk]) => {
+              ${visibleWins.map(([lk, mk]) => {
+                const k = priceMode === "market" ? mk : lk;
                 const v = priceMode === "market" ? r[mk] : r[lk];
-                return html`<td key=${lk} class=${"td-num " + pctCls(v)}>${fmtPctV(v)}</td>`;
+                return html`<td key=${lk} class=${"td-num " + pctCls(v) + (isSortCol(k) ? " sort-active" : "")}>${fmtPctV(v)}</td>`;
               })}
               <td>${sigs.map(([sk, icon, title]) => html`<${Tip} key=${sk} text=${title}>
                 <span class=${"price-db-sig sig-"+sk}>${icon}</span>
