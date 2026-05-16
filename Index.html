@@ -1676,7 +1676,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v19";
+const CACHE_KEY = "packsink:catalog:v20";
 const CACHE_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour — short window, we always background-refresh anyway
 // Minimum row count we'd ever expect. If cache has fewer than this it's
 // almost certainly from a partial fetch or older era — treat as missing.
@@ -2077,6 +2077,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     "Number":c.collector_number||"",
     "img_small":c.image_small,
     "img_normal":c.image_normal,
+    "img_large":c.image_large,
     "ink":c.ink||null,
     "inks":Array.isArray(c.inks) && c.inks.length ? c.inks : (c.ink ? [c.ink] : null),
     "cost":c.cost!=null?c.cost:null,
@@ -6498,9 +6499,12 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const tips = useContext(TipsContext);
   const url = tcgUrl(card.tcgplayer_product_id, card.printing);
   const name = card.version ? `${card.name} — ${card.version}` : card.name;
-  // Prefer image_normal — image_small is ~140px wide and gets upscaled to a
-  // ~200px tile, which looks soft, especially on hi-DPI displays.
-  const img = card.image_normal || card.image_small;
+  // Prefer image_large (734w) over image_normal (367w) over image_small
+  // (200w). Movers banner tiles render at ~200px CSS-width which is 400-600
+  // device px on hi-DPI displays — image_normal looks soft, image_large is
+  // crisp. Slightly heavier payload (~80kb vs 30kb per tile) but a banner
+  // shows max 20 cards so the total cost is bounded.
+  const img = card.image_large || card.image_normal || card.image_small;
   const isFoil = card.printing && card.printing !== "Normal";
   const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
   return html`<div class="mover-tile"
@@ -7105,8 +7109,9 @@ const HomeView = ({raw, theme, user, collection, collectionLoading, updateQty, o
         name: c["Product Name"],
         version: null,                              // already merged into name
         rarity: c.Rarity,
+        image_large:  c.img_large,
         image_normal: c.img_normal,
-        image_small: c.img_small,
+        image_small:  c.img_small,
         low_today:    parseP(c["Low Price"])       ?? m.low_today    ?? null,
         low_prev:     m.low_prev    ?? null,
         market_today: parseP(c["TCGPlayer Market"])?? m.market_today ?? null,
@@ -9486,10 +9491,14 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         const ownedFracBadge = highlightMissing
           ? html`<span class=${"deck-tile-owned-frac"+(haveCapped>=item.quantity?" complete":"")}>${haveCapped}/${item.quantity}</span>`
           : null;
+        // Deck tiles render at ~150-200px wide so img_small (200w) looks
+        // soft when upscaled. Use img_normal (400w) as primary; large is
+        // unnecessary here but kept available for the hover preview below.
+        const tileImg = meta.img_normal || meta.img_small;
         if(viewLayout === "grid"){
           return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
-            ${meta.img_small
-              ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
+            ${tileImg
+              ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             <span class="deck-grid-tile-qty">${item.quantity}×</span>
             ${ownedFracBadge}
@@ -9507,8 +9516,8 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             <div class=${"deck-stack-top"+(highlightMissing && short>0?" missing-pop":"")}>
               <span class="deck-stack-qty">${item.quantity}×</span>
               ${ownedFracBadge}
-              ${meta.img_small
-                ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy"/>`
+              ${tileImg
+                ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`
                 : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
               ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
               ${makeCounter(item, cardMax, "deck-stack-counter")}
@@ -9523,7 +9532,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             ? html`<span class="deck-row-ink" title=${inkList[0]}
                 style=${{background: INK_COLORS[inkList[0]]?.border || "#888"}}></span>`
             : null;
-        const previewSrc = meta.img_normal || meta.img_small;
+        const previewSrc = meta.img_large || meta.img_normal || meta.img_small;
         const onRowEnter = (e) => {
           if(previewSrc) setHoverPreview({src: previewSrc, x: e.clientX, y: e.clientY});
         };
@@ -10125,8 +10134,8 @@ function App(){
         console.warn("inks probe failed (network); assuming column exists", e);
       }
       const CARDS_COLS = hasInksColumn
-        ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id"
-        : "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,tcgplayer_product_id";
+        ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,image_large,tcgplayer_product_id"
+        : "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,image_small,image_normal,image_large,tcgplayer_product_id";
       const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
       const [setsData, priceRows, cardsRows, sealedRows] = await Promise.all([
         sbFetchAll("sets",  {select:"id,name", order:"id.asc"}),
