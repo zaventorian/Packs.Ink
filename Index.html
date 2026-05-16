@@ -949,7 +949,7 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    area at narrow widths via flex-wrap. */
 .home-top-band{display:flex;gap:18px;align-items:flex-end;justify-content:space-between;
   flex-wrap:wrap;margin-bottom:10px;}
-.home-ev-strip{flex:0 0 auto;min-width:420px;
+.home-ev-strip{flex:0 0 360px;width:360px;max-width:100%;box-sizing:border-box;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
   padding:8px 10px;font-size:11px;}
 .home-ev-strip-head{display:flex;justify-content:space-between;align-items:center;
@@ -960,8 +960,8 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .home-ev-strip-toggles label{display:flex;align-items:center;gap:3px;cursor:pointer;}
 .home-ev-strip-toggles input{margin:0;width:11px;height:11px;accent-color:var(--accent);}
 .home-ev-strip-table{display:flex;flex-direction:column;gap:1px;}
-.home-ev-strip-row{display:grid;grid-template-columns:minmax(0,1.6fr) 70px 70px 110px;
-  gap:8px;align-items:center;padding:3px 4px;border-radius:4px;}
+.home-ev-strip-row{display:grid;grid-template-columns:minmax(0,1.4fr) 1fr 1fr 1.2fr;
+  gap:6px;align-items:center;padding:3px 4px;border-radius:4px;}
 .home-ev-strip-head-row{font-size:9px;font-weight:700;letter-spacing:0.4px;
   text-transform:uppercase;color:var(--text-muted);}
 .home-ev-strip-row:not(.home-ev-strip-head-row):hover{background:var(--bg-card);}
@@ -1002,10 +1002,8 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .home-feed-meta{font-size:10px;color:var(--text-muted);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .home-feed-creator{font-weight:600;color:var(--text-dim);}
-.home-feed-unlisted-tag{margin-left:4px;font-size:9px;font-weight:700;
-  color:var(--accent);letter-spacing:0.4px;}
 .home-feed-inks{display:flex;gap:2px;flex-shrink:0;align-items:center;}
-.home-feed-ink-icon{width:14px;height:14px;object-fit:contain;display:block;}
+.home-feed-ink-icon{width:13px;height:13px;object-fit:contain;display:block;}
 
 /* Panel header — flex container with title on the left, minimize button
    on the right. Used by CollectionPanel and other right-column panels. */
@@ -1018,10 +1016,14 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .panel-min-btn:hover{color:var(--accent);border-color:var(--accent);}
 .collection-panel.is-min{padding-bottom:12px;}
 
-.home-grid{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:18px;
+.home-grid{display:grid;grid-template-columns:200px minmax(0,1fr) 360px;gap:18px;
   align-items:start;margin-bottom:14px;}
 .home-grid-main{min-width:0;}
-@media (max-width: 980px){
+@media (max-width: 1280px){
+  .home-grid{grid-template-columns:minmax(0,1fr) 360px;}
+  .home-feed{grid-column:1 / -1;}
+}
+@media (max-width: 720px){
   .home-grid{grid-template-columns:1fr;}
 }
 .collection-panel{background:var(--bg-surface);border:1px solid var(--border);
@@ -8982,7 +8984,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices}) => {
 //   unlisted deck → fetch via the SECURITY DEFINER get_shared_deck RPC,
 //   which bypasses RLS as long as the token matches. This lets users see
 //   updates to unlisted decks they're authorised to view.
-const FollowingFeed = ({user, onSignIn}) => {
+const FollowingFeed = ({user, onSignIn, raw}) => {
   const [entries, setEntries] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => {
@@ -9043,6 +9045,31 @@ const FollowingFeed = ({user, onSignIn}) => {
           .slice(0, 15);
         if(!decks.length){ setEntries([]); return; }
 
+        // Some decks have null/empty `inks` in the DB (the editor doesn't
+        // always write to that column). Compute inks client-side from
+        // deck_cards + the catalog for any deck missing them, so the feed
+        // can always render the ink shields.
+        const missingInkIds = decks.filter(d => !(d.inks && d.inks.length)).map(d => d.id);
+        const computedInks = {};
+        if(missingInkIds.length && raw && raw.length){
+          const inkByCardId = new Map();
+          for(const r of raw){
+            if(r.card_id && !inkByCardId.has(r.card_id)){
+              const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
+              if(inks.length) inkByCardId.set(r.card_id, inks);
+            }
+          }
+          const {data: dcRows} = await sbClient.from("deck_cards")
+            .select("deck_id,card_id")
+            .in("deck_id", missingInkIds);
+          for(const id of missingInkIds) computedInks[id] = new Set();
+          for(const dc of (dcRows || [])){
+            const inks = inkByCardId.get(dc.card_id);
+            if(!inks) continue;
+            for(const ink of inks) computedInks[dc.deck_id].add(ink);
+          }
+        }
+
         const creatorIds = Array.from(new Set(decks.map(d => d.user_id)));
         const {data: profiles} = await sbClient.from("profiles")
           .select("user_id,display_name,avatar_url")
@@ -9050,18 +9077,23 @@ const FollowingFeed = ({user, onSignIn}) => {
         if(cancelled) return;
         const profileById = {};
         for(const p of (profiles || [])) profileById[p.user_id] = p;
-        setEntries(decks.map(d => ({
-          deck: d,
-          creator: profileById[d.user_id] || null,
-          isPublish: Math.abs(new Date(d.updated_at) - new Date(d.created_at)) < 3*60*1000,
-          shareToken: tokenByDeck[d.id] || null,
-        })));
+        setEntries(decks.map(d => {
+          const inks = (d.inks && d.inks.length)
+            ? d.inks
+            : (computedInks[d.id] ? Array.from(computedInks[d.id]) : []);
+          return {
+            deck: {...d, inks},
+            creator: profileById[d.user_id] || null,
+            isPublish: Math.abs(new Date(d.updated_at) - new Date(d.created_at)) < 3*60*1000,
+            shareToken: tokenByDeck[d.id] || null,
+          };
+        }));
       } catch(e){
         if(!cancelled) setErr(String(e?.message || e).slice(0, 200));
       }
     })();
     return () => { cancelled = true; };
-  }, [user]);
+  }, [user, raw]);
 
   if(!user){
     return html`<aside class="home-feed">
@@ -9103,7 +9135,6 @@ const FollowingFeed = ({user, onSignIn}) => {
               <span class="home-feed-meta">
                 <span class="home-feed-creator">${creator?.display_name || "Someone"}</span>
                 <span> · ${isPublish ? "new" : "updated"} ${relativeTime(deck.updated_at)}</span>
-                ${deck.visibility !== "public" && html`<span class="home-feed-unlisted-tag" title="Unlisted">·U</span>`}
               </span>
             </span>
             <span class="home-feed-inks">
@@ -9317,8 +9348,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     </div>
 
     <div class="home-grid">
+      <${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw}/>
       <div class="home-grid-main">
-        <${FollowingFeed} user=${user} onSignIn=${onSignIn}/>
         ${NEWEST_SET && html`<${MoversBanner}
               title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
               subtitle=${`Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price`}
