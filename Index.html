@@ -105,6 +105,68 @@ input[type="checkbox"]{accent-color:var(--accent);}
   margin-left:4px;transition:all 0.12s;}
 .tab-help:hover{color:var(--accent);border-color:var(--accent);}
 .tab-help.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+/* Cards tab — multi-select bulk bar + per-tile checkbox + ephemeral toast. */
+.cards-bulk-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
+  padding:8px 12px;margin-bottom:10px;
+  background:var(--accent-glow);border:1px solid var(--border-accent);border-radius:8px;
+  position:sticky;top:8px;z-index:10;}
+.cards-bulk-count{font-size:13px;font-weight:700;color:var(--accent);
+  padding:2px 8px;background:var(--bg-card);border-radius:5px;}
+.cards-bulk-link{background:none;border:none;color:var(--text-dim);font-size:12px;
+  cursor:pointer;padding:2px 6px;border-radius:4px;}
+.cards-bulk-link:hover{color:var(--accent);background:var(--bg-card);}
+.cards-bulk-spacer{flex:1;}
+.cards-bulk-action{position:relative;display:inline-block;}
+.cards-bulk-primary{padding:6px 14px;font-size:13px;font-weight:700;
+  background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;}
+.cards-bulk-primary:hover{filter:brightness(1.08);}
+.cards-bulk-menu{position:absolute;top:calc(100% + 4px);right:0;min-width:280px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.18);z-index:20;padding:4px;}
+.cards-bulk-menu-picker{max-height:360px;overflow-y:auto;}
+.cards-bulk-menu-head{display:flex;align-items:center;gap:8px;
+  padding:6px 8px;font-size:11px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;color:var(--text-muted);border-bottom:1px solid var(--border);
+  margin-bottom:4px;}
+.cards-bulk-back{background:transparent;border:none;color:var(--text-muted);
+  cursor:pointer;font-size:14px;padding:0 4px;}
+.cards-bulk-back:hover{color:var(--accent);}
+.cards-bulk-menu-item{display:flex;align-items:center;gap:10px;width:100%;
+  padding:7px 10px;background:transparent;border:none;border-radius:6px;
+  cursor:pointer;text-align:left;color:var(--text);}
+.cards-bulk-menu-item:hover{background:var(--bg-surface);}
+.cards-bulk-menu-icon{flex-shrink:0;width:22px;height:22px;display:inline-flex;
+  align-items:center;justify-content:center;font-size:14px;font-weight:700;
+  color:var(--accent);background:var(--accent-glow);border-radius:5px;}
+.cards-bulk-menu-title{font-size:13px;font-weight:600;line-height:1.25;}
+.cards-bulk-menu-sub{font-size:11px;color:var(--text-muted);line-height:1.3;}
+.cards-bulk-picker-list{display:flex;flex-direction:column;gap:1px;}
+
+/* The little checkbox button overlaid on each card tile. Hidden by default
+   in grid mode and revealed on hover; once selected, stays visible. */
+.card-tile-check{position:absolute;top:6px;left:6px;width:22px;height:22px;
+  padding:0;display:inline-flex;align-items:center;justify-content:center;
+  border:1.5px solid rgba(255,255,255,0.85);background:rgba(0,0,0,0.45);
+  color:#fff;border-radius:4px;font-size:13px;font-weight:700;cursor:pointer;
+  z-index:3;opacity:0;transition:opacity 0.1s,background 0.1s,border-color 0.1s;
+  line-height:1;}
+.card-tile:hover .card-tile-check,
+.card-tile-check.on{opacity:1;}
+.card-tile-check.on{background:var(--accent);border-color:var(--accent);}
+.card-tile.is-selected{box-shadow:0 0 0 2px var(--accent);}
+/* In list rows the checkbox sits inline at the left edge. */
+.card-row .card-tile-check{position:static;flex-shrink:0;margin-right:4px;
+  opacity:1;background:transparent;color:var(--text-muted);
+  border:1.5px solid var(--border);}
+.card-row .card-tile-check.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.card-row.is-selected{background:var(--accent-glow);}
+
+.cards-toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);
+  background:var(--bg-card);color:var(--text);
+  border:1px solid var(--border-accent);border-radius:8px;
+  padding:10px 16px;font-size:13px;font-weight:600;
+  box-shadow:0 6px 18px rgba(0,0,0,0.18);z-index:100;}
 .loading-status{font-size:11px;color:var(--text-muted);letter-spacing:0.3px;
   margin:-1.25rem 0 1rem 36px;font-weight:500;}
 
@@ -3738,7 +3800,8 @@ const PriceBadge = ({row, label, klass}) => {
 // Wrapped in React.memo below so unchanged tiles skip re-render when
 // filter state changes. Stable group references (see CardBrowser) make
 // this effective — without them the prop diff would always miss.
-const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChange, viewMode}) => {
+const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChange, viewMode,
+                       selectable, isSelected, onToggleSelect}) => {
   const img = group.img_normal || group.img_small || group.img_large;
   const productName = group["Product Name"];
   const showLabels = group.normal && group.foil;
@@ -3762,6 +3825,11 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
     if(next !== (deckQty || 0)) onDeckQtyChange(group, next);
   };
   const onClick = deckMode ? addOne : openModal;
+  const checkboxEl = (selectable && onToggleSelect && group.card_id) ? html`<button
+    class=${"card-tile-check"+(isSelected?" on":"")}
+    onClick=${e => { e.stopPropagation(); onToggleSelect(group.card_id); }}
+    title=${isSelected?"Unselect":"Select"}
+    aria-pressed=${!!isSelected} aria-label="Select card">${isSelected?"✓":""}</button>` : null;
   const onExpand = (e) => { e.stopPropagation(); if(openModal) openModal(); };
   const bump = (delta) => (e) => {
     e.stopPropagation();
@@ -3774,7 +3842,8 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
   if(viewMode === "list"){
     const nLow = group.normal && group.normal["Low Price"];
     const fLow = group.foil   && group.foil["Low Price"];
-    return html`<div class="card-row" onClick=${onClick}>
+    return html`<div class=${"card-row"+(isSelected?" is-selected":"")} onClick=${onClick}>
+      ${checkboxEl}
       ${img
         ? html`<img class="card-row-img" src=${img} alt=${productName} loading="lazy"/>`
         : html`<div class="card-row-img card-row-img-placeholder"></div>`}
@@ -3810,11 +3879,12 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
   // Default grid-view tile. The image + overlays live inside their own
   // wrapper so the absolute price-row stays anchored to the image, not the
   // bottom of the tile (which extends to include the deck counter).
-  return html`<div class="card-tile" onClick=${onClick}>
+  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")} onClick=${onClick}>
     <div class="card-tile-img-wrap">
       ${img
         ? html`<img src=${img} alt=${productName} loading="lazy"/>`
         : html`<div class="card-img-placeholder" style=${{aspectRatio:"5/7"}}>${productName}</div>`}
+      ${checkboxEl}
       ${ownedAny && html`<div class="owned-badge">
         ${nQty>0 && html`<span class="owned-n">${nQty}×</span>`}
         ${fQty>0 && html`<span class="owned-f">${fQty}✦</span>`}
@@ -4194,7 +4264,10 @@ const emptyFilter = () => ({
 //     overlay used by the deck builder.
 // Stable references on these callbacks let React.memo on CardTile skip
 // unchanged tiles when filters change.
-const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange, sortDefault="set-new"}) => {
+const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
+                      sortDefault="set-new",
+                      selectable, isAuthed, onSignIn,
+                      onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks}) => {
   const [filter,setFilter] = useState(emptyFilter);
   const [drawerOpen,setDrawerOpen] = useState(false);
   const [sortKey,setSortKey] = useState(sortDefault);
@@ -4229,6 +4302,55 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange, 
   const parsedSummary = useMemo(()=>summarizeParsedQuery(parsed), [parsed]);
   const setsByGroup = useMemo(()=>groupSetsForFilter(raw),[raw]);
   const activeCount = countActiveFilters(filter);
+
+  // Multi-select. Kept as a Set of card_ids so the selection persists
+  // across filter changes (the user can stack a few from one filter, then
+  // change filters and add more without losing anything). Disabled when
+  // CardBrowser is being used inside the deck editor (deckMode) — the
+  // ± counter UX already covers that case.
+  const deckMode = typeof onDeckQtyChange === "function";
+  const allowSelect = !!selectable && !deckMode;
+  const [selected, setSelected] = useState(() => new Set());
+  const toggleSelected = useCallback((cardId) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if(next.has(cardId)) next.delete(cardId); else next.add(cardId);
+      return next;
+    });
+  }, []);
+  const clearSelection = useCallback(() => setSelected(new Set()), []);
+  const selectAllVisible = useCallback(() => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      for(const g of grouped) if(g.card_id) next.add(g.card_id);
+      return next;
+    });
+  }, [grouped]);
+
+  // Action dropdown state — what's open, and the cached deck list for the
+  // "Add to existing deck" submenu.
+  const [actionMenu, setActionMenu] = useState(null); // null | "root" | "deckPicker"
+  const [userDecks, setUserDecks] = useState(null);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const actionRef = useRef(null);
+  useEffect(() => {
+    if(!actionMenu) return;
+    const onDoc = (e) => {
+      if(actionRef.current && !actionRef.current.contains(e.target)) setActionMenu(null);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [actionMenu]);
+  const openDeckPicker = useCallback(async () => {
+    setActionMenu("deckPicker");
+    if(userDecks != null) return;
+    setPickerLoading(true);
+    try {
+      const decks = (typeof fetchUserDecks === "function") ? await fetchUserDecks() : [];
+      setUserDecks(decks);
+    } finally { setPickerLoading(false); }
+  }, [userDecks, fetchUserDecks]);
+
   return html`<div>
     <div class="cards-toolbar">
       <div class="search"><input type="search"
@@ -4282,30 +4404,233 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange, 
       <span class="parsed-hint-lbl">Filtering:</span>
       ${parsedSummary.map(p => html`<span class="parsed-hint-pill" key=${p}>${p}</span>`)}
     </div>`}
+    ${allowSelect && selected.size > 0 && html`<div class="cards-bulk-bar">
+      <span class="cards-bulk-count">${selected.size} selected</span>
+      <button class="cards-bulk-link" onClick=${selectAllVisible}
+        title="Add every card matching the current filters to the selection">
+        + Select all visible (${grouped.length.toLocaleString()})
+      </button>
+      <button class="cards-bulk-link" onClick=${clearSelection}>Clear</button>
+      <div class="cards-bulk-spacer"></div>
+      <div ref=${actionRef} class="cards-bulk-action">
+        <button class="cards-bulk-primary" onClick=${()=>setActionMenu(m => m ? null : "root")}>
+          Bulk action ▾
+        </button>
+        ${actionMenu === "root" && html`<div class="cards-bulk-menu">
+          <button class="cards-bulk-menu-item" onClick=${()=>{
+            if(!isAuthed){ onSignIn && onSignIn(); setActionMenu(null); return; }
+            onBulkAddCollection && onBulkAddCollection(Array.from(selected));
+            clearSelection(); setActionMenu(null);
+          }}>
+            <span class="cards-bulk-menu-icon">＋</span>
+            <div>
+              <div class="cards-bulk-menu-title">Add to my collection</div>
+              <div class="cards-bulk-menu-sub">+1 of the Normal printing for each selected card</div>
+            </div>
+          </button>
+          <button class="cards-bulk-menu-item" onClick=${()=>{
+            if(!isAuthed){ onSignIn && onSignIn(); setActionMenu(null); return; }
+            openDeckPicker();
+          }}>
+            <span class="cards-bulk-menu-icon">→</span>
+            <div>
+              <div class="cards-bulk-menu-title">Add to an existing deck…</div>
+              <div class="cards-bulk-menu-sub">Pick which deck to drop these into</div>
+            </div>
+          </button>
+          <button class="cards-bulk-menu-item" onClick=${()=>{
+            if(!isAuthed){ onSignIn && onSignIn(); setActionMenu(null); return; }
+            onBulkNewDeck && onBulkNewDeck(Array.from(selected));
+            clearSelection(); setActionMenu(null);
+          }}>
+            <span class="cards-bulk-menu-icon">✦</span>
+            <div>
+              <div class="cards-bulk-menu-title">Start a new deck</div>
+              <div class="cards-bulk-menu-sub">Create a deck pre-seeded with the selection</div>
+            </div>
+          </button>
+        </div>`}
+        ${actionMenu === "deckPicker" && html`<div class="cards-bulk-menu cards-bulk-menu-picker">
+          <div class="cards-bulk-menu-head">
+            <button class="cards-bulk-back" onClick=${()=>setActionMenu("root")} title="Back">←</button>
+            <span>Add to deck</span>
+          </div>
+          ${pickerLoading
+            ? html`<div class="muted" style=${{padding:"10px 12px",fontSize:12}}>Loading your decks…</div>`
+            : (!userDecks || userDecks.length === 0)
+              ? html`<div class="muted" style=${{padding:"10px 12px",fontSize:12}}>
+                  No decks yet — try Start a new deck instead.</div>`
+              : html`<div class="cards-bulk-picker-list">
+                  ${userDecks.map(d => html`<button key=${d.id} class="cards-bulk-menu-item"
+                    onClick=${()=>{
+                      onBulkAddToDeck && onBulkAddToDeck(Array.from(selected), d.id, d.name || "Untitled");
+                      clearSelection(); setActionMenu(null);
+                    }}>
+                    <span class="cards-bulk-menu-icon">▸</span>
+                    <div>
+                      <div class="cards-bulk-menu-title">${d.name || "Untitled deck"}</div>
+                      <div class="cards-bulk-menu-sub">${d.visibility || "private"}</div>
+                    </div>
+                  </button>`)}
+                </div>`}
+        </div>`}
+      </div>
+    </div>`}
     <div class=${(viewMode==="list"?"cards-list":"cards-grid")+(isFiltering?" cards-pending":"")}>
       ${grouped.map((g,i) => html`<${CardTile}
         key=${g.card_id||g["Product Name"]+":"+i}
         group=${g} collection=${collection} viewMode=${viewMode}
         onSelectGroup=${onSelectGroup}
         deckQty=${deckQty ? deckQty(g) : undefined}
-        onDeckQtyChange=${onDeckQtyChange}/>`)}
+        onDeckQtyChange=${onDeckQtyChange}
+        selectable=${allowSelect}
+        isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
+        onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
     </div>
     ${drawerOpen && html`<${FilterDrawer} filter=${filter} setFilter=${setFilter}
       setsByGroup=${setsByGroup} onClose=${()=>setDrawerOpen(false)} onReset=${()=>setFilter(emptyFilter())}/>`}
   </div>`;
 };
 
-const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn}) => {
+const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, openDeckById}) => {
   const [selectedGroup,setSelectedGroup] = useState(null);
   // Stable click handler so React.memo on CardTile can actually skip
   // unchanged tiles when filters change. Without useCallback the handler
   // identity changes every parent render, busting the memo.
   const openGroup = useCallback((g) => setSelectedGroup(g), []);
+  // Toast for ephemeral confirmation after bulk actions.
+  const [toast, setToast] = useState(null);
+  const showToast = useCallback((msg) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), 2400);
+  }, []);
+  // Build a card_id -> first-row index so we can find the canonical
+  // tcg_printing key for each selected card without scanning raw on
+  // every action.
+  const rowByCardId = useMemo(() => {
+    const m = new Map();
+    for(const r of raw){
+      if(!r.card_id || m.has(r.card_id)) continue;
+      // Prefer the Normal printing when one exists for this card_id.
+      m.set(r.card_id, r);
+    }
+    // Second pass: if a card has a Normal printing in raw, swap it in.
+    for(const r of raw){
+      if(!r.card_id) continue;
+      const cur = m.get(r.card_id);
+      if(cur && cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal"){
+        m.set(r.card_id, r);
+      }
+    }
+    return m;
+  }, [raw]);
+
+  // Bulk: add each selected card to the collection. Normal printing when
+  // available, foil otherwise.
+  const onBulkAddCollection = useCallback(async (cardIds) => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    let added = 0;
+    for(const id of cardIds){
+      const row = rowByCardId.get(id);
+      if(!row || !row.tcg_printing) continue;
+      const key = id + ":" + row.tcg_printing;
+      const cur = (collection && collection[key]) || 0;
+      updateQty(key, cur + 1);
+      added++;
+    }
+    showToast(`Added ${added} card${added===1?"":"s"} to your collection.`);
+  }, [user, onSignIn, collection, updateQty, rowByCardId, showToast]);
+
+  // Bulk: start a new deck pre-seeded with the selected cards, then jump
+  // to the editor for that deck.
+  const onBulkNewDeck = useCallback(async (cardIds) => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    try {
+      const {data: deckRow, error} = await sbClient.from("decks")
+        .insert({user_id: user.id, name: "New Deck from Cards"})
+        .select("id").single();
+      if(error) throw error;
+      const rows = [];
+      for(const id of cardIds){
+        const row = rowByCardId.get(id);
+        if(!row || !row.tcg_printing) continue;
+        rows.push({deck_id: deckRow.id, card_id: id, printing: row.tcg_printing, quantity: 1});
+      }
+      if(rows.length){
+        const ins = await sbClient.from("deck_cards").insert(rows);
+        if(ins.error) throw ins.error;
+      }
+      openDeckById && openDeckById(deckRow.id);
+    } catch(e){
+      console.error("new deck from selection failed:", e);
+      alert("Couldn't create deck: " + (e.message || String(e)));
+    }
+  }, [user, onSignIn, rowByCardId, openDeckById]);
+
+  // Bulk: add the selection to an existing deck. The caller (CardBrowser's
+  // popover) gives us the deck id; we upsert one row per card, summing the
+  // quantity if the row already exists (deck_cards uses a composite PK on
+  // deck_id+card_id+printing).
+  const onBulkAddToDeck = useCallback(async (cardIds, deckId, deckName) => {
+    if(!user || !deckId){ return; }
+    try {
+      // Pre-fetch existing rows in that deck so we can compute new quantities.
+      const {data: existing, error: e1} = await sbClient.from("deck_cards")
+        .select("card_id,printing,quantity").eq("deck_id", deckId);
+      if(e1) throw e1;
+      const have = new Map();
+      for(const r of (existing || [])) have.set(r.card_id+":"+r.printing, r.quantity || 0);
+      const upserts = [];
+      for(const id of cardIds){
+        const row = rowByCardId.get(id);
+        if(!row || !row.tcg_printing) continue;
+        const k = id + ":" + row.tcg_printing;
+        const cur = have.get(k) || 0;
+        // Cap at the card's deck limit (4 for most cards, 99 for Dalmatian
+        // Puppy variants, Microbots is uncapped but UI-capped at 99).
+        const cap = getDeckLimit(row["Product Name"]);
+        const target = Math.min(cap === Infinity ? 99 : cap, cur + 1);
+        if(target === cur) continue;
+        upserts.push({deck_id: deckId, card_id: id, printing: row.tcg_printing, quantity: target});
+      }
+      if(upserts.length){
+        const {error: e2} = await sbClient.from("deck_cards")
+          .upsert(upserts, {onConflict: "deck_id,card_id,printing"});
+        if(e2) throw e2;
+      }
+      // Touch the deck's updated_at so it reorders correctly.
+      await sbClient.from("decks").update({updated_at: new Date().toISOString()}).eq("id", deckId);
+      showToast(`Added ${upserts.length} card${upserts.length===1?"":"s"} to "${deckName}".`);
+    } catch(e){
+      console.error("add to deck failed:", e);
+      alert("Couldn't add to deck: " + (e.message || String(e)));
+    }
+  }, [user, rowByCardId, showToast]);
+
+  // Lazy-fetch the user's decks for the "Add to existing deck" picker.
+  const fetchUserDecks = useCallback(async () => {
+    if(!user) return [];
+    const {data, error} = await sbClient.from("decks")
+      .select("id,name,visibility,updated_at")
+      .eq("user_id", user.id)
+      .order("updated_at", {ascending:false});
+    if(error){ console.warn("fetch user decks failed:", error.message); return []; }
+    return data || [];
+  }, [user]);
+
   return html`<div>
-    <${CardBrowser} raw=${raw} onSelectGroup=${openGroup} collection=${collection}/>
+    <${CardBrowser} raw=${raw} onSelectGroup=${openGroup} collection=${collection}
+      selectable=${true}
+      isAuthed=${!!user}
+      onSignIn=${onSignIn}
+      onBulkAddCollection=${onBulkAddCollection}
+      onBulkNewDeck=${onBulkNewDeck}
+      onBulkAddToDeck=${onBulkAddToDeck}
+      fetchUserDecks=${fetchUserDecks}/>
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${toast && html`<div class="cards-toast">${toast}</div>`}
   </div>`;
 };
 
@@ -12093,6 +12418,15 @@ function App(){
     setView("history");
     setTabClickNonce(n => n + 1);
   }, []);
+  // Open a specific deck in the Decks tab. Used by cross-view jumps such
+  // as the Cards-tab bulk action that creates a new deck pre-seeded with
+  // the user's selection, then routes them to the editor.
+  const openDeckById = useCallback((deckId) => {
+    if(!deckId) return;
+    setIncomingDeckId(deckId);
+    setView("decks");
+    setTabClickNonce(n => n + 1);
+  }, []);
   const [incomingShareToken, setIncomingShareToken] = useState(initialUrlParams.token);
   const [incomingUserId, setIncomingUserId] = useState(initialUrlParams.deck ? null : initialUrlParams.user);
   const [nc,setNc]=useState(false);
@@ -12704,7 +13038,8 @@ function App(){
       sealedPrices=${sealedPrices}
       updateQty=${updateQty} onSignIn=${signIn}/>`}
     ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
-      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}/>`}
+      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
+      openDeckById=${openDeckById}/>`}
     ${view==="collection"&&html`<${CollectionView} raw=${raw} user=${user}
       collection=${collection} collectionLoading=${collectionLoading} updateQty=${updateQty}
       bulkUpdateCollection=${bulkUpdateCollection}
