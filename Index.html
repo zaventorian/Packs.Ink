@@ -1168,6 +1168,31 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
   text-transform:uppercase;color:var(--text-muted);}
 .deck-readonly-by{font-size:14px;font-weight:600;color:var(--text);}
 
+/* Notes / video popover for the deck editor. Same chrome as the share
+   popover but wider since the textarea needs room. */
+.deck-notes-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
+  width:380px;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  padding:12px;display:flex;flex-direction:column;gap:6px;}
+.deck-notes-textarea{width:100%;min-width:0;font-size:13px;padding:8px 10px;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;
+  color:var(--text);font-family:inherit;resize:vertical;line-height:1.4;}
+.deck-notes-textarea:focus{border-color:var(--accent);outline:none;}
+
+/* Notes + embed block rendered in view mode. Sits below the stats sidebar
+   when present; collapsed when both description and youtube_url are blank. */
+.deck-notes-block{margin-top:14px;background:var(--bg-surface);
+  border:1px solid var(--border);border-radius:10px;padding:14px;}
+.deck-notes-title{font-family:'Cinzel',serif;font-size:12px;font-weight:600;
+  color:var(--accent);margin-bottom:8px;padding-bottom:4px;
+  border-bottom:1px solid var(--border);letter-spacing:0.3px;text-transform:uppercase;}
+.deck-notes-text{font-size:13px;line-height:1.55;color:var(--text);
+  white-space:pre-wrap;word-wrap:break-word;}
+.deck-video-wrap{position:relative;width:100%;aspect-ratio:16/9;
+  margin-top:10px;border-radius:8px;overflow:hidden;
+  background:#000;border:1px solid var(--border);}
+.deck-video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0;}
+
 .deck-share-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
   width:320px;background:var(--bg-card);border:1px solid var(--border);
   border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
@@ -7431,7 +7456,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       // — which polluted "Your Decks" with externally-favorited decks and
       // made delete silently fail (RLS rejects deletes of others' rows).
       const {data: deckRows, error: e1} = await sbClient.from("decks")
-        .select("id,name,description,inks,tags,visibility,share_token,created_at,updated_at,user_id")
+        .select("id,name,description,youtube_url,inks,tags,visibility,share_token,created_at,updated_at,user_id")
         .eq("user_id", user.id)
         .order("updated_at", {ascending:false});
       if(e1) throw e1;
@@ -7474,7 +7499,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     if(!ids.length) return [];
     const [decksRes, cardsRes] = await Promise.all([
       sbClient.from("decks")
-        .select("id,user_id,name,description,inks,tags,visibility,updated_at")
+        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
         .in("id", ids),
       sbClient.from("deck_cards")
         .select("deck_id,card_id,printing,quantity")
@@ -7567,7 +7592,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       setUserFollows(new Set(followedIds));
       if(!followedIds.length){ setFollowingFeed([]); return; }
       const {data: deckRows, error: dErr} = await sbClient.from("decks")
-        .select("id,user_id,name,description,inks,tags,visibility,updated_at")
+        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
         .in("user_id", followedIds)
         .eq("visibility", "public")
         .order("updated_at", {ascending:false})
@@ -7709,7 +7734,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     setDiscoverLoading(true);
     try {
       let q = sbClient.from("decks")
-        .select("id,user_id,name,description,inks,tags,visibility,updated_at")
+        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
         .eq("visibility", "public")
         .order("updated_at", {ascending:false})
         .limit(DISCOVER_PAGE + 1);
@@ -7740,7 +7765,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     try {
       const oldest = discoverEntries[discoverEntries.length - 1].deck.updated_at;
       let q = sbClient.from("decks")
-        .select("id,user_id,name,description,inks,tags,visibility,updated_at")
+        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
         .eq("visibility", "public")
         .lt("updated_at", oldest)
         .order("updated_at", {ascending:false})
@@ -7778,7 +7803,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       const [profileRes, decksRes] = await Promise.all([
         sbClient.from("profiles").select("user_id,display_name,avatar_url").eq("user_id", creatorId).maybeSingle(),
         sbClient.from("decks")
-          .select("id,user_id,name,description,inks,tags,visibility,updated_at")
+          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
           .eq("user_id", creatorId).eq("visibility", "public")
           .order("updated_at", {ascending:false}),
       ]);
@@ -7831,7 +7856,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       //    null for unlisted-without-token or private-not-yours).
       if(!deckRow){
         const {data, error} = await sbClient.from("decks")
-          .select("id,user_id,name,description,inks,tags,visibility,share_token,updated_at")
+          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,share_token,updated_at")
           .eq("id", incomingDeckId).maybeSingle();
         if(cancelled) return;
         if(error){
@@ -8216,7 +8241,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     setPending(p => p + 1);
     try {
       const {data, error} = await sbClient.from("decks").update(patch).eq("id", deckId)
-        .select("id,name,description,inks,tags,visibility,share_token,created_at,updated_at,user_id")
+        .select("id,name,description,youtube_url,inks,tags,visibility,share_token,created_at,updated_at,user_id")
         .maybeSingle();
       if(error) throw error;
       if(data){
@@ -8816,6 +8841,33 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
   </div>`;
 };
 
+// Extract a YouTube video id from any of the common URL shapes:
+//   https://www.youtube.com/watch?v=ID
+//   https://youtu.be/ID
+//   https://www.youtube.com/embed/ID
+//   https://www.youtube.com/shorts/ID
+// Returns null if nothing matches so the caller can fall back to a plain link.
+const youtubeIdFromUrl = (url) => {
+  if(!url) return null;
+  try {
+    const u = new URL(url.trim());
+    const host = u.hostname.replace(/^www\./, "");
+    if(host === "youtu.be"){
+      const id = u.pathname.slice(1).split("/")[0];
+      return /^[\w-]{6,}$/.test(id) ? id : null;
+    }
+    if(host === "youtube.com" || host === "m.youtube.com"){
+      if(u.pathname === "/watch"){
+        const id = u.searchParams.get("v");
+        return id && /^[\w-]{6,}$/.test(id) ? id : null;
+      }
+      const m = u.pathname.match(/^\/(?:embed|shorts|v)\/([\w-]{6,})/);
+      if(m) return m[1];
+    }
+  } catch {}
+  return null;
+};
+
 // Background-style swatch for the legend (CSS doesn't share SVG gradient ids
 // across an <svg> and a <span>, so we use a linear-gradient CSS image for
 // dual-ink swatches and a solid color for single-ink). Matches the SVG
@@ -8848,6 +8900,30 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const shareRef = useRef(null);
+  // Notes / video popover state. Local mirror of deck.description and
+  // deck.youtube_url so the textarea/input can be edited without firing
+  // an update on every keystroke; debounced commit on blur or popover close.
+  const [notesOpen, setNotesOpen] = useState(false);
+  const notesRef = useRef(null);
+  const [notesDraft, setNotesDraft] = useState(deck.description || "");
+  const [videoDraft, setVideoDraft] = useState(deck.youtube_url || "");
+  useEffect(() => { setNotesDraft(deck.description || ""); }, [deck.description, deck.id]);
+  useEffect(() => { setVideoDraft(deck.youtube_url || ""); }, [deck.youtube_url, deck.id]);
+  useEffect(()=>{
+    if(!notesOpen) return;
+    const onDoc = (e) => {
+      if(notesRef.current && !notesRef.current.contains(e.target)){
+        // Commit on outside-click close.
+        const patch = {};
+        if((notesDraft || "") !== (deck.description || "")) patch.description = notesDraft || null;
+        if((videoDraft || "") !== (deck.youtube_url || "")) patch.youtube_url = videoDraft || null;
+        if(Object.keys(patch).length && onUpdateMeta) onUpdateMeta(patch);
+        setNotesOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [notesOpen, notesDraft, videoDraft, deck.description, deck.youtube_url, onUpdateMeta]);
   // View-mode preferences (layout, sort, highlight-missing). Persist to
   // localStorage so the user's choice survives reloads.
   const [viewLayout, setViewLayout] = useState(() => {
@@ -9288,6 +9364,25 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             </div>`}
           </div>`}
         </div>`}
+        ${isOwnDeck && html`<div ref=${notesRef} style=${{position:"relative",display:"inline-flex"}}>
+          <button onClick=${()=>setNotesOpen(o=>!o)}
+            class=${(deck.description || deck.youtube_url) ? "active" : ""}
+            style=${{fontSize:12,padding:"5px 10px"}}
+            title="Add notes or a YouTube video for this deck (optional)">
+            ${(deck.description || deck.youtube_url) ? "📝 Notes ✓" : "📝 Notes"}
+          </button>
+          ${notesOpen && html`<div class="deck-notes-popover">
+            <div class="deck-share-section-title">Notes</div>
+            <textarea class="deck-notes-textarea" rows="6"
+              placeholder="Write up your deck — strategy, win condition, sideboard ideas. Shown to anyone viewing this deck."
+              value=${notesDraft} onInput=${e=>setNotesDraft(e.target.value)}></textarea>
+            <div class="deck-share-section-title" style=${{marginTop:8}}>YouTube URL</div>
+            <input class="deck-share-url" type="text"
+              placeholder="https://www.youtube.com/watch?v=..."
+              value=${videoDraft} onInput=${e=>setVideoDraft(e.target.value)}/>
+            <div class="deck-share-note">Both are optional and only render when set. Saves on close.</div>
+          </div>`}
+        </div>`}
         ${!readOnly && html`<button onClick=${handleImport} style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
         <button onClick=${handleExport} style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export</button>
         ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
@@ -9334,7 +9429,26 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
           <${DeckPie} title="Types" data=${aggregates.typeCount}
             colorOf=${TYPE_PIE_COLOR}/>
         </div>
-      </div>`}`;
+      </div>`}
+      ${(deck.description || deck.youtube_url) && (() => {
+        const videoId = youtubeIdFromUrl(deck.youtube_url);
+        return html`<div class="deck-notes-block">
+          ${deck.description && html`<div>
+            <div class="deck-notes-title">Notes</div>
+            <div class="deck-notes-text">${deck.description}</div>
+          </div>`}
+          ${videoId
+            ? html`<div class="deck-video-wrap">
+                <iframe src=${"https://www.youtube.com/embed/" + videoId}
+                  title="Deck profile video" allowfullscreen
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
+              </div>`
+            : deck.youtube_url && html`<a href=${deck.youtube_url} target="_blank" rel="noopener"
+                style=${{display:"block",marginTop:10,fontSize:12,color:"var(--accent)"}}>
+                ▶ ${deck.youtube_url}
+              </a>`}
+        </div>`;
+      })()}`;
 
       const openCardModal = (cardId) => {
         const rows = cardById[cardId] || [];
