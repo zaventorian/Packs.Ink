@@ -140,6 +140,30 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .price-db-table .pct-up{color:var(--green);font-weight:600;}
 .price-db-table .pct-down{color:var(--red);font-weight:600;}
 .price-db-sig{display:inline-block;font-size:14px;line-height:1;margin:0 1px;cursor:help;}
+
+/* Inline preset description sentence that swaps based on the active chip. */
+.price-db-desc{font-size:11px;line-height:1.4;padding:2px 2px 4px;}
+
+/* Advanced filter drawer — collapses by default; shows a stacked set of
+   numeric range inputs that build a Morningstar-style query on top of
+   the basic dropdowns. */
+.price-db-advbtn{padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;}
+.price-db-advbtn:hover{border-color:var(--accent);}
+.price-db-adv{display:flex;flex-direction:column;gap:6px;padding:10px 12px;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
+  margin-top:-2px;}
+.price-db-adv-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.price-db-adv-row label{font-size:11px;font-weight:600;color:var(--text-muted);
+  min-width:120px;text-transform:uppercase;letter-spacing:0.3px;}
+.price-db-adv-row input,
+.price-db-adv-row select{padding:4px 8px;font-size:12px;
+  background:var(--bg-card);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;outline:none;}
+.price-db-adv-row input[type="number"]{width:90px;}
+.price-db-adv-row input:focus,
+.price-db-adv-row select:focus{border-color:var(--accent);}
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
   border:1px solid transparent;border-radius:6px;cursor:pointer;
@@ -6435,22 +6459,32 @@ const PRICE_DB_WIN = [
   ["pct_180d", "mkt_pct_180d", "6M"],
   ["pct_365d", "mkt_pct_365d", "1Y"],
 ];
+// [key, label, one-line description shown beneath the preset chips]
 const PRICE_DB_PRESETS = [
-  ["all",       "All"],
-  ["gainers1d", "1D Gainers"],
-  ["losers1d",  "1D Losers"],
-  ["gainers1w", "1W Gainers"],
-  ["losers1w",  "1W Losers"],
-  ["buyouts",   "Buyouts"],
-  ["crashing",  "Crashing"],
-  ["discount",  "Discount"],
-  ["premium",   "Premium"],
+  ["all",       "All",         "Every tracked card. Use the filters below to narrow down."],
+  ["gainers1d", "1D Gainers",  "Sorted by biggest 24-hour low_price gains. Top of the leaderboard for today's movement."],
+  ["losers1d",  "1D Losers",   "Sorted by biggest 24-hour drops. Often pairs with reprint news or post-spike cooldown."],
+  ["gainers1w", "1W Gainers",  "Biggest 7-day gains. Less noise than 1D — confirms a sustained trend."],
+  ["losers1w",  "1W Losers",   "Biggest 7-day drops. Cards correcting from a recent peak or fading interest."],
+  ["buyouts",   "🔥 Buyouts",  "1D ≥ +30% with a prior low of at least $1 — pattern of someone sweeping the cheap copies off the market."],
+  ["crashing",  "📉 Crashing", "1W ≤ -20%. Sustained decline. Often hits after a spike unwinds or a reprint is announced."],
+  ["discount",  "💰 Discount", "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
+  ["premium",   "↑ Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
 ];
 const fmtMoney = (v) => v == null ? "—" : "$" + Number(v).toFixed(2);
 const fmtPctV  = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(1) + "%";
 const pctCls   = (v) => v == null ? "" : v > 0 ? "pct-up" : v < 0 ? "pct-down" : "";
 
-function PriceDatabase({sets}){
+// Lorcast publishes rarities with underscores ("Super_rare", "Super_Rare"
+// — both have appeared). Normalize to a display label by snake→space and
+// title-casing each word. Keeps the raw value as the filter key so the
+// dropdown options still match what's in r.rarity.
+function rarityLabel(r){
+  if(!r) return "—";
+  return String(r).split(/[_\s]+/).map(w => w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : "").join(" ");
+}
+
+function PriceDatabase({raw, sets}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   const [sortKey, setSortKey] = useState("pct_1d");
   const [sortDesc, setSortDesc] = useState(true);
@@ -6460,6 +6494,16 @@ function PriceDatabase({sets}){
   const [filterInk, setFilterInk] = useState("");
   const [search, setSearch] = useState("");
   const [preset, setPreset] = useState("all");
+  // Advanced filters: numeric ranges on the active price + each Δ% window.
+  // Empty string means "no bound". Keeps things flexible — e.g. find every
+  // card under $10 that moved +50% in a month, or only cards trading between
+  // $20-$100 that dropped ≥10% in a week.
+  const [advOpen, setAdvOpen] = useState(false);
+  const [minPrice, setMinPrice] = useState("");
+  const [maxPrice, setMaxPrice] = useState("");
+  const [minPct, setMinPct] = useState("");
+  const [maxPct, setMaxPct] = useState("");
+  const [pctWin, setPctWin] = useState("pct_30d"); // which window the % range applies to
 
   useEffect(() => {
     let cancelled = false;
@@ -6474,11 +6518,17 @@ function PriceDatabase({sets}){
     return () => { cancelled = true; };
   }, []);
 
+  // Build set_id -> set name from `raw`. The `sets` prop is a flat array
+  // of set NAME strings (MAINLINE_SETS-derived), not {id, name} objects,
+  // so the previous lookup was always empty. raw rows carry both set_id
+  // and Set (name), so we derive the mapping from there.
   const setNameById = useMemo(() => {
     const m = {};
-    for(const s of (sets || [])) m[s.id] = s.name;
+    for(const r of (raw || [])) {
+      if(r.set_id && r.Set && !m[r.set_id]) m[r.set_id] = r.Set;
+    }
     return m;
-  }, [sets]);
+  }, [raw]);
 
   const filtered = useMemo(() => {
     const rows = state.rows;
@@ -6491,6 +6541,16 @@ function PriceDatabase({sets}){
       if(q){
         const nm = ((r.name || "") + " " + (r.version || "")).toLowerCase();
         if(!nm.includes(q)) return false;
+      }
+      // Advanced numeric filters. priceMode decides which price they apply to.
+      const px = priceMode === "market" ? r.market_today : r.low_today;
+      if(minPrice !== "" && (px == null || px < +minPrice)) return false;
+      if(maxPrice !== "" && (px == null || px > +maxPrice)) return false;
+      if(minPct !== "" || maxPct !== ""){
+        const winKey = priceMode === "market" ? pctWin.replace("pct_", "mkt_pct_") : pctWin;
+        const v = r[winKey];
+        if(minPct !== "" && (v == null || v < +minPct)) return false;
+        if(maxPct !== "" && (v == null || v > +maxPct)) return false;
       }
       if(preset === "buyouts"  && !(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1)) return false;
       if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
@@ -6512,8 +6572,11 @@ function PriceDatabase({sets}){
     const sk = presetSort ? presetSort[0] : sortKey;
     const sd = presetSort ? presetSort[1] : sortDesc;
     const getVal = (r, k) => {
-      if(k === "name") return (r.name || "") + " " + (r.version || "");
-      if(k === "price") return priceMode === "market" ? r.market_today : r.low_today;
+      if(k === "name")   return (r.name || "") + " " + (r.version || "");
+      if(k === "low")    return r.low_today;
+      if(k === "market") return r.market_today;
+      // Legacy "price" key (active-mode-driven) still supported for old prefs.
+      if(k === "price")  return priceMode === "market" ? r.market_today : r.low_today;
       return r[k];
     };
     out.sort((a, b) => {
@@ -6553,32 +6616,67 @@ function PriceDatabase({sets}){
     return out;
   };
 
+  const activePreset = PRICE_DB_PRESETS.find(([k]) => k === preset);
+  const presetDesc = activePreset ? activePreset[2] : "";
+
   return html`<div class="price-db">
     <div class="price-db-presets">
-      ${PRICE_DB_PRESETS.map(([k, l]) => html`<button key=${k}
+      ${PRICE_DB_PRESETS.map(([k, l, tip]) => html`<button key=${k}
         class=${"price-db-preset" + (preset === k ? " active" : "")}
+        title=${tip}
         onClick=${() => setPreset(k)}>${l}</button>`)}
     </div>
+    <div class="price-db-desc muted">${presetDesc}</div>
     <div class="price-db-filters">
-      <input class="price-db-search" type="search" placeholder="Search name"
+      <input class="price-db-search" type="search" placeholder="Search by name"
         value=${search} onInput=${(e) => setSearch(e.target.value)}/>
       <select value=${filterSet} onChange=${(e) => setFilterSet(e.target.value)}>
         <option value="">All sets</option>
-        ${(sets || []).slice().reverse().map((s) => html`<option key=${s.id} value=${s.name}>${s.name}</option>`)}
+        ${(sets || []).slice().reverse().map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
       </select>
       <select value=${filterRarity} onChange=${(e) => setFilterRarity(e.target.value)}>
         <option value="">All rarities</option>
-        ${rarities.map((r) => html`<option key=${r} value=${r}>${r}</option>`)}
+        ${rarities.map((r) => html`<option key=${r} value=${r}>${rarityLabel(r)}</option>`)}
       </select>
       <select value=${filterInk} onChange=${(e) => setFilterInk(e.target.value)}>
         <option value="">All inks</option>
         ${inks.map((i) => html`<option key=${i} value=${i}>${i}</option>`)}
       </select>
-      <div class="market-sim-kind" role="group" style=${{marginLeft: "auto"}}>
-        <button class=${priceMode === "low" ? "active" : ""} onClick=${() => setPriceMode("low")}>Low</button>
-        <button class=${priceMode === "market" ? "active" : ""} onClick=${() => setPriceMode("market")}>Market</button>
+      <button class="price-db-advbtn" onClick=${() => setAdvOpen(o => !o)}
+        title="Advanced numeric filters">
+        ${advOpen ? "Advanced ▴" : "Advanced ▾"}
+      </button>
+      <div class="market-sim-kind" role="group"
+        title="Determines which column drives the preset logic (Buyouts, Discount, etc.) and which prices the advanced range filters apply to. Both columns are always shown in the table."
+        style=${{marginLeft: "auto"}}>
+        <button class=${priceMode === "low" ? "active" : ""} onClick=${() => setPriceMode("low")}>Use Low</button>
+        <button class=${priceMode === "market" ? "active" : ""} onClick=${() => setPriceMode("market")}>Use Market</button>
       </div>
     </div>
+    ${advOpen && html`<div class="price-db-adv">
+      <div class="price-db-adv-row">
+        <label>NM ${priceMode === "market" ? "Market" : "Low"} price</label>
+        <input type="number" min="0" step="0.5" placeholder="Min $"
+          value=${minPrice} onInput=${e => setMinPrice(e.target.value)}/>
+        <span class="muted">–</span>
+        <input type="number" min="0" step="0.5" placeholder="Max $"
+          value=${maxPrice} onInput=${e => setMaxPrice(e.target.value)}/>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Δ% over</label>
+        <select value=${pctWin} onChange=${e => setPctWin(e.target.value)}>
+          ${PRICE_DB_WIN.map(([lk, , lbl]) => html`<option key=${lk} value=${lk}>${lbl}</option>`)}
+        </select>
+        <input type="number" step="1" placeholder="Min %"
+          value=${minPct} onInput=${e => setMinPct(e.target.value)}/>
+        <span class="muted">–</span>
+        <input type="number" step="1" placeholder="Max %"
+          value=${maxPct} onInput=${e => setMaxPct(e.target.value)}/>
+        <button class="price-db-advbtn" onClick=${() => { setMinPrice(""); setMaxPrice(""); setMinPct(""); setMaxPct(""); }}>
+          Clear ranges
+        </button>
+      </div>
+    </div>`}
     <div class="price-db-count muted">${filtered.length} cards</div>
     <div class="price-db-tablewrap">
       <table class="price-db-table">
@@ -6588,16 +6686,20 @@ function PriceDatabase({sets}){
           <th>Set</th>
           <th>Rarity</th>
           <th>Ink</th>
-          <th class="sortable th-num" onClick=${() => onSort("price")}>${priceMode === "market" ? "Market" : "Low"}${arrow("price")}</th>
+          <th class="sortable th-num" onClick=${() => onSort("low")}
+              title="TCGPlayer NM Low — lowest active NM listing">NM Low${arrow("low")}</th>
+          <th class="sortable th-num" onClick=${() => onSort("market")}
+              title="TCGPlayer NM Market — smoothed average of recent NM sales">NM Market${arrow("market")}</th>
           ${PRICE_DB_WIN.map(([lk, mk, lbl]) => {
             const k = priceMode === "market" ? mk : lk;
-            return html`<th key=${k} class="sortable th-num" onClick=${() => onSort(k)}>${lbl}${arrow(k)}</th>`;
+            return html`<th key=${k} class="sortable th-num"
+              title=${"Δ% over " + lbl + " (" + (priceMode === "market" ? "Market" : "Low") + " — flip the Use Low / Use Market toggle to switch)"}
+              onClick=${() => onSort(k)}>${lbl}${arrow(k)}</th>`;
           })}
           <th>Signals</th>
         </tr></thead>
         <tbody>
           ${filtered.slice(0, 1000).map((r) => {
-            const px = priceMode === "market" ? r.market_today : r.low_today;
             const img = r.image_small || r.image_normal;
             const sigs = sigOf(r);
             return html`<tr key=${r.card_id + ":" + r.printing}>
@@ -6607,9 +6709,10 @@ function PriceDatabase({sets}){
                 <div class="td-name-meta">${r.printing} #${r.collector_number || "?"}</div>
               </td>
               <td>${setNameById[r.set_id] || "—"}</td>
-              <td>${r.rarity || "—"}</td>
+              <td>${rarityLabel(r.rarity)}</td>
               <td>${r.ink || "—"}</td>
-              <td class="td-num">${fmtMoney(px)}</td>
+              <td class="td-num">${fmtMoney(r.low_today)}</td>
+              <td class="td-num">${fmtMoney(r.market_today)}</td>
               ${PRICE_DB_WIN.map(([lk, mk]) => {
                 const v = priceMode === "market" ? r[mk] : r[lk];
                 return html`<td key=${lk} class=${"td-num " + pctCls(v)}>${fmtPctV(v)}</td>`;
@@ -6679,7 +6782,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collect
         </label>
       <//>`}
     </div>
-    ${sub==="db"      && html`<${PriceDatabase} sets=${setsNewest}/>`}
+    ${sub==="db"      && html`<${PriceDatabase} raw=${raw} sets=${setsNewest}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme} priceMode=${priceMode}/>`}
     ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs} priceMode=${priceMode}/>`}
     ${sub==="ev"      && html`<${EVView} raw=${raw} sets=${setsNewest} avgs=${avgs}
