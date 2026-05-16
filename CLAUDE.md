@@ -9,10 +9,18 @@ Lorcana TCG market + collection app. Affiliate revenue via TCGPlayer (Impact, 3.
   - **Catalog tables**: `cards`, `sets`, `prices_daily`, `sealed_products`.
   - **User tables**: `profiles`, `collection_items`, `sealed_collection_items`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`.
   - **Materialized views** (refreshed daily by the ETL): `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`.
-- **ETL**: `scripts/etl_tcgcsv_daily.py` pulls TCGCSV, upserts `prices_daily`, then refreshes all four matviews via SECURITY DEFINER RPCs (`refresh_card_prices_latest`, `refresh_rarity_avg_daily`, `refresh_price_movers`, `refresh_sealed_prices_latest`). Runs via GitHub Actions cron at 21:00 UTC daily (`.github/workflows/etl.yml`).
+- **ETL**: `scripts/etl_tcgcsv_daily.py` pulls TCGCSV, upserts `prices_daily`, then refreshes all four matviews via SECURITY DEFINER RPCs (`refresh_card_prices_latest`, `refresh_rarity_avg_daily`, `refresh_price_movers`, `refresh_sealed_prices_latest`). Runs via GitHub Actions cron at 21:00 UTC daily (`.github/workflows/etl.yml`). **Aborts when today's fetched snapshot is >95% byte-identical to yesterday's** — TCGCSV publishes ~20:00 UTC and the ETL guard catches the "ran before file dropped" case so we don't pollute prices_daily with a duplicate-day row that zeros out 1D movers downstream.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed-product catalog**: `scripts/load_sealed_products.py` — pulls every product TCGCSV exposes for category 71, classifies by name, upserts into `sealed_products`.
 - **Local dev preview**: launch config lives in `../Sayumi.Ink/.claude/launch.json` under the `packs-ink` entry (MCP preview reads from session CWD).
+
+## Top-level nav
+
+`Home · Screener · Price Graphing · Analytics · Cards · Collection · Decks`
+
+- **Screener** = sortable financial-database-style table of every tracked card (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface.
+- **Price Graphing** = per-card history charts and a multi-card Compare mode (handoff from Screener's batch action).
+- **Analytics** = umbrella for the calculator-y tools (Expected Value, Card Averages, Playset Cost, Heatmap, Sealed, Simulate). Was called "Market"; renamed because none of those sub-pages actually show market data, they analyze it.
 
 ## Data flow (non-negotiable)
 
@@ -20,28 +28,35 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 ## Client cache rules
 
-- Catalog key: `packsink:catalog:vN`. **Bump N whenever the cached row shape changes** — old cache entries are silently ignored on version mismatch. Currently `v18`.
+- Catalog key: `packsink:catalog:vN`. **Bump N whenever the cached row shape changes** — old cache entries are silently ignored on version mismatch. Currently `v20`.
 - Sealed-price key: `packsink:sealed:v1`. Bump independently when sealed_prices_latest's SELECT columns change.
-- Quota is ~5MB. Keep slim: don't cache `text`, `flavor_text`, `image_large`, mid/high prices. Modal fetches those on demand by `card_id`.
+- Quota is ~5MB. Keep slim: don't cache `text`, `flavor_text`, mid/high prices. `img_large` IS cached (~730w URLs) since the hover preview / detail modal benefits.
 - Min rows: 4000. Max age: 1 hour.
 
 ## PostgREST gotchas
 
 - `sbFetchAll` parallel range pagination **requires an explicit `order=` param** — without it, ranges overlap and rows duplicate. Always pass a stable sort (e.g. `tcgplayer_product_id.asc,printing.asc` for prices, `id.asc` for cards).
+- `sbFetchAll` with `limit=N` confuses its own pagination — first request uses `Prefer: count=exact` which returns the FULL table count, so subsequent pages try to fetch beyond the limit and 416. **For "does this column exist" probes, use a direct `fetch()`, not sbFetchAll.**
 - Anything previously a "regular view" that hits `prices_daily` should be a **materialized view**. Statement timeout is 10s; raw views over the ~3M-row `prices_daily` will hit it. `card_prices_latest`, `rarity_avg_daily`, `price_movers`, and `sealed_prices_latest` are all matviews now.
 - Matviews need a unique index for `REFRESH CONCURRENTLY`. All four have one; refresh functions fall back to non-concurrent on first run.
 - **PostgREST default page size is 1000.** `sbClient.from().select()` silently truncates beyond that. Always paginate `.range()` for tables that could exceed it (collection fetch in App does this).
 - **Upserts return `{error}`, they don't throw.** Always check `.error`. For bulk upserts, also add `.select("any_col")` and compare returned count vs sent count — RLS / triggers can silently drop rows otherwise.
 - **`ON CONFLICT DO UPDATE` rejects batches with duplicate conflict-target rows.** Dedupe by the conflict key before sending — `Supabase.upsert()` now does this automatically.
 - **`sbFetchWithRetry` wraps every fetch** with 3 retries on 5xx — Supabase's 57014 (statement timeout) is intermittent under load.
-- **RLS broadening trap.** When a SELECT policy includes `OR <some condition non-owner can satisfy>`, an unfiltered `select` returns every visible row, not just yours. Explicitly `.eq("user_id", user.id)` for "my own" reads. (Hit this twice: once when `decks` opened up to public sharing, once with deck visibility leaks via `?visibility=eq.unlisted`.)
+- **`CREATE OR REPLACE FUNCTION` can't change a RETURNS TABLE signature.** Postgres errors with 42P13 / "cannot change return type". Drop first, then create. Hit when adding `youtube_url` to `get_shared_deck`.
+- **RLS broadening trap.** When a SELECT policy includes `OR <some condition non-owner can satisfy>`, an unfiltered `select` returns every visible row, not just yours. Explicitly `.eq("user_id", user.id)` for "my own" reads.
 - **`NOTIFY pgrst, 'reload schema';` at the end of every migration.** PostgREST caches the schema; renaming a table or adding a function means the API doesn't know about it until the cache reloads. Habit, not tooling.
 - **`SECURITY DEFINER` functions must pin `search_path` to include `extensions`** if they use anything from pgcrypto (`gen_random_bytes`, `gen_random_uuid`, etc.). Supabase puts pgcrypto in the `extensions` schema, off the default search path.
 - **Long-running RPCs need explicit statement_timeout.** Default role-level cap kills concurrent matview refreshes once the matview grows past ~30s. Every refresh function pins `set statement_timeout = '5min'`.
+- **When recreating a matview, re-grant SELECT to every role that needs it.** `grant select on price_movers to anon, authenticated` is mandatory; service_role doesn't inherit unless you grant explicitly. Migration 26 missed service_role and broke offline diagnostics until we used the anon key.
+
+## price_movers matview gotcha
+
+The matview computes Δ% across 6 windows (1D / 1W / 1M / 3M / 6M / 1Y) for both low and market. **`low_prev` is "most recent non-null low BEFORE low_today's own date"**, not "before the global max date in prices_daily" — migration 26 fixes this. The old definition collapsed pct_1d to 0 for every card that wasn't priced today, which is most sparse-listing chase cards. If 1D movers ever look broken again, check that the per-card `latest_low_date` CTE is still in place.
 
 ## Catalog merging — `transformSupabaseData` rules
 
-This is where catalog correctness lives. Four structural cleanups beyond the basic cards+prices merge:
+This is where catalog correctness lives. Structural cleanups beyond the basic cards+prices merge:
 
 1. **Holofoil mislabel rule** — TCGCSV sometimes publishes a card's in-pack foil under `printing=Holofoil` instead of `Cold Foil` (late-2024+ sets, confirmed via live TCGPlayer listings). When a non-chase, non-extras card has a Holofoil row, that's the canonical foil and any separate Cold Foil/Foil row is suppressed as stale.
 2. **`EXTRAS_MAP`** — curated map of `tcgplayer_product_id` → variant info for cards that get promoted to the "Extras & Oddities" bucket. Currently 17 entries:
@@ -50,17 +65,40 @@ This is where catalog correctness lives. Four structural cleanups beyond the bas
    - `excludeFromBaseSet: true` cards are suppressed from their origin set (Deep Trouble + Half Hexwell Crown).
    - `standalone: {...}` lets us include cards Lorcast doesn't index (Piglet has this).
 3. **`CONNECTING_FOILS`** — map of `base_product_id` → `foil_product_id` for cards whose foil version TCGPlayer lists as a separate SKU (connecting-art / extended-art foils). 24 entries across Winterspell, Wilds Unknown, and Reign of Jafar. The foil row is emitted under the base card's `card_id` so the collection slot stays grouped. The companion product is suppressed from the main loop to avoid duplicate rows.
-4. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price` columns. When a card has one but not the other (typical for sparse/newest-set rows), the missing side falls back to the present side so it still contributes to rarity averages. The Market analytics views' `priceMode` toggle then picks the preferred field per render.
+4. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price` columns. When a card has one but not the other (typical for sparse/newest-set rows), the missing side falls back to the present side so it still contributes to rarity averages. The Analytics views' `priceMode` toggle then picks the preferred field per render.
 
 Audit scripts to regenerate these maps: `scripts/audit_holofoils.py`, `scripts/audit_connecting_foils.py`, `scripts/audit_missing_foils.py`. Sealed orphan / catalog audits: `supabase/diagnostics/sealed_product_audit.sql`. Index usage walks: `supabase/diagnostics/index_usage_audit.sql`.
 
 ## Set conventions
 
-- **`MAINLINE_SETS`** = the 13 booster-pack sets (TFC → Attack of the Vines). Used by EV, Pack Sim, Box Sim, Playset Cost, Price Trends, Card Averages, Heatmap, and the Home page "newest set" walk.
+- **`MAINLINE_SETS`** = the booster-pack sets (TFC → Attack of the Vines). Used by EV, Pack Sim, Box Sim, Playset Cost, Price Graphing, Card Averages, Heatmap, and the Home page "newest set" walk.
 - **`SET_ORDER`** = `[EXTRAS_SET_NAME, "Promo Set 1/2/3", ...MAINLINE_SETS]`. Drives the Cards browse, Collection grid, set-membership gates. `reverse()` in the renderer puts mainlines on top and Extras at the bottom.
 - **`MAINLINE_RELEASE_ORDER`** = `MAINLINE_SETS` minus unreleased sets. Drives Core Constructed rotation math (`computeCoreSets`) — keeps the two most-recent complete 4-set groups + the in-progress group.
-- **Newest-first inside Market.** Every Market sub-view (EV, Card Averages, Playset Cost, Heatmap, Sealed) lists sets newest-first via a `setsNewest = sets.slice().reverse()` derived once in `MarketView`. Simulators inherit the same ordering — newest-first reads better in their dropdowns too.
+- **Newest-first inside Analytics.** Every Analytics sub-view lists sets newest-first via a `setsNewest = sets.slice().reverse()` derived once in `MarketView`. Simulators inherit the same ordering.
 - Decks pick up format automatically (`checkDeckLegality`): structurally legal + all cards in Core legal sets → "Core Constructed"; structurally legal otherwise → "Infinity"; structurally broken → "Invalid Deck".
+
+## Inks & dual-ink cards
+
+Lorcana has six single inks (Amber, Amethyst, Emerald, Ruby, Sapphire, Steel) and dual-ink cards introduced in late 2025. Lorcast exposes duals as `inks: ["Emerald","Sapphire"]` with `ink: null`. **Always read `meta.inks` first, fall back to `[meta.ink]`** — the legacy `ink` column is populated with `inks[0]` for back-compat but doesn't capture the second color.
+
+- Migration `27_card_inks_array.sql` adds the `inks text[]` column.
+- `scripts/load_lorcast.py` writes both `ink` (= inks[0]) and `inks` (the full array).
+- `scripts/patch_card_inks.py` is the one-shot backfill for rows loaded before the migration. Idempotent.
+
+**Rendering convention for dual-ink:**
+- **Deck stats Colors pie**: dual-ink cards form their OWN bucket keyed by joined ink names ("Emerald/Sapphire"). The bucket gets the full card quantity (not split). Slice rendered as a flat neutral charcoal (DUAL_INK_PIE_COLOR = slate-600) with a "dual" pill tag in the legend — gradient slices are unreadable at small angles.
+- **Cost curve bar chart**: same bucketing as the pie, but the rendered block uses a 135° diagonal gradient (Emerald top-left → Sapphire bottom-right) since bar segments are large enough to read both colors.
+- **Deck row ink swatch**: a 14px circle with a hard mid-line divider — half-color-A, half-color-B. Single inks use a solid circle.
+- **Legality (`checkDeckLegality`)**: dual-ink cards contribute BOTH colors to the deck's ink set. An Emerald/Sapphire dual + an Amber single = 3 inks → over the 2-ink cap. Same logic for `inkColorsInDeck` header label.
+
+## Deck-build limit exceptions
+
+Lorcana's default is 4-of-any-card. A handful bypass it via card text — keep `SPECIAL_DECK_LIMITS` in `Index.html` updated when new exception cards are printed. Currently:
+
+- `"Dalmatian Puppy - Tail Wagger"` → 99 (Puppy Power; variants share the total)
+- `"Microbots"` → Infinity (UI caps at 99 for sanity)
+
+`getDeckLimit(productName)` returns the cap (4 default). `getDeckLimitForUI(productName)` clamps Infinity to 99 for +/- buttons. `checkDeckLegality` sums by Product Name across variants before comparing — so variants of Tail Wagger correctly accumulate toward the 99 cap, not 99 each. DB constraint relaxed to `quantity <= 99` in migration `28_deck_cards_quantity_99.sql`.
 
 ## Deck sharing model
 
@@ -74,10 +112,10 @@ Three visibility states, each backed by a per-deck `share_token` (22-char URL-sa
 
 Key invariants:
 
-- **Non-owner reads of unlisted decks go through the SECURITY DEFINER `get_shared_deck(uuid, text)` / `get_shared_deck_cards(uuid, text)` RPCs.** These bypass RLS but require the token to match. Defeats the `?visibility=eq.unlisted` enumeration that an `OR visibility != 'private'` policy would expose.
+- **Non-owner reads of unlisted decks go through the SECURITY DEFINER `get_shared_deck(uuid, text)` / `get_shared_deck_cards(uuid, text)` RPCs.** These bypass RLS but require the token to match. **`get_shared_deck`'s RETURNS TABLE must include every column the client reads.** When a new deck column is added (e.g. `youtube_url`), the RPC needs to drop-and-recreate to include it — migration `30_shared_deck_youtube.sql` is the template for this kind of update.
 - **Flipping a deck TO Private auto-rotates the share token** via the `rotate_share_token_on_private` trigger. Every in-the-wild share URL stops working instantly. Going back to Unlisted later generates a fresh token.
 - **Owner-only `regenerate_deck_share_token(uuid)` RPC** lets users revoke a leaked URL without going through Private.
-- **Favorites of unlisted decks** capture the share_token at favorite-time (`deck_favorites.share_token`). The Favorites list fetches via the RPC using stored tokens; rotation/revocation gracefully drops the favorite from the list (it just stops loading).
+- **Favorites of unlisted decks** capture the share_token at favorite-time (`deck_favorites.share_token`). The Favorites list fetches via the RPC using stored tokens; rotation/revocation gracefully drops the favorite from the list.
 
 Discovery surfaces:
 
@@ -88,20 +126,29 @@ Discovery surfaces:
 
 Aggregate metrics (favorite count, view count) are exposed via SECURITY DEFINER RPCs (`deck_favorite_counts(uuid[])`, `deck_view_counts(uuid[])`) that return only totals, never the underlying `(user_id, deck_id)` rows. Privacy preserved.
 
-## Profiles & display names
+## Deck view / edit modes
 
-- Public `profiles` table mirrors the bits of `auth.users` metadata other users need to see ("made by …" on a shared deck).
-- **Display name is user-chosen, not Google-derived.** First-time sign-in shows a blocking modal asking the user to pick one (your real name is never auto-applied). Edit later via Settings popover. 32-char check constraint.
-- **Avatar is the user's chosen card art, never their Google profile photo.** `AvatarPicker` syncs the picked card's `image_small` URL into `profiles.avatar_url` so other viewers see the same art.
+Clicking your own deck defaults to **view mode** (no card browser, no inline-rename); the toolbar has an **✎ Edit** toggle that flips to edit mode. Brand-new decks open straight into edit since the view is empty.
+
+- `DecksView` uses `openDeckInMode(id, "view"|"edit")` instead of bare `setSelectedDeckId(id)`. Click → "view"; createDeck → "edit"; duplicate → "view".
+- Owner controls (Share, Duplicate, Delete, Export) gate on `isOwnDeck`. Import + inline rename + Saved indicator + CardBrowser gate on `!readOnly`.
+- The "Viewing shared deck" banner only renders when `readOnly && !isOwnDeck`.
+- Three list layouts (View ▾ dropdown): compact list, image grid, stacked pile. Persisted to localStorage. The stacked pile uses peek strips of the same `img_small` for each extra copy — give each peek 22px height, +1% width per layer for a nested-cards-getting-larger effect, and let object-fit:cover clip to the card-top.
 
 ## TCGCSV / Lorcast notes
 
 - categoryId 71 = Lorcana. Archive starts 2024-02-08.
 - Daily snapshot lands ~20:00 UTC. ETL cron at 21:00 UTC = 1 hour after.
-- Low price can be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback (above) means Low is more inclusive.
-- Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded TCGPlayer URL>`. The `tcgUrl()` helper wraps every TCGPlayer link site-wide — never link directly to `tcgplayer.com/product/...`.
-- **Lorcast's API key for "is this card inkable" is `inkwell`, not `inkable`.** Our column is named `inkable`; the ETL has to translate. Backfill script: `scripts/patch_inkable.py` (one-shot, idempotent).
-- **Sealed product is product-agnostic.** The TCGCSV `/prices` endpoint returns booster boxes, packs, troves, starter decks alongside singles; the ETL upserts all of them. `sealed_products` catalogues the non-card subset. Loader is `scripts/load_sealed_products.py`, idempotent, classification refinable in the `classify()` helper.
+- **TCGCSV's `low_price` is a sticker, not a sale.** For high-value cards the lowest active listing often sits unchanged for weeks. ~98% of 1D `low_today == low_prev` is normal. **Use `market_price` / `mkt_pct_*` for short-window (≤7d) movement detection**; reserve `low_price` for medium-to-long windows where the buy-it-now floor matters more than transaction noise.
+- Low price can also be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
+- Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded TCGPlayer URL>`. The `tcgUrl()` helper wraps every TCGPlayer link site-wide — never link directly to `tcgplayer.com/product/...`. Mass-entry carts use `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=4 Name||4 Name` routed through the same affiliate wrapper.
+- **Lorcast's API key for "is this card inkable" is `inkwell`, not `inkable`.** Our column is named `inkable`; the ETL has to translate. Backfill: `scripts/patch_inkable.py`. Same pattern: `inks` array uses `inks` directly.
+- **Image sizes**: Lorcast publishes `small` (200w), `normal` (400w), `large` (734w). All three are stored in `cards`. Use `img_normal` for tiles ≤200px wide; `img_large` for hover previews and detail modals; `img_small` only for thumbnails ≤80px.
+
+## CSS pitfalls
+
+- **`mask-image` on a container softens its child `<img>` elements.** The mask forces an offscreen compositing layer that rasterizes children at the layer's pixel ratio, visibly blurring AVIF / hi-res photos. Use absolutely-positioned gradient pseudo-elements (`::before` / `::after`) for edge-fade effects instead. Same caution applies to `will-change: transform`, `filter: blur(0)`, `transform: translateZ(0)`, `opacity: 0.99` — all known compositing-layer triggers.
+- **`image-rendering: crisp-edges`** is for pixel-art sprites. It disables smooth bilinear interpolation and makes downsampled card art look blocky/jagged. Default `image-rendering: auto` is correct for photos.
 
 ## Conventions
 
@@ -110,7 +157,7 @@ Aggregate metrics (favorite count, view count) are exposed via SECURITY DEFINER 
 - Set release dates: two flags per set — `LGS Release` and `Retail Release`. Source: Wikipedia.
 - "<$1 → $0" toggle: cards under $1 count as 0 **before** averaging (mirrors `avg_low_nc` / `avg_market_nc`).
 - Earliest price data: 2024-02-08. Sets released before that show a `*` asterisk note.
-- Time display: `relativeTime(iso)` for compact ("2d ago"), `absoluteLocalTime(iso)` for the hover tooltip. Both use the browser's local time zone — `timestamptz` carries the offset, `new Date(iso).toLocaleString()` handles the conversion. Japan→Chicago time math is free.
+- Time display: `relativeTime(iso)` for compact ("2d ago"), `absoluteLocalTime(iso)` for the hover tooltip. Both use the browser's local time zone — `timestamptz` carries the offset, `new Date(iso).toLocaleString()` handles the conversion.
 
 ## Performance gotchas
 
@@ -119,13 +166,15 @@ Aggregate metrics (favorite count, view count) are exposed via SECURITY DEFINER 
   2. `CardTile` is wrapped in `React.memo` so unchanged tiles skip re-render. The callbacks flowing into `CardBrowser` (`onSelectGroup`, `deckQty`, `onDeckQtyChange`) must be stable (`useCallback`) — otherwise the memo busts.
   3. CSS `content-visibility: auto` + `contain-intrinsic-size` on `.card-tile` / `.card-row` lets the browser skip layout/paint for off-screen tiles. Combined with `useDeferredValue(filter)`, ink-filter toggling stays responsive even when going from 250 visible back to 1500.
 - The Collection-value chart caches the *computed* series (not the raw rows) in `localStorage` under `packsink:colvalue:{userId}:{productsHash}:{rangeKey}`. Hydrates synchronously on mount so the chart paints immediately and refreshes in the background.
+- The Screener table caps rendering at 1,000 rows; users tighten filters to see beyond. Could promote to virtualized scrolling if catalog grows past ~10k tracked cards.
 
 ## Ops
 
 - **GitHub Actions cron** (`.github/workflows/etl.yml`): daily at 21:00 UTC for prices, Sundays at 22:00 UTC for Lorcast metadata refresh. **Heads-up: GitHub auto-disables scheduled workflows after 60 days of repo inactivity** — push at least monthly or you'll lose the cron silently.
-- **Sentry browser SDK** loaded via CDN in `<head>` of `Index.html` (loader script, lazy init on first error). User attribution wired in via `Sentry.setUser({id, username})` post-sign-in. Free tier; no card on file.
+- **Sentry browser SDK** loaded via CDN in `<head>` of `Index.html` (loader script, lazy init on first error). User attribution via `Sentry.setUser({id, username})` on auth state change.
 - **UptimeRobot** pings the prod URL every 5 minutes; alerts on 2 consecutive failures.
-- **ETL stale-data footer pill** queries `card_prices_latest`'s max(price_date) on App load and flashes ⚠ if > 36h behind. Caught a 6-month-running silent bug on 2026-05-14 — the original ETL committed in the bootstrap didn't call the refresh RPCs, and only ran the refresh when invoked locally.
+- **ETL stale-data footer pill** queries `card_prices_latest`'s max(price_date) on App load and flashes ⚠ if > 36h behind.
+- **Duplicate-snapshot guard in `etl_tcgcsv_daily.py`** — refuses to write a snapshot that's >95% byte-identical to yesterday's. Pass `--force` to override. TCGCSV occasionally re-serves yesterday's file when its daily cron hasn't fired yet; the guard prevents polluting prices_daily.
 
 ## Disclaimer
 
@@ -145,7 +194,6 @@ Lives only on the **How It Works** page. One paragraph: "Packs.Ink is an unoffic
 **Top of the list:**
 
 - **Tier 2 schema** — `strength` / `willpower` / `lore` columns in `cards` + smart-search filters in the Cards browse (`str>=3`, `lore>=2`, etc.). Lorcast exposes these already; mostly a loader update + UI work.
-- **Buyout badge** — flag tiles where `low_price` jumps a large % day-over-day (suggested: +200% in 24h, prior_low ≥ $1 to filter noise). `price_movers` matview has the data. Surface as a card-tile badge + a "Potential buyouts" home banner. Highest-leverage feature still on deck.
 - **Deck legality auto-fix suggestions** — "your deck is 57 cards; here are 3 candidates to add" based on cost curve / ink balance.
 
 **Nice to have:**
@@ -154,11 +202,14 @@ Lives only on the **How It Works** page. One paragraph: "Packs.Ink is an unoffic
 - **Deck-list cost-curve sparklines** on the Decks tab list (currently only in the editor).
 - **Card scanner (phone)** — vision-based identification. Scan a card → identify → show current price + history. Lowest priority, last to build.
 - **More Extras & Oddities curation** — re-run the audit scripts periodically; user has to triage case-by-case.
+- **Floor-coverage indicator** on Screener — distinguishes "1 lonely listing" from "10 sellers all at the floor". Needs a different upstream (TCGCSV's `/products` endpoint, not just /prices).
+- **Stale-data warning per row** on Screener — flag rows whose `low_today` is more than 3 days old. `is_stale` exists on `card_prices_latest` but not on `price_movers` yet.
+- **Save Screener views to Supabase** instead of localStorage so they roam across devices.
 
 **Quality / operational:**
 
-- **Re-run the index usage audit** ([supabase/diagnostics/index_usage_audit.sql](supabase/diagnostics/index_usage_audit.sql)) once stats age past ~13 days, drop anything confirmed unused (`sets_released_at_idx`, possibly `collection_items_card_idx`).
+- **Re-run the index usage audit** ([supabase/diagnostics/index_usage_audit.sql](supabase/diagnostics/index_usage_audit.sql)) once stats age past ~13 days, drop anything confirmed unused.
 - **EV % change pills can underreport for the newest set.** `evFromBucket` reads `rarity_avg_daily` directly with no Low↔Market fallback (the fallback only lives in client-side `processData`). Fix would be either a server-side fallback in the matview definition or a two-pass client-side fetch.
-- **Bump `actions/checkout@v4` → v5 and `actions/setup-python@v5` → v6** in `etl.yml` to clear the Node.js 20 deprecation warning. GitHub disables Node 20 actions in September 2026.
+- **Bump `actions/checkout@v4` → v5 and `actions/setup-python@v5` → v6** in `etl.yml` to clear the Node.js 20 deprecation warning.
 
 **North-star framing**: "the ultimate place to check what new cards cost and how the market is moving." Every feature decision should ladder up to that — surface prices and price movement, not deckbuilding theorycraft.

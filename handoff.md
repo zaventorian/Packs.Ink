@@ -1,149 +1,142 @@
-# Handoff — 2026-05-14
+# Handoff — 2026-05-16
 
 > Snapshot in time. Treat as stale once `git log` (or file mtimes) move past this date. Durable rules live in `CLAUDE.md`.
 
-## Big picture since last handoff (2026-05-13 → 2026-05-14)
+## Big picture since last handoff (2026-05-14 → 2026-05-16)
 
-Massive session. The 6+ months of WIP that had been documented in handoff.md but never committed is now in git (commit `8bbc3b5`, pushed to `origin/main`). Major themes:
+Two-day sprint focused on three large surfaces:
 
-1. **Audited every layer** — found and fixed a daily ETL bug that had been silently breaking matview refreshes for the entire life of the project.
-2. **Reorganized navigation** — Market sub-tab umbrella consolidates the v1 analytics sprawl; Decks gains Favorites / Following / Discover sub-tabs.
-3. **Deck sharing shipped** end-to-end — three visibility states, share tokens with auto-rotation, read-only viewer, favorites of unlisted decks, creator profile pages, view counts, favorite counts.
-4. **Sealed-product surface** built from scratch — TCGCSV catalog loader, sealed_products + sealed_prices_latest, Market → Sealed sub-tab, Collection → Sealed section, Price Trends sealed mode, EV-vs-Box-price column.
-5. **Display name / avatar / user-facing identity** is now user-controlled, not Google-derived.
-6. **Ops** — Sentry + UptimeRobot live; ETL stale-data footer pill caught the silent-failure bug above.
+1. **Deck view rebuild** — clicking a deck now opens a read-only view (stats / charts / list) with an ✎ Edit toggle to the card-browser editor. Three list layouts (compact list, image grid, stacked pile), Highlight-Missing toggle, Notes + YouTube embed, owner Shop-on-TCGPlayer CTA with affiliate mass-entry. The deck page is now a real-feeling consumer page, not just an editor.
+2. **Dual-ink support** — schema, loader, backfill, and rendering. Dual-ink cards now form their own pie bucket with a neutral color + "dual" tag in the legend, render as a diagonal gradient block in the cost curve, and show a half/half circle next to the card name. Legality counts both colors toward the 2-ink cap.
+3. **Screener** — entirely new top-level tab. Morningstar-style financial table of every tracked card with sortable columns, multi-select filters, preset views (Gainers / Losers with window picker, Buyouts, Crashing, Discount, Premium), signal chips, density toggle, pinned name column, saved views, sparklines, multi-card Compare handoff to Price Graphing.
 
-## What landed (in rough order)
+Plus a critical ETL fix and several CSS / quality polish passes.
 
-### ETL hardening (Tier 1)
+## What landed (rough order)
 
-1. **`scripts/supabase_client.py` `upsert()` dedupes by `on_conflict` keys** before chunking — fixes the silent "cannot affect row a second time" failure mode.
-2. **`scripts/etl_tcgcsv_daily.py` exits non-zero on any matview-refresh RPC failure.** Plus per-row try/except around the set-group update loop so one bad row doesn't abort the rest.
-3. **Migration `25_refresh_function_timeouts.sql`** — pins `statement_timeout = '5min'` on every refresh function. The card_prices_latest / rarity_avg_daily / price_movers refreshes had grown past the role-level default timeout (~30s) and were silently dying in the GitHub Actions cron. Symptom: `prices_daily` current but matviews stuck on 2026-05-12.
+### Deck view rebuild
 
-### Nav reorganization (Option C)
+1. **Default-to-view-mode** when clicking your own deck. `DecksView` now uses `openDeckInMode(id, "view"|"edit")` everywhere instead of bare `setSelectedDeckId(id)`. New decks open in edit (empty view would be useless); duplicates open in view.
+2. **✎ Edit / ✓ Done toggle** in the toolbar (own decks only). Hides the CardBrowser + inline-rename when in view mode.
+3. **Two-column layout** (deck list left ~60%, stats sidebar right ~340px) in view mode. Fixes the previous stretched/fuzzy chart problem from when the panel went full-width.
+4. **Three layouts** (View ▾ dropdown): compact list, image grid, stacked pile. Persisted to localStorage. Stacked-pile peeks are 22px tall with each successive layer 1% wider — reads as "physical stack" instead of "stacked JPEGs". Default layout = grid.
+5. **Group by + Sort by** dropdowns in the View popover. Group: Type / Color / Set / Rarity / Inkwell / Cost. Sort: Cost ↑↓ / Name / Price ↑↓.
+6. **Highlight Missing toggle** — dims owned rows, pops missing ones (red border on grid/stacked; subtle red bg on list). Pairs with an X/Y fraction badge ("1/4" → green when complete).
+7. **Per-card ink swatch** next to each card name in the list view: solid circle for single-ink, half/half gradient with hard divider for dual-ink. 14px so the duals are unmistakable.
+8. **Missing-tile becomes Shop CTA** — clickable green pill that opens a TCGPlayer mass-entry cart pre-filled with all missing cards (`?productline=Lorcana TCG&c=4 Name||4 Name`), routed through the Impact affiliate URL.
+9. **Per-card price chips are affiliate links** — every $ chip in the deck list opens that exact product+printing on TCGPlayer.
+10. **Hover preview** in list mode floats a full `img_large` card image near the cursor (portaled to body to escape overflow:hidden ancestors). Pinned to viewport so it never clips at the edges.
+11. **Inkable indicator** (small gold/empty hex dot) next to each list-row card name.
+12. **Updated timestamp** in the deck header. "Updated 2h ago" with absolute-local-time tooltip.
+13. **Notes + YouTube embed** — optional fields in the deck. `📝 Notes` button opens a popover with a textarea + URL input; both commit on outside-click. View-mode renders them in a `.deck-notes-block` under the charts. `youtubeIdFromUrl` extracts video IDs from watch / youtu.be / embed / shorts URLs. Empty fields render nothing.
 
-4. **Top nav collapsed from 13 tabs to 6**: Home, Market, Price Trends (renamed from History), Cards, Collection, Decks. Plus `?` icon top-right for How It Works.
-5. **Market umbrella** (`MarketView`) — sub-tab strip with Expected Value, Card Averages, Playset Cost, Heatmap, Sealed, Simulate. Persisted sub-tab + persisted Low/Market price toggle. EV-specific `nc` / `ne` toggles moved into the EV page header (out of the global strip).
-6. **Renames**: "Set Values" → **Playset Cost**, "Pull Rates" → **Card Averages**, "Expected Value" replaced "Box EV". "Compare Sets" folded into Card Averages with chip-based multi-select; Diff column appears when exactly two sets are picked.
+### Dual-ink card support
 
-### Expected Value rebuild
+14. **Migration `27_card_inks_array.sql`** — adds `inks text[]` to `cards`. Legacy `ink` column kept and populated with `inks[0]` for back-compat.
+15. **`scripts/load_lorcast.py`** — writes both `ink` and the full `inks` array.
+16. **`scripts/patch_card_inks.py`** — one-shot backfill for rows loaded before the migration. Idempotent. 2911 rows updated across 15 dual-ink combinations on first run.
+17. **`CARDS_COLS` includes `inks`**, with a defensive probe in `transformSupabaseData` that drops the column from the SELECT if the migration hasn't been applied — uses a direct `fetch()` to avoid the `sbFetchAll` + limit=1 pagination quirk that produced false-negative 416s.
+18. **Cache version bumped to v19**, then **v20** when `image_large` was added.
+19. **Dual-ink rendering convention** (durable in CLAUDE.md):
+    - Pie: own bucket keyed by joined names ("Emerald/Sapphire"), neutral charcoal fill, "dual" tag in legend.
+    - Cost curve: same bucket, but rendered as a 135° diagonal gradient block (large enough to read both colors).
+    - Deck row ink swatch: half/half circle with hard divider.
+    - Legality: both inks count toward the 2-ink cap.
+20. **Inkable / Types pies refreshed** to use vibrant non-ink colors so they don't visually rhyme with the Colors pie.
 
-7. **Card-style header with integrated toggle cards** ("Remove Bulk", "Exclude Enchanted/Iconic") replacing the toolbar checkboxes. Tooltips wired through `<Tip>`.
-8. **Historical EV % change pills** for 1D / 1W / 1M / 3M / 6M / 1Y. Two-phase fetch: probe `rarity_avg_daily` for the latest date, then one batched call for the seven target dates. Pulls both `avg_low` and `avg_market` so the global Low/Market toggle flips the % derivation too.
-9. **EV vs Box Price column** when sealed prices are loaded. Per-set Booster Box lookup excludes "Case" SKUs (12-box cases) and picks the cheapest non-case listing. Diff badge: green when `EV > box price` (cracking is +EV), red otherwise. Tooltip: "Cracking is +EV at current box price" / "Box price exceeds EV — buy singles." Box link routes through `tcgUrl()` (affiliate).
-10. **Newest-first set ordering** in every Market sub-view via `setsNewest = sets.slice().reverse()`. Mainline simulators (Pack / Box Sim) inherit the same ordering in their set dropdowns.
-11. **Clicking any set name jumps to Price Trends** focused on that set (cross-view nav via App-level `historyTarget` state with nonce so re-clicks re-fire).
+### Screener (new top-level tab)
 
-### Sealed product (full surface)
+21. **Top nav reorg**: `Home · Screener · Price Graphing · Analytics · Cards · Collection · Decks`. "Market" renamed to "Analytics" since none of its sub-pages actually show the market — they analyze it. Internal view key stays `market` so old URLs / state don't break.
+22. **`PriceDatabase` component** — sortable table backed by `price_movers`. Columns: image · name + meta · set · rarity · NM Low · NM Market · Δ% (3 windows centered on the selected window; "All windows" toggle to see all 6) · signals.
+23. **Presets**: `All`, `Gainers`, `Losers`, `Buyouts`, `Crashing`, `Discount`, `Premium`. Gainers / Losers show a window-chip row (1D / 1W / 1M / 3M / 6M / 1Y). Default = abs(1D Δ) sort, persisted across reloads.
+24. **Filters**: search by name, multi-select rarity (selectable button chips), set dropdown. Advanced drawer adds multi-select ink, price range (default min = $5), and Δ% range over any chosen window.
+25. **Signals as compact text badges** (BUY / CRSH / DISC / PREM / TRND) — fixed-width, color-coded, generic plain-English tooltips via the existing `<Tip>` component. `priceDbSignals` is module-level so the filter useMemo can reference it without TDZ.
+26. **Buyout rule** = any of: 1W ≥ +20%, 1M ≥ +35%, 3M ≥ +60%, 6M ≥ +100%, 1Y ≥ +200%, OR low_today ≥ 1.5× low_30d / 2× low_90d / 3× low_180d. Catches both fast sweeps and quiet supply-tightening runs. Old single-1D rule was missing real buyouts.
+27. **Crashing** = 1W ≤ -20%. **Discount** = low ≤ 85% of market. **Premium** = low ≥ 110% of market. **Trending** = 1M ≥ +15% (signal-only, no preset).
+28. **Collection-status pills** (All / Owned / Missing) — only shown when signed in. Filters against the existing `collection` map.
+29. **Signal-presence chips** as a secondary filter — click BUY to show only cards tagged BUY.
+30. **Per-row checkbox + batch actions**:
+    - 🛒 Buy on TCGPlayer — affiliate mass-entry cart.
+    - 📋 Copy as decklist — `1 Name` lines to clipboard.
+    - 📊 Add to Price Graphing — pushes selected cards into the new Compare mode (see below).
+31. **Click image or name** → opens the existing `CardDetailModal` with full price history. ↗ link beside the name opens TCGPlayer directly.
+32. **Sort-source highlight** — the active sort column has an accent-colored header and accent-glow cell background.
+33. **Sticky table header** + **pinned name column** (position:sticky on the Name td/th) so the header stays visible vertically and the name stays visible horizontally during wide table scrolls.
+34. **Density toggle** (▤ Compact / ▥ Comfy), **saved filter views** (☆ Save view — captures every filter + preset + sort + density; chip strip at the top to apply/delete), **sparkline column** (toggle reveals an inline SVG line built from the 7 price snapshots already in price_movers — no extra DB fetch), **CSV export** of the current filtered/sorted view (download button).
+35. **Multi-card price graphing** — Screener's `Add to Price Graphing` batch action wires `App.startCompareCards(cards)`, flips view to `history`, and `HistoryView` opens its new **Compare** mode. Compare mode fetches each card's history in parallel, renders one LineChart with one colored series per card, supports NM Low / NM Market y-axis toggle, removable card chips in the legend. Capped at 8 cards (chart legibility).
 
-12. **Migration `15_sealed_products.sql`** — table for TCGCSV catalog entries that aren't cards (booster boxes, packs, troves, starter decks, gift sets, bundles, quests, promo singles). Loader `scripts/load_sealed_products.py` classifies by name heuristic; idempotent re-runnable.
-13. **Migration `16_sealed_prices_latest.sql`** — matview joining sealed_products + prices_daily for latest price per SKU. Refreshed daily by the ETL alongside the card matviews.
-14. **Market → Sealed sub-tab** (`SealedView`) — sections by display type (Booster Boxes → Booster Packs → Sleeved Booster Packs → Booster Pack Art Bundles → Troves → Prerelease Packs → Starter Decks → Gift Sets → Bundles → Quests → Sealed → Collector's Edition → Cases & Displays). Click set pill on any row → Price Trends. Per-product change windows mirroring EV.
-15. **Migration `17_sealed_collection_items.sql`** + Collection → Sealed section. Per-user inventory of sealed product with +/- counters, summary stats (units, distinct SKUs, estimated value), "Show only owned" filter, owned-row tinting.
-16. **Price Trends "By Sealed" mode** — picker grouped by display type, click-to-chart any sealed product's price history.
-17. **Frontend reclassification overrides** — "Collection Starter Set" and "Starter Blister Bundle" SKUs display under Bundles instead of Starter Decks (they're sealed collectibles, not competitive starters). Pure render-time refinement; no loader re-run needed.
+### ETL hardening + diagnostics
 
-### Deck sharing (Phases A → C + token security)
+36. **Duplicate-snapshot guard in `etl_tcgcsv_daily.py`** — before upserting, the script compares each fetched row against yesterday's `prices_daily` row by (product, printing). If >95% are byte-identical, aborts with a clear message ("TCGCSV likely served a stale snapshot — re-run after 20:00 UTC, or pass --force to write anyway"). TCGCSV occasionally re-serves yesterday's file; without the guard we'd silently pollute prices_daily with a duplicate-day row that zeros out 1D movers downstream for the next 30 days.
+37. **Migration `26_price_movers_fix_prev.sql`** — fixes the pct_1d-collapses-to-0 bug for sparse cards. Old definition was `low_prev = most recent non-null low WHERE date < global_max(date)`; for a card whose latest non-null low was 3 days ago, both `low_today` and `low_prev` resolved to the same older snapshot → pct_1d = 0. New definition uses a per-(product, printing) `latest_low_date` CTE and defines prev relative to *that* date.
 
-18. **Migration `18_deck_sharing.sql`** — `decks.visibility` column (private/unlisted/public), broadened SELECT RLS, public `profiles` table mirroring auth.users metadata, `deck_follows` table (later renamed to `deck_favorites`).
-19. **Migration `19_deck_sharing_v2.sql`** — renamed `deck_follows` → `deck_favorites`; added `user_follows` (creator-level follow distinct from deck-level favorite). Concept split:
-    - **Favorite** = save a specific deck (`deck_favorites`, deck-scoped bookmark).
-    - **Follow** = follow another creator (`user_follows`); their public decks appear in your Following feed.
-20. **Migration `20_deck_favorite_counts.sql`** — SECURITY DEFINER RPC exposing aggregate counts without leaking who-favorited-what.
-21. **Migration `22_deck_share_tokens.sql`** — per-deck `share_token` (~128-bit random base64). RLS tightened from `OR visibility != 'private'` (enumerable) to `OR visibility = 'public'`. Non-owner reads of unlisted go through `get_shared_deck(uuid, text)` / `get_shared_deck_cards(uuid, text)` RPCs that require token. Trigger auto-rotates token on flip to Private. Owner-only `regenerate_deck_share_token(uuid)` RPC for explicit revocation. `deck_favorites.share_token` column captures the token used to access an unlisted deck so the Favorites list can re-fetch via the RPC.
-22. **Migration `23_fix_share_token_search_path.sql`** — `gen_random_bytes()` is in `extensions` schema; SECURITY DEFINER functions need explicit `search_path = public, extensions, pg_catalog`. Hit once during the token rollout.
-23. **Migration `24_deck_views.sql`** — `deck_views (user_id, deck_id, viewed_at)` unique-per-(user, deck), `deck_view_counts(uuid[])` aggregate RPC. Counted on URL deep-link AND card-click. Owner views of own decks gated client-side so they don't bump their own counter.
-24. **Migration `21_profile_display_name.sql`** — 32-char length check on `profiles.display_name`. Plus the `notify pgrst` habit-builder.
+### Migrations 28 / 29 / 30 — deck features
 
-**Frontend wiring for deck sharing:**
+38. **`28_deck_cards_quantity_99.sql`** — relaxes `deck_cards.quantity <= 4` to `<= 99`. Required for Dalmatian Puppy Tail Wagger (99 cap) and Microbots (unlimited, UI-capped at 99). `SPECIAL_DECK_LIMITS` map in `Index.html` holds the per-card overrides; `checkDeckLegality` sums by Product Name across variants.
+39. **`29_deck_youtube_url.sql`** — adds `decks.youtube_url text` for the optional embed.
+40. **`30_shared_deck_youtube.sql`** — rebuilds the `get_shared_deck` RPC to include `youtube_url` in its RETURNS TABLE so shared-deck viewers see the embed. `CREATE OR REPLACE FUNCTION` can't change a TABLE signature; have to drop first, then create. Established as the template for "added a deck column, need it in the shared RPC."
 
-- URL deep links: `?deck=<uuid>[&token=<token>]` for decks, `?user=<uuid>` for creator profiles. Address bar auto-syncs with current view. Token only appended for Unlisted decks (Public stays clean).
-- Read-only viewer with creator banner (avatar / display name / + Follow button) and Favorite + Duplicate actions. CardBrowser hidden in read-only mode.
-- Share popover: visibility radios + share URL + Copy button + "↻ Regenerate share link" for Unlisted. Visibility change reads back the row post-update so trigger-rotated `share_token` syncs locally.
-- Favorites / Following / Discover sub-tabs in Decks with chip-based ink filter + Your-Decks search + 6-way sort (Recently updated / Recently created / Highest value / Most favorited / Most owned / Name A→Z).
-- Discover feed: paginated cursor-by-`updated_at`, excludes the current user's own decks. "Load more" button.
-- Creator profile page with avatar / name / public deck list / Follow button. Reachable via clickable creator name in any read-only banner.
+### Visual polish
 
-### Deck-list UX revamp
+41. **Movers banner mask-image blur fix** — `.movers-wrap` had a CSS `mask-image: linear-gradient(...)` for the edge fade. CSS masks force a compositing layer that rasterizes children at the layer's pixel ratio, visibly softening AVIF card art. Replaced with absolutely-positioned gradient `::before` / `::after` overlays that achieve the same visual fade without compositing children. Captured the insight as `memory/project_css_mask_image_blur.md`.
+42. **Banner tile sizing tuned to 138px** with tighter row layout — two banners fit on a typical viewport now. Removed a leftover `image-rendering: crisp-edges` that was making AVIF look blocky (pixel-art mode, wrong for photos).
+43. **Image resolution upgrades** — Lorcast publishes `small`/`normal`/`large` (200/400/734w). `CARDS_COLS` now includes `image_large`; deck grid tiles + stacked top use `img_normal`; hover previews and detail modal use `img_large`. Cache bumped v19→v20.
 
-25. **Ink-tinted gradient backgrounds** on every deck card. 4-stop linear-gradient renders solid color A for 45% → blend zone → solid color B from 55%, so 2-ink decks read as a clear half-and-half split instead of a wash. Theme-aware via INK_TINT_LIGHT/DARK.
-26. **Visibility badge** on Your Decks cards: 🌐 Public / 🔗 Unlisted / 🔒 Private pills with explanatory tooltips.
-27. **Ink/uninkable counts as hex symbols** (using existing `<InkableHex/>` / `<UninkableHex/>`) instead of `12 / 3` text. Per-deck ink shield row in card meta.
-28. **View count + favorite count** in card meta line (`★ N`, `👁 N`) and in the deck-editor toolbar.
-29. **Updated …Xd ago timestamp** on every card with absolute-time tooltip in the viewer's local timezone (`relativeTime()` + `absoluteLocalTime()` helpers — 8am Tokyo update reads as Thursday 6pm Chicago automatically).
+### Memory entries
 
-### Display name + avatar
-
-30. **First-time display-name prompt modal** when a freshly-signed-in user has no `profiles.display_name`. Blocking — there's no close button. Required field, 32-char cap, helper text emphasizes "not your real name."
-31. **Settings popover** has inline Display Name editor (Set / Change). 
-32. **Avatars are card art only.** `AvatarPicker` writes the chosen card's image URL into `profiles.avatar_url`; Google's `avatar_url` is never synced. Existing users' Google-derived display names are left in place but they can edit through Settings.
-
-### Ops & monitoring
-
-33. **Sentry browser SDK** wired in via the loader script `<script>` tag in `<head>`. User attribution via `Sentry.setUser({id, username})` on auth state change (UUID + display name only — no email). Free tier; no card on file.
-34. **UptimeRobot** monitors prod URL every 5 minutes; alerts after 2 consecutive failures.
-35. **ETL stale-data footer pill** appears when `card_prices_latest`'s max(price_date) is > 36h old. Caught the matview-refresh silent failure the same day it was wired in.
-36. **Sealed-prices localStorage cache** (`packsink:sealed:v1`, 1h max age, mirrors catalog cache pattern).
-
-### Database hygiene
-
-37. **Migration `14_drop_redundant_indexes.sql`** — dropped `collection_items_user_idx` and `deck_cards_deck_idx` (both leading columns already covered by their tables' PKs). Confirmed via the new `supabase/diagnostics/index_usage_audit.sql` diagnostic.
-38. **Migration headers updated** on `04_card_view_v2.sql`, `05_view_perf.sql`, `09_price_movers.sql` to flag them as superseded by later migrations (still safe to run on a fresh deploy, just redundant).
-
-### Cleanup
-
-39. **`Art Assets/` folder (3.3 GB) deleted** from disk and gitignored. Source media-kit zips weren't being used at runtime; only the curated `Logos/` subset ships.
-40. **Catchup commit pushed** (`8bbc3b5`): 43 files changed, +11,280 / -418. GitHub repo `zaventorian/Packs.Ink` now reflects the full state.
+44. `project_low_price_sticky.md` — TCGCSV `low_price` is a sticker not a sale; use market_price for short-window detection.
+45. `project_deck_limit_exceptions.md` — `SPECIAL_DECK_LIMITS` convention and how to add new exception cards.
+46. `project_css_mask_image_blur.md` — mask-image / filter / transform on a container blurs child `<img>` via compositing.
 
 ## Blocked / waiting on user
 
-None at the moment. All migrations through `25_*.sql` have been run; ETL is healthy; site is live.
+None active. Migrations 26-30 should be confirmed run in production Supabase. Patch_card_inks.py should have been run against production once. If a fresh deploy starts from scratch, the sequence is: `27 → patch_card_inks → 28 → 29 → 30 → 26` (26 last so the matview rebuild happens after the column is populated).
 
 ## Verified
 
-- Cache v18 (no shape change this session); all sets rendering with correct counts.
-- Deck sharing end-to-end across two accounts: create → flip Unlisted → copy share URL → load incognito → favorite → unfavorite → flip Private → URL stops working → flip Unlisted → token rotates → old URL stays dead → new URL works.
-- ETL #6 ran green in 59s with all four `Refreshed via …` lines in the log. Matviews caught up to today's date.
-- Sentry receives errors with user attribution (display name + UUID).
-- Sealed product visible in Market → Sealed; collection sealed quantities persist across reload.
-
-## Outstanding from previous handoffs
-
-- **Tier 2 schema** (strength / willpower / lore columns + smart-search filters) — not started.
-- **Buyout badge** — not started. Data path is wired (`price_movers` has `pct_1d` + `low_prev`); needs UI + threshold tuning.
-- **Card scanner (phone)** — not started. Lowest priority.
-- **Deck list cost-curve sparklines** — not started.
-
-## Next up (priority order)
-
-1. **Buyout badge** — highest-leverage user-facing feature still on the list, ladders into the north-star framing. ~1-2 hours including the home-page "Potential buyouts" banner.
-2. **Tier 2 schema** + smart-search filters — Lorcast already exposes these; mostly loader + UI plumbing. ~2-3 hours.
-3. **Sim a pack inline button** on each Playset Cost / Set Values row — Option C plan leftover. Folds Pack/Box Sim from destination → contextual action. ~45 minutes.
-4. **Deck-list cost-curve sparklines** — small per-deck visualization on the Decks list page. ~45 minutes.
-5. **EV-pill server-side fallback** — make `rarity_avg_daily` matview's row-level Low/Market fallback match `processData`'s frontend logic so the historical % change doesn't underreport for the newest set.
-6. **Bump GitHub Actions to Node 24** — `actions/checkout@v4` → v5, `actions/setup-python@v5` → v6. Cosmetic warning clear; required before September 2026 anyway.
+- Deck view opens by default; Edit toggle flips to builder; brand-new decks open in edit; Save indicator runs in edit only.
+- Three deck-list layouts render correctly; +/- counters work in all three.
+- Dual-ink card (Ink Geyser) renders: own pie bucket "Emerald/Sapphire" with dual tag; diagonal-gradient cost-curve block; half/half ink swatch on the row.
+- Notes + YouTube fields hide when blank; both render in view mode + shared-deck mode after migration 30.
+- Dalmatian Puppy / Microbots can go past 4 in the deck builder.
+- Buyouts preset now populates (Black Cauldron Cold Foil, Snow White, Scuttle, Mickey Mouse Brave Little Tailor visible).
+- Multi-card Compare mode: tick 3 rows in Screener → Add to Price Graphing → all 3 lines render on one chart with removable legend chips.
+- Saved Screener views persist across reload; sparkline toggle adds a Trend column.
+- CSV export downloads with TCGPlayer URLs.
 
 ## Useful invariants when debugging
 
-- **If "Prices may be stale" pill appears**: check the diagnostic query `select max(date) from prices_daily; select max(price_date) from card_prices_latest;`. If they diverge → matview refresh failed → check today's GitHub Actions ETL log for `Could not call refresh_*` lines. Fix is usually a statement_timeout regression — verify all refresh functions still have `set statement_timeout = '5min'`.
-- **If shared deck loads as "no longer available"**: the share_token rotated or the deck flipped to private. Owner can regenerate the token from the Share popover or flip back to Unlisted; either generates a new URL.
-- **If Your Decks shows decks you don't own**: regression of the post-18_*.sql user_id filter on `refreshDecks`. The SELECT must include `.eq("user_id", user.id)`.
-- **If favorited unlisted decks vanish from your list**: creator rotated the token or flipped to private. The stored token in `deck_favorites.share_token` no longer matches; RPC returns empty.
-- **If Collection counts go wrong**: first suspect cache version, then pagination ordering, then the `transformSupabaseData` mislabel/EXTRAS/CONNECTING_FOILS rules, then catalog-vs-prices merge direction.
-- **If a filter feels laggy**: check that callbacks flowing into CardBrowser are wrapped in `useCallback` (busts `React.memo` otherwise). Two-stage memoization (`allGroups` then `grouped`) + `useDeferredValue(filter)` + `content-visibility: auto` must stay intact.
-- **If a SECURITY DEFINER RPC says "function X does not exist"**: pgcrypto search_path. The function needs `set search_path = public, extensions, pg_catalog`.
-- **If a matview refresh hits PG error 57014**: statement_timeout. Either bump the function's pinned `statement_timeout`, drop CONCURRENTLY (fallback path is faster but locks reads), or move the refresh out of the API path entirely with `pg_cron`.
+- **If "Prices may be stale" pill appears**: check `select max(date) from prices_daily; select max(price_date) from card_prices_latest;`. If they diverge, matview refresh failed — check today's GitHub Actions ETL log for `Could not call refresh_*` lines.
+- **If 1D movers banner is empty**: it's probably real. TCGCSV's `low_price` rarely moves day-to-day for high-value cards (sticker, not sale). Switch to 1W on the banner toolbar.
+- **If today's prices_daily looks identical to yesterday's**: TCGCSV served a stale snapshot. The new ETL guard aborts on this; if it slipped through somehow, re-run after 20:00 UTC.
+- **If the Screener Buyouts preset shows nothing**: likely the matview is stale (run `select public.refresh_price_movers();`). The rule itself fires across all six windows + baseline-lift comparisons; if it still shows nothing after a fresh refresh, lower the thresholds in `priceDbSignals` and the buyouts filter in `Index.html`.
+- **If `Cannot access 'sigOf' before initialization` in the Screener**: a hooked function got referenced from a useMemo body before its `const` declaration. Move it to module-level (à la `priceDbSignals`).
+- **If a shared deck loads as "no longer available"**: share_token rotated or deck flipped private. Owner can regenerate via the Share popover.
+- **If the deck Notes save but the video doesn't show for other viewers**: the `get_shared_deck` RPC's RETURNS TABLE is missing `youtube_url`. PostgREST drops fields not declared. Drop + recreate the RPC.
+- **If a SECURITY DEFINER RPC says "function X does not exist"**: pgcrypto search_path. Needs `set search_path = public, extensions, pg_catalog`.
+- **If a matview refresh hits PG error 57014**: statement_timeout. Either bump the function's pinned `statement_timeout`, drop CONCURRENTLY, or move out of the API path.
 - **If PostgREST 404s a freshly-renamed table or new RPC**: schema cache. Run `notify pgrst, 'reload schema';` in SQL editor.
+- **If new columns / matview-recreates lose service_role access**: re-grant. `grant select on price_movers to anon, authenticated, service_role` after a `drop materialized view ... cascade`.
+- **If banner / Screener images look fuzzy on a particular card**: check for `mask-image`, `filter`, `will-change`, `transform: translateZ(0)`, or `opacity: 0.99` on any ancestor. All trigger compositing-layer rasterization that softens AVIF.
+
+## Next up (priority order)
+
+1. **Tier 2 schema** — `strength` / `willpower` / `lore` columns + smart-search filters (e.g. `lore>=3`). Lorcast exposes the data; mostly a loader update + UI. ~2-3 hours. Unlocks much more useful Cards-tab filtering and a richer Screener.
+2. **Deck-list cost-curve sparklines** on the Decks tab list page (already have inline sparklines on Screener — same pattern, fewer data points).
+3. **Save Screener views to Supabase** instead of localStorage so they roam.
+4. **Stale-data warning per row** on Screener — flag rows whose latest non-null low_today is more than 3 days old.
+5. **Floor-coverage indicator** — distinguishes "1 lonely listing" from "10 sellers at the floor". Needs TCGCSV's `/products` endpoint, not just `/prices`.
 
 ## Files most recently touched
 
-- `Index.html` (~9k lines) — Market sub-tab umbrella, EV rebuild, sealed surfaces, deck sharing UI, Decks list UX, display-name flow, Sentry init, ETL stale-pill.
-- `CLAUDE.md`, `handoff.md` — full refresh today.
-- `.gitignore` — added `Art Assets/`, dryrun outputs, audit CSVs.
-- `scripts/etl_tcgcsv_daily.py` — refresh-failure exit code, set-group update error handling.
-- `scripts/supabase_client.py` — upsert dedup by on_conflict keys.
-- `scripts/load_sealed_products.py` (new) — TCGCSV product catalog loader.
-- `supabase/14_drop_redundant_indexes.sql` through `supabase/25_refresh_function_timeouts.sql` — 12 new migrations.
-- `supabase/diagnostics/index_usage_audit.sql`, `supabase/diagnostics/sealed_product_audit.sql` — reusable DB diagnostics.
-- `.github/workflows/etl.yml` — unchanged; the silent matview bug was in the script, not the workflow.
+- `Index.html` (~11k lines) — deck view rebuild, dual-ink rendering, Screener / Price Database, multi-card Compare mode in HistoryView, batch actions, signal badges, density/saved-views/sparklines, nav rename, mask-image fix.
+- `supabase/26_price_movers_fix_prev.sql` (new) — fixes per-card prev/today collapse bug.
+- `supabase/27_card_inks_array.sql` (new) — adds `inks text[]` column.
+- `supabase/28_deck_cards_quantity_99.sql` (new) — relax quantity constraint.
+- `supabase/29_deck_youtube_url.sql` (new) — adds `decks.youtube_url`.
+- `supabase/30_shared_deck_youtube.sql` (new) — RPC signature update.
+- `scripts/etl_tcgcsv_daily.py` — duplicate-snapshot guard + `--force` flag.
+- `scripts/load_lorcast.py` — writes `inks` array.
+- `scripts/patch_card_inks.py` (new) — one-shot backfill for `inks`.
+- `CLAUDE.md`, `handoff.md` — full refresh (this commit).
+- `~/.claude/projects/.../memory/` — three new memory entries on TCGCSV semantics, deck-limit exceptions, and CSS mask blur.
