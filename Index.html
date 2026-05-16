@@ -6573,7 +6573,7 @@ const PRICE_DB_PRESETS = [
   ["all",      "All",       "Every tracked card. Use the filters below to narrow down."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
-  ["buyouts",  "Buyouts",   "1D ≥ +30% with a prior low of at least $1 — pattern of someone sweeping the cheap copies off the market."],
+  ["buyouts",  "Buyouts",   "1W ≥ +30% from a starting low of at least $1 — a real buyout plays out over multiple days, not a single noisy session."],
   ["crashing", "Crashing",  "1W ≤ -20%. Sustained decline. Often hits after a spike unwinds or a reprint is announced."],
   ["discount", "Discount",  "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
   ["premium",  "Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
@@ -6722,7 +6722,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         if(minPct !== "" && (v == null || v < +minPct)) return false;
         if(maxPct !== "" && (v == null || v > +maxPct)) return false;
       }
-      if(preset === "buyouts"  && !(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1)) return false;
+      if(preset === "buyouts"  && !(r.pct_7d != null && r.pct_7d >= 30 && (r.low_7d || 0) >= 1)) return false;
       if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
       if(preset === "discount"){
         if(!(r.low_today != null && r.market_today != null && r.market_today > 0 && r.low_today / r.market_today <= 0.85)) return false;
@@ -6778,24 +6778,26 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   if(state.loading) return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center"}}>Loading price database…</div>`;
   if(state.error)   return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center", color: "var(--red)"}}>${state.error}</div>`;
 
-  // Signals as compact text badges instead of emoji-soup. Each signal is a
-  // fixed-width 4-char uppercase tag with a consistent color scheme so a
-  // row's signal cell always reads cleanly even when multiple fire.
+  // Signals as compact text badges. Generic tooltips — the per-card numeric
+  // values live in the table columns themselves, so the chip only needs to
+  // explain what each badge MEANS in plain English. Buyouts switched from
+  // a 1D rule to 1W: a true buyout takes a few days to play out across the
+  // market and 1D was over-firing on noise / aggressive single-day undercuts.
   const sigOf = (r) => {
     const out = [];
-    if(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1) out.push(["buy", "BUY",
-      "Buyout candidate: 1D Δ is +" + r.pct_1d.toFixed(1) + "% from a prior low of $" + (r.low_prev||0).toFixed(2) + ". Pattern often means a single buyer swept the cheap copies — supply thinned, listings jumped overnight."]);
+    if(r.pct_7d != null && r.pct_7d >= 30 && (r.low_7d || 0) >= 1) out.push(["buy", "BUY",
+      "Buyout — low_price up sharply over the past week from at least a $1 starting point. Pattern of someone sweeping the cheap copies; supply thins, floor rises."]);
     if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
-      "Crashing: down " + Math.abs(r.pct_7d).toFixed(1) + "% over the last week. Sustained drop, not noise. Common after a spike unwinds or a reprint is announced."]);
+      "Crashing — sustained week-over-week drop. Common after a price spike unwinds or a reprint is announced."]);
     if(r.low_today != null && r.market_today != null && r.market_today > 0){
       const ratio = r.low_today / r.market_today;
       if(ratio <= 0.85) out.push(["disc", "DISC",
-        "Discount: NM Low is " + Math.round((1-ratio)*100) + "% under NM Market. Cheapest listing is undercutting recent sale prices — possible undercut bargain or a stale low-baller."]);
+        "Discount — the cheapest active listing is well below the recent sale-price average. Could be a genuine bargain or a stale low-baller; check the listing before pulling the trigger."]);
       if(ratio >= 1.10) out.push(["prem", "PREM",
-        "Premium: NM Low is " + Math.round((ratio-1)*100) + "% over NM Market. Even the floor seller is asking more than recent sales — supply may be tightening."]);
+        "Premium — even the floor listing is above the recent sale average. Supply may be tightening or sellers are testing higher asks."]);
     }
     if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
-      "Trending up: +" + r.pct_30d.toFixed(1) + "% over the last month. Sustained appreciation across multiple price snapshots."]);
+      "Trending up — sustained appreciation over the past month, not a one-day blip."]);
     return out;
   };
 
