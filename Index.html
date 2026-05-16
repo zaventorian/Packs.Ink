@@ -5498,12 +5498,24 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     if(historyTarget && historyTarget.setName){
       setMode("set");
       setSetNameLocal(historyTarget.setName);
-      const item = buildSetCompareItem(historyTarget.setName);
-      if(item){
+      const sample = raw.find(r => r.Set === historyTarget.setName);
+      const sid = sample && sample.set_id;
+      if(sid){
+        const item = {
+          kind: "set",
+          card_id: "set-" + sid,
+          productId: null,
+          printing: null,
+          setId: sid,
+          setName: historyTarget.setName,
+          name: historyTarget.setName + " — EV / Box",
+          sub: "Set EV",
+          image: null,
+        };
         setCompareCards(prev => prev.some(p => p.card_id === item.card_id) ? prev : [...prev, item]);
       }
     }
-  }, [historyTarget, buildSetCompareItem]);
+  }, [historyTarget, raw]);
   // Consume the Screener -> Price Graphing handoff. Switch to compare mode,
   // load the card list, and clear the App-level state so navigating back
   // and forth doesn't re-trigger.
