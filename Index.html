@@ -1318,10 +1318,31 @@ a.deck-row-price{color:var(--green);text-decoration:none;
   padding:2px 6px;border-radius:4px;background:var(--bg-card);border:1px solid var(--border);}
 a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08);}
 
+/* Compact 2-column list in deck view (matches dreamborn density). Edit mode
+   keeps the single-column layout since the +/- counter pushes width. */
+.deck-editor-grid.readonly .deck-section > .deck-row,
+.deck-editor-grid.readonly .deck-section-rows{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:0 12px;}
+.deck-editor-grid.readonly .deck-row{padding:4px 0;}
+/* Inkable indicator in list view — small gold/grey dot AFTER the cost hex. */
+.deck-row-inkable{display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:#c8a846;flex-shrink:0;margin-right:3px;vertical-align:middle;}
+.deck-row-inkable.no{background:transparent;border:1px solid var(--text-muted);}
+
+/* Hover preview — full card image floats near cursor when hovering a list
+   row. Portaled to body so overflow:hidden ancestors don't clip it. */
+.deck-hover-preview{position:fixed;z-index:1000;pointer-events:none;
+  width:200px;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
+  border:1px solid var(--border);overflow:hidden;background:var(--bg-card);}
+.deck-hover-preview img{width:100%;display:block;}
+
 /* Image-grid layout for the card list. */
 .deck-section-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(110px,1fr));gap:8px;}
 .deck-grid-tile{position:relative;background:var(--bg-card);border:1px solid var(--border);
-  border-radius:6px;overflow:hidden;display:flex;flex-direction:column;}
+  border-radius:6px;overflow:hidden;display:flex;flex-direction:column;cursor:pointer;
+  transition:transform 0.12s ease-out,box-shadow 0.12s ease-out;}
+.deck-grid-tile:hover{transform:translateY(-3px) scale(1.02);
+  box-shadow:0 8px 18px -4px rgba(0,0,0,0.25);border-color:var(--accent);}
+.deck-grid-tile img{transition:transform 0.12s ease-out;}
 .deck-grid-tile.owned-dim{opacity:0.4;}
 .deck-grid-tile.missing-pop{border-color:var(--red);}
 .deck-grid-tile img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
@@ -8769,9 +8790,14 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
     <div class="deck-pie-legend">
       ${slices.map(s => {
         const isDual = (s.k||"").includes("/");
+        // For non-gradient (Inkable/Types) pies, color the legend name to
+        // match the slice. For gradient (Colors) pie, keep the name in the
+        // default text color since the swatch already does the gradient/dual
+        // duty and a colored name competes with the ink color naming.
+        const nameStyle = gradientPrefix ? null : {color: s.color, fontWeight: 600};
         return html`<div key=${s.k} class=${"deck-pie-legend-row"+(isDual?" dual":"")}>
           <span class=${"deck-pie-swatch"+(isDual?" dual":"")} style=${s.swatch}></span>
-          <span class="deck-pie-legend-name">${s.k}${isDual?html` <span class="dual-tag">dual</span>`:""}</span>
+          <span class="deck-pie-legend-name" style=${nameStyle}>${s.k}${isDual?html` <span class="dual-tag">dual</span>`:""}</span>
           <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
         </div>`;
       })}
@@ -8814,7 +8840,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   // View-mode preferences (layout, sort, highlight-missing). Persist to
   // localStorage so the user's choice survives reloads.
   const [viewLayout, setViewLayout] = useState(() => {
-    try { return localStorage.getItem("packsink:deckview:layout") || "list"; } catch { return "list"; }
+    try { return localStorage.getItem("packsink:deckview:layout") || "grid"; } catch { return "grid"; }
   });
   const [sortBy, setSortBy] = useState(() => {
     try { return localStorage.getItem("packsink:deckview:sort") || "cost-asc"; } catch { return "cost-asc"; }
@@ -8824,6 +8850,10 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   });
   const [viewDropOpen, setViewDropOpen] = useState(false);
   const viewDropRef = useRef(null);
+  // Hover preview state — when hovering a list row, float the card image
+  // near the cursor. Portaled to body so overflow:hidden ancestors don't
+  // clip it. Edit mode shows the same preview when viewing the deck list.
+  const [hoverPreview, setHoverPreview] = useState(null); // {src, x, y}
   useEffect(()=>{ try { localStorage.setItem("packsink:deckview:layout", viewLayout); } catch{} }, [viewLayout]);
   useEffect(()=>{ try { localStorage.setItem("packsink:deckview:sort", sortBy); } catch{} }, [sortBy]);
   useEffect(()=>{ try { localStorage.setItem("packsink:deckview:highlight", String(highlightMissing)); } catch{} }, [highlightMissing]);
@@ -9317,12 +9347,21 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             ? html`<span class="deck-row-ink" title=${inkList[0]}
                 style=${{background: INK_COLORS[inkList[0]]?.border || "#888"}}></span>`
             : null;
-        return html`<div key=${k} class=${"deck-row"+dimClass}>
+        const previewSrc = meta.img_normal || meta.img_small;
+        const onRowEnter = (e) => {
+          if(previewSrc) setHoverPreview({src: previewSrc, x: e.clientX, y: e.clientY});
+        };
+        const onRowMove = (e) => {
+          if(previewSrc) setHoverPreview(p => p ? {...p, x: e.clientX, y: e.clientY} : p);
+        };
+        const onRowLeave = () => setHoverPreview(null);
+        return html`<div key=${k} class=${"deck-row"+dimClass}
+          onMouseEnter=${onRowEnter} onMouseMove=${onRowMove} onMouseLeave=${onRowLeave}>
           <span class="deck-row-qty">${item.quantity}×</span>
           <span class="deck-row-cost">${meta.cost ?? "—"}</span>
           <span class="deck-row-name" title=${meta["Product Name"]}
             onClick=${()=>openCardModal(item.card_id)}
-            style=${{cursor:"pointer"}}>${inkSwatch}${meta["Product Name"] || "(unknown card)"}</span>
+            style=${{cursor:"pointer"}}>${inkSwatch}<span class=${"deck-row-inkable"+(meta.inkable===false?" no":"")} title=${meta.inkable===false?"Uninkable":"Inkable"}></span>${meta["Product Name"] || "(unknown card)"}</span>
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
@@ -9388,6 +9427,13 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${null} onSignIn=${onSignIn || (()=>{})}/>`}
+    ${hoverPreview && html`<div class="deck-hover-preview"
+      style=${{
+        left:  Math.min(window.innerWidth  - 210, hoverPreview.x + 16) + "px",
+        top:   Math.min(window.innerHeight - 290, hoverPreview.y + 16) + "px",
+      }}>
+      <img src=${hoverPreview.src} alt=""/>
+    </div>`}
   </div>`;
 };
 
