@@ -427,6 +427,62 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 .ev-toggle.on .ev-toggle-title{color:var(--accent);}
 .ev-toggle-sub{font-size:10px;color:var(--text-muted);font-variant-numeric:tabular-nums;line-height:1.1;}
 
+/* Grouped "exclude chase rarities" toggle — one master button plus two
+   sub-checkboxes so users can drop just Enchanted or just Iconic. */
+.ev-toggle-group{flex-direction:column;align-items:stretch;gap:6px;padding:6px 10px 8px;}
+.ev-toggle-group-btn{background:transparent;border:none;color:inherit;font:inherit;
+  text-align:left;cursor:pointer;padding:4px 4px 2px;}
+.ev-toggle-group-rows{display:flex;gap:10px;font-size:11px;color:var(--text-muted);
+  border-top:1px dashed var(--border);padding-top:6px;margin-top:2px;}
+.ev-toggle-sub-row{display:flex;align-items:center;gap:4px;cursor:pointer;}
+.ev-toggle-sub-row input{margin:0;width:13px;height:13px;accent-color:var(--accent);}
+.ev-toggle-sub-row.on{color:var(--accent);font-weight:600;}
+
+/* Compact Low / Market segmented control embedded in each analytics
+   sub-view's filter row (replaces the old subtab-strip placement). */
+.price-mode-toggle{display:inline-flex;align-items:center;gap:6px;
+  padding:4px 6px 4px 10px;background:var(--bg-card);
+  border:1px solid var(--border);border-radius:8px;}
+.price-mode-label{font-size:10px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;color:var(--text-muted);}
+.price-mode-toggle button{padding:4px 10px;background:transparent;
+  color:var(--text-muted);border:none;border-radius:6px;
+  cursor:pointer;font-size:12px;font-weight:600;transition:all 0.12s;}
+.price-mode-toggle button:hover{color:var(--text);background:var(--bg-surface-hover);}
+.price-mode-toggle button.active{background:var(--accent);color:#fff;}
+
+/* Explainer banner shown at the top of analytics sub-views to define
+   what the table actually means. Kept lightweight — small caption +
+   bulleted glossary, no heavy chrome. */
+.market-explainer{font-size:12px;color:var(--text-dim);line-height:1.55;
+  background:var(--bg-surface);border:1px solid var(--border);
+  border-left:3px solid var(--accent);border-radius:6px;
+  padding:10px 14px;margin-bottom:14px;}
+.market-explainer strong{color:var(--text);}
+.market-explainer-defs{margin:6px 0 0;padding-left:18px;color:var(--text-muted);}
+.market-explainer-defs li{margin:2px 0;}
+
+/* Filter row shared by Card Averages / Playset Cost / Heatmap — wraps
+   the price toggle and any view-specific filters together. */
+.market-filter-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  margin-bottom:12px;}
+.market-filter-spacer{flex:1;}
+
+/* Simulate sub-tab kind selector — dropdown replaces the old button pair. */
+.sim-kind-bar{display:flex;gap:10px;align-items:center;
+  padding:10px 12px;background:var(--bg-surface);
+  border:1px solid var(--border);border-radius:8px;margin-bottom:14px;}
+.sim-kind-label{font-size:11px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;color:var(--text-muted);}
+.sim-kind-select{padding:6px 10px;font-size:13px;background:var(--bg-card);
+  border:1px solid var(--border);border-radius:6px;color:var(--text);
+  min-width:300px;}
+
+/* Sealed header layout — title block on the left, price toggle on the right. */
+.sealed-header{display:flex;align-items:flex-start;justify-content:space-between;
+  gap:18px;margin-bottom:14px;flex-wrap:wrap;}
+.sealed-header-text{flex:1;min-width:240px;}
+
 /* Per-set rows */
 .ev-rows{display:flex;flex-direction:column;gap:6px;}
 .ev-row{display:grid;grid-template-columns:1fr 180px 1fr;column-gap:18px;
@@ -2631,12 +2687,16 @@ const processData = raw => {
   return {sets,avgs};
 };
 
-const calcEV = (avgs,set,nc,ne,priceMode) => {
+// `excludes` accepts a Set of rarity names to skip, or a legacy boolean
+// (true = skip Enchanted + Iconic, false = skip nothing). Keeping the
+// boolean overload avoids changing every existing call site.
+const calcEV = (avgs,set,nc,excludes,priceMode) => {
   const d=avgs[set]||{},pull=getPull(set);let ev=0;
   const useMarket = priceMode === "market";
+  const exc = excludes instanceof Set ? excludes : (excludes === true ? NO_ENCH : new Set());
   for(const r of RARS){
     const rate=pull[r],rd=d[r];if(!rd) continue;
-    if(ne&&NO_ENCH.has(r)) continue;
+    if(exc.has(r)) continue;
     const v = useMarket ? (nc?rd.avgMktNC:rd.avgMkt) : (nc?rd.avgNC:rd.avg);
     if(v == null) continue;
     ev += v * rate;
@@ -4162,8 +4222,12 @@ const EV_WINDOWS = [
   ["6M",  180, "6 months"],
   ["1Y",  365, "1 year"],
 ];
-function EVView({raw, sets, avgs, nc, setNc, ne, setNe, priceMode, openSetHistory, sealedPrices}){
+function EVView({raw, sets, avgs, nc, setNc,
+                excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic, excludeRars,
+                priceMode, setPriceMode, openSetHistory, sealedPrices}){
   const useMarket = priceMode === "market";
+  const ne = !!(excludeEnchanted && excludeIconic);
+  const setExcludeBoth = (v) => { setExcludeEnchanted(!!v); setExcludeIconic(!!v); };
   // Per-set Booster Box lookup. A set typically has the box itself plus a
   // "Booster Box Case" SKU (12-box case). We want the single-box price, so
   // exclude anything with "case" in the name. If multiple boxes remain (rare),
@@ -4256,7 +4320,7 @@ function EVView({raw, sets, avgs, nc, setNc, ne, setNe, priceMode, openSetHistor
     const pull = getPull(setName);
     let ev = 0, anyHit = false;
     for(const r of RARS){
-      if(ne && NO_ENCH.has(r)) continue;
+      if(excludeRars && excludeRars.has(r)) continue;
       const rate = pull[r], cell = bucket[r];
       if(!cell) continue;
       const v = useMarket
@@ -4274,7 +4338,7 @@ function EVView({raw, sets, avgs, nc, setNc, ne, setNe, priceMode, openSetHistor
   // doesn't refetch — only re-derives.
   const rows = useMemo(() => {
     return sets.map(setName => {
-      const ev = calcEV(avgs, setName, nc, ne, priceMode);
+      const ev = calcEV(avgs, setName, nc, excludeRars, priceMode);
       const sid = setIdByName[setName];
       const deltas = {};
       if(hist.status === "ready" && sid){
@@ -4297,7 +4361,7 @@ function EVView({raw, sets, avgs, nc, setNc, ne, setNe, priceMode, openSetHistor
       const diffVsBox = (box && ev) ? (ev - box.price) : null;
       return {setName, ev, deltas, box, diffVsBox};
     });
-  }, [sets, avgs, nc, ne, hist, setIdByName, priceMode, boxBySetId]);
+  }, [sets, avgs, nc, excludeRars, hist, setIdByName, priceMode, boxBySetId]);
   const anyBoxData = rows.some(r => r.box);
 
   return html`<div class="ev-view">
@@ -4308,6 +4372,7 @@ function EVView({raw, sets, avgs, nc, setNc, ne, setNe, priceMode, openSetHistor
         <div class="ev-header-sub">Estimated booster-box and pack value at current TCGPlayer ${useMarket?"Market":"Low"} prices.</div>
       </div>
       <div class="ev-toggles">
+        <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
         <${Tip} text="Treats any card worth less than $1.00 as $0. Gives a more realistic 'sellable' EV by ignoring bulk penny cards.">
           <label class=${"ev-toggle"+(nc?" on":"")}>
             <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>
@@ -4317,15 +4382,26 @@ function EVView({raw, sets, avgs, nc, setNc, ne, setNe, priceMode, openSetHistor
             </div>
           </label>
         <//>
-        <${Tip} text="Removes Enchanted and Iconic cards from the EV calculation. Shows your expected return without relying on ultra-rare jackpot pulls.">
-          <label class=${"ev-toggle"+(ne?" on":"")}>
-            <input type="checkbox" checked=${ne} onChange=${e=>setNe(e.target.checked)}/>
-            <div class="ev-toggle-text">
-              <div class="ev-toggle-title">Exclude Enchanted/Iconic</div>
-              <div class="ev-toggle-sub">Skip chase rarities</div>
-            </div>
-          </label>
-        <//>
+        <div class=${"ev-toggle ev-toggle-group"+(ne?" on":"")}>
+          <${Tip} text="Click 'Exclude chase' to drop both Enchanted and Iconic from EV (the one-click default). The two checkboxes below let you exclude just one if you want to keep, say, Enchanteds in play.">
+            <button class="ev-toggle-group-btn" onClick=${()=>setExcludeBoth(!ne)}>
+              <div class="ev-toggle-text">
+                <div class="ev-toggle-title">${ne ? "Excluding chase" : "Exclude chase"}</div>
+                <div class="ev-toggle-sub">${ne ? "Enchanted + Iconic skipped" : "Skip Enchanted + Iconic"}</div>
+              </div>
+            </button>
+          <//>
+          <div class="ev-toggle-group-rows">
+            <label class=${"ev-toggle-sub-row"+(excludeEnchanted?" on":"")}>
+              <input type="checkbox" checked=${excludeEnchanted} onChange=${e=>setExcludeEnchanted(e.target.checked)}/>
+              Enchanted
+            </label>
+            <label class=${"ev-toggle-sub-row"+(excludeIconic?" on":"")}>
+              <input type="checkbox" checked=${excludeIconic} onChange=${e=>setExcludeIconic(e.target.checked)}/>
+              Iconic
+            </label>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -4465,7 +4541,7 @@ const sealedDisplayTypeRank = (t) => {
 // the set pill already says where this is from; the prefix is just noise.
 const cleanSealedName = (name) => (name || "").replace(/^Disney Lorcana:\s*/i, "");
 
-function SealedView({raw, sealedPrices, sets, priceMode, openSetHistory}){
+function SealedView({raw, sealedPrices, sets, priceMode, setPriceMode, openSetHistory}){
   const useMarket = priceMode === "market";
   const priceField = useMarket ? "market_price" : "low_price";
 
@@ -4603,11 +4679,14 @@ function SealedView({raw, sealedPrices, sets, priceMode, openSetHistory}){
 
   return html`<div class="sealed-view">
     <div class="sealed-header">
-      <div class="ev-header-eyebrow">Market analytics</div>
-      <h2 class="ev-header-h2">Sealed Product</h2>
-      <div class="ev-header-sub">
-        Current TCGPlayer ${useMarket?"Market":"Low"} prices for every booster box, pack, starter deck, trove and related sealed SKU.
+      <div class="sealed-header-text">
+        <div class="ev-header-eyebrow">Market analytics</div>
+        <h2 class="ev-header-h2">Sealed Product</h2>
+        <div class="ev-header-sub">
+          Current TCGPlayer ${useMarket?"Market":"Low"} prices for every booster box, pack, starter deck, trove and related sealed SKU.
+        </div>
       </div>
+      <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
     </div>
 
     ${grouped.length === 0 && html`<div class="muted" style=${{fontSize:13,padding:"20px 0"}}>
@@ -4679,7 +4758,7 @@ function SealedView({raw, sealedPrices, sets, priceMode, openSetHistory}){
 // filtering. Absorbs the old Compare Sets view: pick exactly two sets and a
 // Diff column appears so you get the same A−B comparison without a separate
 // page. Bottom row summarizes box EV for whatever sets are visible.
-function AvgView({sets, avgs, nc, priceMode, openSetHistory}){
+function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, openSetHistory}){
   const useMarket = priceMode === "market";
   // Default = all sets selected. When `sets` changes (new release) keep
   // whatever overlap exists; if the user had filtered down and the overlap
@@ -4707,13 +4786,30 @@ function AvgView({sets, avgs, nc, priceMode, openSetHistory}){
   const pickAvg = (d) => d ? (useMarket ? (nc?d.avgMktNC:d.avgMkt) : (nc?d.avgNC:d.avg)) : null;
   const onlyOne = visibleSets.length === 1 ? visibleSets[0] : null;
   return html`<div>
+    <div class="market-explainer">
+      <strong>Card Averages</strong> — the typical price per card at each rarity inside a booster. Multiplying the average by the pull rate gives that rarity's contribution to box EV; summing across rarities gives the <em>EV / box</em> row at the bottom. Useful for comparing two sets card-by-card (pick two on the chip strip to reveal a Diff column) or for seeing which rarity is carrying a set's value.
+      <ul class="market-explainer-defs">
+        <li><strong>Pull rate</strong> — the expected number of cards of that rarity in a single box (24 packs).</li>
+        <li><strong>Avg price</strong> — current average ${useMarket?"TCGPlayer Market":"TCGPlayer Low"} price across every card of that rarity in the set.</li>
+        <li><strong>${"<$1 → $0"}</strong> — count any card below $1 as $0 before averaging (filters bulk noise).</li>
+      </ul>
+    </div>
+    <div class="market-filter-row">
+      <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
+      <${Tip} text="Treats any card worth less than $1.00 as $0. More realistic 'sellable' average — ignores bulk pennies.">
+        <label class="market-flag">
+          <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1→$0"}
+        </label>
+      <//>
+      <div class="market-filter-spacer"></div>
+      ${visibleSets.length < sets.length && html`<button class="card-avg-chip-reset"
+        onClick=${()=>setSelected(new Set(sets))} title="Show all sets">✕ Reset to all sets</button>`}
+    </div>
     <div class="card-avg-chips">
-      <span class="card-avg-chips-lbl">Sets:</span>
+      <span class="card-avg-chips-lbl">Sets (newest first):</span>
       ${sets.map(s => html`<button key=${s}
         class=${"card-avg-chip"+(selected.has(s)?" active":"")}
         onClick=${()=>toggleSet(s)}>${s}</button>`)}
-      ${visibleSets.length < sets.length && html`<button class="card-avg-chip-reset"
-        onClick=${()=>setSelected(new Set(sets))} title="Show all sets">✕ Reset</button>`}
       ${showDiff && html`<span class="card-avg-mode-hint">Comparing two sets — Diff column shown.</span>`}
     </div>
 
@@ -4851,7 +4947,6 @@ function Histogram({data}){
 
 function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn}){
   const [s,setS]=useState("");const [res,setRes]=useState(null);const [boxHist,setBoxHist]=useState([]);
-  const [n,setN]=useState(1000);const [running,setRunning]=useState(false);const [dist,setDist]=useState(null);
   const [selectedGroup,setSelectedGroup]=useState(null);
   const openBestPull = () => { if(!res?.best) return; const g = groupFromSimCard(res.best, rawData); if(g) setSelectedGroup(g); };
   const pools=useMemo(()=>s?buildPools(rawData,s):null,[rawData,s]);
@@ -4864,26 +4959,13 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn}){
     const best=all.reduce((b,c)=>(!b||(c.price||0)>(b.price||0))?c:b,null);
     const rc={};for(const c of all){const k=c.printing==="Cold Foil"||c.printing==="Foil"?c.rarity+" Foil":c.rarity;rc[k]=(rc[k]||0)+1;}
     const entry={total,best,rc,num:boxHist.length+1};
-    setRes(entry);setBoxHist(h=>[...h,entry]);setDist(null);
-  };
-  const runSim=()=>{
-    if(!pools) return;setRunning(true);
-    setTimeout(()=>{
-      const pull=getPull(s);
-      const tots=[];for(let b=0;b<n;b++){let t=0;for(let p=0;p<24;p++) for(const c of simPack(pools,pull)) t+=(c.price||0);tots.push(t);}
-      tots.sort((a,b)=>a-b);
-      const mean=tots.reduce((a,b)=>a+b,0)/tots.length,median=tots[Math.floor(tots.length/2)];
-      const bs=10,minB=Math.floor(tots[0]/bs)*bs,maxB=Math.ceil(tots[tots.length-1]/bs)*bs;
-      const bkts={};for(let b=minB;b<=maxB;b+=bs) bkts[b]=0;
-      for(const t of tots){const b=Math.floor(t/bs)*bs;bkts[b]=(bkts[b]||0)+1;}
-      setDist({totals:tots,mean,median,min:tots[0],max:tots[tots.length-1],buckets:bkts,n});setRunning(false);
-    },50);
+    setRes(entry);setBoxHist(h=>[...h,entry]);
   };
   return html`<div>
     <div class="row">
-      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);setDist(null);}} placeholder="Select a set..." sets=${sets}/>
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);}} placeholder="Select a set..." sets=${sets}/>
       <button onClick=${openBox} disabled=${!s} class=${s?"active":""}>${boxHist.length===0?"Open a box":"Open another"}</button>
-      ${boxHist.length>0&&html`<button onClick=${()=>{setRes(null);setBoxHist([]);setDist(null);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
+      ${boxHist.length>0&&html`<button onClick=${()=>{setRes(null);setBoxHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
     </div>
     ${boxHist.length>0&&html`<div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
       <${Stat} label="Boxes opened" value=${boxHist.length}/>
@@ -4931,22 +5013,10 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn}){
         </tr>`)}</tbody>
       </table></div>
     </div>`}
-    ${s&&html`<div style=${{borderTop:"1px solid var(--border)",paddingTop:"1.5rem"}}>
-      <div style=${{fontWeight:600,marginBottom:"0.75rem",fontFamily:"'Cinzel',serif"}}>Monte Carlo Simulation</div>
-      <div class="row">
-        <select value=${n} onChange=${e=>setN(+e.target.value)} style=${{width:160}}>
-          ${[100,500,1000,5000].map(v=>html`<option key=${v} value=${v}>${v.toLocaleString()} boxes</option>`)}
-        </select>
-        <button onClick=${runSim} disabled=${running} class="active">${running?"Running...":"Run simulation"}</button>
-      </div>
-      ${dist&&html`<div>
-        <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
-          <${Stat} label="Mean" value=${fmt(dist.mean)}/><${Stat} label="Median" value=${fmt(dist.median)}/>
-          <${Stat} label="Min" value=${fmt(dist.min)}/><${Stat} label="Max" value=${fmt(dist.max)} accent="var(--green)"/>
-        </div>
-        <${Histogram} data=${dist}/>
-      </div>`}
-    </div>`}
+    ${s&&html`<p class="muted" style=${{fontSize:11,marginTop:"1rem"}}>
+      Want statistics from thousands of boxes instead of single opens?
+      Head to the <strong>Monte Carlo</strong> tab in Analytics.
+    </p>`}
   </div>`;
 }
 
@@ -4973,12 +5043,23 @@ function CompareView({sets,avgs,priceMode}){
   </div>`;
 }
 
-function HeatmapView({sets,avgs,priceMode}){
+function HeatmapView({sets,avgs,priceMode,setPriceMode}){
   const useMarket = priceMode === "market";
   const pickAvg = (cell) => cell ? (useMarket ? (cell.avgMkt||0) : (cell.avg||0)) : 0;
   const rows=useMemo(()=>sets.map(s=>{const d=avgs[s]||{},tot=RARS.reduce((t,r)=>t+pickAvg(d[r])*PULL[r],0);const c={};for(const r of RARS) c[r]=tot>0?(pickAvg(d[r])*PULL[r]/tot)*100:0;return {s,c};}),[sets,avgs,priceMode]);
   const cs={padding:"5px 7px",fontSize:11,textAlign:"center",border:"1px solid var(--border)"};
   return html`<div>
+    <div class="market-explainer">
+      <strong>EV Heatmap</strong> — for each set, the share of box value contributed by each rarity. A row sums to ~100%. Darker shading = that rarity is doing more of the work in that set. Quick way to spot "chase-dependent" sets (Enchanted / Iconic dominates) vs "broad-value" sets (Rare / Super Rare / Legendary do the heavy lifting).
+      <ul class="market-explainer-defs">
+        <li><strong>Formula</strong> — (average price × pull rate) ÷ total box EV, expressed as a percentage.</li>
+        <li><strong>Reading it</strong> — a 50%+ cell in Enchanted means half a box's expected value rides on hitting an Enchanted. A flatter row means returns are more reliable.</li>
+        <li><strong>Empty cells</strong> — rarity not present in that set's print run, or its average price isn't loaded yet.</li>
+      </ul>
+    </div>
+    <div class="market-filter-row">
+      <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
+    </div>
     <p class="muted" style=${{fontSize:12,marginBottom:"1rem"}}>% of box EV from each rarity. Darker = higher contribution.</p>
     <div class="scr"><table style=${{borderCollapse:"collapse"}}><thead><tr>
       <th style=${{...cs,textAlign:"left",minWidth:100,whiteSpace:"nowrap"}}>Set</th>
@@ -7158,7 +7239,7 @@ function SetDetail({data,mult,activeRars,theme}){
   </div>`;
 }
 
-function SetValuesView({rawData,sets,theme,priceMode}){
+function SetValuesView({rawData,sets,theme,priceMode,setPriceMode}){
   const [mode,setMode]=useState("playset");
   const [activeRars,setActiveRars]=useState(()=>new Set(SET_RARS));
   const [expanded,setExpanded]=useState(null);
@@ -7185,7 +7266,16 @@ function SetValuesView({rawData,sets,theme,priceMode}){
   const toggleRar=r=>{setActiveRars(prev=>{const next=new Set(prev);if(next.has(r)) next.delete(r); else next.add(r);return next;});};
   const getTotal=s=>{const d=setData[s];if(!d) return 0;let t=0;for(const r of SET_RARS) if(activeRars.has(r)) t+=(d.byRar[r]?.total||0);return t*mult;};
   return html`<div>
-    <div class="row" style=${{gap:12}}>
+    <div class="market-explainer">
+      <strong>Playset Cost</strong> — what it would cost to buy every constructed-legal card in a set, at the listed price tier. <em>Playset</em> = 4 copies of every card (a fully tournament-ready collection); <em>Master Set</em> = 1 copy of each (a complete collection without duplicates). Normal printings only — foils, Enchanteds, Iconics, and Epics are excluded because they're collector tier and don't see constructed play.
+      <ul class="market-explainer-defs">
+        <li><strong>Total</strong> — the cost to assemble that mode for that set at the active price tier.</li>
+        <li><strong>Rarity columns</strong> — the contribution from each rarity. Toggle a rarity chip off to drop it from the Total.</li>
+        <li>Click any set row to expand into card-by-card detail.</li>
+      </ul>
+    </div>
+    <div class="market-filter-row">
+      <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
       <div style=${{display:"flex",gap:4}}>
         <button onClick=${()=>setMode("playset")} class=${mode==="playset"?"active":""}>Playset (4x)</button>
         <button onClick=${()=>setMode("master")} class=${mode==="master"?"active":""}>Master Set (1x)</button>
@@ -7227,13 +7317,86 @@ function SetValuesView({rawData,sets,theme,priceMode}){
 // simulators. Each tool lives as a sub-tab so the top nav stays compact.
 // Sub-selection + sim kind are persisted to localStorage so re-entering
 // the tab lands where the user left off.
+
+// Compact Low / Market segmented control rendered inline in each sub-view's
+// filter row. Centralised so the styling and Tip copy stay consistent.
+const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text="Low = lowest non-foreign listing on TCGPlayer. Market = TCGPlayer's smoothed average of recent sales. Low is more aggressive; Market lags but is more stable.">
+  <div class="price-mode-toggle" role="group" aria-label="Price source" style=${style||null}>
+    <span class="price-mode-label">Price</span>
+    <button class=${priceMode==="low"?"active":""}    onClick=${()=>setPriceMode("low")}>Low</button>
+    <button class=${priceMode==="market"?"active":""} onClick=${()=>setPriceMode("market")}>Market</button>
+  </div>
+<//>`;
+
+// Monte Carlo box simulator extracted from BoxSim so it can live as its
+// own Analytics sub-tab. Runs N box openings and renders the EV distribution
+// histogram plus summary stats.
+function MonteCarloView({rawData, sets, theme}){
+  const [s, setS] = useState("");
+  const [n, setN] = useState(1000);
+  const [running, setRunning] = useState(false);
+  const [dist, setDist] = useState(null);
+  const pools = useMemo(()=>s?buildPools(rawData,s):null, [rawData,s]);
+  const runSim = () => {
+    if(!pools) return;
+    setRunning(true);
+    setTimeout(()=>{
+      const pull = getPull(s);
+      const tots = [];
+      for(let b=0; b<n; b++){
+        let t = 0;
+        for(let p=0; p<24; p++) for(const c of simPack(pools, pull)) t += (c.price || 0);
+        tots.push(t);
+      }
+      tots.sort((a,b)=>a-b);
+      const mean = tots.reduce((a,b)=>a+b, 0) / tots.length;
+      const median = tots[Math.floor(tots.length/2)];
+      const bs = 10;
+      const minB = Math.floor(tots[0]/bs)*bs;
+      const maxB = Math.ceil(tots[tots.length-1]/bs)*bs;
+      const bkts = {};
+      for(let b=minB; b<=maxB; b+=bs) bkts[b] = 0;
+      for(const t of tots){ const b = Math.floor(t/bs)*bs; bkts[b] = (bkts[b]||0) + 1; }
+      setDist({totals:tots, mean, median, min:tots[0], max:tots[tots.length-1], buckets:bkts, n});
+      setRunning(false);
+    }, 50);
+  };
+  return html`<div>
+    <div class="market-explainer">
+      <strong>What this does:</strong> simulates opening thousands of booster boxes in seconds — drawing each card with realistic pull rates — and plots the distribution of total box EV. Reading the histogram: the dark bar is near the mean; the tail shows how often a box prints money (and how often it bricks).
+    </div>
+    <div class="row">
+      <${SetSel} val=${s} onChange=${v=>{ setS(v); setDist(null); }} placeholder="Select a set..." sets=${sets}/>
+      <select value=${n} onChange=${e=>setN(+e.target.value)} style=${{width:160}}>
+        ${[100,500,1000,5000].map(v=>html`<option key=${v} value=${v}>${v.toLocaleString()} boxes</option>`)}
+      </select>
+      <button onClick=${runSim} disabled=${!s || running} class=${s && !running ? "active" : ""}>
+        ${running ? "Running…" : "Run simulation"}
+      </button>
+    </div>
+    ${dist && html`<div style=${{marginTop:"1rem"}}>
+      <div style=${{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,marginBottom:"1rem"}}>
+        <${Stat} label="Mean"   value=${fmt(dist.mean)}/>
+        <${Stat} label="Median" value=${fmt(dist.median)}/>
+        <${Stat} label="Min"    value=${fmt(dist.min)}/>
+        <${Stat} label="Max"    value=${fmt(dist.max)} accent="var(--green)"/>
+      </div>
+      <${Histogram} data=${dist}/>
+      <p class="muted" style=${{fontSize:11,marginTop:10}}>
+        ${dist.n.toLocaleString()} simulated boxes for ${s}. Mean is the long-run average box value; median is the typical box (half above, half below). Box MSRP is $109.99 — anything to the right of that on the histogram is profit at single-card resale.
+      </p>
+    </div>`}
+  </div>`;
+}
+
 const MARKET_SUBS = [
-  ["ev",      "Expected Value"],
-  ["avg",     "Card Averages"],
-  ["setval",  "Playset Cost"],
-  ["heatmap", "Heatmap"],
-  ["sealed",  "Sealed"],
-  ["sim",     "Simulate"],
+  ["ev",         "Expected Value"],
+  ["sealed",     "Sealed"],
+  ["avg",        "Card Averages"],
+  ["setval",     "Playset Cost"],
+  ["heatmap",    "Heatmap"],
+  ["sim",        "Simulate"],
+  ["montecarlo", "Monte Carlo"],
 ];
 
 // Morningstar-style financial table of every tracked card, driven by the
@@ -7982,77 +8145,77 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   </div>`;
 }
 
-function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collection, updateQty, onSignIn, openSetHistory, sealedPrices}){
+function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
+                    excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
+                    user, collection, updateQty, onSignIn, openSetHistory, sealedPrices}){
   // Market analytics list sets newest-first so the most relevant sets land
   // at the top of every table. Simulators inherit the same ordering — their
   // set dropdown reads better newest-first anyway.
   const setsNewest = useMemo(()=>sets.slice().reverse(), [sets]);
-  const [sub, setSub] = useState(()=>{
-    try { return localStorage.getItem("packsink:market:sub") || "ev"; }
-    catch { return "ev"; }
-  });
-  useEffect(()=>{ try { localStorage.setItem("packsink:market:sub", sub); } catch {} }, [sub]);
+  // Default to Expected Value every time Analytics is opened. The user
+  // explicitly asked for this — landing on EV is the strongest signal of
+  // current market health and the page's "home" view.
+  const [sub, setSub] = useState("ev");
   const [simKind, setSimKind] = useState(()=>{
     try { return localStorage.getItem("packsink:market:simkind") || "pack"; }
     catch { return "pack"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:market:simkind", simKind); } catch {} }, [simKind]);
-  // Shared price-source preference: applies to every analytics sub-view so
-  // toggling once flips EV, Playset Cost, Card Averages, Compare, Heatmap.
-  // Persisted because users generally settle on one source.
+  // Shared price-source preference: each sub-view renders its own toggle
+  // (closer to its filters) but the value is shared so toggling once flips
+  // EV, Playset Cost, Card Averages, Heatmap, Sealed. Persisted because
+  // users generally settle on one source.
   const [priceMode, setPriceMode] = useState(()=>{
     try { return localStorage.getItem("packsink:market:priceMode") || "low"; }
     catch { return "low"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:market:priceMode", priceMode); } catch {} }, [priceMode]);
-  // EV owns its own toggle UI (integrated into the page header); the strip
-  // still surfaces `<$1→$0` for Card Averages where there's no dedicated header.
-  const showNc = sub === "avg";
-  const showNe = false;
-  // Show the price toggle on every analytics sub-tab except Simulate.
-  const showPriceToggle = sub !== "sim";
+
+  // Build a Set of excluded chase rarities once for EV-style helpers.
+  const excludeRars = useMemo(()=>{
+    const s = new Set();
+    if(excludeEnchanted) s.add("Enchanted");
+    if(excludeIconic) s.add("Iconic");
+    return s;
+  }, [excludeEnchanted, excludeIconic]);
+
   return html`<div>
     <div class="market-subtabs">
       ${MARKET_SUBS.map(([k,l])=>html`<button key=${k}
         class=${"market-subtab"+(sub===k?" active":"")}
         onClick=${()=>setSub(k)}>${l}</button>`)}
-      ${sub==="sim" && html`<div class="market-sim-kind" role="group" aria-label="Simulator type">
-        <button class=${simKind==="pack"?"active":""} onClick=${()=>setSimKind("pack")}>Pack</button>
-        <button class=${simKind==="box"?"active":""}  onClick=${()=>setSimKind("box")}>Box</button>
-      </div>`}
-      ${showPriceToggle && html`<${Tip} text="Low = lowest non-foreign listing on TCGPlayer. Market = TCGPlayer's smoothed average of recent sales. Low is more aggressive; Market lags but is more stable.">
-        <div class="market-sim-kind" role="group" aria-label="Price source" style=${{marginLeft:"auto"}}>
-          <button class=${priceMode==="low"?"active":""}    onClick=${()=>setPriceMode("low")}>Low</button>
-          <button class=${priceMode==="market"?"active":""} onClick=${()=>setPriceMode("market")}>Market</button>
-        </div>
-      <//>`}
-      ${showNc && html`<${Tooltip} text="Treats any card worth less than $1.00 as $0. Gives a more realistic 'sellable' EV by ignoring bulk penny cards.">
-        <label class="market-flag">
-          <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1→$0"}
-        </label>
-      <//>`}
-      ${showNe && html`<${Tooltip} text="Removes Enchanted and Iconic cards from the EV calculation. Shows your expected return without relying on ultra-rare jackpot pulls.">
-        <label class="market-flag">
-          <input type="checkbox" checked=${ne} onChange=${e=>setNe(e.target.checked)}/> No Ench/Iconic
-        </label>
-      <//>`}
     </div>
-    ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme} priceMode=${priceMode}/>`}
-    ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs} priceMode=${priceMode}/>`}
+    ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
+      priceMode=${priceMode} setPriceMode=${setPriceMode}/>`}
+    ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs}
+      priceMode=${priceMode} setPriceMode=${setPriceMode}/>`}
     ${sub==="ev"      && html`<${EVView} raw=${raw} sets=${setsNewest} avgs=${avgs}
-      nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}
-      priceMode=${priceMode}
+      nc=${nc} setNc=${setNc}
+      excludeEnchanted=${excludeEnchanted} setExcludeEnchanted=${setExcludeEnchanted}
+      excludeIconic=${excludeIconic} setExcludeIconic=${setExcludeIconic}
+      excludeRars=${excludeRars}
+      priceMode=${priceMode} setPriceMode=${setPriceMode}
       sealedPrices=${sealedPrices}
       openSetHistory=${openSetHistory}/>`}
-    ${sub==="avg"     && html`<${AvgView} sets=${setsNewest} avgs=${avgs} nc=${nc} priceMode=${priceMode}
+    ${sub==="avg"     && html`<${AvgView} sets=${setsNewest} avgs=${avgs} nc=${nc} setNc=${setNc}
+      priceMode=${priceMode} setPriceMode=${setPriceMode}
       openSetHistory=${openSetHistory}/>`}
     ${sub==="sealed"  && html`<${SealedView} raw=${raw} sets=${setsNewest}
-      sealedPrices=${sealedPrices} priceMode=${priceMode}
+      sealedPrices=${sealedPrices}
+      priceMode=${priceMode} setPriceMode=${setPriceMode}
       openSetHistory=${openSetHistory}/>`}
+    ${sub==="sim" && html`<div class="sim-kind-bar">
+      <label class="sim-kind-label">Simulator</label>
+      <select class="sim-kind-select" value=${simKind} onChange=${e=>setSimKind(e.target.value)}>
+        <option value="pack">Pack — open one booster at a time</option>
+        <option value="box">Box — open 24 packs (full booster box)</option>
+      </select>
+    </div>`}
     ${sub==="sim" && simKind==="pack" && html`<${PackSim} rawData=${raw} sets=${setsNewest} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
     ${sub==="sim" && simKind==="box"  && html`<${BoxSim} rawData=${raw} sets=${setsNewest} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${sub==="montecarlo" && html`<${MonteCarloView} rawData=${raw} sets=${setsNewest} theme=${theme}/>`}
   </div>`;
 }
 
@@ -11290,7 +11453,14 @@ function App(){
   }, []);
   const [incomingShareToken, setIncomingShareToken] = useState(initialUrlParams.token);
   const [incomingUserId, setIncomingUserId] = useState(initialUrlParams.deck ? null : initialUrlParams.user);
-  const [nc,setNc]=useState(false);const [ne,setNe]=useState(false);
+  const [nc,setNc]=useState(false);
+  const [excludeEnchanted,setExcludeEnchanted]=useState(false);
+  const [excludeIconic,setExcludeIconic]=useState(false);
+  // Legacy boolean (true when BOTH chase rarities are excluded). Some
+  // call sites still consume `ne` as a single flag; we expose it as
+  // derived state so the new split toggles remain the source of truth.
+  const ne = excludeEnchanted && excludeIconic;
+  const setNe = (v) => { setExcludeEnchanted(!!v); setExcludeIconic(!!v); };
   const [view,setView]=useState((initialUrlParams.deck || initialUrlParams.user) ? "decks" : "home");
   // Cross-view navigation: a child view sets a "target" payload (e.g. EV
   // wants to jump into History focused on a specific set) and the destination
@@ -11882,6 +12052,8 @@ function App(){
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
     ${view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}
+      excludeEnchanted=${excludeEnchanted} setExcludeEnchanted=${setExcludeEnchanted}
+      excludeIconic=${excludeIconic} setExcludeIconic=${setExcludeIconic}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       sealedPrices=${sealedPrices}
       openSetHistory=${openSetHistory}/>`}
