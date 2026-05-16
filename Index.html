@@ -975,32 +975,37 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .home-ev-strip-diff.up{color:var(--green);}
 .home-ev-strip-diff.down{color:var(--red);}
 
-/* Following feed — left column above the first banner. Reads as a
-   compact activity log: who, what, when, deck name + ink chips. */
+/* Following feed — left column above the first banner. Single-line rows:
+   green/yellow dot (new vs updated) · deck name · creator + time · ink icons. */
 .home-feed{background:var(--bg-surface);border:1px solid var(--border);
-  border-radius:8px;padding:10px 12px;margin-bottom:14px;}
+  border-radius:8px;padding:6px 8px 8px;margin-bottom:14px;}
 .home-feed-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
-  text-transform:uppercase;color:var(--text-muted);margin-bottom:8px;}
-.home-feed-empty{font-size:12px;color:var(--text-dim);line-height:1.5;}
-.home-feed-signin{display:block;margin-top:8px;padding:6px 12px;font-size:12px;}
-.home-feed-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;
-  max-height:320px;overflow-y:auto;}
+  text-transform:uppercase;color:var(--text-muted);margin:2px 4px 4px;}
+.home-feed-empty{font-size:12px;color:var(--text-dim);line-height:1.5;
+  padding:2px 4px 6px;}
+.home-feed-signin{display:block;margin-top:6px;padding:6px 12px;font-size:12px;}
+.home-feed-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;
+  max-height:340px;overflow-y:auto;}
 .home-feed-item{}
-.home-feed-link{display:block;padding:6px 8px;border-radius:6px;text-decoration:none;
-  color:inherit;transition:background 0.1s;}
+.home-feed-link{display:flex;gap:6px;align-items:center;
+  padding:3px 6px;border-radius:5px;text-decoration:none;color:inherit;
+  transition:background 0.1s;line-height:1.2;}
 .home-feed-link:hover{background:var(--bg-card);}
-.home-feed-row1{display:flex;gap:6px;align-items:baseline;font-size:11px;
-  color:var(--text-muted);}
-.home-feed-creator{font-weight:700;color:var(--text);}
-.home-feed-verb{font-style:italic;}
-.home-feed-time{margin-left:auto;font-size:10px;}
-.home-feed-row2{display:flex;justify-content:space-between;align-items:center;
-  gap:8px;margin-top:2px;}
-.home-feed-deckname{font-size:13px;font-weight:600;color:var(--accent);
-  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;}
-.home-feed-inks{display:flex;gap:3px;flex-shrink:0;}
-.home-feed-ink-pill{font-size:9px;font-weight:600;padding:1px 5px;border-radius:8px;
-  letter-spacing:0.2px;}
+.home-feed-verb-dot{flex-shrink:0;width:6px;height:6px;border-radius:50%;
+  background:var(--text-muted);}
+.home-feed-verb-dot.pub{background:var(--green);}
+.home-feed-verb-dot.upd{background:#d4a93b;}
+.home-feed-main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.home-feed-deckname{font-size:12px;font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.home-feed-link:hover .home-feed-deckname{color:var(--accent);}
+.home-feed-meta{font-size:10px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.home-feed-creator{font-weight:600;color:var(--text-dim);}
+.home-feed-unlisted-tag{margin-left:4px;font-size:9px;font-weight:700;
+  color:var(--accent);letter-spacing:0.4px;}
+.home-feed-inks{display:flex;gap:2px;flex-shrink:0;align-items:center;}
+.home-feed-ink-icon{width:14px;height:14px;object-fit:contain;display:block;}
 
 /* Panel header — flex container with title on the left, minimize button
    on the right. Used by CollectionPanel and other right-column panels. */
@@ -8966,8 +8971,17 @@ const HomeEvStrip = ({sets, avgs, sealedPrices}) => {
 
 // Compact deck-activity feed for the Home sidebar. Independent fetch from
 // the Decks tab's followingFeed / favoritedDecks (kept inside DecksView)
-// to avoid lifting that state up. We union creators-followed AND favorited
-// decks, sort by updated_at desc, and cap at 15.
+// to avoid lifting that state up. We union followed-creator decks AND
+// favorited decks, sort by updated_at desc, and cap at 15.
+//
+// Visibility handling:
+// - Followed creators: their PUBLIC decks via direct query. (Unlisted decks
+//   from creators you follow stay link-only — RLS blocks direct read.)
+// - Favorited decks: split by share_token. Favourites stored without a
+//   token = public/owner read via direct query. Favourites with a token =
+//   unlisted deck → fetch via the SECURITY DEFINER get_shared_deck RPC,
+//   which bypasses RLS as long as the token matches. This lets users see
+//   updates to unlisted decks they're authorised to view.
 const FollowingFeed = ({user, onSignIn}) => {
   const [entries, setEntries] = useState(null);
   const [err, setErr] = useState(null);
@@ -8976,48 +8990,59 @@ const FollowingFeed = ({user, onSignIn}) => {
     let cancelled = false;
     (async () => {
       try {
-        // Creators I follow → their recent public decks.
         const {data: followRows} = await sbClient.from("user_follows")
           .select("followed_id").eq("follower_id", user.id);
         const followedIds = (followRows || []).map(r => r.followed_id);
 
-        // Decks I've favorited → fetch their updated_at separately.
         const {data: favRows} = await sbClient.from("deck_favorites")
           .select("deck_id,share_token").eq("user_id", user.id);
-        const favIds = (favRows || []).map(r => r.deck_id);
+        const directFavIds = (favRows || []).filter(r => !r.share_token).map(r => r.deck_id);
+        const tokenFavs    = (favRows || []).filter(r =>  r.share_token);
+        const tokenByDeck  = Object.fromEntries((favRows || []).map(r => [r.deck_id, r.share_token || null]));
 
-        const tasks = [];
+        const directTasks = [];
         if(followedIds.length){
-          tasks.push(sbClient.from("decks")
+          directTasks.push(sbClient.from("decks")
             .select("id,user_id,name,inks,visibility,created_at,updated_at,share_token")
             .in("user_id", followedIds)
             .eq("visibility", "public")
             .order("updated_at", {ascending:false})
-            .limit(20));
+            .limit(30));
         }
-        if(favIds.length){
-          tasks.push(sbClient.from("decks")
+        if(directFavIds.length){
+          directTasks.push(sbClient.from("decks")
             .select("id,user_id,name,inks,visibility,created_at,updated_at,share_token")
-            .in("id", favIds)
+            .in("id", directFavIds)
             .order("updated_at", {ascending:false})
-            .limit(20));
+            .limit(30));
         }
-        const results = await Promise.all(tasks);
+        const tokenTasks = tokenFavs.map(({deck_id, share_token}) =>
+          sbClient.rpc("get_shared_deck", {p_deck_id: deck_id, p_token: share_token})
+            .then(({data, error}) => (error ? null : (data && data[0]) || null))
+            .catch(() => null)
+        );
+
+        const [directResults, tokenResults] = await Promise.all([
+          Promise.all(directTasks),
+          Promise.all(tokenTasks),
+        ]);
         if(cancelled) return;
+
         const combined = new Map();
-        for(const r of results){
+        for(const r of directResults){
           if(r.error) continue;
           for(const d of (r.data || [])){
-            // Dedupe — a favorited deck whose creator I also follow
-            // shouldn't appear twice.
             if(!combined.has(d.id)) combined.set(d.id, d);
           }
+        }
+        for(const d of tokenResults){
+          if(d && !combined.has(d.id)) combined.set(d.id, d);
         }
         const decks = Array.from(combined.values())
           .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
           .slice(0, 15);
         if(!decks.length){ setEntries([]); return; }
-        // Resolve creator display names.
+
         const creatorIds = Array.from(new Set(decks.map(d => d.user_id)));
         const {data: profiles} = await sbClient.from("profiles")
           .select("user_id,display_name,avatar_url")
@@ -9028,10 +9053,8 @@ const FollowingFeed = ({user, onSignIn}) => {
         setEntries(decks.map(d => ({
           deck: d,
           creator: profileById[d.user_id] || null,
-          // Treat created_at within ~3 minutes of updated_at as "published"
-          // (first save). Any later change with a wider gap is "updated".
           isPublish: Math.abs(new Date(d.updated_at) - new Date(d.created_at)) < 3*60*1000,
-          shareToken: (favRows || []).find(f => f.deck_id === d.id)?.share_token || null,
+          shareToken: tokenByDeck[d.id] || null,
         })));
       } catch(e){
         if(!cancelled) setErr(String(e?.message || e).slice(0, 200));
@@ -9073,20 +9096,21 @@ const FollowingFeed = ({user, onSignIn}) => {
         const href = "?" + params.toString();
         const inks = (deck.inks && deck.inks.length) ? deck.inks : [];
         return html`<li key=${deck.id} class="home-feed-item">
-          <a href=${href} class="home-feed-link">
-            <div class="home-feed-row1">
-              <span class="home-feed-creator">${creator?.display_name || "Someone"}</span>
-              <span class="home-feed-verb">${isPublish ? "published" : "updated"}</span>
-              <span class="home-feed-time">${relativeTime(deck.updated_at)}</span>
-            </div>
-            <div class="home-feed-row2">
+          <a href=${href} class="home-feed-link" title=${(creator?.display_name || "Someone") + " " + (isPublish?"published":"updated") + " " + (deck.name || "Untitled deck")}>
+            <span class="home-feed-verb-dot ${isPublish?"pub":"upd"}" aria-hidden="true"></span>
+            <span class="home-feed-main">
               <span class="home-feed-deckname">${deck.name || "Untitled deck"}</span>
-              <span class="home-feed-inks">
-                ${inks.map((ink, i) => html`<span key=${i} class="home-feed-ink-pill"
-                  style=${{background: (INK_COLORS[ink]||{}).bg || "var(--bg-surface)",
-                            color: (INK_COLORS[ink]||{}).text || "var(--text-muted)"}}>${ink}</span>`)}
+              <span class="home-feed-meta">
+                <span class="home-feed-creator">${creator?.display_name || "Someone"}</span>
+                <span> · ${isPublish ? "new" : "updated"} ${relativeTime(deck.updated_at)}</span>
+                ${deck.visibility !== "public" && html`<span class="home-feed-unlisted-tag" title="Unlisted">·U</span>`}
               </span>
-            </div>
+            </span>
+            <span class="home-feed-inks">
+              ${inks.map((ink, i) => INK_ICONS[ink]
+                ? html`<img key=${i} src=${INK_ICONS[ink]} alt=${ink} title=${ink} class="home-feed-ink-icon"/>`
+                : null)}
+            </span>
           </a>
         </li>`;
       })}
