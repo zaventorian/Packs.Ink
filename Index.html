@@ -9345,7 +9345,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices}) => {
 //   unlisted deck → fetch via the SECURITY DEFINER get_shared_deck RPC,
 //   which bypasses RLS as long as the token matches. This lets users see
 //   updates to unlisted decks they're authorised to view.
-const FollowingFeed = ({user, onSignIn, raw}) => {
+const FollowingFeed = ({user, onSignIn, raw, openDeckById}) => {
   const [entries, setEntries] = useState(null);
   const [err, setErr] = useState(null);
   useEffect(() => {
@@ -9552,8 +9552,22 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
         if(deck.visibility !== "public" && shareToken) params.set("token", shareToken);
         const href = "/decks?" + params.toString();
         const inks = (deck.inks && deck.inks.length) ? deck.inks : [];
+        // In-app navigation: prevent the default <a> navigation so the
+        // browser doesn't request /decks?... from the server (which 404s
+        // on dev servers without SPA fallback). Right-click / middle-click
+        // / Ctrl-click still get the real href, so "open in new tab"
+        // continues to work.
+        const onLinkClick = (e) => {
+          if(e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button === 1) return;
+          if(typeof openDeckById === "function"){
+            e.preventDefault();
+            openDeckById(deck.id, shareToken);
+          }
+        };
         return html`<li key=${deck.id} class="home-feed-item">
-          <a href=${href} class="home-feed-link" title=${(creator?.display_name || "Someone") + " " + (isPublish?"published":"updated") + " " + (deck.name || "Untitled deck")}>
+          <a href=${href} class="home-feed-link"
+            onClick=${onLinkClick}
+            title=${(creator?.display_name || "Someone") + " " + (isPublish?"published":"updated") + " " + (deck.name || "Untitled deck")}>
             <span class="home-feed-verb-dot ${isPublish?"pub":"upd"}" aria-hidden="true"></span>
             <span class="home-feed-main">
               <span class="home-feed-deckname-line">
@@ -9583,7 +9597,7 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
   </aside>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, updateQty, onSignIn}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, updateQty, onSignIn, openDeckById}) => {
   const [state, setState] = useState({rows:null, loading:true, error:null});
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [windowKey, setWindowKey] = useState("1d");
@@ -9779,7 +9793,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     </div>
 
     <div class="home-grid">
-      <${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw}/>
+      <${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById}/>
       <div class="home-grid-main">
         ${NEWEST_SET && html`<${MoversBanner}
               title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
@@ -12418,12 +12432,16 @@ function App(){
     setView("history");
     setTabClickNonce(n => n + 1);
   }, []);
-  // Open a specific deck in the Decks tab. Used by cross-view jumps such
-  // as the Cards-tab bulk action that creates a new deck pre-seeded with
-  // the user's selection, then routes them to the editor.
-  const openDeckById = useCallback((deckId) => {
+  // Open a specific deck in the Decks tab. Used by cross-view jumps —
+  // the Cards-tab bulk action that creates a new deck pre-seeded with
+  // the user's selection AND the home Following feed entries clicking
+  // through to a deck. Optional `token` lets the caller open an
+  // unlisted deck via its share token (e.g. a favorited unlisted deck
+  // surfaced in the feed).
+  const openDeckById = useCallback((deckId, token) => {
     if(!deckId) return;
     setIncomingDeckId(deckId);
+    if(token != null) setIncomingShareToken(token);
     setView("decks");
     setTabClickNonce(n => n + 1);
   }, []);
@@ -13036,7 +13054,8 @@ function App(){
     ${view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices}
-      updateQty=${updateQty} onSignIn=${signIn}/>`}
+      updateQty=${updateQty} onSignIn=${signIn}
+      openDeckById=${openDeckById}/>`}
     ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}/>`}
