@@ -99,6 +99,8 @@ select{border:1px solid var(--btn-border);border-radius:6px;padding:6px 10px;fon
 select option{background:var(--bg);color:var(--text);}
 input[type="checkbox"]{accent-color:var(--accent);}
 .tabs{display:flex;gap:4px;flex-wrap:wrap;margin-bottom:1.5rem;align-items:center;}
+.loading-status{font-size:11px;color:var(--text-muted);letter-spacing:0.3px;
+  margin:-1.25rem 0 1rem 36px;font-weight:500;}
 
 /* Sub-tab strip used inside the Market view. Sits at the top of the page,
    below the main nav, with a softer treatment so it reads as secondary. */
@@ -149,6 +151,12 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .price-db-table .td-name-link{overflow:hidden;text-overflow:ellipsis;}
 .price-db-table .td-name-meta{font-size:10px;color:var(--text-muted);margin-top:1px;
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* Set column: keep full set names but truncate when long so the column
+   itself stays compact. Hover surfaces the untruncated name natively
+   via the cell's text overflowing into a tooltip is handled by setting
+   title on the td, which is done where we render. */
+.price-db-table .td-set{max-width:120px;overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;color:var(--text-muted);font-size:11px;}
 .price-db-table .td-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .price-db-table .pct-up{color:var(--green);font-weight:600;}
 .price-db-table .pct-down{color:var(--red);font-weight:600;}
@@ -239,6 +247,14 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
   border-radius:5px;white-space:nowrap;}
 .price-db-multibtn:hover{border-color:var(--accent);}
+/* Rarity filter buttons — same selectable-chip pattern the Cards tab uses. */
+.price-db-raritybtns{display:inline-flex;flex-wrap:wrap;gap:3px;align-items:center;}
+.price-db-raritybtn{padding:4px 10px;font-size:11px;font-weight:600;cursor:pointer;
+  background:var(--bg-surface);color:var(--text-muted);border:1px solid var(--border);
+  border-radius:14px;letter-spacing:0.2px;}
+.price-db-raritybtn:hover{border-color:var(--accent);color:var(--text);}
+.price-db-raritybtn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.price-db-raritybtn.clear{color:var(--accent);border-style:dashed;}
 .price-db-multimenu{position:absolute;top:calc(100% + 4px);left:0;z-index:200;
   min-width:170px;max-height:320px;overflow-y:auto;
   background:var(--bg-card);border:1px solid var(--border);border-radius:7px;
@@ -296,6 +312,42 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 /* Highlight the active sort column so users see why a row is at the top. */
 .price-db-table th.sort-active{color:var(--accent);}
 .price-db-table td.sort-active{background:var(--accent-glow);}
+
+/* Saved-view chips at the top of the page. Each chip = a stored snapshot
+   of the user's filter + preset state. */
+.price-db-savedviews{display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  padding:6px 10px;background:var(--bg-surface);border:1px dashed var(--border);
+  border-radius:8px;}
+.price-db-savedchip{display:inline-flex;align-items:stretch;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:14px;
+  overflow:hidden;}
+.price-db-savedchip button{padding:4px 10px;font-size:11px;font-weight:600;
+  cursor:pointer;background:transparent;border:none;color:var(--text);}
+.price-db-savedchip button:hover{background:var(--accent-glow);color:var(--accent);}
+.price-db-savedclose{padding:4px 8px !important;color:var(--text-muted) !important;
+  border-left:1px solid var(--border) !important;font-weight:700;font-size:12px !important;}
+.price-db-savedclose:hover{color:var(--red) !important;background:transparent !important;}
+
+/* Density toggle. Compact tightens font, padding, and row height. */
+.price-db.density-compact .price-db-table{font-size:11px;}
+.price-db.density-compact .price-db-table th,
+.price-db.density-compact .price-db-table td{padding:3px 6px;}
+.price-db.density-compact .price-db-table .td-img img{width:22px;height:31px;}
+.price-db.density-compact .price-db-table .td-name-meta{font-size:9px;}
+
+/* Pin the name column horizontally — handy when scrolling right to see
+   far-out Δ% columns. Uses position:sticky on the third <td>/<th>. The
+   nth-child here matches the post-ink column order. */
+.price-db-table th:nth-child(3),
+.price-db-table td:nth-child(3){position:sticky;left:0;z-index:2;
+  background:var(--bg-page);}
+.price-db-table thead th:nth-child(3){z-index:4;background:var(--bg-surface);}
+.price-db-table tr.price-db-row-sel td:nth-child(3){background:var(--accent-glow);}
+
+/* Sparkline column. */
+.price-db-table .th-spark{width:80px;text-align:center;}
+.price-db-table .td-spark{text-align:center;padding-left:4px;padding-right:4px;}
+.price-db-table .td-spark svg{display:inline-block;}
 
 /* Mobile: trim padding, hide image / set / rarity columns. Columns now are:
    [1] checkbox · [2] image · [3] name+meta · [4] set · [5] rarity ·
@@ -6649,6 +6701,66 @@ function rarityLabel(r){
   return String(r).split(/[_\s]+/).map(w => w ? w[0].toUpperCase() + w.slice(1).toLowerCase() : "").join(" ");
 }
 
+// Signal detection for a row. Module-level (instead of inside the
+// component) so it can be referenced from the filter useMemo without
+// hitting a temporal-dead-zone error. Generic tooltips — per-card numbers
+// live in the table cells.
+// Compact inline SVG sparkline from the 7 price snapshots the matview
+// carries: low_365d -> low_180d -> low_90d -> low_30d -> low_7d -> low_prev
+// -> low_today. Roughly maps to a 1-year trend at uneven sampling; gives
+// a quick visual cue without an extra DB fetch.
+function priceDbSparkline(r){
+  const pts = [r.low_365d, r.low_180d, r.low_90d, r.low_30d, r.low_7d, r.low_prev, r.low_today]
+    .map(v => (v == null || isNaN(+v)) ? null : +v);
+  const valid = pts.filter(v => v != null);
+  if(valid.length < 2) return html`<span class="muted" style=${{fontSize:9}}>—</span>`;
+  const min = Math.min(...valid);
+  const max = Math.max(...valid);
+  const range = max - min || 1;
+  const W = 64, H = 22;
+  const stepX = pts.length > 1 ? W / (pts.length - 1) : W;
+  // Linear path skipping nulls (breaks the line at gaps).
+  let d = "";
+  let drawing = false;
+  pts.forEach((v, i) => {
+    if(v == null){ drawing = false; return; }
+    const x = i * stepX;
+    const y = H - ((v - min) / range) * H;
+    d += (drawing ? " L " : (d ? " M " : "M ")) + x.toFixed(1) + " " + y.toFixed(1);
+    drawing = true;
+  });
+  const lastValid = pts.findLast ? pts.findLast(v => v != null) : valid[valid.length - 1];
+  const firstValid = valid[0];
+  const trendUp = lastValid > firstValid;
+  const stroke = lastValid === firstValid ? "var(--text-muted)" : (trendUp ? "var(--green)" : "var(--red)");
+  return html`<svg viewBox="0 0 ${W} ${H}" width=${W} height=${H} preserveAspectRatio="none"
+    style=${{display:"block"}}>
+    <path d=${d} fill="none" stroke=${stroke} stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>
+  </svg>`;
+}
+
+function priceDbSignals(r){
+  const out = [];
+  const fastW    = r.pct_7d  != null && r.pct_7d  >= 25 && (r.low_7d  || 0) >= 1;
+  const sustainM = r.pct_30d != null && r.pct_30d >= 50 && (r.low_30d || 0) >= 1;
+  const aboveBase = r.low_today != null && r.low_30d != null && r.low_30d >= 1
+                    && r.low_today >= 1.5 * r.low_30d && r.low_today >= 2;
+  if(fastW || sustainM || aboveBase) out.push(["buy", "BUY",
+    "Buyout — supply has thinned and the floor is rising. Either jumped sharply this week, jumped a lot this month, or is sitting well above its 30-day baseline."]);
+  if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
+    "Crashing — low_price down 20% or more on the week."]);
+  if(r.low_today != null && r.market_today != null && r.market_today > 0){
+    const ratio = r.low_today / r.market_today;
+    if(ratio <= 0.85) out.push(["disc", "DISC",
+      "Discount — the cheapest active listing is well below the recent sale-price average."]);
+    if(ratio >= 1.10) out.push(["prem", "PREM",
+      "Premium — even the floor listing is above the recent sale average. Supply may be tightening."]);
+  }
+  if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
+    "Trending up — sustained appreciation over the past month, not a one-day blip."]);
+  return out;
+}
+
 function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
@@ -6710,6 +6822,63 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   // Term checkbox — column visibility is now primarily driven by the
   // selected window so users only see windows near what they care about.
   const [showAllWins, setShowAllWins] = useState(false);
+  // Density toggle — compact mode tightens the table (smaller font + padding)
+  // so more rows fit on one screen. Default to comfortable.
+  const [density, setDensity] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:density") || "comfy"; } catch { return "comfy"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:density", density); } catch{} }, [density]);
+  // Sparkline column — shows a tiny low_price trend from low_365d through
+  // low_today across the 7 snapshots the matview carries. Off by default
+  // since it takes a little horizontal space.
+  const [showSpark, setShowSpark] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:spark") === "true"; } catch { return false; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:spark", String(showSpark)); } catch{} }, [showSpark]);
+  // Saved filter combos — capture the current query as a named view that
+  // shows up as a chip at the top of the page. localStorage keyed so
+  // returning users see their own saved screens.
+  const [savedViews, setSavedViews] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("packsink:screener:views") || "[]"); }
+    catch { return []; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:views", JSON.stringify(savedViews)); } catch{} }, [savedViews]);
+  const saveCurrentView = () => {
+    const name = prompt("Name this view (e.g. 'My buyout watchlist', 'Sub-$20 trending'):");
+    const clean = (name || "").trim();
+    if(!clean) return;
+    const snapshot = {
+      name: clean, preset, moverWin, priceMode, filterSet, search,
+      filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
+      collFilter, sigFilter: Array.from(sigFilter),
+      minPrice, maxPrice, minPct, maxPct, pctWin,
+      showAllWins, density, showSpark,
+      sortKey, sortDesc,
+    };
+    setSavedViews(prev => [...prev.filter(v => v.name !== clean), snapshot]);
+  };
+  const applyView = (v) => {
+    setPreset(v.preset || "all");
+    setMoverWin(v.moverWin || "pct_1d");
+    setPriceMode(v.priceMode || "low");
+    setFilterSet(v.filterSet || "");
+    setSearch(v.search || "");
+    setFilterRarities(new Set(v.filterRarities || []));
+    setFilterInks(new Set(v.filterInks || []));
+    setCollFilter(v.collFilter || "all");
+    setSigFilter(new Set(v.sigFilter || []));
+    setMinPrice(v.minPrice ?? "");
+    setMaxPrice(v.maxPrice ?? "");
+    setMinPct(v.minPct ?? "");
+    setMaxPct(v.maxPct ?? "");
+    setPctWin(v.pctWin || "pct_30d");
+    setShowAllWins(!!v.showAllWins);
+    setDensity(v.density || "comfy");
+    setShowSpark(!!v.showSpark);
+    setSortKey(v.sortKey || "abs_pct_1d");
+    setSortDesc(v.sortDesc !== false);
+  };
+  const deleteView = (name) => setSavedViews(prev => prev.filter(v => v.name !== name));
   // Card detail modal — clicking a row's image or name opens it.
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Multi-select state. Stored as a Set of keys (card_id:printing) so a
@@ -6801,7 +6970,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       // Signal-presence filter — row must include at least one of the
       // checked signals.
       if(sigFilter.size > 0){
-        const sigKeys = new Set(sigOf(r).map(s => s[0]));
+        const sigKeys = new Set(priceDbSignals(r).map(s => s[0]));
         let any = false;
         for(const k of sigFilter) if(sigKeys.has(k)){ any = true; break; }
         if(!any) return false;
@@ -6881,32 +7050,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   if(state.loading) return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center"}}>Loading price database…</div>`;
   if(state.error)   return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center", color: "var(--red)"}}>${state.error}</div>`;
 
-  // Signals as compact text badges. Generic tooltips — the per-card numeric
-  // values live in the table columns themselves, so the chip only needs to
-  // explain what each badge MEANS in plain English. Buyouts switched from
-  // a 1D rule to 1W: a true buyout takes a few days to play out across the
-  // market and 1D was over-firing on noise / aggressive single-day undercuts.
-  const sigOf = (r) => {
-    const out = [];
-    const fastW    = r.pct_7d  != null && r.pct_7d  >= 25 && (r.low_7d  || 0) >= 1;
-    const sustainM = r.pct_30d != null && r.pct_30d >= 50 && (r.low_30d || 0) >= 1;
-    const aboveBase = r.low_today != null && r.low_30d != null && r.low_30d >= 1
-                      && r.low_today >= 1.5 * r.low_30d && r.low_today >= 2;
-    if(fastW || sustainM || aboveBase) out.push(["buy", "BUY",
-      "Buyout — supply has thinned and the floor is rising. Either jumped sharply this week, jumped a lot this month, or is sitting well above its 30-day baseline."]);
-    if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
-      "Crashing — low_price down 20% or more on the week."]);
-    if(r.low_today != null && r.market_today != null && r.market_today > 0){
-      const ratio = r.low_today / r.market_today;
-      if(ratio <= 0.85) out.push(["disc", "DISC",
-        "Discount — the cheapest active listing is well below the recent sale-price average. Could be a genuine bargain or a stale low-baller; check the listing before pulling the trigger."]);
-      if(ratio >= 1.10) out.push(["prem", "PREM",
-        "Premium — even the floor listing is above the recent sale average. Supply may be tightening or sellers are testing higher asks."]);
-    }
-    if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
-      "Trending up — sustained appreciation over the past month, not a one-day blip."]);
-    return out;
-  };
 
   // Mass-entry URL for the selected cards. TCGPlayer accepts qty + card
   // name pairs separated by double-pipe; we route through Impact's affiliate
@@ -6966,9 +7109,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
 
   const activePreset = PRICE_DB_PRESETS.find(([k]) => k === preset);
   const presetDesc = activePreset ? activePreset[2] : "";
-  // Centered window slice + the "is this column the active sort?" helper.
+  // Visible Δ% columns. "All windows" expands to all 6. The Gainers /
+  // Losers presets center the 3-column slice on the active window (so a
+  // user picking 1M sees 1W / 1M / 3M); every other preset uses a stable
+  // default of 1D / 1W / 1M so the window picker doesn't quietly mutate
+  // the columns in unrelated views.
   const visibleWins = (() => {
     if(showAllWins) return PRICE_DB_WIN;
+    if(preset !== "gainers" && preset !== "losers") return PRICE_DB_WIN.slice(0, 3);
     const cur = PRICE_DB_WIN.findIndex(w => w[0] === moverWin);
     if(cur < 0) return PRICE_DB_WIN.slice(0, 3);
     const lo = Math.max(0, Math.min(PRICE_DB_WIN.length - 3, cur - 1));
@@ -6976,7 +7124,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   })();
   const isSortCol = (k) => sortKey === k;
 
-  return html`<div class="price-db">
+  return html`<div class=${"price-db density-"+density}>
+    ${savedViews.length > 0 && html`<div class="price-db-savedviews">
+      <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:4}}>Saved</span>
+      ${savedViews.map(v => html`<span key=${v.name} class="price-db-savedchip"
+        title="Apply this saved view">
+        <button onClick=${()=>applyView(v)}>${v.name}</button>
+        <button class="price-db-savedclose" onClick=${()=>deleteView(v.name)}
+          title="Delete this saved view" aria-label="Delete">×</button>
+      </span>`)}
+    </div>`}
     <div class="price-db-presets">
       ${PRICE_DB_PRESETS.map(([k, l, tip]) => html`<button key=${k}
         class=${"price-db-preset" + (preset === k ? " active" : "")}
@@ -7013,19 +7170,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         <option value="">All sets</option>
         ${(sets || []).slice().reverse().map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
       </select>
-      <div ref=${rarityRef} style=${{position:"relative",display:"inline-flex"}}>
-        <button class="price-db-multibtn" onClick=${()=>setRarityOpen(o=>!o)}>
-          ${filterRarities.size === 0 ? "All rarities" : `${filterRarities.size} ${filterRarities.size===1?"rarity":"rarities"}`} ▾
-        </button>
-        ${rarityOpen && html`<div class="price-db-multimenu">
-          ${rarities.map(r => html`<label key=${r} class="price-db-multiitem">
-            <input type="checkbox" checked=${filterRarities.has(r)}
-              onChange=${()=>setFilterRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}/>
-            ${rarityLabel(r)}
-          </label>`)}
-          ${filterRarities.size > 0 && html`<button class="price-db-multiclear"
-            onClick=${()=>setFilterRarities(new Set())}>Clear</button>`}
-        </div>`}
+      <div class="price-db-raritybtns" role="group" aria-label="Rarity filter">
+        ${rarities.map(r => html`<button key=${r}
+          class=${"price-db-raritybtn"+(filterRarities.has(r)?" active":"")}
+          onClick=${()=>setFilterRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>
+          ${rarityLabel(r)}
+        </button>`)}
+        ${filterRarities.size > 0 && html`<button class="price-db-raritybtn clear"
+          onClick=${()=>setFilterRarities(new Set())}>Clear</button>`}
       </div>
       <button class="price-db-advbtn" onClick=${() => setAdvOpen(o => !o)}
         title="Advanced numeric filters">
@@ -7034,6 +7186,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       <label class="price-db-toggle" title="Show every Δ% window (1D, 1W, 1M, 3M, 6M, 1Y) instead of just the three centered on the selected window">
         <input type="checkbox" checked=${showAllWins} onChange=${e=>setShowAllWins(e.target.checked)}/>
         All windows
+      </label>
+      <button class="price-db-advbtn" onClick=${saveCurrentView}
+        title="Save the current preset + filter combo as a named view (chip appears at the top)">
+        ☆ Save view
+      </button>
+      <button class="price-db-advbtn" onClick=${()=>setDensity(d => d === "comfy" ? "compact" : "comfy")}
+        title="Toggle row density — Compact fits more rows on screen, Comfy is easier to scan">
+        ${density === "comfy" ? "▤ Compact" : "▥ Comfy"}
+      </button>
+      <label class="price-db-toggle" title="Show a tiny line chart of the card's low_price over the past year">
+        <input type="checkbox" checked=${showSpark} onChange=${e=>setShowSpark(e.target.checked)}/>
+        Sparkline
       </label>
       <button class="price-db-advbtn" onClick=${exportCsv}
         title="Download the current filtered + sorted view as CSV">
@@ -7131,6 +7295,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
               title="TCGPlayer NM Low — lowest active NM listing">NM Low${arrow("low")}</th>
           <th class="sortable th-num" onClick=${() => onSort("market")}
               title="TCGPlayer NM Market — smoothed average of recent NM sales">NM Market${arrow("market")}</th>
+          ${showSpark && html`<th class="th-spark" title="Approximate 1-year low_price trend across 7 snapshots (365d / 180d / 90d / 30d / 7d / prev / today)">Trend</th>`}
           ${visibleWins.map(([lk, mk, lbl]) => {
             const k = priceMode === "market" ? mk : lk;
             const active = isSortCol(k) ? " sort-active" : "";
@@ -7143,7 +7308,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         <tbody>
           ${filtered.slice(0, 1000).map((r) => {
             const img = r.image_small || r.image_normal;
-            const sigs = sigOf(r);
+            const sigs = priceDbSignals(r);
             const key = r.card_id + ":" + r.printing;
             const isSel = selected.has(key);
             const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
@@ -7164,10 +7329,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
                 </div>
                 <div class="td-name-meta">${r.printing} #${r.collector_number || "?"}</div>
               </td>
-              <td title=${setNameById[r.set_id] || ""}>${SET_ABBREV[setNameById[r.set_id]] || setNameById[r.set_id] || "—"}</td>
+              <td class="td-set" title=${setNameById[r.set_id] || ""}>${setNameById[r.set_id] || "—"}</td>
               <td>${rarityLabel(r.rarity)}</td>
               <td class="td-num">${fmtMoney(r.low_today)}</td>
               <td class="td-num">${fmtMoney(r.market_today)}</td>
+              ${showSpark && html`<td class="td-spark">${priceDbSparkline(r)}</td>`}
               ${visibleWins.map(([lk, mk]) => {
                 const k = priceMode === "market" ? mk : lk;
                 const v = priceMode === "market" ? r[mk] : r[lk];
@@ -10990,9 +11156,8 @@ function App(){
     <div class="tabs">
       <img src="Logos/packs-ink-logo.png" alt="packs.ink"
         style=${{height:26,width:"auto",marginRight:10,display:"block"}}/>
-      ${loading&&html`<span style=${{fontSize:11,color:"var(--text-muted)",letterSpacing:0.3}}>${loaded?"refreshing...":(loadProgress.current||"loading...")}</span>`}
-      ${err&&html`<span style=${{fontSize:11,color:"var(--red)"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
       ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>onTabClick(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
+      ${err&&html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
       <div style=${{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
         <button class="theme-toggle" onClick=${()=>setView("faq")}
           title="How it works" aria-label="How it works"
@@ -11047,6 +11212,9 @@ function App(){
         </button>
       </div>
     </div>
+    ${loading && html`<div class="loading-status">
+      ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
+    </div>`}
     ${avatarPickerOpen && html`<${AvatarPicker} raw=${raw}
       onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false); }}
       onClose=${()=>setAvatarPickerOpen(false)}/>`}
