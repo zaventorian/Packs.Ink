@@ -7464,10 +7464,10 @@ const PRICE_DB_PRESETS = [
   ["all",      "All",       "Every tracked card. Use the filters below to narrow down."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
-  ["buyouts",  "Buyouts",   "Cards whose floor has jumped meaningfully across any tracked window, or is now sitting well above an earlier baseline. Combines short-term sweeps and long-term squeeze runs."],
+  ["buyouts",  "Buyouts",   "Fresh sweeps in progress: the floor has jumped 15%+ this week AND now sits at or above the market sale average — sellers re-priced upward before recent sales caught up. Includes cards with no market data whose floor jumped 1.5× their 30-day baseline."],
   ["crashing", "Crashing",  "Cards down 20% or more on low_price over the past week."],
   ["discount", "Discount",  "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
-  ["premium",  "Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
+  ["premium",  "Premium",   "Settled above-market pricing: the floor is 10%+ above market AND hasn't moved much this week. Card is just expensive — not actively being swept (those show up under Buyouts)."],
 ];
 const MOVER_WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
 
@@ -7546,28 +7546,32 @@ function priceDbSparkline(r){
 
 function priceDbSignals(r){
   const out = [];
-  // Mirrors the buyouts preset row-filter: any window with a meaningful
-  // climb OR current floor well above an older baseline.
-  const winJump =
-    (r.pct_7d   != null && r.pct_7d   >= 20) ||
-    (r.pct_30d  != null && r.pct_30d  >= 35) ||
-    (r.pct_90d  != null && r.pct_90d  >= 60) ||
-    (r.pct_180d != null && r.pct_180d >= 100) ||
-    (r.pct_365d != null && r.pct_365d >= 200);
-  const aboveBase =
+  const hasMarket = r.low_today != null && r.market_today != null && r.market_today > 0;
+  const ratio = hasMarket ? (r.low_today / r.market_today) : null;
+  const weekUp = r.pct_7d != null && r.pct_7d >= 15;
+  // Buyout — the *divergence* between low and market opened recently.
+  // A real sweep re-prices listings upward; market (smoothed sales) lags,
+  // so low/market expands above 1. Pairing the ratio with a 1W move keeps
+  // this from firing on cards that have just been settled above market
+  // for a long time (those are Premium, below). Fallback: cards with no
+  // market data still qualify if the floor jumped 1.5× its 30d baseline.
+  const ratioBuyout    = hasMarket && ratio >= 1.05 && weekUp;
+  const baselineBuyout =
     (r.low_today != null && r.low_30d  && r.low_today >= 1.5 * r.low_30d) ||
     (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
     (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
-  if(winJump || aboveBase) out.push(["buy", "BUY",
-    "Buyout — supply has thinned and the floor is rising. Either jumped sharply this week, jumped a lot this month, or is sitting well above its 30-day baseline."]);
+  if(ratioBuyout || baselineBuyout) out.push(["buy", "BUY",
+    "Buyout — the floor jumped this week and now sits at or above the market sale average. Market hasn't caught up yet, so someone is sweeping inventory."]);
   if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
     "Crashing — low_price down 20% or more on the week."]);
-  if(r.low_today != null && r.market_today != null && r.market_today > 0){
-    const ratio = r.low_today / r.market_today;
+  if(hasMarket){
     if(ratio <= 0.85) out.push(["disc", "DISC",
       "Discount — the cheapest active listing is well below the recent sale-price average."]);
-    if(ratio >= 1.10) out.push(["prem", "PREM",
-      "Premium — even the floor listing is above the recent sale average. Supply may be tightening."]);
+    // Premium = settled-high pricing. The pct_7d < 10 gate is what makes
+    // it mutually exclusive with Buyout — if the floor *also* spiked this
+    // week, the card is being swept (BUY), not just expensive (PREM).
+    if(ratio >= 1.10 && (r.pct_7d == null || r.pct_7d < 10)) out.push(["prem", "PREM",
+      "Premium — the floor sits above the market sale average and has been there for a while. The card is just expensive; not an active sweep."]);
   }
   if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
     "Trending up — sustained appreciation over the past month, not a one-day blip."]);
@@ -7812,24 +7816,27 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // legit buyouts (e.g. Snow White Cold Foil +99% 1M, Black Cauldron
       // +1212% 3M — both real, neither were firing on the old rule).
       if(preset === "buyouts"){
-        const winJump =
-          (r.pct_7d   != null && r.pct_7d   >= 20) ||
-          (r.pct_30d  != null && r.pct_30d  >= 35) ||
-          (r.pct_90d  != null && r.pct_90d  >= 60) ||
-          (r.pct_180d != null && r.pct_180d >= 100) ||
-          (r.pct_365d != null && r.pct_365d >= 200);
-        const aboveBase =
+        // Fresh sweep: low/market ratio diverging this week.
+        const hasMkt = r.low_today != null && r.market_today != null && r.market_today > 0;
+        const ratioBuyout = hasMkt && (r.low_today / r.market_today) >= 1.05
+                            && r.pct_7d != null && r.pct_7d >= 15;
+        // Fallback for cards with no market data — old baseline-lift rule.
+        const baselineBuyout =
           (r.low_today != null && r.low_30d  && r.low_today >= 1.5 * r.low_30d) ||
           (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
           (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
-        if(!(winJump || aboveBase)) return false;
+        if(!(ratioBuyout || baselineBuyout)) return false;
       }
       if(preset === "crashing" && !(r.pct_7d != null && r.pct_7d <= -20)) return false;
       if(preset === "discount"){
         if(!(r.low_today != null && r.market_today != null && r.market_today > 0 && r.low_today / r.market_today <= 0.85)) return false;
       }
       if(preset === "premium"){
-        if(!(r.low_today != null && r.market_today != null && r.market_today > 0 && r.low_today / r.market_today >= 1.10)) return false;
+        // Settled above-market, NOT a recent spike (those are Buyouts).
+        const hasMkt = r.low_today != null && r.market_today != null && r.market_today > 0;
+        const ratioOk = hasMkt && (r.low_today / r.market_today) >= 1.10;
+        const notSpiking = r.pct_7d == null || r.pct_7d < 10;
+        if(!(ratioOk && notSpiking)) return false;
       }
       return true;
     };
