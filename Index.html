@@ -1064,6 +1064,48 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   background:transparent;border:none;color:var(--text-muted);cursor:pointer;
   font-weight:700;font-size:14px;border-radius:50%;line-height:1;padding:0;}
 .compare-remove:hover{background:var(--bg-surface);color:var(--red);}
+.compare-kind-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
+  padding:1px 5px;border-radius:8px;background:var(--bg-surface);color:var(--text-muted);
+  border:1px solid var(--border);margin-left:4px;vertical-align:middle;}
+.compare-picker-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;margin-bottom:10px;}
+.compare-summary{flex:1;min-width:0;}
+.history-picker-hint{font-size:11px;color:var(--text-muted);padding:6px 10px 0;line-height:1.4;}
+.history-picker-item.picker-multi{display:flex;align-items:center;gap:8px;padding:6px 10px;}
+.history-picker-item.picker-multi .picker-check{
+  width:16px;height:16px;flex-shrink:0;border:1.5px solid var(--border);border-radius:3px;
+  display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;
+  color:transparent;background:var(--bg-card);transition:all 0.12s;line-height:1;}
+.history-picker-item.picker-multi.active .picker-check,
+.history-picker-item.picker-multi .picker-check.checked{
+  background:var(--accent);border-color:var(--accent);color:#fff;}
+.history-picker-item.picker-multi .picker-text{display:flex;flex-direction:column;gap:1px;min-width:0;text-align:left;flex:1;}
+.history-picker-item.picker-multi:disabled{opacity:0.45;cursor:not-allowed;}
+.compare-search{flex:1;min-width:0;padding:7px 10px;font-size:13px;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:8px;color:var(--text);}
+.compare-search:disabled{opacity:0.55;cursor:not-allowed;}
+.compare-export-group{display:flex;gap:4px;flex-shrink:0;}
+.compare-search-results{background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+  display:flex;flex-direction:row;gap:0;overflow:hidden;}
+.compare-search-group{flex:1;min-width:0;padding:6px 0;}
+.compare-search-group + .compare-search-group{border-left:1px solid var(--border);}
+.compare-search-head{font-size:10px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;
+  color:var(--text-muted);padding:2px 12px 4px;}
+.compare-search-item{display:flex;flex-direction:column;align-items:flex-start;gap:1px;
+  width:100%;padding:6px 12px;background:transparent;border:none;text-align:left;cursor:pointer;color:var(--text);}
+.compare-search-item:hover:not(:disabled){background:var(--bg-surface);}
+.compare-search-item:disabled{opacity:0.45;cursor:not-allowed;}
+.compare-search-item .hpi-name{font-size:12px;font-weight:600;}
+.compare-search-item .hpi-sub{font-size:11px;color:var(--text-muted);}
+.history-preview-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px;}
+.compare-stats-table{width:100%;border-collapse:collapse;margin-top:14px;font-size:12px;}
+.compare-stats-table th{font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;
+  color:var(--text-muted);text-align:left;padding:6px 10px;border-bottom:1px solid var(--border);}
+.compare-stats-table td{padding:7px 10px;border-bottom:1px solid var(--border);color:var(--text);vertical-align:middle;}
+.compare-stats-table td.muted{color:var(--text-muted);}
+.compare-stats-table td.num,.compare-stats-table th.num{text-align:right;font-variant-numeric:tabular-nums;}
+.compare-stats-table td.num.up{color:#1d8d4a;font-weight:700;}
+.compare-stats-table td.num.down{color:#c64c5a;font-weight:700;}
 @media(max-width:720px){
   .history-card-mode{grid-template-columns:1fr;}
   .history-picker{max-height:280px;}
@@ -2912,6 +2954,186 @@ const buildHistorySeries = (normalRows, foilRows, opts={}) => {
   if(foilRows && foilRows.length)     seriesFor(foilRows,   "#7e54c4", "Foil");
   return out;
 };
+
+// ── Compare-report export ───────────────────────────────────────────────
+// Builds a self-contained SVG of the multi-product compare chart with a
+// Morningstar-style title block, branded footer, and a product table
+// (color swatch, name, type/set, start/end price, % change). Serializable
+// to PNG via the standard SVG -> Image -> canvas trick. No external assets
+// referenced (no <img>, no web fonts) so the rendered PNG is deterministic
+// and CORS-clean.
+const _xmlEscape = (s) => String(s == null ? "" : s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'})[c]);
+const _truncate = (s, n) => { const str = String(s||""); return str.length <= n ? str : str.slice(0, n-1) + "…"; };
+
+function buildCompareReportSvg({title, subtitle, items, series, colors, footerNote}){
+  const W = 1100;
+  const headerH = 80;
+  const chartH = 340;
+  const chartPad = {top: 24, right: 28, bottom: 36, left: 64};
+  const tableHeaderH = 30;
+  const rowH = 26;
+  const tableH = tableHeaderH + Math.max(1, items.length) * rowH + 16;
+  const footerH = 34;
+  const totalH = headerH + chartH + tableH + footerH;
+
+  const validSeries = (series || []).filter(s => s && s.data && s.data.length);
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+  for(const s of validSeries){
+    for(const p of s.data){
+      if(!Number.isFinite(p.y)) continue;
+      if(p.x < minX) minX = p.x;
+      if(p.x > maxX) maxX = p.x;
+      if(p.y < minY) minY = p.y;
+      if(p.y > maxY) maxY = p.y;
+    }
+  }
+  const hasData = Number.isFinite(minX) && Number.isFinite(maxX) && Number.isFinite(minY) && Number.isFinite(maxY);
+  if(hasData && maxX === minX){ maxX = minX + 1; }
+  const yPad = hasData ? Math.max(0.01, (maxY - minY) * 0.08) : 0;
+  const yMin = hasData ? Math.max(0, minY - yPad) : 0;
+  const yMax = hasData ? maxY + yPad : 1;
+
+  const innerLeft = chartPad.left;
+  const innerRight = W - chartPad.right;
+  const innerTop = headerH + chartPad.top;
+  const innerBottom = headerH + chartH - chartPad.bottom;
+  const innerW = innerRight - innerLeft;
+  const innerH = innerBottom - innerTop;
+  const xScale = x => innerLeft + ((x - minX) / (maxX - minX)) * innerW;
+  const yScale = y => innerBottom - ((y - yMin) / (yMax - yMin || 1)) * innerH;
+  const yTicks = hasData ? niceTicks(yMin, yMax, 5) : [];
+  const xTicks = hasData ? [minX, minX + (maxX - minX) * 0.25, (minX+maxX)/2, minX + (maxX - minX) * 0.75, maxX] : [];
+  const rangeMs = hasData ? (maxX - minX) : 0;
+
+  const parts = [];
+  parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${totalH}" viewBox="0 0 ${W} ${totalH}" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif">`);
+  parts.push(`<rect width="${W}" height="${totalH}" fill="#ffffff"/>`);
+  parts.push(`<rect x="0" y="0" width="6" height="${totalH}" fill="#1d8d4a"/>`);
+  parts.push(`<text x="40" y="40" font-size="22" font-weight="700" fill="#16181c">${_xmlEscape(title)}</text>`);
+  parts.push(`<text x="40" y="62" font-size="12" fill="#5a6068">${_xmlEscape(subtitle)}</text>`);
+  parts.push(`<text x="${W-40}" y="40" font-size="13" font-weight="700" fill="#1d8d4a" text-anchor="end">packs.ink</text>`);
+  parts.push(`<text x="${W-40}" y="58" font-size="10" fill="#7a8088" text-anchor="end">Lorcana market data</text>`);
+  parts.push(`<line x1="40" x2="${W-40}" y1="${headerH-1}" y2="${headerH-1}" stroke="#e3e6ea"/>`);
+
+  if(hasData){
+    for(const t of yTicks){
+      const y = yScale(t);
+      parts.push(`<line x1="${innerLeft}" x2="${innerRight}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="#eef0f2" stroke-dasharray="3,3"/>`);
+      parts.push(`<text x="${innerLeft-6}" y="${(y+4).toFixed(1)}" text-anchor="end" font-size="10" fill="#7a8088">${_xmlEscape(fmtTickPrice(t))}</text>`);
+    }
+    xTicks.forEach((t, i) => {
+      const x = xScale(t);
+      const anchor = i===0?'start':i===xTicks.length-1?'end':'middle';
+      parts.push(`<text x="${x.toFixed(1)}" y="${(innerBottom+16).toFixed(1)}" font-size="10" fill="#7a8088" text-anchor="${anchor}">${_xmlEscape(fmtTickDate(t, rangeMs))}</text>`);
+    });
+    parts.push(`<line x1="${innerLeft}" x2="${innerRight}" y1="${innerBottom}" y2="${innerBottom}" stroke="#cfd3d8"/>`);
+    parts.push(`<line x1="${innerLeft}" x2="${innerLeft}" y1="${innerTop}" y2="${innerBottom}" stroke="#cfd3d8"/>`);
+    validSeries.forEach((s) => {
+      const valid = s.data.filter(p => Number.isFinite(p.y));
+      if(valid.length < 2) return;
+      const pts = valid.map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(' ');
+      parts.push(`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
+    });
+  } else {
+    parts.push(`<text x="${(W/2).toFixed(0)}" y="${(headerH + chartH/2).toFixed(0)}" font-size="14" fill="#7a8088" text-anchor="middle">No history data available for the selected products.</text>`);
+  }
+
+  const tableTop = headerH + chartH;
+  parts.push(`<line x1="40" x2="${W-40}" y1="${tableTop}" y2="${tableTop}" stroke="#e3e6ea"/>`);
+  const cols = [
+    {label:"#",         x: 64,  anchor:"start"},
+    {label:"PRODUCT",   x: 96,  anchor:"start"},
+    {label:"TYPE / SET",x: 480, anchor:"start"},
+    {label:"START",     x: 760, anchor:"end"},
+    {label:"END",       x: 870, anchor:"end"},
+    {label:"CHANGE",    x: 990, anchor:"end"},
+  ];
+  const headerY = tableTop + 20;
+  for(const c of cols){
+    parts.push(`<text x="${c.x}" y="${headerY}" font-size="10" font-weight="700" fill="#3a4047" text-anchor="${c.anchor}" letter-spacing="0.6">${_xmlEscape(c.label)}</text>`);
+  }
+  parts.push(`<line x1="40" x2="${W-40}" y1="${tableTop + tableHeaderH - 2}" y2="${tableTop + tableHeaderH - 2}" stroke="#eef0f2"/>`);
+
+  items.forEach((it, i) => {
+    const rowY = tableTop + tableHeaderH + i * rowH + 18;
+    const color = colors[i % colors.length];
+    parts.push(`<rect x="46" y="${rowY-9}" width="14" height="5" fill="${color}" rx="2"/>`);
+    parts.push(`<text x="${cols[0].x}" y="${rowY}" font-size="11" fill="#5a6068" text-anchor="start">${i+1}</text>`);
+    parts.push(`<text x="${cols[1].x}" y="${rowY}" font-size="12" fill="#16181c" font-weight="600">${_xmlEscape(_truncate(it.name, 60))}</text>`);
+    const kindBadge = it.kind === "sealed" ? "Sealed" : "Card";
+    const typeStr = (it.sub ? it.sub + " · " : "") + kindBadge;
+    parts.push(`<text x="${cols[2].x}" y="${rowY}" font-size="11" fill="#5a6068">${_xmlEscape(_truncate(typeStr, 44))}</text>`);
+    const sData = series[i] && series[i].data ? series[i].data.filter(p => Number.isFinite(p.y)) : [];
+    if(sData.length){
+      const start = sData[0].y, end = sData[sData.length-1].y;
+      const pct = start !== 0 ? ((end - start)/start*100) : null;
+      parts.push(`<text x="${cols[3].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">$${start.toFixed(2)}</text>`);
+      parts.push(`<text x="${cols[4].x}" y="${rowY}" font-size="11" fill="#16181c" text-anchor="end">$${end.toFixed(2)}</text>`);
+      const pctText = pct == null ? "—" : (pct >= 0 ? "+" : "") + pct.toFixed(1) + "%";
+      const pctColor = pct == null ? "#5a6068" : (pct >= 0 ? "#1d8d4a" : "#c64c5a");
+      parts.push(`<text x="${cols[5].x}" y="${rowY}" font-size="11" fill="${pctColor}" font-weight="600" text-anchor="end">${_xmlEscape(pctText)}</text>`);
+    } else {
+      parts.push(`<text x="${cols[5].x}" y="${rowY}" font-size="11" fill="#5a6068" text-anchor="end">no data</text>`);
+    }
+  });
+
+  parts.push(`<line x1="40" x2="${W-40}" y1="${totalH-footerH}" y2="${totalH-footerH}" stroke="#e3e6ea"/>`);
+  parts.push(`<text x="40" y="${totalH-12}" font-size="10" fill="#7a8088">${_xmlEscape(footerNote || "Unofficial fan site · not affiliated with Disney or Ravensburger")}</text>`);
+  parts.push(`<text x="${W-40}" y="${totalH-12}" font-size="10" fill="#7a8088" text-anchor="end">Source: TCGCSV / TCGPlayer · Generated ${new Date().toISOString().slice(0,10)}</text>`);
+  parts.push('</svg>');
+  return parts.join('');
+}
+
+async function exportCompareReportPng(reportArgs){
+  const svgString = buildCompareReportSvg(reportArgs);
+  const filenameBase = "packs-ink-compare-" + new Date().toISOString().slice(0,10);
+  const svgBlob = new Blob([svgString], {type: "image/svg+xml;charset=utf-8"});
+  const url = URL.createObjectURL(svgBlob);
+  try {
+    const img = await new Promise((resolve, reject) => {
+      const im = new Image();
+      im.onload = () => resolve(im);
+      im.onerror = (e) => reject(e);
+      im.src = url;
+    });
+    const scale = 2;
+    const canvas = document.createElement("canvas");
+    const W = img.width || 1100;
+    const H = img.height || 800;
+    canvas.width = W * scale;
+    canvas.height = H * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.scale(scale, scale);
+    ctx.drawImage(img, 0, 0, W, H);
+    await new Promise((resolve, reject) => {
+      canvas.toBlob(blob => {
+        if(!blob) return reject(new Error("toBlob returned null"));
+        const a = document.createElement("a");
+        const burl = URL.createObjectURL(blob);
+        a.href = burl;
+        a.download = filenameBase + ".png";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(burl);
+        resolve();
+      }, "image/png");
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function exportCompareReportSvg(reportArgs){
+  const svgString = buildCompareReportSvg(reportArgs);
+  const filename = "packs-ink-compare-" + new Date().toISOString().slice(0,10) + ".svg";
+  const blob = new Blob([svgString], {type: "image/svg+xml;charset=utf-8"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 // ── Ink color palette (light/dark variants) ─────────────────────────────
 // Used for ink chip styling and row background tinting in the collection.
@@ -5283,36 +5505,42 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
   // and forth doesn't re-trigger.
   useEffect(()=>{
     if(!incomingCompareCards || !incomingCompareCards.length) return;
-    setMode("compare");
+    setMode("card");
     setCompareCards(incomingCompareCards);
     setCompareSeries({});
     onConsumedIncomingCompareCards && onConsumedIncomingCompareCards();
   }, [incomingCompareCards, onConsumedIncomingCompareCards]);
-  // Fetch each compared card's history in parallel.
+  // Fetch each graphed product's history in parallel. Only fetch items whose
+  // history we don't already have cached in compareSeries — this avoids
+  // re-fetching the whole list every time the user checks one more box.
   useEffect(()=>{
-    if(mode !== "compare" || !compareCards.length) return;
+    if(!compareCards.length) return;
+    const missing = compareCards.filter(c => !compareSeries[c.card_id]);
+    if(!missing.length) return;
     let cancelled = false;
     setCompareLoading(true);
-    const tasks = compareCards.map(c =>
+    const tasks = missing.map(c =>
       fetchCardHistory(c.productId, c.printing)
         .then(rows => ({id: c.card_id, rows}))
         .catch(() => ({id: c.card_id, rows: []}))
     );
     Promise.all(tasks).then(results => {
       if(cancelled) return;
-      const map = {};
-      for(const {id, rows} of results){
-        map[id] = (rows || []).map(r => ({
-          x: new Date(r.date).getTime(),
-          low: r.low_price == null ? null : +r.low_price,
-          market: r.market_price == null ? null : +r.market_price,
-        }));
-      }
-      setCompareSeries(map);
+      setCompareSeries(prev => {
+        const next = {...prev};
+        for(const {id, rows} of results){
+          next[id] = (rows || []).map(r => ({
+            x: new Date(r.date).getTime(),
+            low: r.low_price == null ? null : +r.low_price,
+            market: r.market_price == null ? null : +r.market_price,
+          }));
+        }
+        return next;
+      });
       setCompareLoading(false);
     });
     return () => { cancelled = true; };
-  }, [mode, compareCards]);
+  }, [compareCards]);
   // Distinct colors for the multi-line chart. Stable mapping by index.
   const COMPARE_COLORS = ["#1d8d4a","#7e54c4","#c64c5a","#4d83bf","#d4a93b","#0e6b6b","#787e88","#e07c2a"];
   const [setEv, setSetEv] = useState({rows:null, loading:false, error:null});
@@ -5440,8 +5668,24 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     return ()=>{ cancelled = true; };
   }, [mode, selectedSealedPid]);
 
+  // set_id -> position in `sets` (oldest = 0, newest = N-1). Used to sort
+  // sealed picker entries newest-set first within each product-type group,
+  // matching the Sealed sub-tab on Analytics.
+  const setOrderIndexById = useMemo(()=>{
+    const byId = {};
+    for(const r of raw){
+      if(r.set_id && r.Set){
+        const idx = sets.indexOf(r.Set);
+        if(idx >= 0) byId[r.set_id] = idx;
+      }
+    }
+    return byId;
+  }, [raw, sets]);
+
   // Pre-grouped sealed picker list — same display-type sections as the
   // Market Sealed sub-tab, plus a name-substring filter from the search box.
+  // Within each type, newest set first then name; types ordered by
+  // sealedDisplayTypeRank (Booster Boxes → Booster Packs → ETB → ...).
   const sealedPickerData = useMemo(()=>{
     if(!sealedPrices) return [];
     const q = sealedSearch.trim().toLowerCase();
@@ -5458,12 +5702,17 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     }
     const out = [];
     for(const [type, list] of byType){
-      list.sort((a, b) => (a.name||"").localeCompare(b.name||""));
+      list.sort((a, b) => {
+        const ai = a.set_id != null ? (setOrderIndexById[a.set_id] ?? -999) : -1000;
+        const bi = b.set_id != null ? (setOrderIndexById[b.set_id] ?? -999) : -1000;
+        if(ai !== bi) return bi - ai;
+        return (a.name||"").localeCompare(b.name||"");
+      });
       out.push({type, items: list});
     }
     out.sort((a, b) => sealedDisplayTypeRank(a.type) - sealedDisplayTypeRank(b.type));
     return out;
-  }, [sealedPrices, sealedSearch]);
+  }, [sealedPrices, sealedSearch, setOrderIndexById]);
 
   // Build LineChart series from the sealed-history rows (mirrors the card
   // mode's buildHistorySeries, but with one printing instead of two).
@@ -5564,6 +5813,77 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     return out;
   }, [setName]);
 
+  // Compare-mode builder: lets users assemble a multi-product comparison
+  // (cards + sealed) directly from Price Graphing instead of only via the
+  // Screener handoff. Items share the same shape as Screener pushes; the
+  // `kind` field is informational only (fetchCardHistory works generically
+  // for both since sealed products use Normal printing keyed by product_id).
+  const COMPARE_MAX = 8;
+  const addToCompare = useCallback((item) => {
+    if(!item) return;
+    setCompareCards(prev => {
+      if(prev.some(p => p.card_id === item.card_id)) return prev;
+      if(prev.length >= COMPARE_MAX) return prev;
+      return [...prev, item];
+    });
+  }, []);
+  const buildCardCompareItem = useCallback((c) => {
+    if(!c || !c.card_id) return null;
+    const allRows = raw.filter(r => r.card_id === c.card_id);
+    const groups = groupCards(allRows);
+    const g = groups[0];
+    const pick = (g && (g.normal || g.foil)) || null;
+    if(!pick) return null;
+    return {
+      kind: "card",
+      card_id: c.card_id,
+      productId: pick.tcgplayer_product_id,
+      printing: pick.tcg_printing || "Normal",
+      name: cardDisplayTitle(c),
+      sub: `${c.Set}${c.Number?" · #"+c.Number.split("/")[0]:""}${c.Rarity?" · "+c.Rarity:""}`,
+      image: c.img_normal || c.img_small || null,
+    };
+  }, [raw]);
+  const buildSealedCompareItem = useCallback((s) => {
+    if(!s || s.tcgplayer_product_id == null) return null;
+    return {
+      kind: "sealed",
+      card_id: "sealed-" + s.tcgplayer_product_id,
+      productId: s.tcgplayer_product_id,
+      printing: "Normal",
+      name: cleanSealedName(s.name),
+      sub: deriveSealedDisplayType(s),
+      image: s.image_url || null,
+    };
+  }, []);
+
+  // Inline picker used inside Compare mode so users can add cards / sealed
+  // without leaving the report. Top 8 card hits and top 4 sealed hits.
+  const [compareSearch, setCompareSearch] = useState("");
+  const compareSearchHits = useMemo(()=>{
+    const q = compareSearch.trim().toLowerCase();
+    if(!q) return null;
+    const cardHits = [];
+    for(const c of cardOptions){
+      const name = c["Product Name"] || "";
+      if(name.toLowerCase().includes(q)){
+        cardHits.push(c);
+        if(cardHits.length >= 8) break;
+      }
+    }
+    const sealedHits = [];
+    if(sealedPrices){
+      for(const p of sealedPrices){
+        if(p.printing !== "Normal" || p.product_type === "Promo Single") continue;
+        if(cleanSealedName(p.name).toLowerCase().includes(q)){
+          sealedHits.push(p);
+          if(sealedHits.length >= 4) break;
+        }
+      }
+    }
+    return {cards: cardHits, sealed: sealedHits};
+  }, [compareSearch, cardOptions, sealedPrices]);
+
   // Available sets for the picker — only sets we have rarity_avg data for.
   // Reuse the same source as the dropdown (sets prop already excludes promos).
   const filteredSetList = useMemo(()=>{
@@ -5580,9 +5900,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     <div class="history-toolbar">
       <div class="seg-toggle">
         <button class=${mode==="card"?"active":""}    onClick=${()=>setMode("card")}>By Card</button>
-        <button class=${mode==="compare"?"active":""} onClick=${()=>setMode("compare")}>Compare</button>
-        <button class=${mode==="set"?"active":""}     onClick=${()=>setMode("set")}>By Set EV</button>
         <button class=${mode==="sealed"?"active":""}  onClick=${()=>setMode("sealed")}>By Sealed</button>
+        <button class=${mode==="set"?"active":""}     onClick=${()=>setMode("set")}>By Set EV</button>
       </div>
       <div class="seg-toggle">
         ${RANGE_OPTIONS.map(([k,l]) => html`<button key=${k}
@@ -5606,159 +5925,230 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
       </label>`}
     </div>
 
-    ${mode === "sealed" ? html`<div class="history-card-mode">
-      <div class="history-picker">
-        <input type="search" placeholder="Search sealed product..."
-          value=${sealedSearch} onInput=${e=>setSealedSearch(e.target.value)}/>
-        <div class="history-picker-list">
-          ${sealedPickerData.length === 0
-            ? html`<div class="history-picker-empty">${sealedPrices && sealedPrices.length
-                ? `No products match "${sealedSearch}"`
-                : "No sealed-product data loaded. Run supabase/16_sealed_prices_latest.sql."}</div>`
-            : sealedPickerData.map(({type, items}) => html`<div key=${type} class="history-picker-group">
-                <div class="history-picker-group-head">${type}</div>
-                ${items.map(item => html`<button key=${item.tcgplayer_product_id}
-                  class=${"history-picker-item "+(selectedSealedPid===item.tcgplayer_product_id?"active":"")}
-                  onClick=${()=>setSelectedSealedPid(item.tcgplayer_product_id)}>
-                  <div class="hpi-name">${cleanSealedName(item.name)}</div>
-                </button>`)}
-              </div>`)}
-        </div>
-      </div>
-      <div class="history-chart-pane">
-        ${!selectedSealed ? html`<div class="chart-empty large">Pick a sealed product from the list →</div>`
-          : html`<div>
-              <div class="history-card-preview">
-                ${selectedSealed.image_url && html`<img class="history-preview-img"
-                  src=${selectedSealed.image_url} alt=${selectedSealed.name}/>`}
-                <div class="history-preview-info">
-                  <div class="history-preview-name">${cleanSealedName(selectedSealed.name)}</div>
-                  <div class="history-preview-meta">${selectedSealed.product_type}</div>
-                  ${tcgUrl(selectedSealed.tcgplayer_product_id) && html`<div class="history-preview-type">
-                    <a href=${tcgUrl(selectedSealed.tcgplayer_product_id)} target="_blank" rel="noopener nofollow">View on TCGPlayer ↗</a>
-                  </div>`}
-                </div>
-              </div>
-              <div class="history-chart-controls">
-                <div class="history-chart-legend">
-                  <span class="legend-line-style"><span class="line-solid"/>Low</span>
-                  <span class="legend-line-style"><span class="line-dashed"/>Market</span>
-                </div>
-                <div class="checkbox-group" style=${{marginLeft:"auto"}}>
-                  <label><input type="checkbox" checked=${showLow} onChange=${e=>setShowLow(e.target.checked)}/> <${Tip} text=${TIP_NM_LOW}>Low<//></label>
-                  <label><input type="checkbox" checked=${showMarket} onChange=${e=>setShowMarket(e.target.checked)}/> <${Tip} text=${TIP_MARKET}>Market<//></label>
-                </div>
-              </div>
-              ${sealedHist.loading
-                ? html`<div class="chart-empty large">Loading history…</div>`
-                : sealedSeries.length === 0
-                  ? html`<div class="chart-empty large">No price history yet for this product.</div>`
-                  : html`<${LineChart}
-                      series=${clipSeriesFrom(sealedSeries, computeChartStartMs(rangeKey, customStart, false, null))}
-                      width=780 height=300/>`}
-            </div>`}
-      </div>
-    </div>` : mode === "card" ? html`<div class="history-card-mode">
-      <div class="history-picker">
-        <input type="search"
-          placeholder="Search — name, rarity, ink, set..."
-          value=${cardQuery}
-          onInput=${e=>setCardQuery(e.target.value)}/>
-        <div class="history-picker-list">
-          ${flatMatches != null ? (flatMatches.length === 0
-            ? html`<div class="history-picker-empty">No cards match "${cardQuery}"</div>`
-            : flatMatches.map(c => html`<button key=${c.card_id}
-                class=${"history-picker-item "+(selectedGroup?.card_id===c.card_id?"active":"")}
-                onClick=${()=>setSelectedGroup(c)}>
-                <div class="hpi-name">${cardDisplayTitle(c)}</div>
-                <div class="hpi-sub">${c.Set}${c.Number?" · #"+c.Number.split("/")[0]:""}${c.ink?" · "+c.ink:""}</div>
-              </button>`))
-            : groupedBySet.map(([setKey, cards]) => html`<div key=${setKey} class="history-picker-group">
-                <div class="history-picker-group-head">${setKey}</div>
-                ${cards.map(c => html`<button key=${c.card_id}
-                  class=${"history-picker-item "+(selectedGroup?.card_id===c.card_id?"active":"")}
-                  onClick=${()=>setSelectedGroup(c)}>
-                  <div class="hpi-name">${cardDisplayTitle(c)}</div>
-                  <div class="hpi-sub">${c.Number?"#"+c.Number.split("/")[0]:""}${c.ink?" · "+c.ink:""}${c.Rarity && !["Enchanted","Iconic","Epic","Promo"].includes(c.Rarity)?" · "+c.Rarity:""}</div>
-                </button>`)}
-              </div>`)}
-        </div>
-      </div>
-      <div class="history-chart-pane">
-        ${selectedGroup ? html`<div>
-          <div class="history-card-preview">
-            ${(selectedGroup.img_normal||selectedGroup.img_small) && html`<img class="history-preview-img"
-              src=${selectedGroup.img_normal||selectedGroup.img_small} alt=${selectedGroup["Product Name"]}/>`}
-            <div class="history-preview-info">
-              <div class="history-preview-name">${cardDisplayTitle(selectedGroup)}</div>
-              <div class="history-preview-meta">
-                ${selectedGroup.Set}${selectedGroup.Number?" · #"+selectedGroup.Number.split("/")[0]:""} · ${selectedGroup.Rarity}${selectedGroup.ink?" · "+selectedGroup.ink:""}
-              </div>
-              ${selectedGroup.card_type && html`<div class="history-preview-type">${selectedGroup.card_type}${selectedGroup.cost!=null?" · Cost "+selectedGroup.cost:""}</div>`}
+    ${(mode === "sealed" || mode === "card") ? (() => {
+      const priceLabel = showLow ? "NM Low" : "NM Market";
+      const builtSeries = compareCards.map((c, i) => {
+        const rows = compareSeries[c.card_id] || [];
+        const data = rows
+          .filter(p => (showLow ? p.low != null : p.market != null))
+          .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
+        return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
+      });
+      const startMs = computeChartStartMs(rangeKey, customStart, hidePreorders, null);
+      const clipped = clipSeriesFrom(builtSeries, startMs);
+      const rangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [,"All"])[1];
+      const reportArgs = {
+        title: "Price Comparison Report",
+        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel} · Range: ${rangeLabel}`,
+        items: compareCards,
+        series: clipped,
+        colors: COMPARE_COLORS,
+        footerNote: "packs.ink · Unofficial fan site, not affiliated with Disney or Ravensburger",
+      };
+      const doExportPng = () => exportCompareReportPng(reportArgs);
+      const doExportSvg = () => exportCompareReportSvg(reportArgs);
+      const doExportCsv = () => {
+        const headers = ["#","Name","Type/Set","Kind","Start","End","Change %"];
+        const esc = v => { const s = v==null?"":String(v); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
+        const lines = [headers.join(",")];
+        compareCards.forEach((c, i) => {
+          const data = clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : [];
+          const start = data.length ? data[0].y : "";
+          const end   = data.length ? data[data.length-1].y : "";
+          const pct   = (data.length && start) ? ((end-start)/start*100).toFixed(2) : "";
+          lines.push([i+1, c.name, c.sub||"", c.kind==="sealed"?"Sealed":"Card",
+            start===""?"":start.toFixed(2), end===""?"":end.toFixed(2), pct].map(esc).join(","));
+        });
+        const blob = new Blob([lines.join("\n")], {type:"text/csv"});
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a"); a.href = url;
+        a.download = "packs-ink-compare-" + new Date().toISOString().slice(0,10) + ".csv";
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      };
+
+      const renderSeries = clipped.filter(s => s.data && s.data.length >= 2);
+      const isFull = compareCards.length >= COMPARE_MAX;
+      const isCardInCompare = (cid) => compareCards.some(p => p.card_id === cid);
+      const toggleCard = (c) => {
+        if(isCardInCompare(c.card_id)){
+          setCompareCards(prev => prev.filter(p => p.card_id !== c.card_id));
+        } else if(!isFull){
+          const item = buildCardCompareItem(c);
+          if(item) setCompareCards(prev => [...prev, item]);
+        }
+      };
+      const toggleSealed = (s) => {
+        const sid = "sealed-" + s.tcgplayer_product_id;
+        if(isCardInCompare(sid)){
+          setCompareCards(prev => prev.filter(p => p.card_id !== sid));
+        } else if(!isFull){
+          const item = buildSealedCompareItem(s);
+          if(item) setCompareCards(prev => [...prev, item]);
+        }
+      };
+      const previewItem = compareCards.length === 1 ? compareCards[0] : null;
+      const previewImg = previewItem
+        ? (previewItem.kind === "sealed"
+            ? previewItem.image
+            : (cardOptions.find(c => c.card_id === previewItem.card_id)?.img_normal
+               || cardOptions.find(c => c.card_id === previewItem.card_id)?.img_small
+               || previewItem.image))
+        : null;
+
+      const pickerJsx = mode === "card"
+        ? html`<div class="history-picker">
+            <input type="search"
+              placeholder="Search — name, rarity, ink, set..."
+              value=${cardQuery}
+              onInput=${e=>setCardQuery(e.target.value)}/>
+            <div class="history-picker-hint">Click any card to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-list">
+              ${flatMatches != null ? (flatMatches.length === 0
+                ? html`<div class="history-picker-empty">No cards match "${cardQuery}"</div>`
+                : flatMatches.map(c => {
+                    const sel = isCardInCompare(c.card_id);
+                    return html`<button key=${c.card_id}
+                      class=${"history-picker-item picker-multi "+(sel?"active":"")}
+                      disabled=${!sel && isFull}
+                      title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                      onClick=${()=>toggleCard(c)}>
+                      <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
+                      <span class="picker-text">
+                        <span class="hpi-name">${cardDisplayTitle(c)}</span>
+                        <span class="hpi-sub">${c.Set}${c.Number?" · #"+c.Number.split("/")[0]:""}${c.ink?" · "+c.ink:""}</span>
+                      </span>
+                    </button>`;
+                  }))
+                : groupedBySet.map(([setKey, cards]) => html`<div key=${setKey} class="history-picker-group">
+                    <div class="history-picker-group-head">${setKey}</div>
+                    ${cards.map(c => {
+                      const sel = isCardInCompare(c.card_id);
+                      return html`<button key=${c.card_id}
+                        class=${"history-picker-item picker-multi "+(sel?"active":"")}
+                        disabled=${!sel && isFull}
+                        title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                        onClick=${()=>toggleCard(c)}>
+                        <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
+                        <span class="picker-text">
+                          <span class="hpi-name">${cardDisplayTitle(c)}</span>
+                          <span class="hpi-sub">${c.Number?"#"+c.Number.split("/")[0]:""}${c.ink?" · "+c.ink:""}${c.Rarity && !["Enchanted","Iconic","Epic","Promo"].includes(c.Rarity)?" · "+c.Rarity:""}</span>
+                        </span>
+                      </button>`;
+                    })}
+                  </div>`)}
             </div>
-          </div>
-          <div class="history-chart-controls">
-            <div class="history-chart-legend">
-              ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Normal</span>`}
-              ${history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
-              <span class="legend-line-style"><span class="line-solid"/>Low</span>
-              <span class="legend-line-style"><span class="line-dashed"/>Market</span>
-            </div>
-            <div class="checkbox-group" style=${{marginLeft:"auto"}}>
-              <label><input type="checkbox" checked=${showLow} onChange=${e=>setShowLow(e.target.checked)}/> <${Tip} text=${TIP_NM_LOW}>NM Low<//></label>
-              <label><input type="checkbox" checked=${showMarket} onChange=${e=>setShowMarket(e.target.checked)}/> <${Tip} text=${TIP_MARKET}>Market<//></label>
-            </div>
-          </div>
-          ${history.loading
-            ? html`<div class="chart-empty large">Loading history…</div>`
-            : html`<${LineChart}
-                series=${clipSeriesFrom(buildHistorySeries(history.normal, history.foil, {showLow, showMarket}), computeChartStartMs(rangeKey, customStart, hidePreorders, selectedGroup?.Set))}
-                width=780 height=300/>`}
-        </div>` : html`<div class="chart-empty large">Pick a card from the list →</div>`}
-      </div>
-    </div>` : mode === "compare" ? html`<div class="history-compare-mode">
-      ${compareCards.length === 0
-        ? html`<div class="chart-empty large">
-            No cards loaded for comparison. Use the Screener's Add to Price Graphing batch action,
-            or go back to <button class="settings-action link" onClick=${()=>setMode("card")}>By Card</button>
-            and pick one to graph.
           </div>`
-        : html`<div class="compare-legend">
-            <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>Comparing</span>
-            ${compareCards.map((c, i) => html`<span key=${c.card_id} class="compare-chip"
-              style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
-              <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
-              <span class="compare-name">${c.name}</span>
-              <button class="compare-remove"
-                onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
-                title="Remove from comparison" aria-label="Remove">×</button>
-            </span>`)}
-            <button class="settings-action link" style=${{marginLeft:8,fontSize:11}}
-              onClick=${()=>{ setCompareCards([]); setCompareSeries({}); }}>Clear all</button>
+        : html`<div class="history-picker">
+            <input type="search" placeholder="Search sealed product..."
+              value=${sealedSearch} onInput=${e=>setSealedSearch(e.target.value)}/>
+            <div class="history-picker-hint">Click any product to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-list">
+              ${sealedPickerData.length === 0
+                ? html`<div class="history-picker-empty">${sealedPrices && sealedPrices.length
+                    ? `No products match "${sealedSearch}"`
+                    : "No sealed-product data loaded. Run supabase/16_sealed_prices_latest.sql."}</div>`
+                : sealedPickerData.map(({type, items}) => html`<div key=${type} class="history-picker-group">
+                    <div class="history-picker-group-head">${type}</div>
+                    ${items.map(item => {
+                      const sid = "sealed-" + item.tcgplayer_product_id;
+                      const sel = isCardInCompare(sid);
+                      return html`<button key=${item.tcgplayer_product_id}
+                        class=${"history-picker-item picker-multi "+(sel?"active":"")}
+                        disabled=${!sel && isFull}
+                        title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                        onClick=${()=>toggleSealed(item)}>
+                        <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
+                        <span class="picker-text">
+                          <span class="hpi-name">${cleanSealedName(item.name)}</span>
+                        </span>
+                      </button>`;
+                    })}
+                  </div>`)}
+            </div>
+          </div>`;
+
+      return html`<div class="history-card-mode">
+        ${pickerJsx}
+        <div class="history-chart-pane">
+          <div class="compare-picker-bar">
+            <div class="compare-summary">
+              ${compareCards.length === 0
+                ? html`<span class="muted" style=${{fontSize:12}}>${mode === "card" ? "Check off cards on the left to start graphing." : "Check off sealed products on the left to start graphing."}</span>`
+                : html`<span style=${{fontSize:12,fontWeight:600}}>${compareCards.length} product${compareCards.length===1?"":"s"} on the graph</span>
+                       <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
+            </div>
+            ${compareCards.length > 0 && html`<div class="compare-export-group">
+              <button class="settings-action" onClick=${doExportPng} title="Export the comparison chart + product list as a PNG report.">📥 PNG</button>
+              <button class="settings-action" onClick=${doExportSvg} title="Export as scalable vector (SVG).">SVG</button>
+              <button class="settings-action" onClick=${doExportCsv} title="Export the products table as CSV.">CSV</button>
+              <button class="settings-action link" onClick=${()=>{ setCompareCards([]); setCompareSeries({}); }} style=${{fontSize:11}}>Clear all</button>
+            </div>`}
           </div>
-          <div class="history-set-detail">
-            ${compareLoading
-              ? html`<div class="chart-empty large">Loading…</div>`
-              : (() => {
-                  const cardSeries = compareCards.map((c, i) => {
-                    const rows = compareSeries[c.card_id] || [];
-                    const data = rows
-                      .filter(p => (showLow ? p.low != null : p.market != null))
-                      .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
-                    return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
-                  }).filter(s => s.data.length >= 2);
-                  if(cardSeries.length === 0) return html`<div class="chart-empty large">No history data for these cards yet.</div>`;
-                  return html`<div>
-                    <div class="seg-toggle" style=${{marginBottom:8}}>
-                      <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>NM Low</button>
-                      <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>NM Market</button>
-                    </div>
-                    <${LineChart} series=${clipSeriesFrom(cardSeries, computeChartStartMs(rangeKey, customStart, false, null))}
-                      width=920 height=320/>
-                  </div>`;
-                })()}
-          </div>`}
-    </div>` : html`<div class="history-card-mode">
+
+          ${compareCards.length === 0
+            ? html`<div class="chart-empty large">${mode === "card" ? "Pick cards from the list →" : "Pick sealed products from the list →"}</div>`
+            : html`<div>
+                ${previewItem && previewImg && html`<div class="history-card-preview">
+                  <img class="history-preview-img" src=${previewImg} alt=${previewItem.name}/>
+                  <div class="history-preview-info">
+                    <div class="history-preview-name">${previewItem.name}</div>
+                    <div class="history-preview-meta">${previewItem.sub || ""}</div>
+                    ${tcgUrl(previewItem.productId) && html`<div class="history-preview-type">
+                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow">View on TCGPlayer ↗</a>
+                    </div>`}
+                  </div>
+                </div>`}
+                ${compareCards.length > 1 && html`<div class="compare-legend">
+                  <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>On graph</span>
+                  ${compareCards.map((c, i) => html`<span key=${c.card_id} class="compare-chip"
+                    style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
+                    <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
+                    <span class="compare-name">${c.name}</span>
+                    ${c.kind === "sealed" && html`<span class="compare-kind-tag">sealed</span>`}
+                    <button class="compare-remove"
+                      onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
+                      title="Remove from graph" aria-label="Remove">×</button>
+                  </span>`)}
+                </div>`}
+                <div class="history-chart-controls">
+                  <div class="seg-toggle">
+                    <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>NM Low</button>
+                    <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>NM Market</button>
+                  </div>
+                </div>
+                ${compareLoading
+                  ? html`<div class="chart-empty large">Loading history…</div>`
+                  : renderSeries.length === 0
+                    ? html`<div class="chart-empty large">No price history yet for the selected product${compareCards.length>1?"s":""}.</div>`
+                    : html`<${LineChart} series=${renderSeries} width=920 height=320/>`}
+                <table class="compare-stats-table">
+                  <thead><tr>
+                    <th></th><th>#</th><th>Product</th><th>Type / Set</th>
+                    <th class="num">Start</th><th class="num">End</th><th class="num">Change</th>
+                  </tr></thead>
+                  <tbody>
+                    ${compareCards.map((c, i) => {
+                      const data = clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : [];
+                      const start = data.length ? data[0].y : null;
+                      const end   = data.length ? data[data.length-1].y : null;
+                      const pct   = (data.length && start) ? ((end-start)/start*100) : null;
+                      return html`<tr key=${c.card_id}>
+                        <td><span class="legend-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length], display:"inline-block", width:14, height:5, borderRadius:2}}/></td>
+                        <td>${i+1}</td>
+                        <td><strong>${c.name}</strong>${c.kind === "sealed" && html` <span class="compare-kind-tag">sealed</span>`}</td>
+                        <td class="muted">${c.sub || ""}</td>
+                        <td class="num">${start==null?"—":"$"+start.toFixed(2)}</td>
+                        <td class="num">${end==null?"—":"$"+end.toFixed(2)}</td>
+                        <td class=${"num "+(pct==null?"":(pct>=0?"up":"down"))}>${pct==null?"—":(pct>=0?"+":"")+pct.toFixed(1)+"%"}</td>
+                      </tr>`;
+                    })}
+                  </tbody>
+                </table>
+              </div>`}
+        </div>
+      </div>`;
+    })() : html`<div class="history-card-mode">
       <div class="history-picker">
         <input type="search" placeholder="Search sets..."
           value=${setSearch} onInput=${e=>setSetSearch(e.target.value)}/>
