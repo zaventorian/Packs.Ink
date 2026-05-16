@@ -944,12 +944,14 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 
 /* Home page two-column grid: left = banners, right = collection panel.
    Collapses to single column under 980px so the panel stacks below. */
-/* Home top band — page title + compact EV table side-by-side. The EV
-   strip sits above the collection panel and spills back over the banners
-   area at narrow widths via flex-wrap. */
-.home-top-band{display:flex;gap:18px;align-items:flex-start;justify-content:space-between;
-  flex-wrap:wrap;margin-bottom:10px;}
-.home-ev-strip{flex:0 0 360px;width:360px;max-width:100%;box-sizing:border-box;
+/* Slim page title above the home grid. */
+.home-page-title{margin-bottom:8px;}
+/* Right column = stacked EV strip + Collection panel. Both elements
+   inherit the column's full width (360px) so the right side reads as a
+   single symmetrical stack matching the left column's feed. */
+.home-grid-right{display:flex;flex-direction:column;gap:14px;min-width:0;
+  position:sticky;top:8px;align-self:start;}
+.home-ev-strip{width:100%;box-sizing:border-box;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
   padding:8px 10px;font-size:11px;}
 .home-ev-strip-head{display:flex;justify-content:space-between;align-items:center;
@@ -1032,7 +1034,7 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   .home-feed{grid-column:auto;}
 }
 .collection-panel{background:var(--bg-surface);border:1px solid var(--border);
-  border-radius:8px;padding:14px 16px;position:sticky;top:8px;}
+  border-radius:8px;padding:14px 16px;}
 .collection-panel .panel-title{font-family:var(--font-title,inherit);font-size:13px;
   font-weight:600;letter-spacing:0.3px;margin:0 0 8px;color:var(--accent);
   text-transform:uppercase;}
@@ -9050,59 +9052,75 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
           .slice(0, 15);
         if(!decks.length){ setEntries([]); return; }
 
-        // Some decks have null/empty `inks` in the DB (the editor doesn't
-        // always write to that column). Compute inks client-side from
-        // deck_cards + the catalog. For unlisted decks where RLS would
-        // block the direct deck_cards read (e.g. a deck from a creator
-        // I follow but don't own), fall back to the SECURITY DEFINER
-        // get_shared_deck_cards RPC using the deck's own share_token.
-        const computedInks = {};
-        const inkByCardId = new Map();
+        // Index the catalog: card_id -> {inks, set}. Used to compute both
+        // ink shields AND the deck's actual format (Core / Infinity)
+        // from its cards, instead of trusting the user-set tags[0] which
+        // is often wrong or unset.
+        const cardMetaById = new Map();
         if(raw && raw.length){
           for(const r of raw){
-            if(r.card_id && !inkByCardId.has(r.card_id)){
+            if(r.card_id && !cardMetaById.has(r.card_id)){
               const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
-              if(inks.length) inkByCardId.set(r.card_id, inks);
+              cardMetaById.set(r.card_id, {inks, set: r.Set});
             }
           }
         }
-        const collectInks = (deckId, cards) => {
-          const set = computedInks[deckId] || new Set();
-          for(const dc of (cards || [])){
-            const inks = inkByCardId.get(dc.card_id);
-            if(!inks) continue;
-            for(const ink of inks) set.add(ink);
-          }
-          computedInks[deckId] = set;
-        };
+        // Per-deck cards we've pulled. Used for both ink + format compute.
+        // Direct query first (bulk, fast). Unlisted-from-followed decks
+        // get a per-deck get_shared_deck_cards RPC fallback.
+        const cardsByDeck = {};
         const needCompute = decks.filter(d => !(d.inks && d.inks.length));
-        if(needCompute.length && inkByCardId.size){
-          const ids = needCompute.map(d => d.id);
-          // First pass — bulk direct query. RLS-visible decks (mine + public)
-          // come back here.
+        const allFetchIds = decks.map(d => d.id);
+        if(allFetchIds.length && cardMetaById.size){
           const {data: dcRows} = await sbClient.from("deck_cards")
-            .select("deck_id,card_id").in("deck_id", ids);
-          for(const id of ids) computedInks[id] = new Set();
-          const seenByDeck = {};
+            .select("deck_id,card_id,quantity").in("deck_id", allFetchIds);
+          const seen = {};
           for(const dc of (dcRows || [])){
-            seenByDeck[dc.deck_id] = true;
-            const inks = inkByCardId.get(dc.card_id);
-            if(!inks) continue;
-            for(const ink of inks) computedInks[dc.deck_id].add(ink);
+            seen[dc.deck_id] = true;
+            (cardsByDeck[dc.deck_id] = cardsByDeck[dc.deck_id] || []).push(dc);
           }
-          // Second pass — for decks the direct query couldn't see (RLS),
-          // hit the get_shared_deck_cards RPC with the deck's own
-          // share_token. The RPC is SECURITY DEFINER and validates the
-          // token, so it returns rows regardless of caller ownership.
-          const rpcCandidates = needCompute.filter(d => !seenByDeck[d.id] && d.share_token);
+          const rpcCandidates = decks.filter(d => !seen[d.id] && d.share_token);
           if(rpcCandidates.length){
             const rpcResults = await Promise.all(rpcCandidates.map(d =>
               sbClient.rpc("get_shared_deck_cards", {p_deck_id: d.id, p_token: d.share_token})
                 .then(({data, error}) => ({deckId: d.id, rows: error ? [] : (data || [])}))
                 .catch(() => ({deckId: d.id, rows: []}))
             ));
-            for(const {deckId, rows} of rpcResults) collectInks(deckId, rows);
+            for(const {deckId, rows} of rpcResults) cardsByDeck[deckId] = rows;
           }
+        }
+        const coreSets = new Set(typeof computeCoreSets === "function" ? computeCoreSets() : []);
+        const computedInks = {};
+        const formatByDeck = {};
+        for(const d of decks){
+          const cards = cardsByDeck[d.id] || [];
+          const inkSet = new Set();
+          let totalQty = 0;
+          let allInCore = cards.length > 0;
+          let anyCardKnown = false;
+          for(const dc of cards){
+            totalQty += (dc.quantity || 0);
+            const meta = cardMetaById.get(dc.card_id);
+            if(!meta) continue;
+            anyCardKnown = true;
+            for(const i of meta.inks) inkSet.add(i);
+            if(meta.set && !coreSets.has(meta.set)) allInCore = false;
+          }
+          computedInks[d.id] = inkSet;
+          // Legality: >=60 cards AND <=2 inks. (60 is the minimum; over is OK.)
+          // If we couldn't resolve any cards for this deck, fall back to "infinity"
+          // so we don't silently hide the tag.
+          let fmt;
+          if(!anyCardKnown){
+            fmt = "infinity";
+          } else if(totalQty < 60 || inkSet.size > 2){
+            fmt = "invalid";
+          } else if(allInCore){
+            fmt = "core";
+          } else {
+            fmt = "infinity";
+          }
+          formatByDeck[d.id] = fmt;
         }
 
         const creatorIds = Array.from(new Set(decks.map(d => d.user_id)));
@@ -9116,16 +9134,14 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
           const inks = (d.inks && d.inks.length)
             ? d.inks
             : (computedInks[d.id] ? Array.from(computedInks[d.id]) : []);
-          // Format lives in tags[0]. "core" → Core Constructed, anything
-          // else (or missing) → Infinity. Same convention as deckFormatKey.
-          const fmtKey = (d.tags && d.tags[0] === "core") ? "core" : "infinity";
+          const fmtKey = formatByDeck[d.id] || "infinity";
           return {
             deck: {...d, inks},
             creator: profileById[d.user_id] || null,
             isPublish: Math.abs(new Date(d.updated_at) - new Date(d.created_at)) < 3*60*1000,
             shareToken: tokenByDeck[d.id] || null,
             formatKey: fmtKey,
-            formatLabel: fmtKey === "core" ? "Core" : "Inf",
+            formatLabel: fmtKey === "core" ? "Core" : (fmtKey === "infinity" ? "Inf" : null),
           };
         }));
       } catch(e){
@@ -9173,7 +9189,7 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
             <span class="home-feed-main">
               <span class="home-feed-deckname-line">
                 <span class="home-feed-deckname">${deck.name || "Untitled deck"}</span>
-                <span class=${"home-feed-fmt-tag fmt-"+formatKey} title=${formatKey==="core"?"Core Constructed":"Infinity"}>${formatLabel}</span>
+                ${formatLabel && html`<span class=${"home-feed-fmt-tag fmt-"+formatKey} title=${formatKey==="core"?"Core Constructed":"Infinity"}>${formatLabel}</span>`}
               </span>
               <span class="home-feed-meta">
                 <span class="home-feed-creator">${creator?.display_name || "Someone"}</span>
@@ -9386,14 +9402,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   </div>`;
 
   return html`<div class="scr">
-    <div class="home-top-band">
-      <div>
-        <h1 class="title-font" style=${{fontSize:16,fontWeight:700,margin:"0 0 2px",color:"var(--accent)",letterSpacing:0.5}}>Lorcana Market</h1>
-        <p class="muted" style=${{fontSize:11,margin:0}}>
-          Click a card for details · corner icon opens TCGPlayer.
-        </p>
-      </div>
-      <${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices}/>
+    <div class="home-page-title">
+      <h1 class="title-font" style=${{fontSize:16,fontWeight:700,margin:"0 0 2px",color:"var(--accent)",letterSpacing:0.5}}>Lorcana Market</h1>
+      <p class="muted" style=${{fontSize:11,margin:0}}>
+        Click a card for details · corner icon opens TCGPlayer.
+      </p>
     </div>
 
     <div class="home-grid">
@@ -9461,9 +9474,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     onTileClick=${openCard}/>
                 </div>`}
       </div>
-      <${CollectionPanel} raw=${raw} user=${user} collection=${collection}
-        collectionLoading=${collectionLoading}
-        moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}/>
+      <div class="home-grid-right">
+        <${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices}/>
+        <${CollectionPanel} raw=${raw} user=${user} collection=${collection}
+          collectionLoading=${collectionLoading}
+          moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}/>
+      </div>
     </div>
 
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
@@ -10772,7 +10788,8 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
 function checkDeckLegality(deck, cardById){
   const issues = [];
   const total = (deck.cards||[]).reduce((s,c)=>s+c.quantity, 0);
-  if(total !== 60) issues.push(`${total} / 60 cards — ${total < 60 ? "need "+(60-total)+" more" : (total-60)+" over"}`);
+  // 60 is the minimum; going over is allowed (Lorcana has no upper cap).
+  if(total < 60) issues.push(`${total} / 60 cards — need ${60 - total} more`);
   // Dual-ink cards contribute BOTH colors to the deck's ink set. A deck with
   // an Emerald/Sapphire dual + an Amber single uses 3 inks (Amber, Emerald,
   // Sapphire) — over the 2-ink cap.
