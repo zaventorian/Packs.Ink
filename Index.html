@@ -9205,7 +9205,7 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
         const params = new URLSearchParams();
         params.set("deck", deck.id);
         if(deck.visibility !== "public" && shareToken) params.set("token", shareToken);
-        const href = "?" + params.toString();
+        const href = "/decks?" + params.toString();
         const inks = (deck.inks && deck.inks.length) ? deck.inks : [];
         return html`<li key=${deck.id} class="home-feed-item">
           <a href=${href} class="home-feed-link" title=${(creator?.display_name || "Someone") + " " + (isPublish?"published":"updated") + " " + (deck.name || "Untitled deck")}>
@@ -11950,6 +11950,38 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
 };
 
 // ── Main App ────────────────────────────────────────────────────────────
+// ── Top-level routing ──────────────────────────────────────────────────
+// Each top-level view maps to a path. We use the History API so the URL
+// bar always shows where the user is, the browser back/forward buttons
+// move between views, and direct links / bookmarks (e.g. packs.ink/decks)
+// resolve to the right tab. On Netlify the SPA fallback in _redirects
+// rewrites every unknown path to Index.html so the client can read
+// location.pathname and pick the view.
+const VIEW_PATHS = {
+  home:       "/",
+  screener:   "/screener",
+  history:    "/price-graphing",
+  market:     "/analytics",
+  cards:      "/cards",
+  collection: "/collection",
+  decks:      "/decks",
+  faq:        "/how-it-works",
+};
+const PATH_TO_VIEW = (() => {
+  const m = {};
+  for(const [v, p] of Object.entries(VIEW_PATHS)){
+    m[p.replace(/\/$/, "") || "/"] = v;
+  }
+  return m;
+})();
+function parseViewFromPath(pathname){
+  if(!pathname) return null;
+  // Strip trailing slash + tolerate the literal /Index.html dev URL.
+  let p = pathname.replace(/\/$/, "") || "/";
+  if(p === "/Index.html" || p === "/index.html") p = "/";
+  return PATH_TO_VIEW[p] || null;
+}
+
 function App(){
   const [raw,setRaw]=useState([]);const [loading,setLoading]=useState(false);const [err,setErr]=useState(null);const [loaded,setLoaded]=useState(false);
   // Sealed-product price snapshot. Joined to sealed_products server-side
@@ -12009,7 +12041,40 @@ function App(){
   // derived state so the new split toggles remain the source of truth.
   const ne = excludeEnchanted && excludeIconic;
   const setNe = (v) => { setExcludeEnchanted(!!v); setExcludeIconic(!!v); };
-  const [view,setView]=useState((initialUrlParams.deck || initialUrlParams.user) ? "decks" : "home");
+  // Pick the initial view from (1) ?deck=/?user= query (forces decks),
+  // (2) the URL pathname (e.g. /screener, /decks, etc.), (3) home.
+  const [view,setView]=useState(() => {
+    if(initialUrlParams.deck || initialUrlParams.user) return "decks";
+    try { return parseViewFromPath(window.location.pathname) || "home"; }
+    catch { return "home"; }
+  });
+  // Keep the URL pathname in sync with `view` so back/forward + reload +
+  // bookmarks all work. Preserves the existing query string (e.g. ?deck=,
+  // ?token=, ?user=) so deep links don't break when the view changes.
+  useEffect(() => {
+    try {
+      const target = VIEW_PATHS[view] || "/";
+      const current = window.location.pathname.replace(/\/$/, "") || "/";
+      const normalizedTarget = target.replace(/\/$/, "") || "/";
+      if(current === normalizedTarget) return;
+      const url = new URL(window.location.href);
+      url.pathname = target;
+      window.history.pushState({view}, "", url.toString());
+    } catch {/* SSR / blocked storage / no-op */}
+  }, [view]);
+  // Browser back/forward — re-parse the path and update `view`.
+  useEffect(() => {
+    const onPop = () => {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        if(params.get("deck") || params.get("user")){ setView("decks"); return; }
+        const v = parseViewFromPath(window.location.pathname);
+        if(v) setView(v);
+      } catch {/* no-op */}
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   // Cross-view navigation: a child view sets a "target" payload (e.g. EV
   // wants to jump into History focused on a specific set) and the destination
   // view consumes it via prop on mount. Bumped to a new object each call so
