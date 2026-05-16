@@ -478,6 +478,17 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   border:1px solid var(--border);border-radius:6px;color:var(--text);
   min-width:300px;}
 
+/* Playset Cost — expanded card list rows. Clickable rows open the card
+   modal; the TCG button next to each name jumps straight to TCGPlayer. */
+.playset-row{transition:background 0.1s;}
+.playset-row.clickable{cursor:pointer;}
+.playset-row.clickable:hover{background:var(--accent-glow);}
+.playset-tcg-btn{display:inline-block;margin-left:8px;padding:1px 6px;font-size:10px;
+  font-weight:700;letter-spacing:0.3px;color:var(--accent);background:var(--accent-glow);
+  border:1px solid var(--border-accent);border-radius:4px;text-decoration:none;
+  vertical-align:middle;transition:all 0.1s;}
+.playset-tcg-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent);}
+
 /* Sealed header layout — title block on the left, price toggle on the right. */
 .sealed-header{display:flex;align-items:flex-start;justify-content:space-between;
   gap:18px;margin-bottom:14px;flex-wrap:wrap;}
@@ -7204,14 +7215,15 @@ function FAQView(){
   </div>`;
 }
 
-function SetDetail({data,mult,activeRars,theme}){
+function SetDetail({data,mult,activeRars,theme,onOpenCard}){
   const [rf,setRf]=useState(null);
   const cards=useMemo(()=>{
     let list=data.cards.filter(c=>activeRars.has(c.rarity));
     if(rf) list=list.filter(c=>c.rarity===rf);
     return list.sort((a,b)=>(b.price||0)-(a.price||0));
   },[data,activeRars,rf]);
-  return html`<div style=${{padding:"12px 16px",background:"var(--bg-surface)",borderTop:"1px solid var(--border)"}}>
+  return html`<div style=${{padding:"12px 16px",background:"var(--bg-surface)",borderTop:"1px solid var(--border)"}}
+    onClick=${e=>e.stopPropagation()}>
     <div style=${{display:"flex",gap:4,marginBottom:10,flexWrap:"wrap"}}>
       <button onClick=${()=>setRf(null)} class=${rf===null?"active":""} style=${{fontSize:11,padding:"3px 8px"}}>All</button>
       ${SET_RARS.filter(r=>activeRars.has(r)).map(r=>{const s=getBadgeStyle(r,theme);
@@ -7221,15 +7233,33 @@ function SetDetail({data,mult,activeRars,theme}){
       })}
     </div>
     <div style=${{maxHeight:400,overflowY:"auto"}}>
-      <table><thead><tr><th style=${{textAlign:"left"}}>Card</th><th>Rarity</th><th>${mult===4?"Playset (4x)":"Price (1x)"}</th><th>Each</th></tr></thead>
-        <tbody>${cards.map((c,i)=>{const url=tcgUrl(c.tcgplayer_product_id, c.tcg_printing);
-          return html`<tr key=${i}>
-          <td style=${{textAlign:"left",maxWidth:280,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-            ${c.img_small?html`<img src=${c.img_small} alt="" style=${{width:24,height:34,borderRadius:3,verticalAlign:"middle",marginRight:6,objectFit:"cover"}}/>`:null}${c.name}
+      <table><thead><tr>
+        <th style=${{textAlign:"left"}}>Card</th>
+        <th>Rarity</th>
+        <th>${mult===4?"Playset (4x)":"Price (1x)"}</th>
+        <th>Each</th>
+        <th style=${{width:40}}></th>
+      </tr></thead>
+      <tbody>${cards.map((c,i)=>{
+        const url=tcgUrl(c.tcgplayer_product_id, c.tcg_printing);
+        const handleOpen = () => { if(onOpenCard && c.tcgplayer_product_id) onOpenCard(c); };
+        const clickable = !!(onOpenCard && c.tcgplayer_product_id);
+        return html`<tr key=${i}
+          class=${clickable ? "playset-row clickable" : "playset-row"}
+          onClick=${clickable ? handleOpen : null}
+          title=${clickable ? "Open card details" : null}>
+          <td style=${{textAlign:"left",maxWidth:340,overflow:"hidden",whiteSpace:"nowrap"}}>
+            ${c.img_small?html`<img src=${c.img_small} alt="" style=${{width:24,height:34,borderRadius:3,verticalAlign:"middle",marginRight:6,objectFit:"cover"}}/>`:null}
+            <span style=${{verticalAlign:"middle"}}>${c.name}</span>
+            ${url && html`<a href=${url} target="_blank" rel="noopener nofollow"
+              onClick=${e=>e.stopPropagation()}
+              class="playset-tcg-btn"
+              title="Open on TCGPlayer">TCG ↗</a>`}
           </td>
           <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
           <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
-          <td class="muted">${url ? html`<a href=${url} target="_blank" rel="noopener nofollow" style=${{color:"inherit",textDecoration:"none"}}>${fmt(c.price)}<span style=${{fontSize:9,opacity:0.7,marginLeft:2}}>↗</span></a>` : fmt(c.price)}</td>
+          <td class="muted">${fmt(c.price)}</td>
+          <td style=${{textAlign:"right",color:"var(--text-muted)",fontSize:11}}>${clickable?"›":""}</td>
         </tr>`;})}</tbody></table>
     </div>
     <div style=${{display:"flex",justifyContent:"space-between",padding:"8px 12px",background:"var(--stat-bg)",border:"1px solid var(--border)",borderRadius:6,marginTop:8}}>
@@ -7239,10 +7269,11 @@ function SetDetail({data,mult,activeRars,theme}){
   </div>`;
 }
 
-function SetValuesView({rawData,sets,theme,priceMode,setPriceMode}){
+function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collection,updateQty,onSignIn}){
   const [mode,setMode]=useState("playset");
   const [activeRars,setActiveRars]=useState(()=>new Set(SET_RARS));
   const [expanded,setExpanded]=useState(null);
+  const [selectedGroup,setSelectedGroup]=useState(null);
   const mult=mode==="playset"?4:1;
   const priceField = priceMode === "market" ? "TCGPlayer Market" : "Low Price";
   const setData=useMemo(()=>{
@@ -7254,7 +7285,14 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode}){
         const rar=(row["Rarity"]||"").trim(),pr=(row["Printing"]||"").trim();
         if(pr!=="Normal"||!SET_RARS.includes(rar)) continue;
         const name=(row["Product Name"]||"").trim(),price=parseP(row[priceField]);
-        if(!cards[name]) cards[name]={name,rarity:rar,price,img_small:row["img_small"],img_normal:row["img_normal"],num:row["Number"]};
+        if(!cards[name]) cards[name]={
+          name, rarity:rar, price,
+          img_small:row["img_small"], img_normal:row["img_normal"],
+          num:row["Number"],
+          tcgplayer_product_id: row["tcgplayer_product_id"],
+          tcg_printing: row["tcg_printing"] || row["Printing"],
+          card_id: row["card_id"],
+        };
       }
       const cardList=Object.values(cards);
       const byRar={};
@@ -7263,6 +7301,12 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode}){
     }
     return result;
   },[rawData,sets,priceField]);
+  // Open the existing card-detail modal on row click. Mirrors the
+  // Pack/Box-sim handoff via groupFromSimCard.
+  const openCard = (c) => {
+    const g = groupFromSimCard(c, rawData);
+    if(g) setSelectedGroup(g);
+  };
   const toggleRar=r=>{setActiveRars(prev=>{const next=new Set(prev);if(next.has(r)) next.delete(r); else next.add(r);return next;});};
   const getTotal=s=>{const d=setData[s];if(!d) return 0;let t=0;for(const r of SET_RARS) if(activeRars.has(r)) t+=(d.byRar[r]?.total||0);return t*mult;};
   return html`<div>
@@ -7304,11 +7348,14 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode}){
             <td class="muted">${d.cards.length}</td>
           </tr>
           ${isExp&&html`<tr><td colspan=${SET_RARS.length+3} style=${{padding:0,border:"none"}}>
-            <${SetDetail} data=${d} mult=${mult} activeRars=${activeRars} theme=${theme}/>
+            <${SetDetail} data=${d} mult=${mult} activeRars=${activeRars} theme=${theme} onOpenCard=${openCard}/>
           </td></tr>`}
         <//>`;})}</tbody>
     </table></div>
     <p class="muted" style=${{fontSize:11,marginTop:8}}>Normal printings only (excludes foils, Enchanted, Epic, Iconic). ${mode==="playset"?"Playset = 4 copies of each card.":"Master Set = 1 copy of each card."} Prices via Lorcast (TCGPlayer).</p>
+    ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
+      onClose=${()=>setSelectedGroup(null)}
+      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
   </div>`;
 }
 
@@ -8186,7 +8233,8 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         onClick=${()=>setSub(k)}>${l}</button>`)}
     </div>
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
-      priceMode=${priceMode} setPriceMode=${setPriceMode}/>`}
+      priceMode=${priceMode} setPriceMode=${setPriceMode}
+      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
     ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs}
       priceMode=${priceMode} setPriceMode=${setPriceMode}/>`}
     ${sub==="ev"      && html`<${EVView} raw=${raw} sets=${setsNewest} avgs=${avgs}
