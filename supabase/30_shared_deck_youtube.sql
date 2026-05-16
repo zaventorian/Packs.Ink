@@ -7,7 +7,11 @@
 -- was silently stripped on the way to the client even though the underlying
 -- decks row has it.
 --
--- Idempotent: create or replace.
+-- Postgres rejects CREATE OR REPLACE when RETURNS TABLE columns change
+-- ("cannot change return type of existing function" / 42P13), so we drop
+-- the old definition first. Drop is idempotent via IF EXISTS.
+
+drop function if exists public.get_shared_deck(uuid, text);
 
 create or replace function public.get_shared_deck(p_deck_id uuid, p_token text)
 returns table(
