@@ -4204,10 +4204,13 @@ const SetSel=({val,onChange,placeholder,sets})=>html`<select value=${val} onChan
 const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span class="tip-icon">?</span><span class="tip-box">${text}</span></span>`;
 
 const Footer = ({lastEtlDate})=>{
-  // Warn when the daily ETL hasn't refreshed prices in > 36h. Quiet when
-  // healthy (no pill) so the footer doesn't get noisy on normal days.
+  // Warn when the daily ETL hasn't refreshed prices on schedule. Anchor
+  // to 21:00 UTC of the snapshot date (when the cron actually runs) plus
+  // a 24h grace window — that way the pill fires once the *next* day's
+  // scheduled run is 24h overdue, not at 12:00 UTC every day (which was
+  // the old "midnight + 36h" formula's noisy behaviour).
   const stale = lastEtlDate
-    ? (Date.now() - new Date(lastEtlDate + "T00:00:00Z").getTime()) > 36*3600*1000
+    ? (Date.now() - new Date(lastEtlDate + "T21:00:00Z").getTime()) > 24*3600*1000
     : false;
   return html`<div class="footer">
     <div class="footer-text">
