@@ -133,13 +133,36 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .price-db-table tbody tr{border-bottom:1px solid var(--border);}
 .price-db-table tbody tr:hover{background:var(--bg-surface);}
 .price-db-table td{padding:5px 8px;vertical-align:middle;}
+.price-db-table .td-img{width:32px;}
 .price-db-table .td-img img{width:28px;height:39px;object-fit:cover;border-radius:3px;display:block;}
-.price-db-table .td-name-main{font-weight:600;color:var(--text);line-height:1.2;}
-.price-db-table .td-name-meta{font-size:10px;color:var(--text-muted);margin-top:1px;}
+/* Name column: fixed width + ellipsis so every row's name lines up
+   vertically with neighbors regardless of name length. */
+.price-db-table th:nth-child(3){min-width:240px;max-width:280px;}
+.price-db-table td:nth-child(3){min-width:240px;max-width:280px;}
+.price-db-table .td-name-main{font-weight:600;color:var(--text);line-height:1.2;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:flex;align-items:center;gap:6px;}
+.price-db-table .td-name-link{overflow:hidden;text-overflow:ellipsis;}
+.price-db-table .td-name-meta{font-size:10px;color:var(--text-muted);margin-top:1px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .price-db-table .td-num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;}
 .price-db-table .pct-up{color:var(--green);font-weight:600;}
 .price-db-table .pct-down{color:var(--red);font-weight:600;}
-.price-db-sig{display:inline-block;font-size:14px;line-height:1;margin:0 1px;cursor:help;}
+/* Compact uppercase signal tags. Fixed dimensions so a row with 1 sig
+   lines up vertically with a row with 4 sigs — no emoji-soup. */
+.price-db-sig{display:inline-block;font-size:10px;font-weight:700;letter-spacing:0.4px;
+  padding:2px 6px;border-radius:3px;margin:1px 2px;cursor:help;
+  min-width:38px;text-align:center;line-height:1.2;
+  border:1px solid transparent;}
+.price-db-sig.sig-buy{   background:rgba(220,38,38,0.15); color:#dc2626; border-color:rgba(220,38,38,0.35);}
+.price-db-sig.sig-crash{ background:rgba(220,38,38,0.08); color:#dc2626; border-color:rgba(220,38,38,0.20);}
+.price-db-sig.sig-disc{  background:rgba(22,163,74,0.15); color:#15803d; border-color:rgba(22,163,74,0.35);}
+.price-db-sig.sig-prem{  background:rgba(217,119,6,0.15); color:#b45309; border-color:rgba(217,119,6,0.35);}
+.price-db-sig.sig-trend{ background:rgba(37,99,235,0.12); color:#1d4ed8; border-color:rgba(37,99,235,0.30);}
+html[data-theme="dark"] .price-db-sig.sig-buy{   color:#fca5a5;}
+html[data-theme="dark"] .price-db-sig.sig-crash{ color:#fca5a5;}
+html[data-theme="dark"] .price-db-sig.sig-disc{  color:#86efac;}
+html[data-theme="dark"] .price-db-sig.sig-prem{  color:#fdba74;}
+html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 
 /* Inline preset description sentence that swaps based on the active chip. */
 .price-db-desc{font-size:11px;line-height:1.4;padding:2px 2px 4px;}
@@ -6478,7 +6501,6 @@ function SetValuesView({rawData,sets,theme,priceMode}){
 // Sub-selection + sim kind are persisted to localStorage so re-entering
 // the tab lands where the user left off.
 const MARKET_SUBS = [
-  ["db",      "Price Database"],
   ["ev",      "Expected Value"],
   ["avg",     "Card Averages"],
   ["setval",  "Playset Cost"],
@@ -6527,7 +6549,10 @@ function rarityLabel(r){
 
 function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
-  const [sortKey, setSortKey] = useState("pct_1d");
+  // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
+  // key maps to Math.abs(r.pct_1d) so the first thing you see is whatever
+  // moved most today regardless of direction.
+  const [sortKey, setSortKey] = useState("abs_pct_1d");
   const [sortDesc, setSortDesc] = useState(true);
   const [priceMode, setPriceMode] = useState("low");
   const [filterSet, setFilterSet] = useState("");
@@ -6572,7 +6597,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   // card under $10 that moved +50% in a month, or only cards trading between
   // $20-$100 that dropped ≥10% in a week.
   const [advOpen, setAdvOpen] = useState(false);
-  const [minPrice, setMinPrice] = useState("");
+  const [minPrice, setMinPrice] = useState("5");
   const [maxPrice, setMaxPrice] = useState("");
   const [minPct, setMinPct] = useState("");
   const [maxPct, setMaxPct] = useState("");
@@ -6645,9 +6670,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
     const sk = presetSort ? presetSort[0] : sortKey;
     const sd = presetSort ? presetSort[1] : sortDesc;
     const getVal = (r, k) => {
-      if(k === "name")   return (r.name || "") + " " + (r.version || "");
-      if(k === "low")    return r.low_today;
-      if(k === "market") return r.market_today;
+      if(k === "name")        return (r.name || "") + " " + (r.version || "");
+      if(k === "low")         return r.low_today;
+      if(k === "market")      return r.market_today;
+      // Absolute-value 1D sort: biggest movers in EITHER direction. Used
+      // as the default sort so the first view shows what actually moved
+      // today, not just what gained.
+      if(k === "abs_pct_1d")  return r.pct_1d == null ? null : Math.abs(r.pct_1d);
       // Legacy "price" key (active-mode-driven) still supported for old prefs.
       if(k === "price")  return priceMode === "market" ? r.market_today : r.low_today;
       return r[k];
@@ -6676,20 +6705,23 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   if(state.loading) return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center"}}>Loading price database…</div>`;
   if(state.error)   return html`<div class="muted" style=${{padding: "30px 0", textAlign: "center", color: "var(--red)"}}>${state.error}</div>`;
 
+  // Signals as compact text badges instead of emoji-soup. Each signal is a
+  // fixed-width 4-char uppercase tag with a consistent color scheme so a
+  // row's signal cell always reads cleanly even when multiple fire.
   const sigOf = (r) => {
     const out = [];
-    if(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1) out.push(["buyout", "🔥",
-      "Buyout candidate: 1D Δ is +" + r.pct_1d.toFixed(1) + "% from a prior low of $" + (r.low_prev||0).toFixed(2) + ". Pattern often means a single buyer swept the cheap copies — supply quickly thinned, listings jumped overnight."]);
-    if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crashing", "📉",
+    if(r.pct_1d != null && r.pct_1d >= 30 && (r.low_prev || 0) >= 1) out.push(["buy", "BUY",
+      "Buyout candidate: 1D Δ is +" + r.pct_1d.toFixed(1) + "% from a prior low of $" + (r.low_prev||0).toFixed(2) + ". Pattern often means a single buyer swept the cheap copies — supply thinned, listings jumped overnight."]);
+    if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
       "Crashing: down " + Math.abs(r.pct_7d).toFixed(1) + "% over the last week. Sustained drop, not noise. Common after a spike unwinds or a reprint is announced."]);
     if(r.low_today != null && r.market_today != null && r.market_today > 0){
       const ratio = r.low_today / r.market_today;
-      if(ratio <= 0.85) out.push(["discount", "💰",
-        "Discount: NM Low is " + Math.round((1-ratio)*100) + "% under NM Market. Cheapest listing is undercutting recent sale prices — could be a stale low-baller, could be a genuine buy."]);
-      if(ratio >= 1.10) out.push(["premium", "↑",
+      if(ratio <= 0.85) out.push(["disc", "DISC",
+        "Discount: NM Low is " + Math.round((1-ratio)*100) + "% under NM Market. Cheapest listing is undercutting recent sale prices — possible undercut bargain or a stale low-baller."]);
+      if(ratio >= 1.10) out.push(["prem", "PREM",
         "Premium: NM Low is " + Math.round((ratio-1)*100) + "% over NM Market. Even the floor seller is asking more than recent sales — supply may be tightening."]);
     }
-    if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trending", "📈",
+    if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
       "Trending up: +" + r.pct_30d.toFixed(1) + "% over the last month. Sustained appreciation across multiple price snapshots."]);
     return out;
   };
@@ -6910,7 +6942,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collect
   const showNc = sub === "avg";
   const showNe = false;
   // Show the price toggle on every analytics sub-tab except Simulate.
-  const showPriceToggle = sub !== "sim" && sub !== "db";
+  const showPriceToggle = sub !== "sim";
   return html`<div>
     <div class="market-subtabs">
       ${MARKET_SUBS.map(([k,l])=>html`<button key=${k}
@@ -6937,9 +6969,6 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe, user, collect
         </label>
       <//>`}
     </div>
-    ${sub==="db"      && html`<${PriceDatabase} raw=${raw} sets=${setsNewest}
-      theme=${theme} user=${user} collection=${collection}
-      updateQty=${updateQty} onSignIn=${onSignIn}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme} priceMode=${priceMode}/>`}
     ${sub==="heatmap" && html`<${HeatmapView} sets=${setsNewest} avgs=${avgs} priceMode=${priceMode}/>`}
     ${sub==="ev"      && html`<${EVView} raw=${raw} sets=${setsNewest} avgs=${avgs}
@@ -10674,7 +10703,7 @@ function App(){
 
   useEffect(()=>{loadFromSupabase();},[loadFromSupabase]);
 
-  const TABS=[["home","Home"],["market","Market"],["history","Price Graphing"],["cards","Cards"],["collection","Collection"],["decks","Decks"]];
+  const TABS=[["home","Home"],["screener","Screener"],["history","Price Graphing"],["market","Analytics"],["cards","Cards"],["collection","Collection"],["decks","Decks"]];
 
   // Render the app shell immediately. Empty views just render blank tables
   // while data is in flight; cache hits make this instantaneous after the
@@ -10773,6 +10802,8 @@ function App(){
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       sealedPrices=${sealedPrices}
       openSetHistory=${openSetHistory}/>`}
+    ${view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
+      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}/>`}
     ${view==="faq"&&html`<${FAQView}/>`}
     <${Footer} lastEtlDate=${lastEtlDate}/>
   </div><//>`;
