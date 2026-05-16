@@ -228,6 +228,52 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   background:var(--bg-surface);color:var(--text-muted);text-decoration:none;
   border:1px solid var(--border);font-weight:700;flex-shrink:0;}
 .price-db-table .td-tcg-link:hover{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+/* Multi-select dropdown for rarities / inks. */
+.price-db-multibtn{padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
+  border-radius:5px;white-space:nowrap;}
+.price-db-multibtn:hover{border-color:var(--accent);}
+.price-db-multimenu{position:absolute;top:calc(100% + 4px);left:0;z-index:200;
+  min-width:170px;max-height:320px;overflow-y:auto;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:7px;
+  box-shadow:0 8px 20px rgba(0,0,0,0.18);padding:4px;
+  display:flex;flex-direction:column;gap:1px;}
+.price-db-multiitem{display:flex;align-items:center;gap:8px;padding:6px 10px;
+  font-size:13px;cursor:pointer;border-radius:4px;color:var(--text);user-select:none;}
+.price-db-multiitem:hover{background:var(--bg-surface);}
+.price-db-multiitem input{cursor:pointer;}
+.price-db-multiclear{margin-top:4px;padding:5px 10px;font-size:11px;font-weight:600;
+  cursor:pointer;background:transparent;border:none;color:var(--accent);text-align:left;}
+.price-db-multiclear:hover{background:var(--accent-glow);border-radius:4px;}
+
+/* Window-picker chips shown only for Gainers / Losers presets. */
+.price-db-winrow{display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
+.price-db-winchip{padding:4px 11px;font-size:11px;font-weight:700;cursor:pointer;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
+  border-radius:12px;letter-spacing:0.3px;}
+.price-db-winchip:hover{border-color:var(--accent);}
+.price-db-winchip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+/* "Long term" Δ% toggle. */
+.price-db-toggle{display:inline-flex;align-items:center;gap:5px;font-size:12px;
+  font-weight:600;color:var(--text-muted);cursor:pointer;user-select:none;
+  padding:5px 10px;background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:5px;}
+.price-db-toggle:hover{border-color:var(--accent);color:var(--text);}
+.price-db-toggle input{cursor:pointer;}
+
+/* Mobile: trim padding, hide image column, single-line meta. */
+@media (max-width: 720px){
+  .price-db-table{font-size:11px;}
+  .price-db-table th, .price-db-table td{padding:4px 5px;}
+  .price-db-table th:nth-child(2), .price-db-table td:nth-child(2){display:none;} /* image */
+  .price-db-table th:nth-child(4), .price-db-table td:nth-child(4){display:none;} /* set */
+  .price-db-table th:nth-child(5), .price-db-table td:nth-child(5){display:none;} /* rarity */
+  .price-db-table th:nth-child(6), .price-db-table td:nth-child(6){display:none;} /* ink */
+  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:140px;max-width:180px;}
+  .price-db-table .td-img{display:none;}
+}
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
   border:1px solid transparent;border-radius:6px;cursor:pointer;
@@ -6524,16 +6570,15 @@ const PRICE_DB_WIN = [
 ];
 // [key, label, one-line description shown beneath the preset chips]
 const PRICE_DB_PRESETS = [
-  ["all",       "All",         "Every tracked card. Use the filters below to narrow down."],
-  ["gainers1d", "1D Gainers",  "Sorted by biggest 24-hour low_price gains. Top of the leaderboard for today's movement."],
-  ["losers1d",  "1D Losers",   "Sorted by biggest 24-hour drops. Often pairs with reprint news or post-spike cooldown."],
-  ["gainers1w", "1W Gainers",  "Biggest 7-day gains. Less noise than 1D — confirms a sustained trend."],
-  ["losers1w",  "1W Losers",   "Biggest 7-day drops. Cards correcting from a recent peak or fading interest."],
-  ["buyouts",   "🔥 Buyouts",  "1D ≥ +30% with a prior low of at least $1 — pattern of someone sweeping the cheap copies off the market."],
-  ["crashing",  "📉 Crashing", "1W ≤ -20%. Sustained decline. Often hits after a spike unwinds or a reprint is announced."],
-  ["discount",  "💰 Discount", "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
-  ["premium",   "↑ Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
+  ["all",      "All",       "Every tracked card. Use the filters below to narrow down."],
+  ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
+  ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
+  ["buyouts",  "Buyouts",   "1D ≥ +30% with a prior low of at least $1 — pattern of someone sweeping the cheap copies off the market."],
+  ["crashing", "Crashing",  "1W ≤ -20%. Sustained decline. Often hits after a spike unwinds or a reprint is announced."],
+  ["discount", "Discount",  "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
+  ["premium",  "Premium",   "Cheapest listing is 10%+ above market. Even the floor seller is asking more than recent sales — supply may be drying up."],
 ];
+const MOVER_WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
 const fmtMoney = (v) => v == null ? "—" : "$" + Number(v).toFixed(2);
 const fmtPctV  = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(1) + "%";
 const pctCls   = (v) => v == null ? "" : v > 0 ? "pct-up" : v < 0 ? "pct-down" : "";
@@ -6556,10 +6601,37 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
   const [sortDesc, setSortDesc] = useState(true);
   const [priceMode, setPriceMode] = useState("low");
   const [filterSet, setFilterSet] = useState("");
-  const [filterRarity, setFilterRarity] = useState("");
-  const [filterInk, setFilterInk] = useState("");
+  // Multi-select rarities and inks. Sets allow toggling individual values
+  // without rewriting a single-value dropdown.
+  const [filterRarities, setFilterRarities] = useState(() => new Set());
+  const [filterInks, setFilterInks] = useState(() => new Set());
+  const [rarityOpen, setRarityOpen] = useState(false);
+  const [inkOpen, setInkOpen] = useState(false);
+  const rarityRef = useRef(null);
+  const inkRef = useRef(null);
+  useEffect(() => {
+    if(!rarityOpen && !inkOpen) return;
+    const onDoc = (e) => {
+      if(rarityOpen && rarityRef.current && !rarityRef.current.contains(e.target)) setRarityOpen(false);
+      if(inkOpen    && inkRef.current    && !inkRef.current.contains(e.target))    setInkOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [rarityOpen, inkOpen]);
   const [search, setSearch] = useState("");
-  const [preset, setPreset] = useState("all");
+  const [preset, setPreset] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:preset") || "all"; } catch { return "all"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:preset", preset); } catch{} }, [preset]);
+  // Window selector that drives the Gainers / Losers presets. Persists so a
+  // returning user lands on whatever timeframe they last cared about.
+  const [moverWin, setMoverWin] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:moverwin") || "pct_1d"; } catch { return "pct_1d"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:moverwin", moverWin); } catch{} }, [moverWin]);
+  // Compact column mode hides the 3M/6M/1Y columns by default so the table
+  // fits a typical laptop screen. Toggle in the toolbar shows them again.
+  const [showLongWins, setShowLongWins] = useState(false);
   // Card detail modal — clicking a row's image or name opens it.
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Multi-select state. Stored as a Set of keys (card_id:printing) so a
@@ -6633,8 +6705,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
     if(!rows) return [];
     const q = search.trim().toLowerCase();
     const passes = (r) => {
-      if(filterRarity && r.rarity !== filterRarity) return false;
-      if(filterInk && r.ink !== filterInk) return false;
+      if(filterRarities.size > 0 && !filterRarities.has(r.rarity)) return false;
+      if(filterInks.size > 0 && !filterInks.has(r.ink)) return false;
       if(filterSet && setNameById[r.set_id] !== filterSet) return false;
       if(q){
         const nm = ((r.name || "") + " " + (r.version || "")).toLowerCase();
@@ -6661,12 +6733,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       return true;
     };
     const out = rows.filter(passes);
-    const presetSort = {
-      gainers1d: ["pct_1d", true],
-      losers1d:  ["pct_1d", false],
-      gainers1w: ["pct_7d", true],
-      losers1w:  ["pct_7d", false],
-    }[preset];
+    // Gainers / Losers sort by the selected window. The Use Low/Use Market
+    // toggle decides which series (low_pct_* or mkt_pct_*) drives the sort.
+    const winKey = priceMode === "market" ? moverWin.replace("pct_", "mkt_pct_") : moverWin;
+    const presetSort =
+      preset === "gainers" ? [winKey, true]  :
+      preset === "losers"  ? [winKey, false] :
+      null;
     const sk = presetSort ? presetSort[0] : sortKey;
     const sd = presetSort ? presetSort[1] : sortDesc;
     const getVal = (r, k) => {
@@ -6691,7 +6764,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
       return sd ? bv - av : av - bv;
     });
     return out;
-  }, [state.rows, search, filterSet, filterRarity, filterInk, preset, sortKey, sortDesc, priceMode, setNameById]);
+  }, [state.rows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin]);
 
   const onSort = (k) => {
     if(sortKey === k) setSortDesc((d) => !d);
@@ -6759,6 +6832,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         title=${tip}
         onClick=${() => setPreset(k)}>${l}</button>`)}
     </div>
+    ${(preset === "gainers" || preset === "losers") && html`<div class="price-db-winrow">
+      <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase"}}>${preset === "gainers" ? "Gainers over" : "Losers over"}</span>
+      ${MOVER_WINS.map(([k, lbl]) => html`<button key=${k}
+        class=${"price-db-winchip"+(moverWin===k?" active":"")}
+        onClick=${()=>setMoverWin(k)}>${lbl}</button>`)}
+    </div>`}
     <div class="price-db-desc muted">${presetDesc}</div>
     <div class="price-db-filters">
       <input class="price-db-search" type="search" placeholder="Search by name"
@@ -6767,18 +6846,42 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
         <option value="">All sets</option>
         ${(sets || []).slice().reverse().map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
       </select>
-      <select value=${filterRarity} onChange=${(e) => setFilterRarity(e.target.value)}>
-        <option value="">All rarities</option>
-        ${rarities.map((r) => html`<option key=${r} value=${r}>${rarityLabel(r)}</option>`)}
-      </select>
-      <select value=${filterInk} onChange=${(e) => setFilterInk(e.target.value)}>
-        <option value="">All inks</option>
-        ${inks.map((i) => html`<option key=${i} value=${i}>${i}</option>`)}
-      </select>
+      <div ref=${rarityRef} style=${{position:"relative",display:"inline-flex"}}>
+        <button class="price-db-multibtn" onClick=${()=>setRarityOpen(o=>!o)}>
+          ${filterRarities.size === 0 ? "All rarities" : `${filterRarities.size} ${filterRarities.size===1?"rarity":"rarities"}`} ▾
+        </button>
+        ${rarityOpen && html`<div class="price-db-multimenu">
+          ${rarities.map(r => html`<label key=${r} class="price-db-multiitem">
+            <input type="checkbox" checked=${filterRarities.has(r)}
+              onChange=${()=>setFilterRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}/>
+            ${rarityLabel(r)}
+          </label>`)}
+          ${filterRarities.size > 0 && html`<button class="price-db-multiclear"
+            onClick=${()=>setFilterRarities(new Set())}>Clear</button>`}
+        </div>`}
+      </div>
+      <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
+        <button class="price-db-multibtn" onClick=${()=>setInkOpen(o=>!o)}>
+          ${filterInks.size === 0 ? "All inks" : `${filterInks.size} ${filterInks.size===1?"ink":"inks"}`} ▾
+        </button>
+        ${inkOpen && html`<div class="price-db-multimenu">
+          ${inks.map(i => html`<label key=${i} class="price-db-multiitem">
+            <input type="checkbox" checked=${filterInks.has(i)}
+              onChange=${()=>setFilterInks(prev=>{ const n=new Set(prev); n.has(i)?n.delete(i):n.add(i); return n; })}/>
+            ${i}
+          </label>`)}
+          ${filterInks.size > 0 && html`<button class="price-db-multiclear"
+            onClick=${()=>setFilterInks(new Set())}>Clear</button>`}
+        </div>`}
+      </div>
       <button class="price-db-advbtn" onClick=${() => setAdvOpen(o => !o)}
         title="Advanced numeric filters">
         ${advOpen ? "Advanced ▴" : "Advanced ▾"}
       </button>
+      <label class="price-db-toggle" title="Show 3M / 6M / 1Y Δ% columns alongside the short-window ones">
+        <input type="checkbox" checked=${showLongWins} onChange=${e=>setShowLongWins(e.target.checked)}/>
+        Long term
+      </label>
       <div class="market-sim-kind" role="group"
         title="Determines which column drives the preset logic (Buyouts, Discount, etc.) and which prices the advanced range filters apply to. Both columns are always shown in the table."
         style=${{marginLeft: "auto"}}>
@@ -6855,7 +6958,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
               title="TCGPlayer NM Low — lowest active NM listing">NM Low${arrow("low")}</th>
           <th class="sortable th-num" onClick=${() => onSort("market")}
               title="TCGPlayer NM Market — smoothed average of recent NM sales">NM Market${arrow("market")}</th>
-          ${PRICE_DB_WIN.map(([lk, mk, lbl]) => {
+          ${PRICE_DB_WIN.filter((_, i) => showLongWins || i < 3).map(([lk, mk, lbl]) => {
             const k = priceMode === "market" ? mk : lk;
             return html`<th key=${k} class="sortable th-num"
               title=${"Δ% over " + lbl + " (" + (priceMode === "market" ? "Market" : "Low") + " — flip the Use Low / Use Market toggle to switch)"}
@@ -6892,7 +6995,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
               <td>${r.ink || "—"}</td>
               <td class="td-num">${fmtMoney(r.low_today)}</td>
               <td class="td-num">${fmtMoney(r.market_today)}</td>
-              ${PRICE_DB_WIN.map(([lk, mk]) => {
+              ${PRICE_DB_WIN.filter((_, i) => showLongWins || i < 3).map(([lk, mk]) => {
                 const v = priceMode === "market" ? r[mk] : r[lk];
                 return html`<td key=${lk} class=${"td-num " + pctCls(v)}>${fmtPctV(v)}</td>`;
               })}
