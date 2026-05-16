@@ -1346,12 +1346,21 @@ a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08)
 .deck-grid-tile.owned-dim{opacity:0.4;}
 .deck-grid-tile.missing-pop{border-color:var(--red);}
 .deck-grid-tile img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
-.deck-grid-tile-qty{position:absolute;top:4px;left:4px;background:rgba(0,0,0,0.75);
-  color:#fff;font-size:11px;font-weight:700;padding:2px 6px;border-radius:4px;}
+.deck-grid-tile-qty{position:absolute;top:5px;right:5px;
+  background:linear-gradient(180deg, #6d4dd6, #5a3fc4);
+  color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:5px;
+  box-shadow:0 1px 3px rgba(0,0,0,0.35);letter-spacing:0.3px;z-index:2;}
 .deck-grid-tile-price{position:absolute;bottom:4px;right:4px;background:rgba(22,163,74,0.92);
   color:#fff;font-size:10px;font-weight:700;padding:2px 5px;border-radius:3px;
   text-decoration:none;}
 .deck-grid-tile-price:hover{background:rgba(22,163,74,1);}
+/* Owned/missing fraction (e.g. "1/4") on the bottom-center of grid tiles
+   when Highlight missing is on. Always-visible counter that pairs with
+   the dimming/border styles. */
+.deck-tile-owned-frac{position:absolute;top:5px;left:5px;
+  background:rgba(0,0,0,0.75);color:#fff;font-size:10px;font-weight:700;
+  padding:2px 6px;border-radius:4px;letter-spacing:0.3px;z-index:2;}
+.deck-tile-owned-frac.complete{background:rgba(22,163,74,0.92);}
 
 /* +/- counter overlaid on grid + stacked deck-list tiles. Bottom-left so
    it doesn't collide with the price chip in the bottom-right. */
@@ -1369,39 +1378,41 @@ a.deck-row-price:hover{border-color:var(--green);background:rgba(22,163,74,0.08)
 .deck-stack-counter button:disabled{opacity:0.35;cursor:not-allowed;}
 
 /* Stacked-pile layout — each qty renders as a peek-strip above the top card.
-   Each peek looks like a real card edge: rounded top corners, border, drop
-   shadow under it so the next card "sits" on the one below. Hover lifts the
-   whole stack slightly so it feels interactive. */
-.deck-section-stack{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px;}
+   Sized so each peek shows the upper card frame (cost circle + title bar)
+   instead of a thin meaningless strip. Strong drop shadows separate the
+   layers so the eye reads "physical card stack" not "stacked JPEGs". */
+.deck-section-stack{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:22px;}
 .deck-stack-tile{position:relative;display:flex;flex-direction:column;cursor:pointer;
   transition:transform 0.12s ease-out;}
-.deck-stack-tile:hover{transform:translateY(-3px);}
+.deck-stack-tile:hover{transform:translateY(-4px);}
 .deck-stack-tile.owned-dim{opacity:0.4;}
-.deck-stack-peek{position:relative;width:100%;height:16px;overflow:hidden;
-  border-radius:9px 9px 0 0;
-  border:1px solid rgba(0,0,0,0.18);border-bottom:none;
+.deck-stack-peek{position:relative;width:96%;margin:0 auto -3px;height:22px;overflow:hidden;
+  border-radius:8px 8px 0 0;
+  border:1px solid rgba(0,0,0,0.32);border-bottom:none;
   background:var(--bg-card);
-  box-shadow:0 2px 4px -1px rgba(0,0,0,0.18);
-  margin-bottom:-2px;}
-html[data-theme="dark"] .deck-stack-peek{border-color:rgba(255,255,255,0.08);
-  box-shadow:0 2px 4px -1px rgba(0,0,0,0.5);}
-.deck-stack-peek img{width:100%;height:auto;display:block;
-  object-fit:cover;object-position:0 0;}
-/* Inset highlight along the top of each peek — sells the "real card" look. */
+  box-shadow:0 4px 6px -3px rgba(0,0,0,0.4),inset 0 -2px 3px -2px rgba(0,0,0,0.25);}
+html[data-theme="dark"] .deck-stack-peek{border-color:rgba(255,255,255,0.14);}
+.deck-stack-peek img{width:100%;height:auto;display:block;}
+/* Stagger each successive peek slightly wider so the stack reads as nested
+   cards getting larger toward the front. */
+.deck-stack-peek:nth-last-child(2){width:97%;}
+.deck-stack-peek:nth-last-child(3){width:98%;}
+.deck-stack-peek:nth-last-child(4){width:99%;}
+/* Top highlight along each peek's upper edge — sells the "real card" look. */
 .deck-stack-peek::after{content:"";position:absolute;inset:0 0 auto 0;height:1px;
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.4),transparent);
+  background:linear-gradient(90deg,transparent,rgba(255,255,255,0.45),transparent);
   pointer-events:none;}
-.deck-stack-top{position:relative;border:1px solid rgba(0,0,0,0.22);border-radius:10px;
+.deck-stack-top{position:relative;border:1px solid rgba(0,0,0,0.32);border-radius:10px;
   overflow:hidden;background:var(--bg-card);
-  box-shadow:0 6px 14px -4px rgba(0,0,0,0.25),0 2px 4px -1px rgba(0,0,0,0.15);
+  box-shadow:0 8px 18px -4px rgba(0,0,0,0.4),0 3px 6px -2px rgba(0,0,0,0.2);
   transition:box-shadow 0.12s ease-out;}
-html[data-theme="dark"] .deck-stack-top{border-color:rgba(255,255,255,0.1);
-  box-shadow:0 6px 14px -4px rgba(0,0,0,0.6),0 2px 4px -1px rgba(0,0,0,0.4);}
-.deck-stack-tile:hover .deck-stack-top{box-shadow:0 10px 22px -4px rgba(0,0,0,0.32),0 3px 6px -1px rgba(0,0,0,0.2);}
+html[data-theme="dark"] .deck-stack-top{border-color:rgba(255,255,255,0.18);
+  box-shadow:0 8px 18px -4px rgba(0,0,0,0.7),0 3px 6px -2px rgba(0,0,0,0.45);}
+.deck-stack-tile:hover .deck-stack-top{box-shadow:0 12px 26px -4px rgba(0,0,0,0.5),0 4px 8px -2px rgba(0,0,0,0.25);}
 .deck-stack-top img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
-.deck-stack-top.missing-pop{border-color:var(--red);box-shadow:0 0 0 2px rgba(220,38,38,0.4),0 6px 14px -4px rgba(0,0,0,0.25);}
-.deck-stack-qty{position:absolute;top:7px;left:7px;
-  background:linear-gradient(180deg,rgba(0,0,0,0.85),rgba(0,0,0,0.7));
+.deck-stack-top.missing-pop{border-color:var(--red);box-shadow:0 0 0 2px rgba(220,38,38,0.4),0 8px 18px -4px rgba(0,0,0,0.4);}
+.deck-stack-qty{position:absolute;top:7px;right:7px;
+  background:linear-gradient(180deg, #6d4dd6, #5a3fc4);
   color:#fff;font-size:12px;font-weight:700;padding:3px 9px;border-radius:5px;z-index:2;
   box-shadow:0 1px 3px rgba(0,0,0,0.4);letter-spacing:0.3px;}
 .deck-stack-price{position:absolute;bottom:7px;right:7px;
@@ -8845,6 +8856,9 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const [sortBy, setSortBy] = useState(() => {
     try { return localStorage.getItem("packsink:deckview:sort") || "cost-asc"; } catch { return "cost-asc"; }
   });
+  const [groupBy, setGroupBy] = useState(() => {
+    try { return localStorage.getItem("packsink:deckview:group") || "type"; } catch { return "type"; }
+  });
   const [highlightMissing, setHighlightMissing] = useState(() => {
     try { return localStorage.getItem("packsink:deckview:highlight") === "true"; } catch { return false; }
   });
@@ -8856,6 +8870,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
   const [hoverPreview, setHoverPreview] = useState(null); // {src, x, y}
   useEffect(()=>{ try { localStorage.setItem("packsink:deckview:layout", viewLayout); } catch{} }, [viewLayout]);
   useEffect(()=>{ try { localStorage.setItem("packsink:deckview:sort", sortBy); } catch{} }, [sortBy]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:deckview:group", groupBy); } catch{} }, [groupBy]);
   useEffect(()=>{ try { localStorage.setItem("packsink:deckview:highlight", String(highlightMissing)); } catch{} }, [highlightMissing]);
   useEffect(()=>{
     if(!viewDropOpen) return;
@@ -9075,19 +9090,59 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
     return copy;
   }, [sortBy, cardById]);
 
-  // Group deck rows into sections by card_type.
+  // Group deck rows into sections. Default is by card_type (Characters /
+  // Actions / Items / Locations) using DECK_SECTIONS' built-in matchers;
+  // alternate groupBy values bucket by the named meta field.
   const sectioned = useMemo(() => {
-    const out = DECK_SECTIONS.map(s => ({...s, items: []}));
-    const fallback = {key:"Other", label:"Other", items:[]};
+    if(groupBy === "type"){
+      const out = DECK_SECTIONS.map(s => ({...s, items: []}));
+      const fallback = {key:"Other", label:"Other", items:[]};
+      for(const c of deck.cards||[]){
+        const meta = (cardById[c.card_id]||[])[0];
+        const t = meta?.card_type || "";
+        const section = out.find(s => s.match(t)) || fallback;
+        section.items.push({...c, meta});
+      }
+      if(fallback.items.length) out.push(fallback);
+      return out.filter(s => s.items.length).map(s => ({...s, items: sortItems(s.items)}));
+    }
+    // Generic grouping: build buckets keyed by the selected meta value.
+    const bucketKey = (meta) => {
+      if(!meta) return "Other";
+      if(groupBy === "color"){
+        const list = (meta.inks && meta.inks.length) ? meta.inks : (meta.ink ? [meta.ink] : ["Unknown"]);
+        return list.slice().sort().join("/");
+      }
+      if(groupBy === "set")     return meta.Set || "Unknown";
+      if(groupBy === "rarity")  return meta.Rarity || "Unknown";
+      if(groupBy === "inkwell") return meta.inkable === false ? "Uninkable" : (meta.inkable === true ? "Inkable" : "Unknown");
+      if(groupBy === "cost")    return (meta.cost == null) ? "?" : ("Cost " + (meta.cost >= 9 ? "9+" : meta.cost));
+      return "Other";
+    };
+    const buckets = new Map();
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0];
-      const t = meta?.card_type || "";
-      const section = out.find(s => s.match(t)) || fallback;
-      section.items.push({...c, meta});
+      const k = bucketKey(meta);
+      if(!buckets.has(k)) buckets.set(k, []);
+      buckets.get(k).push({...c, meta});
     }
-    if(fallback.items.length) out.push(fallback);
-    return out.filter(s => s.items.length).map(s => ({...s, items: sortItems(s.items)}));
-  }, [deck.cards, cardById, sortItems]);
+    // Deterministic section order: rarity uses RARS ladder; cost numeric;
+    // others alphabetical.
+    const sectionOrder = (a, b) => {
+      if(groupBy === "rarity"){
+        const idx = (k) => { const i = RARS.indexOf(k); return i < 0 ? 999 : i; };
+        return idx(a) - idx(b);
+      }
+      if(groupBy === "cost"){
+        const num = (k) => { const m = k.match(/\d+/); return m ? parseInt(m[0],10) : 99; };
+        return num(a) - num(b);
+      }
+      return a.localeCompare(b);
+    };
+    return Array.from(buckets.keys()).sort(sectionOrder).map(k => ({
+      key: k, label: k, items: sortItems(buckets.get(k)),
+    }));
+  }, [deck.cards, cardById, sortItems, groupBy]);
 
   // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
   // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
@@ -9312,12 +9367,18 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
         const short = ownedShortByKey[k]?.short || 0;
         const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
         const cardMax = getDeckLimitForUI(meta["Product Name"]);
+        const have = ownedShortByKey[k]?.have || 0;
+        const haveCapped = Math.min(have, item.quantity);
+        const ownedFracBadge = highlightMissing
+          ? html`<span class=${"deck-tile-owned-frac"+(haveCapped>=item.quantity?" complete":"")}>${haveCapped}/${item.quantity}</span>`
+          : null;
         if(viewLayout === "grid"){
           return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
             ${meta.img_small
               ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             <span class="deck-grid-tile-qty">${item.quantity}×</span>
+            ${ownedFracBadge}
             ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
             ${makeCounter(item, cardMax, "deck-grid-tile-counter")}
           </div>`;
@@ -9331,6 +9392,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
             </div>`)}
             <div class=${"deck-stack-top"+(highlightMissing && short>0?" missing-pop":"")}>
               <span class="deck-stack-qty">${item.quantity}×</span>
+              ${ownedFracBadge}
               ${meta.img_small
                 ? html`<img src=${meta.img_small} alt=${meta["Product Name"]||""} loading="lazy"/>`
                 : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
@@ -9385,6 +9447,17 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
                 <button class=${viewLayout==="grid"?"active":""} onClick=${()=>setViewLayout("grid")} title="Image grid">▦</button>
                 <button class=${viewLayout==="stacked"?"active":""} onClick=${()=>setViewLayout("stacked")} title="Stacked pile">▤</button>
               </div>
+            </div>
+            <div>
+              <div class="deck-view-section-title">Group by</div>
+              <select class="deck-view-select" value=${groupBy} onChange=${e=>setGroupBy(e.target.value)}>
+                <option value="type">Type</option>
+                <option value="color">Color</option>
+                <option value="set">Set</option>
+                <option value="rarity">Rarity</option>
+                <option value="inkwell">Inkwell</option>
+                <option value="cost">Cost</option>
+              </select>
             </div>
             <div>
               <div class="deck-view-section-title">Sort by</div>
