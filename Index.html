@@ -1047,6 +1047,23 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .history-chart-title{font-size:14px;font-weight:600;color:var(--text);margin-bottom:6px;font-family:'Cinzel',serif;}
 .history-chart-legend{display:flex;gap:14px;font-size:11px;color:var(--text-dim);margin-bottom:10px;}
 .history-set-mode{display:flex;flex-direction:column;gap:14px;}
+
+/* Multi-card compare mode — the chart + a legend strip of removable
+   card chips above it. */
+.history-compare-mode{display:flex;flex-direction:column;gap:14px;}
+.compare-legend{display:flex;flex-wrap:wrap;gap:6px;align-items:center;
+  padding:8px 10px;background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:8px;}
+.compare-chip{display:inline-flex;align-items:center;gap:6px;
+  padding:3px 4px 3px 8px;font-size:12px;font-weight:600;
+  background:var(--bg-card);border:1px solid var(--border);border-radius:14px;
+  color:var(--text);}
+.compare-swatch{width:10px;height:10px;border-radius:50%;flex-shrink:0;}
+.compare-name{max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.compare-remove{width:18px;height:18px;display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;border:none;color:var(--text-muted);cursor:pointer;
+  font-weight:700;font-size:14px;border-radius:50%;line-height:1;padding:0;}
+.compare-remove:hover{background:var(--bg-surface);color:var(--red);}
 @media(max-width:720px){
   .history-card-mode{grid-template-columns:1fr;}
   .history-picker{max-height:280px;}
@@ -5235,7 +5252,7 @@ const clipSeriesFrom = (series, startMs) => {
   return series.map(s => ({...s, data: (s.data||[]).filter(p => p.x >= startMs)}));
 };
 
-const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices}) => {
+const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCompareCards, onConsumedIncomingCompareCards}) => {
   const tips = useContext(TipsContext);
   const [mode, setMode] = useState("card");
   // Sealed mode state — parallel to selectedGroup/cardQuery for cards.
@@ -5246,6 +5263,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices}) => {
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [history, setHistory] = useState({normal:null, foil:null, loading:false});
   const [setName, setSetNameLocal] = useState("");
+  // Multi-card compare: list of {card_id, productId, printing, name} plus
+  // the fetched series map (card_id -> [{date_ms, low, market}]). The
+  // Screener pushes a list via incomingCompareCards on mount; we fetch
+  // each in parallel and render LineChart with one series per card.
+  const [compareCards, setCompareCards] = useState([]);
+  const [compareSeries, setCompareSeries] = useState({});
+  const [compareLoading, setCompareLoading] = useState(false);
   // Consume cross-view nav payload from App. Bumped nonce ensures re-arriving
   // at the same set still re-applies (e.g. user clicks the same EV row twice).
   useEffect(()=>{
@@ -5254,6 +5278,43 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices}) => {
       setSetNameLocal(historyTarget.setName);
     }
   }, [historyTarget]);
+  // Consume the Screener -> Price Graphing handoff. Switch to compare mode,
+  // load the card list, and clear the App-level state so navigating back
+  // and forth doesn't re-trigger.
+  useEffect(()=>{
+    if(!incomingCompareCards || !incomingCompareCards.length) return;
+    setMode("compare");
+    setCompareCards(incomingCompareCards);
+    setCompareSeries({});
+    onConsumedIncomingCompareCards && onConsumedIncomingCompareCards();
+  }, [incomingCompareCards, onConsumedIncomingCompareCards]);
+  // Fetch each compared card's history in parallel.
+  useEffect(()=>{
+    if(mode !== "compare" || !compareCards.length) return;
+    let cancelled = false;
+    setCompareLoading(true);
+    const tasks = compareCards.map(c =>
+      fetchCardHistory(c.productId, c.printing)
+        .then(rows => ({id: c.card_id, rows}))
+        .catch(() => ({id: c.card_id, rows: []}))
+    );
+    Promise.all(tasks).then(results => {
+      if(cancelled) return;
+      const map = {};
+      for(const {id, rows} of results){
+        map[id] = (rows || []).map(r => ({
+          x: new Date(r.date).getTime(),
+          low: r.low_price == null ? null : +r.low_price,
+          market: r.market_price == null ? null : +r.market_price,
+        }));
+      }
+      setCompareSeries(map);
+      setCompareLoading(false);
+    });
+    return () => { cancelled = true; };
+  }, [mode, compareCards]);
+  // Distinct colors for the multi-line chart. Stable mapping by index.
+  const COMPARE_COLORS = ["#1d8d4a","#7e54c4","#c64c5a","#4d83bf","#d4a93b","#0e6b6b","#787e88","#e07c2a"];
   const [setEv, setSetEv] = useState({rows:null, loading:false, error:null});
   // Low / Market checkbox state — shared across card mode and set EV mode.
   // Default = Low only. Toggle Market to add it as a dashed series.
@@ -5518,9 +5579,10 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices}) => {
   return html`<div class="history-view">
     <div class="history-toolbar">
       <div class="seg-toggle">
-        <button class=${mode==="card"?"active":""}   onClick=${()=>setMode("card")}>By Card</button>
-        <button class=${mode==="set"?"active":""}    onClick=${()=>setMode("set")}>By Set EV</button>
-        <button class=${mode==="sealed"?"active":""} onClick=${()=>setMode("sealed")}>By Sealed</button>
+        <button class=${mode==="card"?"active":""}    onClick=${()=>setMode("card")}>By Card</button>
+        <button class=${mode==="compare"?"active":""} onClick=${()=>setMode("compare")}>Compare</button>
+        <button class=${mode==="set"?"active":""}     onClick=${()=>setMode("set")}>By Set EV</button>
+        <button class=${mode==="sealed"?"active":""}  onClick=${()=>setMode("sealed")}>By Sealed</button>
       </div>
       <div class="seg-toggle">
         ${RANGE_OPTIONS.map(([k,l]) => html`<button key=${k}
@@ -5654,6 +5716,48 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices}) => {
                 width=780 height=300/>`}
         </div>` : html`<div class="chart-empty large">Pick a card from the list →</div>`}
       </div>
+    </div>` : mode === "compare" ? html`<div class="history-compare-mode">
+      ${compareCards.length === 0
+        ? html`<div class="chart-empty large">
+            No cards loaded for comparison. Use the Screener's Add to Price Graphing batch action,
+            or go back to <button class="settings-action link" onClick=${()=>setMode("card")}>By Card</button>
+            and pick one to graph.
+          </div>`
+        : html`<div class="compare-legend">
+            <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>Comparing</span>
+            ${compareCards.map((c, i) => html`<span key=${c.card_id} class="compare-chip"
+              style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
+              <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
+              <span class="compare-name">${c.name}</span>
+              <button class="compare-remove"
+                onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
+                title="Remove from comparison" aria-label="Remove">×</button>
+            </span>`)}
+            <button class="settings-action link" style=${{marginLeft:8,fontSize:11}}
+              onClick=${()=>{ setCompareCards([]); setCompareSeries({}); }}>Clear all</button>
+          </div>
+          <div class="history-set-detail">
+            ${compareLoading
+              ? html`<div class="chart-empty large">Loading…</div>`
+              : (() => {
+                  const cardSeries = compareCards.map((c, i) => {
+                    const rows = compareSeries[c.card_id] || [];
+                    const data = rows
+                      .filter(p => (showLow ? p.low != null : p.market != null))
+                      .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
+                    return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
+                  }).filter(s => s.data.length >= 2);
+                  if(cardSeries.length === 0) return html`<div class="chart-empty large">No history data for these cards yet.</div>`;
+                  return html`<div>
+                    <div class="seg-toggle" style=${{marginBottom:8}}>
+                      <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>NM Low</button>
+                      <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>NM Market</button>
+                    </div>
+                    <${LineChart} series=${clipSeriesFrom(cardSeries, computeChartStartMs(rangeKey, customStart, false, null))}
+                      width=920 height=320/>
+                  </div>`;
+                })()}
+          </div>`}
     </div>` : html`<div class="history-card-mode">
       <div class="history-picker">
         <input type="search" placeholder="Search sets..."
@@ -6769,7 +6873,7 @@ function priceDbSignals(r){
   return out;
 }
 
-function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}){
+function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
   // key maps to Math.abs(r.pct_1d) so the first thing you see is whatever
@@ -7294,9 +7398,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn}
               }
               setBatchOpen(false);
             }}>📋 Copy as decklist (paste into a deck)</button>
-            <button class="price-db-batchitem" disabled=${true}
-              title="Multi-card price graphing is coming soon — for now use the Price Graphing tab per-card.">
-              📊 Add to Price Graphing <span class="muted" style=${{fontSize:10}}>(soon)</span>
+            <button class="price-db-batchitem"
+              onClick=${() => {
+                const cards = selRows.slice(0, 8).map(r => ({
+                  card_id: r.card_id,
+                  productId: r.tcgplayer_product_id,
+                  printing: r.printing,
+                  name: r.name + (r.version ? " - " + r.version : ""),
+                }));
+                setBatchOpen(false);
+                if(onCompareCards) onCompareCards(cards);
+              }}>
+              📊 Add to Price Graphing
+              ${selRows.length > 8 && html`<span class="muted" style=${{fontSize:10,marginLeft:4}}>(first 8 of ${selRows.length})</span>`}
             </button>`;
           })()}
         </div>`}
@@ -10672,6 +10786,17 @@ function App(){
     } catch { return {deck: null, token: null, user: null}; }
   }, []);
   const [incomingDeckId, setIncomingDeckId] = useState(initialUrlParams.deck);
+  // Multi-card compare on the Price Graphing tab. Screener's "Add to Price
+  // Graphing" batch action sets this array of {card_id, productId, printing,
+  // name} objects and switches to the history view; HistoryView consumes
+  // the prop on mount, fetches each card's series, and renders them on one
+  // chart.
+  const [incomingCompareCards, setIncomingCompareCards] = useState(null);
+  const startCompareCards = useCallback((cards) => {
+    setIncomingCompareCards(cards);
+    setView("history");
+    setTabClickNonce(n => n + 1);
+  }, []);
   const [incomingShareToken, setIncomingShareToken] = useState(initialUrlParams.token);
   const [incomingUserId, setIncomingUserId] = useState(initialUrlParams.deck ? null : initialUrlParams.user);
   const [nc,setNc]=useState(false);const [ne,setNe]=useState(false);
@@ -11261,14 +11386,17 @@ function App(){
       onSignIn=${signIn} theme=${theme}/>`}
     ${view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
       sealedPrices=${sealedPrices}
-      historyTarget=${historyTarget}/>`}
+      historyTarget=${historyTarget}
+      incomingCompareCards=${incomingCompareCards}
+      onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
     ${view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       sealedPrices=${sealedPrices}
       openSetHistory=${openSetHistory}/>`}
     ${view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
-      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}/>`}
+      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
+      onCompareCards=${startCompareCards}/>`}
     ${view==="faq"&&html`<${FAQView}/>`}
     <${Footer} lastEtlDate=${lastEtlDate}/>
   </div><//>`;
