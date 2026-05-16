@@ -2065,6 +2065,15 @@ html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35
 .deck-pie-legend-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .deck-pie-legend-val{color:var(--text-muted);font-variant-numeric:tabular-nums;}
 </style>
+<!-- Preload the six ink-shield icons so the home Following feed and other
+     ink-chip surfaces don't paint a brief gap-then-pop on first visit.
+     Each PNG is ~3-5 KB so the cost is negligible. -->
+<link rel="preload" as="image" href="Logos/inks/AMBER.png"/>
+<link rel="preload" as="image" href="Logos/inks/AMETHYST.png"/>
+<link rel="preload" as="image" href="Logos/inks/EMERALD.png"/>
+<link rel="preload" as="image" href="Logos/inks/RUBY.png"/>
+<link rel="preload" as="image" href="Logos/inks/SAPPHIRE.png"/>
+<link rel="preload" as="image" href="Logos/inks/STEEL.png"/>
 </head>
 <body>
 <div id="root"></div>
@@ -9052,16 +9061,25 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
           .slice(0, 15);
         if(!decks.length){ setEntries([]); return; }
 
-        // Index the catalog: card_id -> {inks, set}. Used to compute both
-        // ink shields AND the deck's actual format (Core / Infinity)
-        // from its cards, instead of trusting the user-set tags[0] which
-        // is often wrong or unset.
+        // Index the catalog two ways:
+        // - card_id -> {inks, name, set}: per-printing metadata
+        // - Product Name -> Set<set name>: every set the card has ever been
+        //   printed in. Used for reprint-aware Core legality — a card
+        //   reprinted in a Core-legal set is Core-legal regardless of which
+        //   printing the user happened to add to the deck.
         const cardMetaById = new Map();
+        const setsByProductName = new Map();
         if(raw && raw.length){
           for(const r of raw){
+            const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
+            const name = r["Product Name"];
             if(r.card_id && !cardMetaById.has(r.card_id)){
-              const inks = r.inks && r.inks.length ? r.inks : (r.ink ? [r.ink] : []);
-              cardMetaById.set(r.card_id, {inks, set: r.Set});
+              cardMetaById.set(r.card_id, {inks, name, set: r.Set});
+            }
+            if(name && r.Set){
+              let bag = setsByProductName.get(name);
+              if(!bag){ bag = new Set(); setsByProductName.set(name, bag); }
+              bag.add(r.Set);
             }
           }
         }
@@ -9104,7 +9122,13 @@ const FollowingFeed = ({user, onSignIn, raw}) => {
             if(!meta) continue;
             anyCardKnown = true;
             for(const i of meta.inks) inkSet.add(i);
-            if(meta.set && !coreSets.has(meta.set)) allInCore = false;
+            // Reprint-aware Core check: card is Core-legal if ANY of its
+            // printings (across the catalog) sits in a Core set, not just
+            // the specific printing in this deck.
+            const allSetsForCard = setsByProductName.get(meta.name) || new Set([meta.set]);
+            let hasCorePrinting = false;
+            for(const s of allSetsForCard){ if(coreSets.has(s)){ hasCorePrinting = true; break; } }
+            if(!hasCorePrinting) allInCore = false;
           }
           computedInks[d.id] = inkSet;
           // Legality: >=60 cards AND <=2 inks. (60 is the minimum; over is OK.)
@@ -9679,6 +9703,20 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       if(!r.card_id) continue;
       if(!m[r.card_id]) m[r.card_id] = [];
       m[r.card_id].push(r);
+    }
+    return m;
+  }, [raw]);
+  // Product Name -> Set of every Set the card has been printed in.
+  // Used by checkDeckLegality to honor reprints: a card with a Set-1
+  // printing AND a Set-9 reprint is Core-legal because at least one
+  // printing falls inside the current Core rotation.
+  const setsByProductName = useMemo(() => {
+    const m = {};
+    for(const r of raw){
+      const name = r && r["Product Name"];
+      if(!name || !r.Set) continue;
+      if(!m[name]) m[name] = new Set();
+      m[name].add(r.Set);
     }
     return m;
   }, [raw]);
@@ -10785,7 +10823,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
 // sets), so a Core-legal deck is also Infinity-legal. Returns:
 //   format: "core" | "infinity" | "invalid"
 //   issues: [strings] — empty when format is core/infinity
-function checkDeckLegality(deck, cardById){
+function checkDeckLegality(deck, cardById, setsByProductName){
   const issues = [];
   const total = (deck.cards||[]).reduce((s,c)=>s+c.quantity, 0);
   // 60 is the minimum; going over is allowed (Lorcana has no upper cap).
@@ -10826,9 +10864,18 @@ function checkDeckLegality(deck, cardById){
     format = "invalid";
   } else {
     const coreLegal = getFormat("core").legalSets();
+    // Reprint-aware: a card is Core-legal if ANY of its printings sits in
+    // a Core-legal set. setsByProductName, when supplied, maps each card's
+    // Product Name to the full set of sets it's been printed in. When the
+    // map isn't available (legacy caller), fall back to the single printing
+    // present on the row.
     const allInCore = (deck.cards||[]).every(c => {
       const meta = (cardById[c.card_id]||[])[0];
-      return meta && coreLegal.has(meta.Set);
+      if(!meta) return false;
+      const sets = (setsByProductName && setsByProductName[meta["Product Name"]])
+        || new Set([meta.Set]);
+      for(const s of sets) if(coreLegal.has(s)) return true;
+      return false;
     });
     format = allInCore ? "core" : "infinity";
   }
@@ -11319,7 +11366,7 @@ const DeckEditor = ({deck, cardById, collection, raw, theme, pending,
     return Array.from(inks);
   }, [deck.cards, cardById]);
 
-  const legality = useMemo(() => checkDeckLegality(deck, cardById), [deck, cardById]);
+  const legality = useMemo(() => checkDeckLegality(deck, cardById, setsByProductName), [deck, cardById, setsByProductName]);
 
   // Aggregate per-cost / per-ink / inkable / per-type counts for the charts.
   // Dual-ink cards form their own bucket keyed by the joined ink names
