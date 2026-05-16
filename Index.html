@@ -1548,6 +1548,20 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
   padding:1px 6px;border-radius:8px;background:var(--bg-surface);
   color:var(--text-muted);font-variant-numeric:tabular-nums;}
 .deck-section-tab.active .deck-section-tab-count{background:var(--accent);color:#fff;}
+/* Public-feed sub-tabs (Core / Infinity) inside the Discover section.
+   Slightly lighter visual weight than the top-level deck-section-tabs
+   so they read as a secondary control. */
+.discover-format-tabs{display:flex;align-items:center;gap:4px;flex-wrap:wrap;
+  margin:6px 0 14px;padding:4px;background:var(--bg-surface);
+  border:1px solid var(--border);border-radius:8px;}
+.discover-format-tab{padding:5px 12px;font-size:12px;font-weight:600;
+  background:transparent;color:var(--text-muted);border:none;
+  border-radius:5px;cursor:pointer;transition:all 0.12s;
+  display:inline-flex;align-items:center;gap:5px;}
+.discover-format-tab:hover{color:var(--text);background:var(--bg-card);}
+.discover-format-tab.active{color:var(--accent);background:var(--accent-glow);}
+.discover-format-note{margin-left:auto;font-size:11px;padding:0 8px;
+  line-height:1.4;text-align:right;}
 
 /* Deck list filter / search / sort row, sits below the section-tab strip. */
 .deck-filter-row{display:flex;gap:14px;align-items:center;flex-wrap:wrap;
@@ -9652,6 +9666,32 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   // user's own). Paginated — we initially load DISCOVER_PAGE entries and
   // grow via the "Load more" button.
   const [discoverEntries, setDiscoverEntries] = useState([]);
+  // Public-feed sub-tab — Core vs Infinity. Default to Core; last-opened
+  // value persists in localStorage so the user lands on the format they
+  // care about between sessions.
+  const [discoverFormat, setDiscoverFormat] = useState(() => {
+    try {
+      const v = localStorage.getItem("packsink:decks:discoverFormat");
+      return v === "infinity" ? "infinity" : "core";
+    } catch { return "core"; }
+  });
+  useEffect(()=>{
+    try { localStorage.setItem("packsink:decks:discoverFormat", discoverFormat); } catch {}
+  }, [discoverFormat]);
+  // Cutoff: only show decks created or edited since the most recent mainline
+  // set's prerelease (LGS) date. Older decks built for rotated-out sets
+  // shouldn't crowd the feed when newer metas have moved on.
+  const discoverCutoff = useMemo(() => {
+    const today = new Date().toISOString().slice(0, 10);
+    let latest = null;
+    for(const s of MAINLINE_SETS){
+      const d = SET_RELEASE_DATES[s];
+      if(d && d.lgs && d.lgs <= today){
+        if(!latest || d.lgs > latest) latest = d.lgs;
+      }
+    }
+    return latest;
+  }, []);
   const [discoverHasMore, setDiscoverHasMore] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   // Creator profile state — when set, the Decks tab renders that creator's
@@ -10046,7 +10086,11 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   // Discover feed: refresh + load-more. Filters out the current user's own
   // decks (they have Your Decks for those) and excludes any decks the user
   // already favorited (less noise in the feed).
-  const DISCOVER_PAGE = 30;
+  // Bounded one-shot fetch: every public deck edited since the cutoff,
+  // ordered server-side by updated_at desc, sorted client-side by favorite
+  // count. The cutoff cap keeps the payload small enough that we don't
+  // need pagination — typically <200 decks per cycle.
+  const DISCOVER_LIMIT = 200;
   const refreshDiscover = useCallback(async () => {
     setDiscoverLoading(true);
     try {
@@ -10054,19 +10098,46 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
         .eq("visibility", "public")
         .order("updated_at", {ascending:false})
-        .limit(DISCOVER_PAGE + 1);
+        .limit(DISCOVER_LIMIT);
+      if(discoverCutoff) q = q.gte("updated_at", discoverCutoff);
       if(user) q = q.neq("user_id", user.id);
       const {data: deckRows, error} = await q;
       if(error) throw error;
-      const more = (deckRows||[]).length > DISCOVER_PAGE;
-      const visible = (deckRows||[]).slice(0, DISCOVER_PAGE);
-      setDiscoverHasMore(more);
-      if(!visible.length){ setDiscoverEntries([]); return; }
-      const ids = visible.map(d => d.id);
+      if(!deckRows || !deckRows.length){
+        setDiscoverEntries([]); setDiscoverHasMore(false); return;
+      }
+      const ids = deckRows.map(d => d.id);
       const entries = await hydrateDecksByIds(ids);
-      entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
+      // Auto-detect each deck's format using the same logic as the deck
+      // view (reprint-aware Core check). Stamped onto the entry so the
+      // Core/Infinity sub-tab filter can use it without re-running per
+      // render.
+      for(const e of entries){
+        try {
+          const leg = checkDeckLegality(e.deck, cardById, setsByProductName);
+          e.format = leg.format;
+        } catch { e.format = "infinity"; }
+      }
+      // Fetch favorite counts inline so we can sort the array before
+      // committing it to state (mergeFavoriteCounts is fire-and-forget
+      // and wouldn't be ready in time).
+      let counts = {};
+      try {
+        const {data: rpcData} = await sbClient.rpc("deck_favorite_counts", {deck_ids: ids});
+        for(const id of ids) counts[id] = 0;
+        for(const row of (rpcData || [])) counts[row.deck_id] = Number(row.favorite_count) || 0;
+        setFavoriteCounts(prev => ({...prev, ...counts}));
+      } catch(e){
+        console.warn("favorite count fetch for discover failed:", e?.message || e);
+      }
+      entries.sort((a, b) => {
+        const fa = counts[a.deck.id] || 0;
+        const fb = counts[b.deck.id] || 0;
+        if(fb !== fa) return fb - fa;
+        return new Date(b.deck.updated_at) - new Date(a.deck.updated_at);
+      });
       setDiscoverEntries(entries);
-      mergeFavoriteCounts(ids);
+      setDiscoverHasMore(false);
       mergeViewCounts(ids);
     } catch(e){
       console.warn("discover fetch failed:", e?.message || e);
@@ -10075,37 +10146,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     } finally {
       setDiscoverLoading(false);
     }
-  }, [user, hydrateDecksByIds, mergeFavoriteCounts]);
-  const loadMoreDiscover = useCallback(async () => {
-    if(!discoverEntries.length) return;
-    setDiscoverLoading(true);
-    try {
-      const oldest = discoverEntries[discoverEntries.length - 1].deck.updated_at;
-      let q = sbClient.from("decks")
-        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
-        .eq("visibility", "public")
-        .lt("updated_at", oldest)
-        .order("updated_at", {ascending:false})
-        .limit(DISCOVER_PAGE + 1);
-      if(user) q = q.neq("user_id", user.id);
-      const {data: deckRows, error} = await q;
-      if(error) throw error;
-      const more = (deckRows||[]).length > DISCOVER_PAGE;
-      const visible = (deckRows||[]).slice(0, DISCOVER_PAGE);
-      setDiscoverHasMore(more);
-      if(!visible.length) return;
-      const newIds = visible.map(d => d.id);
-      const entries = await hydrateDecksByIds(newIds);
-      entries.sort((a, b) => new Date(b.deck.updated_at) - new Date(a.deck.updated_at));
-      setDiscoverEntries(prev => [...prev, ...entries]);
-      mergeFavoriteCounts(newIds);
-      mergeViewCounts(newIds);
-    } catch(e){
-      console.warn("discover load-more failed:", e?.message || e);
-    } finally {
-      setDiscoverLoading(false);
-    }
-  }, [user, discoverEntries, hydrateDecksByIds]);
+  }, [user, hydrateDecksByIds, cardById, setsByProductName, discoverCutoff, mergeViewCounts]);
   // Initial discover load on entering the tab — fires on every tabClick so
   // the feed picks up newly-published decks while the user is on the site.
   useEffect(()=>{ refreshDiscover(); }, [refreshDiscover, tabClickNonce]);
@@ -10801,22 +10842,37 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     })()}
 
     ${deckSection === "discover" && html`<div>
+      <div class="discover-format-tabs">
+        ${[["core","Core Constructed"],["infinity","Infinity"]].map(([k, l]) => {
+          const n = discoverEntries.filter(e => e.format === k).length;
+          return html`<button key=${k}
+            class=${"discover-format-tab"+(discoverFormat===k?" active":"")}
+            onClick=${()=>setDiscoverFormat(k)}>${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}</button>`;
+        })}
+        <span class="muted discover-format-note">
+          Sorted by ★ favorites — only decks edited or made since the prerelease of the newest set${discoverCutoff?` (${discoverCutoff})`:""}.
+        </span>
+      </div>
       ${discoverEntries.length === 0 && !discoverLoading
         ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
             No public decks to discover yet. Once someone sets a deck's visibility to Public from its Share menu, it'll show up here.
           </div>`
         : (() => {
-            const visible = filterExternal(discoverEntries);
+            const byFormat = discoverEntries.filter(e => e.format === discoverFormat);
+            const visible = filterExternal(byFormat);
+            if(byFormat.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
+              No ${discoverFormat === "core" ? "Core" : "Infinity"} decks have been published in this window yet.
+              ${discoverFormat === "core"
+                ? html` Try <button class="settings-action link" onClick=${()=>setDiscoverFormat("infinity")}>Infinity</button>.`
+                : html` Try <button class="settings-action link" onClick=${()=>setDiscoverFormat("core")}>Core Constructed</button>.`}
+            </div>`;
             if(visible.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              No public decks match the current ink filter. <button class="settings-action link"
+              No ${discoverFormat === "core" ? "Core" : "Infinity"} decks match the current ink filter. <button class="settings-action link"
                 onClick=${()=>setInkFilter(new Set())}>Clear inks</button>
             </div>`;
             return html`<div class="deck-list">${visible.map(entry => renderExternalCard(entry, {}))}</div>`;
           })()}
       ${discoverLoading && html`<div class="muted" style=${{fontSize:12,padding:"12px 0",textAlign:"center"}}>Loading…</div>`}
-      ${!discoverLoading && discoverHasMore && html`<div style=${{display:"flex",justifyContent:"center",margin:"14px 0"}}>
-        <button onClick=${loadMoreDiscover} style=${{padding:"7px 18px",fontSize:13}}>Load more</button>
-      </div>`}
     </div>`}
 
     ${toastEl}
