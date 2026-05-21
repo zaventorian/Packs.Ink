@@ -57,7 +57,17 @@ def transform_card(c: dict, set_id: str) -> dict:
     imgs = (c.get("image_uris") or {}).get("digital") or {}
     raw_type = c.get("type")
     if isinstance(raw_type, list):
-        card_type = raw_type[0] if raw_type else None
+        # Lorcana songs come back as ["Action", "Song"] — keep both so the
+        # client can bucket them as Songs separately from plain Actions. We
+        # store the joined form "Action - Song" (also what TCGCSV uses).
+        if raw_type:
+            non_song = [t for t in raw_type if t != "Song"]
+            if "Song" in raw_type and non_song:
+                card_type = non_song[0] + " - Song"
+            else:
+                card_type = raw_type[0]
+        else:
+            card_type = None
     else:
         card_type = raw_type
     # Inks: Lorcast returns `inks: ["Emerald", "Sapphire"]` for dual-ink
@@ -70,6 +80,10 @@ def transform_card(c: dict, set_id: str) -> dict:
         single = c.get("ink")
         inks = [single] if single else None
     primary_ink = inks[0] if inks else None
+
+    illustrators = c.get("illustrators")
+    if illustrators and not isinstance(illustrators, list):
+        illustrators = [illustrators]
 
     return {
         "id": c["id"],
@@ -84,6 +98,7 @@ def transform_card(c: dict, set_id: str) -> dict:
         "inkable": c.get("inkwell"),  # Lorcast's field name; we store it as `inkable`
         "card_type": card_type,
         "classifications": c.get("classifications"),
+        "illustrators": illustrators,
         "text": c.get("text"),
         "flavor_text": c.get("flavor_text"),
         "tcgplayer_product_id": c.get("tcgplayer_id"),

@@ -1,14 +1,15 @@
 """
 SPA-fallback dev server for Packs.Ink.
 
-Drop-in replacement for `python -m http.server 8765`. Same default port,
-serves static files normally, but routes that don't match a real file
-fall back to /Index.html with a 200 — so reloading on /decks, /screener,
+Drop-in replacement for `python -m http.server`. Defaults to port 8766
+to dodge a clash with AnkiConnect (which squats on 8765). Serves static
+files normally, but routes that don't match a real file fall back to
+/Index.html with a 200 — so reloading on /decks, /screener,
 /decks?deck=<uuid>, etc. works locally just like it does on Netlify.
 
 Usage:
-    python scripts/dev_server.py
-    python scripts/dev_server.py 8000    # custom port
+    python scripts/dev_server.py            # http://localhost:8766/
+    python scripts/dev_server.py 8000       # custom port
 
 Real subfolders that ship as part of the deploy keep serving their own
 files (Logos, scripts, supabase, _redirects) so e.g. ink-shield PNGs
@@ -19,6 +20,7 @@ import os
 import socketserver
 import sys
 import urllib.parse
+import urllib.request
 
 # Folders that must serve their own files (and 404 if a child is missing).
 # Match the same list as _redirects so dev mirrors prod.
@@ -26,9 +28,38 @@ PASSTHROUGH_FOLDERS = ("Logos", "scripts", "supabase", ".github")
 
 
 class SPAHandler(http.server.SimpleHTTPRequestHandler):
+    # Force no-cache for Index.html / styles.css / logo.js so live edits
+    # actually show up after a normal reload. Browsers (especially Chrome)
+    # otherwise serve stale copies via the disk cache even when mtime
+    # changed. Production Netlify cache rules don't run locally, so we
+    # bypass entirely here.
+    def end_headers(self):
+        url_path = urllib.parse.urlsplit(self.path).path or "/"
+        if url_path == "/" or url_path.endswith((".html", ".css", ".js")):
+            self.send_header("Cache-Control", "no-store, max-age=0")
+        super().end_headers()
+
+    def _proxy_lorcast(self, path: str) -> None:
+        """Mirror Netlify's /img-proxy/* → cards.lorcast.io rewrite so the
+        Export Deck Image feature can draw images to a canvas locally too."""
+        upstream = "https://cards.lorcast.io/" + path.lstrip("/")
+        try:
+            req = urllib.request.Request(upstream, headers={"User-Agent": "packs.ink-dev/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                self.send_response(resp.status)
+                self.send_header("Content-Type", resp.headers.get("Content-Type", "image/avif"))
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "public, max-age=86400")
+                self.end_headers()
+                self.wfile.write(resp.read())
+        except Exception as e:
+            self.send_error(502, f"proxy failure: {e}")
+
     def do_GET(self):  # noqa: N802 - stdlib API
         parsed = urllib.parse.urlsplit(self.path)
         url_path = parsed.path or "/"
+        if url_path.startswith("/img-proxy/"):
+            return self._proxy_lorcast(url_path[len("/img-proxy/"):])
         # Strip query string when checking on-disk; reattach when rewriting.
         rel = url_path.lstrip("/")
         disk = os.path.join(os.getcwd(), rel) if rel else os.path.join(os.getcwd(), "Index.html")
@@ -50,7 +81,7 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
 
 
 def main():
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8765
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8766
     with socketserver.ThreadingTCPServer(("", port), SPAHandler) as httpd:
         print(f"Packs.Ink dev server: http://localhost:{port}/")
         print("SPA fallback active — try /decks, /screener, etc. directly.")

@@ -4,15 +4,19 @@ Lorcana TCG market + collection app. Affiliate revenue via TCGPlayer (Impact, 3.
 
 ## Stack
 
-- **Frontend**: single `Index.html`, React via `htm` template literals, no build step. Served by `python -m http.server 8765` for dev; **Netlify free tier** for prod (Cloudflare Pages is the natural upgrade if bandwidth hits 100GB/mo).
+- **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765) for dev; **Netlify free tier** for prod (Cloudflare Pages is the natural upgrade if bandwidth hits 100GB/mo). Domain currently registered through Netlify; transfer to Cloudflare blocked until 2026-06-08 (ICANN 60-day post-registration lock). The CSS extraction is a deliberate split for browser caching + editor sanity; do NOT inline CSS back into Index.html.
 - **DB**: Supabase (Postgres + PostgREST).
-  - **Catalog tables**: `cards`, `sets`, `prices_daily`, `sealed_products`.
-  - **User tables**: `profiles`, `collection_items`, `sealed_collection_items`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`.
-  - **Materialized views** (refreshed daily by the ETL): `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`.
-- **ETL**: `scripts/etl_tcgcsv_daily.py` pulls TCGCSV, upserts `prices_daily`, then refreshes all four matviews via SECURITY DEFINER RPCs (`refresh_card_prices_latest`, `refresh_rarity_avg_daily`, `refresh_price_movers`, `refresh_sealed_prices_latest`). Runs via GitHub Actions cron at 21:00 UTC daily (`.github/workflows/etl.yml`). **Aborts when today's fetched snapshot is >95% byte-identical to yesterday's** — TCGCSV publishes ~20:00 UTC and the ETL guard catches the "ran before file dropped" case so we don't pollute prices_daily with a duplicate-day row that zeros out 1D movers downstream.
+  - **Catalog tables**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
+  - **User tables**: `profiles` (now also carries collection-sharing visibility + share_token columns), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`.
+  - **Tournament tables**: `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker on).
+  - **Materialized views** (refreshed daily by the ETL): `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`, `graded_prices_latest`.
+- **ETL**: two daily pulls run sequentially in **one** GitHub Actions workflow at 21:00 UTC daily (`.github/workflows/etl.yml`):
+  1. `scripts/etl_tcgcsv_daily.py` — TCGCSV → `prices_daily`, then refreshes the four raw-price matviews. **Aborts when today's fetched snapshot is >95% byte-identical to yesterday's** (`--force` to override). Pass-through guard against TCGCSV re-serving yesterday's file before its ~20:00 UTC daily cron fires.
+  2. `scripts/etl_tcgpricelookup_daily.py` — TCGPriceLookup Trader tier → `graded_prices_daily`, then refreshes `graded_prices_latest`. Pinned `graded` after `prices` via `needs:` so a single 21:00 trigger covers both. GitHub free-tier scheduler silently drops one of two close-together schedules under load — that's why we consolidated.
+  - Weekly Lorcast metadata refresh stays on its own Sundays 22:00 UTC cron.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed-product catalog**: `scripts/load_sealed_products.py` — pulls every product TCGCSV exposes for category 71, classifies by name, upserts into `sealed_products`.
-- **Local dev preview**: launch config lives in `../Sayumi.Ink/.claude/launch.json` under the `packs-ink` entry (MCP preview reads from session CWD).
+- **Local dev preview**: launch config lives in `./.claude/launch.json` under the `packs-ink` entry. **The MCP preview reads from the active project's `.claude/launch.json`, NOT the Sayumi.Ink workspace's.** Must point at `scripts/dev_server.py` (not `python -m http.server`) so `/img-proxy/*` works for the deck-poster export. There's also a stale-looking entry in `../Sayumi.Ink/.claude/launch.json` — it's not the active one.
 
 ## Top-level nav
 
@@ -28,10 +32,21 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 ## Client cache rules
 
-- Catalog key: `packsink:catalog:vN`. **Bump N whenever the cached row shape changes** — old cache entries are silently ignored on version mismatch. Currently `v20`.
-- Sealed-price key: `packsink:sealed:v1`. Bump independently when sealed_prices_latest's SELECT columns change.
-- Quota is ~5MB. Keep slim: don't cache `text`, `flavor_text`, mid/high prices. `img_large` IS cached (~730w URLs) since the hover preview / detail modal benefits.
-- Min rows: 4000. Max age: 1 hour.
+- **Catalog key**: `packsink:catalog:vN`. **Bump N whenever the cached row shape changes** — old cache entries are silently ignored on version mismatch. Currently `v37`. 24h TTL with background refresh.
+- **`img_large` is STRIPPED from the catalog cache on write** (writeCache `slim = rows.map(({img_large, ...rest}) => rest)`). Saves ~30% of catalog size. The few places that prefer img_large (deck poster, hover preview, detail modal) all gracefully fall back to `img_normal`. Don't add img_large back — the 5MB quota is tight.
+- **writeCache does three-pass eviction**: (1) `removeItem(CACHE_KEY)` before `setItem` since some browsers count old+new against quota during overwrite; (2) on failure, evict every other `packsink:*` key except auth/tiny prefs; (3) retry. Final fallback warns and lets the next visit retry.
+- Per-view banner caches use generic `readJsonCache(key, ttlMs)` + `writeJsonCache(key, data)` helpers:
+  - `packsink:movers:v1` — home movers (12h).
+  - `packsink:screener-movers:v1` — Screener's separate price_movers fetch (12h).
+  - `packsink:following:v1:{uid8}` — home Following feed (30min).
+  - `packsink:home:tourneys:v1` — home Tournament Results banner (2h).
+  - `packsink:hist:v1:{productId}:{printing}` — per-card price history (12h).
+  - `packsink:sealed:v1` — sealed-price catalog. Bump independently.
+  - `packsink:setsMeta:v1` — `sets` table snapshot (id + name + released_at). Fetched on EVERY page load via an independent `useEffect` (not bundled with the catalog Promise.all) because `loadFromSupabase` returns early on a fresh catalog cache, which would otherwise leave `setsMeta` empty and break (a) the home box-price set_id matching, and (b) the collection-value prerelease guard.
+  - `packsink:colvalue:v2:{uid8}:{productsHash}:{rangeKey}` — collection value chart series. Bumped to v2 when the prerelease guard landed so stale unguarded entries get invalidated automatically.
+- **`writeJsonCache` has its own QuotaExceededError eviction** that drops `packsink:hist:` first (cheapest to rebuild), then home banners, then sealed. Catalog is NOT in this eviction list (most expensive to rebuild). Catalog's own writeCache evicts everything else if it has to.
+- Quota is ~5MB. Min rows for catalog: 4000.
+- **Symptom of quota exhaustion**: cache writes fail silently, every visit becomes a cold fetch, per-view banners "unload" on tab switch. Diagnostic: `Object.entries(localStorage).reduce((s,[k,v])=>s+v.length,0)/1024/1024` in console.
 
 ## PostgREST gotchas
 
@@ -49,6 +64,13 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 - **`SECURITY DEFINER` functions must pin `search_path` to include `extensions`** if they use anything from pgcrypto (`gen_random_bytes`, `gen_random_uuid`, etc.). Supabase puts pgcrypto in the `extensions` schema, off the default search path.
 - **Long-running RPCs need explicit statement_timeout.** Default role-level cap kills concurrent matview refreshes once the matview grows past ~30s. Every refresh function pins `set statement_timeout = '5min'`.
 - **When recreating a matview, re-grant SELECT to every role that needs it.** `grant select on price_movers to anon, authenticated` is mandatory; service_role doesn't inherit unless you grant explicitly. Migration 26 missed service_role and broke offline diagnostics until we used the anon key.
+- **Views authored as the dashboard user are SECURITY DEFINER by default** — triggers Supabase's `0010_security_definer_view` linter alert. Always create with `with (security_invoker = on)` so the view runs as the querying user. See `supabase/38_tournament_view_invoker.sql` for the retroactive `ALTER VIEW ... SET (security_invoker = on)` template.
+
+## Auth state gotcha (do NOT regress)
+
+**`sbClient.auth.updateUser()` fires an auth-state-change event after every successful call**, creating a new `user` object reference. If a `useEffect` syncs user_metadata back via `updateUser()` and has `user` in its deps, you get an infinite loop throttled only by debounce. Supabase rate-limits `/auth/v1/user` quickly (429); the auth lock then serializes and stalls every other Supabase query behind it.
+
+The prefs-sync effect in `App.jsx` (writes `{theme, tipsEnabled, avatarCardId}` to `user_metadata`) deliberately omits `user` from its deps and uses `prefsHydrated.current` ref to wait for first hydration. Symptoms of regression: catalog fetch takes minutes, "Loading price database…" forever, every tab switch acts like a cold load.
 
 ## price_movers matview gotcha
 
@@ -59,15 +81,32 @@ The matview computes Δ% across 6 windows (1D / 1W / 1M / 3M / 6M / 1Y) for both
 This is where catalog correctness lives. Structural cleanups beyond the basic cards+prices merge:
 
 1. **Holofoil mislabel rule** — TCGCSV sometimes publishes a card's in-pack foil under `printing=Holofoil` instead of `Cold Foil` (late-2024+ sets, confirmed via live TCGPlayer listings). When a non-chase, non-extras card has a Holofoil row, that's the canonical foil and any separate Cold Foil/Foil row is suppressed as stale.
-2. **`EXTRAS_MAP`** — curated map of `tcgplayer_product_id` → variant info for cards that get promoted to the "Extras & Oddities" bucket. Currently 17 entries:
+2. **`EXTRAS_MAP`** — curated map of `tcgplayer_product_id` → variant info for cards that get promoted to the "Extras & Oddities" bucket. 21 entries:
    - 12 starter-deck-exclusive foils (4 each in Wilds Unknown, Fabled, Whispers in the Well — flagged as Holofoil in TCGCSV).
    - 5 Illumineer's Quest: Deep Trouble cards (Half Hexwell Crown, Mickey Mouse Playful Sorcerer, Yen Sid, Mulan Elite Archer, Piglet Pooh Pirate Captain).
-   - `excludeFromBaseSet: true` cards are suppressed from their origin set (Deep Trouble + Half Hexwell Crown).
-   - `standalone: {...}` lets us include cards Lorcast doesn't index (Piglet has this).
+   - 4 Illumineer's Quest: Palace Heist cards (Bolt Superdog, Goofy Groundbreaking Chef, Pinocchio Strings Attached, Elsa Ice Maker).
+   - `excludeFromBaseSet: true` cards are suppressed from their origin set (Deep Trouble + Half Hexwell Crown + all 4 Palace Heist).
+   - `standalone: {...}` lets us include cards Lorcast doesn't index. Palace Heist + Piglet use this; their actual `cards` table rows come from `scripts/patch_pid_overrides.py` (see below).
 3. **`CONNECTING_FOILS`** — map of `base_product_id` → `foil_product_id` for cards whose foil version TCGPlayer lists as a separate SKU (connecting-art / extended-art foils). 24 entries across Winterspell, Wilds Unknown, and Reign of Jafar. The foil row is emitted under the base card's `card_id` so the collection slot stays grouped. The companion product is suppressed from the main loop to avoid duplicate rows.
-4. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price` columns. When a card has one but not the other (typical for sparse/newest-set rows), the missing side falls back to the present side so it still contributes to rarity averages. The Analytics views' `priceMode` toggle then picks the preferred field per render.
+4. **`CUSTOM_VARIANTS`** — for cards Lorcast doesn't index that live INSIDE a mainline set (not in Extras). Genie - On the Job (Two Swords Variant) + Peter Pan - Pirate's Bane (Text Error). Each entry clones its base card's row with a distinct `card_id` (`<base>::variant::<slug>`), `Number` suffix `Error`, `variant_label`, null prices. `baseRarity` defaults to `Enchanted` — case-insensitive name match + rarity filter handles cases where the same name has multiple printings in the same set (e.g. Peter Pan's #120 base vs #215 Enchanted).
+5. **`CUSTOM_CARDS`** — placeholder array for cards Lorcast doesn't index. Currently empty; Golden Mickey + Palace Heist all migrated to real `cards` rows via `patch_pid_overrides.py`. Kept as infrastructure for future one-off injections.
+6. **`SET_DISPLAY_NAMES`** — `{Lorcast set name → UI display name}`. Currently `{"Challenge Promo": "Challenge Promo (C1)"}`. Applied in `transformSupabaseData`'s setName resolution so every downstream surface (tiles, drill-in, deck banner) uses the friendly name.
+7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_collector_number>`. Applied in `buildRow`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community-canonical #1/2/3/4. Use this when Lorcast's numbering doesn't match the print's printed number.
+8. **`UNIFIED_TILE_SETS`** — a Set of set names whose Collection tile collapses Normal/Foil/Enchanted into one `Promos X/Y` row instead of three near-empty rows. Currently Promo Set 1/2/3, D23 Collection, Lorcana Challenge Year 3, EPCOT Festival of the Arts. Challenge Promo (C1) is intentionally NOT in this set — it has a real Non-Foil / Foil split (Prize Wall non-foils + foil prizes).
+9. **`CHINA_ONLY_NONFOIL`** — `{<name>|<cn>: <local image path>}` for cards whose Non-Foil printing exists only in the Chinese market. Currently Dragon Fire #25, Let It Go #41. Non-foil row gets `variant_label: "Chinese Exclusive"`, null prices, null `tcgplayer_product_id`, and the local image. Backfill emits a synthetic Normal row if TCGCSV only had foil entries.
+10. **`TCG_PID_OVERRIDES` is authoritative** — was originally a fill-in-null mechanism but now overrides Lorcast even when Lorcast has a (wrong) value. Used to correct the Hiro Hamada #24/24B pid swap. **Entries are applied client-side in `transformSupabaseData` AND server-side via `scripts/patch_pid_overrides.py`** — the latter writes them into the `cards` table so the `card_prices_latest` matview JOIN picks them up. Client-only overrides don't help the matview.
+11. **Image fallback chain in `buildRow`** — `img_normal` falls back to `img_large || img_small`, etc. Lorcast occasionally populates only `image_large` (Challenge Promo Dragon Fire / Let It Go / Cinderella / Rapunzel are this way — small + normal are empty strings). Without the fallback, tiles render broken-image placeholders.
+12. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price` columns. When a card has one but not the other (typical for sparse/newest-set rows), the missing side falls back to the present side so it still contributes to rarity averages. The Analytics views' `priceMode` toggle then picks the preferred field per render.
 
 Audit scripts to regenerate these maps: `scripts/audit_holofoils.py`, `scripts/audit_connecting_foils.py`, `scripts/audit_missing_foils.py`. Sealed orphan / catalog audits: `supabase/diagnostics/sealed_product_audit.sql`. Index usage walks: `supabase/diagnostics/index_usage_audit.sql`.
+
+**`scripts/patch_pid_overrides.py`** — the bridge between client-side maps and the DB. Run after editing `TCG_PID_OVERRIDES` in Index.html or after declaring new Extras-style standalone cards. It (a) writes the override pids into the `cards` table so the matview JOIN picks them up, (b) upserts synthetic `cards` rows for Lorcast-missing products (Golden Mickey pid 554628, Palace Heist 4: 634262/63/64/65 — all under Ursula's Return's `set_id` as the Deep Trouble convention), and (c) calls `refresh_card_prices_latest()` at the end. Idempotent; safe to re-run.
+
+**Why client-side overrides aren't enough for prices.** `card_prices_latest` is `cards INNER JOIN prices_daily ON tcgplayer_product_id`. If `cards.tcgplayer_product_id` is null or wrong, no matview row → no price flowing through the catalog fetch into `pricesByProduct`. The client-side `TCG_PID_OVERRIDES` only fixes the display row's `tcgplayer_product_id` field, not the upstream join. Running the patch script is required for prices to appear.
+
+## Graded data: `date` vs `price_date`
+
+**Trap.** `graded_prices_daily.date` is the column name. The `graded_prices_latest` matview projects it as `price_date` to be consistent with `card_prices_latest`. If you query `graded_prices_daily` with `select("...price_date...")` or filter `price_date: "gte.YYYY-MM-DD"`, you'll get a 42703 "column does not exist" error. Easy to mix up since graded_prices_latest uses the renamed column. The Graded portfolio value chart in CollectionView learned this the hard way.
 
 ## Set conventions
 
@@ -126,6 +165,45 @@ Discovery surfaces:
 
 Aggregate metrics (favorite count, view count) are exposed via SECURITY DEFINER RPCs (`deck_favorite_counts(uuid[])`, `deck_view_counts(uuid[])`) that return only totals, never the underlying `(user_id, deck_id)` rows. Privacy preserved.
 
+## Collection sharing
+
+Mirrors the Deck sharing pattern but with three independent visibility axes (raw / sealed / graded), each `private | unlisted | public`. Backed by `profiles.collection_raw_visibility` + `collection_sealed_visibility` + `collection_graded_visibility` + a shared `profiles.collection_share_token`.
+
+| Visibility | Direct read (table API) | URL behavior | Profile listing |
+|---|---|---|---|
+| **Private** | owner only | none | excluded |
+| **Unlisted** | owner only | `?collection=<uuid>&token=<x>` works | excluded |
+| **Public** | n/a (RPCs only) | `?collection=<uuid>` works | included |
+
+Key invariants (migration 39):
+
+- **Non-owner reads always go through SECURITY DEFINER RPCs.** Direct `collection_items`/`sealed_collection_items`/`graded_collection_items` reads stay owner-only via RLS. The three `get_shared_collection_raw/sealed/graded(uuid, text)` RPCs are the only public-reachable path; they accept the token and gate per section visibility.
+- **`get_collection_visibility(uuid, text)` returns** the three per-section booleans the client uses to decide which section tabs + sections to render.
+- **One token for all three sections.** Public sections render with or without it; unlisted sections require it. Trigger rotates the token when all three sections go to `private` simultaneously (so revoking everything kills the URL).
+- **Owner-only `regenerate_collection_share_token()` RPC** rotates the token without flipping visibility. Same pattern as decks.
+- **Viewer mode** = `?collection=<uuid>` in the URL. App fetches via the visibility-gated RPCs and feeds `CollectionView` with a `viewerContext` prop (sets `readOnly`, hides edit affordances, gates section tabs by visibility).
+- **`paginateRpc` is required** for the three `get_shared_collection_*` calls — PostgREST caps RPC table-returns at 1000 rows by default. The helper drains via `.range(from, to)` until a short page. Without it, collections >1000 silently truncate.
+- **InlineCounter in read-only mode** renders the qty without +/- buttons. Previously it returned an empty div, breaking the set-detail grid alignment.
+- **Comparison stats** in viewer mode require the viewer to be signed in (we need their `collection` + `sealedCollection` to compute overlap).
+
+## Tournaments
+
+Admin-gated bulk-upload of tournament results. Each tournament has N player rows; each row creates a public deck linked to the tournament. Tournament decks have **`user_id = null`** (ownerless) so they don't pollute the uploader's My Decks / Following feed.
+
+- **Schema** (migrations 35 + 37): `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker=on). RLS: public SELECT, admin-only INSERT/UPDATE/DELETE. Manage admin rows manually via dashboard.
+- **Admin gate**: `is_tournament_admin(uuid)` SECURITY DEFINER helper. Client calls `sbClient.rpc("is_tournament_admin", {p_user: user.id})` on auth to gate UI.
+- **Bulk upload RPC**: `bulk_upload_tournament(p_name, p_event_date, p_format, p_num_players, p_rows jsonb) returns uuid`. One transactional round-trip — either everything lands or nothing. Replaces an older client loop that did 4 sequential round-trips per deck (took 5+ min on slow Supabase nights).
+- **Admin ops RPCs**: `admin_delete_tournament(uuid)`, `admin_update_tournament_meta(uuid, name, date, format, num_players)`, `admin_update_tournament_deck(uuid, place, place_rank, player_name, deck_name)`, and (migration 40) `admin_replace_tournament_deck_cards(result_id, inks, cards jsonb)` + `admin_add_tournament_deck(...)` + `admin_delete_tournament_deck(result_id)`. All SECURITY DEFINER, gated on `is_tournament_admin(auth.uid())`.
+- **`TournamentBulkEditModal`** is the canonical editor — replaces the meta-only `TournamentEditModal`. Same layout as Bulk Upload but pre-populates from existing rows (single batched `deck_cards` query for all linked decks) and diffs on save. Add/remove/edit multiple decks in one pass.
+- **Discover tile for tournament decks** — `renderExternalCard` checks `tournamentByDeckId[d.id]`. If present, swaps the byline from "by Creator" to "by Player Name" and prepends a trophy strip: `🏆 Tournament Name · 1st · 57p`. Don't render the "Unfollow {creator}" button for ownerless decks (`d.user_id` is null).
+- **CSS gotcha**: the tournament-result row's grid layout MUST live on `.tournament-result-open` (the inner button containing the spans), NOT `.tournament-result-row` (the outer wrapper). Admin mode's `.has-admin` flips to flex; non-admin mode would otherwise have a grid container with no laid-out children.
+- **`decks.user_id` is nullable** (migration 37). Tournament decks set it null; any "my decks" / "following feed" / creator-profile queries filter on `user_id = X` and naturally exclude them. Discover feed (public decks) still shows them.
+- **Per-row deck name fallback chain** (client-side, before sending to RPC): explicit deck name → joined inks (`Amber/Emerald`) → `${player_name}'s deck` → `Untitled deck`.
+- **Per-row inks** computed client-side from `parseDeckText` entries + catalog meta, sent in the row payload. RPC writes to `decks.inks`. Avoids a server-side `cards` lookup per insert.
+- **Deck detail page tournament badge**: `DeckEditor` accepts `tournamentContext` + `onOpenTournament` props. When set, the readonly banner replaces "by Creator" with `🏆 Tournament Name · 1st · 57 players` + "by Player Name". Build the lookup once in `DecksView` from `tournamentResults`: `tournamentByDeckId = useMemo(() => { ... }, [tournamentResults])`.
+- **Image export poster** mirrors the badge — `DeckPosterModal` accepts `tournamentContext`, renders the trophy line under the deck title, uses `player_name` instead of `creatorName` for the "by" credit.
+- **Home Tournament Results banner** below Following in `.home-left-col`. Top 4 decks per tournament, newest first, capped at 16 total. Row shape: `<place> Player Name: Deck Name 🛡️🛡️`. Deck click → `openDeckById`; tournament name click → `openTournamentById` (App-level cross-view nav, mirrors `openDeckById`).
+
 ## Deck view / edit modes
 
 Clicking your own deck defaults to **view mode** (no card browser, no inline-rename); the toolbar has an **✎ Edit** toggle that flips to edit mode. Brand-new decks open straight into edit since the view is empty.
@@ -143,12 +221,14 @@ Clicking your own deck defaults to **view mode** (no card browser, no inline-ren
 - Low price can also be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
 - Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded TCGPlayer URL>`. The `tcgUrl()` helper wraps every TCGPlayer link site-wide — never link directly to `tcgplayer.com/product/...`. Mass-entry carts use `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=4 Name||4 Name` routed through the same affiliate wrapper.
 - **Lorcast's API key for "is this card inkable" is `inkwell`, not `inkable`.** Our column is named `inkable`; the ETL has to translate. Backfill: `scripts/patch_inkable.py`. Same pattern: `inks` array uses `inks` directly.
-- **Image sizes**: Lorcast publishes `small` (200w), `normal` (400w), `large` (734w). All three are stored in `cards`. Use `img_normal` for tiles ≤200px wide; `img_large` for hover previews and detail modals; `img_small` only for thumbnails ≤80px.
+- **Image sizes**: Lorcast publishes `small` (200w), `normal` (400w), `large` (734w). All three are stored in `cards`. Use `img_normal` for tiles ≤200px wide; `img_large` for hover previews / detail modals / poster export; `img_small` only for thumbnails ≤80px. **`img_large` is NOT in the catalog localStorage cache** (stripped on write to save ~30% size); fetch sites that prefer it fall back to `img_normal` gracefully — verify on existing call sites before adding new ones.
 
 ## CSS pitfalls
 
 - **`mask-image` on a container softens its child `<img>` elements.** The mask forces an offscreen compositing layer that rasterizes children at the layer's pixel ratio, visibly blurring AVIF / hi-res photos. Use absolutely-positioned gradient pseudo-elements (`::before` / `::after`) for edge-fade effects instead. Same caution applies to `will-change: transform`, `filter: blur(0)`, `transform: translateZ(0)`, `opacity: 0.99` — all known compositing-layer triggers.
 - **`image-rendering: crisp-edges`** is for pixel-art sprites. It disables smooth bilinear interpolation and makes downsampled card art look blocky/jagged. Default `image-rendering: auto` is correct for photos.
+- **`--bg-card` is translucent in dark mode** (`rgba(255,255,255,0.06)`). Don't use it for modal/popup backgrounds — they'll be unreadable in dark mode. Use **`--bg-modal`** (opaque in both themes) for the `.modal` and `.name-prompt` containers. Tooltips/popovers intentionally use translucent surfaces over the page bg and render fine.
+- **Conditional grid cells break grid-template-columns alignment.** If a grid-row JSX renders `${condition && html\`<img class="cell"/>\`}` for one of its columns, the cell vanishes when condition is falsy → all subsequent cells shift left. Always render a wrapper element for the slot, conditionally render the content inside it. The set-detail row's rarity icon slot uses `<span class="sd-row-rarity-slot">${RARITY_ICONS[r] && html\`<img.../>\`}</span>` for exactly this reason.
 
 ## Conventions
 
@@ -159,6 +239,45 @@ Clicking your own deck defaults to **view mode** (no card browser, no inline-ren
 - Earliest price data: 2024-02-08. Sets released before that show a `*` asterisk note.
 - Time display: `relativeTime(iso)` for compact ("2d ago"), `absoluteLocalTime(iso)` for the hover tooltip. Both use the browser's local time zone — `timestamptz` carries the offset, `new Date(iso).toLocaleString()` handles the conversion.
 
+## Browser back/history pattern
+
+Sub-pages within a top-level view (deck detail inside Decks, set detail inside Collection, tournament detail inside Decks, viewer-mode collection) push their own history entries so browser back returns to the parent grid instead of jumping to the previously-active top-level view.
+
+- **Entering a sub-page**: `window.history.pushState({...}, "", url-with-param)` BEFORE the state update. Query param convention: `?deck=<id>`, `?set=<name>`, `?tourney=<id>`, `?user=<uuid>`, `?collection=<uuid>` (+ optional `&token=<x>` for unlisted decks/collections).
+- **Popstate listener inside the view**: reads the URL param and syncs `selectedDeckId` / `selectedSet` / `selectedTournamentId` state. Always present per-view (`CollectionView`, `DecksView`) so back/forward works within that view's sub-pages.
+- **Existing wrappers**: `openDeckInMode(id, mode)` and `openTournament(tid)` in `DecksView`; the `useEffect` watching `selectedSet` in `CollectionView`. Add new sub-page navigation through one of these patterns or you'll regress the back button.
+- **Top-nav clicks strip view-specific deep-link params.** When `view` changes via the top nav, the App-level URL sync effect removes `?deck`, `?token`, `?user`, `?collection`, `?set`, `?tourney` from the URL before pushing the new pathname. Otherwise navigating Collection viewer → Home would leave a stale `?collection=…` hanging. Each sub-view's own URL-sync effect re-adds the right param on entry.
+
+## SQL editor syntax
+
+Postgres functions are invoked from a `SELECT`, not as bare statements. Calling `refresh_card_prices_latest()` directly in the Supabase SQL editor errors with `42601 syntax error`. Use:
+
+```sql
+SELECT public.refresh_card_prices_latest();
+SELECT public.refresh_rarity_avg_daily();
+SELECT public.refresh_price_movers();
+SELECT public.refresh_sealed_prices_latest();
+SELECT public.refresh_graded_prices_latest();
+```
+
+## parseDeckText scoring
+
+The "paste a decklist" parser (used by Bulk Upload + import deck text + tournament rows) resolves a card NAME to a `card_id` via a per-name lookup. Multiple printings can share a Product Name once Challenge Promo / D23 / Lorcana Challenge Year 3 enter the catalog AND chase rarities (Enchanted #200ish) share the name with their base.
+
+Scoring rules in `parseDeckText`:
+
+- `+100` if `Set ∈ MAINLINE_SETS`
+- `-80` if `Rarity ∈ {Enchanted, Iconic, Epic}` (chase printings share the base name; demote so the base wins inside one set)
+- `-60` if `isCustomVariant` (Genie / Peter Pan error variants)
+- `-40` if `isCustomCard` (legacy stub flag)
+- `-20` if any `variant_label` is present
+
+Highest-scoring candidate wins. Tiebreaker is iteration order. Verified: Cinderella - Stouthearted resolves to Rise of the Floodborn #177 (Super Rare) instead of Challenge Promo #42 or the Enchanted at #200ish.
+
+## Collection value chart: prerelease guard
+
+TCGPlayer pre-release prices for new sets are wildly inflated — often 10-20× the post-release floor. `computeCollectionValueHistory` accepts an optional `productEarliestDate` map (`tcgplayer_product_id → "YYYY-MM-DD"`); any prices_daily row with `date < earliest[pid]` is dropped before the rollup. `CollectionPanel` builds the map from `setsMeta.released_at + 1 day`, filtered to MAINLINE_SETS only (promos/D23/Challenge stay unfiltered — they don't have a "spike" pattern). Cache key bumped to `packsink:colvalue:v2:` so stale unguarded series get invalidated.
+
 ## Performance gotchas
 
 - The Cards browse / deck-builder grid renders 1500+ tiles. **Three layers** make this fast:
@@ -167,14 +286,21 @@ Clicking your own deck defaults to **view mode** (no card browser, no inline-ren
   3. CSS `content-visibility: auto` + `contain-intrinsic-size` on `.card-tile` / `.card-row` lets the browser skip layout/paint for off-screen tiles. Combined with `useDeferredValue(filter)`, ink-filter toggling stays responsive even when going from 250 visible back to 1500.
 - The Collection-value chart caches the *computed* series (not the raw rows) in `localStorage` under `packsink:colvalue:{userId}:{productsHash}:{rangeKey}`. Hydrates synchronously on mount so the chart paints immediately and refreshes in the background.
 - The Screener table caps rendering at 1,000 rows; users tighten filters to see beyond. Could promote to virtualized scrolling if catalog grows past ~10k tracked cards.
+- **Per-view banners (movers / Following / tournaments / screener-movers) cache to localStorage** with their own TTLs so tab switches don't refire heavy queries. See "Client cache rules" for the keys. Each banner's effect hydrates from cache instantly and only background-refreshes when stale.
+- **Per-card price history caches to localStorage** (`packsink:hist:v1:{productId}:{printing}`, 12h TTL) inside `fetchCardHistory`. The original anon `prices_daily` history fetch was 89% of total Supabase query time per the query-performance report; the cache collapses repeat views.
+- **Top-of-cold-load parallelization**: the `cards.inks` and `cards.illustrators` schema probes run via `Promise.all` (were sequential). `FollowingFeed`'s initial `user_follows` + `deck_favorites` queries also parallel. `FollowingFeed`'s effect depends on `[user]` only (not `raw`) so it kicks off in parallel with the catalog fetch — saves 2-3s on cold loads.
 
 ## Ops
 
-- **GitHub Actions cron** (`.github/workflows/etl.yml`): daily at 21:00 UTC for prices, Sundays at 22:00 UTC for Lorcast metadata refresh. **Heads-up: GitHub auto-disables scheduled workflows after 60 days of repo inactivity** — push at least monthly or you'll lose the cron silently.
+- **GitHub Actions cron** (`.github/workflows/etl.yml`): one consolidated daily trigger at 21:00 UTC. The `prices` job runs first; `graded` (`needs: prices`) runs sequentially after. Sundays 22:00 UTC fires the Lorcast metadata refresh separately. **Heads-up: GitHub auto-disables scheduled workflows after 60 days of repo inactivity** — push at least monthly or you'll lose the cron silently. Also: two close-together schedules silently drop one on the free tier — keep both daily jobs on the same 21:00 trigger.
+- **Dev server cache header**: `scripts/dev_server.py` sends `Cache-Control: no-store` on HTML/CSS/JS responses. Chrome's disk cache otherwise serves stale assets even after the file changes — this stops that in dev. Production uses normal Netlify cache rules.
+- **`scripts/patch_pid_overrides.py`** is the bridge between client-side `TCG_PID_OVERRIDES` and the `cards` table. Re-run after editing the map in Index.html or after adding new synthetic Lorcast-missing cards. Idempotent.
 - **Sentry browser SDK** loaded via CDN in `<head>` of `Index.html` (loader script, lazy init on first error). User attribution via `Sentry.setUser({id, username})` on auth state change.
 - **UptimeRobot** pings the prod URL every 5 minutes; alerts on 2 consecutive failures.
 - **ETL stale-data footer pill** queries `card_prices_latest`'s max(price_date) on App load and flashes ⚠ if > 36h behind.
 - **Duplicate-snapshot guard in `etl_tcgcsv_daily.py`** — refuses to write a snapshot that's >95% byte-identical to yesterday's. Pass `--force` to override. TCGCSV occasionally re-serves yesterday's file when its daily cron hasn't fired yet; the guard prevents polluting prices_daily.
+- **Required GitHub Actions secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `TCGPRICELOOKUP_API_KEY`. Missing the third makes the consolidated workflow's graded job fail with "api_key required".
+- **PWA / service worker** (`sw.js`, registered from `<head>` of Index.html, scope `/`): caches the app shell (Index.html, styles.css, logo.js, manifest, icons) and Lorcast card images. Data APIs (Supabase, TCGCSV, Lorcast metadata, qrserver) are explicitly bypassed so they always hit network. **Bump `CACHE_VERSION` in sw.js any time Index.html / styles.css / logo.js changes meaningfully** — without the bump, installed clients serve the old cached shell until the SW happens to update on its own (up to 24h). The activate handler purges any cache key that doesn't match the current version. Pre-cache uses `cache.add().catch(null)` per asset so a missing file (e.g. renamed icon) doesn't abort install. `manifest.json` and the `/icon-*.png` / `/favicon-*.png` / `apple-touch-icon.png` files all live at the repo root and must NOT be moved (the manifest references absolute paths).
 
 ## Disclaimer
 
@@ -195,12 +321,13 @@ Lives only on the **How It Works** page. One paragraph: "Packs.Ink is an unoffic
 
 - **Tier 2 schema** — `strength` / `willpower` / `lore` columns in `cards` + smart-search filters in the Cards browse (`str>=3`, `lore>=2`, etc.). Lorcast exposes these already; mostly a loader update + UI work.
 - **Deck legality auto-fix suggestions** — "your deck is 57 cards; here are 3 candidates to add" based on cost curve / ink balance.
+- **Domain transfer Netlify → Name.com → (optional) Cloudflare** to enable Cloudflare WAF + Bot Fight Mode in front of Netlify. Blocked until **2026-06-08** (ICANN 60-day post-registration lock). Netlify only transfers to Name.com per their partnership; from Name.com we'd flip nameservers to Cloudflare.
+- **Card scanner (phone)** — vision-based identification. Scan a card → identify → show current price + history.
 
 **Nice to have:**
 
 - **Sim a pack inline button** on each row in Playset Cost / Set Values — folds Pack/Box Sim from a destination into a contextual action.
 - **Deck-list cost-curve sparklines** on the Decks tab list (currently only in the editor).
-- **Card scanner (phone)** — vision-based identification. Scan a card → identify → show current price + history. Lowest priority, last to build.
 - **More Extras & Oddities curation** — re-run the audit scripts periodically; user has to triage case-by-case.
 - **Floor-coverage indicator** on Screener — distinguishes "1 lonely listing" from "10 sellers all at the floor". Needs a different upstream (TCGCSV's `/products` endpoint, not just /prices).
 - **Stale-data warning per row** on Screener — flag rows whose `low_today` is more than 3 days old. `is_stale` exists on `card_prices_latest` but not on `price_movers` yet.
