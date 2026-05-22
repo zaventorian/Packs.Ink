@@ -3263,7 +3263,90 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const [showUrl, setShowUrl] = useState(true);
   const [showStats, setShowStats] = useState(true);
   const [showCurve, setShowCurve] = useState(true);
+  const [showCost, setShowCost] = useState({nonFoil:true, foil:true, maxRarity:true});
   const [error, setError] = useState(null);
+
+  // Three deck-cost totals using the same Low-Price field shown elsewhere on
+  // the site. Enchanted / Iconic / Epic / Promo variants live under DIFFERENT
+  // card_ids than the base printing, so we group by Product Name (per Set) to
+  // collect every variant for a given card. For each deck entry × quantity:
+  //   - nonFoil: the Normal printing's price (skipped if no Normal exists).
+  //   - foil:    cheapest foil-tier printing (Cold Foil / Foil / Holofoil);
+  //              excludes Enchanted / Iconic / Epic chase tiers.
+  //   - maxRarity: most-expensive chase-tier variant
+  //              (Enchanted / Iconic / Epic / Promo) across ALL printings of
+  //              that Product Name; falls back to the Normal price when the
+  //              card has no chase printing. Two exclusions for sanity:
+  //                * Promo Set 1 cards #1-7 (Prize Wall promos — listed
+  //                  prices aren't representative).
+  //                * Any Promo-rarity variant priced >$1000 — but Iconics
+  //                  >$1000 are kept (a legit chase tier).
+  const variantsByName = useMemo(() => {
+    const m = new Map();
+    for(const arr of Object.values(cardById || {})){
+      for(const r of (arr || [])){
+        const n = r?.["Product Name"];
+        if(!n) continue;
+        if(!m.has(n)) m.set(n, []);
+        m.get(n).push(r);
+      }
+    }
+    return m;
+  }, [cardById]);
+  const costs = useMemo(() => {
+    const priceOf = (v) => v?.["Low Price"] ?? v?.["TCGPlayer Market"] ?? null;
+    let nonFoil = 0, foil = 0, maxRarity = 0;
+    let nfHits = 0, fHits = 0, mrHits = 0;
+    for(const c of cards){
+      const productName = c.meta?.["Product Name"];
+      const byId = (cardById[c.card_id] || []).filter(Boolean);
+      const byName = (productName && variantsByName.get(productName)) || [];
+      // Dedupe by (card_id|tcg_printing) — byId variants are a subset of byName.
+      const seen = new Set();
+      const variants = [];
+      for(const v of [...byId, ...byName]){
+        const k = (v.card_id||"") + "|" + (v.tcg_printing||v.Printing||"");
+        if(seen.has(k)) continue;
+        seen.add(k);
+        variants.push(v);
+      }
+      if(!variants.length && c.meta) variants.push(c.meta);
+      const normal = variants.find(v => v?.Printing === "Normal" || v?.tcg_printing === "Normal");
+      const normalPrice = priceOf(normal);
+      if(normalPrice != null){ nonFoil += normalPrice * c.quantity; nfHits++; }
+
+      const foilVariants = variants.filter(v => {
+        if(!v) return false;
+        const rar = v.Rarity || "";
+        if(/Enchanted|Iconic|Epic/i.test(rar)) return false;
+        return v.Printing === "Foil" || /foil/i.test(v.tcg_printing||"");
+      });
+      const foilPrices = foilVariants.map(priceOf).filter(p => p != null);
+      const foilPrice = foilPrices.length ? Math.min(...foilPrices) : null;
+      if(foilPrice != null){ foil += foilPrice * c.quantity; fHits++; }
+
+      const chaseVariants = variants.filter(v => {
+        if(!v) return false;
+        const rar = v.Rarity || "";
+        if(!/Enchanted|Iconic|Epic|Promo/i.test(rar)) return false;
+        const p = priceOf(v);
+        if(p == null) return false;
+        const num = parseInt(String(v.Number||"").replace(/\D/g,""), 10);
+        // Exclude Promo Set 1 #1-7 (Prize Wall / rarely-traded outliers).
+        if(v.Set === "Promo Set 1" && num >= 1 && num <= 7) return false;
+        // Exclude individual Promo cards >$1000 (but Iconics >$1000 are kept).
+        if(/Promo/i.test(rar) && !/Iconic/i.test(rar) && p > 1000) return false;
+        return true;
+      });
+      const chasePrices = chaseVariants.map(priceOf).filter(p => p != null);
+      const chaseMax = chasePrices.length ? Math.max(...chasePrices) : null;
+      const mr = chaseMax ?? normalPrice;
+      if(mr != null){ maxRarity += mr * c.quantity; mrHits++; }
+    }
+    return {nonFoil, foil, maxRarity, nfHits, fHits, mrHits};
+  }, [cards, cardById, variantsByName]);
+  const fmtUSD = (n) => "$" + n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
+  const anyCost = showCost.nonFoil || showCost.foil || showCost.maxRarity;
 
   // Cost curve buckets 1..9+, keyed by ink composition. Single-ink cards
   // contribute to their ink's bar; dual-ink cards form their OWN bucket
@@ -3528,6 +3611,15 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 onClick=${()=>setShowStats(v=>!v)}>Stats</button>
               <button class=${"chip "+(showCurve?"active":"")}
                 onClick=${()=>setShowCurve(v=>!v)}>Cost curve</button>
+              <button class=${"chip "+(showCost.nonFoil?"active":"")}
+                onClick=${()=>setShowCost(c=>({...c,nonFoil:!c.nonFoil}))}
+                title="Total deck cost using Normal printings">Non-Foil $</button>
+              <button class=${"chip "+(showCost.foil?"active":"")}
+                onClick=${()=>setShowCost(c=>({...c,foil:!c.foil}))}
+                title="Total deck cost using cheapest Foil printings">Foil $</button>
+              <button class=${"chip "+(showCost.maxRarity?"active":"")}
+                onClick=${()=>setShowCost(c=>({...c,maxRarity:!c.maxRarity}))}
+                title="Total deck cost using each card's most expensive Enchanted / Iconic / Epic / Promo printing (with sanity exclusions — see ? page)">Max Rarity $</button>
               ${shareUrl && html`<button class=${"chip "+(showUrl?"active":"")}
                 onClick=${()=>setShowUrl(v=>!v)}>URL footer</button>`}
             </div>
@@ -3552,6 +3644,20 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               <div style=${{display:"flex",gap:6,flexWrap:"wrap",marginTop:8,fontSize:12}}>
                 <span style=${{padding:"3px 10px",borderRadius:12,background:isLightBg?"rgba(0,0,0,0.08)":"rgba(255,255,255,0.18)",fontWeight:600}}>${inkLabel}</span>
               </div>
+              ${anyCost && html`<div style=${{display:"flex",flexDirection:"column",gap:4,marginTop:10}}>
+                ${showCost.nonFoil && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
+                  <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Non-Foil</span>
+                  <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.nonFoil)}</span>
+                </div>`}
+                ${showCost.foil && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
+                  <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Foil</span>
+                  <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.foil)}</span>
+                </div>`}
+                ${showCost.maxRarity && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
+                  <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Max Rarity*</span>
+                  <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.maxRarity)}</span>
+                </div>`}
+              </div>`}
             </div>
             ${(showStats || showCurve) && html`<div style=${{display:"flex",flexDirection:"column",gap:10,flex:"1 1 auto",minWidth:0,alignItems:"stretch"}}>
               ${showStats && html`<div style=${{display:"flex",gap:18,flexWrap:"wrap",alignItems:"flex-end"}}>
@@ -3890,9 +3996,18 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
       return;
     }
     const safeArtist = picked.replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    // Route Lorcast art through /img-proxy/* so html2canvas (used by the
+    // "Copy as Image" button) can read pixels without canvas-taint. The
+    // proxy is same-origin (Netlify _redirects in prod, dev_server.py
+    // locally), and it sends Access-Control-Allow-Origin: * so crossOrigin
+    // works on the <img> too.
+    const proxify = (url) => (typeof url === "string" && url.startsWith("https://cards.lorcast.io/"))
+      ? "/img-proxy/" + url.slice("https://cards.lorcast.io/".length)
+      : url;
     const tiles = cardsForArtist.map(c => `
       <figure>
-        <img src="${c.img}" alt="${c.name.replace(/"/g,"&quot;")}" loading="eager"/>
+        <img src="${proxify(c.img)}" crossorigin="anonymous"
+          alt="${c.name.replace(/"/g,"&quot;")}" loading="eager"/>
         <figcaption>${c.set} · #${c.number||""}</figcaption>
       </figure>`).join("");
     const doc = `<!doctype html><html><head>
@@ -3900,16 +4015,19 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
       <title>Artist Alley — ${safeArtist}</title>
       <style>
         :root{color-scheme:dark;}
-        *{box-sizing:border-box;}
-        body{margin:0;padding:48px 56px;background:linear-gradient(180deg,#1a1334,#0d0a1f);
+        *{box-sizing:border-box;
+          -webkit-print-color-adjust:exact;print-color-adjust:exact;}
+        body{margin:0;padding:36px 44px;background:linear-gradient(180deg,#1a1334,#0d0a1f);
           color:#fff;font-family:'Nunito Sans',system-ui,sans-serif;min-height:100vh;}
         header{display:flex;align-items:flex-end;justify-content:space-between;
-          margin-bottom:32px;gap:24px;flex-wrap:wrap;}
-        h1{font-size:56px;margin:0;font-weight:800;letter-spacing:-0.5px;}
-        h2{font-size:36px;margin:6px 0 0;font-weight:500;color:#c4b5fd;}
-        .meta{font-size:16px;color:rgba(255,255,255,0.6);text-align:right;line-height:1.5;}
-        .grid{display:grid;grid-template-columns:repeat(5,1fr);gap:18px;}
-        figure{margin:0;display:flex;flex-direction:column;gap:6px;}
+          margin-bottom:24px;gap:20px;flex-wrap:wrap;}
+        h1{font-size:48px;margin:0;font-weight:800;letter-spacing:-0.5px;line-height:1;}
+        h2{font-size:28px;margin:4px 0 0;font-weight:500;color:#c4b5fd;line-height:1.1;}
+        .meta{font-size:14px;color:rgba(255,255,255,0.6);text-align:right;line-height:1.5;}
+        .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
+        figure{margin:0;display:flex;flex-direction:column;gap:6px;
+          /* Don't split a card across page boundaries when printing. */
+          break-inside:avoid;page-break-inside:avoid;}
         figure img{width:100%;aspect-ratio:5/7;object-fit:cover;border-radius:10px;
           box-shadow:0 6px 16px rgba(0,0,0,0.35);background:rgba(255,255,255,0.04);}
         figcaption{font-size:11px;color:rgba(255,255,255,0.55);text-align:center;
@@ -3919,16 +4037,28 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
           border:1px solid rgba(255,255,255,0.2);background:#7c3aed;color:#fff;cursor:pointer;
           font-family:inherit;}
         .actions button.secondary{background:rgba(255,255,255,0.1);}
+        /* Print: preserve the dark poster look (no white-background flip).
+           Chromium / Edge / modern Safari honor color-adjust:exact and render
+           background gradients + drop-shadows in the saved PDF. Spreading
+           across multiple pages is fine; the break-inside guard on figures
+           keeps individual cards intact across page splits. */
         @media print{
-          body{background:#fff;color:#000;padding:24px;}
-          h2{color:#5b21b6;}
-          figcaption{color:#666;}
-          figure img{box-shadow:none;background:#f5f5f5;}
+          @page{margin:0;size:letter portrait;}
+          body{padding:28px 32px;background:linear-gradient(180deg,#1a1334,#0d0a1f);
+            color:#fff;min-height:auto;}
+          h1{font-size:44px;}
+          h2{font-size:26px;color:#c4b5fd;}
+          figcaption{color:rgba(255,255,255,0.55);}
           .actions{display:none;}
-          .grid{gap:10px;}
+          header{break-after:avoid;margin-bottom:18px;}
+          /* Pin print grid to 6 cols explicitly — the print preview's
+             ~816px viewport (8.5in × 96dpi) would otherwise match the
+             max-width:900px screen rule and drop to 4 cols. */
+          .grid{grid-template-columns:repeat(6,1fr) !important;gap:10px;}
+          figcaption{font-size:9px;}
         }
-        @media (max-width:900px){
-          .grid{grid-template-columns:repeat(3,1fr);}
+        @media screen and (max-width:900px){
+          .grid{grid-template-columns:repeat(4,1fr);}
         }
       </style>
     </head><body>
@@ -3944,9 +4074,127 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
       </header>
       <div class="grid">${tiles}</div>
       <div class="actions">
-        <button onclick="window.print()">💾 Save as PDF</button>
+        <button id="copy-img-btn" onclick="copyAsImage()" title="Copy the entire poster to your clipboard as one tall PNG">📋 Copy as Image</button>
+        <button id="save-img-btn" onclick="saveAsImage()" title="Download the entire poster as a single JPG (well under 10 MB so Discord accepts it)">💾 Save JPG</button>
+        <button onclick="window.print()" title="Open the print dialog, then choose 'Save as PDF' as the destination">🖨 Save as PDF</button>
         <button class="secondary" onclick="window.close()">Close</button>
       </div>
+      <div id="toast" style="position:fixed;bottom:80px;right:20px;padding:10px 16px;
+        background:rgba(124,58,237,0.95);color:#fff;font-size:13px;font-weight:600;
+        border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,0.3);
+        opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:11;"></div>
+      <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
+        crossorigin="anonymous"><\/script>
+      <script>
+        const TOAST = document.getElementById('toast');
+        const showToast = (msg, ms = 2000) => {
+          TOAST.textContent = msg; TOAST.style.opacity = '1';
+          setTimeout(() => { TOAST.style.opacity = '0'; }, ms);
+        };
+        // Render the whole poster as one tall canvas. Waits for every <img>
+        // to finish loading first — otherwise html2canvas paints empty boxes
+        // for any image that hasn't decoded yet.
+        const renderPosterCanvas = async () => {
+          const imgs = Array.from(document.querySelectorAll('figure img'));
+          await Promise.all(imgs.map(img => img.complete
+            ? Promise.resolve()
+            : new Promise(res => { img.onload = img.onerror = res; })));
+          if(!window.html2canvas) throw new Error('html2canvas failed to load');
+          // Adaptive scale: short posters can use full 2× for sharpness, but
+          // tall posters (40+ cards) blow past Discord's 10 MB cap unless we
+          // render at lower density. Target ~6-8 megapixels total — JPEG of
+          // that size at q=0.85 comfortably lands under 10 MB.
+          const bodyH = document.body.scrollHeight;
+          const bodyW = document.body.scrollWidth || 1200;
+          // Output canvas pixels = (bodyW*scale) × (bodyH*scale). We want
+          // the resulting megapixel count near targetMP so JPEG q=0.85
+          // lands well under Discord's 10 MB cap regardless of card count.
+          const targetMP = 7;
+          const naturalMP = (bodyW * bodyH) / 1e6;
+          let scale = Math.sqrt(targetMP / Math.max(0.1, naturalMP));
+          if(scale > 2) scale = 2;
+          if(scale < 1) scale = 1;
+          return await window.html2canvas(document.body, {
+            useCORS: true,
+            backgroundColor: '#0d0a1f',
+            scale: scale,
+            logging: false,
+            // Skip the floating action bar + toast so the captured PNG is just the poster.
+            ignoreElements: (el) => {
+              if(!el || !el.classList) return false;
+              return el.classList.contains('actions') || el.id === 'toast';
+            },
+          });
+        };
+        // JPEG quality 0.92 keeps card art sharp but yields ~1-3 MB on the
+        // typical poster — well under Discord's 10 MB free-tier upload cap.
+        // PNG of the same canvas would be 15-30 MB and unsendable. Quality
+        // tuned to be visually indistinguishable from PNG on card photos.
+        const JPEG_QUALITY = 0.85;
+        const DISCORD_BUDGET = 9.5 * 1048576; // leave headroom under 10 MB cap
+        const canvasToBlob = (canvas, type, quality) => new Promise((res, rej) =>
+          canvas.toBlob(b => b ? res(b) : rej(new Error('toBlob failed')), type, quality));
+        // Encode JPEG; if it overshoots Discord's cap, retry at progressively
+        // lower quality until it fits (or we bottom out at q=0.55).
+        const encodeJpegUnderBudget = async (canvas) => {
+          for(const q of [JPEG_QUALITY, 0.78, 0.7, 0.62, 0.55]){
+            const b = await canvasToBlob(canvas, 'image/jpeg', q);
+            if(b.size <= DISCORD_BUDGET) return b;
+          }
+          // Give up — return the smallest version we produced (q=0.55).
+          return await canvasToBlob(canvas, 'image/jpeg', 0.55);
+        };
+        async function copyAsImage(){
+          const btn = document.getElementById('copy-img-btn');
+          btn.disabled = true; btn.textContent = '⏳ Rendering…';
+          try {
+            if(!navigator.clipboard || !window.ClipboardItem){
+              throw new Error('Clipboard image copy not supported in this browser — try Save instead.');
+            }
+            const canvas = await renderPosterCanvas();
+            // Try JPEG first (small file). Some browsers (older Safari) reject
+            // image/jpeg in ClipboardItem — fall back to PNG for those.
+            try {
+              const jpg = await encodeJpegUnderBudget(canvas);
+              try { window.focus(); } catch {}
+              await navigator.clipboard.write([new ClipboardItem({'image/jpeg': jpg})]);
+              const mb = (jpg.size / 1048576).toFixed(1);
+              showToast('Poster copied (' + mb + ' MB)');
+            } catch(jpegErr) {
+              const png = await canvasToBlob(canvas, 'image/png');
+              try { window.focus(); } catch {}
+              await navigator.clipboard.write([new ClipboardItem({'image/png': png})]);
+              const mb = (png.size / 1048576).toFixed(1);
+              showToast('Poster copied as PNG (' + mb + ' MB)');
+            }
+          } catch(e) {
+            showToast('Copy failed: ' + (e && e.message || e), 4000);
+          } finally {
+            btn.disabled = false; btn.textContent = '📋 Copy as Image';
+          }
+        }
+        async function saveAsImage(){
+          const btn = document.getElementById('save-img-btn');
+          btn.disabled = true; btn.textContent = '⏳ Rendering…';
+          try {
+            const canvas = await renderPosterCanvas();
+            const blob = await encodeJpegUnderBudget(canvas);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const safe = (s) => String(s||'artist').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g,'');
+            a.href = url;
+            a.download = 'packsink-artist-alley-' + safe(${JSON.stringify(picked)}) + '.jpg';
+            document.body.appendChild(a); a.click(); a.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 2000);
+            const mb = (blob.size / 1048576).toFixed(1);
+            showToast('Poster saved (' + mb + ' MB)');
+          } catch(e) {
+            showToast('Save failed: ' + (e && e.message || e), 4000);
+          } finally {
+            btn.disabled = false; btn.textContent = '💾 Save JPG';
+          }
+        }
+      <\/script>
     </body></html>`;
     w.document.open();
     w.document.write(doc);
@@ -4027,8 +4275,17 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
 const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       sortDefault="set-new",
                       selectable, isAuthed, onSignIn,
-                      onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks}) => {
+                      onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
+                      pendingSearch, onConsumedPendingSearch}) => {
   const [filter,setFilter] = useState(emptyFilter);
+  // Apply a search string handed in from outside (the home page quick-search
+  // bar uses this so opening Cards via the search bar lands with the query
+  // already in the smart-search box).
+  useEffect(() => {
+    if(pendingSearch == null) return;
+    setFilter(f => ({...f, search: pendingSearch}));
+    onConsumedPendingSearch && onConsumedPendingSearch();
+  }, [pendingSearch, onConsumedPendingSearch]);
   const [drawerOpen,setDrawerOpen] = useState(false);
   const [artistAlleyOpen, setArtistAlleyOpen] = useState(false);
   const [sortKey,setSortKey] = useState(sortDefault);
@@ -4383,8 +4640,28 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   </div>`;
 };
 
-const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, openDeckById}) => {
+const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, openDeckById,
+                    incomingSearch, incomingOpenCardId, onConsumedIncomingCardsSearch}) => {
   const [selectedGroup,setSelectedGroup] = useState(null);
+  // Home-page quick-search handoff: pre-seed the smart-search and (when set)
+  // open the chosen card's detail modal once `raw` is loaded.
+  const [pendingSearch, setPendingSearch] = useState(null);
+  useEffect(() => {
+    if(incomingSearch == null && incomingOpenCardId == null) return;
+    setPendingSearch(incomingSearch || "");
+    if(incomingOpenCardId && raw && raw.length){
+      // Build a fully-populated "group" via the canonical groupCards()
+      // helper so every CardDetailModal subsection (normal + foil rows,
+      // price compares, ownership counters) renders correctly. Same path
+      // the Pack/Box sims + Playset rows use.
+      const row = raw.find(r => r.card_id === incomingOpenCardId);
+      if(row && row.tcgplayer_product_id){
+        const g = groupFromSimCard(row, raw);
+        if(g) setSelectedGroup(g);
+      }
+    }
+    onConsumedIncomingCardsSearch && onConsumedIncomingCardsSearch();
+  }, [incomingSearch, incomingOpenCardId, raw, onConsumedIncomingCardsSearch]);
   // Stable click handler so React.memo on CardTile can actually skip
   // unchanged tiles when filters change. Without useCallback the handler
   // identity changes every parent render, busting the memo.
@@ -4517,7 +4794,9 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       onBulkAddCollection=${onBulkAddCollection}
       onBulkNewDeck=${onBulkNewDeck}
       onBulkAddToDeck=${onBulkAddToDeck}
-      fetchUserDecks=${fetchUserDecks}/>
+      fetchUserDecks=${fetchUserDecks}
+      pendingSearch=${pendingSearch}
+      onConsumedPendingSearch=${() => setPendingSearch(null)}/>
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -6162,7 +6441,7 @@ const clipSeriesFrom = (series, startMs) => {
   return series.map(s => ({...s, data: (s.data||[]).filter(p => p.x >= startMs)}));
 };
 
-const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCompareCards, onConsumedIncomingCompareCards}) => {
+const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards}) => {
   const tips = useContext(TipsContext);
   const [mode, setMode] = useState("card");
   // Sealed mode state — parallel to selectedGroup/cardQuery for cards.
@@ -6225,6 +6504,29 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
     setCompareSeries({});
     onConsumedIncomingCompareCards && onConsumedIncomingCompareCards();
   }, [incomingCompareCards, onConsumedIncomingCompareCards]);
+  // Prerelease guard: a card's price history is meaningless before its set's
+  // street date — TCGPlayer's pre-release listings sit 10-20x above eventual
+  // floors. Build a (tcgplayer_product_id → earliest-shown-date) map keyed off
+  // setsMeta.released_at + 1 day, MAINLINE_SETS only (promos / D23 / Challenge
+  // don't have the spike pattern). Mirrors the collection-value chart guard.
+  const productEarliestDate = useMemo(() => {
+    if(!setsMeta || !setsMeta.length || !raw || !raw.length) return {};
+    const setIdToFloor = {};
+    for(const s of setsMeta){
+      if(!s.released_at || !MAINLINE_SETS.includes(s.name)) continue;
+      const d = new Date(s.released_at + "T00:00:00Z");
+      d.setUTCDate(d.getUTCDate() + 1);
+      setIdToFloor[s.id] = d.toISOString().slice(0, 10);
+    }
+    const m = {};
+    for(const r of raw){
+      const pid = r?.tcgplayer_product_id;
+      const floor = setIdToFloor[r?.set_id];
+      if(pid != null && floor) m[pid] = floor;
+    }
+    return m;
+  }, [setsMeta, raw]);
+
   // Fetch each graphed product's history in parallel. Only fetch items whose
   // history we don't already have cached in compareSeries — this avoids
   // re-fetching the whole list every time the user checks one more box.
@@ -6268,7 +6570,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
               market: r.ebay_avg_30d == null ? null : +r.ebay_avg_30d,
             }));
           } else {
-            next[id] = (rows || []).map(r => ({
+            // Drop pre-release rows for the card's set (TCGPlayer pre-release
+            // prices sit 10-20x the eventual floor; including them spikes the
+            // very left edge of the chart). productEarliestDate is keyed by
+            // pid, so look up via the source card item.
+            const cardItem = compareCards.find(p => p.card_id === id);
+            const floor = cardItem ? productEarliestDate[cardItem.productId] : null;
+            next[id] = (rows || []).filter(r => !floor || r.date >= floor).map(r => ({
               x: new Date(r.date).getTime(),
               low: r.low_price == null ? null : +r.low_price,
               market: r.market_price == null ? null : +r.market_price,
@@ -6280,7 +6588,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
       setCompareLoading(false);
     });
     return () => { cancelled = true; };
-  }, [compareCards]);
+  }, [compareCards, productEarliestDate]);
 
   // Fetch graded picker options lazily — only when the user first opens
   // the By Graded tab. Keeps the Price Graphing initial load fast for
@@ -6412,7 +6720,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
   const [setSearch, setSetSearch] = useState("");
   const [rangeKey, setRangeKey] = useState("all");
   const [customStart, setCustomStart] = useState(""); // YYYY-MM-DD when rangeKey="custom"
-  const [hidePreorders, setHidePreorders] = useState(true);
+  const [hidePreorders, setHidePreorders] = useState(() => {
+    try { return localStorage.getItem("packsink:history:hidePreorders") !== "0"; }
+    catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:history:hidePreorders", hidePreorders ? "1" : "0"); } catch {}
+  }, [hidePreorders]);
   // EV toggles (only meaningful in set EV mode)
   const [noChase, setNoChase] = useState(false);   // exclude Enchanted + Iconic
   const [noPenny, setNoPenny] = useState(false);   // <$1 → $0 (uses avg_low_nc)
@@ -6812,9 +7126,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
         value=${customStart}
         max=${new Date().toISOString().slice(0,10)}
         onChange=${e=>setCustomStart(e.target.value)}/>`}
-      <label class="checkbox-group" title="Hide data points from before the set's Local Game Store release date.">
+      <label class="checkbox-group" title="Pre-release prices are wildly inflated (often 10-20× the real post-release floor). Default ON hides those days for every card individually using its set's release date. Uncheck to include them anyway.">
         <input type="checkbox" checked=${hidePreorders} onChange=${e=>setHidePreorders(e.target.checked)}/>
-        Hide Preorders
+        Hide prerelease
       </label>
       ${mode === "set" && html`<label class="checkbox-group" title="Cards worth less than $1 count as $0 in the EV calculation.">
         <input type="checkbox" checked=${noPenny} onChange=${e=>setNoPenny(e.target.checked)}/>
@@ -6828,6 +7142,24 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
 
     ${(mode === "sealed" || mode === "card" || mode === "set" || mode === "graded") ? (() => {
       const priceLabel = showLow ? "NM Low" : "NM Market";
+      // Per-pid earliest acceptable timestamp = release date + 1 day. Used to
+      // drop pre-release spike days from each compared card individually
+      // (different cards have different release dates so a single shared
+      // startMs can't do this). Promos / undated sets fall through (no clip).
+      const releaseFloorByPid = (() => {
+        const setRel = {};
+        for(const s of (setsMeta || [])) if(s && s.id && s.released_at) setRel[s.id] = s.released_at;
+        const m = {};
+        for(const r of (raw || [])){
+          const pid = r.tcgplayer_product_id;
+          if(pid == null || m[pid] !== undefined) continue;
+          const rel = setRel[r.set_id];
+          if(!rel) continue;
+          const d = new Date(rel + "T00:00:00Z").getTime();
+          m[pid] = d + 24 * 60 * 60 * 1000; // +1 day
+        }
+        return m;
+      })();
       const builtSeries = compareCards.map((c, i) => {
         let data = [];
         if(c.kind === "set"){
@@ -6840,6 +7172,14 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, incomingCom
           data = rows
             .filter(p => (showLow ? p.low != null : p.market != null))
             .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
+        }
+        // Per-card pre-release clip: drop points before this card's set
+        // released_at + 1 day, unless the user has explicitly toggled
+        // pre-release inclusion ON via the "Include prerelease" checkbox
+        // (which flips hidePreorders to false).
+        if(hidePreorders && c.kind !== "set"){
+          const floorMs = releaseFloorByPid[c.productId];
+          if(floorMs != null) data = data.filter(p => p.x >= floorMs);
         }
         return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
       });
@@ -8888,7 +9228,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         </select>
       </label>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
-        title="Import a Dreamborn.ink collection CSV">Import CSV</button>`}
+        title="Import a collection CSV">Import CSV</button>`}
       ${!isViewerMode && html`<input ref=${importFileRef} type="file" accept=".csv,text/csv" style=${{display:"none"}}
         onChange=${e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; handleImportFile(f); }}/>`}
     </div>
@@ -9057,7 +9397,19 @@ function FAQView(){
     <p>Flipping back to Private rotates the share link so the old URL stops working. There's also a one-click "Regenerate link" if you ever want to revoke a leaked URL without going fully private.</p>
 
     <h2>Exporting a deck image</h2>
-    <p>Open any deck and hit <strong>\u{1F5BC} Export Image</strong> to generate a poster you can post or DM. Toggle the QR code, stats, and cost curve on/off, change the background style (Ink / Dark / Light), and pick 5–8 columns of card art. Use the <em>Copy</em> button to put a PNG on your clipboard, or <em>Save</em> to download.</p>
+    <p>Open any deck and hit <strong>\u{1F5BC} Export Image</strong> to generate a poster you can post or DM. Toggle the QR code, stats, cost curve, and the three deck-cost lines on/off, change the background style (Ink / Dark / Light), and pick 5–8 columns of card art. Use the <em>Copy</em> button to put a PNG on your clipboard, or <em>Save</em> to download.</p>
+    <p><strong>Deck-cost lines</strong> (all three default on, individually toggleable):</p>
+    <ul>
+      <li><strong>Non-Foil</strong> — total cost if every copy in the deck is a Normal printing.</li>
+      <li><strong>Foil</strong> — total cost using the cheapest Foil printing for each card.</li>
+      <li><strong>Max Rarity</strong>* — the "treasure-hunt" build: for each card, use its most expensive Enchanted / Iconic / Epic / Promo printing. Cards with no chase printing fall back to their Non-Foil price so totals stay meaningful.</li>
+    </ul>
+    <p><strong>*Max Rarity exclusions</strong> — two narrow filters so a couple of outlier promos don't dominate the total:</p>
+    <ul>
+      <li><strong>Promo Set 1, #1–7</strong> are skipped entirely (they're so rarely traded that the listed prices aren't representative).</li>
+      <li>Other <strong>Promo</strong>-rarity printings priced over <strong>$1,000</strong> are also skipped. (<strong>Iconic</strong>-rarity printings priced over $1,000 are kept — that's a legitimate chase tier, not an outlier.)</li>
+    </ul>
+    <p>All cost lines use the same <strong>NM Low</strong> price shown elsewhere on the site.</p>
 
     <h2>Sharing your collection</h2>
     <p>From the Collection tab's <strong>Share ▾</strong> menu, set each section (Cards / Sealed / Graded) independently to Private, Unlisted, or Public. Public collections appear on your creator profile; Unlisted needs the share link. Visitors who are signed in get a <strong>comparison strip</strong> showing what they own, what overlaps, and what they're missing.</p>
@@ -11560,10 +11912,120 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
   </aside>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection}) => {
+// Quick-search bar on the home page. Lightweight typeahead over `raw` —
+// matches by Product Name substring. Enter (or clicking "Search") opens the
+// Cards tab with the typed query pre-applied. Clicking a suggestion does the
+// same but also opens that card's detail modal on landing.
+const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
+  const [q, setQ] = useState("");
+  const [open, setOpen] = useState(false);
+  const [idx, setIdx] = useState(0);
+  const inputRef = useRef(null);
+  // Build one entry per Product Name. Enchanted / Iconic / Epic variants
+  // live under different card_ids — collapsing by name avoids duplicate
+  // "Stitch - Carefree Surfer" rows for the Normal + Enchanted printings.
+  // Prefer Normal printing for the thumbnail and prefer non-chase rarities
+  // as the canonical click target so picking the suggestion lands on the
+  // base card, not its $400 Enchanted twin.
+  const byCard = useMemo(() => {
+    const m = new Map();
+    const isChase = (rar) => /Enchanted|Iconic|Epic/i.test(rar || "");
+    for(const r of (raw || [])){
+      const name = r["Product Name"];
+      if(!name) continue;
+      const cur = m.get(name);
+      if(!cur){ m.set(name, r); continue; }
+      // Replacement rule: prefer non-chase over chase, then Normal printing.
+      const curChase = isChase(cur.Rarity);
+      const rChase   = isChase(r.Rarity);
+      if(curChase && !rChase){ m.set(name, r); continue; }
+      if(!curChase && rChase) continue;
+      if(cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal"){
+        m.set(name, r);
+      }
+    }
+    return Array.from(m.values());
+  }, [raw]);
+  const suggestions = useMemo(() => {
+    const s = q.trim().toLowerCase();
+    if(s.length < 2) return [];
+    // Tokenize: every whitespace-separated word must appear somewhere in
+    // the card's Product Name. "stitch surfer" → matches "Stitch - Carefree
+    // Surfer". Within hits, rank by how closely they reflect the query:
+    //   1. Full string startsWith (best — exact name prefix)
+    //   2. Full string includes (substring contiguous)
+    //   3. All tokens present anywhere (default for multi-word queries)
+    const tokens = s.split(/\s+/).filter(Boolean);
+    const scored = [];
+    for(const r of byCard){
+      const name = (r["Product Name"] || "").toLowerCase();
+      if(!name) continue;
+      // Token gate first — cheap reject for non-matches.
+      let allHit = true;
+      for(const t of tokens){ if(!name.includes(t)){ allHit = false; break; } }
+      if(!allHit) continue;
+      let rank;
+      if(name.startsWith(s))      rank = 0;
+      else if(name.includes(s))   rank = 1;
+      else                        rank = 2;
+      scored.push({r, rank, name});
+    }
+    scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
+    return scored.slice(0, 8).map(x => x.r);
+  }, [q, byCard]);
+  const handleSubmit = () => {
+    const txt = q.trim();
+    if(!txt) return;
+    openCardsWithSearch && openCardsWithSearch(txt);
+  };
+  const handlePick = (r) => {
+    openCardsWithSearch && openCardsWithSearch(r["Product Name"], r.card_id);
+  };
+  return html`<div class="home-quick-search">
+    <input type="search" ref=${inputRef}
+      placeholder="Search every card · press Enter to browse"
+      value=${q}
+      onFocus=${()=>setOpen(true)}
+      onBlur=${()=>setTimeout(()=>setOpen(false), 150)}
+      onInput=${e=>{ setQ(e.target.value); setIdx(0); setOpen(true); }}
+      onKeyDown=${e=>{
+        if(e.key === "Enter"){
+          e.preventDefault();
+          if(open && suggestions.length && idx >= 0 && idx < suggestions.length){
+            handlePick(suggestions[idx]);
+          } else {
+            handleSubmit();
+          }
+        } else if(e.key === "ArrowDown" && suggestions.length){
+          e.preventDefault(); setIdx(i => (i+1) % suggestions.length); setOpen(true);
+        } else if(e.key === "ArrowUp" && suggestions.length){
+          e.preventDefault(); setIdx(i => (i-1+suggestions.length) % suggestions.length); setOpen(true);
+        } else if(e.key === "Escape"){
+          setOpen(false);
+        }
+      }}/>
+    <button class="home-quick-search-go" onClick=${handleSubmit}
+      title="Open the Cards tab with this search">Search</button>
+    ${open && suggestions.length > 0 && html`<div class="home-quick-search-list" role="listbox">
+      ${suggestions.map((r, i) => html`<button key=${r.card_id}
+        class=${"home-quick-search-item" + (i === idx ? " active" : "")}
+        role="option" aria-selected=${i === idx}
+        onMouseDown=${e=>e.preventDefault()}
+        onClick=${()=>handlePick(r)}>
+        ${r.img_small && html`<img src=${r.img_small} alt="" loading="lazy"/>`}
+        <div class="home-quick-search-item-text">
+          <div class="home-quick-search-item-name">${r["Product Name"]}</div>
+          <div class="home-quick-search-item-meta">${r.Set || ""} · ${r.Rarity || ""}</div>
+        </div>
+      </button>`)}
+    </div>`}
+  </div>`;
+};
+
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch}) => {
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
-  const goAnalytics  = openView ? (()=>openView("analytics"))  : null;
+  const goAnalytics  = openView ? (()=>openView("market"))     : null;
   const goCollection = openView ? (()=>openView("collection")) : null;
   const goFollowing  = openDecksSection ? (()=>openDecksSection("following")) : null;
   const [state, setState] = useState({rows:null, loading:true, error:null});
@@ -11573,7 +12035,15 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const [showDown, setShowDown] = useState(true);
   const [paused, setPaused] = useState(false);
   // Most-Valuable banner: "main" (non-chase rarities) vs "chase".
-  const [valuableMode, setValuableMode] = useState("main");
+  const [valuableMode, setValuableMode] = useState(() => {
+    try {
+      const v = localStorage.getItem("packsink:home:valuableMode");
+      return (v === "chase" || v === "main") ? v : "main";
+    } catch { return "main"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:valuableMode", valuableMode); } catch {}
+  }, [valuableMode]);
 
   // Resolve a mover (carries card_id + tcgplayer_product_id) to the
   // CardDetailModal-shaped "group" via O(1) lookups instead of scanning
@@ -11769,6 +12239,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       <p class="muted" style=${{fontSize:11,margin:0}}>
         Click a card for details · corner icon opens TCGPlayer.
       </p>
+      <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
     </div>
 
     <div class="home-grid">
@@ -13699,10 +14170,20 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   // Duplicate an existing deck — inserts a new deck row prefixed with
   // "Copy of ", then bulk-inserts all deck_cards. Shows a confirmation
   // toast and navigates to the new deck so the action is obvious.
+  // Tournament-aware deck-copy title: if the source has a tournament_id linked,
+  // use "<name> - <player> - <event> - <placement>" so the copy carries its
+  // pedigree. Otherwise fall back to the classic "Copy of <name>".
+  const buildDuplicateName = useCallback((src) => {
+    const tctx = tournamentByDeckId[src?.id];
+    if(!tctx) return "Copy of " + src.name;
+    const parts = [src.name, tctx.player_name, tctx.tournament_name, tctx.place].filter(Boolean);
+    return parts.join(" - ");
+  }, [tournamentByDeckId]);
+
   const duplicateDeck = useCallback(async (deckId) => {
     const src = (decks || []).find(d => d.id === deckId);
     if(!src || !user) return;
-    const newName = "Copy of " + src.name;
+    const newName = buildDuplicateName(src);
     const {data, error} = await sbClient.from("decks")
       .insert({user_id:user.id, name: newName,
                description: src.description || null,
@@ -13722,14 +14203,14 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     await refreshDecks();
     openDeckInMode(data.id, "view");
     showToast(`Duplicated as "${newName}"`);
-  }, [decks, user, refreshDecks, openDeckInMode]);
+  }, [decks, user, refreshDecks, openDeckInMode, buildDuplicateName]);
 
   // Deep-copy a deck the current user doesn't own (someone else's shared deck)
   // into their own collection. Mirrors duplicateDeck but sources the rows
   // from a deck object we already have in memory (the externalDeck cache).
   const duplicateExternalDeck = useCallback(async (src) => {
     if(!src || !user) return;
-    const newName = "Copy of " + src.name;
+    const newName = buildDuplicateName(src);
     const {data, error} = await sbClient.from("decks")
       .insert({user_id:user.id, name: newName,
                description: src.description || null,
@@ -13750,7 +14231,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     setExternalDeck(null);
     openDeckInMode(data.id, "view");
     showToast(`Duplicated as "${newName}"`);
-  }, [user, refreshDecks, showToast, openDeckInMode]);
+  }, [user, refreshDecks, showToast, openDeckInMode, buildDuplicateName]);
 
   const deleteDeck = useCallback(async (deckId) => {
     if(!confirm("Delete this deck? This can't be undone.")) return;
@@ -15538,6 +16019,16 @@ function App(){
     setView("decks");
     setTabClickNonce(n => n + 1);
   }, []);
+  // Home page quick-search → Cards tab handoff. Pre-fills the smart-search
+  // and (when openCardId is set) opens that card's detail modal.
+  const [incomingCardsSearch, setIncomingCardsSearch] = useState(null);
+  const [incomingCardsOpenId, setIncomingCardsOpenId] = useState(null);
+  const openCardsWithSearch = useCallback((query, openCardId) => {
+    setIncomingCardsSearch(query || "");
+    setIncomingCardsOpenId(openCardId || null);
+    setView("cards");
+    setTabClickNonce(n => n + 1);
+  }, []);
   const openView = useCallback((v) => {
     setView(v);
     setTabClickNonce(n => n + 1);
@@ -16280,8 +16771,10 @@ function App(){
 
   return html`<${TipsContext.Provider} value=${tipsEnabled}><div>
     <div class="tabs">
-      <img src="Logos/packs-ink-logo.png" alt="packs.ink"
-        style=${{height:26,width:"auto",marginRight:10,display:"block"}}/>
+      <button class="tabs-logo-btn" onClick=${()=>onTabClick("home")}
+        title="Home" aria-label="Home">
+        <img src="Logos/packs-ink-logo.png" alt="packs.ink"/>
+      </button>
       ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>onTabClick(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
       <button class=${"tab-help"+(view==="faq"?" active":"")} onClick=${()=>onTabClick("faq")}
         title="How it works" aria-label="How it works">?</button>
@@ -16357,10 +16850,14 @@ function App(){
       updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById} openTournamentById=${openTournamentById}
       openTournamentsList=${openTournamentsList}
-      openView=${openView} openDecksSection=${openDecksSection}/>`}
+      openView=${openView} openDecksSection=${openDecksSection}
+      openCardsWithSearch=${openCardsWithSearch}/>`}
     ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
-      openDeckById=${openDeckById}/>`}
+      openDeckById=${openDeckById}
+      incomingSearch=${incomingCardsSearch}
+      incomingOpenCardId=${incomingCardsOpenId}
+      onConsumedIncomingCardsSearch=${() => { setIncomingCardsSearch(null); setIncomingCardsOpenId(null); }}/>`}
     ${view==="collection"&&html`<${CollectionView} raw=${raw}
       user=${viewedCollectionId ? (viewedCollectionData?.profile || null) : user}
       collection=${viewedCollectionId ? (viewedCollectionData?.rawMap || {}) : collection}
@@ -16402,7 +16899,7 @@ function App(){
       onConsumedIncomingDeckSection=${() => setIncomingDeckSection(null)}
       onSignIn=${signIn} theme=${theme}/>`}
     ${view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
-      sealedPrices=${sealedPrices}
+      sealedPrices=${sealedPrices} setsMeta=${setsMeta}
       historyTarget=${historyTarget}
       incomingCompareCards=${incomingCompareCards}
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
