@@ -98,22 +98,34 @@ input[type="checkbox"]{accent-color:var(--accent);}
   body{padding:14px;}
   /* iOS Safari zooms in when an input has font-size < 16px. Force ≥16 everywhere on phone. */
   input,textarea,select{font-size:16px !important;}
-  /* The whole top bar stays at the top of the page during vertical scroll.
-     The tabs row scrolls horizontally INSIDE this bar. Logo and right-side
-     cluster live OUTSIDE the scroll, so they're physically incapable of
-     overlapping with the tab buttons. */
+  /* On mobile, the WHOLE top bar is one horizontal scroller. Tabs were
+     starved for room when the username pill + theme toggle stayed pinned
+     on the right; now those scroll alongside the tabs. The logo stays
+     pinned to the left edge via position:sticky so the user always has a
+     "home" anchor visible. */
   .top-nav{position:sticky;top:0;z-index:50;background:var(--bg);
     padding-top:8px;padding-bottom:6px;
     margin-left:-14px;margin-right:-14px;padding-left:14px;padding-right:14px;
-    margin-bottom:1rem;gap:8px;}
-  .tabs{flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;
-    scrollbar-width:none;
-    scroll-snap-type:x proximity;
-    /* flex:1 + min-width:0 (set in base rule) lets it shrink between the
-       fixed-width logo and right cluster, with overflow scrolling for the
-       buttons that don't fit. */}
-  .tabs::-webkit-scrollbar{display:none;}
-  .tabs > button{flex-shrink:0;min-height:36px;font-size:13px;scroll-snap-align:start;}
+    margin-bottom:1rem;gap:8px;
+    flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    scrollbar-width:none;}
+  .top-nav::-webkit-scrollbar{display:none;}
+  /* Logo: sticky to the left edge of the scrolling container so it stays
+     visible no matter how far the user scrolls right. The bg/padding fill
+     the gap so tabs that scroll past don't show through. */
+  .tabs-logo-btn{position:sticky;left:0;z-index:2;background:var(--bg);
+    padding-right:6px;flex-shrink:0;}
+  /* Tabs inside the unified scroller — no nested overflow, just inline flow. */
+  .tabs{flex-wrap:nowrap;overflow:visible;flex:0 0 auto;}
+  .tabs > button{flex-shrink:0;min-height:36px;font-size:13px;}
+  /* Right cluster (avatar + theme toggle) now scrolls with the tabs. */
+  .top-nav-right{flex:0 0 auto;flex-shrink:0;}
+  /* Pin the settings popover to the viewport on mobile so it doesn't get
+     clipped by .top-nav's horizontal overflow:auto (which forces y-clip
+     per the CSS spec). Coordinates are anchored to the top-right of the
+     screen, not the avatar button. */
+  .settings-popover{position:fixed !important;top:56px !important;right:8px !important;left:auto !important;
+    max-width:calc(100vw - 16px);}
   /* Bump tiny mover-tile text + tile width so cards are readable on phones. */
   .mover-tile{flex-basis:158px;}
   .mover-tile .mt-name{font-size:11px;}
@@ -153,8 +165,8 @@ input[type="checkbox"]{accent-color:var(--accent);}
   background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;}
 .cards-bulk-primary:hover{filter:brightness(1.08);}
 .cards-bulk-menu{position:absolute;top:calc(100% + 4px);right:0;min-width:280px;
-  background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
-  box-shadow:0 8px 24px rgba(0,0,0,0.18);z-index:20;padding:4px;}
+  background:var(--bg-modal);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.35);z-index:20;padding:4px;}
 .cards-bulk-menu-picker{max-height:360px;overflow-y:auto;}
 .cards-bulk-menu-head{display:flex;align-items:center;gap:8px;
   padding:6px 8px;font-size:11px;font-weight:700;letter-spacing:0.5px;
@@ -329,8 +341,8 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   background:var(--accent);color:#fff;border:none;border-radius:6px;}
 .price-db-batchbtn:hover{filter:brightness(1.1);}
 .price-db-batchmenu{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
-  width:280px;background:var(--bg-card);border:1px solid var(--border);
-  border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  width:280px;background:var(--bg-modal);border:1px solid var(--border);
+  border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
   padding:4px;display:flex;flex-direction:column;}
 .price-db-batchitem{display:block;padding:9px 12px;font-size:13px;font-weight:500;
   cursor:pointer;background:transparent;border:none;text-align:left;
@@ -374,8 +386,8 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 .price-db-raritybtn.clear{color:var(--accent);border-style:dashed;}
 .price-db-multimenu{position:absolute;top:calc(100% + 4px);left:0;z-index:200;
   min-width:170px;max-height:320px;overflow-y:auto;
-  background:var(--bg-card);border:1px solid var(--border);border-radius:7px;
-  box-shadow:0 8px 20px rgba(0,0,0,0.18);padding:4px;
+  background:var(--bg-modal);border:1px solid var(--border);border-radius:7px;
+  box-shadow:0 8px 20px rgba(0,0,0,0.35);padding:4px;
   display:flex;flex-direction:column;gap:1px;}
 .price-db-multiitem{display:flex;align-items:center;gap:8px;padding:6px 10px;
   font-size:13px;cursor:pointer;border-radius:4px;color:var(--text);user-select:none;}
@@ -457,8 +469,12 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
    nth-child here matches the post-ink column order. */
 .price-db-table th:nth-child(3),
 .price-db-table td:nth-child(3){position:sticky;left:0;z-index:2;
-  background:var(--bg);}
-.price-db-table thead th:nth-child(3){z-index:4;background:var(--bg-surface);}
+  background:var(--bg-modal);
+  /* Right-edge separator + shadow so other columns visually pass UNDER this
+     sticky column instead of overlapping when horizontally scrolling. */
+  box-shadow:1px 0 0 var(--border), 6px 0 8px -6px rgba(0,0,0,0.35);}
+.price-db-table tbody tr:hover td:nth-child(3){background:var(--bg-modal);}
+.price-db-table thead th:nth-child(3){z-index:4;background:var(--bg-modal);}
 .price-db-table tr.price-db-row-sel td:nth-child(3){background:var(--accent-glow);}
 
 /* Sparkline column. */
@@ -841,8 +857,8 @@ html[data-theme="dark"] .sealed-type-pill.type-prerelease-pack{color:#e8a3b9;}
   width:16px;height:16px;border-radius:50%;font-size:13px;line-height:1;
   background:rgba(0,0,0,0.18);}
 .smart-suggest-pop{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
-  background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
-  box-shadow:0 6px 18px rgba(0,0,0,0.18);overflow:hidden;max-height:280px;overflow-y:auto;}
+  background:var(--bg-modal);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 6px 18px rgba(0,0,0,0.35);overflow:hidden;max-height:280px;overflow-y:auto;}
 .smart-suggest-item{display:block;width:100%;padding:8px 12px;text-align:left;
   background:transparent;border:none;font-size:13px;color:var(--text);cursor:pointer;
   font-family:'Nunito Sans',sans-serif;}
@@ -2189,8 +2205,8 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 /* Notes / video popover for the deck editor. Same chrome as the share
    popover but wider since the textarea needs room. */
 .deck-notes-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
-  width:380px;background:var(--bg-card);border:1px solid var(--border);
-  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  width:380px;background:var(--bg-modal);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
   padding:12px;display:flex;flex-direction:column;gap:6px;}
 .deck-notes-textarea{width:100%;min-width:0;font-size:13px;padding:8px 10px;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;
@@ -2212,8 +2228,8 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0;}
 
 .deck-share-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
-  width:320px;background:var(--bg-card);border:1px solid var(--border);
-  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  width:320px;background:var(--bg-modal);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
   padding:12px;display:flex;flex-direction:column;gap:6px;}
 .deck-share-section-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);margin-top:4px;}
@@ -2343,8 +2359,8 @@ html[data-theme="dark"] .deck-row-ink.dual::after{background:rgba(255,255,255,0.
   color:var(--text);}
 .deck-view-trigger:hover{border-color:var(--accent);}
 .deck-view-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
-  width:240px;background:var(--bg-card);border:1px solid var(--border);
-  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.18);
+  width:240px;background:var(--bg-modal);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
   padding:12px;display:flex;flex-direction:column;gap:10px;}
 .deck-view-section-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);}

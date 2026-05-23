@@ -1,35 +1,39 @@
 name: ETL
 
-# Minimum permissions the workflow needs. The default in many orgs/repos is
-# "read only" or even "none" for GITHUB_TOKEN, which makes actions/checkout
-# fail with "could not read Username for 'https://github.com': terminal
-# prompts disabled". Pinning contents:read here ensures the runner gets a
-# token that can clone the repo regardless of the repo's default workflow
-# permissions setting.
+# Minimum permissions the workflow needs. Pinning contents:read here ensures
+# actions/checkout gets a working token regardless of repo-level default
+# permissions settings.
 permissions:
   contents: read
 
+# Reliability strategy:
+#   - TCGCSV publishes daily ~20:00 UTC. We fire 3 times to absorb both
+#     GitHub's flaky scheduler AND TCGCSV publishing late.
+#   - The script is idempotent: if today's prices_daily is already written,
+#     it skips the fetch and only refreshes matviews. So later cron firings
+#     are cheap no-ops once one succeeds.
+#   - "TCGCSV hasn't published yet" exits 0 (not failure), so we don't email
+#     on every miss before 20:00 UTC.
+#   - Selfheal fires 4× over the post-publish window to catch matview refresh
+#     failures even when the main ETL never wrote prices_daily.
 on:
   schedule:
-    # Single daily trigger at 21:00 UTC (1h after TCGCSV's ~20:00 UTC refresh).
-    # The prices + graded jobs both run off this one cron: GitHub's free tier
-    # silently drops scheduled triggers when multiple workflows fire close
-    # together, so consolidating into one schedule entry is more reliable
-    # than two crons 30 min apart.
+    # Primary daily ETL (TCGCSV + graded). 21:00 UTC = 1h after TCGCSV publish.
     - cron: "0 21 * * *"
-    # Weekly metadata refresh from Lorcast: Sundays 22:00 UTC.
+    # Retry #1: 1.5h later. Catches GitHub dropping the 21:00 trigger or
+    # TCGCSV publishing late.
+    - cron: "30 22 * * *"
+    # Retry #2: 4h later. Last-ditch attempt before next day's cron.
+    - cron: "0 1 * * *"
+    # Weekly Lorcast metadata refresh — independent of price ETL.
     - cron: "0 22 * * 0"
-    # Matview self-heal: detects when prices_daily has rows newer than
-    # card_prices_latest (i.e. the inline matview refresh in the main ETL
-    # failed silently) and runs the four refresh_* RPCs.
-    #
-    # Was hourly (15 * * * *), but data only updates once per day so 22 of
-    # 24 hourly runs were no-ops. Now fires twice: 30 min after the main
-    # ETL kicks off (catches a fast inline-refresh failure) and ~2.5h
-    # later (catches a slow / hung main ETL that eventually wrote
-    # prices_daily but missed the matview refresh). No-op when current.
+    # Matview self-heal sweep. Each run is a no-op when matview is current.
+    # Spread across the post-publish window so a matview-refresh failure on
+    # any attempt above gets repaired within ~30 min.
     - cron: "30 21 * * *"
-    - cron: "0 0 * * *"
+    - cron: "15 23 * * *"
+    - cron: "30 1 * * *"
+    - cron: "0 6 * * *"
   workflow_dispatch:
     inputs:
       job:
@@ -48,9 +52,13 @@ jobs:
   prices:
     name: TCGCSV daily prices
     runs-on: ubuntu-latest
-    # Daily 21:00 cron OR manual with job in {prices, both}
+    # Fires on any of the 3 daily price schedules OR manual dispatch.
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *') ||
+      (github.event_name == 'schedule' && (
+        github.event.schedule == '0 21 * * *' ||
+        github.event.schedule == '30 22 * * *' ||
+        github.event.schedule == '0 1 * * *'
+      )) ||
       (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
     steps:
       - uses: actions/checkout@v4
@@ -64,18 +72,23 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        # Script exits 0 when today's data is already loaded OR when TCGCSV
+        # hasn't published yet, so multiple cron firings produce no email
+        # noise. Real failures (network errors, RPC errors) still exit non-zero
+        # and surface as workflow failures.
         run: python scripts/etl_tcgcsv_daily.py
 
   graded:
     name: TCGPriceLookup graded prices
     runs-on: ubuntu-latest
-    # Runs sequentially after `prices` on the daily schedule so the two
-    # jobs don't pile concurrent matview refreshes on Supabase. On manual
-    # dispatch, `needs:` is skipped when prices isn't selected.
     needs: prices
     if: |
       always() && (
-        (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *') ||
+        (github.event_name == 'schedule' && (
+          github.event.schedule == '0 21 * * *' ||
+          github.event.schedule == '30 22 * * *' ||
+          github.event.schedule == '0 1 * * *'
+        )) ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'graded' || inputs.job == 'both'))
       )
     steps:
@@ -116,13 +129,16 @@ jobs:
   selfheal:
     name: Matview self-heal
     runs-on: ubuntu-latest
-    # Fires twice daily (30 min and ~3h after the main ETL) OR on manual
-    # selfheal trigger. Does nothing when the matview is already current;
-    # calls refresh_* when prices_daily has rows newer than card_prices_latest.
-    # No external API calls (Supabase only), so safe to run while TCGPlayer
-    # / TCGCSV are down.
+    # Fires on any of the 4 selfheal schedules OR manual dispatch. Always a
+    # no-op when matview is current; calls refresh_* when prices_daily has
+    # newer rows than card_prices_latest. No external API calls.
     if: |
-      (github.event_name == 'schedule' && (github.event.schedule == '30 21 * * *' || github.event.schedule == '0 0 * * *')) ||
+      (github.event_name == 'schedule' && (
+        github.event.schedule == '30 21 * * *' ||
+        github.event.schedule == '15 23 * * *' ||
+        github.event.schedule == '30 1 * * *' ||
+        github.event.schedule == '0 6 * * *'
+      )) ||
       (github.event_name == 'workflow_dispatch' && inputs.job == 'selfheal')
     steps:
       - uses: actions/checkout@v4

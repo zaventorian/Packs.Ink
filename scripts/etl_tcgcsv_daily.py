@@ -152,6 +152,31 @@ def main() -> None:
     sb = Supabase()
 
     print(f"Snapshot date: {snapshot}")
+
+    # Idempotency check: if today's prices_daily rows already exist (a prior
+    # run today already wrote them), skip the whole fetch. Lets us schedule
+    # multiple cron triggers per day without re-fetching gigabytes of price
+    # data on every retry. Still refresh matviews — they may have failed on
+    # the run that wrote prices_daily, so a later retry can recover them.
+    if not args.force:
+        try:
+            existing = sb.select(
+                "prices_daily",
+                columns="tcgplayer_product_id",
+                limit=1,
+                filters={
+                    "date": f"eq.{snapshot.isoformat()}",
+                    "source": "eq.tcgcsv",
+                    "grade": "eq.raw",
+                },
+            )
+            if existing:
+                print(f"Today's snapshot ({snapshot}) is already loaded. Skipping fetch.")
+                _refresh_matviews(sb)
+                return
+        except Exception as e:
+            print(f"  (idempotency probe failed, continuing with fetch: {e})")
+
     print(f"Fetching TCGPlayer groups for categoryId {LORCANA_CATEGORY_ID}...")
     groups = fetch_groups(LORCANA_CATEGORY_ID)
     print(f"  {len(groups)} groups")
@@ -174,16 +199,19 @@ def main() -> None:
     # Duplicate-snapshot guard. TCGCSV publishes their daily file ~20:00 UTC;
     # if the ETL runs before that, the API may serve yesterday's snapshot.
     # Writing it under today's date would silently zero out every 1D mover.
-    # If >95% of fetched rows match yesterday's prices_daily exactly, abort.
+    # If >95% of fetched rows match yesterday's prices_daily exactly, exit 0
+    # so cron retries don't spam failure emails — this is normal "no new
+    # data yet", not a real error.
     ratio, matched = detect_duplicate_snapshot(sb, snapshot, all_rows)
     print(f"Duplicate-snapshot check: {ratio:.1%} of rows match prior day ({matched} exact matches).")
     if ratio > 0.95 and not args.force:
-        sys.exit(
-            f"\nABORTED: {ratio:.1%} of fetched rows are byte-identical to "
+        print(
+            f"\nSKIP: {ratio:.1%} of fetched rows are byte-identical to "
             f"{(snapshot - timedelta(days=1)).isoformat()}. TCGCSV likely "
-            "served a stale snapshot (their daily file lands ~20:00 UTC). "
-            "Re-run after that, or pass --force to write anyway."
+            "hasn't published today's snapshot yet (their daily file lands "
+            "~20:00 UTC). This is normal — a later cron firing will pick it up."
         )
+        return
 
     sb.upsert(
         "prices_daily",
@@ -191,10 +219,14 @@ def main() -> None:
         on_conflict="tcgplayer_product_id,date,printing,source,grade",
     )
 
-    # Refresh derived materialized views so the site reflects today's
-    # snapshot. Failures here mean the site serves stale derived data while
-    # raw prices_daily is fresh — track them and exit non-zero so cron
-    # surfaces the breakage instead of silently succeeding.
+    _refresh_matviews(sb)
+    print("\nDone.")
+
+
+def _refresh_matviews(sb: "Supabase") -> None:
+    """Refresh the 4 price matviews. Exits non-zero if any refresh fails
+    (matview staleness is a real failure worth alerting on, unlike the
+    duplicate-snapshot skip)."""
     refresh_failures: list[str] = []
     for fn, hint in (
         ("refresh_card_prices_latest",   "supabase/12_card_prices_latest_matview.sql"),
@@ -214,7 +246,6 @@ def main() -> None:
             f"\nFAIL: matview refresh failed for: {', '.join(refresh_failures)}. "
             "Raw prices_daily is up to date but derived views are stale."
         )
-    print("\nDone.")
 
 
 if __name__ == "__main__":
