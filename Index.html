@@ -165,7 +165,7 @@ function readCache(){
   try {
     const s = localStorage.getItem(CACHE_KEY);
     if(!s) return null;
-    const {t, rows} = JSON.parse(s);
+    const {t, rows, latestDate} = JSON.parse(s);
     if(typeof t !== "number" || !Array.isArray(rows)) return null;
     if(rows.length < CACHE_MIN_ROWS){
       console.warn("Cache row count below threshold ("+rows.length+"); discarding.");
@@ -173,10 +173,10 @@ function readCache(){
       return null;
     }
     const stale = Date.now() - t > CACHE_MAX_AGE_MS;
-    return {rows, stale};
+    return {rows, stale, latestDate: latestDate || null};
   } catch { return null; }
 }
-function writeCache(rows){
+function writeCache(rows, latestDate){
   if(!Array.isArray(rows) || rows.length < CACHE_MIN_ROWS) return; // don't poison the cache with partial data
   // Strip img_large before caching — it eats ~500KB across 5k rows and is
   // only used as a fallback for img_normal in three places (deck poster /
@@ -189,7 +189,7 @@ function writeCache(rows){
     const {img_large, ...rest} = r;
     return rest;
   });
-  const payload = JSON.stringify({t:Date.now(), rows: slim});
+  const payload = JSON.stringify({t:Date.now(), rows: slim, latestDate: latestDate || null});
   // Three-pass write:
   //   1. Delete the old key first so the browser doesn't have to hold both
   //      old + new during the setItem (some browsers count it that way and
@@ -17689,8 +17689,29 @@ function App(){
     const cached = force ? null : readCache();
     if(cached && cached.rows.length){
       setRaw(cached.rows);setLoaded(true);setLoading(false);
-      // If still fresh, we're done. Otherwise fall through and refresh.
-      if(!cached.stale) return;
+      // Even if the TTL says "fresh", probe the server's latest price_date
+      // to catch the case where the daily ETL ran since the user's last
+      // visit. Without this, a daily visitor sees yesterday's prices for
+      // up to 24h after each ETL completes. Probe is a single-row query
+      // (~50ms) so the cost is trivial vs the correctness win.
+      if(!cached.stale){
+        try {
+          const r = await fetch(SUPABASE_URL + "/rest/v1/card_prices_latest?select=price_date&order=price_date.desc&limit=1",
+            {headers: sbHeaders()});
+          if(r.ok){
+            const j = await r.json();
+            const serverDate = (j && j[0] && j[0].price_date) || null;
+            if(serverDate && cached.latestDate && serverDate <= cached.latestDate){
+              return; // cache is genuinely current
+            }
+            console.log("Catalog cache out of date (server:", serverDate, "cache:", cached.latestDate, "). Refreshing...");
+          } else {
+            return; // probe failed, trust TTL and skip refresh
+          }
+        } catch {
+          return; // network error on probe, trust TTL
+        }
+      }
     } else {
       setLoading(true);setLoadProgress({loaded:0,total:0,current:"Connecting..."});
     }
@@ -17701,7 +17722,7 @@ function App(){
       // Slim columns — heavy text fields (text/flavor_text) are fetched on
       // demand when the detail modal opens. Explicit ORDER BY is REQUIRED so
       // PostgREST returns deterministic slices across parallel range requests.
-      const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price";
+      const PRICE_COLS = "tcgplayer_product_id,printing,low_price,market_price,price_date";
       // Probe whether the `inks` column has been deployed yet. Use a direct
       // fetch (not sbFetchAll — its count=exact pagination conflicts with
       // limit:1 and produces a misleading 416 that we'd interpret as "column
@@ -17774,7 +17795,13 @@ function App(){
       setSetsMeta(setsData);
       if(sealedRows && sealedRows.length) writeSealedCache(sealedRows);
       setLoadProgress({loaded:3,total:3,current:"Done!"});
-      writeCache(allRows);
+      // Compute server's max price_date so the next visit can probe
+      // "is anything newer than what I cached?" cheaply.
+      let maxPriceDate = null;
+      for(const p of priceRows){
+        if(p && p.price_date && (!maxPriceDate || p.price_date > maxPriceDate)) maxPriceDate = p.price_date;
+      }
+      writeCache(allRows, maxPriceDate);
     } catch(e){
       // If we already showed cache, just log and keep that on screen.
       if(cached && cached.rows.length) console.warn("background refresh failed:", e);
