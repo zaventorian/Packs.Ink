@@ -43,6 +43,17 @@
 <link rel="preload" as="image" href="Logos/inks/STEEL.png"/>
 </head>
 <body>
+<!--
+  Static link visible to crawlers that don't execute JavaScript (e.g. Google's
+  OAuth consent verification crawler). The footer link inside the React app
+  exists too, but doesn't render until hydration, so a no-JS crawler sees
+  nothing. <noscript> ensures human visitors with JS see nothing extra.
+-->
+<noscript>
+  <p>Packs.Ink — a Disney Lorcana TCG market and collection tracker.
+  <a href="/privacy">Privacy policy</a></p>
+</noscript>
+<a href="/privacy" rel="noopener" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Privacy policy</a>
 <div id="root"></div>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
@@ -141,7 +152,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v37";
+const CACHE_KEY = "packsink:catalog:v38";
 // 24h cache — we always background-refresh when stale, so the user sees
 // cached data instantly and gets a fresh swap within seconds. Long TTL keeps
 // the experience snappy on slow Supabase nights without risking stale-price
@@ -291,9 +302,9 @@ const SET_ORDER = [
   "Promo Set 1","Promo Set 2","Promo Set 3",
   // Special / non-mainline sets that Lorcast indexes separately. Names
   // must match what Lorcast returns in /sets so the loader picks them up.
-  "Challenge Promo (C1)",       // 2024-05-17 — Cinderella Stouthearted, Baymax, etc.
+  "Lorcana Challenge Promo (C1)",       // 2024-05-17 — Cinderella Stouthearted, Baymax, etc.
   "D23 Collection",             // 2024-08-09 — Mickey Brave Little Tailor, etc.
-  "Lorcana Challenge Year 3",   // 2026-01-16 — Pegasus, Mulan Charging Ahead, etc.
+  "Lorcana Challenge Promo (C2)",   // 2026-01-16 — Pegasus, Mulan Charging Ahead, etc.
   "EPCOT Festival of the Arts", // 2026-01-16
   ...MAINLINE_SETS,
 ];
@@ -301,19 +312,52 @@ const SET_ORDER = [
 // Sets whose Collection tile collapses Normal/Foil/Enchanted into a single
 // "Promos X/Y" row. Each card in these sets exists as one printing only,
 // so splitting buckets surfaces a lot of 0/0 noise.
-// NOTE: Challenge Promo (C1) is intentionally NOT in this set — it has a
-// real Non-Foil + Foil split (Prize Wall non-foils vs the foil prizes).
+// NOTE: Lorcana Challenge Promo (C1) and Lorcana Challenge Promo (C2) are intentionally
+// NOT in this set — both have a real Non-Foil + Foil split (Prize Wall
+// non-foils vs the rare foil prizes). Year 3 even gives foil and non-foil
+// different collector numbers.
 const UNIFIED_TILE_SETS = new Set([
   "Promo Set 1", "Promo Set 2", "Promo Set 3",
   "D23 Collection",
-  "Lorcana Challenge Year 3", "EPCOT Festival of the Arts",
+  "EPCOT Festival of the Arts",
 ]);
+
+// Sets where every card is a promo regardless of what Lorcast labels its
+// printed rarity. EPCOT's "Stitch - Rock Star" is published by Lorcast as
+// Rare; "Anna Braving the Story" as Super Rare; but for our screener /
+// banner / filter purposes, every card in a promo-only set should sort
+// under the Promo rarity tier. transformSupabaseData consults this when
+// assigning each row's Rarity field.
+const PROMO_RARITY_SETS = new Set([
+  "Promo Set 1", "Promo Set 2", "Promo Set 3",
+  "Lorcana Challenge Promo (C1)",
+  "D23 Collection",
+  "Lorcana Challenge Promo (C2)",
+  "EPCOT Festival of the Arts",
+]);
+
+// Lorcana Challenge Promo (C2) publishes foil and non-foil at DIFFERENT collector
+// numbers, but TCGCSV emits a price entry for both "Normal" AND "Cold Foil"
+// printings under each pid — producing ghost rows that would otherwise show
+// the same card in both sections of the collection set-detail view. This map
+// declares the canonical printing per collector number so transformSupabaseData
+// suppresses the bogus one. Numbers not listed fall through and emit both
+// (defensive for future additions before we know which printing exists).
+//   1-4   = Foil prizes (top-cut tournament awards)
+//   5-10  = Non-Foil prize wall handouts
+//   15-18 = Non-Foil (subject to change when foil prize variants drop)
+const YEAR3_PRINTING_BY_NUMBER = {
+  1:"foil", 2:"foil", 3:"foil", 4:"foil",
+  5:"normal", 6:"normal", 7:"normal", 8:"normal", 9:"normal", 10:"normal",
+  15:"normal", 16:"normal", 17:"normal", 18:"normal",
+};
 
 // Display-name overrides for sets. Catalog set name (from Lorcast) → name
 // shown in the UI. Applied in transformSupabaseData so every downstream
 // render path (tiles, drill-in, deck banner, etc.) uses the friendly name.
 const SET_DISPLAY_NAMES = {
-  "Challenge Promo": "Challenge Promo (C1)",
+  "Challenge Promo":          "Lorcana Challenge Promo (C1)",
+  "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)",
 };
 
 // Per-card collector-number overrides. Keyed by Lorcast set_id + "|" +
@@ -882,6 +926,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     }
     let rar = normalizeRarity(c.rarity);
     if(!SET_ORDER.includes(setName)) rar = "Promo";
+    else if(PROMO_RARITY_SETS.has(setName)) rar = "Promo";
     const name = c.version ? c.name+" - "+c.version : c.name;
     const isChase = ["Enchanted","Iconic","Epic"].includes(rar);
     const extras = c.tcgplayer_product_id != null ? EXTRAS_MAP[c.tcgplayer_product_id] : null;
@@ -907,8 +952,19 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       const treatHolofoilAsFoil = hasHolofoil && !isChase && !extras && !connectingFoilPid;
       const suppressNonFoil = (c.tcgplayer_product_id != null && SUPPRESS_NONFOIL_PIDS.has(c.tcgplayer_product_id))
         || SUPPRESS_NONFOIL_NAMES.has(name + "|" + (c.collector_number||""));
+      // Year 3 ghost-row suppression: each card has exactly one real printing
+      // per collector number; TCGCSV publishes both. Drop the bogus one.
+      const y3Num = setName === "Lorcana Challenge Promo (C2)"
+        ? parseInt(String(c.collector_number||"").split("/")[0], 10)
+        : null;
+      const y3Canonical = (y3Num != null) ? YEAR3_PRINTING_BY_NUMBER[y3Num] : null;
       for(const p of prices){
         if(suppressNonFoil && p.printing === "Normal") continue;
+        if(y3Canonical){
+          const pIsFoil = p.printing === "Cold Foil" || p.printing === "Foil" || p.printing === "Holofoil";
+          if(y3Canonical === "foil"   && !pIsFoil) continue;
+          if(y3Canonical === "normal" &&  pIsFoil) continue;
+        }
         if(connectingFoilPid && (p.printing === "Cold Foil" || p.printing === "Foil" || p.printing === "Holofoil")){
           // Connecting-art foils have the real foil at a SEPARATE
           // tcgplayer_product_id (handled below). Any foil-class row on
@@ -971,12 +1027,12 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
           rows.push(row);
         }
       }
-      // Challenge Promo (C1) always ships a foil printing per card — every
+      // Lorcana Challenge Promo (C1) always ships a foil printing per card — every
       // card has at least a Cold Foil/Holofoil prize variant. If TCGCSV
       // only returned a Normal row for a card in this set (e.g. A Whole
       // New World — only the Normal pid is indexed), synthesize a Cold
       // Foil placeholder so the Foil section is complete.
-      if(setName === "Challenge Promo (C1)"){
+      if(setName === "Lorcana Challenge Promo (C1)"){
         const haveFoil = rows.some(r =>
           r.card_id === c.id && r.Set === setName
           && (r.tcg_printing === "Cold Foil" || r.tcg_printing === "Foil" || r.tcg_printing === "Holofoil"));
@@ -993,10 +1049,20 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       // Promo sets almost always ship a single printing per card (typically
       // Cold Foil). Emitting both placeholder rows is noise — collapse to one.
       const isPromoSet = setName === "Promo Set 1" || setName === "Promo Set 2" || setName === "Promo Set 3";
+      // Same Year 3 canonical-printing rule as the priced branch — pick
+      // only the one synthetic row that actually exists in the print run.
+      const y3NumNoPx = setName === "Lorcana Challenge Promo (C2)"
+        ? parseInt(String(c.collector_number||"").split("/")[0], 10)
+        : null;
+      const y3CanonicalNoPx = (y3NumNoPx != null) ? YEAR3_PRINTING_BY_NUMBER[y3NumNoPx] : null;
       if(isChase){
         rows.push(buildRow(c, setName, rar, name, "Holofoil", null));
       } else if(isPromoSet){
         rows.push(buildRow(c, setName, rar, name, "Cold Foil", null));
+      } else if(y3CanonicalNoPx === "foil"){
+        rows.push(buildRow(c, setName, rar, name, "Cold Foil", null));
+      } else if(y3CanonicalNoPx === "normal"){
+        rows.push(buildRow(c, setName, rar, name, "Normal", null));
       } else {
         if(!suppressNonFoil) rows.push(buildRow(c, setName, rar, name, "Normal", null));
         if(!connectingFoilPid) rows.push(buildRow(c, setName, rar, name, "Cold Foil", null));
@@ -1569,6 +1635,23 @@ const fmtTooltipDate = (ts) =>
 const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null}) => {
   const wrapRef = useRef(null);
   const [hover, setHover] = useState(null); // {x: viewBoxX, clientX, clientY}
+  // Measure the wrapper's actual rendered width so the SVG viewBox matches
+  // the on-screen pixel width 1:1. Without this, the SVG was stretched
+  // horizontally via preserveAspectRatio="none" — visually fine for the
+  // line path, but text labels (date axis, dollar ticks) end up squashed
+  // or stretched depending on container ratio. Resize-observing keeps the
+  // viewBox aligned even when the chart is resized.
+  const [measuredW, setMeasuredW] = useState(width);
+  useEffect(() => {
+    if(!wrapRef.current || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width;
+      if(w && w > 0) setMeasuredW(Math.round(w));
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+  width = measuredW;
 
   if(!series || !series.length) return null;
   const allPoints = series.flatMap(s => s.data || []);
@@ -1698,7 +1781,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
 // showLow/showMarket let us render Low and Market on the same chart as
 // solid (Low) + dashed (Market) lines.
 const buildHistorySeries = (normalRows, foilRows, opts={}) => {
-  const {showLow=true, showMarket=false} = opts;
+  const {showLow=true, showMarket=false, showFoil=true} = opts;
   const out = [];
   const seriesFor = (rows, color, kind) => {
     if(showLow){
@@ -1721,7 +1804,7 @@ const buildHistorySeries = (normalRows, foilRows, opts={}) => {
     }
   };
   if(normalRows && normalRows.length) seriesFor(normalRows, "#1d8d4a", "Normal");
-  if(foilRows && foilRows.length)     seriesFor(foilRows,   "#7e54c4", "Foil");
+  if(showFoil && foilRows && foilRows.length) seriesFor(foilRows, "#7e54c4", "Foil");
   return out;
 };
 
@@ -2405,8 +2488,17 @@ const matchesCardFilter = (row, f, parsed) => {
     if(parsed.filters.inkable === true  && row.inkable !== true)  return false;
     if(parsed.filters.inkable === false && row.inkable !== false) return false;
     if(parsed.filters.classification){
+      // Soft match: card qualifies if EITHER its declared classifications
+      // include the word OR its name contains the word. Without this, typing
+      // "elsa spirit" (where 'spirit' is a classification keyword) zeroes
+      // out — Elsa - Spirit of Winter has "spirit" in her name but no
+      // Spirit-class subtype. The soft check lets natural-language search
+      // win without breaking class-only intent like "all princess cards".
+      const want = parsed.filters.classification.toLowerCase();
       const cls = (row.classifications || []).map(c => (c||"").toLowerCase());
-      if(!cls.includes(parsed.filters.classification.toLowerCase())) return false;
+      const classMatch = cls.includes(want);
+      const nameMatch = (row["Product Name"] || "").toLowerCase().includes(want);
+      if(!classMatch && !nameMatch) return false;
     }
     if(parsed.filters.ability_keyword){
       const kws = (row.keywords || []).map(k => (k||"").toLowerCase());
@@ -2558,12 +2650,19 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
   // Default grid-view tile. The image + overlays live inside their own
   // wrapper so the absolute price-row stays anchored to the image, not the
   // bottom of the tile (which extends to include the deck counter).
+  // When the group has been split by printing (e.g. Challenge Promo C1 where
+  // Foil and Non-Foil are economically separate products), show a clear
+  // overlay badge so the two tiles aren't visually indistinguishable.
+  const splitBadge = group.isSplitPrinting
+    ? (group.foil ? "PRIZE FOIL" : "PRIZE WALL")
+    : null;
   return html`<div class=${"card-tile"+(isSelected?" is-selected":"")} onClick=${onClick}>
     <div class="card-tile-img-wrap">
       ${img
         ? html`<img src=${img} alt=${productName} loading="lazy"/>`
         : html`<div class="card-img-placeholder" style=${{aspectRatio:"5/7"}}>${productName}</div>`}
       ${checkboxEl}
+      ${splitBadge && html`<div class="printing-tag" style=${{top: ownedAny ? "32px" : "6px"}}>${splitBadge}</div>`}
       ${ownedAny && html`<div class="owned-badge">
         ${nQty>0 && html`<span class="owned-n">${nQty}×</span>`}
         ${fQty>0 && html`<span class="owned-f">${fQty}✦</span>`}
@@ -2593,12 +2692,28 @@ const CardTile = React.memo(CardTileImpl);
 // the foil — and we don't bother labeling it.
 const groupCards = (rows) => {
   const CHASE = new Set(["Enchanted","Iconic","Epic"]);
+  // Sets where Normal and Foil are economically distinct products and
+  // should render as two separate tiles in the catalog (each with its own
+  // detail modal and its own collection counter). The Non-Foil is the
+  // Prize Wall handout anyone can get; the Foil is a top-cut tournament
+  // prize and one of the rarest cards in Lorcana. Grouping them shows
+  // misleading "Normal $89 / Foil $6000" ranges and tiles. card_id stays
+  // untouched so collection storage remains backwards-compatible — only
+  // the grouping key splits.
+  //   Lorcana Challenge Promo (C2) is intentionally NOT here even though it
+  //   has the same economic split — it prints foil/non-foil with DIFFERENT
+  //   collector numbers, so each printing is already its own card_id row
+  //   and groupCards naturally keeps them apart.
+  const SPLIT_BY_PRINTING_SETS = new Set(["Lorcana Challenge Promo (C1)"]);
   const byCard = new Map();
   for(const r of rows){
-    const key = r.card_id || (r["Product Name"]+"::"+r.Set+"::"+r.Number);
+    const baseKey = r.card_id || (r["Product Name"]+"::"+r.Set+"::"+r.Number);
+    const splitSuffix = SPLIT_BY_PRINTING_SETS.has(r.Set) ? ("::" + (r.Printing || "")) : "";
+    const key = baseKey + splitSuffix;
     let g = byCard.get(key);
     if(!g){
-      g = {...r, normal:null, foil:null, isChase:CHASE.has(r.Rarity)};
+      g = {...r, normal:null, foil:null, isChase:CHASE.has(r.Rarity),
+           isSplitPrinting: !!splitSuffix};
       byCard.set(key, g);
     }
     if(r.Printing === "Normal") g.normal = r;
@@ -2879,6 +2994,16 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   // Same chart controls as the History tab so the modal feels consistent.
   const [showLow, setShowLow] = useState(true);
   const [showMarket, setShowMarket] = useState(false);
+  // Foil-line toggle on the per-card chart. Default ON, but persisted so a
+  // user who prefers Normal-only sees that preference applied to every card
+  // they open next.
+  const [showFoil, setShowFoil] = useState(() => {
+    try { return localStorage.getItem("packsink:cardHist:showFoil") !== "0"; }
+    catch { return true; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:cardHist:showFoil", showFoil ? "1" : "0"); } catch {}
+  }, [showFoil]);
   const [rangeKey, setRangeKey] = useState("all");
   const [customStart, setCustomStart] = useState("");
   const [hidePreorders, setHidePreorders] = useState(true);
@@ -2956,7 +3081,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const cardType = meta?.card_type;
 
   const hasAnyHistory = (history.normal && history.normal.length > 0) || (history.foil && history.foil.length > 0);
-  const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket});
+  const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil});
   const chartStartMs = computeChartStartMs(rangeKey, customStart, hidePreorders, group.Set);
 
   return html`<div class="card-detail-overlay" onClick=${onClose}>
@@ -2969,7 +3094,16 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             : html`<div class="card-img-placeholder" style=${{aspectRatio:"5/7",minHeight:300}}>${group["Product Name"]}</div>`}
         </div>
       <div class="card-detail-body">
-        <h2 class="title-font">${group["Product Name"]}</h2>
+        <h2 class="title-font">
+          ${group["Product Name"]}
+          ${group.isSplitPrinting && html`<span style=${{
+              marginLeft:8,fontSize:12,fontWeight:700,letterSpacing:0.4,
+              padding:"3px 8px",borderRadius:6,verticalAlign:"middle",
+              background: group.foil ? "rgba(85,55,140,0.18)" : "rgba(22,101,52,0.18)",
+              color:     group.foil ? "#7e54c4"               : "#1d8d4a",
+              border:    group.foil ? "1px solid #7e54c4"     : "1px solid #1d8d4a",
+            }}>${group.foil ? "PRIZE FOIL" : "PRIZE WALL"}</span>`}
+        </h2>
         ${classifications.length > 0 && html`<div class="card-detail-subtitle">${classifications.join(" • ")}</div>`}
         <div class="card-detail-meta">
           ${group.ink && html`<${Badge} rarity=${group.ink} foil=${false} theme=${theme}/>`}
@@ -3017,7 +3151,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
         <div class="card-detail-history-head">
           ${hasAnyHistory && html`<div class="card-detail-history-legend">
             ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Normal</span>`}
-            ${history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
+            ${showFoil && history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
             <span class="legend-line-style"><span class="line-solid"/>Low</span>
             <span class="legend-line-style"><span class="line-dashed"/>Market</span>
           </div>`}
@@ -3038,6 +3172,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           <div class="checkbox-group" style=${{marginLeft:"auto"}}>
             <label><input type="checkbox" checked=${showLow} onChange=${e=>setShowLow(e.target.checked)}/> <${Tip} text=${TIP_NM_LOW}>NM Low<//></label>
             <label><input type="checkbox" checked=${showMarket} onChange=${e=>setShowMarket(e.target.checked)}/> <${Tip} text=${TIP_MARKET}>Market<//></label>
+            ${group.foil && html`<label title="Show the Foil printing's line on the chart (remembered across cards)."><input type="checkbox" checked=${showFoil} onChange=${e=>setShowFoil(e.target.checked)}/> Foil</label>`}
           </div>
         </div>
         ${history.loading
@@ -4810,7 +4945,7 @@ const Badge=({rarity,foil,theme})=>{const s=getBadgeStyle(rarity,theme);return h
 const SetSel=({val,onChange,placeholder,sets})=>html`<select value=${val} onChange=${e=>onChange(e.target.value)} style=${{maxWidth:280,flex:1}}><option value="">${placeholder}</option>${sets.map(s=>html`<option key=${s} value=${s}>${s}</option>`)}</select>`;
 const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span class="tip-icon">?</span><span class="tip-box">${text}</span></span>`;
 
-const Footer = ({lastEtlDate})=>{
+const Footer = ({lastEtlDate, lastRawPriceDate})=>{
   // Warn when the daily ETL hasn't refreshed prices on schedule. Anchor
   // to 21:00 UTC of the snapshot date (when the cron actually runs) plus
   // a 30h grace window — covers the natural "cron is running / TCGCSV is
@@ -4820,14 +4955,24 @@ const Footer = ({lastEtlDate})=>{
   const stale = lastEtlDate
     ? (Date.now() - new Date(lastEtlDate + "T21:00:00Z").getTime()) > 30*3600*1000
     : false;
+  // SEPARATE warning: prices_daily has a newer date than card_prices_latest.
+  // Means today's ETL wrote raw rows but the matview refresh failed silently
+  // — the site is currently serving yesterday's prices despite today's being
+  // in the database. This is a distinct failure mode from "ETL didn't run."
+  const matviewLag = lastEtlDate && lastRawPriceDate && lastRawPriceDate > lastEtlDate;
   return html`<div class="footer">
     <div class="footer-text">
       <div class="footer-social">
         follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>
         · <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>
+        · <a href="/privacy">Privacy</a>
       </div>
       ${stale && html`<div class="footer-stale" title=${"Last successful ETL on " + lastEtlDate + " (your local time). The daily price refresh may be failing — check the ETL cron."}>
         ⚠ Prices may be stale (last update ${relativeTime(lastEtlDate)})
+      </div>`}
+      ${matviewLag && !stale && html`<div class="footer-stale"
+        title=${"prices_daily has " + lastRawPriceDate + " but card_prices_latest only has " + lastEtlDate + ". Refresh the matview to recover."}>
+        ⚠ Display layer is behind raw data (${lastEtlDate} vs ${lastRawPriceDate}) — run refresh_card_prices_latest()
       </div>`}
     </div>
     <img class="footer-logo" src=${LOGO_B64} alt="Ink & Lore"/>
@@ -5507,6 +5652,17 @@ const groupFromSimCard = (simCard, rawData) => {
   const rows = rawData.filter(r => r.tcgplayer_product_id === simCard.tcgplayer_product_id);
   if(rows.length === 0) return null;
   const groups = groupCards(rows);
+  // groupCards may produce TWO groups for cards in SPLIT_BY_PRINTING_SETS
+  // (Challenge Promo C1 — one per printing under the same pid). When the
+  // caller knows which printing the user clicked, prefer that group so the
+  // modal opens to the right side (PRIZE FOIL vs PRIZE WALL). Match against
+  // either the matview-style `printing` ("Normal"/"Cold Foil") or buildRow's
+  // canonical Printing ("Normal"/"Foil").
+  if(groups.length > 1 && simCard.printing){
+    const wantFoil = simCard.printing !== "Normal";
+    const picked = groups.find(g => wantFoil ? !!g.foil : !!g.normal);
+    if(picked) return picked;
+  }
   return groups[0] || null;
 };
 
@@ -5885,9 +6041,17 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // column-flow we use for main sets, and tighter +/- counters so the long
   // card names ("Dalmatian Puppy - Tail Wagger" etc.) actually fit.
   const isPromoSet = setName === "Promo Set 1" || setName === "Promo Set 2" || setName === "Promo Set 3";
-  // Challenge Promo (C1) gets a Non-Foil + Foil section split instead of the
-  // usual mixed-printing rows.
-  const isChallengePromoC1 = setName === "Challenge Promo (C1)";
+  // Sets that get the Non-Foil + Foil section split in the Collection set
+  // detail view (top stack = non-foil, bottom stack = foil) instead of the
+  // usual mixed-printing rows. Both have a meaningful price gap between the
+  // Prize Wall non-foil and the Prize Foil version that makes a unified
+  // counter row misleading. Year 3 also gives the two printings different
+  // collector numbers so each card naturally appears once per section.
+  const SECTION_SPLIT_SETS = new Set([
+    "Lorcana Challenge Promo (C1)",
+    "Lorcana Challenge Promo (C2)",
+  ]);
+  const isChallengePromoC1 = SECTION_SPLIT_SETS.has(setName);
   const [foilMode, setFoilMode] = useState(isExtrasView ? "foil" : "either"); // "either" | "normal" | "foil"
   const [sortKey, setSortKeyState] = useState("num");
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -7928,6 +8092,102 @@ function parseDreambornCsv(text, rowsByName){
 // Sealed Collection — per-user inventory of booster boxes / packs / troves
 // etc. Grouped by display type (mirrors the Market Sealed sub-tab). Rows have
 // +/- counters that persist to sealed_collection_items via updateSealedQty.
+// Portfolio-value chart for the Sealed tab. Mirrors the raw-collection
+// chart on the Home panel — fetches prices_daily for every owned sealed
+// product, rolls up via the shared computeCollectionValueHistory helper,
+// then renders the same line-chart shape used by Graded.
+const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey}) => {
+  const [historyRows, setHistoryRows] = useState(null);
+  const [state, setState] = useState({loading: false, error: null});
+
+  // owned Map keyed as `pid|Normal` so it matches computeCollectionValueHistory's
+  // expected shape (the helper reads "<pid>|<printing>"). Sealed entries are
+  // always Normal printing.
+  const owned = useMemo(() => {
+    const map = new Map();
+    for(const [pid, qty] of Object.entries(sealedCollection || {})){
+      if(qty <= 0) continue;
+      map.set(pid + "|Normal", qty);
+    }
+    return map;
+  }, [sealedCollection]);
+
+  const ownedKey = useMemo(() => Array.from(owned.keys()).sort().join(","), [owned]);
+
+  useEffect(() => {
+    if(!owned.size){ setHistoryRows([]); return; }
+    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const pids = Array.from(new Set(Array.from(owned.keys()).map(k => parseInt(k.split("|")[0],10))));
+    let cancelled = false;
+    setState({loading: true, error: null});
+    fetchCollectionPriceHistory(pids, since)
+      .then(rows => { if(!cancelled){ setHistoryRows(rows); setState({loading:false, error:null}); } })
+      .catch(e => { if(!cancelled) setState({loading:false, error: String(e?.message || e)}); });
+    return () => { cancelled = true; };
+  }, [ownedKey, rangeKey]);
+
+  const valueSeries = useMemo(() => historyRows ? computeCollectionValueHistory(historyRows, owned, null) : null, [historyRows, owned]);
+  const chartSeries = useMemo(() => {
+    if(!valueSeries || !valueSeries.length) return [];
+    return [{
+      label: "Sealed portfolio value",
+      color: "var(--accent)",
+      dashed: false,
+      data: valueSeries.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value})),
+    }];
+  }, [valueSeries]);
+
+  const currentValue = valueSeries && valueSeries.length ? valueSeries[valueSeries.length-1].value : 0;
+  const startValue   = valueSeries && valueSeries.length ? valueSeries[0].value : null;
+  const rangeDelta   = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
+  const rangeDeltaPct= (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
+  const deltaColor   = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
+  const rangeLabel   = (COLLECTION_RANGES.find(r => r.key === rangeKey) || {}).label || rangeKey;
+
+  // When you don't own any sealed items the chart has nothing to draw —
+  // render a thin placeholder strip so the panel is still discoverable.
+  if(!owned.size) return html`<div class="graded-value-chart">
+    <div class="gvc-header">
+      <div class="gvc-title">Sealed portfolio value</div>
+      <div class="muted" style=${{fontSize:11,marginLeft:"auto"}}>
+        Add sealed products below to start tracking value over time.
+      </div>
+    </div>
+  </div>`;
+  return html`<div class="graded-value-chart">
+    <div class="gvc-header">
+      <div class="gvc-title">Sealed portfolio value</div>
+      <div class="gvc-value">
+        <span class="gvc-now">$${currentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        ${rangeDelta != null && html`<span class="gvc-delta" style=${{color:deltaColor}}>
+          ${rangeDelta >= 0 ? "+" : ""}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:0,maximumFractionDigits:0})}
+          <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(1)}%)</span>
+          <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
+        </span>`}
+      </div>
+      <div class="panel-range-buttons">
+        ${COLLECTION_RANGES.map(r => html`<button key=${r.key}
+          class=${rangeKey===r.key?"active":""}
+          onClick=${()=>setRangeKey(r.key)}>${r.label}</button>`)}
+      </div>
+    </div>
+    <div class="gvc-chart">
+      ${(chartSeries.length && chartSeries[0].data.length)
+        ? html`<${LineChart} series=${chartSeries} width=720 height=180
+            padding=${{top:6,right:8,bottom:22,left:60}}/>
+            ${state.loading ? html`<div class="muted" style=${{fontSize:10,textAlign:"center",marginTop:-4}}>Refreshing…</div>` : null}`
+        : state.loading
+          ? html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>Loading…</div>`
+          : state.error
+            ? html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:11}}>${state.error}</div>`
+            : html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>
+                No sealed price history yet for the cards you own.
+              </div>`}
+    </div>
+  </div>`;
+};
+
 function SealedCollectionView({raw, user, sealedPrices, sealedCollection, updateSealedQty, onSignIn, readOnly, compareMode, viewerOwnSealedCollection}){
   const sealedMatchesCompare = (pid) => {
     if(!readOnly || !compareMode || compareMode === "all" || !viewerOwnSealedCollection) return true;
@@ -7944,6 +8204,35 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, update
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:market:priceMode", priceMode); } catch {} }, [priceMode]);
   const [hideUnowned, setHideUnowned] = useState(false);
+  // Grid (image tiles) vs Compact (text-only rows) — mirrors Graded.
+  const [displayMode, setDisplayMode] = useState(()=>{
+    try { return localStorage.getItem("packsink:sealedColl:display") || "grid"; }
+    catch { return "grid"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:sealedColl:display", displayMode); } catch {} }, [displayMode]);
+  // Grouping mode: "set" (per-set sections, with mixed product types within)
+  // or "type" (per-product-type sections, mixed sets within). Persisted.
+  const [groupBy, setGroupBy] = useState(()=>{
+    try { return localStorage.getItem("packsink:sealedColl:groupBy") || "set"; }
+    catch { return "set"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:sealedColl:groupBy", groupBy); } catch {} }, [groupBy]);
+  // Collapsed set sections, persisted. Key is set_id when groupBy=set, or the
+  // display-type string when groupBy=type. Cleared on toggle change so each
+  // mode tracks its own collapsed state.
+  const [collapsedSets, setCollapsedSets] = useState(()=>{
+    try { return new Set(JSON.parse(localStorage.getItem("packsink:sealedColl:collapsed") || "[]")); }
+    catch { return new Set(); }
+  });
+  const toggleCollapsed = (sid) => {
+    setCollapsedSets(prev => {
+      const next = new Set(prev);
+      if(next.has(sid)) next.delete(sid); else next.add(sid);
+      try { localStorage.setItem("packsink:sealedColl:collapsed", JSON.stringify([...next])); } catch {}
+      return next;
+    });
+  };
+  const [chartRange, setChartRange] = useState("3m");
   const useMarket = priceMode === "market";
   const priceField = useMarket ? "market_price" : "low_price";
 
@@ -7953,9 +8242,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, update
     return m;
   }, [raw]);
 
-  // Group by display type (reuses the SealedView classifier), sorted by set
-  // newest-first within each section. Optionally filter to only owned items
-  // so the page is scannable once the user has even a few SKUs.
+  // Group either by set_id or by display-type (Booster Box / Trove / etc).
+  // Each section has the same shape `{set_id, set_name, items}` so the
+  // render below doesn't need to branch — set_id doubles as the section
+  // key in either mode (using the type string when grouping by type).
   const grouped = useMemo(()=>{
     const items = (sealedPrices || []).filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single"
@@ -7964,34 +8254,57 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, update
       ? items.filter(p => (sealedCollection[p.tcgplayer_product_id] || 0) > 0)
       : items
     ).filter(p => sealedMatchesCompare(p.tcgplayer_product_id));
-    const byType = new Map();
-    for(const item of filtered){
-      const t = deriveSealedDisplayType(item);
-      if(!byType.has(t)) byType.set(t, []);
-      byType.get(t).push(item);
-    }
     const setOrder = {};
-    Object.entries(setNameById).forEach(([sid]) => { setOrder[sid] = 0; });
-    // The matview gives us set_ids but we want newest-first ordering. Use
-    // MAINLINE_SETS reversed: the higher the index in MAINLINE_SETS, the
-    // newer; reversal flips it so newer sets get lower sort keys.
     MAINLINE_SETS.forEach((name, i) => {
       const sid = Object.entries(setNameById).find(([, n]) => n === name)?.[0];
       if(sid) setOrder[sid] = MAINLINE_SETS.length - i;
     });
-    const out = [];
-    for(const [type, list] of byType){
-      list.sort((a, b) => {
-        const ai = a.set_id != null ? (setOrder[a.set_id] ?? 999) : 1000;
-        const bi = b.set_id != null ? (setOrder[b.set_id] ?? 999) : 1000;
-        if(ai !== bi) return ai - bi;
-        return (a.name||"").localeCompare(b.name||"");
-      });
-      out.push({type, items: list});
+    if(groupBy === "type"){
+      const byType = new Map();
+      for(const item of filtered){
+        const t = deriveSealedDisplayType(item);
+        if(!byType.has(t)) byType.set(t, []);
+        byType.get(t).push(item);
+      }
+      const out = [];
+      for(const [type, list] of byType){
+        // Inside each type-section, sort newest-set first then by name.
+        list.sort((a, b) => {
+          const ai = a.set_id != null ? (setOrder[a.set_id] ?? 999) : 1000;
+          const bi = b.set_id != null ? (setOrder[b.set_id] ?? 999) : 1000;
+          if(ai !== bi) return ai - bi;
+          return (a.name||"").localeCompare(b.name||"");
+        });
+        out.push({set_id: type, set_name: type, items: list});
+      }
+      out.sort((a, b) => sealedDisplayTypeRank(a.set_name) - sealedDisplayTypeRank(b.set_name));
+      return out;
     }
-    out.sort((a, b) => sealedDisplayTypeRank(a.type) - sealedDisplayTypeRank(b.type));
+    // groupBy === "set" (default)
+    const bySet = new Map();
+    for(const item of filtered){
+      const sid = item.set_id || "__other__";
+      if(!bySet.has(sid)) bySet.set(sid, []);
+      bySet.get(sid).push(item);
+    }
+    const out = [];
+    for(const [sid, list] of bySet){
+      list.sort((a, b) => sealedDisplayTypeRank(deriveSealedDisplayType(a)) - sealedDisplayTypeRank(deriveSealedDisplayType(b))
+        || (a.name||"").localeCompare(b.name||""));
+      out.push({
+        set_id: sid,
+        set_name: sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid),
+        items: list,
+      });
+    }
+    out.sort((a, b) => {
+      const ai = setOrder[a.set_id] ?? 999;
+      const bi = setOrder[b.set_id] ?? 999;
+      if(ai !== bi) return ai - bi;
+      return a.set_name.localeCompare(b.set_name);
+    });
     return out;
-  }, [sealedPrices, sealedCollection, hideUnowned, setNameById, readOnly, compareMode, viewerOwnSealedCollection]);
+  }, [sealedPrices, sealedCollection, hideUnowned, setNameById, readOnly, compareMode, viewerOwnSealedCollection, groupBy]);
 
   // Totals: number of sealed items owned + their combined market value.
   const totals = useMemo(()=>{
@@ -8019,89 +8332,100 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, update
     </div>`;
   }
 
-  return html`<div class="sealed-coll">
-    <div class="sealed-coll-summary">
-      <div class="sealed-coll-stat">
-        <div class="sealed-coll-stat-lbl">Units owned</div>
-        <div class="sealed-coll-stat-val">${totals.units.toLocaleString()}</div>
+  return html`<div class="graded-collection sealed-coll">
+    <div class="graded-collection-header">
+      <div class="graded-collection-totals">
+        <div class="gc-stat"><div class="gc-stat-val">${totals.units.toLocaleString()}</div><div class="gc-stat-lbl">Units owned</div></div>
+        <div class="gc-stat"><div class="gc-stat-val">${totals.distinct.toLocaleString()}</div><div class="gc-stat-lbl">Distinct SKUs</div></div>
+        <div class="gc-stat"><div class="gc-stat-val green">${fmt(totals.value)}</div><div class="gc-stat-lbl">Est. value (${useMarket?"Market":"Low"})</div></div>
       </div>
-      <div class="sealed-coll-stat">
-        <div class="sealed-coll-stat-lbl">Distinct SKUs</div>
-        <div class="sealed-coll-stat-val">${totals.distinct.toLocaleString()}</div>
-      </div>
-      <div class="sealed-coll-stat">
-        <div class="sealed-coll-stat-lbl">Estimated value (${useMarket?"Market":"Low"})</div>
-        <div class="sealed-coll-stat-val">${fmt(totals.value)}</div>
-      </div>
-      <div class="sealed-coll-controls">
+      <div class="graded-collection-header-actions">
+        <div class="seg-toggle" title="Group sections by set or by product type">
+          <button class=${groupBy==="set"?"active":""} onClick=${()=>setGroupBy("set")}>By Set</button>
+          <button class=${groupBy==="type"?"active":""} onClick=${()=>setGroupBy("type")}>By Type</button>
+        </div>
+        <div class="seg-toggle" title="Display mode">
+          <button class=${displayMode==="grid"?"active":""} onClick=${()=>setDisplayMode("grid")}>Grid</button>
+          <button class=${displayMode==="compact"?"active":""} onClick=${()=>setDisplayMode("compact")}>Compact</button>
+        </div>
         <div class="market-sim-kind" role="group" aria-label="Price source">
           <button class=${priceMode==="low"?"active":""} onClick=${()=>setPriceMode("low")}>Low</button>
           <button class=${priceMode==="market"?"active":""} onClick=${()=>setPriceMode("market")}>Market</button>
         </div>
         <label class="sealed-coll-flag" title="Only show sealed products you actually own.">
           <input type="checkbox" checked=${hideUnowned} onChange=${e=>setHideUnowned(e.target.checked)}/>
-          <span>Show only owned</span>
+          <span>Only owned</span>
         </label>
       </div>
     </div>
 
-    ${(!sealedPrices || sealedPrices.length === 0) && html`<div class="muted" style=${{fontSize:13,padding:"20px 0"}}>
-      No sealed-product price data yet. Run supabase/16_sealed_prices_latest.sql, then refresh_sealed_prices_latest(), then reload.
-    </div>`}
+    ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
+      rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
 
-    ${grouped.map(({type, items}) => html`<div class="sealed-set" key=${type}>
-      <div class="sealed-set-header">
-        <span class="sealed-set-title">${type}</span>
-        <span class="sealed-set-count">${items.length}</span>
-      </div>
-      <div class="sealed-rows">
-        <div class="sealed-row sealed-coll-row sealed-row-head">
-          <div class="sealed-row-set">Set</div>
-          <div class="sealed-row-name">Product</div>
-          <div class="sealed-row-price">${useMarket?"Market":"Low"}</div>
-          <div class="sealed-coll-owned-lbl">Owned</div>
-          <div class="sealed-coll-counter-lbl">Quantity</div>
-        </div>
-        ${items.map(item => {
-          const setName = item.set_id ? setNameById[item.set_id] : null;
-          const url = tcgUrl(item.tcgplayer_product_id);
-          const price = item[priceField];
-          const qty = sealedCollection[item.tcgplayer_product_id] || 0;
-          const bump = (delta) => {
-            const next = Math.max(0, Math.min(99, qty + delta));
-            if(next !== qty) updateSealedQty(item.tcgplayer_product_id, next);
-          };
-          return html`<div class=${"sealed-row sealed-coll-row"+(qty>0?" owned":"")} key=${item.tcgplayer_product_id}>
-            <div class="sealed-row-set">
-              ${setName
-                ? html`<span class="sealed-set-pill sealed-set-pill-muted">${setName}</span>`
-                : html`<span class="sealed-set-pill sealed-set-pill-muted">—</span>`}
-            </div>
-            <div class="sealed-row-name">
-              ${url
-                ? html`<a href=${url} target="_blank" rel="noopener nofollow"
-                    title=${item.name}>${cleanSealedName(item.name)}<span class="sealed-name-ext">↗</span></a>`
-                : cleanSealedName(item.name)}
-            </div>
-            <div class="sealed-row-price">${fmt(price)}</div>
-            <div class="sealed-coll-owned-val">${qty > 0 ? fmt((price || 0) * qty) : ""}</div>
-            ${readOnly
-              ? html`<div class="sealed-coll-counter sealed-coll-counter-readonly">
-                  <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
-                </div>`
-              : html`<div class="sealed-coll-counter">
-                  <button onClick=${()=>bump(-1)} disabled=${qty<=0} aria-label="Decrease">−</button>
-                  <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
-                  <button onClick=${()=>bump(+1)} disabled=${qty>=99} aria-label="Increase">+</button>
+    <div class="graded-collection-body">
+      <div class="graded-collection-main">
+        ${(!sealedPrices || sealedPrices.length === 0)
+          ? html`<div class="muted" style=${{padding:"40px 12px",textAlign:"center",fontSize:13,lineHeight:1.5}}>
+              Loading sealed products…
+            </div>`
+          : grouped.length === 0
+          ? html`<div class="muted" style=${{padding:"40px 12px",textAlign:"center",fontSize:13,lineHeight:1.5}}>
+              ${hideUnowned
+                ? "No owned sealed products yet — uncheck \"Only owned\" to browse the catalog."
+                : "No sealed products match your filters."}
+            </div>`
+          : grouped.map(section => {
+              const collapsed = collapsedSets.has(section.set_id);
+              const ownedInSet = section.items.filter(it => (sealedCollection[it.tcgplayer_product_id]||0) > 0).length;
+              return html`<div key=${section.set_id} class="gc-set-block">
+                <div class="gc-set-title gc-set-title-clickable"
+                    onClick=${()=>toggleCollapsed(section.set_id)}>
+                  <span class="gc-set-caret">${collapsed ? "▸" : "▾"}</span>
+                  ${section.set_name}
+                  <span class="muted">${ownedInSet} / ${section.items.length}</span>
+                </div>
+                ${!collapsed && html`<div class=${"gc-set-grid"+(displayMode==="compact"?" gc-compact":"")}>
+                  ${section.items.map(item => {
+                    const qty = sealedCollection[item.tcgplayer_product_id] || 0;
+                    const price = item[priceField];
+                    const url = tcgUrl(item.tcgplayer_product_id);
+                    const dtype = deriveSealedDisplayType(item);
+                    const bump = (delta) => {
+                      const next = Math.max(0, Math.min(99, qty + delta));
+                      if(next !== qty) updateSealedQty(item.tcgplayer_product_id, next);
+                    };
+                    return html`<div key=${item.tcgplayer_product_id} class=${"gc-card"+(qty>0?" gc-card-owned":"")}>
+                      ${displayMode==="grid" && item.image_url && html`<img src=${item.image_url} alt="" class="gc-card-img sealed-card-img" loading="lazy"/>`}
+                      <div class="gc-card-body">
+                        <div class="gc-card-name" title=${item.name}>${cleanSealedName(item.name)}</div>
+                        <div class="gc-card-sub muted">${dtype}</div>
+                        <div class="gc-card-raw">
+                          <span class="gc-card-raw-px">${useMarket?"Market":"Low"} ${fmt(price)}</span>
+                          ${url && html`<a class="gc-card-buy" href=${url} target="_blank" rel="noopener nofollow"
+                              onClick=${e=>e.stopPropagation()}
+                              title="Buy on TCGPlayer">Buy ↗</a>`}
+                        </div>
+                        ${qty > 0 && html`<div class="gc-card-owned-value">
+                          <span class="muted">Owned value</span>
+                          <strong>${fmt((price || 0) * qty)}</strong>
+                        </div>`}
+                        ${readOnly
+                          ? html`<div class="sealed-coll-counter sealed-coll-counter-readonly">
+                              <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>×${qty}</span>
+                            </div>`
+                          : html`<div class="sealed-coll-counter">
+                              <button onClick=${()=>bump(-1)} disabled=${qty<=0} aria-label="Decrease">−</button>
+                              <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
+                              <button onClick=${()=>bump(+1)} disabled=${qty>=99} aria-label="Increase">+</button>
+                            </div>`}
+                      </div>
+                    </div>`;
+                  })}
                 </div>`}
-          </div>`;
-        })}
+              </div>`;
+            })}
       </div>
-    </div>`)}
-
-    ${grouped.length === 0 && hideUnowned && sealedPrices && sealedPrices.length > 0 && html`<div class="muted" style=${{fontSize:13,padding:"20px 0"}}>
-      You don't own any sealed product yet — toggle "Show only owned" off to add some.
-    </div>`}
+    </div>
   </div>`;
 }
 
@@ -9438,6 +9762,23 @@ function FAQView(){
     <h2>Affiliate disclosure</h2>
     <p>Packs.Ink participates in the TCGplayer Affiliate Program. As a TCGplayer Affiliate, we earn a commission from qualifying purchases made through TCGplayer links on this site (the price-tag buttons on every card). This costs you nothing extra and helps keep the site running. Thanks for clicking through!</p>
 
+    <h2 id="privacy">Privacy policy</h2>
+    <p>This policy covers what data Packs.Ink stores about you and how it's handled.</p>
+    <p><strong>What we collect.</strong> The site is fully browseable without an account; only signed-in features collect anything.</p>
+    <ul>
+      <li><strong>If you sign in with Google:</strong> your Google email, profile display name, and (optionally) profile photo URL. We never see your Google password.</li>
+      <li><strong>If you use Collection / Decks features:</strong> the cards, sealed products, graded copies, decks, follows, and favorites you save. All scoped to your account.</li>
+      <li><strong>Error telemetry (Sentry):</strong> if the site crashes in your browser, we receive an anonymized stack trace and a one-line description so we can fix the bug. No prices, deck contents, or page contents are sent.</li>
+      <li><strong>Affiliate clicks (TCGplayer Impact):</strong> when you click a TCGplayer "Buy" link, Impact records an anonymous referral so we can earn commission. We don't see who clicked.</li>
+    </ul>
+    <p><strong>What we don't collect.</strong> No analytics tracking, no advertising trackers, no third-party cookies, no IP geo-tracking, no fingerprinting. The browse experience is entirely anonymous.</p>
+    <p><strong>Where it's stored.</strong> Account + collection data lives in a Supabase Postgres database (US-based). Access is gated by Postgres Row-Level Security so only you can read or modify your own data. The browser holds a recent-data cache in localStorage (purely for speed; cleared when you clear site data).</p>
+    <p><strong>Who we share with.</strong> Nobody. We don't sell, rent, or share data with third parties. Publicly visible deck lists, collection shares, and creator profiles are only shared when you explicitly mark a deck/collection as Public or share an Unlisted link.</p>
+    <p><strong>How to delete your data.</strong> You can delete individual decks, collection items, etc. from inside the app at any time. To delete your entire account and all associated data, DM <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a> on X with the email address on file — we'll wipe everything within 7 days and confirm by reply.</p>
+    <p><strong>Children.</strong> Packs.Ink is intended for users 13 and older.</p>
+    <p><strong>Changes.</strong> If this policy meaningfully changes, the change will be noted at the top of this section with the effective date.</p>
+    <p class="muted" style=${{fontSize:11}}>Last updated 2026-05-22.</p>
+
     <h2>About</h2>
     <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on X for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
 
@@ -9693,6 +10034,7 @@ const PRICE_DB_WIN = [
 // [key, label, one-line description shown beneath the preset chips]
 const PRICE_DB_PRESETS = [
   ["all",      "All",       "Default view — every tracked card sorted by today's biggest 1D movers (gainers and droppers, by absolute Δ%). Use the filters below or click any column header to retune the view."],
+  ["movers",   "Movers",    "Biggest movers over the selected window in EITHER direction — gains and drops interleaved by absolute Δ%. Same ordering the home page banners use."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
   ["buyouts",  "Buyouts",   "Fresh sweeps in progress: the floor has jumped 25%+ this week AND now sits at or above the market sale average — sellers re-priced upward before recent sales caught up. Includes cards with no market data whose floor jumped 1.5× their 30-day baseline."],
@@ -9821,7 +10163,7 @@ function priceDbSignals(r){
   return out;
 }
 
-function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards}){
+function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, incomingScreenerView, onConsumedIncomingScreenerView}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
   // key maps to Math.abs(r.pct_1d) so the first thing you see is whatever
@@ -9858,14 +10200,25 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     try { return localStorage.getItem("packsink:screener:moverwin") || "pct_1d"; } catch { return "pct_1d"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:moverwin", moverWin); } catch{} }, [moverWin]);
-  // When Gainers / Losers is the active preset, the sort follows the window
-  // pick automatically. This is in an effect (instead of overriding the
-  // useMemo sort) so subsequent column-header clicks still work.
+  // When Gainers / Losers / Movers is the active preset, the sort follows
+  // the window pick automatically. This is in an effect (instead of overriding
+  // the useMemo sort) so subsequent column-header clicks still work.
+  //   Gainers → signed desc (biggest +Δ first)
+  //   Losers  → signed asc  (deepest -Δ first)
+  //   Movers  → abs desc    (biggest move in either direction)
   useEffect(() => {
-    if(preset !== "gainers" && preset !== "losers") return;
+    if(preset !== "gainers" && preset !== "losers" && preset !== "movers") return;
     const winKey = priceMode === "market" ? moverWin.replace("pct_", "mkt_pct_") : moverWin;
-    setSortKey(winKey);
-    setSortDesc(preset === "gainers");
+    if(preset === "movers"){
+      // Re-use the abs_pct_<window> virtual sort key the home banner handoff
+      // already plumbed through getVal (line ~10543).
+      const absKey = "abs_pct_" + winKey.replace(/^mkt_pct_|^pct_/, "");
+      setSortKey(absKey);
+      setSortDesc(true);
+    } else {
+      setSortKey(winKey);
+      setSortDesc(preset === "gainers");
+    }
   }, [preset, moverWin, priceMode]);
   // Graded mode toggle — flips the entire screener over to graded eBay
   // entries (PSA/CGC/BGS/SGC/TAG). Each (pid, grader, grade) becomes its
@@ -10007,6 +10360,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setSortKey(v.sortKey || "abs_pct_1d");
     setSortDesc(v.sortDesc !== false);
   };
+  // Consume the App-pushed view payload from a banner-title click on Home.
+  // Apply once, then notify parent so we don't re-fire on prop re-renders.
+  useEffect(() => {
+    if(!incomingScreenerView) return;
+    applyView(incomingScreenerView);
+    onConsumedIncomingScreenerView && onConsumedIncomingScreenerView();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [incomingScreenerView]);
   const deleteView = (name) => setSavedViews(prev => prev.filter(v => v.name !== name));
   // Card detail modal — clicking a row's image or name opens it.
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -10074,8 +10435,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         if(error){
           if(!cached) setState({rows: null, loading: false, error: error.message});
         } else {
-          setState({rows: data || [], loading: false, error: null});
-          writeJsonCache(CACHE_KEY, data || []);
+          // Normalize rarity strings: cards.rarity stores Lorcast's raw value
+          // (e.g. "Super_rare") but every UI surface compares against the
+          // canonical form ("Super Rare"). Without this, the rarity chips on
+          // the screener filter against "Super Rare" and silently exclude
+          // every Super-Rare row in price_movers. Image enrichment for the
+          // Challenge Promo C1 cards with image_small/normal = "" lives in
+          // a useMemo below (rawEnrichedRows) so it re-runs when raw arrives.
+          const rows = (data || []).map(r => ({...r, rarity: normalizeRarity(r.rarity)}));
+          setState({rows, loading: false, error: null});
+          writeJsonCache(CACHE_KEY, rows);
         }
       });
     return () => { cancelled = true; };
@@ -10193,8 +10562,31 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return out;
   }, [state.rows]);
 
+  // Enrich price_movers rows with image fallbacks from raw. The matview
+  // only selects image_small + image_normal, but a few Challenge Promo C1
+  // cards (Rapunzel - Gifted with Healing, Dragon Fire, Let It Go, Cinderella
+  // - Stouthearted) have ONLY image_large populated in Lorcast — the matview
+  // returns "" for those tiles. raw's img_normal has the large URL (buildRow
+  // falls back image_large → image_normal); inject that when the matview is
+  // empty. Reactive to raw so cold-load order doesn't matter.
+  const rawEnrichedRows = useMemo(() => {
+    if(!state.rows) return state.rows;
+    if(!raw || !raw.length) return state.rows;
+    const fallback = {};
+    for(const rr of raw){
+      if(rr.card_id && !fallback[rr.card_id]){
+        fallback[rr.card_id] = rr.img_normal || rr.img_large || rr.img_small || null;
+      }
+    }
+    return state.rows.map(r => {
+      if(r.image_small || r.image_normal || !r.card_id) return r;
+      const fb = fallback[r.card_id];
+      return fb ? {...r, image_normal: fb, image_small: fb} : r;
+    });
+  }, [state.rows, raw]);
+
   const filtered = useMemo(() => {
-    let rows = state.rows;
+    let rows = rawEnrichedRows;
     if(!rows) return [];
     // Graded mode: replace the row set with synthesized (pid, grader, grade)
     // rows. Each one inherits metadata from the matching raw row (name,
@@ -10341,10 +10733,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       if(k === "low")         return r.low_today;
       if(k === "market")      return r.market_today;
       if(k === "set_rank")    return setRank(r);
-      // Absolute-value 1D sort: biggest movers in EITHER direction. Used
-      // as the default sort so the first view shows what actually moved
-      // today, not just what gained.
-      if(k === "abs_pct_1d")  return r.pct_1d == null ? null : Math.abs(r.pct_1d);
+      // Absolute-value sort for ANY window: biggest movers in EITHER
+      // direction. Default sort key is "abs_pct_1d" but the same logic
+      // applies to abs_pct_7d / 30d / 90d / etc, plus market variants.
+      if(typeof k === "string" && k.startsWith("abs_pct_")){
+        const winSuffix = k.slice("abs_pct_".length); // "1d", "7d", etc
+        const isMarket = priceMode === "market";
+        const colName = (isMarket ? "mkt_pct_" : "pct_") + winSuffix;
+        const v = r[colName];
+        return v == null ? null : Math.abs(v);
+      }
       // Legacy "price" key (active-mode-driven) still supported for old prefs.
       if(k === "price")  return priceMode === "market" ? r.market_today : r.low_today;
       return r[k];
@@ -10359,7 +10757,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return sd ? bv - av : av - bv;
     });
     return out;
-  }, [state.rows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, gradedSynth, movRowByPid, filterGraders, filterGrades]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, gradedSynth, movRowByPid, filterGraders, filterGrades]);
 
   const onSort = (k) => {
     if(sortKey === k) setSortDesc((d) => !d);
@@ -10372,10 +10770,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // Unknown rarities sink to the end.
   const rarities = useMemo(() => {
     const present = new Set((state.rows || []).map((r) => r.rarity).filter(Boolean));
+    // Include rarities the user has already selected in the filter even if
+    // no current row matches — otherwise the chip vanishes and the filter
+    // looks broken (e.g. "Super Rare" set via banner handoff but data is
+    // empty for that rarity in this window).
+    for(const r of filterRarities) present.add(r);
     const ordered = CARDS_RARITIES.slice().reverse().filter(r => present.has(r));
     const tail = [...present].filter(r => !ordered.includes(r)).sort();
     return [...ordered, ...tail];
-  }, [state.rows]);
+  }, [state.rows, filterRarities]);
   const inks = useMemo(() => Array.from(new Set((state.rows || []).map((r) => r.ink).filter(Boolean))).sort(), [state.rows]);
 
   // Clear user-added filters but keep preset-baked defaults. The "preset
@@ -10532,13 +10935,29 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           onClick=${()=>setSigFilter(new Set())} style=${{marginLeft:4}}>Clear signals</button>`}
       </div>
     </div>
-    <div class="price-db-filters">
+    <div class="price-db-filters price-db-filters-primary">
       <input class="price-db-search" type="search" placeholder="Search by name"
         value=${search} onInput=${(e) => setSearch(e.target.value)}/>
-      <select value=${filterSet} onChange=${(e) => setFilterSet(e.target.value)}>
+      <select value=${filterSet} onChange=${(e) => setFilterSet(e.target.value)}
+        title="Filter by set" style=${{minWidth:160}}>
         <option value="">All sets</option>
         ${(sets || []).slice().reverse().map((s) => html`<option key=${s} value=${s}>${s}</option>`)}
       </select>
+      <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
+        <button class="price-db-multibtn" onClick=${()=>setInkOpen(o=>!o)}
+          title="Filter by ink (was previously in Advanced)">
+          ${filterInks.size === 0 ? "All inks" : `${filterInks.size} ${filterInks.size===1?"ink":"inks"}`} ▾
+        </button>
+        ${inkOpen && html`<div class="price-db-multimenu">
+          ${inks.map(i => html`<label key=${i} class="price-db-multiitem">
+            <input type="checkbox" checked=${filterInks.has(i)}
+              onChange=${()=>setFilterInks(prev=>{ const n=new Set(prev); n.has(i)?n.delete(i):n.add(i); return n; })}/>
+            ${i}
+          </label>`)}
+          ${filterInks.size > 0 && html`<button class="price-db-multiclear"
+            onClick=${()=>setFilterInks(new Set())}>Clear</button>`}
+        </div>`}
+      </div>
       <div class="price-db-raritybtns" role="group" aria-label="Rarity filter">
         ${rarities.map(r => html`<button key=${r}
           class=${"price-db-raritybtn"+(filterRarities.has(r)?" active":"")}
@@ -10548,6 +10967,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ${filterRarities.size > 0 && html`<button class="price-db-raritybtn clear"
           onClick=${()=>setFilterRarities(new Set())}>Clear</button>`}
       </div>
+    </div>
+    <div class="price-db-filters price-db-filters-secondary">
       <button class="price-db-advbtn" onClick=${() => setAdvOpen(o => !o)}
         title="Advanced numeric filters">
         ${advOpen ? "Advanced ▴" : "Advanced ▾"}
@@ -10608,23 +11029,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </div>`}
     </div>
     ${advOpen && html`<div class="price-db-adv">
-      <div class="price-db-adv-row">
-        <label>Ink</label>
-        <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
-          <button class="price-db-multibtn" onClick=${()=>setInkOpen(o=>!o)}>
-            ${filterInks.size === 0 ? "All inks" : `${filterInks.size} ${filterInks.size===1?"ink":"inks"}`} ▾
-          </button>
-          ${inkOpen && html`<div class="price-db-multimenu">
-            ${inks.map(i => html`<label key=${i} class="price-db-multiitem">
-              <input type="checkbox" checked=${filterInks.has(i)}
-                onChange=${()=>setFilterInks(prev=>{ const n=new Set(prev); n.has(i)?n.delete(i):n.add(i); return n; })}/>
-              ${i}
-            </label>`)}
-            ${filterInks.size > 0 && html`<button class="price-db-multiclear"
-              onClick=${()=>setFilterInks(new Set())}>Clear</button>`}
-          </div>`}
-        </div>
-      </div>
       <div class="price-db-adv-row">
         <label>NM ${priceMode === "market" ? "Market" : "Low"} price</label>
         <input type="number" min="0" step="0.5" placeholder="Min $"
@@ -11055,8 +11459,22 @@ const COLLECTION_RANGES = [
 
 // Right-side panel on Home: current collection value, line chart over a
 // user-selected range, and a tiny "top movers in your collection" list.
-const CollectionPanel = ({raw, user, collection, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, setsMeta}) => {
+const CollectionPanel = ({raw, user, collection, sealedCollection, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, setsMeta}) => {
   const [rangeKey, setRangeKey] = useState("3m");
+  // Per-section visibility toggles for the value chart. All three default
+  // ON; users who don't have sealed or graded just see their card line and
+  // can hide the empty series if they want. Persisted across sessions.
+  const [showCards, setShowCards]   = useState(()=>{try{return localStorage.getItem("packsink:home:colShowCards") !== "0";}catch{return true;}});
+  const [showSealed, setShowSealed] = useState(()=>{try{return localStorage.getItem("packsink:home:colShowSealed") !== "0";}catch{return true;}});
+  const [showGraded, setShowGraded] = useState(()=>{try{return localStorage.getItem("packsink:home:colShowGraded") !== "0";}catch{return true;}});
+  // When true (default), all enabled sections collapse to one summed line.
+  // When false, render each enabled section as its own colored line so users
+  // can spot which segment of their portfolio is moving.
+  const [combinedLine, setCombinedLine] = useState(()=>{try{return localStorage.getItem("packsink:home:colCombined") !== "0";}catch{return true;}});
+  useEffect(()=>{try{localStorage.setItem("packsink:home:colCombined", combinedLine?"1":"0");}catch{}}, [combinedLine]);
+  useEffect(()=>{try{localStorage.setItem("packsink:home:colShowCards", showCards?"1":"0");}catch{}}, [showCards]);
+  useEffect(()=>{try{localStorage.setItem("packsink:home:colShowSealed", showSealed?"1":"0");}catch{}}, [showSealed]);
+  useEffect(()=>{try{localStorage.setItem("packsink:home:colShowGraded", showGraded?"1":"0");}catch{}}, [showGraded]);
   // User preference: collapse the panel to just the title + current value.
   // Persisted because power users with a strong opinion on either layout
   // shouldn't re-toggle every session.
@@ -11206,19 +11624,172 @@ const CollectionPanel = ({raw, user, collection, collectionLoading, moversByKey,
   // so the user sees the chart immediately on return visits.
   const valueSeries = freshSeries || cachedSeries;
 
-  const chartSeries = useMemo(() => {
-    if(!valueSeries || !valueSeries.length) return [];
-    return [{
-      label: "Collection Low value",
-      color: "var(--accent)",
-      dashed: false,
-      data: valueSeries.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value})),
-    }];
-  }, [valueSeries]);
+  // ── Sealed series ────────────────────────────────────────────────────
+  // Mirrors the card pipeline: build owned map → fetch prices_daily → roll
+  // up via computeCollectionValueHistory. Sealed entries are always Normal
+  // printing so the map keys all end in "|Normal".
+  const sealedOwned = useMemo(() => {
+    const map = new Map();
+    if(!user || !sealedCollection) return map;
+    for(const [pid, qty] of Object.entries(sealedCollection)){
+      if(qty <= 0) continue;
+      map.set(pid + "|Normal", qty);
+    }
+    return map;
+  }, [sealedCollection, user]);
+  const sealedCurrentValue = useMemo(() => {
+    if(!sealedPrices || !sealedOwned.size) return 0;
+    const priceByPid = {};
+    for(const p of sealedPrices){
+      if(p.printing !== "Normal") continue;
+      priceByPid[p.tcgplayer_product_id] = parseFloat(p.low_price ?? p.market_price);
+    }
+    let v = 0;
+    for(const [k, qty] of sealedOwned){
+      const pid = parseInt(k.split("|")[0],10);
+      const px = priceByPid[pid];
+      if(px && !isNaN(px)) v += px * qty;
+    }
+    return v;
+  }, [sealedPrices, sealedOwned]);
+  const [sealedHistoryRows, setSealedHistoryRows] = useState(null);
+  const sealedOwnedKey = useMemo(() => Array.from(sealedOwned.keys()).sort().join(","), [sealedOwned]);
+  useEffect(() => {
+    if(!showSealed || !sealedOwned.size){ setSealedHistoryRows(null); return; }
+    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    const pids = Array.from(new Set(Array.from(sealedOwned.keys()).map(k => parseInt(k.split("|")[0],10))));
+    let cancelled = false;
+    fetchCollectionPriceHistory(pids, since)
+      .then(rows => { if(!cancelled) setSealedHistoryRows(rows); })
+      .catch(() => { if(!cancelled) setSealedHistoryRows([]); });
+    return () => { cancelled = true; };
+  }, [sealedOwnedKey, rangeKey, showSealed]);
+  const sealedValueSeries = useMemo(() =>
+    sealedHistoryRows ? computeCollectionValueHistory(sealedHistoryRows, sealedOwned, null) : null,
+    [sealedHistoryRows, sealedOwned]);
 
-  const startValue = valueSeries && valueSeries.length ? valueSeries[0].value : null;
-  const rangeDelta = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
-  const rangeDeltaPct = (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
+  // ── Graded series ────────────────────────────────────────────────────
+  // Fetches the user's graded_collection_items rows once on mount, then
+  // pulls graded_prices_daily history for those slots. Reuses the same
+  // helpers GradedCollectionView uses so the numbers match.
+  const [gradedItems, setGradedItems] = useState(null);
+  useEffect(() => {
+    if(!user){ setGradedItems([]); return; }
+    let cancelled = false;
+    sbClient.from("graded_collection_items")
+      .select("card_id,grader,grade,quantity")
+      .eq("user_id", user.id)
+      .then(({data}) => { if(!cancelled) setGradedItems(data || []); });
+    return () => { cancelled = true; };
+  }, [user]);
+  // card_id → tcgplayer_product_id lookup so we can resolve graded item
+  // identifiers back into product ids for the price fetch.
+  const pidByCardId = useMemo(() => {
+    const m = new Map();
+    for(const r of (raw || [])) if(r.card_id && r.tcgplayer_product_id) m.set(r.card_id, r.tcgplayer_product_id);
+    return m;
+  }, [raw]);
+  const gradedSlots = useMemo(() => {
+    if(!gradedItems) return [];
+    const out = [];
+    for(const it of gradedItems){
+      const pid = pidByCardId.get(it.card_id);
+      if(!pid) continue;
+      out.push({pid, grader: it.grader, grade: it.grade, qty: it.quantity || 0});
+    }
+    return out;
+  }, [gradedItems, pidByCardId]);
+  const gradedCurrentValue = useMemo(() => {
+    // We can't price slots without the graded_prices_latest snapshot.
+    // valueSeries below computes it from the rolled-up history; use the
+    // last point as the current value to stay consistent with the chart.
+    return 0;
+  }, []);
+  const [gradedHistoryRows, setGradedHistoryRows] = useState(null);
+  const gradedSlotsKey = useMemo(() => gradedSlots.map(s => `${s.pid}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [gradedSlots]);
+  useEffect(() => {
+    if(!showGraded || !gradedSlots.length){ setGradedHistoryRows(null); return; }
+    const days = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
+    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
+    let cancelled = false;
+    fetchGradedHistoryFor(gradedSlots, since)
+      .then(rows => { if(!cancelled) setGradedHistoryRows(rows); })
+      .catch(() => { if(!cancelled) setGradedHistoryRows([]); });
+    return () => { cancelled = true; };
+  }, [gradedSlotsKey, rangeKey, showGraded]);
+  const gradedValueSeries = useMemo(() =>
+    gradedHistoryRows ? computeGradedValueHistory(gradedHistoryRows, gradedSlots) : null,
+    [gradedHistoryRows, gradedSlots]);
+  const gradedLatestValue = useMemo(() => (gradedValueSeries && gradedValueSeries.length) ? gradedValueSeries[gradedValueSeries.length-1].value : 0, [gradedValueSeries]);
+
+  // Multi-series chart. Each {date,value} series → one line. Toggled-off
+  // sections aren't added so they vanish from both the chart and totals.
+  const chartSeries = useMemo(() => {
+    const toLine = (label, color, series) => {
+      if(!series || !series.length) return null;
+      return {label, color, dashed:false,
+        data: series.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value}))};
+    };
+    const sections = [];
+    if(showCards)  sections.push({label:"Cards",  color:"var(--accent)", series: valueSeries});
+    if(showSealed) sections.push({label:"Sealed", color:"#7e54c4",       series: sealedValueSeries});
+    if(showGraded) sections.push({label:"Graded", color:"#c8a846",       series: gradedValueSeries});
+    const populated = sections.filter(s => s.series && s.series.length);
+    if(!populated.length) return [];
+    // Combined mode (default): one line summing every enabled section's
+    // value by date. Forward-fill across each section's own dates so a card
+    // section without a snapshot on a sealed-only date still contributes its
+    // most recent known value (instead of dropping to zero on that day and
+    // making the combined line zigzag).
+    if(combinedLine){
+      // Sort each section's series by date for forward-fill.
+      const sortedSections = populated.map(s => ({
+        ...s,
+        sorted: s.series.slice().sort((a,b) => a.date.localeCompare(b.date)),
+      }));
+      const dateSet = new Set();
+      for(const s of sortedSections) for(const p of s.sorted) dateSet.add(p.date);
+      const dates = Array.from(dateSet).sort();
+      const data = [];
+      const cursors = sortedSections.map(() => ({i: 0, lastY: 0}));
+      for(const date of dates){
+        let total = 0;
+        sortedSections.forEach((s, idx) => {
+          const cur = cursors[idx];
+          while(cur.i < s.sorted.length && s.sorted[cur.i].date <= date){
+            cur.lastY = s.sorted[cur.i].value;
+            cur.i++;
+          }
+          total += cur.lastY;
+        });
+        data.push({x: new Date(date+"T00:00:00Z").getTime(), y: total});
+      }
+      return [{label:"Total collection", color:"var(--accent)", dashed:false, data}];
+    }
+    // Split mode: one colored line per section.
+    return sections.map(s => toLine(s.label, s.color, s.series)).filter(Boolean);
+  }, [valueSeries, sealedValueSeries, gradedValueSeries, showCards, showSealed, showGraded, combinedLine]);
+
+  // Combined "now" value = sum of enabled sections at their latest point.
+  const cardLatestValue = currentValue;
+  const sealedLatestValue = sealedCurrentValue;
+  const combinedCurrentValue =
+    (showCards ? cardLatestValue : 0) +
+    (showSealed ? sealedLatestValue : 0) +
+    (showGraded ? gradedLatestValue : 0);
+  // Combined start value (sum across enabled sections' first datapoint) for
+  // the range-delta pill. If only one section is on, use that section's
+  // own start so the delta matches what users expect.
+  const combinedStartValue = (() => {
+    let s = 0, anyHadData = false;
+    if(showCards && valueSeries?.length){ s += valueSeries[0].value; anyHadData = true; }
+    if(showSealed && sealedValueSeries?.length){ s += sealedValueSeries[0].value; anyHadData = true; }
+    if(showGraded && gradedValueSeries?.length){ s += gradedValueSeries[0].value; anyHadData = true; }
+    return anyHadData ? s : null;
+  })();
+  const rangeDelta = (combinedStartValue != null && combinedStartValue > 0) ? (combinedCurrentValue - combinedStartValue) : null;
+  const rangeDeltaPct = (combinedStartValue != null && combinedStartValue > 0) ? ((combinedCurrentValue - combinedStartValue) / combinedStartValue * 100) : null;
 
   // Top 5 movers within owned collection — filtered + sorted by the in-panel
   // window/direction controls.
@@ -11262,7 +11833,8 @@ const CollectionPanel = ({raw, user, collection, collectionLoading, moversByKey,
     </div>`}
   </aside>`;
 
-  if(owned.ownedRows.length === 0) return html`<aside class="collection-panel">
+  // Empty state — fires when the user owns nothing across all three sections.
+  if(owned.ownedRows.length === 0 && sealedOwned.size === 0 && gradedSlots.length === 0) return html`<aside class="collection-panel">
     <div class="panel-header">
       ${onTitleClick
         ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
@@ -11274,7 +11846,7 @@ const CollectionPanel = ({raw, user, collection, collectionLoading, moversByKey,
     ${!minimized && (collectionLoading
       ? html`<div class="muted" style=${{fontSize:12,padding:"24px 0",textAlign:"center"}}>Loading your collection…</div>`
       : html`<div class="muted" style=${{fontSize:12}}>
-          Add cards to your collection (or import a CSV in the Collection tab) to see your value chart here.</div>`)}
+          Add cards (or sealed / graded items) to your collection to see your value chart here.</div>`)}
   </aside>`;
 
   const deltaColor = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
@@ -11290,7 +11862,7 @@ const CollectionPanel = ({raw, user, collection, collectionLoading, moversByKey,
       ${minBtn}
     </div>
     <div class="panel-value">
-      <div class="panel-value-now">$${currentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+      <div class="panel-value-now">$${combinedCurrentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
       ${rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
         ${rangeDelta >= 0 ? "+" : ""}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
         <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(2)}%)</span>
@@ -11303,8 +11875,30 @@ const CollectionPanel = ({raw, user, collection, collectionLoading, moversByKey,
         class=${rangeKey===r.key?"active":""}
         onClick=${()=>setRangeKey(r.key)}>${r.label}</button>`)}
     </div>
+    <div class="panel-section-toggles">
+      <label title="Show Card collection value on the chart">
+        <input type="checkbox" checked=${showCards} onChange=${e=>setShowCards(e.target.checked)}/>
+        <span class="panel-toggle-swatch" style=${{background:"var(--accent)"}}/>
+        <span>Cards <em>${fmt(cardLatestValue)}</em></span>
+      </label>
+      <label title="Show Sealed-product value on the chart">
+        <input type="checkbox" checked=${showSealed} onChange=${e=>setShowSealed(e.target.checked)}/>
+        <span class="panel-toggle-swatch" style=${{background:"#7e54c4"}}/>
+        <span>Sealed <em>${fmt(sealedLatestValue)}</em></span>
+      </label>
+      <label title="Show Graded card value on the chart">
+        <input type="checkbox" checked=${showGraded} onChange=${e=>setShowGraded(e.target.checked)}/>
+        <span class="panel-toggle-swatch" style=${{background:"#c8a846"}}/>
+        <span>Graded <em>${fmt(gradedLatestValue)}</em></span>
+      </label>
+      <label title="Sum every enabled section into a single line (default). Uncheck to see Cards / Sealed / Graded as their own colored lines."
+        style=${{marginLeft:"auto"}}>
+        <input type="checkbox" checked=${combinedLine} onChange=${e=>setCombinedLine(e.target.checked)}/>
+        <span>Combined</span>
+      </label>
+    </div>
     <div class="panel-chart">
-      ${(chartSeries.length && chartSeries[0].data.length)
+      ${(chartSeries.length && chartSeries.some(s => s.data && s.data.length))
         ? html`<${LineChart} series=${chartSeries} width=340 height=160
             padding=${{top:6,right:8,bottom:20,left:48}}/>
             ${historyState.loading ? html`<div class="muted" style=${{fontSize:10,textAlign:"center",marginTop:-4}}>Refreshing…</div>` : null}`
@@ -12022,12 +12616,59 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
   </div>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter}) => {
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
   const goAnalytics  = openView ? (()=>openView("market"))     : null;
   const goCollection = openView ? (()=>openView("collection")) : null;
   const goFollowing  = openDecksSection ? (()=>openDecksSection("following")) : null;
+  // Build a Screener filter payload from the home banner's current state.
+  // - "chase"   → rarities = Enchanted/Iconic/Epic, sort by current window
+  // - "rareLeg" → rarities = Rare/Super Rare/Legendary
+  // - "newest"  → filter set = newest released set, sort by Low desc
+  // Direction (gainers / losers / both) mirrors the home toggle.
+  const openBannerInScreener = (which) => {
+    if(!openScreenerWithFilter) return goScreener && goScreener();
+    const w = MOVER_WIN_BY_KEY[windowKey] || MOVER_WIN_BY_KEY["1d"];
+    const winColLow = w.pctLow; // e.g. "pct_1d"
+    const absWinKey = "abs_pct_" + winColLow.slice("pct_".length); // "abs_pct_1d"
+    const bothDirs  = showUp && showDown;
+    const direction = bothDirs ? "gainers" // preset is "all" via override below
+                    : (showUp && !showDown) ? "gainers"
+                    : (showDown && !showUp) ? "losers"
+                    : "gainers";
+    // When both directions are toggled on (the banner's default), sort by
+    // absolute Δ% so positive AND negative movers interleave by magnitude —
+    // matches what the home banner shows. Otherwise sort signed by the
+    // single chosen direction.
+    const base = {
+      preset: bothDirs ? "movers" : direction,
+      moverWin: winColLow,
+      sortKey: bothDirs ? absWinKey : winColLow,
+      sortDesc: true,
+      priceMode: "low",
+      minPrice: "5",
+    };
+    if(which === "chase"){
+      openScreenerWithFilter({...base, filterRarities: ["Enchanted","Iconic","Epic"]});
+    } else if(which === "rareLeg"){
+      openScreenerWithFilter({...base, filterRarities: ["Rare","Super Rare","Legendary"]});
+    } else if(which === "promo"){
+      openScreenerWithFilter({...base, filterRarities: ["Promo"]});
+    } else if(which === "newest"){
+      openScreenerWithFilter({
+        preset: "all",
+        moverWin: "pct_1d",
+        sortKey: "low_today", sortDesc: true,
+        priceMode: "low",
+        filterSet: NEWEST_SET || "",
+        filterRarities: valuableMode === "chase"
+          ? ["Enchanted","Iconic","Epic"]
+          : ["Common","Uncommon","Rare","Super Rare","Legendary"],
+        minPrice: "",
+      });
+    }
+  };
   const [state, setState] = useState({rows:null, loading:true, error:null});
   const [selectedGroup, setSelectedGroup] = useState(null);
   const [windowKey, setWindowKey] = useState("1d");
@@ -12099,14 +12740,18 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           // Only surface error if we have no cached data to show.
           if(!cached) setState({rows:null, loading:false, error:friendly});
         } else {
-          setState({rows: data || [], loading:false, error:null});
+          // Same normalization as the Screener side — cards.rarity ships
+          // "Super_rare" (underscore) from Lorcast and would otherwise miss
+          // the RARELEG_RARS filter on the rare-leg banner.
+          const rows = (data || []).map(r => ({...r, rarity: normalizeRarity(r.rarity)}));
+          setState({rows, loading:false, error:null});
           writeJsonCache(CACHE_KEY, data || []);
         }
       });
     return ()=>{ cancelled = true; };
   },[]);
 
-  const {chase, rareLeg} = useMemo(()=>{
+  const {chase, rareLeg, promo} = useMemo(()=>{
     if(!state.rows) return {chase:[], rareLeg:[]};
     const win = MOVER_WIN_BY_KEY[windowKey] || MOVER_WIN_BY_KEY["1d"];
     const qualifies = (r) => {
@@ -12121,11 +12766,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       if(pct === 0) return false; // a 0% move isn't a "mover"
       return true;
     };
-    const chase=[], rareLeg=[];
+    const chase=[], rareLeg=[], promo=[];
     for(const r of state.rows){
       if(!qualifies(r)) continue;
       if(CHASE_RARS.has(r.rarity)) chase.push(r);
       else if(RARELEG_RARS.has(r.rarity)) rareLeg.push(r);
+      else if(r.rarity === "Promo") promo.push(r);
     }
     // Sort each bucket by the selected window. Both-directions on → sort by
     // abs(pct) so the largest movers (gains OR drops) rank first. Single
@@ -12139,8 +12785,38 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               : cmpAbs;
     chase.sort(cmp);
     rareLeg.sort(cmp);
-    return {chase: chase.slice(0,20), rareLeg: rareLeg.slice(0,20)};
-  }, [state.rows, windowKey, showUp, showDown]);
+    promo.sort(cmp);
+    // price_movers only carries image_small + image_normal. Several Challenge
+    // Promo C1 cards (Rapunzel - Gifted with Healing, Dragon Fire, Let It Go,
+    // Cinderella - Stouthearted) have ONLY image_large populated in Lorcast
+    // — both other fields are empty strings — so the matview returns "" for
+    // those tiles and MoverTile falls through to its text placeholder.
+    //
+    // Enrich from the main catalog (raw). Note: writeCache STRIPS img_large
+    // from cached rows to save localStorage quota (~30% savings), so we
+    // can't read r.img_large directly. But buildRow's fallback chain sets
+    // img_normal = c.image_normal || c.image_large || c.image_small — so
+    // for these problem cards img_normal IS the large URL. Use it.
+    const fallbackImgByCardId = {};
+    if(raw){
+      for(const r of raw){
+        if(r.card_id && !fallbackImgByCardId[r.card_id]){
+          fallbackImgByCardId[r.card_id] = r.img_normal || r.img_large || r.img_small || null;
+        }
+      }
+    }
+    const enrich = (arr) => arr.map(r => {
+      if(r.image_small || r.image_normal || !r.card_id) return r;
+      const fb = fallbackImgByCardId[r.card_id];
+      // Inject as image_normal so MoverTile's existing image_large → image_normal → image_small chain picks it up.
+      return fb ? {...r, image_normal: fb} : r;
+    });
+    return {
+      chase:   enrich(chase  ).slice(0,20),
+      rareLeg: enrich(rareLeg).slice(0,20),
+      promo:   enrich(promo  ).slice(0,20),
+    };
+  }, [state.rows, windowKey, showUp, showDown, raw]);
 
   const directionLabel = (showUp && showDown) ? "|Δ%|"
                        : showUp ? "Δ% (gains)"
@@ -12276,16 +12952,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             Top 20 per banner · prior low ≥ $5 in selected window
           </span>
         </div>
-        ${NEWEST_SET && html`<${MoversBanner}
-              title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
-              subtitle=${`Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price`}
-              controls=${valuableControls}
-              cards=${valuableCards}
-              activeWindow=${""}
-              visibleWindows=${VALUABLE_VISIBLE_WINDOWS}
-              paused=${paused}
-              onTitleClick=${goScreener}
-              onTileClick=${openCard}/>`}
         ${state.loading
           ? html`<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div>`
           : state.error
@@ -12301,7 +12967,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     activeWindow=${windowKey}
                     visibleWindows=${visibleWindows}
                     paused=${paused}
-                    onTitleClick=${goScreener}
+                    onTitleClick=${()=>openBannerInScreener("chase")}
                     onTileClick=${openCard}/>
                   <${MoversBanner}
                     title="Rare – Legendary Movers"
@@ -12310,13 +12976,33 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     activeWindow=${windowKey}
                     visibleWindows=${visibleWindows}
                     paused=${paused}
-                    onTitleClick=${goScreener}
+                    onTitleClick=${()=>openBannerInScreener("rareLeg")}
                     onTileClick=${openCard}/>
+                  <${MoversBanner}
+                    title="Promo Movers"
+                    subtitle=${`Promo printings — top 20 by ${winLabel} ${directionLabel}`}
+                    cards=${promo}
+                    activeWindow=${windowKey}
+                    visibleWindows=${visibleWindows}
+                    paused=${paused}
+                    onTitleClick=${()=>openBannerInScreener("promo")}
+                    onTileClick=${openCard}/>
+                  ${NEWEST_SET && html`<${MoversBanner}
+                    title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
+                    subtitle=${`Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price`}
+                    controls=${valuableControls}
+                    cards=${valuableCards}
+                    activeWindow=${""}
+                    visibleWindows=${VALUABLE_VISIBLE_WINDOWS}
+                    paused=${paused}
+                    onTitleClick=${()=>openBannerInScreener("newest")}
+                    onTileClick=${openCard}/>`}
                 </div>`}
       </div>
       <div class="home-grid-right">
         <${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>
         <${CollectionPanel} raw=${raw} user=${user} collection=${collection}
+          sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
           collectionLoading=${collectionLoading} setsMeta=${setsMeta}
           moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
           onTitleClick=${goCollection}/>
@@ -15941,9 +16627,40 @@ function App(){
     const cached = readSealedCache();
     return (cached && cached.rows.length) ? cached.rows : [];
   });
+  // Independent sealed-prices refresh — runs on every page mount regardless of
+  // the catalog cache state. loadFromSupabase returns early when the catalog
+  // cache is fresh, which would otherwise leave sealed empty for hours at a
+  // time. Re-fetches when (a) we have no cache or (b) the cache is past its
+  // 60-minute TTL; otherwise the initial useState hydration is enough.
+  useEffect(() => {
+    const cached = readSealedCache();
+    if(cached && cached.rows.length && !cached.stale) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
+        const rows = await sbFetchAll("sealed_prices_latest", {
+          select: SEALED_COLS,
+          order: "tcgplayer_product_id.asc,printing.asc",
+        });
+        if(cancelled || !rows || !rows.length) return;
+        setSealedPrices(rows);
+        writeSealedCache(rows);
+      } catch(e){
+        console.warn("sealed-prices refresh failed:", e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, []);
   // Latest price snapshot date in card_prices_latest. Used by the footer
   // pill to warn when the daily ETL hasn't run in a while (> 36h).
+  // ALSO probe prices_daily.max(date) — if it's newer than the matview's
+  // max(price_date), the matview refresh silently failed and the site is
+  // serving yesterday's prices despite today's rows being in the raw
+  // table. That bug actually fired in prod once; the warning pill now
+  // surfaces it within minutes of next page load.
   const [lastEtlDate, setLastEtlDate] = useState(null);
+  const [lastRawPriceDate, setLastRawPriceDate] = useState(null);
   useEffect(() => {
     let cancelled = false;
     sbClient.from("card_prices_latest").select("price_date")
@@ -15952,6 +16669,14 @@ function App(){
         if(cancelled) return;
         if(error){ console.warn("etl health probe failed:", error.message); return; }
         if(data && data[0]) setLastEtlDate(data[0].price_date);
+      });
+    sbClient.from("prices_daily").select("date")
+      .eq("source", "tcgcsv").eq("grade", "raw")
+      .order("date", {ascending:false}).limit(1)
+      .then(({data, error}) => {
+        if(cancelled) return;
+        if(error){ console.warn("raw-prices health probe failed:", error.message); return; }
+        if(data && data[0]) setLastRawPriceDate(data[0].date);
       });
     return () => { cancelled = true; };
   }, []);
@@ -15980,6 +16705,14 @@ function App(){
   const startCompareCards = useCallback((cards) => {
     setIncomingCompareCards(cards);
     setView("history");
+    setTabClickNonce(n => n + 1);
+  }, []);
+  // Banner → Screener filter handoff. Clicking a home banner title pushes
+  // a payload here; PriceDatabase consumes it on mount via applyView.
+  const [incomingScreenerView, setIncomingScreenerView] = useState(null);
+  const openScreenerWithFilter = useCallback((payload) => {
+    setIncomingScreenerView(payload);
+    setView("screener");
     setTabClickNonce(n => n + 1);
   }, []);
   // Open a specific deck in the Decks tab. Used by cross-view jumps —
@@ -16652,7 +17385,14 @@ function App(){
   const signIn = useCallback(()=>{
     sbClient.auth.signInWithOAuth({
       provider:"google",
-      options:{redirectTo: window.location.origin + window.location.pathname},
+      options:{
+        redirectTo: window.location.origin + window.location.pathname,
+        // Force Google to show its account chooser every time. Without this,
+        // Google silently re-authenticates with whatever account the browser
+        // is already signed into — so "Sign out" → "Sign in" just lands you
+        // right back in the same account.
+        queryParams: {prompt: "select_account"},
+      },
     });
   },[]);
   const signOut = useCallback(async ()=>{await sbClient.auth.signOut();},[]);
@@ -16739,7 +17479,10 @@ function App(){
         // 404s gracefully and we just get an empty array.
         sbFetchAll("sealed_prices_latest", {select:SEALED_COLS, order:"tcgplayer_product_id.asc,printing.asc"}).catch(e => {
           console.warn("sealed_prices_latest fetch failed (run supabase/16_*.sql?):", e?.message || e);
-          return [];
+          // Soft-fall to the stale cache if we have one — better to show
+          // old prices than a permanently-empty Sealed tab.
+          const cached = readSealedCache();
+          return (cached && cached.rows.length) ? cached.rows : [];
         }),
       ]);
       setLoadProgress({loaded:2,total:3,current:"Building view"});
@@ -16770,17 +17513,19 @@ function App(){
   // first visit.
 
   return html`<${TipsContext.Provider} value=${tipsEnabled}><div>
-    <div class="tabs">
+    <div class="top-nav">
       <button class="tabs-logo-btn" onClick=${()=>onTabClick("home")}
         title="Home" aria-label="Home">
         <img src="Logos/packs-ink-logo.png" alt="packs.ink"
           height="26" style=${{height:26,width:"auto",display:"block",pointerEvents:"none"}}/>
       </button>
-      ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>onTabClick(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
-      <button class=${"tab-help"+(view==="faq"?" active":"")} onClick=${()=>onTabClick("faq")}
-        title="How it works" aria-label="How it works">?</button>
-      ${err&&html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
-      <div style=${{marginLeft:"auto",display:"flex",gap:6,alignItems:"center"}}>
+      <div class="tabs">
+        ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>onTabClick(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
+        <button class=${"tab-help"+(view==="faq"?" active":"")} onClick=${()=>onTabClick("faq")}
+          title="How it works" aria-label="How it works">?</button>
+        ${err&&html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
+      </div>
+      <div class="top-nav-right" style=${{display:"flex",gap:6,alignItems:"center"}}>
         <div ref=${settingsRef} style=${{position:"relative",display:"inline-flex"}}>
           ${user
             ? html`<button class="profile-btn" onClick=${()=>setSettingsOpen(o=>!o)}
@@ -16847,12 +17592,13 @@ function App(){
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
     ${view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
-      sealedPrices=${sealedPrices} setsMeta=${setsMeta}
+      sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} setsMeta=${setsMeta}
       updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById} openTournamentById=${openTournamentById}
       openTournamentsList=${openTournamentsList}
       openView=${openView} openDecksSection=${openDecksSection}
-      openCardsWithSearch=${openCardsWithSearch}/>`}
+      openCardsWithSearch=${openCardsWithSearch}
+      openScreenerWithFilter=${openScreenerWithFilter}/>`}
     ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}
@@ -16913,9 +17659,11 @@ function App(){
       openSetHistory=${openSetHistory}/>`}
     ${view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
-      onCompareCards=${startCompareCards}/>`}
+      onCompareCards=${startCompareCards}
+      incomingScreenerView=${incomingScreenerView}
+      onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
     ${view==="faq"&&html`<${FAQView}/>`}
-    <${Footer} lastEtlDate=${lastEtlDate}/>
+    <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
   </div><//>`;
 }
 

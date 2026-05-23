@@ -10,6 +10,11 @@ on:
     - cron: "0 21 * * *"
     # Weekly metadata refresh from Lorcast: Sundays 22:00 UTC.
     - cron: "0 22 * * 0"
+    # Hourly matview self-heal: detects when prices_daily has rows newer than
+    # card_prices_latest (i.e. the inline matview refresh in the main ETL
+    # failed silently) and runs the four refresh_* RPCs. No-op when the
+    # matview is already up to date, so it's safe to fire hourly.
+    - cron: "15 * * * *"
   workflow_dispatch:
     inputs:
       job:
@@ -21,6 +26,7 @@ on:
           - prices
           - graded
           - metadata
+          - selfheal
           - both
 
 jobs:
@@ -91,3 +97,24 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/load_lorcast.py
+
+  selfheal:
+    name: Matview self-heal (hourly)
+    runs-on: ubuntu-latest
+    # Hourly cron OR manual selfheal trigger. Does nothing when the matview
+    # is already current; calls refresh_* when prices_daily has rows newer
+    # than card_prices_latest. No external API calls (Supabase only), so
+    # safe to run while TCGPlayer / TCGCSV are down.
+    if: |
+      (github.event_name == 'schedule' && github.event.schedule == '15 * * * *') ||
+      (github.event_name == 'workflow_dispatch' && inputs.job == 'selfheal')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Self-heal matviews
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/matview_self_heal.py

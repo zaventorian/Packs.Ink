@@ -60,6 +60,10 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         url_path = parsed.path or "/"
         if url_path.startswith("/img-proxy/"):
             return self._proxy_lorcast(url_path[len("/img-proxy/"):])
+        # Mirror Netlify's pretty URL: /privacy serves the static privacy.html.
+        if url_path == "/privacy":
+            self.path = "/privacy.html"
+            return super().do_GET()
         # Strip query string when checking on-disk; reattach when rewriting.
         rel = url_path.lstrip("/")
         disk = os.path.join(os.getcwd(), rel) if rel else os.path.join(os.getcwd(), "Index.html")

@@ -28,6 +28,28 @@ from supabase_client import Supabase
 
 LORCAST_BASE = "https://api.lorcast.com/v0"
 
+# Lorcast publishes rarity as "Super_rare" (snake_case). Every UI surface
+# expects "Super Rare" (titled, space). Normalize on insert so the rare-leg
+# movers banner + screener rarity filters don't silently miss SR rows.
+_RARITY_CANONICAL = {
+    "common":     "Common",
+    "uncommon":   "Uncommon",
+    "rare":       "Rare",
+    "super_rare": "Super Rare",
+    "super rare": "Super Rare",
+    "legendary":  "Legendary",
+    "enchanted":  "Enchanted",
+    "epic":       "Epic",
+    "iconic":     "Iconic",
+    "promo":      "Promo",
+}
+
+
+def _normalize_rarity(r: str | None) -> str | None:
+    if not r:
+        return r
+    return _RARITY_CANONICAL.get(str(r).lower(), r)
+
 
 def get_json(url: str) -> Any:
     for attempt in range(3):
@@ -91,7 +113,7 @@ def transform_card(c: dict, set_id: str) -> dict:
         "name": c["name"],
         "version": c.get("version"),
         "collector_number": c.get("collector_number"),
-        "rarity": c.get("rarity"),
+        "rarity": _normalize_rarity(c.get("rarity")),
         "ink": primary_ink,
         "inks": inks,
         "cost": c.get("cost"),
