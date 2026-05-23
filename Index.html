@@ -152,7 +152,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v38";
+const CACHE_KEY = "packsink:catalog:v39";
 // 24h cache — we always background-refresh when stale, so the user sees
 // cached data instantly and gets a fresh swap within seconds. Long TTL keeps
 // the experience snappy on slow Supabase nights without risking stale-price
@@ -631,15 +631,27 @@ const INK_ICONS = {
 // <img> falls back to display:none via the onError handler in the row so
 // rows render cleanly without a broken-image glyph.
 const RARITY_ICONS = {
-  "Common":     "Logos/rarity/COMMON.png",
-  "Uncommon":   "Logos/rarity/UNCOMMON.png",
-  "Rare":       "Logos/rarity/RARE.png",
-  "Super Rare": "Logos/rarity/SUPER_RARE.png",
-  "Legendary":  "Logos/rarity/LEGENDARY.png",
-  "Enchanted":  "Logos/rarity/ENCHANTED.png",
-  "Epic":       "Logos/rarity/EPIC.png",
-  "Iconic":     "Logos/rarity/ICONIC.png",
-  "Promo":      "Logos/rarity/PROMO.png",
+  "Common":     "Logos/rarity/common.svg",
+  "Uncommon":   "Logos/rarity/uncommon.svg",
+  "Rare":       "Logos/rarity/rare.svg",
+  "Super Rare": "Logos/rarity/super_rare.svg",
+  "Legendary":  "Logos/rarity/legendary.svg",
+  "Enchanted":  "Logos/rarity/enchanted.svg",
+  "Epic":       "Logos/rarity/epic.svg",
+  "Iconic":     "Logos/rarity/iconic.svg",
+  "Promo":      "Logos/rarity/promo.svg",
+};
+// Inline helper: rarity icon + text, used wherever we previously rendered
+// rarity as bare text (card-row metadata, graded picker, etc.). The icon
+// gracefully no-ops when the file is missing.
+const RarityTag = ({rarity, hideText, klass}) => {
+  if(!rarity) return null;
+  const src = RARITY_ICONS[rarity];
+  return html`<span class=${"rarity-tag "+(klass||"")}>
+    ${src && html`<img class="rarity-tag-icon" src=${src} alt="" aria-hidden="true"
+      onError=${e=>{ e.target.style.display="none"; }}/>`}
+    ${!hideText && html`<span class="rarity-tag-text">${rarity}</span>`}
+  </span>`;
 };
 
 // Pointy-top hex frame shared by all the hex chips below. Inline SVG, no
@@ -887,6 +899,10 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     "ink":c.ink||null,
     "inks":Array.isArray(c.inks) && c.inks.length ? c.inks : (c.ink ? [c.ink] : null),
     "cost":c.cost!=null?c.cost:null,
+    "strength":c.strength!=null?c.strength:null,
+    "willpower":c.willpower!=null?c.willpower:null,
+    "lore":c.lore!=null?c.lore:null,
+    "move_cost":c.move_cost!=null?c.move_cost:null,
     "inkable":c.inkable,
     "card_type":c.card_type||null,
     "classifications":c.classifications||null,
@@ -2243,20 +2259,38 @@ const parseSearchQuery = (input) => {
     if(CARD_TYPE_ALIASES[dt]){ out.filters.card_type = CARD_TYPE_ALIASES[dt]; used.add(i); break; }
   }
 
-  // Numeric stats — "keyword N" or "N keyword"
+  // Numeric stats — "kw N", "N kw", "kw>=N", "kw<N", "kwN" (no space).
+  // The numeric value lives at filters[statKey] (back-compat with the
+  // pre-existing cost-equality contract); the comparison operator lives at
+  // filters[statKey + "Op"] and defaults to "=". Supported ops: >=,<=,>,<,=.
   for(const [statKey, kws] of Object.entries(STAT_KEYWORDS)){
     if(out.filters[statKey] != null) continue;
     for(let i=0; i<tokens.length; i++){
       if(used.has(i)) continue;
       const t = tokens[i], nxt = tokens[i+1];
-      if(!nxt) continue;
-      if(kws.includes(t) && /^\d+$/.test(nxt)){
-        out.filters[statKey] = parseInt(nxt,10);
-        used.add(i); used.add(i+1);
+      // Inline "kw>=N" / "kwN" (no space) — e.g. "lore>=2"
+      const inlineM = t.match(/^([a-z]+)(>=|<=|>|<|=)?(\d+)$/);
+      if(inlineM && kws.includes(inlineM[1])){
+        out.filters[statKey] = parseInt(inlineM[3],10);
+        out.filters[statKey + "Op"] = inlineM[2] || "=";
+        used.add(i);
         break;
       }
+      if(!nxt) continue;
+      // "kw N" / "kw >= N" — handle leading op on the value token too.
+      if(kws.includes(t)){
+        const m = nxt.match(/^(>=|<=|>|<|=)?(\d+)$/);
+        if(m){
+          out.filters[statKey] = parseInt(m[2],10);
+          out.filters[statKey + "Op"] = m[1] || "=";
+          used.add(i); used.add(i+1);
+          break;
+        }
+      }
+      // "N kw" — equality only (op-prefixed bare numbers are ambiguous).
       if(/^\d+$/.test(t) && kws.includes(nxt)){
         out.filters[statKey] = parseInt(t,10);
+        out.filters[statKey + "Op"] = "=";
         used.add(i); used.add(i+1);
         break;
       }
@@ -2442,10 +2476,15 @@ const summarizeParsedQuery = (parsed) => {
   if(parsed.filters.card_type)      parts.push(parsed.filters.card_type);
   if(parsed.filters.classification) parts.push(parsed.filters.classification);
   if(parsed.filters.set)            parts.push(parsed.filters.set);
-  if(parsed.filters.cost != null)   parts.push("Cost "+parsed.filters.cost);
-  if(parsed.filters.strength != null)  parts.push("Str "+parsed.filters.strength);
-  if(parsed.filters.willpower != null) parts.push("Wil "+parsed.filters.willpower);
-  if(parsed.filters.lore != null)   parts.push("Lore "+parsed.filters.lore);
+  const _statLabel = (key, label) => {
+    const v = parsed.filters[key]; if(v == null) return null;
+    const op = parsed.filters[key+"Op"] || "=";
+    return op === "=" ? `${label} ${v}` : `${label}${op}${v}`;
+  };
+  const _costL = _statLabel("cost","Cost");      if(_costL) parts.push(_costL);
+  const _strL  = _statLabel("strength","Str");   if(_strL)  parts.push(_strL);
+  const _wilL  = _statLabel("willpower","Wil");  if(_wilL)  parts.push(_wilL);
+  const _loreL = _statLabel("lore","Lore");      if(_loreL) parts.push(_loreL);
   if(parsed.filters.ability_keyword) parts.push("\""+parsed.filters.ability_keyword+"\"");
   if(parsed.filters.inkable === true)  parts.push("Inkable");
   if(parsed.filters.inkable === false) parts.push("Uninkable");
@@ -2458,6 +2497,12 @@ const summarizeParsedQuery = (parsed) => {
 
 // ── Cards tab: filter matching + components ─────────────────────────────
 const COST_BUCKETS = [1,2,3,4,5,6,7,8,9];
+// Strength / Willpower / Lore buckets for the Cards drawer. 9 = "9+" cap so
+// the rare high-strength chase cards don't sprawl the chip strip. Lore tops
+// out at 4 in practice, so we don't need a cap there.
+const STRENGTH_BUCKETS  = [0,1,2,3,4,5,6,7,8,9];
+const WILLPOWER_BUCKETS = [1,2,3,4,5,6,7,8,9];
+const LORE_BUCKETS      = [0,1,2,3,4];
 const CARD_TYPES = ["Character","Action","Item","Location","Song"];
 const CARDS_RARITIES = ["Common","Uncommon","Rare","Super Rare","Legendary","Enchanted","Epic","Iconic","Promo"];
 
@@ -2484,7 +2529,21 @@ const matchesCardFilter = (row, f, parsed) => {
       if((row.card_type||"") !== parsed.filters.card_type) return false;
     }
     if(parsed.filters.set && row.Set !== parsed.filters.set) return false;
-    if(parsed.filters.cost != null && row.cost !== parsed.filters.cost) return false;
+    const _cmpStat = (rowVal, want, op) => {
+      if(want == null) return true;
+      if(rowVal == null) return false;
+      switch(op || "="){
+        case ">":  return rowVal >  want;
+        case ">=": return rowVal >= want;
+        case "<":  return rowVal <  want;
+        case "<=": return rowVal <= want;
+        default:   return rowVal === want;
+      }
+    };
+    if(!_cmpStat(row.cost,      parsed.filters.cost,      parsed.filters.costOp))      return false;
+    if(!_cmpStat(row.strength,  parsed.filters.strength,  parsed.filters.strengthOp))  return false;
+    if(!_cmpStat(row.willpower, parsed.filters.willpower, parsed.filters.willpowerOp)) return false;
+    if(!_cmpStat(row.lore,      parsed.filters.lore,      parsed.filters.loreOp))      return false;
     if(parsed.filters.inkable === true  && row.inkable !== true)  return false;
     if(parsed.filters.inkable === false && row.inkable !== false) return false;
     if(parsed.filters.classification){
@@ -2522,6 +2581,23 @@ const matchesCardFilter = (row, f, parsed) => {
   if(f.costs && f.costs.size){
     const cost = row.cost==null ? -1 : (row.cost >= 9 ? 9 : row.cost);
     if(!f.costs.has(cost)) return false;
+  }
+  // Strength / Willpower / Lore — only present on Character rows. Cards
+  // without a stat (Actions, Items, Songs, Locations) fail any selected
+  // bucket so the filter narrows to characters with that stat value.
+  if(f.strengths && f.strengths.size){
+    if(row.strength == null) return false;
+    const v = row.strength >= 9 ? 9 : row.strength;
+    if(!f.strengths.has(v)) return false;
+  }
+  if(f.willpowers && f.willpowers.size){
+    if(row.willpower == null) return false;
+    const v = row.willpower >= 9 ? 9 : row.willpower;
+    if(!f.willpowers.has(v)) return false;
+  }
+  if(f.lores && f.lores.size){
+    if(row.lore == null) return false;
+    if(!f.lores.has(row.lore)) return false;
   }
   if(f.rarities && f.rarities.size && !f.rarities.has(row.Rarity)) return false;
   if(f.cardTypes && f.cardTypes.size && !f.cardTypes.has(row.card_type)) return false;
@@ -2621,7 +2697,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, onDeckQtyChang
       <div class="card-row-main">
         <div class="card-row-name" title=${productName}>${productName}</div>
         <div class="card-row-meta">
-          ${group.Rarity ? html`<span>${group.Rarity}</span>` : null}
+          ${group.Rarity ? html`<${RarityTag} rarity=${group.Rarity}/>` : null}
           ${group.Set ? html`<span class="card-row-set">${group.Set}${group.Number?` #${group.Number}`:""}</span>` : null}
         </div>
       </div>
@@ -2825,7 +2901,34 @@ const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
 // no graded data at all.
 const GRADER_LABEL = {psa:"PSA", bgs:"BGS", cgc:"CGC", sgc:"SGC", tag:"TAG"};
 const GRADER_ORDER = ["psa","cgc","bgs","sgc","tag"];
+const GRADER_COLOR = {psa:"#c92a2a", cgc:"#2563eb", bgs:"#7c3aed", sgc:"#0f9d58", tag:"#d97706"};
+// Build a single LineChart-ready series from graded history rows for a
+// specific (grader, grade) combo. Returns null when fewer than 2 valid
+// points exist (LineChart bails on <2 anyway, but checking up front lets
+// us skip rendering chart chrome entirely).
+const buildGradedSeries = (history, graderKey, gradeStr, label) => {
+  if(!history || !history.length) return null;
+  const g = (graderKey || "").toLowerCase();
+  const gr = String(gradeStr);
+  const pts = [];
+  for(const h of history){
+    if((h.grader || "").toLowerCase() !== g) continue;
+    if(String(h.grade) !== gr) continue;
+    const v = h.ebay_avg_1d != null ? Number(h.ebay_avg_1d) : null;
+    if(v == null || !Number.isFinite(v)) continue;
+    pts.push({x: new Date(h.date + "T00:00:00Z").getTime(), y: v});
+  }
+  if(pts.length < 2) return null;
+  return {
+    label: label || (GRADER_LABEL[g] + " " + gr),
+    color: GRADER_COLOR[g] || "#888",
+    data: pts,
+  };
+};
 const GradedPricesTab = ({graded}) => {
+  // Inline-expand state must live above the early returns (Rules of Hooks).
+  // Clicking a row's sparkline toggles a full-size chart underneath that row.
+  const [expanded, setExpanded] = useState(() => new Set());
   if(graded.loading){
     return html`<div class="chart-empty large">Loading graded prices…</div>`;
   }
@@ -2903,10 +3006,40 @@ const GradedPricesTab = ({graded}) => {
     </svg>`;
   };
 
+  // Featured-chart pick: PSA 10 by default (the gold-standard graded grade).
+  // If the card has no PSA 10 history, fall back to the first available row
+  // in display order. This is independent of inline expand state below —
+  // the featured chart is always visible at the top of the tab.
+  const psa10Series = buildGradedSeries(graded.history, "psa", "10", "PSA 10");
+  let featuredSeries = psa10Series;
+  let featuredLabel = "PSA 10";
+  if(!featuredSeries){
+    for(const g of orderedGraders){
+      for(const row of byGrader.get(g)){
+        const s = buildGradedSeries(graded.history, g, row.grade);
+        if(s){ featuredSeries = s; featuredLabel = (GRADER_LABEL[g] || g.toUpperCase()) + " " + row.grade; break; }
+      }
+      if(featuredSeries) break;
+    }
+  }
+
+  const toggleExpand = (key) => setExpanded(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
   return html`<div class="graded-tab">
     <div class="graded-tab-explain">
-      Latest eBay sold averages by grader · ranges show the price spread within the window · sparkline traces ~12 months.
+      Latest eBay sold averages by grader · ranges show the price spread within the window · click any sparkline for full history.
     </div>
+    ${featuredSeries && html`<div class="graded-featured-chart">
+      <div class="graded-featured-head">
+        <span class="graded-featured-label" style=${{color: featuredSeries.color}}>${featuredLabel} history</span>
+        <span class="graded-featured-sub muted">12-month eBay sold average</span>
+      </div>
+      <${LineChart} series=${[featuredSeries]} height=${160}/>
+    </div>`}
     <div class="graded-tab-table">
       <div class="graded-tab-thead">
         <div>Grader</div>
@@ -2923,32 +3056,46 @@ const GradedPricesTab = ({graded}) => {
         const points = histByKey.get(key) || [];
         const grade = String(row.grade);
         const isTop = grade === "10";
-        const color = g === "psa" ? "#c92a2a" : g === "cgc" ? "#2563eb" : g === "bgs" ? "#7c3aed" : "#0f9d58";
-        return html`<div key=${key} class=${"graded-row"+(isTop?" is-top":"")}>
-          <div class="graded-grader" style=${{color}}>${GRADER_LABEL[g] || g.toUpperCase()}</div>
-          <div class="graded-grade">${grade}</div>
-          <div class="graded-cell graded-cell-main">${fmt(row.ebay_avg_1d)}</div>
-          <div class="graded-cell">${fmt(row.ebay_avg_7d)}</div>
-          <div class="graded-cell">${fmt(row.ebay_avg_30d)}</div>
-          <div class="graded-cell graded-cell-range">
-            ${row.ebay_low_price != null || row.ebay_high_price != null
-              ? html`<span>${fmtShort(row.ebay_low_price)}</span><span class="dash">–</span><span>${fmtShort(row.ebay_high_price)}</span>`
-              : html`<span class="muted">—</span>`}
+        const color = GRADER_COLOR[g] || "#888";
+        const isExpanded = expanded.has(key);
+        const expandedSeries = isExpanded ? buildGradedSeries(graded.history, g, grade) : null;
+        return html`<${React.Fragment} key=${key}>
+          <div class=${"graded-row"+(isTop?" is-top":"")+(isExpanded?" is-expanded":"")}>
+            <div class="graded-grader" style=${{color}}>${GRADER_LABEL[g] || g.toUpperCase()}</div>
+            <div class="graded-grade">${grade}</div>
+            <div class="graded-cell graded-cell-main">${fmt(row.ebay_avg_1d)}</div>
+            <div class="graded-cell">${fmt(row.ebay_avg_7d)}</div>
+            <div class="graded-cell">${fmt(row.ebay_avg_30d)}</div>
+            <div class="graded-cell graded-cell-range">
+              ${row.ebay_low_price != null || row.ebay_high_price != null
+                ? html`<span>${fmtShort(row.ebay_low_price)}</span><span class="dash">–</span><span>${fmtShort(row.ebay_high_price)}</span>`
+                : html`<span class="muted">—</span>`}
+            </div>
+            <button class=${"graded-cell graded-spark graded-spark-btn"+(isExpanded?" is-active":"")}
+              type="button"
+              title=${isExpanded ? "Hide full history" : "Show full history"}
+              onClick=${()=>toggleExpand(key)}>
+              ${sparkline(points, color) || html`<span class="muted" style=${{fontSize:10}}>—</span>`}
+            </button>
+            <div class="graded-cell graded-date" title=${lastSaleDate(key) ? "Most recent date the price changed (inferred from history)" : "No recorded sales"}>
+              ${(() => {
+                const d = lastSaleDate(key);
+                if(!d) return "—";
+                const days = Math.round((Date.now() - new Date(d+"T00:00:00Z").getTime()) / 86400000);
+                if(days <= 0)  return "today";
+                if(days === 1) return "1d ago";
+                if(days < 30)  return days + "d ago";
+                if(days < 365) return Math.round(days/30) + "mo ago";
+                return Math.round(days/30) + "mo ago";
+              })()}
+            </div>
           </div>
-          <div class="graded-cell graded-spark">${sparkline(points, color) || html`<span class="muted" style=${{fontSize:10}}>—</span>`}</div>
-          <div class="graded-cell graded-date" title=${lastSaleDate(key) ? "Most recent date the price changed (inferred from history)" : "No recorded sales"}>
-            ${(() => {
-              const d = lastSaleDate(key);
-              if(!d) return "—";
-              const days = Math.round((Date.now() - new Date(d+"T00:00:00Z").getTime()) / 86400000);
-              if(days <= 0)  return "today";
-              if(days === 1) return "1d ago";
-              if(days < 30)  return days + "d ago";
-              if(days < 365) return Math.round(days/30) + "mo ago";
-              return Math.round(days/30) + "mo ago";
-            })()}
-          </div>
-        </div>`;
+          ${isExpanded && html`<div class="graded-row-expand">
+            ${expandedSeries
+              ? html`<${LineChart} series=${[expandedSeries]} height=${140}/>`
+              : html`<div class="chart-empty">Not enough data yet</div>`}
+          </div>`}
+        </${React.Fragment}>`;
       }))}
     </div>
   </div>`;
@@ -3234,6 +3381,30 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         </div>
       </div>
       <div class="drawer-section">
+        <div class="drawer-section-head">Strength</div>
+        <div class="cards-chipgroup">
+          ${STRENGTH_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.strengths.has(n)?"active":"")}
+            onClick=${()=>setFilter(f=>({...f,strengths:toggleSet(f.strengths,n)}))}
+            title=${n===9?"Strength 9+":"Strength "+n}>${n===9?"9+":n}</button>`)}
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">Willpower</div>
+        <div class="cards-chipgroup">
+          ${WILLPOWER_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.willpowers.has(n)?"active":"")}
+            onClick=${()=>setFilter(f=>({...f,willpowers:toggleSet(f.willpowers,n)}))}
+            title=${n===9?"Willpower 9+":"Willpower "+n}>${n===9?"9+":n}</button>`)}
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">Lore</div>
+        <div class="cards-chipgroup">
+          ${LORE_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.lores.has(n)?"active":"")}
+            onClick=${()=>setFilter(f=>({...f,lores:toggleSet(f.lores,n)}))}
+            title=${"Lore "+n}>${n}</button>`)}
+        </div>
+      </div>
+      <div class="drawer-section">
         <div class="drawer-section-head">Type</div>
         <div class="cards-chipgroup">
           ${CARD_TYPES.map(t => html`<button key=${t} class=${"chip "+(filter.cardTypes.has(t)?"active":"")}
@@ -3245,15 +3416,6 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="cards-chipgroup">
           <button class=${"chip "+(filter.inkable===true?"active":"")} onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===true?null:true}))}>Inkable</button>
           <button class=${"chip "+(filter.inkable===false?"active":"")} onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===false?null:false}))}>Uninkable</button>
-        </div>
-      </div>
-      <div class="drawer-section">
-        <div class="drawer-section-head">Legality</div>
-        <div class="cards-chipgroup">
-          <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
-            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
-          <button class=${"chip "+(filter.legality==="core"?"active":"")}
-            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core Constructed</button>
         </div>
       </div>
       <div class="drawer-section">
@@ -3272,8 +3434,12 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       <div class="drawer-section">
         <div class="drawer-section-head">Rarity</div>
         <div class="cards-chipgroup">
-          ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip "+(filter.rarities.has(r)?"active":"")}
-            onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>${r}</button>`)}
+          ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
+            title=${r} aria-label=${r}
+            onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
+            ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
+              onError=${e=>{ e.target.style.display="none"; }}/>`}
+          </button>`)}
         </div>
       </div>
       <div class="drawer-section">
@@ -3324,13 +3490,15 @@ const countActiveFilters = (f) =>
   (f.search?1:0) + f.inks.size + f.costs.size + f.rarities.size + f.cardTypes.size + f.sets.size
   + (f.inkable!==null?1:0)
   + (f.classifications?.size||0) + (f.keywords?.size||0) + (f.illustrators?.size||0)
-  + (f.legality?1:0);
+  + (f.strengths?.size||0) + (f.willpowers?.size||0) + (f.lores?.size||0)
+  + (f.legality?1:0) + (f.onlyOwned?1:0);
 
 const emptyFilter = () => ({
   search:"", inks:new Set(), costs:new Set(), rarities:new Set(),
   cardTypes:new Set(), sets:new Set(), inkable:null,
   classifications:new Set(), keywords:new Set(), illustrators:new Set(),
-  legality:null,
+  strengths:new Set(), willpowers:new Set(), lores:new Set(),
+  legality:null, onlyOwned:false,
 });
 
 // Same-origin proxy for Lorcast images so they can be drawn onto a canvas
@@ -4489,10 +4657,20 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // CardTile actually short-circuit unchanged tiles.
   const allGroups = useMemo(() => groupCards(raw), [raw]);
   const grouped = useMemo(()=>{
-    const groups = allGroups.filter(g => matchesCardFilter(g, deferredFilter, parsed));
+    let groups = allGroups.filter(g => matchesCardFilter(g, deferredFilter, parsed));
+    // "Only show cards in my collection" toggle. A group qualifies if the
+    // user owns >=1 of either its Normal or Foil printing. Collection map is
+    // keyed by `card_id:tcg_printing` (see CollectionView).
+    if(deferredFilter.onlyOwned && collection){
+      groups = groups.filter(g => {
+        const nKey = g.normal ? g.card_id + ":" + g.normal.tcg_printing : null;
+        const fKey = g.foil   ? g.card_id + ":" + g.foil.tcg_printing   : null;
+        return (nKey && collection[nKey] > 0) || (fKey && collection[fKey] > 0);
+      });
+    }
     const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
     return groups.slice().sort(cmp);
-  },[allGroups, deferredFilter, parsed, sortKey]);
+  },[allGroups, deferredFilter, parsed, sortKey, collection]);
   const isFiltering = filter !== deferredFilter;
   const parsedSummary = useMemo(()=>summarizeParsedQuery(parsed), [parsed]);
   const setsByGroup = useMemo(()=>groupSetsForFilter(raw),[raw]);
@@ -4560,7 +4738,11 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
 
   // Suggestion dropdown state.
   const [suggestOpen, setSuggestOpen] = useState(false);
-  const [suggestIdx, setSuggestIdx] = useState(0);
+  // -1 = no suggestion is "armed" for Enter. Becomes >=0 only when the user
+  // explicitly arrow-keys or mouse-hovers onto a suggestion. Without this,
+  // Enter would auto-pick suggestion 0 every time, converting fuzzy queries
+  // like "elsa spirit" into a strict 'contains' filter the user didn't ask for.
+  const [suggestIdx, setSuggestIdx] = useState(-1);
   const suggestions = useMemo(()=>buildSearchSuggestions(filter.search||"", allIllustrators), [filter.search, allIllustrators]);
   const applySuggestion = useCallback((sug) => {
     if(!sug) return;
@@ -4587,7 +4769,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         return {...f, search: tokens.join("")};
       });
     }
-    setSuggestIdx(0);
+    setSuggestIdx(-1);
     setSuggestOpen(false);
   }, [addSmartChip]);
 
@@ -4608,7 +4790,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           value=${filter.search}
           onFocus=${()=>setSuggestOpen(true)}
           onBlur=${()=>setTimeout(()=>setSuggestOpen(false), 120)}
-          onInput=${e=>{ setFilter(f=>({...f,search:e.target.value})); setSuggestIdx(0); setSuggestOpen(true); }}
+          onInput=${e=>{ setFilter(f=>({...f,search:e.target.value})); setSuggestIdx(-1); setSuggestOpen(true); }}
           onKeyDown=${e=>{
             if(!suggestOpen || !suggestions.length){
               if(e.key === "Backspace" && !filter.search && smartChips.length){
@@ -4616,9 +4798,20 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
               }
               return;
             }
-            if(e.key === "ArrowDown"){ e.preventDefault(); setSuggestIdx(i => (i+1) % suggestions.length); }
-            else if(e.key === "ArrowUp"){ e.preventDefault(); setSuggestIdx(i => (i-1+suggestions.length) % suggestions.length); }
-            else if(e.key === "Enter"){ e.preventDefault(); applySuggestion(suggestions[suggestIdx]); }
+            if(e.key === "ArrowDown"){ e.preventDefault(); setSuggestIdx(i => i < 0 ? 0 : (i+1) % suggestions.length); }
+            else if(e.key === "ArrowUp"){ e.preventDefault(); setSuggestIdx(i => i < 0 ? suggestions.length-1 : (i-1+suggestions.length) % suggestions.length); }
+            else if(e.key === "Enter"){
+              // Only apply a suggestion if the user explicitly armed one via
+              // arrow/hover. Otherwise commit the typed query as-is so fuzzy
+              // matching can take over.
+              if(suggestIdx >= 0 && suggestions[suggestIdx]){
+                e.preventDefault();
+                applySuggestion(suggestions[suggestIdx]);
+              } else {
+                setSuggestOpen(false);
+                e.target.blur();
+              }
+            }
             else if(e.key === "Escape"){ setSuggestOpen(false); }
             else if(e.key === "Backspace" && !filter.search && smartChips.length){
               removeSmartChip(smartChips.length-1);
@@ -4633,33 +4826,49 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           </button>`)}
         </div>`}
       </div>
-      <div class="cards-chipgroup">
+      <div class="toolbar-row-break"></div>
+      <div class="cards-chipgroup cards-quickfilter-group">
         ${INKS.map(ink => html`<button key=${ink} class=${"chip ink ink-icon-chip "+(filter.inks.has(ink)?"active":"")}
           style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}}
           title=${ink} aria-label=${ink}
           onClick=${()=>setFilter(f=>({...f,inks:toggleSet(f.inks,ink)}))}>
           <img src=${INK_ICONS[ink]} alt=${ink}/>
         </button>`)}
-        <div class="cards-chipgroup" title="Inkable filter" style=${{marginLeft:6}}>
-          <button class=${"chip cost-hex-chip "+(filter.inkable===true?"active":"")}
-            onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===true?null:true}))}
-            title="Inkable cards only" aria-label="Inkable">
-            <${InkableHex}/>
-          </button>
-          <button class=${"chip cost-hex-chip "+(filter.inkable===false?"active":"")}
-            onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===false?null:false}))}
-            title="Uninkable cards only" aria-label="Uninkable">
-            <${UninkableHex}/>
-          </button>
-        </div>
-      </div>
-      <div class="toolbar-row-break"></div>
-      <div class="cards-chipgroup">
+        <button class=${"chip cost-hex-chip "+(filter.inkable===true?"active":"")}
+          onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===true?null:true}))}
+          title="Inkable cards only" aria-label="Inkable">
+          <${InkableHex}/>
+        </button>
+        <button class=${"chip cost-hex-chip "+(filter.inkable===false?"active":"")}
+          onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===false?null:false}))}
+          title="Uninkable cards only" aria-label="Uninkable">
+          <${UninkableHex}/>
+        </button>
+        <span class="cards-quickfilter-divider" aria-hidden="true"></span>
         ${COST_BUCKETS.map(c => html`<button key=${c} class=${"chip cost cost-hex-chip "+(filter.costs.has(c)?"active":"")}
           onClick=${()=>setFilter(f=>({...f,costs:toggleSet(f.costs,c)}))}
           title=${c===9?"Cost 9+":"Cost "+c} aria-label=${c===9?"Cost 9+":"Cost "+c}>
           <${CostHex} n=${c}/>
         </button>`)}
+        <span class="cards-quickfilter-divider" aria-hidden="true"></span>
+        ${CARDS_RARITIES.map(r => html`<button key=${r}
+          class=${"chip chip-rarity-only "+(filter.rarities.has(r)?"active":"")}
+          title=${r} aria-label=${r}
+          onClick=${()=>setFilter(f=>({...f,rarities:toggleSet(f.rarities,r)}))}>
+          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
+            onError=${e=>{ e.target.style.display="none"; }}/>`}
+        </button>`)}
+        <span class="cards-quickfilter-divider" aria-hidden="true"></span>
+        <button class=${"chip "+(filter.legality==="core"?"active":"")}
+          title="Core Constructed — only cards legal in the current rotation"
+          onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core</button>
+        <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
+          title="Infinity — every mainline-legal card"
+          onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
+        ${collection && html`<button
+          class=${"chip "+(filter.onlyOwned?"active":"")}
+          title="Show only cards you own (Normal or Foil)"
+          onClick=${()=>setFilter(f=>({...f,onlyOwned:!f.onlyOwned}))}>✓ Owned</button>`}
       </div>
       <select value=${sortKey} onChange=${e=>setSortKey(e.target.value)} title="Sort">
         ${SORT_OPTIONS.map(o=>html`<option key=${o.key} value=${o.key}>${o.label}</option>`)}
@@ -4757,7 +4966,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     </div>`}
     <div class=${(viewMode==="list"?"cards-list":"cards-grid")+(isFiltering?" cards-pending":"")}>
       ${grouped.map((g,i) => html`<${CardTile}
-        key=${g.card_id||g["Product Name"]+":"+i}
+        key=${(g.card_id ? g.card_id : g["Product Name"]+":"+i) + (g.isSplitPrinting ? "::"+(g.Printing||g.tcg_printing||"") : "")}
         group=${g} collection=${collection} viewMode=${viewMode}
         onSelectGroup=${onSelectGroup}
         deckQty=${deckQty ? deckQty(g) : undefined}
@@ -6932,7 +7141,14 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     if(p.filters.ink && c.ink !== p.filters.ink) return false;
     if(p.filters.rarity && c.Rarity !== p.filters.rarity) return false;
     if(p.filters.set && c.Set !== p.filters.set) return false;
-    if(p.filters.cost != null && c.cost !== p.filters.cost) return false;
+    const _cmp = (rv, w, op) => {
+      if(w == null) return true; if(rv == null) return false;
+      switch(op||"="){case ">":return rv>w;case ">=":return rv>=w;case "<":return rv<w;case "<=":return rv<=w;default:return rv===w;}
+    };
+    if(!_cmp(c.cost,      p.filters.cost,      p.filters.costOp))      return false;
+    if(!_cmp(c.strength,  p.filters.strength,  p.filters.strengthOp))  return false;
+    if(!_cmp(c.willpower, p.filters.willpower, p.filters.willpowerOp)) return false;
+    if(!_cmp(c.lore,      p.filters.lore,      p.filters.loreOp))      return false;
     if(p.filters.card_type && (c.card_type||"") !== p.filters.card_type) return false;
     if(p.filters.inkable === true  && c.inkable !== true)  return false;
     if(p.filters.inkable === false && c.inkable !== false) return false;
@@ -8995,7 +9211,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) =
                     ${c.img_small && html`<img src=${c.img_small} alt=""/>`}
                     <div style=${{minWidth:0,flex:1,textAlign:"left"}}>
                       <div style=${{fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>${c["Product Name"]}</div>
-                      <div class="muted" style=${{fontSize:10}}>${c.Set} · #${c.collector_number||"?"} · ${c.Rarity}</div>
+                      <div class="muted" style=${{fontSize:10,display:"flex",alignItems:"center",gap:4}}>${c.Set} · #${c.collector_number||"?"} · <${RarityTag} rarity=${c.Rarity}/></div>
                     </div>
                   </button>`)}
           </div>
@@ -9005,7 +9221,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) =
             ${picked.img_small && html`<img src=${picked.img_small} alt="" style=${{width:60,height:84,objectFit:"cover",borderRadius:4}}/>`}
             <div style=${{minWidth:0,flex:1}}>
               <div style=${{fontWeight:700,fontSize:14}}>${picked["Product Name"]}</div>
-              <div class="muted" style=${{fontSize:11}}>${picked.Set} · #${picked.collector_number||"?"} · ${picked.Rarity}</div>
+              <div class="muted" style=${{fontSize:11,display:"flex",alignItems:"center",gap:4}}>${picked.Set} · #${picked.collector_number||"?"} · <${RarityTag} rarity=${picked.Rarity}/></div>
             </div>
             <button class="settings-action link" onClick=${()=>setPickedId(null)}>Change</button>
           </div>
@@ -10318,26 +10534,69 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:density", density); } catch{} }, [density]);
   // Saved filter combos — capture the current query as a named view that
-  // shows up as a chip at the top of the page. localStorage keyed so
-  // returning users see their own saved screens.
+  // shows up as a chip at the top of the page. Persisted to Supabase
+  // (screener_views table) when signed in so views roam across devices;
+  // localStorage is the unauth / offline fallback and the synchronous
+  // first-paint source. Sign-in then hydrates from the server.
   const [savedViews, setSavedViews] = useState(() => {
     try { return JSON.parse(localStorage.getItem("packsink:screener:views") || "[]"); }
     catch { return []; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:views", JSON.stringify(savedViews)); } catch{} }, [savedViews]);
-  const saveCurrentView = () => {
+  // Hydrate from Supabase on sign-in. On first sign-in (remote empty,
+  // local non-empty) we migrate the local views up so users don't lose
+  // anything when they switch devices.
+  useEffect(() => {
+    if(!user) return;
+    let cancelled = false;
+    (async () => {
+      const {data, error} = await sbClient
+        .from("screener_views")
+        .select("name,payload,updated_at")
+        .order("updated_at", {ascending:false});
+      if(cancelled) return;
+      if(error){
+        if((error.message||"").toLowerCase().includes("relation") || error.code === "42P01"){
+          console.warn("screener_views table missing — run supabase/44_screener_views.sql");
+        } else {
+          console.warn("screener_views fetch failed:", error.message || error);
+        }
+        return;
+      }
+      const remote = (data||[]).map(r => ({name: r.name, ...(r.payload||{})}));
+      if(remote.length === 0){
+        let local = [];
+        try { local = JSON.parse(localStorage.getItem("packsink:screener:views") || "[]"); } catch {}
+        if(Array.isArray(local) && local.length){
+          const rows = local.map(({name, ...rest}) => ({user_id: user.id, name, payload: rest}));
+          const {error: upErr} = await sbClient.from("screener_views")
+            .upsert(rows, {onConflict:"user_id,name"});
+          if(upErr) console.warn("screener_views migration upsert failed:", upErr.message || upErr);
+          return;
+        }
+      }
+      setSavedViews(remote);
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+  const saveCurrentView = async () => {
     const name = prompt("Name this view (e.g. 'My buyout watchlist', 'Sub-$20 trending'):");
     const clean = (name || "").trim();
     if(!clean) return;
-    const snapshot = {
-      name: clean, preset, moverWin, priceMode, filterSet, search,
+    const payload = {
+      preset, moverWin, priceMode, filterSet, search,
       filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
       collFilter, sigFilter: Array.from(sigFilter),
       minPrice, maxPrice, minPct, maxPct, pctWin,
       showAllWins, density, showGraded,
       sortKey, sortDesc,
     };
-    setSavedViews(prev => [...prev.filter(v => v.name !== clean), snapshot]);
+    setSavedViews(prev => [...prev.filter(v => v.name !== clean), {name: clean, ...payload}]);
+    if(user){
+      const {error} = await sbClient.from("screener_views")
+        .upsert({user_id: user.id, name: clean, payload}, {onConflict:"user_id,name"});
+      if(error) console.warn("screener_views save failed:", error.message || error);
+    }
   };
   const applyView = (v) => {
     setPreset(v.preset || "all");
@@ -10368,7 +10627,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     onConsumedIncomingScreenerView && onConsumedIncomingScreenerView();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingScreenerView]);
-  const deleteView = (name) => setSavedViews(prev => prev.filter(v => v.name !== name));
+  const deleteView = async (name) => {
+    setSavedViews(prev => prev.filter(v => v.name !== name));
+    if(user){
+      const {error} = await sbClient.from("screener_views")
+        .delete().eq("user_id", user.id).eq("name", name);
+      if(error) console.warn("screener_views delete failed:", error.message || error);
+    }
+  };
   // Card detail modal — clicking a row's image or name opens it.
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Hover-to-enlarge state for the row image. {src, x, y} when hovering;
@@ -10960,9 +11226,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </div>
       <div class="price-db-raritybtns" role="group" aria-label="Rarity filter">
         ${rarities.map(r => html`<button key=${r}
-          class=${"price-db-raritybtn"+(filterRarities.has(r)?" active":"")}
+          class=${"price-db-raritybtn price-db-raritybtn-icon"+(filterRarities.has(r)?" active":"")}
           onClick=${()=>setFilterRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>
-          ${rarityLabel(r)}
+          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt="" aria-hidden="true"
+            onError=${e=>{ e.target.style.display="none"; }}/>`}
+          <span>${rarityLabel(r)}</span>
         </button>`)}
         ${filterRarities.size > 0 && html`<button class="price-db-raritybtn clear"
           onClick=${()=>setFilterRarities(new Set())}>Clear</button>`}
@@ -17441,12 +17709,14 @@ function App(){
       // really doesn't exist; anything else means the column is present.
       let hasInksColumn = true;
       let hasIllustratorsColumn = true;
+      let hasTier2Stats = true;
       try {
-        // Probe both columns in parallel — used to be sequential, which
+        // Probe columns in parallel — used to be sequential, which
         // added a wasted round-trip to every cold load.
-        const [probe, probe2] = await Promise.all([
+        const [probe, probe2, probe3] = await Promise.all([
           fetch(SUPABASE_URL+"/rest/v1/cards?select=inks&limit=1", {headers: sbHeaders()}),
           fetch(SUPABASE_URL+"/rest/v1/cards?select=illustrators&limit=1", {headers: sbHeaders()}),
+          fetch(SUPABASE_URL+"/rest/v1/cards?select=lore&limit=1", {headers: sbHeaders()}),
         ]);
         if(probe.status === 400){
           const body = await probe.text();
@@ -17462,13 +17732,21 @@ function App(){
             console.warn("cards.illustrators column missing — run supabase/31_card_illustrators.sql + re-run scripts/load_lorcast.py to enable artist filters.");
           }
         }
+        if(probe3.status === 400){
+          const body = await probe3.text();
+          if(body.includes("42703") || body.includes("does not exist")){
+            hasTier2Stats = false;
+            console.warn("cards.lore column missing — run supabase/43_card_tier2_stats.sql + scripts/patch_card_tier2.py to enable strength/willpower/lore filters.");
+          }
+        }
       } catch(e) {
         console.warn("column probes failed (network); assuming columns exist", e);
       }
       const baseCols = hasInksColumn
         ? "id,set_id,name,version,rarity,ink,inks,collector_number,cost,inkable,card_type,classifications,text,image_small,image_normal,image_large,tcgplayer_product_id"
         : "id,set_id,name,version,rarity,ink,collector_number,cost,inkable,card_type,classifications,text,image_small,image_normal,image_large,tcgplayer_product_id";
-      const CARDS_COLS = hasIllustratorsColumn ? baseCols + ",illustrators" : baseCols;
+      let CARDS_COLS = hasIllustratorsColumn ? baseCols + ",illustrators" : baseCols;
+      if(hasTier2Stats) CARDS_COLS += ",strength,willpower,lore,move_cost";
       const SEALED_COLS = "tcgplayer_product_id,set_id,product_type,name,clean_name,low_price,market_price,image_url,tcgplayer_url,printing,price_date";
       const [setsData, priceRows, cardsRows, sealedRows] = await Promise.all([
         sbFetchAll("sets",  {select:"id,name,released_at", order:"id.asc"}),

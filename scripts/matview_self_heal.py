@@ -16,7 +16,10 @@ matview is already up to date.
 Usage:
     python scripts/matview_self_heal.py
 
-Requires env vars SUPABASE_URL and SUPABASE_SERVICE_KEY.
+Requires env vars SUPABASE_URL and SUPABASE_SERVICE_KEY. SUPABASE_ANON_KEY
+is optional; when set it's used as a fallback if the service key gets a 403
+on a matview read (i.e. a grant regression). RPCs still require the service
+key — without it the refresh path can't run.
 """
 from __future__ import annotations
 
@@ -24,21 +27,34 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+import urllib.error
 import json
 
 
-def _sb_get(path: str) -> list[dict]:
+def _sb_get(path: str, key: str | None = None) -> list[dict]:
     url = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/" + path
+    key = key or os.environ["SUPABASE_SERVICE_KEY"]
     req = urllib.request.Request(
         url,
         headers={
-            "apikey": os.environ["SUPABASE_SERVICE_KEY"],
-            "Authorization": "Bearer " + os.environ["SUPABASE_SERVICE_KEY"],
+            "apikey": key,
+            "Authorization": "Bearer " + key,
             "Accept": "application/json",
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return json.loads(r.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode())
+    except urllib.error.HTTPError as e:
+        # 403 on a matview = role is missing GRANT SELECT. Try the anon key
+        # as a fallback so the check can still run while a grant migration
+        # is being applied. RPC writes (refresh_*) still require service_role,
+        # so this is read-only resiliency.
+        if e.code == 403 and key != os.environ.get("SUPABASE_ANON_KEY") and os.environ.get("SUPABASE_ANON_KEY"):
+            print(f"  service key got 403 on {path} — retrying with anon key. "
+                  "Apply supabase/45_matview_grants_service_role.sql to fix.", file=sys.stderr)
+            return _sb_get(path, key=os.environ["SUPABASE_ANON_KEY"])
+        raise
 
 
 def _sb_rpc(fn: str) -> None:

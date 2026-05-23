@@ -15,10 +15,12 @@ rows with the same data).
 
 Usage:
     pip install -r requirements.txt
-    python scripts/backfill_graded_history.py
+    python scripts/backfill_graded_history.py             # full catalog
+    python scripts/backfill_graded_history.py --pids 510153,527802  # targeted
 """
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import time
@@ -138,6 +140,13 @@ def chunked(seq: list, n: int) -> Iterable[list]:
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--pids", default="",
+                    help="Comma-separated tcgplayer_product_ids. When set, only "
+                         "backfill these specific cards instead of walking the full "
+                         "Lorcana catalog. Skips the search phase entirely.")
+    args = ap.parse_args()
+
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     api_key = os.environ.get("TCGPRICELOOKUP_API_KEY")
     if not api_key:
@@ -146,12 +155,32 @@ def main() -> None:
     sb = Supabase()
     session = requests.Session()
 
-    # Phase 1: discover which cards have graded data (saves us from blindly
-    # hitting /history on every Lorcana card).
-    targets = collect_target_cards(session, api_key)
-    if not targets:
-        print("No graded targets found. Nothing to backfill.")
-        return
+    if args.pids.strip():
+        # Targeted mode — look up just these pids in TCGPriceLookup's catalog
+        # and skip the full-catalog walk.
+        wanted = set()
+        for tok in args.pids.split(","):
+            tok = tok.strip()
+            if tok.isdigit():
+                wanted.add(int(tok))
+        if not wanted:
+            sys.exit("--pids was set but contained no integers.")
+        print(f"Targeted backfill for pids: {sorted(wanted)}")
+        all_targets = collect_target_cards(session, api_key)
+        targets = [t for t in all_targets if t[1] in wanted]
+        missing = wanted - {t[1] for t in targets}
+        if missing:
+            print(f"  WARN: {len(missing)} pid(s) not found in TCGPriceLookup graded set: {sorted(missing)}")
+        if not targets:
+            print("None of the requested pids have graded data on TCGPriceLookup. Exiting.")
+            return
+    else:
+        # Phase 1: discover which cards have graded data (saves us from blindly
+        # hitting /history on every Lorcana card).
+        targets = collect_target_cards(session, api_key)
+        if not targets:
+            print("No graded targets found. Nothing to backfill.")
+            return
 
     # Phase 2: pull /history per card and accumulate rows.
     all_rows: list[dict] = []
