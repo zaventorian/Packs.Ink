@@ -17810,6 +17810,29 @@ function App(){
   },[]);
 
   useEffect(()=>{loadFromSupabase();},[loadFromSupabase]);
+  // Re-probe when the tab/app becomes visible again. Critical for PWA
+  // users who leave the app in the background — without this, opening
+  // the app the next morning shows whatever was on screen yesterday
+  // and never triggers a refresh until they manually reload. Throttled
+  // to once per 60s so quick tab switches don't hammer Supabase.
+  useEffect(() => {
+    let lastProbe = Date.now();
+    const onVisible = () => {
+      if(document.visibilityState !== "visible") return;
+      const now = Date.now();
+      if(now - lastProbe < 60_000) return;
+      lastProbe = now;
+      loadFromSupabase();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    // pageshow fires on bfcache restore (iOS Safari back/forward swipe) —
+    // visibilitychange doesn't always fire in that path.
+    window.addEventListener("pageshow", onVisible);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("pageshow", onVisible);
+    };
+  }, [loadFromSupabase]);
 
   const TABS=[["home","Home"],["screener","Screener"],["history","Price Graphing"],["market","Analytics"],["cards","Cards"],["collection","Collection"],["decks","Decks"]];
 
