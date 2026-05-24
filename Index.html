@@ -4009,7 +4009,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             <div style=${{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
               <img src="Logos/logo transparent.png" alt="packs.ink"
                 crossOrigin="anonymous"
-                style=${{height:36,width:"auto",display:"block",filter:isLightBg?"none":"drop-shadow(0 1px 2px rgba(0,0,0,0.4))"}}/>
+                style=${{height:56,width:"auto",display:"block",filter:isLightBg?"none":"drop-shadow(0 1px 2px rgba(0,0,0,0.4))"}}/>
               <div style=${{fontSize:10,fontWeight:600,color:textColor,letterSpacing:0.3,opacity:0.85}}>
                 packs.ink · ${new Date().toLocaleDateString()}
               </div>
@@ -15208,8 +15208,26 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const prev = decks;
     setDecks(ds => (ds||[]).map(d => {
       if(d.id !== deckId) return d;
-      const cards = (d.cards || []).filter(c => !(c.card_id === cardId && c.printing === printing));
-      if(newQty > 0) cards.push({deck_id:deckId, card_id:cardId, printing, quantity:newQty});
+      // Preserve position: update in place if the card is already in the deck,
+      // remove if newQty<=0, push to end only when it's a genuinely new entry.
+      // Filter+push (the previous approach) was bumping the touched card to
+      // the bottom of its cost group on every quantity change, making rows
+      // jump around as the user clicked +/-.
+      const src = d.cards || [];
+      const idx = src.findIndex(c => c.card_id === cardId && c.printing === printing);
+      let cards;
+      if(idx >= 0){
+        if(newQty <= 0){
+          cards = src.slice(0, idx).concat(src.slice(idx + 1));
+        } else {
+          cards = src.slice();
+          cards[idx] = {...src[idx], quantity:newQty};
+        }
+      } else if(newQty > 0){
+        cards = src.concat([{deck_id:deckId, card_id:cardId, printing, quantity:newQty}]);
+      } else {
+        cards = src;
+      }
       return {...d, cards};
     }));
     setPending(p => p + 1);
@@ -17910,7 +17928,7 @@ function App(){
       <button class="tabs-logo-btn" onClick=${()=>onTabClick("home")}
         title="Home" aria-label="Home">
         <img src="Logos/packs-ink-logo.png" alt="packs.ink"
-          height="26" style=${{height:26,width:"auto",display:"block",pointerEvents:"none"}}/>
+          height="44" style=${{height:44,width:"auto",display:"block",pointerEvents:"none"}}/>
       </button>
       <div class="tabs">
         ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>onTabClick(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
