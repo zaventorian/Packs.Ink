@@ -33,7 +33,8 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 ## Client cache rules
 
 - **Catalog key**: `packsink:catalog:vN` (currently **v40**). Bump N whenever cached row shape changes — old entries silently ignored on version mismatch. 24h TTL with background refresh.
-- **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later.
+- **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs.
+- **`AUX_CACHE_VERSION` sentinel** (Index.html top, added 2026-05-24): per-deploy stamp compared against `packsink:auxCacheVersion` on module load. Mismatch → one-shot wipe of every `packsink:*` key except catalog/auth/install-prefs. **Bump the string to force every existing user's next page load to refresh aux caches** — useful when an ETL/matview change makes those caches stale faster than their TTLs catch. Independent from `CACHE_KEY` (which only invalidates the catalog itself).
 - **Visibility re-probe**: `visibilitychange` + `pageshow` listeners re-run `loadFromSupabase` when the tab/PWA becomes visible again (throttled 60s). Without this, PWA users who background the app would see stale data forever on resume — React tree never remounts.
 - **`img_large` is STRIPPED from catalog cache on write** (writeCache `slim = rows.map(({img_large, ...rest}) => rest)`). Saves ~30%. Sites that prefer it (deck poster, hover preview, detail modal) fall back to `img_normal` gracefully. Don't add img_large back — the 5MB quota is tight.
 - **writeCache does three-pass eviction**: (1) `removeItem` before `setItem`, (2) on failure evict every other `packsink:*` key except auth/prefs, (3) retry.
@@ -113,6 +114,7 @@ Audit scripts: `audit_holofoils.py`, `audit_connecting_foils.py`, `audit_missing
 - **Numeric stat operators**: `cost`, `strength`, `willpower`, `lore` accept equality + comparison. Value at `filters[statKey]`, operator at `filters[statKey + "Op"]` (`=`, `>`, `>=`, `<`, `<=`). Forms accepted: `lore 3`, `3 lore`, `lore>=2`, `lore >= 2`, `lore2`. Matchers use `_cmp(rowVal, want, op)`. Null stats fail any non-null filter.
 - **Classification soft match** — card qualifies if EITHER classifications include the word OR product name includes the word. Without this, "elsa spirit" zeroes out (Elsa - Spirit of Winter has no Spirit subtype). Other dimensions stay hard.
 - **Enter key does NOT auto-apply the first suggestion.** `suggestIdx` starts at -1; only arrow keys / hover arm a suggestion. Pressing Enter on free text just commits the typed query (fuzzy matching). Prevents accidental "contains" chip conversion.
+- **`SET_NICKNAMES` deliberately does NOT include single-token character names** ("ursula", "jafar") even though the sets are "Ursula's Return" and "Reign of Jafar". Those tokens are character names too — typing `ursula` in the deck builder should search for the *card*, not promote to the whole set. The longer/unambiguous forms still work (`ursulas`, `ursulas return`, `reign`, `reign of jafar`). Set suggestion dropdown still surfaces the set via prefix match, so users can click through if they meant the set.
 - Catalog must have `cards.strength / willpower / lore / move_cost` columns (migration 43). Cold load probes for `lore`; silently omits all four from `CARDS_COLS` if missing.
 
 ## Cards browse filter dimensions
@@ -147,6 +149,19 @@ Card detail modal's Graded tab:
 - **Top featured chart**: 12-month LineChart defaulting to PSA 10 (falls back to first available combo if no PSA 10 history).
 - **Per-row sparkline buttons**: click any row's sparkline → expands a full LineChart inline beneath that row. Multiple rows can expand at once for grade-premium comparison.
 - Helper: `buildGradedSeries(history, grader, grade, label)`. Color map: PSA red, CGC blue, BGS purple, SGC green, TAG orange.
+
+## Cost & date tracking (sealed + graded collection)
+
+Migration 48 added optional `amount_paid numeric(12,2)` + `acquired_date date` to both `sealed_collection_items` and `graded_collection_items`. Both nullable. Shared-collection RPCs (`get_shared_collection_sealed` / `_graded`) recreated with the new columns in their RETURNS TABLE.
+
+- **UI**: per-section "Track cost & date" toggle (`packsink:sealedColl:trackCosts` / `packsink:graded:trackCosts` localStorage). Off by default. When on, a `CostDateInputs` component renders below each owned row/slot. Both fields stay optional even when the toggle is on; clearing them writes NULL.
+- **Shared component**: `CostDateInputs` (Index.html, just above `SealedCollectionView`) — `$ paid` + date inputs, commit on blur or Enter. Used by sealed (per-row, keyed by pid) and graded (per-slot, keyed by card_id + grader + grade).
+- **State plumbing**:
+  - Sealed: parallel `sealedMeta = {[pid]: {amount_paid, acquired_date}}` map at App level. `updateSealedMeta(pid, patch)` callback. Flows through `CollectionView` → `SealedCollectionView` AND through `HomeView` → `CollectionPanel` (the chart needs it).
+  - Graded: rows already include `amount_paid` / `acquired_date` (no parallel state needed). `updateItemMeta({card_id, grader, grade}, patch)` callback.
+- **Schema-tolerant fetches**: both fetch paths probe with the new columns, retry without on 42703 (column missing) so the frontend still works pre-migration. Safe to deploy code before applying the migration.
+- **Chart gating** (`computeCollectionValueHistory` + `computeGradedValueHistory`): per-key acquired_date map. A slot contributes $0 to dates strictly before its acquired_date so historical value reflects only what the user actually owned at the time. Slots without acquired_date keep the existing earliest-snapshot behavior.
+- **Graded chart backward-fill**: TCGPriceLookup graded `/history` is extremely sparse (avg 10 rows/slot/year, median slot's first row is months into a 1y window). `computeGradedValueHistory` seeds each slot's `prev` with its first known price (backward-fill) so a slot is always represented once we have ANY data for it. Without this, plain forward-fill produced an artificial ramp ($100 → $2500) as more slots came online with their first data point. Acquired_date gating still wins.
 
 ## Set conventions
 
@@ -226,6 +241,7 @@ Click own deck → defaults to **view** (no card browser, no rename); toolbar ha
 - `DecksView` uses `openDeckInMode(id, "view"|"edit")`. Click → "view"; createDeck → "edit"; duplicate → "view".
 - Owner controls (Share/Duplicate/Delete/Export) gate on `isOwnDeck`. Import + rename + Saved + CardBrowser gate on `!readOnly`.
 - Three list layouts (View ▾): compact list, image grid, stacked pile.
+- **CardBrowser ink pre-fill**: `DeckEditor` passes the deck's current `inkColorsInDeck` (1-2 colors) as the `defaultInks` prop. `CardBrowser`'s initial filter state seeds `filter.inks` from that prop *once on mount*. Re-opening the editor re-mounts CardBrowser → re-applies the deck's inks. Edits to chips during the session win after that. Gated to length 1-2 so a malformed/in-flux deck with 3+ inks doesn't auto-apply a weird filter.
 
 ## Deck import — text parser
 
@@ -374,7 +390,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v19`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
+- **`sw.js CACHE_VERSION`** (current `packsink-v22`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v40**). Bump when row shape changes, OR when forcing all users to cold-fetch (e.g. emergency push of fresh data).
 - **PWA icon refresh**: icon URLs include `?v=2` query so browsers treat them as new resources.
 - **Dev server cache header**: `dev_server.py` sends `Cache-Control: no-store` on HTML/CSS/JS.
@@ -420,3 +436,4 @@ Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. D
 - Re-run [supabase/diagnostics/index_usage_audit.sql](supabase/diagnostics/index_usage_audit.sql) once stats age past ~13 days, drop unused.
 - EV % change pills can underreport for newest set (`evFromBucket` reads `rarity_avg_daily` with no Low↔Market fallback).
 - Bump `actions/checkout@v4` → v5 and `actions/setup-python@v5` → v6 in `etl.yml`.
+- **Rotate the cron-job.org GitHub PAT every ~80 days** (90-day expiry, give yourself a buffer). Token lives in each of the 5 cron-job.org jobs' `Authorization: Bearer <token>` header. Issued 2026-05-24 → first rotation due ~2026-08-12. cron-job.org will start emailing failure alerts when the token dies; rotating before expiry prevents data gaps.
