@@ -10,11 +10,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Packs.Ink">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
-<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png">
-<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png">
-<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2">
+<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=2">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=2">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=2">
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -3515,7 +3515,8 @@ const proxyImg = (url) => {
 // preview, then snapshots it via html2canvas for the Copy / Save buttons.
 // Lorcast images flow through the /img-proxy/* rewrite so the resulting canvas
 // is not tainted.
-const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentContext, onClose}) => {
+const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentContext, onClose,
+                          visibility, onChangeVisibility, isOwner}) => {
   // Card list: one entry per card_id with quantity, sorted into Lorcana's
   // standard section order (chars / actions / songs / items / locations).
   const cards = useMemo(() => {
@@ -3888,32 +3889,40 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
       <div class="modal-body" style=${{padding:18}}>
-        <div style=${{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(180px,1fr))",gap:12,marginBottom:14}}>
-          <div>
-            <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Background</div>
-            <div style=${{display:"flex",gap:4}}>
-              ${[["ink","Ink"],["dark","Dark"],["light","Light"]].map(([k,l]) => html`<button key=${k}
-                class=${"chip "+(bgStyle===k?"active":"")}
-                onClick=${()=>setBgStyle(k)}>${l}</button>`)}
+        <div class="poster-options">
+          <div class="poster-options-group">
+            <div class="poster-options-head">Layout</div>
+            <div class="poster-options-row">
+              <div>
+                <div class="poster-options-sublbl">Background</div>
+                <div style=${{display:"flex",gap:4}}>
+                  ${[["ink","Ink"],["dark","Dark"],["light","Light"]].map(([k,l]) => html`<button key=${k}
+                    class=${"chip "+(bgStyle===k?"active":"")}
+                    onClick=${()=>setBgStyle(k)}>${l}</button>`)}
+                </div>
+              </div>
+              <div>
+                <div class="poster-options-sublbl">Columns</div>
+                <div style=${{display:"flex",gap:4}}>
+                  ${[5,6,7,8].map(n => html`<button key=${n}
+                    class=${"chip "+(cols===n?"active":"")}
+                    onClick=${()=>setCols(n)}>${n}</button>`)}
+                </div>
+              </div>
             </div>
           </div>
-          <div>
-            <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Columns</div>
-            <div style=${{display:"flex",gap:4}}>
-              ${[5,6,7,8].map(n => html`<button key=${n}
-                class=${"chip "+(cols===n?"active":"")}
-                onClick=${()=>setCols(n)}>${n}</button>`)}
-            </div>
-          </div>
-          <div>
-            <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Options</div>
+          <div class="poster-options-group">
+            <div class="poster-options-head">Show</div>
             <div style=${{display:"flex",gap:4,flexWrap:"wrap"}}>
-              ${shareUrl && html`<button class=${"chip "+(showQr?"active":"")}
-                onClick=${()=>setShowQr(v=>!v)}>QR code</button>`}
               <button class=${"chip "+(showStats?"active":"")}
                 onClick=${()=>setShowStats(v=>!v)}>Stats</button>
               <button class=${"chip "+(showCurve?"active":"")}
                 onClick=${()=>setShowCurve(v=>!v)}>Cost curve</button>
+            </div>
+          </div>
+          <div class="poster-options-group">
+            <div class="poster-options-head">Costs</div>
+            <div style=${{display:"flex",gap:4,flexWrap:"wrap"}}>
               <button class=${"chip "+(showCost.nonFoil?"active":"")}
                 onClick=${()=>setShowCost(c=>({...c,nonFoil:!c.nonFoil}))}
                 title="Total deck cost using Normal printings">Non-Foil $</button>
@@ -3923,14 +3932,43 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               <button class=${"chip "+(showCost.maxRarity?"active":"")}
                 onClick=${()=>setShowCost(c=>({...c,maxRarity:!c.maxRarity}))}
                 title="Total deck cost using each card's most expensive Enchanted / Iconic / Epic / Promo printing (with sanity exclusions — see ? page)">Max Rarity $</button>
-              ${shareUrl && html`<button class=${"chip "+(showUrl?"active":"")}
-                onClick=${()=>setShowUrl(v=>!v)}>URL footer</button>`}
+            </div>
+          </div>
+          <div class="poster-options-group">
+            <div class="poster-options-head">
+              Share
+              ${!shareUrl && html`<span class="poster-share-lockhint">deck is private</span>`}
+            </div>
+            <div style=${{display:"flex",gap:4,flexWrap:"wrap"}}>
+              ${shareUrl
+                ? html`<${React.Fragment}>
+                    <button class=${"chip "+(showQr?"active":"")}
+                      onClick=${()=>setShowQr(v=>!v)}>QR code</button>
+                    <button class=${"chip "+(showUrl?"active":"")}
+                      onClick=${()=>setShowUrl(v=>!v)}>URL footer</button>
+                  </>`
+                : html`<${React.Fragment}>
+                    <button class="chip chip-locked"
+                      onClick=${()=>isOwner && onChangeVisibility && onChangeVisibility("unlisted")}
+                      disabled=${!isOwner}
+                      title=${isOwner ? "Click to make this deck Unlisted (link works for anyone with the URL)" : "Only the owner can change visibility"}>
+                      🔒 QR code
+                    </button>
+                    <button class="chip chip-locked"
+                      onClick=${()=>isOwner && onChangeVisibility && onChangeVisibility("unlisted")}
+                      disabled=${!isOwner}
+                      title=${isOwner ? "Click to make this deck Unlisted (link works for anyone with the URL)" : "Only the owner can change visibility"}>
+                      🔒 URL footer
+                    </button>
+                    ${isOwner && html`<div class="poster-share-quick">
+                      <span>Switch deck to:</span>
+                      <button class="chip" onClick=${()=>onChangeVisibility && onChangeVisibility("unlisted")}>Unlisted</button>
+                      <button class="chip" onClick=${()=>onChangeVisibility && onChangeVisibility("public")}>Public</button>
+                    </div>`}
+                  </>`}
             </div>
           </div>
         </div>
-        ${!shareUrl && html`<div class="muted" style=${{fontSize:11,marginBottom:10}}>
-          (QR code is hidden — set this deck to Unlisted or Public to enable a share link.)
-        </div>`}
         <div style=${{position:"relative",marginBottom:14}}>
         <div ref=${posterRef} class="deck-poster" style=${{background:bgCss,padding:24,borderRadius:10,
           color:textColor,position:"relative",zIndex:1}}>
@@ -4009,7 +4047,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             <div style=${{flexShrink:0,display:"flex",flexDirection:"column",alignItems:"flex-start",gap:2}}>
               <img src="Logos/logo transparent.png" alt="packs.ink"
                 crossOrigin="anonymous"
-                style=${{height:56,width:"auto",display:"block",filter:isLightBg?"none":"drop-shadow(0 1px 2px rgba(0,0,0,0.4))"}}/>
+                style=${{height:80,width:"auto",display:"block",filter:isLightBg?"none":"drop-shadow(0 1px 2px rgba(0,0,0,0.4))"}}/>
               <div style=${{fontSize:10,fontWeight:600,color:textColor,letterSpacing:0.3,opacity:0.85}}>
                 packs.ink · ${new Date().toLocaleDateString()}
               </div>
@@ -5190,7 +5228,10 @@ const Footer = ({lastEtlDate, lastRawPriceDate})=>{
         ⚠ Display layer is behind raw data (${lastEtlDate} vs ${lastRawPriceDate}) — run refresh_card_prices_latest()
       </div>`}
     </div>
-    <img class="footer-logo" src=${LOGO_B64} alt="Ink & Lore"/>
+    <div class="footer-logos">
+      <img class="footer-logo footer-logo-packsink" src="Logos/packs-ink-logo.png" alt="Packs.Ink"/>
+      <img class="footer-logo" src=${LOGO_B64} alt="Ink & Lore"/>
+    </div>
   </div>`;
 };
 
@@ -16869,6 +16910,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
       shareUrl=${deck.visibility && deck.visibility !== "private" ? shareUrl : null}
       creatorName=${ownerDisplayName || null}
       tournamentContext=${tournamentContext || null}
+      visibility=${visibility}
+      isOwner=${isOwnDeck}
+      onChangeVisibility=${(v)=>setVisibility(v)}
       onClose=${()=>setPosterOpen(false)}/>`}
     ${hoverPreview && html`<div class="deck-hover-preview"
       style=${{
@@ -17928,7 +17972,7 @@ function App(){
       <button class="tabs-logo-btn" onClick=${()=>onTabClick("home")}
         title="Home" aria-label="Home">
         <img src="Logos/packs-ink-logo.png" alt="packs.ink"
-          height="44" style=${{height:44,width:"auto",display:"block",pointerEvents:"none"}}/>
+          height="60" style=${{height:60,width:"auto",display:"block",pointerEvents:"none"}}/>
       </button>
       <div class="tabs">
         ${TABS.map(([v,l])=>html`<button key=${v} onClick=${()=>onTabClick(v)} class=${view===v?"active":""} style=${{padding:"5px 11px",fontSize:12}}>${l}</button>`)}
