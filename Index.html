@@ -153,6 +153,29 @@ async function sbFetchAll(path, params, token){
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
 const CACHE_KEY = "packsink:catalog:v40";
+// Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
+// per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
+// matview change makes those caches stale faster than their TTLs would catch.
+// On boot we compare against localStorage and, if mismatched, one-shot wipe
+// every packsink:* key except catalog/auth/install-prefs and write the new
+// stamp. This guarantees every existing user gets a clean aux-cache slate on
+// their next page load without needing them to clear browser storage.
+const AUX_CACHE_VERSION = "2026-05-24a";
+const AUX_VERSION_KEY   = "packsink:auxCacheVersion";
+try {
+  const prev = localStorage.getItem(AUX_VERSION_KEY);
+  if(prev !== AUX_CACHE_VERSION){
+    for(const k of Object.keys(localStorage)){
+      if(!k.startsWith("packsink:")) continue;
+      if(k === CACHE_KEY) continue;
+      if(k === AUX_VERSION_KEY) continue;
+      if(k.startsWith("packsink:auth")) continue;
+      if(k === "packsink:installVisits" || k === "packsink:installDismissed") continue;
+      localStorage.removeItem(k);
+    }
+    localStorage.setItem(AUX_VERSION_KEY, AUX_CACHE_VERSION);
+  }
+} catch {}
 // 24h cache — we always background-refresh when stale, so the user sees
 // cached data instantly and gets a fresh swap within seconds. Long TTL keeps
 // the experience snappy on slow Supabase nights without risking stale-price
@@ -1496,6 +1519,19 @@ async function fetchGradedHistoryFor(slots, sinceDate){
 // ownedSlots: array of {pid, grader, grade, qty}. Forward-fills missing dates
 // from the last known price so cards that didn't tick still contribute.
 function computeGradedValueHistory(rows, ownedSlots){
+  // Slots may carry an optional `acquired_date` ("YYYY-MM-DD"); when set, the
+  // slot contributes $0 on dates strictly before that date so historical
+  // value reflects only what the user actually owned at the time.
+  //
+  // TCGPriceLookup's graded `/history` is extremely sparse — median slot has
+  // its first row months into the queried range, so plain forward-fill leaves
+  // most slots contributing $0 across the early window and the rolled-up
+  // chart ramps up artificially as each slot "comes online" with its first
+  // data point. We seed `prev` with each slot's first known price (backward
+  // fill) so a slot is always represented once we have ANY data for it. This
+  // doesn't manufacture history — it just declines to drop owned cards to $0
+  // because the vendor lacks rows for them on that date. Acquired-date
+  // gating still wins: a slot contributes $0 before the date the user got it.
   const bySlot = {};
   for(const r of rows){
     const k = `${r.tcgplayer_product_id}|${r.grader}|${r.grade}`;
@@ -1515,7 +1551,15 @@ function computeGradedValueHistory(rows, ownedSlots){
     const k = `${s.pid}|${s.grader}|${s.grade}`;
     const series = bySlot[k];
     if(!series || !series.length) continue;
-    let prev = null, si = 0;
+    // Pre-roll: find the first valid price across this slot's series.
+    let firstPrice = null;
+    for(const r of series){
+      const p = r.ebay_avg_7d ?? r.ebay_avg_1d ?? r.ebay_avg_30d;
+      if(p != null){ firstPrice = Number(p); break; }
+    }
+    if(firstPrice == null) continue;
+    const acqDate = s.acquired_date || null;
+    let prev = firstPrice, si = 0;
     for(const date of dates){
       while(si < series.length && series[si].date <= date){
         const r = series[si];
@@ -1523,7 +1567,8 @@ function computeGradedValueHistory(rows, ownedSlots){
         if(p != null) prev = Number(p);
         si++;
       }
-      if(prev != null) valueByDate[date] += s.qty * prev;
+      if(acqDate && date < acqDate) continue;
+      valueByDate[date] += s.qty * prev;
     }
   }
   return dates.map(d => ({date: d, value: valueByDate[d]}));
@@ -1578,11 +1623,18 @@ function writeCollectionValueCache(key, series){
 // ownedByProductPrinting: Map<"productId|printing", quantity>
 // Forward-fills missing days from the last known price (cards aren't always
 // in every daily snapshot), so a card that didn't tick today still contributes.
-function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarliestDate){
+function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarliestDate, acquiredByKey){
   // productEarliestDate: optional map tcgplayer_product_id → "YYYY-MM-DD".
   // Any price snapshot strictly older than this date is dropped (prerelease
   // spike guard for mainline sets — typical Pre-Release lows are 20x real).
+  //
+  // acquiredByKey: optional Map<"pid|printing", "YYYY-MM-DD">. When set on a
+  // key, that owned slot contributes $0 on dates strictly before its
+  // acquired_date — items the user didn't yet own shouldn't count toward
+  // historical value. Null/missing entries fall back to the existing
+  // earliest-snapshot behavior (subject to the prerelease guard).
   const guard = productEarliestDate || null;
+  const acquired = acquiredByKey || null;
   const byKey = {};
   for(const r of rows){
     if(guard){
@@ -1605,6 +1657,7 @@ function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarl
   for(const [key, qty] of ownedByProductPrinting){
     const series = byKey[key];
     if(!series || !series.length) continue;
+    const acqDate = acquired ? (acquired.get(key) || null) : null;
     let prev = null, si = 0;
     for(const date of dates){
       while(si < series.length && series[si].date <= date){
@@ -1612,6 +1665,7 @@ function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarl
         if(p != null) prev = p;
         si++;
       }
+      if(acqDate && date < acqDate) continue;  // user didn't own it yet
       if(prev != null) valueByDate[date] += qty * prev;
     }
   }
@@ -2055,11 +2109,11 @@ const SET_NICKNAMES = {
   "tfc":"The First Chapter", "first chapter":"The First Chapter",
   "rotf":"Rise of the Floodborn", "rise":"Rise of the Floodborn", "floodborn set":"Rise of the Floodborn",
   "iti":"Into the Inklands", "inklands":"Into the Inklands", "into the inklands":"Into the Inklands",
-  "ursula":"Ursula's Return", "ursulas":"Ursula's Return", "ursulas return":"Ursula's Return",
+  "ursulas":"Ursula's Return", "ursulas return":"Ursula's Return",
   "shimmering":"Shimmering Skies", "skies":"Shimmering Skies", "shimmering skies":"Shimmering Skies",
   "azurite":"Azurite Sea", "azurite sea":"Azurite Sea",
   "archazia":"Archazia's Island", "archazias island":"Archazia's Island",
-  "jafar":"Reign of Jafar", "reign":"Reign of Jafar", "reign of jafar":"Reign of Jafar",
+  "reign":"Reign of Jafar", "reign of jafar":"Reign of Jafar",
   "fabled":"Fabled",
   "whispers":"Whispers in the Well", "whispers in the well":"Whispers in the Well", "well":"Whispers in the Well",
   "winterspell":"Winterspell", "winter":"Winterspell",
@@ -4643,8 +4697,19 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       sortDefault="set-new",
                       selectable, isAuthed, onSignIn,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
-                      pendingSearch, onConsumedPendingSearch}) => {
-  const [filter,setFilter] = useState(emptyFilter);
+                      pendingSearch, onConsumedPendingSearch,
+                      defaultInks}) => {
+  // When opened inside the deck editor, prefill the ink chips with the
+  // deck's current inks (1-2 colors) so the user keeps seeing in-ink cards
+  // without re-toggling chips every time they come back. Computed once on
+  // mount; user-edits to chips win after that.
+  const [filter,setFilter] = useState(() => {
+    const f = emptyFilter();
+    if(Array.isArray(defaultInks) && defaultInks.length && defaultInks.length <= 2){
+      f.inks = new Set(defaultInks);
+    }
+    return f;
+  });
   // Apply a search string handed in from outside (the home page quick-search
   // bar uses this so opening Cards via the search bar lands with the query
   // already in the smart-search box).
@@ -8471,7 +8536,65 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
   </div>`;
 };
 
-function SealedCollectionView({raw, user, sealedPrices, sealedCollection, updateSealedQty, onSignIn, readOnly, compareMode, viewerOwnSealedCollection}){
+// Shared "amount paid + acquired date" input pair, used inside the Sealed
+// and Graded collection rows. Local-state textbox, commits to the parent on
+// blur (or Enter). Both fields are optional; clearing them writes null.
+//   currentPaid : number | null
+//   currentDate : "YYYY-MM-DD" | null
+//   onCommit({amount_paid?, acquired_date?})  // only sends keys that changed
+const CostDateInputs = ({currentPaid, currentDate, onCommit}) => {
+  const [paid, setPaid] = useState(currentPaid != null ? String(currentPaid) : "");
+  const [date, setDate] = useState(currentDate || "");
+  // Re-sync when the parent's view of the row changes (e.g. cancellation,
+  // optimistic update from elsewhere). Comparing strings keeps the cursor
+  // stable while the user is typing.
+  useEffect(()=>{ setPaid(currentPaid != null ? String(currentPaid) : ""); }, [currentPaid]);
+  useEffect(()=>{ setDate(currentDate || ""); }, [currentDate]);
+  const commitPaid = () => {
+    const v = paid.trim();
+    const next = v === "" ? null : Number(v);
+    if(next != null && !Number.isFinite(next)) return; // invalid → ignore
+    const prev = currentPaid != null ? Number(currentPaid) : null;
+    if(next === prev) return;
+    onCommit({amount_paid: next});
+  };
+  const commitDate = () => {
+    const v = date.trim() || null;
+    if(v === (currentDate || null)) return;
+    onCommit({acquired_date: v});
+  };
+  return html`<div class="cost-date-row" onClick=${e=>e.stopPropagation()}>
+    <label class="cost-date-field">
+      <span class="cost-date-lbl">Paid</span>
+      <span class="cost-date-input-wrap">
+        <span class="cost-date-prefix">$</span>
+        <input type="number" inputmode="decimal" step="0.01" min="0"
+          value=${paid} placeholder="—"
+          onChange=${e=>setPaid(e.target.value)}
+          onBlur=${commitPaid}
+          onKeyDown=${e=>{ if(e.key==="Enter") e.target.blur(); }}/>
+      </span>
+    </label>
+    <label class="cost-date-field">
+      <span class="cost-date-lbl">Acquired</span>
+      <input type="date" value=${date}
+        onChange=${e=>setDate(e.target.value)}
+        onBlur=${commitDate}
+        onKeyDown=${e=>{ if(e.key==="Enter") e.target.blur(); }}/>
+    </label>
+  </div>`;
+};
+
+function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, onSignIn, readOnly, compareMode, viewerOwnSealedCollection}){
+  sealedMeta = sealedMeta || {};
+  updateSealedMeta = updateSealedMeta || (()=>{});
+  // "Track cost & date" toggle. Off by default — most users don't want
+  // extra inputs cluttering the rows. Persisted per device.
+  const [trackCosts, setTrackCosts] = useState(()=>{
+    try { return localStorage.getItem("packsink:sealedColl:trackCosts") === "1"; }
+    catch { return false; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:sealedColl:trackCosts", trackCosts?"1":"0"); } catch {} }, [trackCosts]);
   const sealedMatchesCompare = (pid) => {
     if(!readOnly || !compareMode || compareMode === "all" || !viewerOwnSealedCollection) return true;
     const ownerHas  = (sealedCollection[pid]||0) > 0;
@@ -8639,6 +8762,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, update
           <input type="checkbox" checked=${hideUnowned} onChange=${e=>setHideUnowned(e.target.checked)}/>
           <span>Only owned</span>
         </label>
+        ${!readOnly && html`<label class="sealed-coll-flag" title="Show optional 'amount paid' and 'date acquired' inputs on each owned product. Date acquired gates the collection value chart so an item only contributes from the day you got it.">
+          <input type="checkbox" checked=${trackCosts} onChange=${e=>setTrackCosts(e.target.checked)}/>
+          <span>Track cost & date</span>
+        </label>`}
       </div>
     </div>
 
@@ -8701,6 +8828,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, update
                               <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
                               <button onClick=${()=>bump(+1)} disabled=${qty>=99} aria-label="Increase">+</button>
                             </div>`}
+                        ${!readOnly && trackCosts && qty>0 && html`<${CostDateInputs}
+                          currentPaid=${sealedMeta[item.tcgplayer_product_id]?.amount_paid ?? null}
+                          currentDate=${sealedMeta[item.tcgplayer_product_id]?.acquired_date || null}
+                          onCommit=${patch => updateSealedMeta(item.tcgplayer_product_id, patch)}/>`}
                       </div>
                     </div>`;
                   })}
@@ -8809,6 +8940,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [goals, setGoals] = useState(null);          // tracking goals
   const [latestPrices, setLatestPrices] = useState(null); // graded_prices_latest cache
   const [addOpen, setAddOpen] = useState(false);
+  // When clicking a tracked tile's + button, jump straight to the Add modal
+  // pre-filled with that card_id so the user doesn't have to re-search.
+  const [addPreselectCardId, setAddPreselectCardId] = useState(null);
   const [goalOpen, setGoalOpen] = useState(false);
   const [loadErr, setLoadErr] = useState(null);
   // Click-to-open: builds a CardDetailModal-shaped "group" from raw rows
@@ -8835,6 +8969,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // Portfolio value chart range. Persisted alongside the raw collection chart
   // pattern from the Home panel.
   const [chartRange, setChartRange] = useState("3m");
+  // "Track cost & date" toggle (mirrors Sealed). When on, optional inputs
+  // appear under each owned slot. Persisted per device.
+  const [trackCosts, setTrackCosts] = useState(()=>{
+    try { return localStorage.getItem("packsink:graded:trackCosts") === "1"; }
+    catch { return false; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:graded:trackCosts", trackCosts?"1":"0"); } catch {} }, [trackCosts]);
 
   // Load both user tables + the latest-prices snapshot. In viewer (read-only)
   // mode we use the rows passed in via props and don't fetch goals (they're
@@ -8853,8 +8994,18 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       try {
         const [it, gl, lp] = await Promise.all([
           sbClient.from("graded_collection_items")
-            .select("card_id,grader,grade,quantity,updated_at")
-            .eq("user_id", user.id),
+            .select("card_id,grader,grade,quantity,amount_paid,acquired_date,updated_at")
+            .eq("user_id", user.id)
+            .then(async (r) => {
+              // amount_paid/acquired_date added in migration 48; fall back
+              // to legacy select if the columns aren't deployed yet.
+              if(r.error && (r.error.code === "42703" || /amount_paid|acquired_date/i.test(r.error.message||""))){
+                return sbClient.from("graded_collection_items")
+                  .select("card_id,grader,grade,quantity,updated_at")
+                  .eq("user_id", user.id);
+              }
+              return r;
+            }),
           sbClient.from("graded_collection_goals")
             .select("goal_id,set_id,extras_bucket,rarities,display_name,inserted_at")
             .eq("user_id", user.id),
@@ -8914,16 +9065,18 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     }
     return m;
   }, [raw]);
-  // Bucket Extras & Oddities rows by variant_label so goals can target
-  // a specific Extras sub-bucket (e.g. "Deep Trouble", "Palace Heist",
-  // "Starter Deck Exclusive Foil"). Cards are deduped per (card_id, label)
-  // so split-printing rows don't double-count.
+  // Bucket Extras & Oddities rows by their bucket label. buildRow stores
+  // the EXTRAS_MAP variantLabel ("Deep Trouble", "Palace Heist", "Starter
+  // Deck Exclusive Foil") in the Rarity slot for Extras rows — it's the
+  // "rarity-line label" rendered on Extras tiles. We read it from there.
+  // Cards are deduped per (card_id, bucket) so split-printing rows don't
+  // double-count.
   const extrasCardsByBucket = useMemo(() => {
     const m = new Map();
-    const seenPerBucket = new Map(); // bucket -> Set<card_id>
+    const seenPerBucket = new Map();
     for(const r of (raw||[])){
       if(r.Set !== EXTRAS_SET_NAME) continue;
-      const bucket = r.variant_label || null;
+      const bucket = r.Rarity || r.variant_label || null;
       if(!bucket || !r.card_id) continue;
       const seen = seenPerBucket.get(bucket) || new Set();
       if(seen.has(r.card_id)) continue;
@@ -8968,7 +9121,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     // Owned items first.
     for(const it of items){
       const slots = ensureCard(it.card_id);
-      slots.set(it.grader + "|" + it.grade, {owned: true, qty: it.quantity, grader: it.grader, grade: it.grade});
+      slots.set(it.grader + "|" + it.grade, {
+        owned: true, qty: it.quantity, grader: it.grader, grade: it.grade,
+        amount_paid: it.amount_paid != null ? Number(it.amount_paid) : null,
+        acquired_date: it.acquired_date || null,
+      });
     }
     // Tracked goals add placeholder slots when no graded copy is owned for
     // the card. Goal targets either (set_id, rarities[]) for a regular set
@@ -8991,7 +9148,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         cardsForGoal = cardsBySetId.get(g.set_id) || [];
       }
       for(const r of cardsForGoal){
-        if(rarFilter.size && !rarFilter.has((r.Rarity||"").toLowerCase())) continue;
+        // Skip rarity filter for Extras goals — the synthetic Rarity field
+        // holds the bucket name (e.g. "Deep Trouble"), not an actual rarity,
+        // so any non-empty rarFilter would filter every Extras card out.
+        if(!extrasBucket && rarFilter.size && !rarFilter.has((r.Rarity||"").toLowerCase())) continue;
         if(!r.card_id) continue;
         trackedCardIds.add(r.card_id);
         if(extrasBucket) extrasBucketByCardId.set(r.card_id, extrasBucket);
@@ -9075,6 +9235,20 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(error){ alert("Delete failed: " + error.message); return; }
     setItems(prev => (prev||[]).filter(p => !(p.card_id===card_id && p.grader===grader && p.grade===grade)));
   }, [user]);
+  // Patch optional purchase metadata on an existing owned slot. `patch` may
+  // contain amount_paid (number|null) and/or acquired_date ("YYYY-MM-DD"|null).
+  const updateItemMeta = useCallback(async ({card_id, grader, grade}, patch) => {
+    if(!user) return;
+    setItems(prev => (prev||[]).map(p =>
+      (p.card_id===card_id && p.grader===grader && p.grade===grade) ? {...p, ...patch} : p));
+    const update = {};
+    if("amount_paid"   in patch) update.amount_paid   = patch.amount_paid;
+    if("acquired_date" in patch) update.acquired_date = patch.acquired_date;
+    const {error} = await sbClient.from("graded_collection_items")
+      .update(update)
+      .eq("user_id", user.id).eq("card_id", card_id).eq("grader", grader).eq("grade", grade);
+    if(error) console.error("graded meta update failed:", error.message || error);
+  }, [user]);
   const addGoal = useCallback(async ({set_id, extras_bucket, rarities, display_name}) => {
     if(!user) return;
     const row = {
@@ -9115,6 +9289,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           <button class=${displayMode==="grid"?"active":""} onClick=${()=>setDisplayMode("grid")}>Grid</button>
           <button class=${displayMode==="compact"?"active":""} onClick=${()=>setDisplayMode("compact")}>Compact</button>
         </div>
+        ${!readOnly && html`<label class="sealed-coll-flag" title="Show optional 'amount paid' and 'date acquired' inputs on each owned graded copy. Date acquired gates the collection value chart so a card only contributes from the day you got it.">
+          <input type="checkbox" checked=${trackCosts} onChange=${e=>setTrackCosts(e.target.checked)}/>
+          <span>Track cost & date</span>
+        </label>`}
         ${!readOnly && html`<button class="active" onClick=${()=>setAddOpen(true)} style=${{padding:"7px 14px",fontSize:12}}>+ Add graded card</button>`}
       </div>
     </div>
@@ -9164,10 +9342,19 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     const variantSuffix = card.variant_label
                       ? ` (${card.variant_label.replace(/\s*Variant$/i, "")})`
                       : "";
-                    return html`<div key=${card.card_id} class="gc-card gc-card-clickable"
+                    // Distinguish owned (any owned slot) vs tracked-only
+                    // (wishlist) so the grid reads as "what I have" vs
+                    // "what I'm chasing" at a glance.
+                    const hasOwned = slots.some(s => s.owned);
+                    return html`<div key=${card.card_id}
+                        class=${"gc-card gc-card-clickable " + (hasOwned ? "gc-card-owned" : "gc-card-tracked-only")}
                         style=${tileBg ? {background: tileBg} : null}
                         onClick=${openDetail}
                         title="Open card · graded prices">
+                      ${hasOwned && html`<div class="gc-card-owned-check" title="In your graded collection">✓</div>`}
+                      ${!readOnly && html`<button class="gc-card-add-btn"
+                        title=${hasOwned ? "Add another graded copy" : "Add this card to your graded collection"}
+                        onClick=${e=>{ e.stopPropagation(); setAddPreselectCardId(card.card_id); setAddOpen(true); }}>+</button>`}
                       ${card.img_small && html`<img src=${card.img_small} alt="" class="gc-card-img"/>`}
                       <div class="gc-card-body">
                         <div class="gc-card-name" title=${(card["Product Name"]||"") + variantSuffix}>
@@ -9213,6 +9400,15 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                             </span>`;
                           })}
                         </div>
+                        ${!readOnly && trackCosts && slots.some(s => s.owned) && html`<div class="gc-slot-meta-list" onClick=${e=>e.stopPropagation()}>
+                          ${slots.filter(s => s.owned).map((s, si) => html`<div key=${si} class="gc-slot-meta-row">
+                            <span class="gc-slot-meta-tag">${(s.grader||"").toUpperCase()} ${s.grade}</span>
+                            <${CostDateInputs}
+                              currentPaid=${s.amount_paid ?? null}
+                              currentDate=${s.acquired_date || null}
+                              onCommit=${patch => updateItemMeta({card_id: card.card_id, grader: s.grader, grade: s.grade}, patch)}/>
+                          </div>`)}
+                        </div>`}
                       </div>
                     </div>`;
                   })}
@@ -9239,7 +9435,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                   ? (extrasCardsByBucket.get(g.extras_bucket) || [])
                   : (cardsBySetId.get(g.set_id) || []);
                 const rar = new Set((g.rarities||[]).map(r => (r||"").toLowerCase()));
-                const inGoal = cardsForGoal.filter(r => !rar.size || rar.has((r.Rarity||"").toLowerCase()));
+                // Skip rarity filter for Extras (Rarity holds the bucket name).
+                const inGoal = g.extras_bucket
+                  ? cardsForGoal
+                  : cardsForGoal.filter(r => !rar.size || rar.has((r.Rarity||"").toLowerCase()));
                 const inGoalIds = new Set(inGoal.map(r => r.card_id).filter(Boolean));
                 const ownedSet = new Set((items||[]).map(it => it.card_id));
                 const ownedCount = [...inGoalIds].filter(cid => ownedSet.has(cid)).length;
@@ -9264,8 +9463,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     </div>
     ${addOpen && html`<${GradedCollectionAddModal}
       raw=${raw} cardById=${cardById} priceByKey=${priceByKey}
-      onClose=${()=>setAddOpen(false)}
-      onAdd=${async (p) => { await addItem(p); setAddOpen(false); }}/>`}
+      preselectCardId=${addPreselectCardId}
+      onClose=${()=>{ setAddOpen(false); setAddPreselectCardId(null); }}
+      onAdd=${async (p) => { await addItem(p); setAddOpen(false); setAddPreselectCardId(null); }}/>`}
     ${goalOpen && html`<${GradedCollectionGoalModal}
       setNameById=${setNameById} setIdsByName=${setIdsByName}
       extrasBucketOptions=${extrasBucketOptions}
@@ -9281,9 +9481,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
 
 // Modal for adding a graded card to the collection. Search → pick a card →
 // pick grader/grade → validate against graded_prices_latest → save.
-const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) => {
+const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, onClose, onAdd}) => {
   const [query, setQuery] = useState("");
-  const [pickedId, setPickedId] = useState(null);
+  const [pickedId, setPickedId] = useState(preselectCardId || null);
   const [grader, setGrader] = useState("psa");
   const [grade, setGrade] = useState("10");
   const [qty, setQty] = useState(1);
@@ -9292,12 +9492,29 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) =
   const hits = useMemo(() => {
     const q = query.trim().toLowerCase();
     if(q.length < 2 && !pickedId) return [];
+    // Multi-token "all-words-present" search: "elsa spirit" matches
+    // "Elsa - Spirit of Winter" because every token appears somewhere
+    // in the name. Single-token search is substring + fuzzy via the
+    // shared nameMatches helper.
+    const qTokens = q.split(/\s+/).filter(Boolean);
     const seen = new Set();
     const out = [];
     for(const r of (raw||[])){
       if(!r.card_id || seen.has(r.card_id)) continue;
       const name = (r["Product Name"]||"").toLowerCase();
-      if(q && !name.includes(q)) continue;
+      let ok = false;
+      if(!q){
+        ok = true;
+      } else if(qTokens.length > 1){
+        // Every token must appear as substring of the name.
+        ok = qTokens.every(t => name.includes(t));
+      } else {
+        // Single token: fall through to nameMatches for fuzzy support.
+        ok = typeof nameMatches === "function"
+          ? nameMatches(q, r["Product Name"]||"")
+          : name.includes(q);
+      }
+      if(!ok) continue;
       seen.add(r.card_id);
       out.push(r);
       if(out.length >= 50) break;
@@ -9331,10 +9548,10 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) =
                 ? html`<div class="muted" style=${{fontSize:12,padding:"20px 0",textAlign:"center"}}>No matches.</div>`
                 : hits.map(c => html`<button key=${c.card_id} class="gc-add-hit"
                     onClick=${()=>setPickedId(c.card_id)}>
-                    ${c.img_small && html`<img src=${c.img_small} alt=""/>`}
+                    ${c.img_small && html`<img src=${c.img_small} class="gc-add-hit-thumb" alt=""/>`}
                     <div style=${{minWidth:0,flex:1,textAlign:"left"}}>
                       <div style=${{fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>${c["Product Name"]}</div>
-                      <div class="muted" style=${{fontSize:10,display:"flex",alignItems:"center",gap:4}}>${c.Set} · #${c.collector_number||"?"} · <${RarityTag} rarity=${c.Rarity}/></div>
+                      <div class="muted" style=${{fontSize:10,display:"flex",alignItems:"center",gap:4}}>${c.Set} · #${(c.Number||"").split("/")[0] || "?"} · <${RarityTag} rarity=${c.Rarity} hideText=${true}/></div>
                     </div>
                   </button>`)}
           </div>
@@ -9344,7 +9561,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) =
             ${picked.img_small && html`<img src=${picked.img_small} alt="" style=${{width:60,height:84,objectFit:"cover",borderRadius:4}}/>`}
             <div style=${{minWidth:0,flex:1}}>
               <div style=${{fontWeight:700,fontSize:14}}>${picked["Product Name"]}</div>
-              <div class="muted" style=${{fontSize:11,display:"flex",alignItems:"center",gap:4}}>${picked.Set} · #${picked.collector_number||"?"} · <${RarityTag} rarity=${picked.Rarity}/></div>
+              <div class="muted" style=${{fontSize:11,display:"flex",alignItems:"center",gap:4}}>${picked.Set} · #${(picked.Number||"").split("/")[0] || "?"} · <${RarityTag} rarity=${picked.Rarity} hideText=${true}/></div>
             </div>
             <button class="settings-action link" onClick=${()=>setPickedId(null)}>Change</button>
           </div>
@@ -9449,7 +9666,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
           </select>
           <div class="muted" style=${{fontSize:10,marginTop:4}}>Tracks every card in this Extras sub-bucket (e.g. all Palace Heist cards).</div>
         </label>`}
-        <div style=${{marginBottom:12}}>
+        ${!isExtras && html`<div style=${{marginBottom:12}}>
           <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities</div>
           <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
             ${GRADED_RARITY_OPTIONS.map(r => html`<button key=${r}
@@ -9462,7 +9679,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
             </button>`)}
           </div>
           <div class="muted" style=${{fontSize:10,marginTop:4}}>Leave empty to track all rarities in this set.</div>
-        </div>
+        </div>`}
         <label style=${{display:"block",marginBottom:14}}>
           <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Display name (optional)</div>
           <input type="text" value=${displayName} onChange=${e=>setDisplayName(e.target.value)} maxLength="60"
@@ -9489,7 +9706,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
   </div>`;
 };
 
-const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, updateSealedQty, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken}) => {
+const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken}) => {
   const isViewerMode = !!viewerContext;
   const viewerVis = viewerContext?.data?.visibility || {raw:false, sealed:false, graded:false};
   // Comparison filter for viewer mode: "all" | "missing" | "shared".
@@ -9891,7 +10108,9 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     ${effectiveSection === "sealed"
       ? html`<${SealedCollectionView} raw=${raw} user=${user}
           sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
-          updateSealedQty=${updateSealedQty} onSignIn=${onSignIn}
+          sealedMeta=${sealedMeta || {}}
+          updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta || (()=>{})}
+          onSignIn=${onSignIn}
           readOnly=${isViewerMode}
           compareMode=${canCompare ? compareMode : "all"}
           viewerOwnSealedCollection=${viewerOwnSealedCollection || null}/>`
@@ -11874,7 +12093,8 @@ const COLLECTION_RANGES = [
 
 // Right-side panel on Home: current collection value, line chart over a
 // user-selected range, and a tiny "top movers in your collection" list.
-const CollectionPanel = ({raw, user, collection, sealedCollection, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, setsMeta}) => {
+const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, setsMeta}) => {
+  sealedMeta = sealedMeta || {};
   const [rangeKey, setRangeKey] = useState("3m");
   // Per-section visibility toggles for the value chart. All three default
   // ON; users who don't have sealed or graded just see their card line and
@@ -12080,9 +12300,18 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedPrices,
       .catch(() => { if(!cancelled) setSealedHistoryRows([]); });
     return () => { cancelled = true; };
   }, [sealedOwnedKey, rangeKey, showSealed]);
+  // Per-key acquired_date map so each sealed item only contributes from the
+  // date the user actually got it. Keys mirror sealedOwned ("pid|Normal").
+  const sealedAcquired = useMemo(() => {
+    const m = new Map();
+    for(const [pid, meta] of Object.entries(sealedMeta || {})){
+      if(meta && meta.acquired_date) m.set(pid + "|Normal", meta.acquired_date);
+    }
+    return m;
+  }, [sealedMeta]);
   const sealedValueSeries = useMemo(() =>
-    sealedHistoryRows ? computeCollectionValueHistory(sealedHistoryRows, sealedOwned, null) : null,
-    [sealedHistoryRows, sealedOwned]);
+    sealedHistoryRows ? computeCollectionValueHistory(sealedHistoryRows, sealedOwned, null, sealedAcquired) : null,
+    [sealedHistoryRows, sealedOwned, sealedAcquired]);
 
   // ── Graded series ────────────────────────────────────────────────────
   // Fetches the user's graded_collection_items rows once on mount, then
@@ -12093,9 +12322,17 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedPrices,
     if(!user){ setGradedItems([]); return; }
     let cancelled = false;
     sbClient.from("graded_collection_items")
-      .select("card_id,grader,grade,quantity")
+      .select("card_id,grader,grade,quantity,amount_paid,acquired_date")
       .eq("user_id", user.id)
-      .then(({data}) => { if(!cancelled) setGradedItems(data || []); });
+      .then(async (r) => {
+        // Pre-migration-48 schema: retry without the new columns.
+        if(r.error && (r.error.code === "42703" || /amount_paid|acquired_date/i.test(r.error.message||""))){
+          r = await sbClient.from("graded_collection_items")
+            .select("card_id,grader,grade,quantity")
+            .eq("user_id", user.id);
+        }
+        if(!cancelled) setGradedItems(r.data || []);
+      });
     return () => { cancelled = true; };
   }, [user]);
   // card_id → tcgplayer_product_id lookup so we can resolve graded item
@@ -12111,7 +12348,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedPrices,
     for(const it of gradedItems){
       const pid = pidByCardId.get(it.card_id);
       if(!pid) continue;
-      out.push({pid, grader: it.grader, grade: it.grade, qty: it.quantity || 0});
+      out.push({pid, grader: it.grader, grade: it.grade, qty: it.quantity || 0,
+        acquired_date: it.acquired_date || null});
     }
     return out;
   }, [gradedItems, pidByCardId]);
@@ -13031,7 +13269,7 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
   </div>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter}) => {
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
   const goAnalytics  = openView ? (()=>openView("market"))     : null;
@@ -13417,7 +13655,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       <div class="home-grid-right">
         <${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>
         <${CollectionPanel} raw=${raw} user=${user} collection=${collection}
-          sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
+          sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}} sealedPrices=${sealedPrices}
           collectionLoading=${collectionLoading} setsMeta=${setsMeta}
           moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
           onTitleClick=${goCollection}/>
@@ -16996,7 +17234,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
                    <${CardBrowser} raw=${deckRaw} collection=${collection}
                      onSelectGroup=${onSelectGroupStable}
                      deckQty=${deckQtyForGroup}
-                     onDeckQtyChange=${onDeckQtyChangeStable}/>
+                     onDeckQtyChange=${onDeckQtyChangeStable}
+                     defaultInks=${inkColorsInDeck}/>
                  </div>
                  <aside class="deck-editor-panel">${listBlock}${statsBlock}</aside>`}
       </div>`;
@@ -17315,14 +17554,22 @@ function App(){
         rawMap[`${r.card_id}:${r.printing}`] = (rawMap[`${r.card_id}:${r.printing}`] || 0) + (r.quantity || 0);
       }
       const sealedMap = {};
+      const sealedMeta = {};
       for(const r of (sealedRes.data || [])){
         sealedMap[r.tcgplayer_product_id] = (sealedMap[r.tcgplayer_product_id] || 0) + (r.quantity || 0);
+        if(r.amount_paid != null || r.acquired_date){
+          sealedMeta[r.tcgplayer_product_id] = {
+            amount_paid:   r.amount_paid != null ? Number(r.amount_paid) : null,
+            acquired_date: r.acquired_date || null,
+          };
+        }
       }
       setViewedCollectionData({
         profile: {user_id: vis.user_id, display_name: vis.display_name, avatar_url: vis.avatar_url},
         visibility: {raw: vis.raw_visible, sealed: vis.sealed_visible, graded: vis.graded_visible},
         rawMap,
         sealedMap,
+        sealedMeta,
         gradedRows: gradedRes.data || [],
       });
     })();
@@ -17528,6 +17775,11 @@ function App(){
   // Sealed-product collection: { [tcgplayer_product_id]: quantity }. Parallel
   // to `collection` but keyed by product_id since sealed has no card_id.
   const [sealedCollection, setSealedCollection] = useState({});
+  // Per-row purchase metadata for sealed items: { [pid]: {amount_paid, acquired_date} }.
+  // Optional — only rows the user has filled in appear here. Drives the
+  // Sealed view's "Track cost & date" inputs and the value-chart's per-item
+  // acquired-date gating.
+  const [sealedMeta, setSealedMeta] = useState({});
   // Tracks the post-sign-in fetch so the Home panel can show a "loading"
   // state instead of the "empty collection" CTA during the round-trip.
   const [collectionLoading, setCollectionLoading] = useState(false);
@@ -17732,19 +17984,34 @@ function App(){
   // local key is just the product_id. Silently no-ops if the table isn't
   // deployed yet (17_sealed_collection_items.sql).
   useEffect(()=>{
-    if(!user){ setSealedCollection({}); return; }
+    if(!user){ setSealedCollection({}); setSealedMeta({}); return; }
     let cancelled = false;
     (async ()=>{
       const all = [];
       const PAGE = 1000;
       let from = 0;
+      // amount_paid / acquired_date were added in migration 48; older
+      // deployments don't have them. Probe once on first page; on 42703
+      // (undefined column) fall back to the legacy select. Server still
+      // returns the qty rows regardless.
+      let select = "tcgplayer_product_id,quantity,amount_paid,acquired_date";
       while(true){
-        const {data, error} = await sbClient
+        let {data, error} = await sbClient
           .from("sealed_collection_items")
-          .select("tcgplayer_product_id,quantity")
+          .select(select)
           .eq("condition","NM")
           .order("tcgplayer_product_id", {ascending:true})
           .range(from, from + PAGE - 1);
+        if(error && (error.code === "42703" || /amount_paid|acquired_date/i.test(error.message||""))){
+          select = "tcgplayer_product_id,quantity";
+          const retry = await sbClient
+            .from("sealed_collection_items")
+            .select(select)
+            .eq("condition","NM")
+            .order("tcgplayer_product_id", {ascending:true})
+            .range(from, from + PAGE - 1);
+          data = retry.data; error = retry.error;
+        }
         if(error){
           // Table not deployed yet, or transient error — leave the map
           // empty rather than crashing. Console logs the reason for ops.
@@ -17758,10 +18025,18 @@ function App(){
         from += PAGE;
       }
       const map = {};
+      const meta = {};
       for(const row of all){
         map[row.tcgplayer_product_id] = (map[row.tcgplayer_product_id] || 0) + row.quantity;
+        if(row.amount_paid != null || row.acquired_date){
+          meta[row.tcgplayer_product_id] = {
+            amount_paid:   row.amount_paid != null ? Number(row.amount_paid) : null,
+            acquired_date: row.acquired_date || null,
+          };
+        }
       }
       setSealedCollection(map);
+      setSealedMeta(meta);
     })();
     return ()=>{ cancelled = true; };
   }, [user]);
@@ -17776,6 +18051,11 @@ function App(){
       else next[pid] = newQty;
       return next;
     });
+    // Deleting the row implicitly drops its purchase metadata too —
+    // mirror that locally so the inputs clear if the user re-adds.
+    if(newQty<=0){
+      setSealedMeta(m => { if(!m[pid]) return m; const n = {...m}; delete n[pid]; return n; });
+    }
     try {
       if(newQty<=0){
         await sbClient.from("sealed_collection_items").delete()
@@ -17788,6 +18068,34 @@ function App(){
       }
     } catch(e){
       console.error("sealed collection update failed:", e);
+    }
+  }, [user]);
+
+  // Update optional purchase metadata for a sealed row. Requires the row to
+  // already exist (qty > 0) — callers shouldn't surface the inputs otherwise.
+  // patch keys: amount_paid (number|null), acquired_date ("YYYY-MM-DD"|null).
+  const updateSealedMeta = useCallback(async (productId, patch) => {
+    if(!user || productId == null) return;
+    const pid = parseInt(productId, 10);
+    setSealedMeta(m => {
+      const cur = m[pid] || {amount_paid:null, acquired_date:null};
+      const next = {...cur, ...patch};
+      // If both fields nulled, drop the key entirely.
+      if(next.amount_paid == null && !next.acquired_date){
+        const out = {...m}; delete out[pid]; return out;
+      }
+      return {...m, [pid]: next};
+    });
+    try {
+      const update = {};
+      if("amount_paid"   in patch) update.amount_paid   = patch.amount_paid;
+      if("acquired_date" in patch) update.acquired_date = patch.acquired_date;
+      await sbClient.from("sealed_collection_items")
+        .update(update)
+        .eq("user_id", user.id).eq("tcgplayer_product_id", pid)
+        .eq("condition","NM");
+    } catch(e){
+      console.error("sealed meta update failed:", e);
     }
   }, [user]);
 
@@ -17932,6 +18240,20 @@ function App(){
               return; // cache is genuinely current
             }
             console.log("Catalog cache out of date (server:", serverDate, "cache:", cached.latestDate, "). Refreshing...");
+            // Every cache that derives from price data is now stale too —
+            // movers, sealed prices, per-card history, set metadata, and the
+            // collection-value rollup. Drop them so the next surface that
+            // needs them refetches fresh instead of serving yesterday's
+            // numbers. (Auth + install prefs + the catalog itself stay.)
+            try {
+              for(const k of Object.keys(localStorage)){
+                if(!k.startsWith("packsink:")) continue;
+                if(k === CACHE_KEY) continue;
+                if(k.startsWith("packsink:auth")) continue;
+                if(k === "packsink:installVisits" || k === "packsink:installDismissed") continue;
+                localStorage.removeItem(k);
+              }
+            } catch {}
           } else {
             return; // probe failed, trust TTL and skip refresh
           }
@@ -18148,7 +18470,7 @@ function App(){
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
     ${view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
-      sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} setsMeta=${setsMeta}
+      sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
       updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById} openTournamentById=${openTournamentById}
       openTournamentsList=${openTournamentsList}
@@ -18169,7 +18491,9 @@ function App(){
       bulkUpdateCollection=${viewedCollectionId ? null : bulkUpdateCollection}
       sealedPrices=${sealedPrices}
       sealedCollection=${viewedCollectionId ? (viewedCollectionData?.sealedMap || {}) : sealedCollection}
+      sealedMeta=${viewedCollectionId ? (viewedCollectionData?.sealedMeta || {}) : sealedMeta}
       updateSealedQty=${viewedCollectionId ? (()=>{}) : updateSealedQty}
+      updateSealedMeta=${viewedCollectionId ? (()=>{}) : updateSealedMeta}
       tabClickNonce=${tabClickNonce}
       onSignIn=${signIn} theme=${theme}
       currentUser=${user}

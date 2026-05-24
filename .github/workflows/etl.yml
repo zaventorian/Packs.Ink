@@ -7,33 +7,29 @@ permissions:
   contents: read
 
 # Reliability strategy:
-#   - TCGCSV publishes daily ~20:00 UTC. We fire 3 times to absorb both
-#     GitHub's flaky scheduler AND TCGCSV publishing late.
+#   - Primary trigger is cron-job.org (external pinger), which fires
+#     workflow_dispatch on the GitHub REST API at the scheduled times below.
+#     GitHub's native `schedule:` cron was consistently delayed 2-4h during
+#     high-load windows; the external pinger fires within seconds of schedule.
+#   - The cron entries below are a safety net: if cron-job.org has an outage,
+#     these still fire (just less promptly). One late ETL + one late selfheal
+#     per day is enough to keep the site self-healing.
 #   - The script is idempotent: if today's prices_daily is already written,
-#     it skips the fetch and only refreshes matviews. So later cron firings
-#     are cheap no-ops once one succeeds.
+#     it skips the fetch and only refreshes matviews. So cron-job.org and
+#     GH cron firing the same job back-to-back is harmless.
 #   - "TCGCSV hasn't published yet" exits 0 (not failure), so we don't email
 #     on every miss before 20:00 UTC.
-#   - Selfheal fires 4× over the post-publish window to catch matview refresh
-#     failures even when the main ETL never wrote prices_daily.
 on:
   schedule:
-    # Primary daily ETL (TCGCSV + graded). 21:00 UTC = 1h after TCGCSV publish.
-    - cron: "0 21 * * *"
-    # Retry #1: 1.5h later. Catches GitHub dropping the 21:00 trigger or
-    # TCGCSV publishing late.
-    - cron: "30 22 * * *"
-    # Retry #2: 4h later. Last-ditch attempt before next day's cron.
+    # Safety-net ETL fallback (cron-job.org is primary). 01:00 UTC = 8 PM CDT
+    # — late enough in the day that if cron-job.org missed every earlier slot,
+    # this still catches today's TCGCSV snapshot before midnight UTC.
     - cron: "0 1 * * *"
-    # Weekly Lorcast metadata refresh — independent of price ETL.
-    - cron: "0 22 * * 0"
-    # Matview self-heal sweep. Each run is a no-op when matview is current.
-    # Spread across the post-publish window so a matview-refresh failure on
-    # any attempt above gets repaired within ~30 min.
-    - cron: "30 21 * * *"
-    - cron: "15 23 * * *"
-    - cron: "30 1 * * *"
+    # Safety-net matview selfheal fallback. 06:00 UTC = 1 AM CDT.
     - cron: "0 6 * * *"
+    # Weekly Lorcast metadata refresh — stays on GH cron (once-a-week tolerates
+    # the GH cron delay just fine, no need to wire it into cron-job.org).
+    - cron: "0 22 * * 0"
   workflow_dispatch:
     inputs:
       job:
@@ -52,13 +48,10 @@ jobs:
   prices:
     name: TCGCSV daily prices
     runs-on: ubuntu-latest
-    # Fires on any of the 3 daily price schedules OR manual dispatch.
+    # Fires on the daily safety-net cron OR manual dispatch (which is also how
+    # cron-job.org triggers us — every external ping is a workflow_dispatch).
     if: |
-      (github.event_name == 'schedule' && (
-        github.event.schedule == '0 21 * * *' ||
-        github.event.schedule == '30 22 * * *' ||
-        github.event.schedule == '0 1 * * *'
-      )) ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
       (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
     steps:
       - uses: actions/checkout@v4
@@ -84,11 +77,7 @@ jobs:
     needs: prices
     if: |
       always() && (
-        (github.event_name == 'schedule' && (
-          github.event.schedule == '0 21 * * *' ||
-          github.event.schedule == '30 22 * * *' ||
-          github.event.schedule == '0 1 * * *'
-        )) ||
+        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'graded' || inputs.job == 'both'))
       )
     steps:
@@ -129,16 +118,12 @@ jobs:
   selfheal:
     name: Matview self-heal
     runs-on: ubuntu-latest
-    # Fires on any of the 4 selfheal schedules OR manual dispatch. Always a
-    # no-op when matview is current; calls refresh_* when prices_daily has
-    # newer rows than card_prices_latest. No external API calls.
+    # Fires on the daily safety-net selfheal cron OR manual dispatch (the path
+    # cron-job.org's self-heal pings come in on). Always a no-op when matview
+    # is current; calls refresh_* when prices_daily has newer rows than
+    # card_prices_latest. No external API calls.
     if: |
-      (github.event_name == 'schedule' && (
-        github.event.schedule == '30 21 * * *' ||
-        github.event.schedule == '15 23 * * *' ||
-        github.event.schedule == '30 1 * * *' ||
-        github.event.schedule == '0 6 * * *'
-      )) ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
       (github.event_name == 'workflow_dispatch' && inputs.job == 'selfheal')
     steps:
       - uses: actions/checkout@v4

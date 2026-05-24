@@ -344,19 +344,26 @@ SELECT public.refresh_graded_prices_latest();
 
 ### ETL reliability (post 2026-05-24 rework)
 
-3 daily prices+graded cron firings, each idempotent:
-- **21:00 UTC** — primary (1h after TCGCSV publish)
-- **22:30 UTC** — retry #1 (catches GitHub cron drop or late TCGCSV publish)
-- **01:00 UTC** — retry #2 (last-ditch before next day)
+**Primary trigger: cron-job.org** (external pinger). GitHub Actions `schedule:` cron was consistently delayed 2-4h during high-load windows; an external HTTP cron firing `workflow_dispatch` against the GitHub REST API runs within seconds of schedule. Five cron-job.org jobs (UTC) match the original cadence:
 
-4 daily selfheal sweeps (each a no-op if matview is current):
-- **21:30, 23:15, 01:30, 06:00 UTC**
+- **20:30 UTC** (3:30 PM CDT) — `both` — primary daily ETL (prices + graded)
+- **22:00 UTC** (5:00 PM CDT) — `selfheal` — matview sweep #1
+- **22:30 UTC** (5:30 PM CDT) — `both` — ETL retry #1
+- **01:00 UTC** (8:00 PM CDT) — `both` — ETL retry #2
+- **06:00 UTC** (1:00 AM CDT) — `selfheal` — overnight matview sweep
 
-Sundays 22:00 UTC: weekly Lorcast metadata refresh.
+cron-job.org account uses a fine-grained GitHub PAT scoped to `zaventorian/Packs.Ink` with `actions: write` only. PAT lives in each job's `Authorization: Bearer <token>` header — rotate every 90 days.
+
+**Safety net: GitHub `schedule:` cron**, intentionally minimal:
+- **01:00 UTC daily** — ETL fallback (catches today if cron-job.org outage)
+- **06:00 UTC daily** — selfheal fallback
+- **Sundays 22:00 UTC** — weekly Lorcast metadata refresh (stays on GH cron — once-a-week tolerates GH cron delay)
+
+Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so the prices/graded/selfheal jobs' `if:` filters accept both `schedule` (with the matching daily fallback cron) AND `workflow_dispatch` (with the matching `inputs.job` value).
 
 **No spam emails for "TCGCSV hasn't published yet"** — that's exit 0 in the script (normal, not failure). Only real script failures (network, RPC, etc.) email.
 
-**For the site to show stale data, ALL these must fail**: 3 main ETL cron triggers + 4 selfheal triggers. ~7 independent failure points.
+**For the site to show stale data**, both cron-job.org AND the GH safety-net cron would have to fail. cron-job.org alerts on failure to user email; GH cron failures surface as workflow failures.
 
 `permissions: contents: read` is pinned at the workflow level — required when repo workflow permissions setting is anything other than "Read and write".
 
