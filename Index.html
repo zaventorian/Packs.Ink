@@ -4054,7 +4054,7 @@ const fisherYates = (arr) => {
 // "Install as app" help modal. Platform-aware — Chrome / Android shows a
 // one-tap install button (when the beforeinstallprompt event was captured),
 // iOS Safari has to walk through the Share menu manually.
-const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, onClose}) => {
+const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, onClose, onDismissForever}) => {
   const [busy, setBusy] = useState(false);
   const doInstall = async () => {
     if(!installEvent) return;
@@ -4110,6 +4110,12 @@ const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, on
           <div class="muted" style=${{fontSize:11,marginTop:10,padding:"8px 10px",background:"var(--bg-surface)",borderRadius:6}}>
             On mobile? Open this page on your phone in Chrome (Android) or Safari (iOS) to install.
           </div>
+        </div>`}
+        ${onDismissForever && html`<div style=${{marginTop:14,paddingTop:12,borderTop:"1px solid var(--border)",textAlign:"center"}}>
+          <button onClick=${()=>{ onDismissForever(); onClose(); }}
+            style=${{background:"transparent",border:"none",color:"var(--text-muted)",fontSize:11,cursor:"pointer",textDecoration:"underline"}}>
+            Don't show this again
+          </button>
         </div>`}
       </div>
     </div>
@@ -17295,6 +17301,38 @@ function App(){
   const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
   const isIOS = /iPhone|iPad|iPod/i.test(ua) && !window.MSStream;
   const isAndroid = /Android/i.test(ua);
+  // Auto-nudge to install the PWA. Visit counter increments once per page
+  // load. Skip first visit (don't ambush newcomers), then auto-open the
+  // install modal on visits 2 and 3. The "Don't show again" link in the
+  // modal flips a permanent dismissed flag so users can opt out.
+  // Skipped entirely when already installed (standalone) or not on mobile.
+  const [autoInstallVisits] = useState(() => {
+    try {
+      const prev = parseInt(localStorage.getItem("packsink:installVisits") || "0", 10) || 0;
+      const next = prev + 1;
+      localStorage.setItem("packsink:installVisits", String(next));
+      return next;
+    } catch { return 0; }
+  });
+  useEffect(() => {
+    if(isStandalone) return;
+    if(!isIOS && !isAndroid) return;
+    let dismissed = false;
+    try { dismissed = localStorage.getItem("packsink:installDismissed") === "1"; } catch {}
+    if(dismissed) return;
+    // Show on visits 2 and 3. Beyond that, stay quiet — user has had
+    // multiple chances and either hit "Don't show again" already or
+    // ignored the modal a couple times (which is its own signal).
+    if(autoInstallVisits >= 2 && autoInstallVisits <= 3){
+      // Delay slightly so the modal doesn't slam in during the initial
+      // render; lets the page paint first.
+      const t = setTimeout(() => setInstallHelpOpen(true), 800);
+      return () => clearTimeout(t);
+    }
+  }, [autoInstallVisits, isStandalone, isIOS, isAndroid]);
+  const dismissInstallForever = () => {
+    try { localStorage.setItem("packsink:installDismissed", "1"); } catch {}
+  };
   // Close settings popover on outside click / Escape.
   const settingsRef = useRef(null);
   useEffect(() => {
@@ -17937,7 +17975,8 @@ function App(){
       installEvent=${installEvent}
       clearInstallEvent=${()=>setInstallEvent(null)}
       isIOS=${isIOS} isAndroid=${isAndroid}
-      onClose=${()=>setInstallHelpOpen(false)}/>`}
+      onClose=${()=>setInstallHelpOpen(false)}
+      onDismissForever=${autoInstallVisits >= 3 ? dismissInstallForever : null}/>`}
     ${loading && html`<div class="loading-status">
       ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
     </div>`}
