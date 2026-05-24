@@ -15765,20 +15765,47 @@ function parseDeckText(text, raw){
     }
     byName[k] = best;
   }
+  // Lookup table by exact (Set, collector_number) for the Dreamborn-style
+  // "(set-cn)" suffix import. Set number is 1-based release order matching
+  // MAINLINE_SETS. Collector number may carry a letter suffix (e.g. "24a")
+  // or be slash-suffixed in our data ("24/204") — strip slashes on the key.
+  const candidatesBySetCN = {};
+  for(const r of raw){
+    if(!r.card_id || !r.Set || !r.Number) continue;
+    const setIdx = MAINLINE_SETS.indexOf(r.Set);
+    if(setIdx < 0) continue; // only mainline sets get numeric ids in Dreamborn
+    const cn = String(r.Number).split("/")[0].trim();
+    candidatesBySetCN[(setIdx + 1) + "|" + cn] = r;
+  }
   const entries = [];
   const unmatched = [];
   const lines = text.split(/\r?\n/);
   for(const raw_line of lines){
     const line = raw_line.trim();
     if(!line || line.startsWith("#") || line.startsWith("//")) continue;
-    // "4x Name", "4 Name", "4 - Name"
-    const m = line.match(/^(\d+)\s*(?:x|×)?\s*(?:-\s*)?(.+)$/i);
+    // Formats accepted:
+    //   "4 Name"
+    //   "4x Name", "4× Name", "4 - Name"
+    //   "4 Name - Subtitle (3-16)"   <- Dreamborn export
+    //   "4 Snow Fort (11-98)"        <- no subtitle, still ok
+    const m = line.match(/^(\d+)\s*(?:x|×)?\s*(?:-\s*)?(.+?)(?:\s*\((\d+)-(\d+[a-zA-Z]?)\))?\s*$/i);
     if(!m){ unmatched.push(line); continue; }
     const qty = parseInt(m[1], 10);
     const name = m[2].trim();
+    const setNum = m[3] ? parseInt(m[3], 10) : null;
+    const cn = m[4] ? m[4].trim() : null;
     if(!qty || qty <= 0){ unmatched.push(line); continue; }
-    const hit = byName[normalizeCardName(name)] || byName[squashCardName(name)];
-    if(!hit){ unmatched.push(`${qty} ${name}`); continue; }
+    // If the line carries (set-cn), try an exact lookup first. This wins
+    // over name scoring so e.g. Cinderella - Ballroom Sensation (2-205)
+    // resolves to the Enchanted instead of the base printing.
+    let hit = null;
+    if(setNum && cn){
+      hit = candidatesBySetCN[setNum + "|" + cn] || null;
+    }
+    if(!hit){
+      hit = byName[normalizeCardName(name)] || byName[squashCardName(name)];
+    }
+    if(!hit){ unmatched.push(`${qty} ${name}${setNum && cn ? ` (${setNum}-${cn})` : ""}`); continue; }
     entries.push({card_id: hit.card_id, quantity: Math.min(qty, 4), source_line: line});
   }
   // Dedupe by card_id (sum quantities, cap at 4).
