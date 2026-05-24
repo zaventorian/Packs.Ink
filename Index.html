@@ -3819,12 +3819,15 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // before; pure SVG so html2canvas can render it). Dual-ink buckets emit
   // a 135° linearGradient via <defs>; single-ink uses a flat ink color.
   const curveSvg = useMemo(() => {
-    const W = 460, H = 130, padL = 28, padR = 16, padT = 18, padB = 26;
+    // padL=0 so the first bar starts flush with the SVG's left edge, which
+    // is the same x as the stats row above it. Keeps the cost curve aligned
+    // with "60 CARDS" / "14 UNINKABLE" / etc.
+    const W = 460, H = 130, padL = 0, padR = 16, padT = 18, padB = 26;
     const colCount = 9;
     const innerW = W - padL - padR;
     const innerH = H - padT - padB;
-    const bw = (innerW / colCount) * 0.72;
-    const gap = (innerW / colCount) * 0.28;
+    const bw = (innerW / colCount) * 0.78;
+    const gap = (innerW / colCount) * 0.22;
     const yScale = (v) => (v / curveMax) * innerH;
     // Build linearGradient defs for every composite (dual) ink key in use.
     const gradientDefs = dualKeys.map(k => {
@@ -3845,7 +3848,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     for(let i=0; i<colCount; i++){
       const bucket = costBuckets[i];
       const total = Object.values(bucket).reduce((s,v) => s+v, 0);
-      const x = padL + (innerW/colCount)*i + gap/2;
+      // No leading gap/2 — bar 0 sits flush with x=padL so the cost-curve
+      // column aligns with the stats column immediately above.
+      const x = padL + (innerW/colCount)*i;
       const yBaseline = H - padB;
       let yCursor = yBaseline;
       // Sort keys: singles by INK_ORDER first, then duals alphabetically.
@@ -3969,7 +3974,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             </div>
           </div>
         </div>
-        <div style=${{position:"relative",marginBottom:14}}>
+        <div class="deck-poster-wrap" style=${{position:"relative",marginBottom:14}}>
         <div ref=${posterRef} class="deck-poster" style=${{background:bgCss,padding:24,borderRadius:10,
           color:textColor,position:"relative",zIndex:1}}>
           <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
@@ -4015,12 +4020,15 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 ${curveSvg}
               </div>`}
             </div>`}
-            ${qrSrc && html`<img src=${qrSrc} crossOrigin="anonymous" alt="QR code"
-              style=${{width:96,height:96,background:"#fff",borderRadius:6,padding:4,flexShrink:0,alignSelf:"flex-start"}}/>`}
-            <img src="Logos/packs-ink-logo.png" alt="packs.ink"
-              crossOrigin="anonymous"
-              style=${{height:96,width:"auto",display:"block",flexShrink:0,alignSelf:"flex-start",
-                filter:isLightBg?"none":"drop-shadow(0 2px 5px rgba(0,0,0,0.4))"}}/>
+            <div style=${{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,
+              flexShrink:0,alignSelf:"flex-start"}}>
+              <img src="Logos/packs-ink-logo.png" alt="packs.ink"
+                crossOrigin="anonymous"
+                style=${{height:96,width:"auto",display:"block",
+                  filter:isLightBg?"none":"drop-shadow(0 2px 5px rgba(0,0,0,0.4))"}}/>
+              ${qrSrc && html`<img src=${qrSrc} crossOrigin="anonymous" alt="QR code"
+                style=${{width:96,height:96,background:"#fff",borderRadius:6,padding:4,display:"block"}}/>`}
+            </div>
           </div>
           <div style=${{display:"grid",gridTemplateColumns:`repeat(${cols},1fr)`,gap:10}}>
             ${cards.map(c => html`<div key=${c.card_id} style=${{position:"relative"}}>
@@ -8848,7 +8856,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
             .select("card_id,grader,grade,quantity,updated_at")
             .eq("user_id", user.id),
           sbClient.from("graded_collection_goals")
-            .select("goal_id,set_id,rarities,display_name,inserted_at")
+            .select("goal_id,set_id,extras_bucket,rarities,display_name,inserted_at")
             .eq("user_id", user.id),
           sbFetchAll("graded_prices_latest", {
             select: "tcgplayer_product_id,grader,grade,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,price_date",
@@ -8906,6 +8914,31 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     }
     return m;
   }, [raw]);
+  // Bucket Extras & Oddities rows by variant_label so goals can target
+  // a specific Extras sub-bucket (e.g. "Deep Trouble", "Palace Heist",
+  // "Starter Deck Exclusive Foil"). Cards are deduped per (card_id, label)
+  // so split-printing rows don't double-count.
+  const extrasCardsByBucket = useMemo(() => {
+    const m = new Map();
+    const seenPerBucket = new Map(); // bucket -> Set<card_id>
+    for(const r of (raw||[])){
+      if(r.Set !== EXTRAS_SET_NAME) continue;
+      const bucket = r.variant_label || null;
+      if(!bucket || !r.card_id) continue;
+      const seen = seenPerBucket.get(bucket) || new Set();
+      if(seen.has(r.card_id)) continue;
+      seen.add(r.card_id);
+      seenPerBucket.set(bucket, seen);
+      const arr = m.get(bucket) || [];
+      arr.push(r);
+      m.set(bucket, arr);
+    }
+    return m;
+  }, [raw]);
+  // Sorted list of Extras buckets that actually have at least one card.
+  const extrasBucketOptions = useMemo(() => {
+    return Array.from(extrasCardsByBucket.keys()).sort((a,b) => a.localeCompare(b));
+  }, [extrasCardsByBucket]);
   // Set name lookup.
   const setNameById = useMemo(() => {
     const m = new Map();
@@ -8938,30 +8971,43 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       slots.set(it.grader + "|" + it.grade, {owned: true, qty: it.quantity, grader: it.grader, grade: it.grade});
     }
     // Tracked goals add placeholder slots when no graded copy is owned for
-    // the card. Goal = (set_id, rarities[]). We don't pick a specific grade
-    // for placeholders — show the card once with no grader/grade so the
-    // user can later add an owned slot when they buy one.
+    // the card. Goal targets either (set_id, rarities[]) for a regular set
+    // OR (extras_bucket, rarities[]) for an Extras & Oddities sub-bucket
+    // ("Deep Trouble", "Palace Heist", "Starter Deck Exclusive Foil").
+    //
+    // Cards added via an Extras goal are bucketed under a synthetic set_id
+    // ("__extras:<bucket>") so each Extras bucket renders as its own
+    // section, separate from the cards' real origin sets.
     const trackedCardIds = new Set();
+    const extrasBucketByCardId = new Map(); // card_id -> bucket name (for synthetic bucketing)
     for(const g of goals){
-      const cardsInSet = cardsBySetId.get(g.set_id) || [];
       const rarFilter = new Set((g.rarities||[]).map(r => (r||"").toLowerCase()));
-      for(const r of cardsInSet){
+      let cardsForGoal;
+      let extrasBucket = null;
+      if(g.extras_bucket){
+        cardsForGoal = extrasCardsByBucket.get(g.extras_bucket) || [];
+        extrasBucket = g.extras_bucket;
+      } else {
+        cardsForGoal = cardsBySetId.get(g.set_id) || [];
+      }
+      for(const r of cardsForGoal){
         if(rarFilter.size && !rarFilter.has((r.Rarity||"").toLowerCase())) continue;
         if(!r.card_id) continue;
         trackedCardIds.add(r.card_id);
+        if(extrasBucket) extrasBucketByCardId.set(r.card_id, extrasBucket);
         if(!slotsByCard.has(r.card_id)){
           slotsByCard.set(r.card_id, new Map());
-          // placeholder slot for "tracked but no graded copy yet"
           slotsByCard.get(r.card_id).set("__placeholder", {owned: false, qty: 0});
         }
       }
     }
-    // Bucket by set_id.
+    // Bucket by set_id (or synthetic extras key for Extras-goal cards).
     const bySet = new Map();
     for(const [cid, slots] of slotsByCard){
       const meta = cardById.get(cid);
       if(!meta) continue;
-      const sid = meta.set_id;
+      const extrasBucket = extrasBucketByCardId.get(cid);
+      const sid = extrasBucket ? ("__extras:" + extrasBucket) : meta.set_id;
       if(!bySet.has(sid)) bySet.set(sid, []);
       const arr = Array.from(slots.values());
       arr.sort((a,b) => {
@@ -8970,21 +9016,27 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       });
       bySet.get(sid).push({card: meta, slots: arr});
     }
-    // Sort sets newest-first using MAINLINE_RELEASE_ORDER; promos sink.
-    // Sort cards inside each set by collector number (Number = "12/204").
     const setEntries = Array.from(bySet.entries()).map(([sid, cards]) => ({
       set_id: sid,
-      set_name: setNameById.get(sid) || "Unknown set",
+      set_name: sid.startsWith("__extras:")
+        ? (EXTRAS_SET_NAME + " — " + sid.slice("__extras:".length))
+        : (setNameById.get(sid) || "Unknown set"),
       cards: cards.sort((a,b) => collectorNum(a.card) - collectorNum(b.card)),
     }));
     setEntries.sort((a,b) => {
+      // Extras sub-buckets sort at the very end so they don't push mainline
+      // sets off-screen.
+      const aExtras = a.set_id.startsWith("__extras:");
+      const bExtras = b.set_id.startsWith("__extras:");
+      if(aExtras !== bExtras) return aExtras ? 1 : -1;
+      if(aExtras) return a.set_name.localeCompare(b.set_name);
       const ai = (typeof MAINLINE_RELEASE_ORDER !== "undefined") ? MAINLINE_RELEASE_ORDER.indexOf(a.set_name) : -1;
       const bi = (typeof MAINLINE_RELEASE_ORDER !== "undefined") ? MAINLINE_RELEASE_ORDER.indexOf(b.set_name) : -1;
       if(ai !== bi) return bi - ai;
       return a.set_name.localeCompare(b.set_name);
     });
     return setEntries;
-  }, [items, goals, cardById, cardsBySetId, setNameById]);
+  }, [items, goals, cardById, cardsBySetId, extrasCardsByBucket, setNameById]);
 
   // Quick total/value math for the header.
   const totals = useMemo(() => {
@@ -9023,9 +9075,15 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(error){ alert("Delete failed: " + error.message); return; }
     setItems(prev => (prev||[]).filter(p => !(p.card_id===card_id && p.grader===grader && p.grade===grade)));
   }, [user]);
-  const addGoal = useCallback(async ({set_id, rarities, display_name}) => {
+  const addGoal = useCallback(async ({set_id, extras_bucket, rarities, display_name}) => {
     if(!user) return;
-    const row = {user_id: user.id, set_id, rarities: rarities||[], display_name: display_name||null};
+    const row = {
+      user_id: user.id,
+      set_id: set_id || null,
+      extras_bucket: extras_bucket || null,
+      rarities: rarities||[],
+      display_name: display_name||null,
+    };
     const {data, error} = await sbClient.from("graded_collection_goals").insert(row).select().single();
     if(error){ alert("Save failed: " + error.message); return; }
     setGoals(prev => [...(prev||[]), data]);
@@ -9173,21 +9231,26 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                 No tracking goals. Add one to surface a checklist of cards you're chasing — e.g. <em>Fabled · Epic + Enchanted + Iconic</em>.
               </div>`
             : (goals||[]).map(g => {
-                // x/X math for this goal: total = cards in goal's set matching
-                // the rarity filter; owned = subset where the user has any
-                // graded slot recorded. Goals with empty rarities[] track
-                // every rarity in the set.
-                const cardsInSet = cardsBySetId.get(g.set_id) || [];
+                // x/X math for this goal: total = cards in goal's set (or
+                // Extras bucket) matching the rarity filter; owned = subset
+                // where the user has any graded slot recorded. Goals with
+                // empty rarities[] track every rarity in the bucket.
+                const cardsForGoal = g.extras_bucket
+                  ? (extrasCardsByBucket.get(g.extras_bucket) || [])
+                  : (cardsBySetId.get(g.set_id) || []);
                 const rar = new Set((g.rarities||[]).map(r => (r||"").toLowerCase()));
-                const inGoal = cardsInSet.filter(r => !rar.size || rar.has((r.Rarity||"").toLowerCase()));
+                const inGoal = cardsForGoal.filter(r => !rar.size || rar.has((r.Rarity||"").toLowerCase()));
                 const inGoalIds = new Set(inGoal.map(r => r.card_id).filter(Boolean));
                 const ownedSet = new Set((items||[]).map(it => it.card_id));
                 const ownedCount = [...inGoalIds].filter(cid => ownedSet.has(cid)).length;
                 const total = inGoalIds.size;
                 const pct = total ? Math.round((ownedCount/total)*100) : 0;
+                const targetName = g.extras_bucket
+                  ? (EXTRAS_SET_NAME + " — " + g.extras_bucket)
+                  : (setNameById.get(g.set_id) || g.set_id);
                 return html`<div key=${g.goal_id} class="gc-goal">
-                  <div class="gc-goal-name">${g.display_name || setNameById.get(g.set_id) || "Goal"}</div>
-                  <div class="gc-goal-sub muted">${setNameById.get(g.set_id) || g.set_id}${g.rarities?.length ? " · " + g.rarities.join(" · ") : " · All rarities"}</div>
+                  <div class="gc-goal-name">${g.display_name || targetName || "Goal"}</div>
+                  <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.join(" · ") : " · All rarities"}</div>
                   <div class="gc-goal-progress">
                     <div class="gc-goal-progress-bar"><div class="gc-goal-progress-fill" style=${{width: pct+"%"}}></div></div>
                     <span class="gc-goal-progress-text">${ownedCount} / ${total} ${total ? `· ${pct}%` : ""}</span>
@@ -9205,6 +9268,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       onAdd=${async (p) => { await addItem(p); setAddOpen(false); }}/>`}
     ${goalOpen && html`<${GradedCollectionGoalModal}
       setNameById=${setNameById} setIdsByName=${setIdsByName}
+      extrasBucketOptions=${extrasBucketOptions}
       onClose=${()=>setGoalOpen(false)}
       onAdd=${async (p) => { await addGoal(p); setGoalOpen(false); }}/>`}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
@@ -9334,9 +9398,11 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, onClose, onAdd}) =
   </div>`;
 };
 
-// Modal for adding a Set Tracking goal. Pick set + optional rarities subset.
-const GradedCollectionGoalModal = ({setNameById, setIdsByName, onClose, onAdd}) => {
+// Modal for adding a Set Tracking goal. Pick set (or Extras bucket) +
+// optional rarities subset.
+const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptions, onClose, onAdd}) => {
   const [setName, setSetName] = useState("");
+  const [extrasBucket, setExtrasBucket] = useState("");
   const [rarities, setRarities] = useState(new Set());
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -9348,7 +9414,10 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, onClose, onAdd}) 
       return a.localeCompare(b);
     });
   }, [setIdsByName]);
-  const canSave = setName && setIdsByName.has(setName);
+  const isExtras = setName === EXTRAS_SET_NAME;
+  const canSave = isExtras
+    ? !!extrasBucket
+    : (setName && setIdsByName.has(setName));
 
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:480}}>
@@ -9362,19 +9431,35 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, onClose, onAdd}) 
         </p>
         <label style=${{display:"block",marginBottom:12}}>
           <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Set</div>
-          <select value=${setName} onChange=${e=>setSetName(e.target.value)}
+          <select value=${setName} onChange=${e=>{ setSetName(e.target.value); setExtrasBucket(""); }}
             style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",
               borderRadius:6,background:"var(--bg)",color:"var(--text)",fontSize:13}}>
             <option value="">— Pick a set —</option>
             ${setOptions.map(s => html`<option key=${s} value=${s}>${s}</option>`)}
+            ${extrasBucketOptions && extrasBucketOptions.length > 0 && html`<option value=${EXTRAS_SET_NAME}>${EXTRAS_SET_NAME}</option>`}
           </select>
         </label>
+        ${isExtras && html`<label style=${{display:"block",marginBottom:12}}>
+          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Extras bucket</div>
+          <select value=${extrasBucket} onChange=${e=>setExtrasBucket(e.target.value)}
+            style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",
+              borderRadius:6,background:"var(--bg)",color:"var(--text)",fontSize:13}}>
+            <option value="">— Pick a bucket —</option>
+            ${(extrasBucketOptions||[]).map(b => html`<option key=${b} value=${b}>${b}</option>`)}
+          </select>
+          <div class="muted" style=${{fontSize:10,marginTop:4}}>Tracks every card in this Extras sub-bucket (e.g. all Palace Heist cards).</div>
+        </label>`}
         <div style=${{marginBottom:12}}>
           <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities</div>
           <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
             ${GRADED_RARITY_OPTIONS.map(r => html`<button key=${r}
-              class=${"chip "+(rarities.has(r)?"active":"")}
-              onClick=${()=>setRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>${r}</button>`)}
+              class=${"chip chip-with-icon "+(rarities.has(r)?"active":"")}
+              title=${r} aria-label=${r}
+              onClick=${()=>setRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>
+              ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt="" aria-hidden="true"
+                onError=${e=>{ e.target.style.display="none"; }}/>`}
+              <span>${r}</span>
+            </button>`)}
           </div>
           <div class="muted" style=${{fontSize:10,marginTop:4}}>Leave empty to track all rarities in this set.</div>
         </div>
@@ -9390,7 +9475,10 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, onClose, onAdd}) 
           <button onClick=${onClose}>Cancel</button>
           <button class="active" disabled=${!canSave || busy} onClick=${async ()=>{
             setBusy(true);
-            await onAdd({set_id: setIdsByName.get(setName), rarities: Array.from(rarities), display_name: displayName.trim() || null});
+            const payload = isExtras
+              ? {extras_bucket: extrasBucket, rarities: Array.from(rarities), display_name: displayName.trim() || null}
+              : {set_id: setIdsByName.get(setName), rarities: Array.from(rarities), display_name: displayName.trim() || null};
+            await onAdd(payload);
             setBusy(false);
           }} style=${{padding:"7px 16px",fontSize:13}}>
             ${busy ? "Saving…" : "Add goal"}
