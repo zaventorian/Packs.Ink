@@ -10,8 +10,10 @@ Workflow:
        upsert into public.graded_prices_daily.
 
 Idempotent — re-running is safe (primary key is
-(tcgplayer_product_id, grader, grade, date), so re-pulls overwrite same-day
-rows with the same data).
+(tcgplayer_product_id, printing, grader, grade, date), so re-pulls overwrite
+same-day rows with the same data). `printing` is taken from each
+TCGPriceLookup record's `variant` field so foil and non-foil printings of
+the same tcgplayer_id (LCP C1, TFC Cold Foils) land as distinct rows.
 
 Usage:
     pip install -r requirements.txt
@@ -62,10 +64,13 @@ def call(session: requests.Session, key: str, url: str, params: dict | None = No
     raise RuntimeError(f"persistent rate-limit on {url}")
 
 
-def collect_target_cards(session: requests.Session, key: str) -> list[tuple[str, int, str]]:
-    """Page through the Lorcana catalog and return [(uuid, tcg_id, name)]
-    for every card that currently has at least one graded entry."""
-    out: list[tuple[str, int, str]] = []
+def collect_target_cards(session: requests.Session, key: str) -> list[tuple[str, int, str, str]]:
+    """Page through the Lorcana catalog and return
+    [(uuid, tcg_id, printing, name)] for every card that currently has at
+    least one graded entry. Split-printing cards (TFC Cold Foils, C1
+    Holofoils) appear as two entries sharing the same tcg_id with
+    different printings."""
+    out: list[tuple[str, int, str, str]] = []
     offset = 0
     total = None
     pages = 0
@@ -88,7 +93,8 @@ def collect_target_cards(session: requests.Session, key: str) -> list[tuple[str,
                 tcg_id_int = None
             if tcg_id_int is None:
                 continue
-            out.append((card["id"], tcg_id_int, card.get("name") or ""))
+            printing = (card.get("variant") or "Normal").strip() or "Normal"
+            out.append((card["id"], tcg_id_int, printing, card.get("name") or ""))
         if not page or (offset + len(page)) >= total:
             break
         offset += len(page)
@@ -97,9 +103,10 @@ def collect_target_cards(session: requests.Session, key: str) -> list[tuple[str,
     return out
 
 
-def extract_history_rows(history: dict, tcg_id: int) -> list[dict]:
+def extract_history_rows(history: dict, tcg_id: int, printing: str) -> list[dict]:
     """Walk a /history response and emit one row per
-    (date, grader, grade) where source=ebay."""
+    (date, grader, grade) where source=ebay. `printing` is supplied by the
+    caller since /history doesn't repeat the variant per snapshot."""
     rows: list[dict] = []
     for snap in history.get("data") or []:
         date_str = snap.get("date")
@@ -121,6 +128,7 @@ def extract_history_rows(history: dict, tcg_id: int) -> list[dict]:
                 continue
             rows.append({
                 "tcgplayer_product_id": tcg_id,
+                "printing": printing,
                 "grader": str(grader).lower(),
                 "grade":  str(grade),
                 "date":   date_str,
@@ -167,6 +175,8 @@ def main() -> None:
             sys.exit("--pids was set but contained no integers.")
         print(f"Targeted backfill for pids: {sorted(wanted)}")
         all_targets = collect_target_cards(session, api_key)
+        # Targeted pids may match multiple records (one per printing) —
+        # keep them all so foil + non-foil both get re-pulled.
         targets = [t for t in all_targets if t[1] in wanted]
         missing = wanted - {t[1] for t in targets}
         if missing:
@@ -184,18 +194,18 @@ def main() -> None:
 
     # Phase 2: pull /history per card and accumulate rows.
     all_rows: list[dict] = []
-    for i, (uuid, tcg_id, name) in enumerate(targets, 1):
+    for i, (uuid, tcg_id, printing, name) in enumerate(targets, 1):
         time.sleep(REQUEST_DELAY_SEC)
         try:
             history = call(session, api_key, f"{API_BASE}/cards/{uuid}/history",
                            {"period": HISTORY_PERIOD})
         except Exception as e:
-            print(f"  [{i}/{len(targets)}] {name} (tcg={tcg_id}): history failed — {e}")
+            print(f"  [{i}/{len(targets)}] {name} (tcg={tcg_id} {printing}): history failed — {e}")
             continue
-        rows = extract_history_rows(history, tcg_id)
+        rows = extract_history_rows(history, tcg_id, printing)
         all_rows.extend(rows)
         if i % 25 == 0 or i == len(targets):
-            print(f"  [{i}/{len(targets)}] {name} (tcg={tcg_id}): +{len(rows)} snapshots · running total {len(all_rows)}")
+            print(f"  [{i}/{len(targets)}] {name} (tcg={tcg_id} {printing}): +{len(rows)} snapshots · running total {len(all_rows)}")
 
     if not all_rows:
         print("History returned no rows. Done.")
@@ -206,7 +216,7 @@ def main() -> None:
     upserted = 0
     for batch in chunked(all_rows, BATCH):
         sb.upsert("graded_prices_daily", batch,
-                  on_conflict="tcgplayer_product_id,grader,grade,date")
+                  on_conflict="tcgplayer_product_id,printing,grader,grade,date")
         upserted += len(batch)
         print(f"  upserted {upserted}/{len(all_rows)} rows")
 

@@ -114,6 +114,26 @@ class Supabase:
                 f"Patch {table} {match} failed ({r.status_code}): {r.text[:500]}"
             )
 
+    def delete(self, table: str, filters: dict[str, str]) -> list[dict]:
+        """Delete rows matching `filters` (eq/in/gte/etc, PostgREST syntax).
+        Returns the deleted rows when Prefer=return=representation is set.
+        Requires at least one filter — guards against accidental table wipes."""
+        if not filters:
+            raise ValueError("delete requires at least one filter to prevent table-wide deletes")
+        endpoint = f"{self.url}/rest/v1/{table}"
+        r = requests.delete(
+            endpoint,
+            headers=self._headers("return=representation"),
+            params=filters,
+            timeout=60,
+        )
+        if not r.ok:
+            raise RuntimeError(f"Delete {table} {filters} failed ({r.status_code}): {r.text[:500]}")
+        try:
+            return r.json() if r.text else []
+        except Exception:
+            return []
+
     def rpc(self, name: str, args: dict | None = None) -> dict | list | None:
         """Call a Postgres function exposed via PostgREST RPC."""
         endpoint = f"{self.url}/rest/v1/rpc/{name}"

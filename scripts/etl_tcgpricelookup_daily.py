@@ -13,8 +13,14 @@ Usage:
     python scripts/etl_tcgpricelookup_daily.py
 
 What it stores:
-    public.graded_prices_daily (tcgplayer_product_id, grader, grade, date,
-                                ebay_avg_1d, ebay_avg_7d, ebay_avg_30d)
+    public.graded_prices_daily (tcgplayer_product_id, printing, grader, grade,
+                                date, ebay_avg_1d, ebay_avg_7d, ebay_avg_30d)
+
+    `printing` is taken from each TCGPriceLookup record's `variant` field
+    ("Normal" / "Cold Foil" / "Holofoil"). Split-printing cards (LCP C1,
+    most of TFC's rare foils) appear as TWO records sharing one
+    tcgplayer_id, so capturing variant is what keeps foil and non-foil
+    graded prices separate.
 
 What it does NOT store:
     - Raw TCGPlayer prices (that's etl_tcgcsv_daily.py's job)
@@ -23,6 +29,7 @@ What it does NOT store:
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 import time
@@ -33,6 +40,8 @@ import requests
 from dotenv import load_dotenv
 
 from supabase_client import Supabase
+
+OVERRIDES_PATH = os.path.join(os.path.dirname(__file__), "graded_overrides.json")
 
 API_BASE = "https://api.tcgpricelookup.com/v1"
 GAME_SLUG = "lorcana"
@@ -63,7 +72,12 @@ def fetch_page(session: requests.Session, key: str, offset: int) -> dict:
 
 def extract_rows(card: dict, today: str) -> list[dict]:
     """Pull graded prices out of one card record. Skips cards without a
-    tcgplayer_product_id or without any graded data."""
+    tcgplayer_product_id or without any graded data.
+
+    Each row carries `printing` from the record's `variant` field. For
+    split-printing cards (same tcgplayer_id, different variants — TFC
+    Cold Foils, C1 Holofoils, etc.) the catalog returns multiple records;
+    each one becomes its own row keyed by (pid, printing, grader, grade)."""
     tcg_id = card.get("tcgplayer_id")
     if not tcg_id:
         return []
@@ -74,6 +88,9 @@ def extract_rows(card: dict, today: str) -> list[dict]:
     graded = ((card.get("prices") or {}).get("graded")) or {}
     if not graded:
         return []
+    # Default to "Normal" when variant is missing — matches the migration
+    # backfill and our prices_daily convention.
+    printing = (card.get("variant") or "Normal").strip() or "Normal"
     rows = []
     for grader, grades in graded.items():
         if not isinstance(grades, dict):
@@ -90,6 +107,7 @@ def extract_rows(card: dict, today: str) -> list[dict]:
                 continue
             rows.append({
                 "tcgplayer_product_id": tcg_id_int,
+                "printing": printing,
                 "grader": str(grader).lower(),
                 "grade": str(grade),
                 "date": today,
@@ -104,6 +122,36 @@ def extract_rows(card: dict, today: str) -> list[dict]:
 def chunked(seq: list, n: int) -> Iterable[list]:
     for i in range(0, len(seq), n):
         yield seq[i:i+n]
+
+
+def load_overrides(today: str) -> tuple[list[dict], list[dict]]:
+    """Load scripts/graded_overrides.json and return (insert_rows, delete_rows).
+    insert_rows go through the normal upsert path (they win on PK collision
+    because they're applied AFTER TCGPriceLookup rows in the same batch).
+    delete_rows specify a key that should be removed from today's snapshot.
+    Returns ([], []) when the file is missing or empty."""
+    if not os.path.exists(OVERRIDES_PATH):
+        return [], []
+    try:
+        with open(OVERRIDES_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print(f"WARN: failed to read {OVERRIDES_PATH}: {e}")
+        return [], []
+    inserts = []
+    for r in (data.get("overrides") or []):
+        row = {k: v for k, v in r.items() if k != "notes"}
+        if row.get("date") == "today":
+            row["date"] = today
+        row.setdefault("source", "manual_override")
+        # Require the PK fields; skip silently if malformed.
+        if not all(k in row for k in ("tcgplayer_product_id", "printing", "grader", "grade", "date")):
+            continue
+        inserts.append(row)
+    deletes = []
+    for r in (data.get("delete") or []):
+        deletes.append({k: v for k, v in r.items() if k != "notes"})
+    return inserts, deletes
 
 
 def main() -> None:
@@ -141,23 +189,52 @@ def main() -> None:
         time.sleep(REQUEST_DELAY_SEC)
     print(f"Pulled {pages} pages · {cards_with_graded} cards with graded data · {len(all_rows)} graded-price rows")
 
+    # Apply manual overrides AFTER pulling TCGPriceLookup. Appended last so
+    # they win on PK collision (same date upserts replace). Deletes run
+    # after the upsert to clear out rows we explicitly don't want.
+    override_inserts, override_deletes = load_overrides(today)
+    if override_inserts:
+        print(f"Adding {len(override_inserts)} manual override rows from graded_overrides.json")
+        all_rows.extend(override_inserts)
+
     if not all_rows:
         print("No graded rows to upsert. Done.")
         return
 
     # Upsert in batches. Conflict target = primary key
-    # (tcgplayer_product_id, grader, grade, date), so re-runs same-day are
-    # idempotent.
+    # (tcgplayer_product_id, printing, grader, grade, date), so re-runs
+    # same-day are idempotent.
     BATCH = 500
     upserted = 0
     for batch in chunked(all_rows, BATCH):
         res = sb.upsert(
             "graded_prices_daily", batch,
-            on_conflict="tcgplayer_product_id,grader,grade,date",
+            on_conflict="tcgplayer_product_id,printing,grader,grade,date",
         )
         upserted += len(batch)
         print(f"  upserted {upserted}/{len(all_rows)} rows")
     print(f"Upsert complete · {upserted} rows total")
+
+    # Apply deletes — for each (pid, printing, grader, grade) entry, drop
+    # today's row so the override insert isn't shadowed by a TCGPriceLookup
+    # row we'd rather suppress. Skips historical rows (date != today) so we
+    # don't blow away history.
+    if override_deletes:
+        print(f"Applying {len(override_deletes)} manual delete entries from graded_overrides.json")
+        for d in override_deletes:
+            try:
+                res = sb.delete("graded_prices_daily", filters={
+                    "tcgplayer_product_id": "eq." + str(d["tcgplayer_product_id"]),
+                    "printing": "eq." + d["printing"],
+                    "grader":   "eq." + d["grader"],
+                    "grade":    "eq." + d["grade"],
+                    "date":     "eq." + today,
+                })
+                n = len(res) if isinstance(res, list) else 0
+                if n:
+                    print(f"  deleted {n} rows for pid={d['tcgplayer_product_id']} {d['printing']} {d['grader']} {d['grade']} (today)")
+            except Exception as e:
+                print(f"  WARN: delete failed for {d}: {e}")
 
     # Refresh the latest matview so site queries pick up today's data.
     try:
