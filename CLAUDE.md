@@ -20,11 +20,23 @@ Lorcana TCG market + collection app. Affiliate revenue via TCGPlayer (Impact, 3.
 
 ## Top-level nav
 
-`Home · Screener · Price Graphing · Analytics · Cards · Collection · Decks`
+**Two-row icon nav** (restructured 2026-05-25). Row 1 = "my stuff", Row 2 = "market intel". Home tab removed — the logo IS the home click target.
 
-- **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface.
+- **Row 1**: Collection · Cards · Decks
+- **Row 2**: Screener · Price Graphing · Analytics · Help
+
+Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-style line glyphs), `stroke="currentColor"` so they inherit theme color. To add/swap an icon: edit the `path` for that key in NAV_ICONS, no asset file needed.
+
+- **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + TCGPriceLookup graded data.
 - **Price Graphing** = per-card history + multi-card Compare (handoff from Screener batch action).
 - **Analytics** = umbrella for calculator-y tools (EV, Card Averages, Playset Cost, Heatmap, Sealed, Simulate).
+
+### Mobile top-nav structure (do NOT regress)
+
+- Scroll lives on `.tabs` (middle), NOT on the whole top-nav. Logo + right cluster stay anchored as flex peers.
+- Right cluster on mobile is `flex-direction:column`: row 1 = profile/sign-in pill (collapses to avatar-only on ≤640px — name eats ~80px otherwise), row 2 = bubble controls (install + theme toggle).
+- Help on mobile collapses to icon-only (28×28 chip, `.nav-tab--help .nav-tab-label{display:none}`). Otherwise the row overflows.
+- Every container in the right cluster has `background: var(--bg)` explicitly so the sticky header paints opaquely over scrolled content.
 
 ## Data flow (non-negotiable)
 
@@ -68,7 +80,18 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 **`sbClient.auth.updateUser()` fires an auth-state-change after every call**, creating a new `user` object reference. A `useEffect` syncing user_metadata via `updateUser()` with `user` in its deps → infinite loop throttled only by debounce. Supabase rate-limits `/auth/v1/user` quickly (429); the auth lock then stalls every other query.
 
-The prefs-sync effect in `App.jsx` (writes `{theme, tipsEnabled, avatarCardId}`) omits `user` from deps and uses `prefsHydrated.current`. Symptoms of regression: catalog fetch takes minutes, "Loading price database…" forever, every tab switch cold-loads.
+The prefs-sync effect in `App.jsx` (writes `{themeMode, theme, tipsEnabled, avatarCardId}`) omits `user` from deps and uses `prefsHydrated.current`. Symptoms of regression: catalog fetch takes minutes, "Loading price database…" forever, every tab switch cold-loads.
+
+## Theme: 3-way mode (light / dark / system)
+
+Two pieces of state:
+- **`themeMode`** = the user's pick: `"light" | "dark" | "system"`. Persisted at `localStorage["packsink:themeMode"]` and synced to Supabase auth user_metadata.
+- **`resolvedTheme`** (aliased as `theme` for back-compat) = the effective value applied to `<html data-theme>`. When mode is `"system"`, listens to `prefers-color-scheme` media query and re-resolves on change — this is how "sunset darkmode" works (OS night-shift schedule drives the pref).
+- **Migration**: on first load, reads old `packsink:theme` (light|dark) if `themeMode` key absent. Both keys get written so older code paths reading `packsink:theme` still see the effective value.
+- **`toggleTheme`** (top-bar bubble) flips between explicit light/dark — if currently in `"system"` mode, switches to the OPPOSITE of whatever the OS resolved to (does NOT return to system; that's an explicit pick in the settings popover).
+- **`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
+
+Settings popover (gear/profile dropdown) has a Theme segmented control (Light / Dark / Match system) — that's the only place to choose System mode.
 
 ## price_movers matview gotcha
 
@@ -86,7 +109,7 @@ This is where catalog correctness lives. Structural cleanups:
 6. **`SET_DISPLAY_NAMES`** — `{"Challenge Promo": "Lorcana Challenge Promo (C1)", "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)"}`. **All in-code set comparisons use the DISPLAY name.**
 7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_cn>`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community #1/2/3/4.
 8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3, D23 Collection, EPCOT Festival of the Arts. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
-9. **`CHINA_ONLY_NONFOIL`** — `{name|cn: image path}` for non-foil printings that exist only in China. Currently Dragon Fire #25, Let It Go #41. Gets `variant_label: "Chinese Exclusive"`, null prices, local image.
+9. **`CHINA_ONLY_NONFOIL` + `JAPAN_ONLY_NONFOIL`** — `{name|cn: image path}` for non-foil printings that exist only in a regional market. Get `variant_label: "Chinese Exclusive"` / `"Japanese Exclusive"`, null prices, local image, no TCGPlayer link. Currently CN: Dragon Fire #25, Let It Go #41. JP: Snow White - Unexpected Houseguest #41 (Promo Set 1, added via migration 52). Pattern works only when the card row exists in `cards` table — Lorcast-indexed cards just need the map entry; non-Lorcast cards need a `cards` insert too (see migration 52).
 10. **`TCG_PID_OVERRIDES` is authoritative** — overrides Lorcast even when Lorcast has a (wrong) value. Used for Hiro Hamada #24/24B pid swap. **Applied client-side in `transformSupabaseData` AND server-side via `scripts/patch_pid_overrides.py`** — the latter writes them into `cards` so the matview JOIN picks them up. Client-only overrides don't help the matview.
 11. **Image fallback in `buildRow`** — `img_normal || img_large || img_small`, etc. Lorcast occasionally populates only `image_large` (LCP C1 Dragon Fire, Let It Go, Cinderella, Rapunzel). **Downstream surfaces reading `price_movers` directly (home banners, Screener) DON'T see buildRow fallback** + `img_large` is stripped from catalog cache. Look up `raw[i].img_normal` (contains the large URL via fallback) and inject as `image_normal` on the matview row.
 12. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price`. When a card has one but not the other, the missing side falls back so it still contributes to rarity averages.
@@ -135,6 +158,70 @@ Drawer-only: Strength / Willpower / Lore (numeric buckets), Type, Set, Keywords,
 ## Graded data: `date` vs `price_date`
 
 **Trap.** `graded_prices_daily.date` is the column. `graded_prices_latest` matview projects it as `price_date` to match `card_prices_latest`. Querying `graded_prices_daily` with `select("...price_date...")` errors 42703.
+
+## Graded data: `printing` is part of the PK (migrations 49 + 50)
+
+Both `graded_prices_daily` and `graded_collection_items` are printing-aware:
+
+- **`graded_prices_daily` PK** (mig 49): `(tcgplayer_product_id, printing, grader, grade, date)`. The `printing` value comes from TCGPriceLookup's `variant` field on each card record — values are `"Normal"`, `"Cold Foil"`, `"Holofoil"`. Split-printing cards (TFC Cold Foil rares, LCP C1 Holofoils) appear as multiple TCGPriceLookup records sharing one `tcgplayer_id`; the ETL captures each variant as its own row instead of silently overwriting on upsert (pre-49 behavior caused foil/non-foil prices to conflate randomly).
+- **`graded_collection_items` PK** (mig 50): `(user_id, card_id, printing, grader, grade)`. Users can own foil + non-foil graded copies of the same card_id as distinct slots. `get_shared_collection_graded(uuid, text)` RPC was recreated to project `printing` (drop-and-recreate; PostgREST RETURNS TABLE can't be altered).
+- **`service_role` needs explicit `DELETE` on `graded_prices_daily`** for ETL overrides + the cleanup script. Granted in migration 49. Without this, every delete throws 403.
+- All client queries against `graded_prices_latest` / `graded_prices_daily` must select `printing` and key lookups by `pid|printing|grader|grade`.
+- **`lookupGradedPx(pid, grader, grade, preferredPrinting)` pattern**: try the preferred printing first, then fall back through `["Normal", "Holofoil", "Cold Foil"]` until a match is found. Used by the header totals and the chart's slot resolver. Without the fallback, Holofoil-only cards (Enchanteds, Iconics) whose owned items default to printing='Normal' (mig-50 backfill) find no matching rows and silently drop out.
+- `buildGradedSeries(history, graderKey, gradeStr, label, printingKey)` accepts an optional 5th arg to filter to one printing — used by `GradedPricesTab` and the Compare flow so each printing graphs as a distinct line.
+
+## Graded UI: SPLIT_BY_PRINTING_SETS vs SECTION_SPLIT_SETS
+
+Two top-level constants (defined near `AUX_CACHE_VERSION`):
+
+- **`SPLIT_BY_PRINTING_SETS_GLOBAL`** (currently `{LCP (C1)}`): cards in these sets share one card_id between Normal and Holofoil printings. The catalog's `groupCards()` emits two raw rows per card_id (one per printing); the graded view emits two **tiles** per card_id (keyed `card_id|printing`). For every other set, the graded view collapses to **one tile per card_id** to prevent CONNECTING_FOILS companion rows from doubling the tile count.
+- **`SECTION_SPLIT_SETS_GLOBAL`** (currently `{LCP (C1), LCP (C2)}`): sets where the set view renders Non-Foil and Foil as separate sections. C2 has distinct card_ids per printing (from Lorcast) so it naturally splits without `SPLIT_BY_PRINTING_SETS_GLOBAL`. Both `CollectionSetDetail` (raw) and `GradedCollectionView` (graded) respect this set.
+
+When iterating `cardsForGoal` in the graded view's `grouped` useMemo: if the goal's set is in `SPLIT_BY_PRINTING_SETS_GLOBAL`, emit a tracked placeholder per `(card_id, tcg_printing)`. Otherwise dedupe to one placeholder per `card_id`. The owned-items loop must use the SAME dedupe (`SPLIT_BY_PRINTING_SETS_GLOBAL.has(meta.Set)` check) before bucketing, otherwise foil-owned items in non-split sets render as a second tile.
+
+## Per-user graded value override (migration 51)
+
+`graded_collection_items.custom_value numeric(12,2)` (nullable, added migration 51). When set, the user's owned slot uses this value instead of the TCGPriceLookup eBay average — covers two cases: (a) low-volume cards with NO graded market data at all (the GradedPricesTab early-returns "No graded sales recorded" but the user still owns the slot), (b) any card where the user disagrees with the algorithmic price.
+
+- **Surface**: `CardDetailModal` → graded focus → "Your Graded Copies" panel (gold box above the Price History / Graded tabs). For every owned slot, an inline `<CostDateInputs showCustomValue=${true}/>` renders three always-visible fields: **Paid** / **Acquired** / **Value**. The whole panel sits ABOVE the tab content, so it works even when GradedPricesTab early-returns on empty market data.
+- **Plumbing**: `updateItemMeta({card_id, printing, grader, grade}, {custom_value: N|null})` writes through. Fetch path includes `custom_value` in the SELECT with a schema-tolerant fallback for pre-mig-51 environments. `get_shared_collection_graded` RPC was recreated (drop+create) to return `custom_value` too.
+- **Read path**: any value computation should prefer `it.custom_value ?? lookupGradedPx(...)`. Search for `custom_value` in Index.html for the existing call sites (header totals, value chart, slot pills).
+- **UI affordance**: when `custom_value` is set, the slot's price pill flips from green API price to gold `✎ $N` so the user can see at a glance which copies are overridden.
+- **`CostDateInputs` props**: `currentPaid`, `currentDate`, `currentCustomValue`, `showCustomValue`, `onCommit(patch)`. The component is shared between sealed (no custom value) and graded (with). Don't pass `showCustomValue` for sealed.
+
+## Manual graded price overrides
+
+`scripts/graded_overrides.json` is hand-curated graded price entries the daily ETL merges AFTER pulling TCGPriceLookup (overrides win on PK collision). Use when TCGPriceLookup conflates printings (e.g. LCP C1 Baymax — pid 595439 — has only a "Normal" TCGPriceLookup record but its CGC 8/8.5 sales clearly reflect Holofoil pricing).
+
+Two arrays:
+- `overrides[]` — full row inserts. PK fields required; `date: "today"` resolves at ETL time. `source: "manual_override"` is the default tag.
+- `delete[]` — `{pid, printing, grader, grade}` keys to drop from today's snapshot AFTER the upsert (so the TCGPriceLookup row we're suppressing doesn't outrank our override on read).
+
+`notes` field on each entry is freeform and ignored. Don't blow up the schema; if you need bulk corrections, write a one-off `scripts/cleanup_*.py` instead.
+
+## Graded ops scripts
+
+- **`scripts/probe_graded_printings.py [pids...]`** — audit utility. Walks the TCGPriceLookup catalog and reports any `tcgplayer_id`s with multiple records (= split-printing cards). Use to verify whether new cards have foil/non-foil records BEFORE adding them to `SPLIT_BY_PRINTING_SETS_GLOBAL`.
+- **`scripts/cleanup_stale_graded_printings.py [--commit]`** — purges `graded_prices_daily` rows whose `(pid, printing)` combo doesn't exist in TCGPriceLookup's catalog (e.g. pre-migration-49 "Normal" rows for Holofoil-only cards). Run after any printing-related schema/ETL change. Default is dry-run; `--commit` actually deletes.
+- **`scripts/backfill_graded_history.py [--pids 510153,...]`** — pulls a year of `/history` per card. Now captures `printing` from each record's `variant` field. Re-run after a schema migration to backfill correct printing labels.
+
+## Graded view UX patterns
+
+- **`.gc-caps-*` class family** (header chips): uppercase, letter-spaced 10px font matching `.gc-stat-lbl` so the whole header row reads as one chip set. Includes `.gc-caps-btn`, `.gc-caps-cta`, `.gc-caps-seg`, `.gc-caps-flag`, `.gc-caps-select`. New header controls should adopt these classes for visual consistency.
+- **`.gc-caps-tip` tooltip**: custom popover on the ⓘ icon. More reliable than native `title=` (no delay, multi-line, mobile-friendly). On ≤700px switches to `position: fixed` + full-width-minus-margins so wrapping parents / `overflow:hidden` ancestors can't clip it. Use this pattern for any non-trivial tooltip in the graded view.
+- **`.gc-add-fab` mobile FAB**: at ≤700px, the inline "+ Add graded card" chip is hidden via `.gc-add-cta-desktop` and replaced by a `position:fixed` bottom-right FAB. Standard pattern for high-frequency mobile actions when the header is too crowded.
+- **Two-tap remove** (`armedRemove` state + `.gc-slot-armed` red pulse class): clicking an owned slot pill arms it for ~3s; second click within window confirms. Replaces `window.confirm()`. Reusable pattern — same state machine works for any destructive single-click action.
+- **Quick-add on tracked tile** (`.gc-slot-quickadd` button): clicking the "+ PSA 10" pill on a tracked-only tile logs a PSA 10 instantly (one-tap goal progress). Shift-click opens the full Add modal for non-default grader/grade.
+- **`grader_collection_items` does NOT have RLS for printing** — anyone with the owner's `share_token` can read all printings via the RPC. No additional gating needed; the RPC is already SECURITY DEFINER + token-checked.
+
+### Persisted localStorage keys (graded view)
+
+- `packsink:graded:collapsed` — array of set_ids that are collapsed
+- `packsink:graded:display` — "grid" | "compact"
+- `packsink:graded:trackCosts` — "1" | "0"
+- `packsink:graded:hidden` — array of card_ids hidden from tracking checklists
+- `packsink:graded:visFilter` — "all" | "owned" | "tracked"
+- `packsink:graded:sectionSort` — "release" | "complete" | "value"
 
 ## Graded tracking goals
 
@@ -348,7 +435,8 @@ SELECT public.refresh_graded_prices_latest();
 - categoryId 71 = Lorcana. Archive starts 2024-02-08.
 - TCGCSV daily snapshot lands ~20:00 UTC.
 - **`low_price` is a sticker, not a sale.** For high-value cards the lowest active listing often sits unchanged for weeks. Use `market_price` / `mkt_pct_*` for short-window (≤7d) movement; reserve `low_price` for medium-to-long windows.
-- Low price can be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
+- **`low_price` is ANY-condition, not NM-only.** TCGCSV mirrors TCGPlayer's `lowPrice` field verbatim, which is the lowest active listing across any condition (NM/LP/MP/HP/DMG). For a high-value card with a single LP copy listed below the NM floor, `low_price` will read like the LP listing. There is no per-condition pricing in TCGCSV's feed — TCGPlayer's public pricing API simply doesn't expose it. **Use `market_price` ("NM Market") as the NM-quality reference.** UI labels: "Low" (no NM qualifier) and "NM Market" (explicitly NM). Documented on the How It Works page so users have the same mental model.
+- Low price can also be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
 - Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded URL>`. The `tcgUrl()` helper wraps every TCGPlayer link — never link directly.
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
 - **TCGPriceLookup `/history` endpoint caps at ~1 year.** `period=2y`/`5y`/`all`/`max` silently fall through to a short default. They simply don't have data older than that. Confirmed via `scripts/probe_graded_history.py`.
@@ -390,7 +478,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v22`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
+- **`sw.js CACHE_VERSION`** (current `packsink-v67`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v40**). Bump when row shape changes, OR when forcing all users to cold-fetch (e.g. emergency push of fresh data).
 - **PWA icon refresh**: icon URLs include `?v=2` query so browsers treat them as new resources.
 - **Dev server cache header**: `dev_server.py` sends `Cache-Control: no-store` on HTML/CSS/JS.

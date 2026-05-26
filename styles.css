@@ -87,6 +87,26 @@ input[type="checkbox"]{accent-color:var(--accent);}
 /* Top nav layout — three peers: [logo | tabs (scrollable middle) | right cluster]. */
 .top-nav{display:flex;gap:6px;align-items:center;margin-bottom:1.5rem;}
 .tabs{display:flex;gap:4px;flex-wrap:wrap;align-items:center;flex:1 1 auto;min-width:0;}
+/* Two-row tab grid: row 1 = "my stuff" (Collection / Cards / Decks), row 2 =
+   "market intel" (Screener / Price Graphing / Analytics) + Help. Each tab is
+   an icon-over-label chip. The grid container stacks the rows vertically. */
+.tabs-grid{flex-direction:column;align-items:flex-start;gap:6px;}
+.tabs-row{display:flex;gap:4px;align-items:stretch;flex-wrap:nowrap;}
+.nav-tab{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;min-width:74px;padding:6px 10px 5px;
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;
+  color:var(--text-muted);cursor:pointer;transition:all 0.12s;
+  font-family:'Cinzel',serif;font-weight:600;letter-spacing:0.2px;}
+.nav-tab:hover{color:var(--accent);border-color:var(--accent);}
+.nav-tab.active{background:var(--accent-glow);color:var(--accent);
+  border-color:var(--accent);}
+.nav-tab-icon{display:inline-flex;align-items:center;justify-content:center;
+  width:20px;height:20px;line-height:0;}
+.nav-tab-icon svg{display:block;}
+.nav-tab-label{font-size:10px;line-height:1.1;white-space:nowrap;text-transform:uppercase;}
+/* Help tab: same shape as the others but slightly narrower to read as a
+   utility chip rather than a peer of the main nav items. */
+.nav-tab--help{min-width:56px;margin-left:8px;}
 .top-nav-right{flex-shrink:0;}
 /* Logo button — wraps the wordmark and routes to Home on click. */
 .tabs-logo-btn{background:transparent;border:none;padding:0;margin:0;cursor:pointer;
@@ -95,35 +115,71 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .tabs-logo-btn img{height:60px;width:auto;display:block;pointer-events:none;}
 @media (max-width:640px){
   /* Reclaim horizontal real estate: body padding was 24px on each side, 13% of a 375 viewport. */
-  body{padding:14px;}
+  body{padding:14px;overflow-x:clip;}
+  /* Defense against any descendant that mis-sizes wider than the viewport
+     (causing pinch-zoom-out to reveal dead space on the right). `clip` is
+     used instead of `hidden` because hidden makes the element a scroll
+     container, which breaks position:sticky for descendants like the
+     mobile Cards/Deck tab toggle in the deck editor. clip caps overflow
+     without converting to a scroll container. */
+  html{overflow-x:clip;}
   /* iOS Safari zooms in when an input has font-size < 16px. Force ≥16 everywhere on phone. */
   input,textarea,select{font-size:16px !important;}
-  /* On mobile, the WHOLE top bar is one horizontal scroller. Tabs were
-     starved for room when the username pill + theme toggle stayed pinned
-     on the right; now those scroll alongside the tabs. The logo stays
-     pinned to the left edge via position:sticky so the user always has a
-     "home" anchor visible. */
+  /* On mobile the top bar is [logo | tabs | right-cluster] flex row WITHOUT
+     a global scroll. Only the middle .tabs is a horizontal scroller — that
+     way the logo and right cluster (profile / sign-in / theme) are always
+     anchored on-screen and never overlap each other. (Previous approach made
+     the whole top-nav scroll, and a sticky-right cluster overlapped the last
+     tabs visually.) */
   .top-nav{position:sticky;top:0;z-index:50;background:var(--bg);
     padding-top:8px;padding-bottom:6px;
-    margin-left:-14px;margin-right:-14px;padding-left:14px;padding-right:14px;
-    margin-bottom:1rem;gap:8px;
-    flex-wrap:nowrap;overflow-x:auto;-webkit-overflow-scrolling:touch;
-    scrollbar-width:none;}
-  .top-nav::-webkit-scrollbar{display:none;}
-  /* Logo: sticky to the left edge of the scrolling container so it stays
-     visible no matter how far the user scrolls right. The bg/padding fill
-     the gap so tabs that scroll past don't show through. */
-  .tabs-logo-btn{position:sticky;left:0;z-index:2;background:var(--bg);
-    padding-right:6px;flex-shrink:0;}
-  /* Tabs inside the unified scroller — no nested overflow, just inline flow. */
-  .tabs{flex-wrap:nowrap;overflow:visible;flex:0 0 auto;}
-  .tabs > button{flex-shrink:0;min-height:36px;font-size:13px;}
-  /* Right cluster (avatar + theme toggle) now scrolls with the tabs. */
-  .top-nav-right{flex:0 0 auto;flex-shrink:0;}
-  /* Pin the settings popover to the viewport on mobile so it doesn't get
-     clipped by .top-nav's horizontal overflow:auto (which forces y-clip
-     per the CSS spec). Coordinates are anchored to the top-right of the
-     screen, not the avatar button. */
+    margin-left:-14px;margin-right:-14px;padding-left:10px;padding-right:10px;
+    margin-bottom:1rem;gap:6px;
+    flex-wrap:nowrap;overflow:visible;align-items:center;}
+  .tabs-logo-btn{flex-shrink:0;}
+  .tabs-logo-btn img{height:46px !important;}
+  /* Middle: the actual horizontal scroller. tabs-grid stacks two rows of
+     chips inside; the wider row drives the scroll width. */
+  .tabs{flex:1 1 0;min-width:0;overflow-x:auto;overflow-y:visible;
+    -webkit-overflow-scrolling:touch;scrollbar-width:none;}
+  .tabs::-webkit-scrollbar{display:none;}
+  .tabs-grid{align-items:stretch;}
+  .tabs-row{flex-wrap:nowrap;}
+  .tabs-row > .nav-tab{flex-shrink:0;}
+  /* Compact icon tabs on mobile. Help collapses to icon-only — the "?" glyph
+     reads as help on its own and dropping the label is the difference between
+     "everything fits" and "scrolls off-screen" on a phone. */
+  .nav-tab{min-width:54px;padding:3px 6px 2px;gap:1px;}
+  .nav-tab-icon{width:16px;height:16px;}
+  .nav-tab-icon svg{width:14px;height:14px;}
+  .nav-tab-label{font-size:8.5px;}
+  .nav-tab--help{min-width:28px;width:28px;padding:3px 4px;margin-left:6px;}
+  .nav-tab--help .nav-tab-label{display:none;}
+  .nav-tab--help .nav-tab-icon svg{width:16px;height:16px;}
+  /* Right cluster on mobile: two stacked sub-rows. Row 1 = sign-in/profile
+     pill. Row 2 = small bubble controls (install + theme). Keeps the cluster
+     narrow horizontally so it doesn't crowd the tabs, while every control
+     stays visible inline (no hiding in overflow). Explicit bg so as the page
+     scrolls under the sticky header, content doesn't show through the gaps
+     between bubble buttons. */
+  .top-nav-right{display:flex !important;flex-direction:column;
+    align-items:flex-end;gap:4px;flex:0 0 auto;flex-shrink:0;
+    background:var(--bg);padding-left:4px;}
+  .top-nav-right-row--bubbles{display:flex;gap:4px;align-items:center;
+    background:var(--bg);}
+  .signin-btn{padding:4px 9px;font-size:11px;min-height:28px;}
+  /* On mobile the profile button collapses to just the avatar circle. The
+     name eats ~80px which was the difference between row 2 (Screener / Price
+     Graphing / Analytics / ?) fitting vs. the help button scrolling off the
+     right. Tap the avatar to open the popover; the full name is in there. */
+  .profile-btn{padding:2px;min-height:28px;min-width:28px;
+    border-radius:50%;gap:0;}
+  .profile-btn-name{display:none;}
+  .top-nav-right .theme-toggle{min-height:26px;width:26px;padding:0;font-size:13px;
+    display:inline-flex;align-items:center;justify-content:center;}
+  /* Pin the settings popover to the viewport on mobile so it isn't clipped
+     by ancestor overflow rules. Coordinates anchored to top-right of screen,
+     not the avatar button. */
   .settings-popover{position:fixed !important;top:56px !important;right:8px !important;left:auto !important;
     max-width:calc(100vw - 16px);}
   /* Bump tiny mover-tile text + tile width so cards are readable on phones. */
@@ -220,6 +276,21 @@ input[type="checkbox"]{accent-color:var(--accent);}
 
 /* ── Price Database ─────────────────────────────────────────────────── */
 .price-db{display:flex;flex-direction:column;gap:10px;}
+/* Mode bar — prominent Raw / Graded segmented toggle. Sits above the preset
+   chips because flipping it changes the entire dataset (raw card prices vs.
+   eBay graded sales) and therefore which presets and columns are even
+   visible. Treating it as a peer of presets buried it; making it a separate
+   bar makes the consequence obvious. */
+.price-db-modebar{display:inline-flex;border:1px solid var(--border);
+  border-radius:8px;overflow:hidden;background:var(--bg-surface);
+  width:fit-content;}
+.price-db-modebtn{padding:7px 16px;font-size:12px;font-weight:700;
+  font-family:'Cinzel',serif;letter-spacing:0.5px;text-transform:uppercase;
+  background:transparent;color:var(--text-muted);border:0;
+  border-right:1px solid var(--border);cursor:pointer;transition:all 0.12s;}
+.price-db-modebtn:last-child{border-right:0;}
+.price-db-modebtn:hover{color:var(--accent);}
+.price-db-modebtn.active{background:var(--accent);color:#fff;}
 .price-db-presets{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
 .price-db-mode-tag{font-size:9px;font-weight:800;letter-spacing:0.6px;
   padding:3px 8px;border-radius:10px;background:rgba(200,168,70,0.15);
@@ -484,7 +555,7 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 
 /* Mobile: trim padding, hide image / set / rarity columns. Columns now are:
    [1] checkbox · [2] image · [3] name+meta · [4] set · [5] rarity ·
-   [6] NM Low · [7] NM Market · [8+] Δ% windows · [last] signals */
+   [6] Low · [7] NM Market · [8+] Δ% windows · [last] signals */
 @media (max-width: 720px){
   .price-db-table{font-size:11px;}
   .price-db-table th, .price-db-table td{padding:4px 5px;}
@@ -635,6 +706,24 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   transition:border-color 0.1s,background 0.1s;}
 /* When sealed prices are loaded we insert a Box-price column between EV and the windows. */
 .ev-rows.with-box .ev-row{grid-template-columns:1fr 180px 180px 1fr;}
+@media (max-width:780px){
+  /* Stack: set name → ev/box stacked label+value below. Deltas hidden
+     (tap the row to see per-window detail). Designed to never overflow,
+     even on narrow phones where the EV diff badge was clipping. */
+  .ev-row, .ev-rows.with-box .ev-row{
+    grid-template-columns:1fr 1fr !important;
+    grid-template-rows:auto auto;
+    row-gap:8px;column-gap:10px;padding:10px 12px;}
+  .ev-row-set{font-size:13px;grid-column:1 / -1;grid-row:1;}
+  .ev-row-vals{grid-column:1;grid-row:2;justify-content:flex-start;gap:10px;flex-wrap:wrap;}
+  .ev-row-box{grid-column:2;grid-row:2;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
+  .ev-row-deltas{display:none;}
+  .ev-row-head{display:none;}
+  .ev-row-val{font-size:14px;min-width:0;}
+  .ev-row-val-dim{font-size:11px;}
+  .ev-box-diff{font-size:11px;min-width:0;padding:2px 6px;}
+  .ev-box-link{font-size:13px;}
+}
 .ev-row-box{display:flex;gap:14px;justify-content:flex-end;align-items:baseline;}
 .ev-row:not(.ev-row-head):hover{border-color:var(--border-accent);
   background:var(--bg-surface);}
@@ -726,11 +815,31 @@ button.sealed-set-pill{cursor:pointer;}
 button.sealed-set-pill:hover{color:var(--accent);
   border-color:var(--border-accent);background:var(--accent-glow);}
 .sealed-set-pill-muted{cursor:default;color:var(--text-muted);}
+/* Analytics sub-tabs (Sim Pack, Box Sim, Monte Carlo) render stat rows
+   inline with `repeat(4,1fr)` / `repeat(3,1fr)`. Force a wrap on phones
+   so each $ figure has room without overlapping its neighbor. */
+@media (max-width:560px){
+  .sim-kind-select{min-width:0;width:100%;}
+  .stat-grid.stat-grid-4{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+  .stat-grid.stat-grid-3{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
+}
 .sealed-rows{display:flex;flex-direction:column;gap:5px;}
 .sealed-row{display:grid;grid-template-columns:140px 1fr 90px 1fr;column-gap:14px;
   align-items:center;padding:9px 14px;background:var(--bg-card);
   border:1px solid var(--border);border-radius:8px;
   transition:border-color 0.1s,background 0.1s;}
+@media (max-width:780px){
+  /* Two-row stack on mobile: type pill + name on top, price + change below.
+     Set pill (column 4) hidden — the section header already shows the set. */
+  .sealed-row{grid-template-columns:auto 1fr !important;
+    grid-template-rows:auto auto;row-gap:6px;column-gap:10px;padding:10px 12px;}
+  .sealed-row-type{grid-column:1;grid-row:1;}
+  .sealed-row-name{grid-column:2;grid-row:1;font-size:13px;}
+  .sealed-row-price{grid-column:1 / -1;grid-row:2;justify-self:flex-start;
+    display:flex;gap:14px;align-items:baseline;}
+  .sealed-row-set{display:none;}
+  .sealed-row-head{display:none;}
+}
 .sealed-row:not(.sealed-row-head):hover{border-color:var(--border-accent);
   background:var(--bg-surface);}
 .sealed-row-head{background:transparent;border:none;padding:0 14px 2px;
@@ -793,6 +902,11 @@ html[data-theme="dark"] .sealed-type-pill.type-prerelease-pack{color:#e8a3b9;}
 .badge{font-size:10px;font-weight:600;padding:2px 6px;border-radius:4px;display:inline-block;white-space:nowrap;letter-spacing:0.3px;}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:1rem;}
 .scr{overflow-x:auto;}
+/* Home page never needs horizontal scroll — inner banners have their own
+   scroll containers, and the tournament/banner row is sized in % units.
+   `clip` prevents any stray descendant from making the whole page nudge
+   sideways on mobile. */
+.scr-home{overflow-x:clip;}
 .green{color:var(--green);} .red{color:var(--red);} .muted{color:var(--text-muted);}
 .card-img{width:100%;border-radius:6px;aspect-ratio:5/7;object-fit:cover;background:var(--bg-surface);}
 .card-img-placeholder{width:100%;border-radius:6px;aspect-ratio:5/7;background:var(--bg-surface);display:flex;align-items:center;justify-content:center;color:var(--text-muted);font-size:10px;}
@@ -848,6 +962,19 @@ html[data-theme="dark"] .sealed-type-pill.type-prerelease-pack{color:#e8a3b9;}
 .faq-section strong{color:var(--text);font-weight:600;}
 /* Cards tab ------------------------------------------------------------- */
 .cards-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:14px;padding:10px;background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;}
+@media (max-width:640px){
+  /* Tighter filter box on phones — was eating ~40% of the viewport vertically. */
+  .cards-toolbar{padding:6px;gap:6px;margin-bottom:10px;border-radius:8px;}
+  .cards-toolbar .chip{padding:2px 7px;font-size:10.5px;}
+  .cards-toolbar .chip.ink, .cards-toolbar .chip.ink-icon-chip{width:26px;height:26px;}
+  .cards-toolbar .chip.cost-hex-chip{width:26px;height:26px;}
+  .cards-toolbar .chip.cost-hex-chip .cost-hex{width:24px;height:24px;}
+  .cards-toolbar .chip.chip-rarity-only{min-width:24px;padding:2px 4px;}
+  .cards-toolbar .chip-rarity-icon{width:14px;height:14px;}
+  .smart-search-wrap{padding:2px 6px;}
+  .smart-search-wrap input[type="search"]{padding:6px 6px;}
+  .cards-quickfilter-sub{padding-right:0;border-right:none;}
+}
 .cards-toolbar .search{flex:1;min-width:200px;}
 .cards-toolbar input[type="search"]{width:100%;padding:8px 12px;border:1px solid var(--btn-border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;font-family:'Nunito Sans',sans-serif;}
 .cards-toolbar input[type="search"]:focus{outline:none;border-color:var(--accent);}
@@ -1034,6 +1161,21 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .settings-popover .settings-row{display:flex;align-items:center;gap:8px;
   font-size:13px;cursor:pointer;padding:4px 0;color:var(--text);}
 .settings-popover .settings-row input[type="checkbox"]{margin:0;}
+/* Block-layout variant: label above the control, full width. Used by the
+   theme segmented picker where a horizontal checkbox layout would crowd. */
+.settings-popover .settings-row--block{flex-direction:column;align-items:stretch;
+  gap:5px;padding:6px 0;}
+.settings-popover .settings-row-label{font-size:12px;color:var(--text);
+  font-weight:600;letter-spacing:0.2px;}
+/* Segmented control for the Light / Dark / System picker. */
+.settings-popover .settings-seg{display:flex;border:1px solid var(--border);
+  border-radius:6px;overflow:hidden;background:var(--bg-surface);}
+.settings-popover .settings-seg button{flex:1;padding:6px 8px;font-size:12px;
+  background:transparent;color:var(--text-muted);border:0;border-right:1px solid var(--border);
+  cursor:pointer;transition:all 0.12s;}
+.settings-popover .settings-seg button:last-child{border-right:0;}
+.settings-popover .settings-seg button:hover{color:var(--accent);}
+.settings-popover .settings-seg button.active{background:var(--accent);color:#fff;}
 .settings-popover{min-width:240px;}
 .settings-popover .avatar-row{display:flex;align-items:center;gap:10px;
   padding:2px 0 10px;margin-bottom:8px;border-bottom:1px solid var(--border);}
@@ -1076,9 +1218,11 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    stays the same on every device.
    Min-width keeps the inline flex header from collapsing the middle column. */
 .deck-poster{min-width:1000px;}
-.deck-poster-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
-.deck-poster-wrap::-webkit-scrollbar{height:8px;}
-.deck-poster-wrap::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:4px;}
+/* JS applies transform:scale(N) + computed height so the 1000px+ poster
+   visually fits the viewport. Native size is preserved on the inner element
+   so html2canvas exports at the authored dimensions (snapshot path unsets
+   the transform during capture). No horizontal scroll on the wrap. */
+.deck-poster-wrap{transform-origin:top left;}
 .mulligan-hand{display:grid;grid-template-columns:repeat(7,1fr);gap:14px;}
 @media (max-width:900px){.mulligan-hand{grid-template-columns:repeat(4,1fr);}}
 @media (max-width:560px){.mulligan-hand{grid-template-columns:repeat(3,1fr);}}
@@ -1114,8 +1258,28 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .gc-set-title{font-family:'Cinzel',serif;font-size:13px;font-weight:700;
   letter-spacing:0.4px;color:var(--accent);margin-bottom:10px;text-transform:uppercase;}
 .gc-set-title .muted{font-family:inherit;font-size:11px;font-weight:500;margin-left:6px;}
-.gc-set-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;}
-@media (max-width:700px){.gc-set-grid{grid-template-columns:1fr;}}
+/* minmax(0, 1fr) — the default `1fr` is shorthand for minmax(auto, 1fr),
+   meaning a column expands to fit its widest child. Owned graded tiles
+   carry an "PSA 10 ×1 $XXX" pill that's wider than tracked tiles, so under
+   the default behavior the column containing an owned tile grows beyond
+   1/3 of the row. Explicit 0 minimum forces every column to stay at 1/3
+   even when content overflows (children get clipped/ellipsized instead). */
+.gc-set-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;}
+@media (max-width:1100px){.gc-set-grid{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:640px){.gc-set-grid{grid-template-columns:1fr;}}
+/* Sub-section headers inside a graded set block — used by
+   SECTION_SPLIT_SETS (C1, C2) to split tiles into Non-Foil and Foil. */
+.gc-printing-header{font-family:'Cinzel',serif;font-size:12px;font-weight:600;
+  color:var(--accent);text-transform:uppercase;letter-spacing:0.5px;
+  margin:10px 0 6px;padding-left:2px;}
+.gc-printing-header:first-child{margin-top:4px;}
+/* Empty state for graded view — when the user has no items and no goals. */
+.gc-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;
+  padding:48px 20px;text-align:center;background:var(--bg-surface);
+  border:1px dashed var(--border);border-radius:10px;gap:8px;}
+.gc-empty-title{font-family:'Cinzel',serif;font-size:18px;font-weight:600;color:var(--text);}
+.gc-empty-sub{font-size:13px;color:var(--text-muted);line-height:1.5;max-width:480px;}
+.gc-empty-actions{display:flex;gap:10px;margin-top:14px;flex-wrap:wrap;justify-content:center;}
 
 /* Sealed collection — 3-col tile grid (cards are wider here because the
    product images are landscape, not portrait). Reuses the .gc-* class
@@ -1147,6 +1311,8 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .gc-card-owned-value{display:flex;justify-content:space-between;align-items:baseline;
   font-size:11px;padding-top:4px;border-top:1px dashed var(--border);margin-top:2px;}
 .gc-card-owned-value strong{color:var(--green);font-weight:700;font-size:12px;}
+/* (Duplicate .gc-card-owned rule on line ~1179 removed — canonical rule
+   lives just below at .gc-card.gc-card-owned to win on specificity.) */
 /* Optional "amount paid + acquired date" inputs on owned rows. Rendered
    below the qty counter when the section's Track cost & date toggle is on.
    Both fields are optional; clearing them writes null. */
@@ -1163,13 +1329,17 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .gc-slot-meta-row{display:flex;flex-direction:column;gap:3px;}
 .gc-slot-meta-row .cost-date-row{margin-top:0;padding-top:0;border-top:none;}
 .gc-slot-meta-tag{font-size:9px;font-weight:700;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase;}
-.gc-card-owned{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent-glow);}
+/* (Canonical owned style lives at .gc-card.gc-card-owned a few lines down.) */
 /* Compact mode strips the image so more SKUs fit per page. */
 .sealed-coll .gc-set-grid.gc-compact .gc-card .sealed-card-img{display:none;}
 .gc-card{display:flex;gap:10px;padding:8px;background:var(--bg-card);
-  border:1px solid var(--border);border-radius:8px;position:relative;}
+  border:1px solid var(--border);border-radius:8px;position:relative;
+  /* Lock grid items to exactly 1/N of the row regardless of inner content
+     (owned slots' price pills are wider than tracked placeholders, which
+     would otherwise pull the column wider via auto-sizing). */
+  width:100%;min-width:0;box-sizing:border-box;}
 /* Owned graded card — solid border, accent glow, full opacity. */
-.gc-card.gc-card-owned{border:1px solid var(--accent);box-shadow:0 0 0 1px var(--accent-glow);}
+.gc-card.gc-card-owned{border:1px solid var(--accent);box-shadow:inset 0 0 0 1px var(--accent-glow);}
 /* Tracked-only ("wishlist") graded card — dashed border, faint opacity. */
 .gc-card.gc-card-tracked-only{border:1px dashed var(--text-muted);opacity:0.72;background:var(--bg-surface);}
 .gc-card.gc-card-tracked-only:hover{opacity:1;}
@@ -1178,16 +1348,48 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   border-radius:50%;background:var(--accent);color:#fff;font-size:11px;font-weight:800;
   display:flex;align-items:center;justify-content:center;line-height:1;z-index:2;
   box-shadow:0 1px 3px rgba(0,0,0,0.35);}
-/* Compact mode hides the card image — the check would overlap the name.
-   Hide it; the solid accent border on .gc-card-owned already signals owned. */
+/* Compact mode: hide images, shrink padding, tighten internal layout so
+   the user can see ~2x more cards on screen. The accent border on owned
+   cards still distinguishes them; the ✓ badge is hidden because there's
+   no image to anchor it to. */
 .gc-set-grid.gc-compact .gc-card-owned-check{display:none;}
-/* "+" button top-right — opens the Add modal pre-filled with this card. */
-.gc-card-add-btn{position:absolute;top:4px;right:4px;width:22px;height:22px;
-  border-radius:50%;background:var(--accent);color:#fff;font-size:14px;font-weight:800;
+.gc-set-grid.gc-compact .gc-card{padding:6px 8px;gap:6px;}
+.gc-set-grid.gc-compact .gc-card .gc-card-img{display:none;}
+.gc-set-grid.gc-compact .gc-card-body{gap:2px;}
+.gc-set-grid.gc-compact .gc-card-name{font-size:11px;}
+.gc-set-grid.gc-compact .gc-card-sub{font-size:9px;}
+.gc-set-grid.gc-compact .gc-card-raw{margin-top:2px;font-size:10px;}
+.gc-set-grid.gc-compact .gc-card-slots{margin-top:2px;gap:3px;}
+.gc-set-grid.gc-compact .gc-slot{padding:2px 6px;font-size:9px;min-height:20px;}
+.gc-set-grid.gc-compact .gc-card-add-btn{width:20px;height:20px;font-size:13px;top:3px;right:3px;}
+.gc-set-grid.gc-compact .gc-card-hide-btn{width:18px;height:18px;font-size:12px;bottom:3px;right:3px;}
+/* "+" button top-right — opens the Add modal pre-filled with this card.
+   Always visible (mobile users have no hover). The button itself is 24px
+   but an invisible ::after extends the tap target to 40x40 so touches
+   don't fall through to the parent tile's openDetail handler. */
+.gc-card-add-btn{position:absolute;top:4px;right:4px;width:24px;height:24px;
+  border-radius:50%;background:var(--accent);color:#fff;font-size:15px;font-weight:800;
   border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;
-  line-height:1;z-index:2;opacity:0;transition:opacity 0.12s;padding:0;}
+  line-height:1;z-index:3;opacity:0.92;transition:opacity 0.12s, transform 0.12s;padding:0;
+  box-shadow:0 1px 4px rgba(0,0,0,0.25);}
+.gc-card-add-btn::after{content:"";position:absolute;inset:-10px;}
 .gc-card:hover .gc-card-add-btn, .gc-card-add-btn:focus{opacity:1;}
-.gc-card-add-btn:hover{filter:brightness(1.1);}
+.gc-card-add-btn:hover{filter:brightness(1.1);transform:scale(1.06);}
+.gc-card-add-btn:active{transform:scale(0.94);}
+/* × button to hide a tracked card from goal counting. Bottom-right of the
+   tile — out of the top-right tap zone (reserved for + Add) and away from
+   the card name in the top-left. Tracked-only tiles have no slot pills
+   or buy link at the bottom-right, so this corner is clear. */
+.gc-card-hide-btn{position:absolute;bottom:4px;right:4px;width:22px;height:22px;
+  border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;font-size:14px;font-weight:700;
+  border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;
+  line-height:1;z-index:3;opacity:0.7;transition:opacity 0.12s, transform 0.12s;padding:0;}
+.gc-card-hide-btn::after{content:"";position:absolute;inset:-10px;}
+.gc-card-hide-btn:hover{opacity:1;background:var(--red);transform:scale(1.06);}
+.gc-card-hide-btn-unhide{background:rgba(34,139,34,0.7);font-size:13px;}
+.gc-card-hide-btn-unhide:hover{background:var(--accent);}
+.gc-card.gc-card-hidden{opacity:0.45;border-style:dotted;}
+.gc-card.gc-card-hidden:hover{opacity:0.85;}
 .gc-card-img{width:48px;height:67px;object-fit:cover;border-radius:4px;
   flex-shrink:0;background:var(--bg-surface);}
 .gc-card-body{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;}
@@ -1195,22 +1397,50 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .gc-card-sub{font-size:10px;color:var(--text-muted);}
 .gc-card-slots{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;}
-.gc-slot{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;
-  font-size:10px;font-weight:600;border-radius:4px;cursor:pointer;}
+.gc-slot{display:inline-flex;align-items:center;gap:4px;padding:4px 8px;
+  font-size:10px;font-weight:600;border-radius:4px;cursor:pointer;
+  min-height:24px;position:relative;}
 .gc-slot-owned{background:rgba(200,168,70,0.15);color:#c8a846;
   border:1px solid rgba(200,168,70,0.35);}
 .gc-slot-owned:hover{background:rgba(200,168,70,0.25);}
+.gc-slot.gc-slot-armed{background:rgba(220,38,38,0.18);border-color:var(--red);color:var(--red);
+  animation:gcSlotPulse 0.6s ease-in-out infinite alternate;}
+.gc-slot.gc-slot-armed::after{display:none;}
+@keyframes gcSlotPulse{from{box-shadow:0 0 0 0 rgba(220,38,38,0);} to{box-shadow:0 0 0 3px rgba(220,38,38,0.18);}}
+/* Surface a × on hover so it's obvious the pill is the remove target. */
+.gc-slot-owned::after{content:"×";opacity:0;margin-left:2px;color:var(--red);
+  font-weight:800;font-size:12px;line-height:1;transition:opacity 0.12s;}
+.gc-slot-owned:hover::after{opacity:0.85;}
+@media (max-width: 640px){
+  /* Always show × on touch — no hover to reveal it. */
+  .gc-slot-owned::after{opacity:0.75;}
+  .gc-slot{padding:6px 10px;font-size:11px;min-height:30px;}
+}
 .gc-slot-tracked{background:transparent;color:var(--text-muted);
   border:1px dashed var(--border);cursor:default;font-style:italic;}
+/* Quick-add placeholder pill — looks like the tracked pill but acts as a
+   button. Hover surfaces the affordance: solid border, accent color,
+   "+ PSA 10" reads as an action. */
+button.gc-slot-quickadd{appearance:none;font:inherit;cursor:pointer;}
+button.gc-slot-quickadd:hover{background:var(--accent-glow);border-style:solid;
+  border-color:var(--accent);color:var(--accent);font-style:normal;}
+button.gc-slot-quickadd:disabled{cursor:default;opacity:0.8;}
+button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashed;
+  border-color:var(--border);color:var(--text-muted);font-style:italic;}
 .gc-slot-tag{font-weight:700;letter-spacing:0.3px;}
 .gc-slot-qty{color:var(--text-dim);}
 .gc-slot-px{color:var(--green);font-weight:700;}
+/* Custom-value override pill: tinted differently so users can see at a
+   glance that a slot's price is their own number, not the market. */
+.gc-slot-px-custom{color:var(--accent);}
 .graded-collection-side{background:var(--bg-surface);border:1px solid var(--border);
   border-radius:10px;padding:12px 14px;position:sticky;top:12px;}
 .gc-side-head{display:flex;justify-content:space-between;align-items:center;
   font-size:13px;font-weight:700;color:var(--accent);text-transform:uppercase;
   letter-spacing:0.4px;font-family:'Cinzel',serif;margin-bottom:10px;}
 .gc-side-body{display:flex;flex-direction:column;gap:8px;}
+.gc-side-foot{margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);
+  display:flex;justify-content:flex-start;}
 .gc-goal{position:relative;padding:9px 28px 9px 11px;background:var(--bg-card);
   border:1px solid var(--border);border-radius:6px;}
 .gc-goal-name{font-size:12px;font-weight:700;color:var(--text);}
@@ -1267,6 +1497,15 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    bubble up. Disable pointer events on children so the click target is the
    button itself, end of story. */
 .profile-btn > *{pointer-events:none;}
+/* Signed-out CTA: replaces the old gear-only button. Reads as a clear action
+   instead of a settings affordance, since the popover's primary purpose for
+   signed-out users is auth. Theme controls inside the popover let them tweak
+   appearance even before signing in. */
+.signin-btn{display:flex;align-items:center;justify-content:center;padding:6px 14px;
+  font-size:12px;font-weight:700;font-family:'Cinzel',serif;letter-spacing:0.3px;
+  background:var(--accent);color:#fff;border:1px solid var(--accent);
+  border-radius:6px;cursor:pointer;min-height:36px;text-transform:uppercase;}
+.signin-btn:hover{filter:brightness(1.08);}
 
 /* Avatar picker modal */
 .avatar-picker-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.5);
@@ -1274,6 +1513,14 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .avatar-picker{background:var(--bg);border:1px solid var(--border);border-radius:10px;
   width:min(720px,100%);max-height:85vh;display:flex;flex-direction:column;
   box-shadow:0 10px 32px rgba(0,0,0,0.35);color:var(--text);overflow:hidden;}
+/* Typeahead variant: narrower modal (search-first UX, no grid to fill out),
+   padded content, no internal scrolling — the dropdown handles its own list. */
+.avatar-picker--typeahead{width:min(460px,100%);max-height:none;padding:0 14px 16px;
+  overflow:visible;}
+.avatar-picker--typeahead .avatar-picker-head{border-bottom:0;padding:12px 0 4px;}
+.avatar-picker-search-row{position:relative;}
+.avatar-picker-results{position:static !important;margin-top:6px;
+  max-height:340px;overflow-y:auto;box-shadow:none;border-radius:6px;}
 .avatar-picker-head{display:flex;align-items:center;gap:10px;padding:12px 14px;
   border-bottom:1px solid var(--border);}
 .avatar-picker-search{flex:1;padding:6px 10px;font-size:13px;
@@ -1371,8 +1618,40 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .home-feed{background:var(--bg-surface);border:1px solid var(--border);
   border-radius:8px;padding:6px 8px 8px;margin-bottom:14px;
   position:sticky;top:8px;align-self:start;}
+/* Reusable expand/collapse toggle for home banners (Tournament Results,
+   Following). Sticky-look chip at the bottom of the banner. */
+.home-feed-collapse-toggle{display:block;margin:8px auto 2px;padding:5px 12px;
+  font-size:10.5px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
+  background:transparent;border:1px solid var(--btn-border);border-radius:14px;
+  color:var(--text-dim);cursor:pointer;}
+.home-feed-collapse-toggle:hover{border-color:var(--accent);color:var(--accent);}
+/* Mobile-only variant — hidden on desktop where the full feed always shows. */
+.home-feed-collapse-toggle--mobile-only{display:none;}
+@media (max-width:700px){
+  .home-feed-collapse-toggle--mobile-only{display:block;}
+  /* Hide overflow items in Following feed until expanded. */
+  .home-feed-list:not(.is-expanded) .home-feed-item.is-overflow{display:none;}
+  /* Collapsed Tournament Results shows top 2 per event (1st + 2nd) so the
+     column actually fills next to the chase-movers banner instead of leaving
+     a tall white gap. "Show more" reveals 3rd + 4th. */
+  .home-tourney-decks:not(.is-expanded) li:nth-child(n+3){display:none;}
+  /* On mobile, omit the deck name from tournament tiles entirely — keep
+     just the player name + ink shields. The full deck name is one tap
+     away in the tournament/deck detail view. */
+  .home-tourney-deck .ht-deck{display:none;}
+  .home-tourney-deck .ht-player::after{content:"";}
+}
 .home-feed-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);margin:2px 4px 4px;}
+/* Chase-row variant: matches the MoversBanner title styling (Cinzel, accent
+   color, no uppercase transform) so "Tournament Results" reads as a peer
+   of "Chase Movers" when they sit side by side in the mobile grid. */
+.home-feed-title--chase{font-family:'Cinzel',serif;font-size:12px;font-weight:600;
+  letter-spacing:0.3px;text-transform:none;color:var(--accent);margin:0 0 3px;}
+/* Small variant of the Show more/less chip — used inside the mobile chase row
+   where the tournament column is narrow and the default chip looks oversized. */
+.home-feed-collapse-toggle--small{margin:6px auto 2px;padding:3px 8px;
+  font-size:9px;letter-spacing:0.3px;}
 .home-feed-empty{font-size:12px;color:var(--text-dim);line-height:1.5;
   padding:2px 4px 6px;}
 .home-feed-signin{display:block;margin-top:6px;padding:6px 12px;font-size:12px;}
@@ -1420,6 +1699,51 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .home-feed{grid-column:auto;}
 .home-left-col{grid-column:1;display:flex;flex-direction:column;gap:14px;min-width:0;}
 .home-left-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
+/* Tournament column has two render slots:
+   - .home-tourney-col--desktop: inside .home-left-col, stacked below Following
+   - .home-tourney-col--mobile:  inside the Chase Movers row, side-by-side
+   Each is hidden at the other breakpoint so we don't double-render. The
+   side-by-side breakpoint covers everything below true-desktop width
+   (≤1100px) — phones, tablets, narrow laptops in split-screen. */
+.home-tourney-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
+.home-tourney-col--mobile{display:none;}
+@media (max-width:1100px){
+  .home-tourney-col--desktop{display:none;}
+  .home-tourney-col--mobile{display:block;min-width:0;}
+}
+/* Chase row: grid container that puts Chase Movers in column 1 and
+   tournament results in column 2 at ≤1100px. Grid columns are sized
+   explicitly so the browser can't collapse them — flex with % was
+   unreliable on Safari. */
+.home-chase-row{display:block;}
+@media (max-width:1100px){
+  /* Inside the mobile chase-row grid the tournament column is height-locked
+     to the chase movers banner (alignItems:stretch on the grid). The home-feed
+     fills the cell, and the .home-tourney-list inside is the scroll container
+     — every flex ancestor needs min-height:0 for the scroll to actually work
+     instead of overflowing. Rows are tightened so as many fit as possible
+     before the scrollbar kicks in. */
+  [data-debug="chase-row-tourney"]{display:flex;min-height:0;}
+  [data-debug="chase-row-tourney"] > .home-feed{margin-bottom:0;padding:5px 7px;
+    max-height:none;position:static;flex:1;width:100%;min-height:0;
+    display:flex;flex-direction:column;box-sizing:border-box;}
+  [data-debug="chase-row-tourney"] .home-tourney-list{gap:6px;flex:1;min-height:0;
+    overflow-y:auto;overflow-x:hidden;
+    /* Slim, theme-neutral scrollbar so it doesn't fight the gold accents. */
+    scrollbar-width:thin;}
+  [data-debug="chase-row-tourney"] .home-tourney-list::-webkit-scrollbar{width:5px;}
+  [data-debug="chase-row-tourney"] .home-tourney-list::-webkit-scrollbar-thumb{
+    background:var(--border);border-radius:3px;}
+  [data-debug="chase-row-tourney"] .home-tourney-block{gap:2px;}
+  [data-debug="chase-row-tourney"] .home-tourney-name{font-size:10px;line-height:1.2;}
+  [data-debug="chase-row-tourney"] .home-tourney-deck{padding:2px 4px;gap:4px;
+    grid-template-columns:16px 1fr auto;font-size:10px;}
+  [data-debug="chase-row-tourney"] .home-tourney-deck .ht-place{font-size:9px;}
+  [data-debug="chase-row-tourney"] .home-tourney-deck .ht-player{font-size:10px;}
+  [data-debug="chase-row-tourney"] .home-tourney-deck .ht-inks img{width:11px;height:11px;}
+  /* Hide the deck name (ink-color noise) on the narrow mobile column. */
+  [data-debug="chase-row-tourney"] .home-tourney-deck .ht-deck{display:none;}
+}
 .home-tourney-list{display:flex;flex-direction:column;gap:10px;}
 .home-tourney-block{display:flex;flex-direction:column;gap:4px;}
 .home-tourney-name{font-family:'Cinzel',serif;font-weight:700;font-size:12px;
@@ -1441,6 +1765,54 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 @media (max-width: 900px){
   .home-grid{grid-template-columns:1fr;}
   .home-left-col{grid-column:auto;}
+}
+@media (max-width:1100px){
+  /* Tablet + mobile re-layout: vertical stack, with signal first (movers +
+     tourney are paired side-by-side via .home-chase-row inside
+     home-grid-main). Following + collection panels stack below. */
+  .home-grid{display:flex;flex-direction:column;min-width:0;max-width:100%;}
+  .home-grid-main{order:1;min-width:0;max-width:100%;overflow:hidden;}
+  .home-grid-main > *{min-width:0;max-width:100%;}
+  .home-grid-right{order:2;}
+  .home-left-col{order:3;}
+  /* Skinny tournament column: tighter padding, smaller text. Deck name is
+     already hidden via .ht-deck{display:none} in the earlier rule. */
+  .home-tourney-col--mobile .home-feed{padding:4px 6px 6px;margin-bottom:0;
+    position:static;}
+  .home-tourney-col--mobile .home-tourney-name{font-size:10px;}
+  .home-tourney-col--mobile .home-tourney-deck{padding:3px 4px;gap:3px;
+    grid-template-columns:18px 1fr auto;}
+  .home-tourney-col--mobile .home-tourney-deck .ht-place{font-size:9px;}
+  .home-tourney-col--mobile .home-tourney-deck .ht-player{font-size:10px;}
+  .home-tourney-col--mobile .home-tourney-deck .ht-inks img{width:11px;height:11px;}
+  .home-tourney-col--mobile .home-feed-title{font-size:9px;margin:2px 2px 4px;}
+  .home-tourney-col--mobile .home-feed-collapse-toggle{font-size:9px;padding:4px 8px;}
+}
+@media (max-width:1100px){
+  /* Following + tournament feeds: drop sticky once we stack vertically and
+     force full-width block layout. Sticky only makes sense when these are
+     real sidebars next to the main column; once stacked they cover content
+     below as you scroll. align-self:start (set on the desktop sticky rule)
+     also has to be overridden — otherwise the feed only takes the natural
+     content width instead of stretching across the column. */
+  .home-feed{position:static !important;align-self:stretch !important;
+    width:100% !important;display:block !important;
+    margin-bottom:14px !important;}
+}
+@media (max-width:640px){
+  /* Tighten the page header so it doesn't eat 25% of the viewport. */
+  .home-page-title{margin-bottom:6px;}
+  .home-page-title h1{font-size:14px !important;}
+  .home-page-title p{display:none;}
+  /* Mover toolbar wraps; pause button stays out of the way. */
+  .home-toolbar{flex-wrap:wrap;gap:6px;}
+  /* Mover banner subtitle: wrap to next line instead of clipping when the
+     window subtitle (e.g. "Top 20 non-chase by Low price") doesn't fit. */
+  .movers-wrap + *, section > div > span.muted{white-space:normal;}
+  /* Force the entire banner header (title + subtitle) to wrap so the
+     subtitle gets its own line if it's long. */
+  section > div[style*="flex"]:first-child > .muted,
+  section > div[style*="flex"]:first-child{flex-basis:auto;}
 }
 .collection-panel{background:var(--bg-surface);border:1px solid var(--border);
   border-radius:8px;padding:14px 16px;}
@@ -1492,11 +1864,11 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   padding:4px 10px;border-radius:5px;font-size:12px;cursor:pointer;font-family:inherit;}
 .home-toolbar .seg-grp button.active{background:var(--accent);color:#fff;}
 .home-toolbar .seg-grp button:hover:not(.active){background:var(--accent-glow);}
-.home-toolbar .dir-toggle{display:flex;gap:6px;align-items:center;}
+.home-toolbar .dir-toggle{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .home-toolbar .dir-toggle label{display:inline-flex;align-items:center;gap:5px;
   font-size:12px;color:var(--text-dim);cursor:pointer;
   border:1px solid var(--border);border-radius:6px;padding:4px 9px;
-  background:var(--stat-bg);}
+  background:var(--stat-bg);white-space:nowrap;}
 .home-toolbar .dir-toggle label.on-up{color:var(--green);border-color:var(--green);}
 .home-toolbar .dir-toggle label.on-down{color:var(--red);border-color:var(--red);}
 .home-toolbar .dir-toggle label input{accent-color:currentColor;}
@@ -1595,11 +1967,61 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 /* Graded Prices tab — grid table with sparklines. */
 .graded-tab{padding:4px 0 2px;}
 .graded-tab-explain{font-size:11.5px;color:var(--text-muted);margin-bottom:12px;line-height:1.5;}
+/* Secondary explainer for the Paid / Acquired / Value meta inputs that render
+   under each owned slot. Less prominent than the main explainer; sits just
+   above the grader table. */
+.graded-tab-meta-explain{font-size:11px;line-height:1.5;margin-bottom:10px;
+  padding:8px 10px;background:var(--bg-card);border:1px solid var(--border);
+  border-radius:6px;}
+.graded-tab-meta-explain strong{color:var(--text);font-weight:700;}
+/* Per-owned-slot meta row: full-width strip below the table row, holds the
+   three inputs side by side via the existing CostDateInputs component. */
+.graded-row-meta{padding:8px 14px 10px;background:var(--bg-card);
+  border-top:1px dashed var(--border);
+  display:flex;flex-direction:column;gap:6px;}
+.graded-row-meta-tag{font-size:10px;font-weight:700;letter-spacing:0.5px;
+  text-transform:uppercase;color:var(--text-muted);}
 .graded-tab-table{display:flex;flex-direction:column;gap:1px;background:var(--border);
   border:1px solid var(--border);border-radius:8px;overflow:hidden;}
 .graded-tab-thead, .graded-row{display:grid;
   grid-template-columns:62px 56px 1fr 1fr 1fr 1.3fr 130px 90px;
   align-items:center;gap:0;background:var(--bg-card);padding:7px 10px;font-size:12px;}
+.graded-tab-table-editable .graded-tab-thead,
+.graded-tab-table-editable .graded-row{
+  grid-template-columns:62px 56px 1fr 1fr 1fr 1.3fr 130px 90px 102px;}
+.graded-owned-cell{display:inline-flex;align-items:center;gap:4px;justify-content:flex-end;}
+.graded-qty-btn{appearance:none;background:var(--bg-surface);border:1px solid var(--btn-border);
+  width:24px;height:24px;border-radius:50%;cursor:pointer;font-weight:800;font-size:14px;
+  color:var(--text);display:inline-flex;align-items:center;justify-content:center;line-height:1;padding:0;}
+.graded-qty-btn:hover:not(:disabled){background:var(--accent);color:#fff;border-color:var(--accent);}
+.graded-qty-btn:disabled{opacity:0.4;cursor:not-allowed;}
+.graded-qty-num{min-width:22px;text-align:center;font-variant-numeric:tabular-nums;
+  font-weight:700;font-size:13px;color:var(--text-muted);}
+.graded-qty-num.has{color:var(--accent);}
+/* Prominent owned-graded block in the modal body. Renders only when the
+   modal is opened from the Graded collection view (isGradedFocus). */
+.card-detail-graded-owned{margin:12px 0 4px;padding:10px 12px;
+  background:rgba(200,168,70,0.10);border:1px solid rgba(200,168,70,0.32);
+  border-radius:8px;}
+.card-detail-graded-owned-head{font-weight:700;font-size:13px;color:#c8a846;
+  letter-spacing:0.3px;text-transform:uppercase;display:flex;
+  justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;}
+.card-detail-graded-add-btn{padding:4px 10px;font-size:11px;letter-spacing:0.3px;}
+.card-detail-graded-owned-list{display:flex;flex-direction:column;gap:8px;margin-top:8px;}
+/* Was a single flex row; each owned slot now stacks (qty controls on top,
+   Paid / Acquired / Value inputs below) so the meta inputs have full width. */
+.card-detail-graded-owned-row{display:flex;flex-direction:column;
+  gap:8px;padding:8px 10px;background:var(--bg-card);border-radius:6px;}
+.card-detail-graded-owned-line{display:flex;align-items:center;
+  justify-content:space-between;gap:10px;}
+.card-detail-graded-owned-tag{font-weight:700;font-size:12px;color:var(--text);letter-spacing:0.3px;}
+.card-detail-graded-owned-ctl{display:inline-flex;align-items:center;gap:6px;}
+.card-detail-graded-owned-help{font-size:11px;line-height:1.5;
+  margin-top:6px;padding:6px 8px;background:var(--bg-card);
+  border:1px solid var(--border);border-radius:5px;}
+.card-detail-graded-owned-help strong{color:var(--text);font-weight:700;}
+.card-detail-graded-owned-qty{min-width:24px;text-align:center;font-variant-numeric:tabular-nums;
+  font-weight:800;font-size:14px;color:var(--accent);}
 .graded-tab-thead{font-weight:700;color:var(--text-muted);font-size:10px;
   text-transform:uppercase;letter-spacing:0.4px;background:var(--bg-surface);}
 .graded-row.is-top{background:linear-gradient(90deg, rgba(200,168,70,0.10), var(--bg-card));}
@@ -1626,6 +2048,9 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   .graded-tab-thead, .graded-row{grid-template-columns:56px 44px 1fr 1fr 1.1fr 110px;}
   .graded-tab-thead > :nth-child(4), .graded-row > :nth-child(4){display:none;}
   .graded-tab-thead > :nth-child(8), .graded-row > :nth-child(8){display:none;}
+  .graded-tab-table-editable .graded-tab-thead,
+  .graded-tab-table-editable .graded-row{
+    grid-template-columns:56px 44px 1fr 1fr 1.1fr 110px 96px;}
 }
 .card-detail-history-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px;}
 .card-detail-history-title{font-family:'Cinzel',serif;font-size:14px;color:var(--accent);font-weight:600;}
@@ -1637,8 +2062,33 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 }
 /* History tab ------------------------------------------------------- */
 .history-view{display:flex;flex-direction:column;gap:14px;}
-.history-toolbar{display:flex;gap:10px;align-items:center;}
+.history-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
 .history-card-mode{display:grid;grid-template-columns:280px 1fr;gap:14px;}
+@media (max-width:900px){
+  /* Stack picker above chart so neither is squeezed below readable width. */
+  .history-card-mode{grid-template-columns:1fr;gap:10px;}
+  .history-picker{max-height:none;}
+  .history-picker-list{max-height:300px;}
+}
+@media (max-width:640px){
+  /* Toolbar buttons can wrap; "Filter since release" header etc. fit. */
+  .history-toolbar{gap:6px;}
+  .history-toolbar > *{flex:0 1 auto;min-width:0;}
+  /* Range button group can wrap independently. */
+  .panel-range-buttons{flex-wrap:wrap;}
+  /* Compare picker bar (PNG/SVG/CSV/Clear) — let buttons wrap below summary
+     so they don't overflow the right edge. */
+  .compare-picker-bar{padding:6px 8px;}
+  .compare-summary{flex-basis:100%;}
+  .compare-export-group{flex-basis:100%;overflow-x:auto;
+    -webkit-overflow-scrolling:touch;padding-bottom:2px;}
+  .compare-export-group .settings-action{flex-shrink:0;}
+  /* Compare stats table overflows at 7 columns; wrap in a horizontal
+     scroller. Keep header sticky-ish by leaving the table's display intact. */
+  .compare-stats-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;
+    white-space:nowrap;}
+  .compare-stats-table th, .compare-stats-table td{padding:6px 8px;font-size:11px;}
+}
 .history-picker{background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;max-height:540px;}
 .graded-picker-filters{display:flex;flex-direction:column;gap:4px;
   padding:6px 4px;border-bottom:1px solid var(--border);margin-bottom:2px;}
@@ -1848,8 +2298,8 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   border:1px solid var(--border);border-radius:5px;}
 .import-modal .import-actions button.active{background:var(--accent);color:#fff;border-color:var(--accent);}
 .import-modal .import-actions button:disabled{opacity:0.55;cursor:default;}
-.seg-toggle{display:flex;border:1px solid var(--btn-border);border-radius:18px;overflow:hidden;}
-.seg-toggle button{border:none;border-radius:0;padding:5px 14px;font-size:12px;background:var(--btn-bg);color:var(--btn-text);font-weight:600;cursor:pointer;}
+.seg-toggle{display:flex;border:1px solid var(--btn-border);border-radius:18px;overflow:hidden;flex-shrink:0;}
+.seg-toggle button{border:none;border-radius:0;padding:5px 14px;font-size:12px;background:var(--btn-bg);color:var(--btn-text);font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;}
 .seg-toggle button.active{background:var(--accent);color:#fff;}
 .seg-toggle button + button{border-left:1px solid var(--btn-border);}
 .copies-select{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);font-weight:500;}
@@ -1865,6 +2315,7 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .set-buy-link{display:block;margin-top:8px;padding:5px 10px;font-size:11px;font-weight:600;text-decoration:none;color:#fff;background:rgba(22,101,52,0.92);border-radius:5px;text-align:center;transition:background 0.1s;font-variant-numeric:tabular-nums;}
 .set-buy-link:hover{background:rgba(22,101,52,1);}
 .collection-sets{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;}
+@media (max-width:560px){.collection-sets{grid-template-columns:1fr;gap:8px;}}
 .set-progress-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;}
 .set-progress-name{font-family:'Cinzel',serif;font-size:14px;font-weight:600;color:var(--accent);margin-bottom:10px;}
 .set-progress-row{display:grid;grid-template-columns:60px 1fr;column-gap:8px;row-gap:2px;align-items:center;margin-bottom:8px;}
@@ -1983,7 +2434,19 @@ html[data-theme="dark"] .inline-counter .ic-btn:hover:not(:disabled){background:
 .chip-rarity-only .chip-rarity-icon{width:20px;height:20px;}
 /* Visual divider between filter groups (ink | cost | rarity). */
 .cards-quickfilter-divider{display:inline-block;width:1px;align-self:stretch;background:var(--border);margin:2px 4px;}
-.cards-quickfilter-group{display:flex;flex-wrap:wrap;align-items:center;gap:4px;}
+.cards-quickfilter-group{display:flex;flex-wrap:wrap;align-items:center;gap:10px;}
+/* Each sub-group (inks / costs / rarities / legality) stays together as a
+   unit. Only the OUTER group wraps between sub-groups — so when space
+   gets tight, you see all 6 inks together on one line, all 9 costs on
+   the next, etc. Without nowrap inside, chips would scatter mid-group. */
+.cards-quickfilter-sub{display:flex;flex-wrap:nowrap;align-items:center;gap:4px;
+  padding-right:6px;border-right:1px solid var(--border);}
+.cards-quickfilter-sub:last-child{border-right:none;padding-right:0;}
+@media (max-width:520px){
+  /* On very narrow phones, allow groups to wrap internally too so a single
+     long group (9 costs) doesn't force horizontal scroll. */
+  .cards-quickfilter-sub{flex-wrap:wrap;border-right:none;padding-right:0;}
+}
 /* When only one printing is visible (foilMode = non-foil OR foil), give the
    visible +/- counter both 72px slots so it fills the gap instead of
    leaving an awkward empty column. */
@@ -2115,6 +2578,28 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
 .tournament-card-winner .tc-win-player{font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:90px;}
 .tournament-card-winner .tc-win-deck{color:var(--text-dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;}
 .tournament-card-winner .tc-win-inks{display:inline-flex;gap:2px;flex-shrink:0;}
+/* Top-8 list inside each tournament card (replaces single-winner view). */
+.tournament-card-top8{list-style:none;margin:8px 0 0;padding:8px 0 0;
+  border-top:1px dashed var(--border);display:flex;flex-direction:column;gap:2px;}
+.tc-top8-row{display:grid;grid-template-columns:32px 1fr auto;gap:6px;
+  align-items:center;font-size:11.5px;padding:2px 0;line-height:1.25;}
+.tc-top8-place{font-weight:800;color:var(--accent);font-size:10px;
+  letter-spacing:0.3px;text-align:left;}
+.tc-top8-player{font-weight:700;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+.tc-top8-deck{color:var(--text-dim);font-weight:400;font-size:10.5px;
+  margin-left:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.tc-top8-row{grid-template-columns:28px 1fr auto;}
+/* When deck name is present, give it room by collapsing player+deck into
+   a single flexible cell. Implemented by spanning row 1's columns. */
+.tc-top8-row:has(.tc-top8-deck){grid-template-columns:28px 1fr auto auto;}
+.tc-top8-row:has(.tc-top8-deck) .tc-top8-player{grid-column:2;}
+.tc-top8-row:has(.tc-top8-deck) .tc-top8-deck{grid-column:3;}
+.tc-top8-row:has(.tc-top8-deck) .tc-top8-inks{grid-column:4;}
+.tc-top8-inks{display:inline-flex;gap:1px;flex-shrink:0;}
+.tc-top8-inks img{width:13px;height:13px;}
+.tournament-card-more{font-size:10.5px;margin-top:6px;text-align:center;
+  font-style:italic;}
 .tournament-results-list{display:flex;flex-direction:column;gap:4px;}
 /* Outer row wrapper: just a container. The grid lives on the inner
    button so the spans can line up consistently regardless of whether
@@ -2142,6 +2627,20 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
   width:100%;}
 .tournament-upload-row textarea{resize:vertical;min-height:62px;
   font-family:ui-monospace,SFMono-Regular,Consolas,monospace;}
+@media (max-width:640px){
+  /* Tournament result row: collapse to place + name + inks (deckname under). */
+  .tournament-result-open{grid-template-columns:48px 1fr auto;
+    grid-template-rows:auto auto;gap:6px;padding:8px 10px;}
+  .tournament-result-open .tr-place{grid-column:1;grid-row:1;}
+  .tournament-result-open .tr-player{grid-column:2;grid-row:1;}
+  .tournament-result-open .tr-inks{grid-column:3;grid-row:1;}
+  .tournament-result-open .tr-deckname{grid-column:1 / -1;grid-row:2;font-size:11px;}
+  /* Bulk-upload row: stack inputs 2/row, deck textarea full-width. */
+  .tournament-upload-row{grid-template-columns:1fr 1fr 24px;
+    grid-auto-flow:row dense;}
+  .tournament-upload-row > *:nth-child(3){grid-column:1 / 3;}
+  .tournament-upload-row > textarea{grid-column:1 / -1;}
+}
 .tournament-upload-remove{width:24px;height:24px;align-self:start;padding:0;font-size:14px;
   background:transparent;border:1px solid var(--border);border-radius:4px;cursor:pointer;
   color:var(--text-muted);line-height:1;}
@@ -2173,6 +2672,7 @@ html[data-theme="dark"] .sd-row-price.foil{color:#c0a3ef;}
 .deck-search-input{font-size:13px;padding:6px 10px;
   border:1px solid var(--border);background:var(--bg-card);color:var(--text);
   border-radius:6px;outline:none;min-width:200px;}
+@media (max-width:640px){.deck-search-input{min-width:0;flex:1;}}
 .deck-search-input:focus{border-color:var(--accent);}
 .deck-sort-select{font-size:12px;padding:6px 8px;
   border:1px solid var(--border);background:var(--bg-card);color:var(--text);
@@ -2240,6 +2740,22 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 /* Editor: card browser (left) + deck summary panel (right) */
 .deck-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px;align-items:start;}
 @media (max-width: 1100px){ .deck-editor-grid{grid-template-columns:1fr;} }
+/* Mobile Cards/Deck tab toggle. Desktop hides it entirely; on phones the
+   inactive panel is removed from layout so users see one full-width view
+   at a time instead of scrolling past the whole CardBrowser to reach the
+   deck summary below it. */
+.deck-editor-mobile-tabs{display:none;}
+@media (max-width: 700px){
+  .deck-editor-mobile-tabs{display:flex;gap:6px;margin:0 0 12px;
+    position:sticky;top:60px;z-index:30;background:var(--bg);
+    padding:6px 0;border-bottom:1px solid var(--border);}
+  .deck-editor-mobile-tab{flex:1;padding:10px 14px;border:1px solid var(--btn-border);
+    border-radius:18px;background:var(--btn-bg);color:var(--btn-text);font-weight:700;
+    font-size:13px;letter-spacing:0.3px;cursor:pointer;}
+  .deck-editor-mobile-tab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+  .deck-editor-grid.mobile-tab-deck .deck-editor-browser{display:none;}
+  .deck-editor-grid.mobile-tab-cards .deck-editor-panel{display:none;}
+}
 /* Read-only mode collapses to single column — there's no CardBrowser. */
 .deck-editor-grid.readonly{grid-template-columns:1fr;max-width:720px;}
 
@@ -2261,9 +2777,16 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 /* Notes / video popover for the deck editor. Same chrome as the share
    popover but wider since the textarea needs room. */
 .deck-notes-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
-  width:380px;background:var(--bg-modal);border:1px solid var(--border);
-  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
+  width:380px;max-width:calc(100vw - 24px);background:var(--bg-modal);
+  border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.35);
   padding:12px;display:flex;flex-direction:column;gap:6px;}
+.deck-text-modal{max-width:560px;}
+.deck-text-area{width:100%;box-sizing:border-box;min-height:280px;max-height:60vh;
+  font-family:'Courier New', monospace;font-size:13px;line-height:1.5;
+  padding:10px 12px;background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:6px;color:var(--text);resize:vertical;}
+.deck-text-area:focus{outline:none;border-color:var(--accent);}
 .deck-notes-textarea{width:100%;min-width:0;font-size:13px;padding:8px 10px;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:6px;
   color:var(--text);font-family:inherit;resize:vertical;line-height:1.4;}
@@ -2284,9 +2807,19 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-video-wrap iframe{position:absolute;inset:0;width:100%;height:100%;border:0;}
 
 .deck-share-popover{position:absolute;top:calc(100% + 6px);right:0;z-index:200;
-  width:320px;background:var(--bg-modal);border:1px solid var(--border);
-  border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
+  width:320px;max-width:calc(100vw - 24px);background:var(--bg-modal);
+  border:1px solid var(--border);border-radius:10px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.35);
   padding:12px;display:flex;flex-direction:column;gap:6px;}
+@media (max-width:700px){
+  /* Below tablet, anchor share + notes popovers to the viewport edges so
+     they can't escape the screen on narrow widths. The button's position:
+     relative ancestor would otherwise clip them under top-nav scroll. */
+  .deck-share-popover,
+  .deck-notes-popover{position:fixed;top:auto;right:12px;left:12px;
+    width:auto;max-width:none;
+    max-height:70vh;overflow-y:auto;}
+}
 .deck-share-section-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);margin-top:4px;}
 .deck-share-radio{display:flex;align-items:flex-start;gap:10px;
@@ -2485,10 +3018,11 @@ a.deck-row-price:hover{background:rgba(22,163,74,0.18);border-color:rgba(22,163,
   color:#fff;font-size:10px;font-weight:700;padding:2px 5px;border-radius:3px;
   text-decoration:none;}
 .deck-grid-tile-price:hover{background:rgba(22,163,74,1);}
-/* Owned/missing fraction (e.g. "1/4") on the bottom-center of grid tiles
-   when Highlight missing is on. Always-visible counter that pairs with
-   the dimming/border styles. */
-.deck-tile-owned-frac{position:absolute;top:5px;left:5px;
+/* Owned/missing fraction (e.g. "1/4") shown when Highlight missing is on.
+   Positioned just under the top-right quantity badge so it doesn't cover
+   the ink cost hex (top-left) — the cost is more visually important and
+   was getting hidden by the badge when it lived top-left. */
+.deck-tile-owned-frac{position:absolute;top:30px;right:5px;
   background:rgba(0,0,0,0.75);color:#fff;font-size:10px;font-weight:700;
   padding:2px 6px;border-radius:4px;letter-spacing:0.3px;z-index:2;}
 .deck-tile-owned-frac.complete{background:rgba(22,163,74,0.92);}
@@ -2603,6 +3137,21 @@ html[data-theme="dark"] .card-row-price.foil{color:#c0a3ef;}
   cursor:pointer;border-radius:3px;padding:0;line-height:1;}
 .card-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .card-row-counter button:disabled{opacity:0.3;cursor:not-allowed;}
+/* Compact deck-builder row: no image, just ink + cost + name + counter. */
+.card-row-compact{grid-template-columns:14px 30px 1fr auto;column-gap:8px;padding:4px 8px;}
+.card-row-ink-swatch{width:14px;height:14px;border-radius:50%;flex-shrink:0;
+  border:1px solid rgba(0,0,0,0.15);}
+.card-row-cost-hex{display:inline-flex;align-items:center;justify-content:center;
+  width:30px;height:30px;flex-shrink:0;}
+.card-row-cost-hex .cost-hex{width:28px;height:28px;display:block;}
+.card-row-name-btn{appearance:none;background:transparent;border:none;padding:0;margin:0;
+  font-family:inherit;font-size:13px;font-weight:600;color:var(--text);text-align:left;
+  cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.card-row-name-btn:hover{color:var(--accent);text-decoration:underline;}
+@media (max-width:640px){
+  .card-row-compact{column-gap:6px;padding:3px 6px;}
+  .card-row-counter button{width:32px;height:30px;}
+}
 
 /* Expand button shown only in deck mode: opens the detail modal so the tile
    body itself can become a one-tap "add to deck" target. */
@@ -2824,7 +3373,74 @@ html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35
 .tournament-result-admin button:hover{background:var(--bg-surface-hover);}
 
 /* Graded view header: display-mode toggle next to the Add button. */
-.graded-collection-header-actions{display:flex;gap:10px;align-items:center;}
+.graded-collection-header-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
+/* Uppercase letter-spaced label family — matches the .gc-stat-lbl styling
+   for "UNIQUE CARDS OWNED" so the whole header reads as one set of chips. */
+.gc-caps-row{font-family:'Nunito Sans',sans-serif;}
+.gc-caps-btn,
+.gc-caps-cta,
+.gc-caps-seg button,
+.gc-caps-flag{font-size:10px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;}
+.gc-caps-btn{padding:6px 12px;border-radius:14px;}
+.gc-caps-cta{padding:8px 14px;}
+.gc-caps-cta-sm{padding:5px 10px;}
+.gc-caps-seg button{padding:6px 14px;}
+.gc-caps-flag{display:inline-flex;align-items:center;gap:6px;cursor:help;}
+.gc-caps-flag input[type="checkbox"]{cursor:pointer;}
+.gc-caps-select{font-size:10px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;
+  padding:6px 26px 6px 12px;border-radius:14px;border:1px solid var(--btn-border);
+  background:var(--btn-bg);color:var(--btn-text);cursor:pointer;font-family:'Nunito Sans',sans-serif;
+  appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--text-muted) 50%),
+    linear-gradient(135deg,var(--text-muted) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+  background-size:5px 5px, 5px 5px;background-repeat:no-repeat;}
+.gc-caps-select:hover{border-color:var(--accent);}
+.gc-caps-info{position:relative;font-size:11px;color:var(--text-muted);font-weight:600;
+  letter-spacing:0;text-transform:none;cursor:help;display:inline-flex;align-items:center;}
+.gc-caps-flag:hover .gc-caps-info{color:var(--accent);}
+/* Custom tooltip that pops on hover/focus of the ⓘ icon. More reliable
+   than the native title= attribute (which has long delay + browser
+   inconsistency) and lets us format the body multi-line. */
+.gc-caps-tip{position:absolute;top:calc(100% + 6px);right:0;
+  width:300px;max-width:calc(100vw - 24px);padding:10px 12px;background:var(--bg-modal);
+  border:1px solid var(--border);border-radius:8px;
+  font-size:11px;font-weight:400;color:var(--text);line-height:1.45;
+  text-transform:none;letter-spacing:0;text-align:left;
+  white-space:normal;
+  box-shadow:0 6px 18px rgba(0,0,0,0.35);
+  opacity:0;pointer-events:none;transform:translateY(-4px);
+  transition:opacity 0.12s, transform 0.12s;z-index:50;}
+.gc-caps-info:hover .gc-caps-tip,
+.gc-caps-info:focus .gc-caps-tip,
+.gc-caps-info:focus-within .gc-caps-tip{opacity:1;transform:translateY(0);pointer-events:auto;}
+/* Mobile: pin to viewport so wrapping parents / overflow:hidden ancestors
+   can't clip the tooltip. Centered horizontally, just below the header. */
+@media (max-width:700px){
+  .gc-caps-tip{position:fixed;top:auto;bottom:auto;right:auto;left:12px;right:12px;
+    width:auto;max-width:none;margin-top:6px;font-size:12px;line-height:1.5;
+    /* Anchor against the ⓘ via a transform — when the icon is near the bottom
+       of the screen, the browser already handles scroll. */
+    transform:translateY(-4px) translateX(0);}
+  .gc-caps-info:hover .gc-caps-tip,
+  .gc-caps-info:focus .gc-caps-tip,
+  .gc-caps-info:focus-within .gc-caps-tip{transform:translateY(0) translateX(0);}
+}
+/* Mobile FAB: replaces the inline + Add graded card chip on narrow screens
+   so the most-frequent action stays one-tap-reachable even when the
+   header wraps to 3 rows of chips. Fixed bottom-right, above the footer. */
+/* Goals jumper chip — desktop has the sidebar always visible so we hide
+   the chip there. Only useful on mobile where the panel lives at the
+   bottom of the page. */
+.gc-goals-jumper{display:none;}
+@media (max-width:900px){ .gc-goals-jumper{display:inline-flex;} }
+.gc-add-fab{display:none;}
+@media (max-width:700px){
+  .gc-add-cta-desktop{display:none;}
+  .gc-add-fab{display:flex;position:fixed;bottom:18px;right:18px;width:56px;height:56px;
+    border-radius:50%;font-size:28px;font-weight:800;align-items:center;justify-content:center;
+    padding:0;line-height:1;z-index:50;box-shadow:0 4px 14px rgba(0,0,0,0.35);}
+  .gc-add-fab:active{transform:scale(0.94);}
+}
 
 /* PSA 10 reference price shown on tracked-but-not-owned cards. Renders
    inside the "Tracking" pill as a secondary chip. */
