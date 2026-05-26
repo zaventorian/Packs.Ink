@@ -63,7 +63,15 @@ html[data-theme="dark"] {
   --heatmap-color: rgba(200,168,70,VAL);
 }
 *,*::before,*::after{box-sizing:border-box;}
-body{margin:0;font-family:'Nunito Sans',sans-serif;font-size:14px;color:var(--text);background:var(--bg);padding:1.5rem;max-width:1300px;margin:0 auto;min-height:100vh;position:relative;}
+/* Body padding uses max(designed, safe-area-inset) so iOS notched devices
+   (iPhone 14 Pro+, Dynamic Island) pad content away from the Island,
+   home indicator, and landscape rounded corners. env() resolves to 0 on
+   devices without insets, so desktop and non-cutout Android are
+   unaffected. Pairs with <meta viewport-fit=cover> + apple-mobile-web-app-
+   status-bar-style=black-translucent in Index.html. */
+body{margin:0;font-family:'Nunito Sans',sans-serif;font-size:14px;color:var(--text);background:var(--bg);
+  padding:max(1.5rem,env(safe-area-inset-top)) max(1.5rem,env(safe-area-inset-right)) max(1.5rem,env(safe-area-inset-bottom)) max(1.5rem,env(safe-area-inset-left));
+  max-width:1300px;margin:0 auto;min-height:100vh;position:relative;}
 body::before{content:'';position:fixed;inset:0;z-index:-2;background:var(--bg);}
 body::after{content:'';position:fixed;inset:0;z-index:-1;opacity:0.5;background:
   radial-gradient(ellipse 600px 600px at 10% 20%, rgba(200,168,70,0.04) 0%, transparent 70%),
@@ -114,8 +122,19 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .tabs-logo-btn:hover{opacity:0.85;}
 .tabs-logo-btn img{height:60px;width:auto;display:block;pointer-events:none;}
 @media (max-width:640px){
-  /* Reclaim horizontal real estate: body padding was 24px on each side, 13% of a 375 viewport. */
-  body{padding:14px;overflow-x:clip;}
+  /* Reclaim horizontal real estate: body padding was 24px on each side, 13% of a 375 viewport.
+     Still pad top/bottom by env(safe-area-inset) so iOS Dynamic Island /
+     home indicator can't overlap the top nav (Photo 1) or eat the bottom
+     action bar. max(14px, env) keeps the designed 14px floor for
+     non-notched mobile devices. */
+  body{
+    padding:
+      max(14px, env(safe-area-inset-top))
+      max(14px, env(safe-area-inset-right))
+      max(14px, env(safe-area-inset-bottom))
+      max(14px, env(safe-area-inset-left));
+    overflow-x:clip;
+  }
   /* Defense against any descendant that mis-sizes wider than the viewport
      (causing pinch-zoom-out to reveal dead space on the right). `clip` is
      used instead of `hidden` because hidden makes the element a scroll
@@ -179,9 +198,15 @@ input[type="checkbox"]{accent-color:var(--accent);}
     display:inline-flex;align-items:center;justify-content:center;}
   /* Pin the settings popover to the viewport on mobile so it isn't clipped
      by ancestor overflow rules. Coordinates anchored to top-right of screen,
-     not the avatar button. */
-  .settings-popover{position:fixed !important;top:56px !important;right:8px !important;left:auto !important;
-    max-width:calc(100vw - 16px);}
+     not the avatar button. `top` and `right` honor safe-area-inset so the
+     popover doesn't open under the iPhone Dynamic Island (Photo 4 regression
+     was partly this — the user could tap the avatar but couldn't reach the
+     menu that appeared underneath the Island). */
+  .settings-popover{position:fixed !important;
+    top:calc(56px + env(safe-area-inset-top)) !important;
+    right:max(8px, env(safe-area-inset-right)) !important;
+    left:auto !important;
+    max-width:calc(100vw - 16px - env(safe-area-inset-left) - env(safe-area-inset-right));}
   /* Bump tiny mover-tile text + tile width so cards are readable on phones. */
   .mover-tile{flex-basis:158px;}
   .mover-tile .mt-name{font-size:11px;}
@@ -1900,7 +1925,11 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   .card-detail-body{padding:14px;}
   .card-detail-body h2{font-size:18px;}
 }
-.card-detail-close{position:absolute;top:10px;right:10px;width:34px;height:34px;border-radius:50%;background:rgba(0,0,0,0.4);color:#fff;border:none;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;z-index:2;}
+/* X close button. `top` uses max(10px, safe-area-inset-top) so it stays
+   tappable on iPhone with Dynamic Island (otherwise sits at y≈18px
+   under the Island's ~y=60px reach — Photo 3 regression). On desktop and
+   non-notched devices the env value is 0 and we keep the designed 10px. */
+.card-detail-close{position:absolute;top:max(10px,env(safe-area-inset-top));right:max(10px,env(safe-area-inset-right));width:34px;height:34px;border-radius:50%;background:rgba(0,0,0,0.4);color:#fff;border:none;font-size:22px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;z-index:2;}
 .card-detail-close:hover{background:rgba(0,0,0,0.7);}
 .card-detail-image{flex:0 0 340px;padding:24px;display:flex;align-items:flex-start;justify-content:center;}
 .card-detail-image img{width:100%;max-width:300px;height:auto;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.25);}
@@ -3436,7 +3465,10 @@ html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35
 .gc-add-fab{display:none;}
 @media (max-width:700px){
   .gc-add-cta-desktop{display:none;}
-  .gc-add-fab{display:flex;position:fixed;bottom:18px;right:18px;width:56px;height:56px;
+  .gc-add-fab{display:flex;position:fixed;
+    bottom:calc(18px + env(safe-area-inset-bottom));
+    right:max(18px, env(safe-area-inset-right));
+    width:56px;height:56px;
     border-radius:50%;font-size:28px;font-weight:800;align-items:center;justify-content:center;
     padding:0;line-height:1;z-index:50;box-shadow:0 4px 14px rgba(0,0,0,0.35);}
   .gc-add-fab:active{transform:scale(0.94);}
