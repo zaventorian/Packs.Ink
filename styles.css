@@ -172,7 +172,8 @@ input[type="checkbox"]{accent-color:var(--accent);}
   .nav-tab-icon{width:16px;height:16px;}
   .nav-tab-icon svg{width:14px;height:14px;}
   .nav-tab-label{font-size:8.5px;}
-  .nav-tab--help{min-width:28px;width:28px;padding:3px 4px;margin-left:6px;}
+  .nav-tab--help{min-width:36px;min-height:36px;width:36px;height:36px;padding:0;margin-left:6px;
+    display:inline-flex;align-items:center;justify-content:center;}
   .nav-tab--help .nav-tab-label{display:none;}
   .nav-tab--help .nav-tab-icon svg{width:16px;height:16px;}
   /* Right cluster on mobile: two stacked sub-rows. Row 1 = sign-in/profile
@@ -186,15 +187,18 @@ input[type="checkbox"]{accent-color:var(--accent);}
     background:var(--bg);padding-left:4px;}
   .top-nav-right-row--bubbles{display:flex;gap:4px;align-items:center;
     background:var(--bg);}
-  .signin-btn{padding:4px 9px;font-size:11px;min-height:28px;}
+  /* Mobile tap targets — Apple HIG recommends 44pt minimum; we cap at 36px
+     to keep the two-row nav from getting too tall. Was 28px which made the
+     profile pill (Photo 4 regression) almost impossible to hit on iPhone. */
+  .signin-btn{padding:6px 11px;font-size:11px;min-height:36px;}
   /* On mobile the profile button collapses to just the avatar circle. The
      name eats ~80px which was the difference between row 2 (Screener / Price
      Graphing / Analytics / ?) fitting vs. the help button scrolling off the
      right. Tap the avatar to open the popover; the full name is in there. */
-  .profile-btn{padding:2px;min-height:28px;min-width:28px;
+  .profile-btn{padding:2px;min-height:36px;min-width:36px;
     border-radius:50%;gap:0;}
   .profile-btn-name{display:none;}
-  .top-nav-right .theme-toggle{min-height:26px;width:26px;padding:0;font-size:13px;
+  .top-nav-right .theme-toggle{min-height:36px;width:36px;padding:0;font-size:14px;
     display:inline-flex;align-items:center;justify-content:center;}
   /* Pin the settings popover to the viewport on mobile so it isn't clipped
      by ancestor overflow rules. Coordinates anchored to top-right of screen,
@@ -731,23 +735,44 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   transition:border-color 0.1s,background 0.1s;}
 /* When sealed prices are loaded we insert a Box-price column between EV and the windows. */
 .ev-rows.with-box .ev-row{grid-template-columns:1fr 180px 180px 1fr;}
+/* Inline per-cell label rendered in every data row. Hidden on desktop
+   (head row carries the column labels there) and flipped to block by
+   the @media (max-width:780px) override below. Must be declared BEFORE
+   the @media block so the cascade source-order tiebreaker lets the
+   media rule win when the viewport matches. */
+.ev-row-val-lbl-inline{display:none;}
 @media (max-width:780px){
-  /* Stack: set name → ev/box stacked label+value below. Deltas hidden
-     (tap the row to see per-window detail). Designed to never overflow,
-     even on narrow phones where the EV diff badge was clipping. */
+  /* Mobile layout: set name → ev/box stacked label+value below. Deltas
+     hidden (tap the row to see per-window detail in the price history
+     modal). Each value cell carries its own inline label so the user
+     can tell EV/Box from EV/Pack from Box Price without the head row.
+     Designed to never overflow, even on narrow phones. */
   .ev-row, .ev-rows.with-box .ev-row{
     grid-template-columns:1fr 1fr !important;
     grid-template-rows:auto auto;
-    row-gap:8px;column-gap:10px;padding:10px 12px;}
+    row-gap:10px;column-gap:10px;padding:12px;}
   .ev-row-set{font-size:13px;grid-column:1 / -1;grid-row:1;}
-  .ev-row-vals{grid-column:1;grid-row:2;justify-content:flex-start;gap:10px;flex-wrap:wrap;}
-  .ev-row-box{grid-column:2;grid-row:2;justify-content:flex-end;gap:8px;flex-wrap:wrap;}
-  .ev-row-deltas{display:none;}
+  .ev-row-vals{grid-column:1;grid-row:2;justify-content:flex-start;gap:14px;flex-wrap:wrap;align-items:flex-end;}
+  .ev-row-box{grid-column:2;grid-row:2;justify-content:flex-end;gap:10px;flex-wrap:wrap;align-items:flex-end;}
+  /* Higher-specificity selector (.ev-rows .ev-row-deltas) beats the
+     top-level `.ev-row-deltas{display:grid}` rule without relying on
+     !important — defends against any caching layer that strips the
+     important annotation during stylesheet parse. */
+  .ev-rows .ev-row-deltas, .ev-row .ev-row-deltas{display:none !important;}
   .ev-row-head{display:none;}
-  .ev-row-val{font-size:14px;min-width:0;}
-  .ev-row-val-dim{font-size:11px;}
-  .ev-box-diff{font-size:11px;min-width:0;padding:2px 6px;}
-  .ev-box-link{font-size:13px;}
+  /* Stack inline label above value. tabular-nums on the values keeps
+     adjacent columns visually aligned despite different digit counts. */
+  .ev-row-val{font-size:14px;min-width:0;align-items:flex-start;}
+  .ev-row-box .ev-row-val,
+  .ev-row-box .ev-box-diff{align-items:flex-end;text-align:right;}
+  .ev-row-val-dim{font-size:13px;}
+  .ev-box-diff{font-size:13px;min-width:0;padding:4px 8px;display:inline-flex;flex-direction:column;
+    align-items:flex-end;gap:1px;line-height:1.05;}
+  .ev-box-link{font-size:14px;}
+  .ev-row-val-lbl-inline{display:block;font-size:9px;font-weight:700;letter-spacing:0.5px;
+    text-transform:uppercase;color:var(--text-muted);line-height:1;margin-bottom:2px;}
+  /* Diff badge has a tinted bg, so its inline label needs to read against it. */
+  .ev-box-diff .ev-row-val-lbl-inline{opacity:0.85;}
 }
 .ev-row-box{display:flex;gap:14px;justify-content:flex-end;align-items:baseline;}
 .ev-row:not(.ev-row-head):hover{border-color:var(--border-accent);
@@ -803,12 +828,10 @@ html[data-theme="dark"] .ev-box-diff-down{background:rgba(232,140,140,0.15);colo
 html[data-theme="dark"] .ev-delta-up{background:rgba(127,217,165,0.12);color:#7fd9a5;}
 html[data-theme="dark"] .ev-delta-down{background:rgba(232,140,140,0.12);color:#e88c8c;}
 
-@media (max-width: 820px){
-  .ev-row, .ev-rows.with-box .ev-row{grid-template-columns:1fr;row-gap:8px;}
-  .ev-row-vals, .ev-row-box{justify-content:flex-start;}
-  .ev-row-deltas{grid-template-columns:repeat(6,1fr);}
-  .ev-row-head{display:none;}
-}
+/* Was a redundant @media (max-width:820px) block that fought the 780px
+   rule above (and that left the data rows missing their column labels on
+   mobile because the head row gets display:none'd). The 780px rule is the
+   canonical mobile layout; inline labels per-cell handle the head-row gap. */
 
 /* ── Sealed view ──────────────────────────────────────────────────────── */
 .sealed-view{display:flex;flex-direction:column;gap:22px;}
@@ -854,16 +877,25 @@ button.sealed-set-pill:hover{color:var(--accent);
   border:1px solid var(--border);border-radius:8px;
   transition:border-color 0.1s,background 0.1s;}
 @media (max-width:780px){
-  /* Two-row stack on mobile: type pill + name on top, price + change below.
-     Set pill (column 4) hidden — the section header already shows the set. */
+  /* Mobile layout: set pill + name on row 1, price on row 2.
+     Six-window delta pills hidden — they were rendering without any time-
+     window labels (head row is hidden), so users saw "▼1.4%, ▼4.4%, ▼93.2%"
+     with no idea which span each meant. Tap the row to open the price-
+     history modal for detail.
+     The redundant @media (max-width:820px) block that used to follow this
+     one — and silently fought it — has been removed; this is the canonical
+     mobile sealed-row layout. */
   .sealed-row{grid-template-columns:auto 1fr !important;
     grid-template-rows:auto auto;row-gap:6px;column-gap:10px;padding:10px 12px;}
-  .sealed-row-type{grid-column:1;grid-row:1;}
+  .sealed-row-set{grid-column:1;grid-row:1;align-self:center;}
   .sealed-row-name{grid-column:2;grid-row:1;font-size:13px;}
   .sealed-row-price{grid-column:1 / -1;grid-row:2;justify-self:flex-start;
-    display:flex;gap:14px;align-items:baseline;}
-  .sealed-row-set{display:none;}
+    text-align:left;font-size:15px;}
+  .sealed-row-deltas{display:none !important;}
   .sealed-row-head{display:none;}
+  /* Set pill stays visible on mobile — sections aren't always obvious when
+     scrolling fast and the pill is cheap. Compact width via shorter padding. */
+  .sealed-set-pill, .sealed-set-pill-muted{padding:3px 7px;font-size:10px;}
 }
 .sealed-row:not(.sealed-row-head):hover{border-color:var(--border-accent);
   background:var(--bg-surface);}
@@ -908,11 +940,10 @@ html[data-theme="dark"] .sealed-type-pill.type-prerelease-pack{color:#e8a3b9;}
   text-align:right;font-variant-numeric:tabular-nums;}
 .sealed-row-deltas{display:grid;grid-template-columns:repeat(6,1fr);column-gap:4px;}
 
-@media (max-width: 820px){
-  .sealed-row{grid-template-columns:1fr;row-gap:6px;}
-  .sealed-row-price{text-align:left;}
-  .sealed-row-head{display:none;}
-}
+/* @media (max-width:820px) block removed — was a duplicate of the 780px
+   rule above that fought with it (single-column + no explicit child grid
+   positions made the delta pills land in unpredictable cells). The 780px
+   block is canonical. */
 .stat{background:var(--stat-bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;}
 .stat .lbl{font-size:11px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.3px;}
 .stat .val{font-size:16px;font-weight:600;}
@@ -1643,6 +1674,15 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .home-feed{background:var(--bg-surface);border:1px solid var(--border);
   border-radius:8px;padding:6px 8px 8px;margin-bottom:14px;
   position:sticky;top:8px;align-self:start;}
+/* Disable sticky on mobile — the desktop layout has Following in a left
+   sidebar where sticky-pinned-while-main-scrolls is the intended UX. At
+   ≤1100px the grid collapses to a flex column and sticky causes the
+   Following box to visually overlap the Your Top Movers panel above it
+   while scrolling. Static positioning lets it scroll naturally with the
+   rest of the column. */
+@media (max-width:1100px){
+  .home-feed{position:static;}
+}
 /* Reusable expand/collapse toggle for home banners (Tournament Results,
    Following). Sticky-look chip at the bottom of the banner. */
 .home-feed-collapse-toggle{display:block;margin:8px auto 2px;padding:5px 12px;
@@ -1878,6 +1918,15 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .collection-panel .panel-movers-img{width:22px;}
 .collection-panel .panel-movers-img img{width:22px;height:31px;object-fit:cover;border-radius:2px;display:block;}
 .collection-panel .panel-movers-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0;}
+/* Inline printing badge ("Foil" / "Cold Foil" / "Holo") rendered next to the
+   card name when the row is for a non-Normal printing. Lets users tell
+   foil-vs-non-foil movers of the same card apart at a glance. Small uppercase
+   chip with accent tint, fits inside the truncated name cell. */
+.collection-panel .panel-movers-foil-tag{display:inline-block;margin-left:5px;
+  padding:1px 5px;font-size:9px;font-weight:700;letter-spacing:0.4px;
+  text-transform:uppercase;color:var(--accent);background:var(--accent-glow);
+  border:1px solid var(--border-accent);border-radius:3px;vertical-align:1px;
+  line-height:1.2;}
 .collection-panel .panel-movers-price{text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim);width:50px;}
 .collection-panel .panel-movers-pct{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;width:54px;}
 
@@ -2112,11 +2161,44 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   .compare-export-group{flex-basis:100%;overflow-x:auto;
     -webkit-overflow-scrolling:touch;padding-bottom:2px;}
   .compare-export-group .settings-action{flex-shrink:0;}
-  /* Compare stats table overflows at 7 columns; wrap in a horizontal
-     scroller. Keep header sticky-ish by leaving the table's display intact. */
-  .compare-stats-table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;
-    white-space:nowrap;}
-  .compare-stats-table th, .compare-stats-table td{padding:6px 8px;font-size:11px;}
+  /* Compare stats table on mobile: stack each row as its own card with
+     inline labels instead of a horizontal scroller. Users were seeing
+     "EN..." (End column truncated) because iOS hides scrollbars by default
+     and they had no idea the table was swipable. Card-stack layout shows
+     every column with a clear label and never clips. */
+  .compare-stats-table{display:block;width:100%;border-collapse:separate;}
+  .compare-stats-table thead{display:none;}
+  .compare-stats-table tbody, .compare-stats-table tr{display:block;}
+  .compare-stats-table tr{
+    background:var(--bg-card);border:1px solid var(--border);border-radius:8px;
+    padding:8px 12px;margin-bottom:8px;display:grid;
+    grid-template-columns:1fr auto;column-gap:10px;row-gap:4px;}
+  .compare-stats-table td{display:block;padding:0;font-size:12px;border:none;
+    line-height:1.35;white-space:normal;}
+  /* Swatch swatch — hide its cell, the row already groups visually. */
+  .compare-stats-table td:nth-child(1){display:none;}
+  /* "#" index goes top-left small */
+  .compare-stats-table td:nth-child(2){grid-column:1;grid-row:1;font-size:10px;
+    color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:0.4px;}
+  /* Product name — top-right of the index, large */
+  .compare-stats-table td:nth-child(3){grid-column:2;grid-row:1;font-size:13px;
+    color:var(--text);text-align:right;overflow:hidden;text-overflow:ellipsis;
+    white-space:nowrap;min-width:0;max-width:62vw;}
+  /* Type/Set subtitle — span full width below the name */
+  .compare-stats-table td:nth-child(4){grid-column:1 / -1;grid-row:2;font-size:11px;
+    color:var(--text-muted);}
+  /* Start / End / Change — full-width with inline label injected via ::before */
+  .compare-stats-table td:nth-child(5),
+  .compare-stats-table td:nth-child(6),
+  .compare-stats-table td:nth-child(7){
+    grid-column:1 / -1;display:flex;justify-content:space-between;align-items:baseline;
+    font-variant-numeric:tabular-nums;font-weight:600;}
+  .compare-stats-table td:nth-child(5){grid-row:3;}
+  .compare-stats-table td:nth-child(6){grid-row:4;}
+  .compare-stats-table td:nth-child(7){grid-row:5;}
+  .compare-stats-table td:nth-child(5)::before{content:"Start";color:var(--text-muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;}
+  .compare-stats-table td:nth-child(6)::before{content:"End";color:var(--text-muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;}
+  .compare-stats-table td:nth-child(7)::before{content:"Change";color:var(--text-muted);font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.3px;}
 }
 .history-picker{background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:8px;display:flex;flex-direction:column;gap:6px;max-height:540px;}
 .graded-picker-filters{display:flex;flex-direction:column;gap:4px;
@@ -2331,6 +2413,17 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .seg-toggle button{border:none;border-radius:0;padding:5px 14px;font-size:12px;background:var(--btn-bg);color:var(--btn-text);font-weight:600;cursor:pointer;white-space:nowrap;flex-shrink:0;}
 .seg-toggle button.active{background:var(--accent);color:#fff;}
 .seg-toggle button + button{border-left:1px solid var(--btn-border);}
+/* Mobile: convert the segmented control into wrap-friendly chips so 7-button
+   groups (Since Release / 1Y / 6M / 3M / 1M / 1W / Custom on Price Graphing)
+   don't get clipped by the overflow:hidden pill on narrow viewports.
+   Each button becomes its own rounded chip; wrap flows to a second row when
+   needed. 4-button rows (mode tabs) stay on one row visually. */
+@media (max-width:640px){
+  .seg-toggle{flex-wrap:wrap;border:none;border-radius:0;overflow:visible;gap:4px;}
+  .seg-toggle button{border:1px solid var(--btn-border);border-radius:14px;
+    padding:5px 11px;font-size:11px;}
+  .seg-toggle button + button{border-left:1px solid var(--btn-border);}
+}
 .copies-select{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);font-weight:500;}
 .copies-select select{padding:3px 8px;font-size:12px;}
 .hide-complete-toggle{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;}

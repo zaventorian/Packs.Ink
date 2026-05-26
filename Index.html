@@ -10,11 +10,11 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Packs.Ink">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=2">
-<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=2">
-<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=2">
-<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=2">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=3">
+<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=3">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=3">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=3">
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -5930,12 +5930,13 @@ function EVView({raw, sets, avgs, nc, setNc,
         title=${openSetHistory ? "Open price history for "+setName : null}>
         <div class="ev-row-set">${setName} <span class="ev-row-set-hint">↗</span></div>
         <div class="ev-row-vals">
-          <div class="ev-row-val">${fmt(ev)}</div>
-          <div class="ev-row-val ev-row-val-dim">${fmt(ev/24)}</div>
+          <div class="ev-row-val"><span class="ev-row-val-lbl-inline">per box</span>${fmt(ev)}</div>
+          <div class="ev-row-val ev-row-val-dim"><span class="ev-row-val-lbl-inline">per pack</span>${fmt(ev/24)}</div>
         </div>
         ${anyBoxData && html`<div class="ev-row-box">
           ${box
             ? html`<div class="ev-row-val">
+                <span class="ev-row-val-lbl-inline">box price</span>
                 ${box.url
                   ? html`<a href=${box.url} target="_blank" rel="noopener nofollow"
                       onClick=${e=>e.stopPropagation()}
@@ -5947,11 +5948,11 @@ function EVView({raw, sets, avgs, nc, setNc,
                 const sign = diffVsBox > 0 ? "+" : "";
                 return html`<div class=${"ev-box-diff ev-box-diff-"+cls}
                   title=${diffVsBox>0?"Cracking is +EV at current box price":"Box price exceeds EV — buy singles"}>
-                  ${sign}${fmt(diffVsBox)}
+                  <span class="ev-row-val-lbl-inline">EV − box</span>${sign}${fmt(diffVsBox)}
                 </div>`;
               })()}`
-            : html`<div class="ev-row-val ev-row-val-dim">—</div>
-              <div class="ev-box-diff ev-box-diff-none">—</div>`}
+            : html`<div class="ev-row-val ev-row-val-dim"><span class="ev-row-val-lbl-inline">box price</span>—</div>
+              <div class="ev-box-diff ev-box-diff-none"><span class="ev-row-val-lbl-inline">EV − box</span>—</div>`}
         </div>`}
         <div class="ev-row-deltas">
           ${EV_WINDOWS.map(([k,,label])=>{
@@ -6803,13 +6804,17 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
 
   const visibleGroups = useMemo(() => {
     const parsed = parseSearchQuery(search||"");
+    // Delegate smart-search matching to the canonical matchesCardFilter so
+    // every search input in the app behaves identically. Previously this
+    // view only honored name + ink + rarity, so e.g. "Woody Enchanted"
+    // worked but "elsa spirit" did not — the classification soft-match,
+    // numeric stat filters, card_type, keyword, etc. were silently ignored.
+    // We package the existing chip filters (inkFilter, rarityFilter) into
+    // the `f` argument the canonical matcher expects.
+    const chipFilter = {inks: inkFilter, rarities: rarityFilter};
     return groups.filter(g => {
       if(!matchesCompare(g)) return false;
-      if(inkFilter.size && !inkFilter.has(g.ink)) return false;
-      if(rarityFilter.size && !rarityFilter.has(g.Rarity)) return false;
-      if(parsed.name && !nameMatches(parsed.name, g["Product Name"])) return false;
-      if(parsed.filters.ink && g.ink !== parsed.filters.ink) return false;
-      if(parsed.filters.rarity && g.Rarity !== parsed.filters.rarity) return false;
+      if(!matchesCardFilter(g, chipFilter, parsed)) return false;
 
       // For the active foil mode, count which printings are "in scope" and
       // how complete the user is on each.
@@ -7662,36 +7667,21 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Smart-search filter: when the input is empty we show ALL cards grouped
   // by set (default mode); when non-empty we filter using parseSearchQuery
   // and show a flat list ranked by relevance.
+  //
+  // We delegate the actual matching to `matchesCardFilter` — the canonical
+  // smart-search filter used by Cards / Decks / Screener. Previously this
+  // picker had its own local cardMatches() that was missing the
+  // classification soft-match, so "elsa spirit" zeroed out (parseSearchQuery
+  // extracts 'spirit' as a classification but no Elsa card has the Spirit
+  // subtype). matchesCardFilter falls back to a name-includes check when
+  // the classification doesn't hit, which is what the user expects.
   const parsedQuery = useMemo(()=>parseSearchQuery(cardQuery||""), [cardQuery]);
-  const cardMatches = (c, p) => {
-    if(p.filters.ink && c.ink !== p.filters.ink) return false;
-    if(p.filters.rarity && c.Rarity !== p.filters.rarity) return false;
-    if(p.filters.set && c.Set !== p.filters.set) return false;
-    const _cmp = (rv, w, op) => {
-      if(w == null) return true; if(rv == null) return false;
-      switch(op||"="){case ">":return rv>w;case ">=":return rv>=w;case "<":return rv<w;case "<=":return rv<=w;default:return rv===w;}
-    };
-    if(!_cmp(c.cost,      p.filters.cost,      p.filters.costOp))      return false;
-    if(!_cmp(c.strength,  p.filters.strength,  p.filters.strengthOp))  return false;
-    if(!_cmp(c.willpower, p.filters.willpower, p.filters.willpowerOp)) return false;
-    if(!_cmp(c.lore,      p.filters.lore,      p.filters.loreOp))      return false;
-    if(p.filters.card_type && (c.card_type||"") !== p.filters.card_type) return false;
-    if(p.filters.inkable === true  && c.inkable !== true)  return false;
-    if(p.filters.inkable === false && c.inkable !== false) return false;
-    if(p.filters.classification){
-      const cls = (c.classifications||[]).map(s => (s||"").toLowerCase());
-      if(!cls.includes(p.filters.classification.toLowerCase())) return false;
-    }
-    if(p.excludeRarities && p.excludeRarities.size && p.excludeRarities.has(c.Rarity)) return false;
-    if(p.name && !nameMatches(p.name, c["Product Name"])) return false;
-    return true;
-  };
   const flatMatches = useMemo(()=>{
     if(!cardQuery.trim()) return null;
     return cardOptions
-      .filter(c => cardMatches(c, parsedQuery) && cardPassesHistoryFilter(c))
+      .filter(c => matchesCardFilter(c, historyFilter, parsedQuery))
       .slice(0, 200);
-  }, [cardOptions, cardQuery, parsedQuery, cardPassesHistoryFilter]);
+  }, [cardOptions, cardQuery, parsedQuery, historyFilter]);
 
   // For the default (no-search) view: group by set, newest sets first,
   // collector number ascending within each.
@@ -13513,15 +13503,27 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
         ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>
             No ${moversWin.label} movement in your collection matching the filters.</div>`
         : html`<table class="panel-movers-table"><tbody>
-          ${collectionMovers.map(({row, mover, pct}) => html`<tr key=${row.card_id+":"+row.tcg_printing}
-            onClick=${()=>onTileClick && onTileClick(mover)}>
-            <td class="panel-movers-img">${row.img_small
-              ? html`<img src=${row.img_small} alt="" loading="lazy"/>`
-              : ""}</td>
-            <td class="panel-movers-name">${row["Product Name"]}</td>
-            <td class="panel-movers-price">${fmt(parseP(mover.low_today))}</td>
-            <td class="panel-movers-pct" style=${{color:pctColor(pct)}}>${fmtPct(pct)}</td>
-          </tr>`)}
+          ${collectionMovers.map(({row, mover, pct}) => {
+            // Foil-printing badge: only show when the row's printing isn't the
+            // base Non-Foil. "Holofoil" → "Holo" to fit in the tight column.
+            // Without this, two rows with the same name (foil vs non-foil)
+            // looked identical and users couldn't tell which printing moved.
+            const printing = row.tcg_printing;
+            const printingLabel = (printing && printing !== "Normal" && printing !== "Non-Foil")
+              ? (printing === "Holofoil" ? "Holo" : printing)
+              : null;
+            return html`<tr key=${row.card_id+":"+row.tcg_printing}
+              onClick=${()=>onTileClick && onTileClick(mover)}>
+              <td class="panel-movers-img">${row.img_small
+                ? html`<img src=${row.img_small} alt="" loading="lazy"/>`
+                : ""}</td>
+              <td class="panel-movers-name">${row["Product Name"]}${printingLabel
+                ? html` <span class="panel-movers-foil-tag">${printingLabel}</span>`
+                : ""}</td>
+              <td class="panel-movers-price">${fmt(parseP(mover.low_today))}</td>
+              <td class="panel-movers-pct" style=${{color:pctColor(pct)}}>${fmtPct(pct)}</td>
+            </tr>`;
+          })}
         </tbody></table>`}
     </div>
     </div>`}
@@ -19109,9 +19111,22 @@ function App(){
       .update({display_name: name}).eq("user_id", user.id);
     if(error) return {ok:false, error: error.message};
     setProfile(p => ({...(p||{user_id: user.id}), display_name: name}));
+    const wasFirstTime = showNamePrompt;
     setShowNamePrompt(false);
+    // First-time onboarding: after the user picks their display name, also
+    // walk them through choosing a profile card. We only do this when the
+    // save came from the first-time prompt (showNamePrompt was true) AND
+    // they haven't already set one — settings-popover edits never trigger
+    // this. Gated behind a localStorage sentinel so a user who skips the
+    // picker once isn't pestered every visit.
+    if(wasFirstTime && !avatarCardId && !localStorage.getItem("packsink:avatarPromptShown")){
+      try { localStorage.setItem("packsink:avatarPromptShown", "1"); } catch(_) {}
+      // Defer one tick so the name-prompt unmount animation doesn't fight
+      // the avatar-picker mount.
+      setTimeout(() => setAvatarPickerOpen(true), 200);
+    }
     return {ok:true};
-  }, [user]);
+  }, [user, showNamePrompt, avatarCardId]);
 
   // Tell Sentry who the current user is so errors get attributed in the
   // dashboard. The loader script stubs out a queue immediately, so calling

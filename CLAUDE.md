@@ -2,6 +2,14 @@
 
 Lorcana TCG market + collection app. Affiliate revenue via TCGPlayer (Impact, 3.5%, granted 2026-05-11).
 
+## ⚠️ Push policy — NEVER push without explicit user OK
+
+Netlify is on a metered build plan and Zaven is on limited credits. Every `git push origin main` triggers a deploy that costs build minutes. **Default behavior: commit locally, then STOP and ask before pushing.** Batch pushes to the end of a session (or across multiple sessions) so one deploy carries multiple commits.
+
+The classifier reinforces this: even with `Bash(git push:*)` in `.claude/settings.json`, the classifier may still block individual pushes when it judges them unauthorized. Treat the rule above as the source of truth — don't try to push silently just because the rule allows it.
+
+Exception: explicit user instruction in the current turn ("push it", "ship this", "deploy now"). Anything less = commit only and report what's staged for the next push.
+
 ## Stack
 
 - **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765). Prod is **Netlify free tier**. Domain at Netlify; transfer to Cloudflare blocked until 2026-06-08 (ICANN 60-day lock). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
