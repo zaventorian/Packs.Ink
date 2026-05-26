@@ -43,8 +43,20 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
 
 - Scroll lives on `.tabs` (middle), NOT on the whole top-nav. Logo + right cluster stay anchored as flex peers.
 - Right cluster on mobile is `flex-direction:column`: row 1 = profile/sign-in pill (collapses to avatar-only on ≤640px — name eats ~80px otherwise), row 2 = bubble controls (install + theme toggle).
-- Help on mobile collapses to icon-only (28×28 chip, `.nav-tab--help .nav-tab-label{display:none}`). Otherwise the row overflows.
+- Help on mobile collapses to icon-only **36×36 chip** (`.nav-tab--help .nav-tab-label{display:none}`). Otherwise the row overflows.
 - Every container in the right cluster has `background: var(--bg)` explicitly so the sticky header paints opaquely over scrolled content.
+- **Mobile tap-target floor: 36px** on every top-nav control (`.signin-btn`, `.profile-btn`, `.theme-toggle`, `.nav-tab--help`). Apple HIG recommends 44pt; 36px is the compromise that keeps the two-row nav from growing too tall. Was 26–28px before 2026-05-25 and the profile pill was nearly impossible to hit on iPhone — don't shrink back below 36px.
+
+### iOS safe-area-inset (do NOT regress)
+
+Index.html has `<meta viewport-fit=cover>` + `apple-mobile-web-app-status-bar-style=black-translucent`, which tells iOS to extend content edge-to-edge under the Dynamic Island / home indicator. Every page-level element that sits near a screen edge MUST honor `env(safe-area-inset-*)` or it lands under the unsafe zone on notched iPhones (14 Pro+, 15/16/17 Pro/Pro Max).
+
+- **`body` padding** uses `max(designed, env(safe-area-inset-*))` on all four sides — desktop and non-cutout devices see 0 from env() so the designed 24px / 14px floor applies; notched devices pad outward to clear unsafe zones.
+- **`.card-detail-close`**: `top: max(10px, env(safe-area-inset-top))` so the X stays tappable on iPhone (Photo 3 regression).
+- **`.settings-popover` mobile pin**: `top: calc(56px + env(safe-area-inset-top))` so the menu doesn't open under the Island when tapping the avatar.
+- **`.gc-add-fab` (graded mobile FAB)**: `bottom: calc(18px + env(safe-area-inset-bottom))` so the Add button isn't clipped by the home indicator.
+
+Any new sticky / position-fixed / position-absolute element near a viewport edge should add `env(safe-area-inset-*)` to its offsets.
 
 ## Data flow (non-negotiable)
 
@@ -52,7 +64,7 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 ## Client cache rules
 
-- **Catalog key**: `packsink:catalog:vN` (currently **v40**). Bump N whenever cached row shape changes — old entries silently ignored on version mismatch. 24h TTL with background refresh.
+- **Catalog key**: `packsink:catalog:vN` (currently **v41**). Bump N whenever cached row shape changes — old entries silently ignored on version mismatch. 24h TTL with background refresh.
 - **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs.
 - **`AUX_CACHE_VERSION` sentinel** (Index.html top, added 2026-05-24): per-deploy stamp compared against `packsink:auxCacheVersion` on module load. Mismatch → one-shot wipe of every `packsink:*` key except catalog/auth/install-prefs. **Bump the string to force every existing user's next page load to refresh aux caches** — useful when an ETL/matview change makes those caches stale faster than their TTLs catch. Independent from `CACHE_KEY` (which only invalidates the catalog itself).
 - **Visibility re-probe**: `visibilitychange` + `pageshow` listeners re-run `loadFromSupabase` when the tab/PWA becomes visible again (throttled 60s). Without this, PWA users who background the app would see stale data forever on resume — React tree never remounts.
@@ -147,6 +159,28 @@ Audit scripts: `audit_holofoils.py`, `audit_connecting_foils.py`, `audit_missing
 - **Enter key does NOT auto-apply the first suggestion.** `suggestIdx` starts at -1; only arrow keys / hover arm a suggestion. Pressing Enter on free text just commits the typed query (fuzzy matching). Prevents accidental "contains" chip conversion.
 - **`SET_NICKNAMES` deliberately does NOT include single-token character names** ("ursula", "jafar") even though the sets are "Ursula's Return" and "Reign of Jafar". Those tokens are character names too — typing `ursula` in the deck builder should search for the *card*, not promote to the whole set. The longer/unambiguous forms still work (`ursulas`, `ursulas return`, `reign`, `reign of jafar`). Set suggestion dropdown still surfaces the set via prefix match, so users can click through if they meant the set.
 - Catalog must have `cards.strength / willpower / lore / move_cost` columns (migration 43). Cold load probes for `lore`; silently omits all four from `CARDS_COLS` if missing.
+
+### Single canonical matcher: `matchesCardFilter(row, f, parsed)`
+
+Every card-search surface in the app **must** route through `matchesCardFilter` (defined at the top of Index.html, ~line 2691). It's the only function that knows about the classification soft-match, the haystack fallback for name search, and the union of every filter dimension. Inline custom matchers will drift from the canonical behavior and produce subtle UX bugs (the "elsa spirit" / "Woody Enchanted" zero-result class of issue).
+
+**Signature:**
+- `row` — the card or group object (must have `Product Name`, `Rarity`, `ink`, `Set`, classifications[], etc.)
+- `f` — chip-state filter object (may have `inks`, `rarities`, `costs`, `cardTypes`, `inkable`, `classifications`, `keywords`, etc., all Sets). Required (not null-safe).
+- `parsed` — the output of `parseSearchQuery(searchString)`. Optional — pass `null` if there's no search input.
+
+**Surfaces that route through it** (audited 2026-05-26):
+- Cards view main browse (`visibleGroups` ~line 5162)
+- Decks editor card browser (via Cards groups)
+- Price Graphing "By Card" picker (`flatMatches` ~line 7672)
+- Price Graphing FilterDrawer reuse (`cardPassesHistoryFilter` ~line 7660)
+- Collection set-detail view (`visibleGroups` ~line 6815) — unified 2026-05-26 from a local 3-field reduced matcher
+
+**Surfaces that intentionally do NOT use it:**
+- Set-name search inputs (Price Graphing's "Search sets…" — filters set names, not cards)
+- Screener (different data shape — `price_movers` matview rows, not card-catalog rows)
+
+**Anti-pattern:** Don't re-implement the soft-match or stat-op logic inline. If a new view needs a small filter shim (e.g. chip-only filtering with no parsed query), pass `{inks: chipInks, rarities: chipRarities}` as `f` and `null` as `parsed`.
 
 ## Cards browse filter dimensions
 
@@ -380,6 +414,20 @@ Auto-opens `InstallHelpModal` on visits 2 and 3 (counter at `localStorage["packs
 
 Modal accepts `onDismissForever`; only passed on visit ≥3 so the dismiss link appears the second time the modal pops.
 
+## First-time sign-in onboarding
+
+Two prompts fire in sequence on a fresh sign-in:
+
+1. **Display name prompt** (`showNamePrompt` state in App): opens whenever `profiles.display_name` is empty for the signed-in user. Triggers via the `useEffect` that hydrates the profile row. Closes via `saveDisplayName` (which writes the name and flips the flag).
+2. **Avatar picker** (`AvatarPicker` component): auto-opens 200ms after the user finishes step 1, gated by `localStorage["packsink:avatarPromptShown"]` and `!avatarCardId`. Picks ANY card from the catalog as the user's profile picture (writes `avatarCardId` to user_metadata + localStorage). The 200ms defer keeps the name-prompt unmount animation from fighting the picker mount.
+
+The avatar gate is one-shot — closing the picker once flips `packsink:avatarPromptShown` so returning users without an avatar aren't pestered on every visit. Settings-popover edits to display name DON'T trigger the avatar prompt (the trigger is gated on `wasFirstTime = showNamePrompt` at save time).
+
+## Home page surface
+
+- **No "Lorcana Market" h1 or "Click a card for details" subtitle** — both removed 2026-05-26. The search bar sits directly under the top nav. The logo IS the home click target (the title was redundant).
+- **Your Top Movers tiles show a printing badge** when the moving row is the foil printing — class `.panel-movers-foil-tag`, accent-color chip with text "Foil" / "Cold Foil" / "Holo" (Holofoil shortens to "Holo" to fit the tight column). Logic: `row.tcg_printing && row.tcg_printing !== "Normal" && row.tcg_printing !== "Non-Foil"` → render. Lets users tell foil-vs-non-foil movers of the same card apart.
+
 ## Mobile top-nav
 
 Whole top bar is a single horizontal scroll container on phones (`overflow-x: auto`). Logo is `position: sticky; left: 0` so it stays pinned to the left edge. Tabs + username pill + theme toggle all scroll together → reclaims width that was previously fixed-right cluster space.
@@ -401,6 +449,27 @@ The 3rd column is `position: sticky; left: 0` with `background: var(--bg-modal)`
 - **`mask-image` on a container softens child `<img>`s** by forcing offscreen compositing. Use absolutely-positioned gradient pseudo-elements for edge fades. Same caution: `will-change: transform`, `filter: blur(0)`, `transform: translateZ(0)`, `opacity: 0.99`.
 - **`image-rendering: crisp-edges`** is for pixel-art. Default `auto` for card photos.
 - **Conditional grid cells break `grid-template-columns` alignment.** Always render a wrapper element for the slot, conditionally render the content inside. Example: `<span class="sd-row-rarity-slot">${RARITY_ICONS[r] && html\`<img.../>\`}</span>`.
+- **`-webkit-overflow-scrolling: touch` is a no-op on iOS 13+.** Modern iOS Safari auto-applies inertial scroll. Audits will recommend adding this property defensively; it's harmless but doesn't actually fix anything on the user's test devices (iPhone 17 Pro / iOS 18+). Don't burn time on cargo-cult additions.
+- **Two `@media` queries with overlapping breakpoints fight each other on cascade tiebreaker.** The EV and Sealed views used to have BOTH a `@media (max-width:780px)` block AND a `@media (max-width:820px)` block defining `.ev-row` / `.sealed-row` layout. Both matched on iPhone width; only one of the rules' overrides won per property, depending on source order. Removed the 820px block on 2026-05-26. **One canonical mobile breakpoint per surface.** Default = 640px for general mobile, 780px for tables with many columns, 1100px when collapsing a sidebar-grid to flex column.
+- **Default rules with same specificity as `@media` rules MUST come BEFORE the `@media` block.** Otherwise source order makes the default win at the matching breakpoint, defeating the override. Tripped this on `.ev-row-val-lbl-inline{display:none}` initially — had to move it above its `@media` override.
+
+## Tables → labeled card stacks on mobile
+
+Three multi-column tables on the site (EV rows, Sealed rows, Price Graphing "compare stats" table) all hit the same problem: head-row labels get `display:none` at narrow widths to save space, then data rows show floating numbers with no column context. The pattern:
+
+- **EV rows** (`.ev-row` data rows): each value cell gets an inline label `<span class="ev-row-val-lbl-inline">` (e.g. "per box", "per pack", "box price", "EV − box"). Hidden on desktop (head row carries labels there), shown via the mobile @media rule. The 6-window delta pills are hidden on mobile entirely via `.ev-rows .ev-row-deltas, .ev-row .ev-row-deltas { display: none !important; }` (specific selector beats the top-level `.ev-row-deltas{display:grid}` independent of !important — defends against caching layers that strip the important annotation during stylesheet parse).
+- **Sealed rows** (`.sealed-row`): same delta-pill hide; set pill kept visible on mobile since sections aren't always obvious when scrolling fast.
+- **Compare stats table** (`.compare-stats-table` at Price Graphing bottom): full pivot to per-row card stack at ≤640px. `tr { display: grid; }`, `thead { display: none; }`, each `<td>` gets an injected `::before` label ("Start", "End", "Change") via `nth-child(5/6/7)`. Replaced an earlier `overflow-x:auto` scroller that users couldn't tell was scrollable (iOS hides scrollbars).
+
+If you add a new multi-column table that needs to work on mobile, follow the same pattern — don't fall back to horizontal-scroll-only.
+
+## Segmented control wrap on mobile
+
+`.seg-toggle` (the rounded-pill multi-button group used for Price Graphing tabs, range buttons, foil mode toggle, etc.) has `overflow:hidden` on desktop. At ≤640px the `@media` rule converts each button into an independently-rounded chip and lets the group `flex-wrap: wrap` so a 7-button row (Since Release / 1Y / 6M / 3M / 1M / 1W / Custom) flows onto two rows instead of getting clipped. 4-button groups stay on a single row visually. New seg-toggle uses get this for free.
+
+## Home page panel layout (sticky behavior)
+
+`.home-feed` (the Following panel and other home left-column panels) is `position: sticky; top: 8px` on desktop so it pins as the main content scrolls. **Disabled on mobile** (`@media (max-width:1100px)` sets `position: static`) — sticky inside a single-column flex layout causes the panel to visually overlap whatever's above it as the user scrolls. Same breakpoint as `.home-grid` collapse.
 
 ## Rarity icons
 
@@ -486,9 +555,10 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v67`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
-- **Catalog cache version**: `packsink:catalog:vN` (current **v40**). Bump when row shape changes, OR when forcing all users to cold-fetch (e.g. emergency push of fresh data).
-- **PWA icon refresh**: icon URLs include `?v=2` query so browsers treat them as new resources.
+- **`sw.js CACHE_VERSION`** (current `packsink-v68`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
+- **Catalog cache version**: `packsink:catalog:vN` (current **v41**). Bump when row shape changes, OR when forcing all users to cold-fetch (e.g. emergency push of fresh data).
+- **PWA icon refresh**: icon URLs include `?v=3` query (bumped 2026-05-26 with the dark-blue rebake) so browsers treat them as new resources. Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
+- **PWA icon backgrounds are baked in, not transparent.** The 5 icon PNGs at the repo root (`apple-touch-icon.png` 180×180, `favicon-32.png`, `favicon-64.png`, `icon-192.png`, `icon-512.png`) were composited over `#0f0d20` on 2026-05-26 — previously they had transparent corners and iOS / Android were filling them with OS defaults (white). `manifest.json` `background_color` is also `#0f0d20`. If you re-export from `Logos/PacksInk.ai`, bake the dark-blue background into each PNG; don't rely on `background_color` alone (iOS PWA save-to-home-screen ignores it).
 - **Dev server cache header**: `dev_server.py` sends `Cache-Control: no-store` on HTML/CSS/JS.
 
 ### Misc
@@ -514,6 +584,12 @@ Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. D
 
 ## Pending / roadmap
 
+**iPhone bugs to verify after the 2026-05-26 deploy lands** (may already be resolved by the tap-target / safe-area / sticky-overlap fixes — retest before doing more work):
+
+- **Recent Set EV panel off-center on home (Photo 2)** — deferred pending safe-area retest. Likely resolves incidentally.
+- **Profile pill click "spawns a duplicate username" on iPhone (Photo 4)** — was probably a half-tap registering twice on a 28×28 hit area; now 36×36. If it persists, dig into the profile-pill click handler / settings-popover mount logic.
+- **Tournament Results panel rendering twice on mobile** — attributed to stale service-worker cache serving an older Index.html. Force-quit PWA twice (let v68 take over). If it persists, real component-mount bug.
+
 **Top of the list:**
 
 - **Domain transfer Netlify → Name.com → (optional) Cloudflare** for WAF + Bot Fight Mode in front of Netlify. Blocked until **2026-06-08** (ICANN lock). Netlify only transfers to Name.com per their partnership.
@@ -526,6 +602,8 @@ Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. D
 - More Extras & Oddities curation — re-run audit scripts periodically.
 - Floor-coverage indicator on Screener (1 lonely listing vs 10 sellers at the floor). Needs TCGCSV `/products`.
 - Stale-data warning per row on Screener — flag rows whose `low_today` is > 3 days old.
+- Deck-notes-popover may collide with iOS keyboard when its `<textarea>` is focused (mobile-audit finding #8 from 2026-05-26). Hasn't been observed in the wild; flagged for if it surfaces.
+- Sweep dynamic-string overflow on long deck names / tournament names / usernames in narrow flex contexts — make sure they all get `flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis`.
 
 **Quality / operational:**
 
@@ -533,3 +611,4 @@ Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. D
 - EV % change pills can underreport for newest set (`evFromBucket` reads `rarity_avg_daily` with no Low↔Market fallback).
 - Bump `actions/checkout@v4` → v5 and `actions/setup-python@v5` → v6 in `etl.yml`.
 - **Rotate the cron-job.org GitHub PAT every ~80 days** (90-day expiry, give yourself a buffer). Token lives in each of the 5 cron-job.org jobs' `Authorization: Bearer <token>` header. Issued 2026-05-24 → first rotation due ~2026-08-12. cron-job.org will start emailing failure alerts when the token dies; rotating before expiry prevents data gaps.
+- 5 `.bak` PNG icon files at repo root (`apple-touch-icon.png.bak` etc.) — rollback safety net from the 2026-05-26 icon rebake. Delete once the dark-blue icons are confirmed correct on iPhone home screen.
