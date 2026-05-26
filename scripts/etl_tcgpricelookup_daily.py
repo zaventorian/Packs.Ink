@@ -189,19 +189,19 @@ def main() -> None:
         time.sleep(REQUEST_DELAY_SEC)
     print(f"Pulled {pages} pages · {cards_with_graded} cards with graded data · {len(all_rows)} graded-price rows")
 
-    # Apply manual overrides AFTER pulling TCGPriceLookup. Appended last so
-    # they win on PK collision (same date upserts replace). Deletes run
-    # after the upsert to clear out rows we explicitly don't want.
+    # Load manual overrides; applied AFTER the main upsert so they win on
+    # PK collision (same-date upserts replace). They go in a SEPARATE upsert
+    # call because override rows carry extra columns (ebay_low_price /
+    # ebay_high_price) that the regular rows don't — PostgREST rejects
+    # batches with heterogeneous key sets (PGRST102 "All object keys must
+    # match"). Deletes run last to clear rows we explicitly don't want.
     override_inserts, override_deletes = load_overrides(today)
-    if override_inserts:
-        print(f"Adding {len(override_inserts)} manual override rows from graded_overrides.json")
-        all_rows.extend(override_inserts)
 
-    if not all_rows:
+    if not all_rows and not override_inserts:
         print("No graded rows to upsert. Done.")
         return
 
-    # Upsert in batches. Conflict target = primary key
+    # Upsert regular TCGPriceLookup rows in batches. Conflict target = PK
     # (tcgplayer_product_id, printing, grader, grade, date), so re-runs
     # same-day are idempotent.
     BATCH = 500
@@ -214,6 +214,17 @@ def main() -> None:
         upserted += len(batch)
         print(f"  upserted {upserted}/{len(all_rows)} rows")
     print(f"Upsert complete · {upserted} rows total")
+
+    # Separate pass for override rows — same conflict target, but isolated
+    # so the key signature stays homogeneous within each PostgREST batch.
+    if override_inserts:
+        print(f"Applying {len(override_inserts)} manual override rows from graded_overrides.json")
+        for batch in chunked(override_inserts, BATCH):
+            sb.upsert(
+                "graded_prices_daily", batch,
+                on_conflict="tcgplayer_product_id,printing,grader,grade,date",
+            )
+        print(f"  override upsert complete · {len(override_inserts)} rows")
 
     # Apply deletes — for each (pid, printing, grader, grade) entry, drop
     # today's row so the override insert isn't shadowed by a TCGPriceLookup
