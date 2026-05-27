@@ -112,10 +112,24 @@ input[type="checkbox"]{accent-color:var(--accent);}
   width:20px;height:20px;line-height:0;}
 .nav-tab-icon svg{display:block;}
 .nav-tab-label{font-size:10px;line-height:1.1;white-space:nowrap;text-transform:uppercase;}
-/* Help tab: same shape as the others but slightly narrower to read as a
-   utility chip rather than a peer of the main nav items. */
-.nav-tab--help{min-width:56px;margin-left:8px;}
-.top-nav-right{flex-shrink:0;}
+/* Help: rendered as a bubble in the right cluster's bubble row alongside
+   install + theme-toggle (moved out of the tabs grid 2026-05-26 so it
+   doesn't crowd the Screener/Price Graphing/Analytics row on phones and
+   overlap the sign-in pill / profile chip). The bubble inherits `.theme-toggle`
+   shape; `.active` paints the gold accent so the user can tell when they're
+   on the How It Works page. SVG centers inside the 32×32 / 36×36 circle
+   naturally (icon is 18px). */
+.theme-toggle--help svg{display:block;}
+.theme-toggle--help.active{background:var(--accent-glow);color:var(--accent);
+  border-color:var(--accent);}
+.top-nav-right{flex-shrink:0;display:flex;flex-direction:column;
+  align-items:flex-end;gap:4px;}
+/* Bubbles row needs an explicit horizontal flex on desktop too — without
+   it, the row falls back to block layout and the three bubble buttons can
+   line up with subtle vertical offsets (the user saw `?` painting above
+   `🌙` because of baseline alignment, not a deliberate stack). Mobile re-
+   declares this inside the @media block with !important for safety. */
+.top-nav-right-row--bubbles{display:flex;gap:4px;align-items:center;}
 /* Logo button — wraps the wordmark and routes to Home on click. */
 .tabs-logo-btn{background:transparent;border:none;padding:0;margin:0;cursor:pointer;
   display:inline-flex;align-items:center;flex-shrink:0;}
@@ -165,17 +179,24 @@ input[type="checkbox"]{accent-color:var(--accent);}
   .tabs-grid{align-items:stretch;}
   .tabs-row{flex-wrap:nowrap;}
   .tabs-row > .nav-tab{flex-shrink:0;}
-  /* Compact icon tabs on mobile. Help collapses to icon-only — the "?" glyph
-     reads as help on its own and dropping the label is the difference between
-     "everything fits" and "scrolls off-screen" on a phone. */
-  .nav-tab{min-width:54px;padding:3px 6px 2px;gap:1px;}
+  /* Compact icon tabs on mobile. Tight padding + narrow gaps + WRAPPABLE
+     labels with an explicit max-width so the two-word "Price Graphing"
+     actually breaks to two lines instead of pushing Analytics off the right
+     edge. white-space:normal alone wouldn't wrap because the parent .nav-tab
+     has no width constraint — the label would stay one line and the button
+     would just grow wider. max-width:54px forces the break. Single-word
+     labels (COLLECTION ~55px, ANALYTICS ~50px, SCREENER ~45px) fit one
+     line at this width and stay on one line. Tab heights even out via
+     align-items:stretch on .tabs-grid. */
+  .nav-tab{min-width:50px;padding:3px 5px 2px;gap:1px;}
   .nav-tab-icon{width:16px;height:16px;}
   .nav-tab-icon svg{width:14px;height:14px;}
-  .nav-tab-label{font-size:8.5px;}
-  .nav-tab--help{min-width:36px;min-height:36px;width:36px;height:36px;padding:0;margin-left:6px;
-    display:inline-flex;align-items:center;justify-content:center;}
-  .nav-tab--help .nav-tab-label{display:none;}
-  .nav-tab--help .nav-tab-icon svg{width:16px;height:16px;}
+  .nav-tab-label{font-size:8.5px;white-space:normal;line-height:1.05;
+    max-width:64px;word-break:normal;overflow-wrap:break-word;hyphens:none;}
+  .tabs-row{gap:3px;}
+  /* Mobile help bubble — slightly tighter SVG inside the 36×36 bubble so
+     it visually balances the install + theme glyphs (which read smaller). */
+  .top-nav-right .theme-toggle--help svg{width:18px;height:18px;}
   /* Right cluster on mobile: two stacked sub-rows. Row 1 = sign-in/profile
      pill. Row 2 = small bubble controls (install + theme). Keeps the cluster
      narrow horizontally so it doesn't crowd the tabs, while every control
@@ -582,16 +603,24 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 .price-db-table .td-spark{text-align:center;padding-left:4px;padding-right:4px;}
 .price-db-table .td-spark svg{display:inline-block;}
 
-/* Mobile: trim padding, hide image / set / rarity columns. Columns now are:
+/* Mobile: trim padding, hide image / set / rarity columns AND the checkbox
+   (the checkbox is functionally invisible on mobile anyway — the sticky
+   NAME column overlays it permanently — but it still occupied 28px of
+   table width). Columns rendered are:
    [1] checkbox · [2] image · [3] name+meta · [4] set · [5] rarity ·
-   [6] Low · [7] NM Market · [8+] Δ% windows · [last] signals */
+   [6] Low · [7] NM Market · [8+] Δ% windows · [last] signals
+   With checkbox/image/set/rarity hidden and NAME tightened to 110-135px,
+   the default no-scroll view fits NAME + Low + NM Market + 1W on a
+   standard 360-414px phone, which is what the user asked for. Batch-select
+   via checkbox stays available on tablet/desktop. */
 @media (max-width: 720px){
   .price-db-table{font-size:11px;}
-  .price-db-table th, .price-db-table td{padding:4px 5px;}
+  .price-db-table th, .price-db-table td{padding:3px 4px;}
+  .price-db-table th:nth-child(1), .price-db-table td:nth-child(1){display:none;} /* checkbox */
   .price-db-table th:nth-child(2), .price-db-table td:nth-child(2){display:none;} /* image */
   .price-db-table th:nth-child(4), .price-db-table td:nth-child(4){display:none;} /* set */
   .price-db-table th:nth-child(5), .price-db-table td:nth-child(5){display:none;} /* rarity */
-  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:140px;max-width:180px;}
+  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:110px;max-width:135px;}
 }
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
@@ -971,6 +1000,15 @@ html[data-theme="dark"] .sealed-type-pill.type-prerelease-pack{color:#e8a3b9;}
 @keyframes glimmer{0%{background-position:-200% center;}100%{background-position:200% center;}}
 .glimmer-text{background:linear-gradient(90deg,var(--accent) 0%,#f0d878 25%,var(--accent) 50%,#f0d878 75%,var(--accent) 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:glimmer 3s linear infinite;}
 .footer{margin-top:3rem;padding:1.5rem 0;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:flex-end;gap:16px;}
+/* On mobile the desktop's generous 3rem margin-top + 1.5rem padding-top
+   (~72px combined) reads as wasted blank space below in-page content like
+   the deck editor's stats/charts panel — the bottom of the panel ends up
+   floating mid-screen even when scrolled to the very bottom of the page.
+   Tighten both on phones so the content panel sits close to the footer
+   without crowding it. */
+@media (max-width:640px){
+  .footer{margin-top:1rem;padding:0.75rem 0;gap:10px;}
+}
 .site-disclaimer{padding:1rem 0 2rem;color:var(--text-muted);font-size:11px;line-height:1.55;}
 .site-disclaimer h4{font-family:'Cinzel',serif;font-size:11px;font-weight:600;
   color:var(--text-dim);letter-spacing:0.5px;text-transform:uppercase;margin:0 0 6px;}
@@ -1418,7 +1456,7 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .gc-set-grid.gc-compact .gc-card-slots{margin-top:2px;gap:3px;}
 .gc-set-grid.gc-compact .gc-slot{padding:2px 6px;font-size:9px;min-height:20px;}
 .gc-set-grid.gc-compact .gc-card-add-btn{width:20px;height:20px;font-size:13px;top:3px;right:3px;}
-.gc-set-grid.gc-compact .gc-card-hide-btn{width:18px;height:18px;font-size:12px;bottom:3px;right:3px;}
+.gc-set-grid.gc-compact .gc-card-remove-btn{width:18px;height:18px;font-size:14px;bottom:3px;right:3px;}
 /* "+" button top-right — opens the Add modal pre-filled with this card.
    Always visible (mobile users have no hover). The button itself is 24px
    but an invisible ::after extends the tap target to 40x40 so touches
@@ -1436,16 +1474,18 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    tile — out of the top-right tap zone (reserved for + Add) and away from
    the card name in the top-left. Tracked-only tiles have no slot pills
    or buy link at the bottom-right, so this corner is clear. */
-.gc-card-hide-btn{position:absolute;bottom:4px;right:4px;width:22px;height:22px;
-  border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;font-size:14px;font-weight:700;
+/* "Remove from tracking" button on unowned placeholder tiles. Bottom-right
+   corner so it doesn't conflict with the + add button (top-right) or the
+   card name (top-left). Replaces the older × Hide button — the new
+   semantics are "remove forever" (recoverable only via owning the card or
+   re-adding the set goal), not a togglable hide. Compact tiles get a
+   smaller variant via .gc-set-grid.gc-compact override below. */
+.gc-card-remove-btn{position:absolute;bottom:4px;right:4px;width:22px;height:22px;
+  border-radius:50%;background:rgba(0,0,0,0.55);color:#fff;font-size:18px;font-weight:700;
   border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;
   line-height:1;z-index:3;opacity:0.7;transition:opacity 0.12s, transform 0.12s;padding:0;}
-.gc-card-hide-btn::after{content:"";position:absolute;inset:-10px;}
-.gc-card-hide-btn:hover{opacity:1;background:var(--red);transform:scale(1.06);}
-.gc-card-hide-btn-unhide{background:rgba(34,139,34,0.7);font-size:13px;}
-.gc-card-hide-btn-unhide:hover{background:var(--accent);}
-.gc-card.gc-card-hidden{opacity:0.45;border-style:dotted;}
-.gc-card.gc-card-hidden:hover{opacity:0.85;}
+.gc-card-remove-btn::after{content:"";position:absolute;inset:-10px;}
+.gc-card-remove-btn:hover{opacity:1;background:var(--red);transform:scale(1.06);}
 .gc-card-img{width:48px;height:67px;object-fit:cover;border-radius:4px;
   flex-shrink:0;background:var(--bg-surface);}
 .gc-card-body{min-width:0;flex:1;display:flex;flex-direction:column;gap:3px;}
@@ -1670,19 +1710,18 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .home-ev-strip-diff.down{color:var(--red);}
 
 /* Following feed — left column above the first banner. Single-line rows:
-   green/yellow dot (new vs updated) · deck name · creator + time · ink icons. */
+   green/yellow dot (new vs updated) · deck name · creator + time · ink icons.
+   Previously `position: sticky; top: 8px` on desktop so the panel pinned as
+   the main column scrolled. Removed 2026-05-26 because the left column
+   contains TWO `.home-feed` instances (Following + Tournament Results) —
+   both sticky at the same top offset stack on top of each other once both
+   reach the constraint, with Following visually covering Tournament Results.
+   Letting both scroll naturally with the page sidesteps the conflict, and
+   also fixes the residual mobile overlap that survived the @media override
+   when service-worker caches were stale. */
 .home-feed{background:var(--bg-surface);border:1px solid var(--border);
   border-radius:8px;padding:6px 8px 8px;margin-bottom:14px;
-  position:sticky;top:8px;align-self:start;}
-/* Disable sticky on mobile — the desktop layout has Following in a left
-   sidebar where sticky-pinned-while-main-scrolls is the intended UX. At
-   ≤1100px the grid collapses to a flex column and sticky causes the
-   Following box to visually overlap the Your Top Movers panel above it
-   while scrolling. Static positioning lets it scroll naturally with the
-   rest of the column. */
-@media (max-width:1100px){
-  .home-feed{position:static;}
-}
+  align-self:start;}
 /* Reusable expand/collapse toggle for home banners (Tournament Results,
    Following). Sticky-look chip at the bottom of the banner. */
 .home-feed-collapse-toggle{display:block;margin:8px auto 2px;padding:5px 12px;
@@ -1854,15 +1893,12 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   .home-tourney-col--mobile .home-feed-collapse-toggle{font-size:9px;padding:4px 8px;}
 }
 @media (max-width:1100px){
-  /* Following + tournament feeds: drop sticky once we stack vertically and
-     force full-width block layout. Sticky only makes sense when these are
-     real sidebars next to the main column; once stacked they cover content
-     below as you scroll. align-self:start (set on the desktop sticky rule)
-     also has to be overridden — otherwise the feed only takes the natural
-     content width instead of stretching across the column. */
-  .home-feed{position:static !important;align-self:stretch !important;
-    width:100% !important;display:block !important;
-    margin-bottom:14px !important;}
+  /* Stretch the panel full-width inside the stacked column — desktop's
+     `align-self:start` would otherwise let it collapse to natural content
+     width. Sticky is already off across all viewports (see the base rule)
+     so no `position` override is needed here anymore. */
+  .home-feed{align-self:stretch !important;width:100% !important;
+    display:block !important;margin-bottom:14px !important;}
 }
 @media (max-width:640px){
   /* Tighten the page header so it doesn't eat 25% of the viewport. */
@@ -1917,16 +1953,23 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .collection-panel .panel-movers-table td{padding:3px 4px;vertical-align:middle;border:none;}
 .collection-panel .panel-movers-img{width:22px;}
 .collection-panel .panel-movers-img img{width:22px;height:31px;object-fit:cover;border-radius:2px;display:block;}
-.collection-panel .panel-movers-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:0;}
-/* Inline printing badge ("Foil" / "Cold Foil" / "Holo") rendered next to the
-   card name when the row is for a non-Normal printing. Lets users tell
-   foil-vs-non-foil movers of the same card apart at a glance. Small uppercase
-   chip with accent tint, fits inside the truncated name cell. */
-.collection-panel .panel-movers-foil-tag{display:inline-block;margin-left:5px;
-  padding:1px 5px;font-size:9px;font-weight:700;letter-spacing:0.4px;
-  text-transform:uppercase;color:var(--accent);background:var(--accent-glow);
-  border:1px solid var(--border-accent);border-radius:3px;vertical-align:1px;
-  line-height:1.2;}
+/* Two-line layout: card name (line 1) + optional "FOIL" sub-label (line 2,
+   Cold Foil only). The cell uses vertical-align:top and a fixed top
+   padding so the name-text always sits at the same Y across rows
+   regardless of whether the sub-label is rendered. Without this, the td's
+   default vertical-align:middle centered the name+tag stack, which moved
+   the name up ~5px on rows with the sub-label and broke horizontal
+   alignment across the column. The 6px padding-top puts the name slightly
+   above the geometric middle of the 31px image cell — a deliberate
+   compromise so two-line rows (name + tag) stay within the row height
+   without growing it. */
+.collection-panel .panel-movers-name{max-width:0;line-height:1.15;vertical-align:top;
+  padding-top:6px !important;text-align:left;}
+.collection-panel .panel-movers-name-text{overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;}
+.collection-panel .panel-movers-foil-tag{display:block;font-size:8.5px;font-weight:700;
+  letter-spacing:0.5px;text-transform:uppercase;color:var(--accent);
+  line-height:1;margin-top:2px;}
 .collection-panel .panel-movers-price{text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim);width:50px;}
 .collection-panel .panel-movers-pct{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;width:54px;}
 
@@ -2061,12 +2104,18 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   text-transform:uppercase;color:var(--text-muted);}
 .graded-tab-table{display:flex;flex-direction:column;gap:1px;background:var(--border);
   border:1px solid var(--border);border-radius:8px;overflow:hidden;}
+/* Columns: Grader · Grade · Latest avg (avg_1d, primary) · 30d avg (avg_30d,
+   secondary) · Range (30d) · Trend (sparkline) · Last sale [· Owned]. The
+   7d avg column was dropped 2026-05-26 — see CLAUDE.md note on graded
+   primary-metric switch. avg_7d is no longer surfaced as a price; avg_1d
+   is the "Last" and avg_30d is the smoother secondary, mirroring Low/NM
+   Market for raw cards. */
 .graded-tab-thead, .graded-row{display:grid;
-  grid-template-columns:62px 56px 1fr 1fr 1fr 1.3fr 130px 90px;
+  grid-template-columns:62px 56px 1fr 1fr 1.3fr 130px 90px;
   align-items:center;gap:0;background:var(--bg-card);padding:7px 10px;font-size:12px;}
 .graded-tab-table-editable .graded-tab-thead,
 .graded-tab-table-editable .graded-row{
-  grid-template-columns:62px 56px 1fr 1fr 1fr 1.3fr 130px 90px 102px;}
+  grid-template-columns:62px 56px 1fr 1fr 1.3fr 130px 90px 102px;}
 .graded-owned-cell{display:inline-flex;align-items:center;gap:4px;justify-content:flex-end;}
 .graded-qty-btn{appearance:none;background:var(--bg-surface);border:1px solid var(--btn-border);
   width:24px;height:24px;border-radius:50%;cursor:pointer;font-weight:800;font-size:14px;
@@ -2123,12 +2172,15 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .graded-featured-sub{font-size:11px;}
 .graded-date{font-size:10.5px;color:var(--text-muted);}
 @media (max-width:780px){
-  .graded-tab-thead, .graded-row{grid-template-columns:56px 44px 1fr 1fr 1.1fr 110px;}
-  .graded-tab-thead > :nth-child(4), .graded-row > :nth-child(4){display:none;}
-  .graded-tab-thead > :nth-child(8), .graded-row > :nth-child(8){display:none;}
+  /* Mobile drops the Range column (nth-child 5 in the new 7-col layout)
+     and the Last-sale column (nth-child 7). Latest avg + 30d avg + Trend
+     stay visible. */
+  .graded-tab-thead, .graded-row{grid-template-columns:56px 44px 1fr 1fr 110px;}
+  .graded-tab-thead > :nth-child(5), .graded-row > :nth-child(5){display:none;}
+  .graded-tab-thead > :nth-child(7), .graded-row > :nth-child(7){display:none;}
   .graded-tab-table-editable .graded-tab-thead,
   .graded-tab-table-editable .graded-row{
-    grid-template-columns:56px 44px 1fr 1fr 1.1fr 110px 96px;}
+    grid-template-columns:56px 44px 1fr 1fr 110px 96px;}
 }
 .card-detail-history-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px;}
 .card-detail-history-title{font-family:'Cinzel',serif;font-size:14px;color:var(--accent);font-weight:600;}
@@ -2270,6 +2322,17 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   background:transparent;border:none;color:var(--text-muted);cursor:pointer;
   font-weight:700;font-size:14px;border-radius:50%;line-height:1;padding:0;}
 .compare-remove:hover{background:var(--bg-surface);color:var(--red);}
+/* "+ variants" pill on each compare chip — adds every other printing /
+   rarity variant of that card to the graph. Sized smaller than the chip
+   itself so it reads as a secondary action. Hidden once the graph hits
+   COMPARE_MAX. */
+.compare-add-variants{font-size:9px;font-weight:700;letter-spacing:0.3px;
+  text-transform:uppercase;padding:2px 6px;border-radius:8px;line-height:1;
+  background:var(--accent-glow);color:var(--accent);
+  border:1px solid var(--border-accent);cursor:pointer;
+  white-space:nowrap;margin-left:2px;}
+.compare-add-variants:hover{background:var(--accent);color:#fff;
+  border-color:var(--accent);}
 .compare-kind-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
   padding:1px 5px;border-radius:8px;background:var(--bg-surface);color:var(--text-muted);
   border:1px solid var(--border);margin-left:4px;vertical-align:middle;}
@@ -2414,12 +2477,19 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .seg-toggle button.active{background:var(--accent);color:#fff;}
 .seg-toggle button + button{border-left:1px solid var(--btn-border);}
 /* Mobile: convert the segmented control into wrap-friendly chips so 7-button
-   groups (Since Release / 1Y / 6M / 3M / 1M / 1W / Custom on Price Graphing)
-   don't get clipped by the overflow:hidden pill on narrow viewports.
+   groups (Since Release / 1Y / 6M / 3M / 1M / 1W / Custom on Price Graphing,
+   and the same set in the card-detail modal's history toolbar) don't get
+   clipped by the overflow:hidden pill on narrow viewports.
    Each button becomes its own rounded chip; wrap flows to a second row when
-   needed. 4-button rows (mode tabs) stay on one row visually. */
+   needed. 4-button rows (mode tabs) stay on one row visually.
+   `flex-shrink:1; min-width:0; max-width:100%` overrides the base rule's
+   `flex-shrink:0` — without these the seg-toggle keeps its natural width
+   (sum of buttons) regardless of parent constraints, so when the buttons
+   total wider than the modal/card-detail container they bleed past the
+   right edge and get clipped by the modal's overflow:hidden. */
 @media (max-width:640px){
-  .seg-toggle{flex-wrap:wrap;border:none;border-radius:0;overflow:visible;gap:4px;}
+  .seg-toggle{flex-wrap:wrap;border:none;border-radius:0;overflow:visible;
+    gap:4px;flex-shrink:1;min-width:0;max-width:100%;}
   .seg-toggle button{border:1px solid var(--btn-border);border-radius:14px;
     padding:5px 11px;font-size:11px;}
   .seg-toggle button + button{border-left:1px solid var(--btn-border);}
@@ -2868,15 +2938,58 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
    deck summary below it. */
 .deck-editor-mobile-tabs{display:none;}
 @media (max-width: 700px){
-  .deck-editor-mobile-tabs{display:flex;gap:6px;margin:0 0 12px;
-    position:sticky;top:60px;z-index:30;background:var(--bg);
-    padding:6px 0;border-bottom:1px solid var(--border);}
+  /* Deck/Cards toggle as a FIXED bottom bar on mobile (was sticky top:60px
+     which got clipped by the two-row top-nav that's ~80-90px tall on
+     phones, leaving the toggle perpetually half-hidden under the header
+     and impossible to tap). Bottom-fixed keeps the toggle in the thumb
+     zone and dodges the variable-height top-nav entirely.
+     The bar uses `inset:auto 0 -1px 0` instead of `bottom:0` so it
+     overshoots the viewport bottom by 1px. This is defensive against
+     subpixel rounding on Android/iOS where the page background was
+     visible through a hairline gap between the bar's CSS box and the
+     actual screen edge — what the user described as a "sliver of the
+     screen behind it". The 1px overshoot is invisible (it's off-screen)
+     but guarantees the bar's background bleeds to the true viewport edge.
+     padding-bottom doesn't include env(safe-area-inset-bottom) anymore;
+     the buttons sit 8px above the bar's bottom edge regardless of device.
+     On notched iPhones/Androids the buttons may render in the home-
+     indicator zone but the bar's background still covers it cleanly. */
+  .deck-editor-mobile-tabs{display:flex;gap:6px;
+    position:fixed;left:0;right:0;bottom:-1px;z-index:40;
+    margin:0;
+    padding:8px max(12px, env(safe-area-inset-left))
+            calc(9px + env(safe-area-inset-bottom))
+            max(12px, env(safe-area-inset-right));
+    background:var(--bg);border-top:1px solid var(--border);
+    box-shadow:0 -2px 8px rgba(0,0,0,0.08);}
   .deck-editor-mobile-tab{flex:1;padding:10px 14px;border:1px solid var(--btn-border);
     border-radius:18px;background:var(--btn-bg);color:var(--btn-text);font-weight:700;
-    font-size:13px;letter-spacing:0.3px;cursor:pointer;}
+    font-size:13px;letter-spacing:0.3px;cursor:pointer;min-height:36px;}
   .deck-editor-mobile-tab.active{background:var(--accent);color:#fff;border-color:var(--accent);}
   .deck-editor-grid.mobile-tab-deck .deck-editor-browser{display:none;}
   .deck-editor-grid.mobile-tab-cards .deck-editor-panel{display:none;}
+  /* Read-only mode (viewing a deck, not editing): the second tab is
+     "Deck Info" (the stats/charts panel), not "Cards" (the browser doesn't
+     exist in this mode). Override the .mobile-tab-cards rule above so the
+     panel SHOWS in cards tab when readonly, and hide the deck-view-list
+     instead. Higher specificity (.readonly + tab class) wins. */
+  .deck-editor-grid.readonly.mobile-tab-cards .deck-editor-panel{display:block;}
+  .deck-editor-grid.readonly.mobile-tab-cards .deck-view-list{display:none;}
+  .deck-editor-grid.readonly.mobile-tab-deck .deck-editor-panel{display:none;}
+  /* Toolbar (Done / Share / Notes / Mulligan / Export / Import / Duplicate /
+     Delete) is bulky on phones. When the user is on the Cards tab they're
+     focused on adding cards from the browser, so collapse the toolbar to
+     just Done and Delete (the two flagged with .deck-toolbar-keep). On the
+     Deck tab and on desktop the full set stays visible. */
+  .deck-editor-toolbar-actions.hide-on-cards-tab > *:not(.deck-toolbar-keep){
+    display:none;}
+  /* Reserve space at the bottom of the page so the fixed tab bar doesn't
+     cover the last items of the deck content (or the footer that comes
+     after the grid). Scoped via :has() so other pages don't gain phantom
+     bottom padding. Bar height: 10 (pad) + 36 (button min-height) + 8
+     (pad) = ~54px, plus the home-indicator inset. */
+  body:has(.deck-editor-mobile-tabs){
+    padding-bottom:calc(70px + env(safe-area-inset-bottom));}
 }
 /* Read-only mode collapses to single column — there's no CardBrowser. */
 .deck-editor-grid.readonly{grid-template-columns:1fr;max-width:720px;}
@@ -2989,9 +3102,19 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
   font-variant-numeric:tabular-nums;}
 .deck-pick-qty.has{color:var(--text);}
 
-/* Right-side deck summary panel */
+/* Right-side deck summary panel. On desktop it's a sidebar that pins as
+   the main card-browser column scrolls (sticky + max-height + overflow:auto
+   so its inner content scrolls when the deck is large). On mobile the grid
+   collapses to a single column at ≤1100px, where sticky+max-height becomes
+   a fixed-height scrollable box mid-page that clips the cost-curve / pie
+   charts at the bottom even though the page itself has more room below.
+   Drop all three properties on mobile so the panel flows naturally with
+   the page and the charts render at full height. */
 .deck-editor-panel{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;
   padding:14px;position:sticky;top:8px;max-height:calc(100vh - 20px);overflow-y:auto;}
+@media (max-width: 1100px){
+  .deck-editor-panel{position:static;max-height:none;overflow-y:visible;}
+}
 .deck-stat-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;
   padding-bottom:14px;border-bottom:1px solid var(--border);}
 .deck-stat{background:var(--bg-card);border:1px solid var(--border);border-radius:6px;padding:8px 10px;}
@@ -3032,6 +3155,20 @@ html[data-theme="dark"] .cost-shield-num{fill:#f4f1eb;}
   cursor:pointer;border-radius:3px;padding:0;line-height:1;}
 .deck-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .deck-row-counter button:disabled{opacity:0.3;cursor:not-allowed;}
+/* Mobile compaction: tighter cost-shield column + smaller gap/padding + a
+   compact price chip leave enough room for the card name AND the inline
+   ink shield to coexist. (An earlier pass hid the inline shield to claw
+   back ~30px; turned out unnecessary once the cost shield + paddings
+   were trimmed.) The row's tinted background still shows ink color too,
+   so the inline shield is a "second visual confirmation" rather than the
+   only signal. */
+@media (max-width:700px){
+  .deck-row{grid-template-columns:24px 26px 1fr auto auto;gap:6px;padding:5px 6px;}
+  .deck-row-costshield .cost-hex-shield-inkable{height:24px;}
+  .deck-row-costshield .cost-hex-shield-uninkable{height:22px;width:22px;}
+  .deck-row-price{padding:2px 5px;font-size:10px;}
+  .deck-row-counter button{width:20px;height:20px;}
+}
 
 /* Ink swatch shown next to a deck row's card name. Single circle for single-
    ink cards, half-and-half for dual-ink cards. Visual cue that this card
@@ -3091,9 +3228,13 @@ html[data-theme="dark"] .deck-row-ink.dual::after{background:rgba(255,255,255,0.
 .deck-highlight-pill .dot{width:8px;height:8px;border-radius:50%;background:currentColor;opacity:0.6;}
 .deck-highlight-pill.on .dot{opacity:1;}
 
-/* Owned rows dim when highlightMissing is on; missing rows pop. */
-.deck-row.owned-dim{opacity:0.45;}
-.deck-row.missing-pop{background:rgba(220,38,38,0.06);border-color:rgba(220,38,38,0.35);}
+/* When HIGHLIGHT MISSING is on: rows you're missing copies of get FADED
+   (opacity:0.45) so the owned cards visually pop. Class renamed from
+   .owned-dim → .missing-fade 2026-05-26 when the logic flipped (used to
+   fade owned cards and highlight missing with a red border; now it's the
+   inverse — owned cards render normal, missing cards fade). The X/Y
+   fraction badge in the top-right also paints red on missing. */
+.deck-row.missing-fade{opacity:0.45;}
 
 /* Per-card price chip becomes an affiliate link. */
 a.deck-row-price{text-decoration:none;}
@@ -3129,8 +3270,7 @@ a.deck-row-price:hover{background:rgba(22,163,74,0.18);border-color:rgba(22,163,
 .deck-grid-tile:hover{transform:translateY(-3px) scale(1.02);
   box-shadow:0 8px 18px -4px rgba(0,0,0,0.25);border-color:var(--accent);}
 .deck-grid-tile img{transition:transform 0.12s ease-out;}
-.deck-grid-tile.owned-dim{opacity:0.4;}
-.deck-grid-tile.missing-pop{border-color:var(--red);}
+.deck-grid-tile.missing-fade{opacity:0.4;}
 .deck-grid-tile img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
 .deck-grid-tile-qty{position:absolute;top:5px;right:5px;
   background:linear-gradient(180deg, #6d4dd6, #5a3fc4);
@@ -3148,6 +3288,7 @@ a.deck-row-price:hover{background:rgba(22,163,74,0.18);border-color:rgba(22,163,
   background:rgba(0,0,0,0.75);color:#fff;font-size:10px;font-weight:700;
   padding:2px 6px;border-radius:4px;letter-spacing:0.3px;z-index:2;}
 .deck-tile-owned-frac.complete{background:rgba(22,163,74,0.92);}
+.deck-tile-owned-frac.incomplete{background:rgba(220,38,38,0.92);}
 
 /* +/- counter overlaid on grid + stacked deck-list tiles. Bottom-left so
    it doesn't collide with the price chip in the bottom-right. */
@@ -3172,7 +3313,7 @@ a.deck-row-price:hover{background:rgba(22,163,74,0.18);border-color:rgba(22,163,
 .deck-stack-tile{position:relative;display:flex;flex-direction:column;cursor:pointer;
   transition:transform 0.12s ease-out;}
 .deck-stack-tile:hover{transform:translateY(-4px);}
-.deck-stack-tile.owned-dim{opacity:0.4;}
+.deck-stack-tile.missing-fade{opacity:0.4;}
 .deck-stack-peek{position:relative;width:96%;margin:0 auto -3px;height:22px;overflow:hidden;
   border-radius:8px 8px 0 0;
   border:1px solid rgba(0,0,0,0.32);border-bottom:none;
@@ -3197,7 +3338,6 @@ html[data-theme="dark"] .deck-stack-top{border-color:rgba(255,255,255,0.18);
   box-shadow:0 8px 18px -4px rgba(0,0,0,0.7),0 3px 6px -2px rgba(0,0,0,0.45);}
 .deck-stack-tile:hover .deck-stack-top{box-shadow:0 12px 26px -4px rgba(0,0,0,0.5),0 4px 8px -2px rgba(0,0,0,0.25);}
 .deck-stack-top img{width:100%;aspect-ratio:5/7;object-fit:cover;display:block;}
-.deck-stack-top.missing-pop{border-color:var(--red);box-shadow:0 0 0 2px rgba(220,38,38,0.4),0 8px 18px -4px rgba(0,0,0,0.4);}
 .deck-stack-qty{position:absolute;top:7px;right:7px;
   background:linear-gradient(180deg, #6d4dd6, #5a3fc4);
   color:#fff;font-size:12px;font-weight:700;padding:3px 9px;border-radius:5px;z-index:2;

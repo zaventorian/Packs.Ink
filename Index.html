@@ -7,14 +7,15 @@
 <!-- PWA: installable on mobile + offline shell via service worker. -->
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0f0d20">
+<meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Packs.Ink">
-<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=3">
-<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=3">
-<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=3">
-<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=3">
-<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=3">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=4">
+<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png?v=4">
+<link rel="icon" type="image/png" sizes="64x64" href="/favicon-64.png?v=4">
+<link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=4">
+<link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=4">
 <script>
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
@@ -153,7 +154,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v41";
+const CACHE_KEY = "packsink:catalog:v42";
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -161,7 +162,7 @@ const CACHE_KEY = "packsink:catalog:v41";
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-05-25-graded-printing-2";
+const AUX_CACHE_VERSION = "2026-05-26-kill-hidden-feature";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -213,15 +214,27 @@ function readCache(){
 }
 function writeCache(rows, latestDate){
   if(!Array.isArray(rows) || rows.length < CACHE_MIN_ROWS) return; // don't poison the cache with partial data
-  // Strip img_large before caching — it eats ~500KB across 5k rows and is
-  // only used as a fallback for img_normal in three places (deck poster /
-  // hover preview / detail modal). When those need the larger image they
-  // gracefully degrade to img_normal (~400w), which is plenty visually.
-  // Saves ~30% of the catalog cache size, keeping us well under the 5MB
-  // localStorage quota.
+  // Strip img_large AND text before caching.
+  //
+  // img_large eats ~500KB across 5k rows and is only used as a fallback for
+  // img_normal in three places (deck poster / hover preview / detail modal),
+  // which gracefully degrade to img_normal (~400w) when img_large is absent.
+  //
+  // text (card body / rules text) was added to buildRow in 2026-05-26 for
+  // smart-search body-text matching ("gets", "gains", etc.). It adds ~600KB
+  // across 5k rows and pushed the catalog past the 5MB localStorage quota
+  // — sealed/movers/etc aux caches started failing with QuotaExceededError.
+  // Stripping it on cache write keeps the catalog ~2-2.5MB. The in-memory
+  // rows from the cold fetch still carry text, so body-text search works
+  // for the rest of the live session; on cache replay the search haystack
+  // falls back to name + card_type + classifications (the matchesCardFilter
+  // haystack tolerates missing text via `(row.text||"")`). The freshness
+  // probe wipes the catalog whenever the ETL has published new prices, so
+  // most active users cold-fetch within hours and get text-search back.
+  // Saves ~30% (img_large) + ~25% (text) of the catalog cache size.
   const slim = rows.map(r => {
-    if(!r.img_large) return r;
-    const {img_large, ...rest} = r;
+    if(!r.img_large && !r.text) return r;
+    const {img_large, text, ...rest} = r;
     return rest;
   });
   const payload = JSON.stringify({t:Date.now(), rows: slim, latestDate: latestDate || null});
@@ -993,6 +1006,12 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     "inkable":c.inkable,
     "card_type":c.card_type||null,
     "classifications":c.classifications||null,
+    // Card body text (ability/rules text). Carried onto the row so smart
+    // search can match against "gets", "gains", "draws", etc. — anything in
+    // the printed rules box. Cached as-is (~120 char avg per card, ~600KB
+    // total). When absent (older cache versions), text search degrades to
+    // name + type + classifications.
+    "text":c.text||null,
     "keywords":keywordsByCardId[c.id] || null,
     "illustrators":Array.isArray(c.illustrators) && c.illustrators.length
       // Lorcast stores co-illustrators as a single " / "-joined string
@@ -1665,7 +1684,7 @@ function computeGradedValueHistory(rows, ownedSlots){
     // Pre-roll: find the first valid price across this slot's series.
     let firstPrice = null;
     for(const r of series){
-      const p = r.ebay_avg_7d ?? r.ebay_avg_1d ?? r.ebay_avg_30d;
+      const p = r.ebay_avg_1d ?? r.ebay_avg_30d ?? r.ebay_avg_7d;
       if(p != null){ firstPrice = Number(p); break; }
     }
     if(firstPrice == null) continue;
@@ -1674,7 +1693,7 @@ function computeGradedValueHistory(rows, ownedSlots){
     for(const date of dates){
       while(si < series.length && series[si].date <= date){
         const r = series[si];
-        const p = r.ebay_avg_7d ?? r.ebay_avg_1d ?? r.ebay_avg_30d;
+        const p = r.ebay_avg_1d ?? r.ebay_avg_30d ?? r.ebay_avg_7d;
         if(p != null) prev = Number(p);
         si++;
       }
@@ -2216,6 +2235,20 @@ const RARITY_ALIASES = {
   "enchanted":"Enchanted", "enc":"Enchanted",
   "epic":"Epic", "iconic":"Iconic", "promo":"Promo",
 };
+// Resolve any ≥3-char unambiguous prefix to a canonical rarity. "ench" /
+// "enchant" / "enchante" → Enchanted, "leg" / "lege" → Legendary, "epi" /
+// "icon" / "pro" / "rar" / "com" / "unc" → Epic / Iconic / Promo / Rare /
+// Common / Uncommon. Super Rare is intentionally excluded — "sup" collides
+// with the "super" classification subtype (Big Hero 6 Super characters). Use
+// "sr" or the full "super rare" / "superrare" aliases for that one.
+const _RARITY_PREFIX_TARGETS = ["Common","Uncommon","Rare","Legendary","Enchanted","Epic","Iconic","Promo"];
+const resolveRarityPrefix = (token) => {
+  if(!token || token.length < 3) return null;
+  const t = String(token).toLowerCase();
+  if(RARITY_ALIASES[t]) return RARITY_ALIASES[t];
+  const hits = _RARITY_PREFIX_TARGETS.filter(r => r.toLowerCase().startsWith(t));
+  return hits.length === 1 ? hits[0] : null;
+};
 const SET_NICKNAMES = {
   "tfc":"The First Chapter", "first chapter":"The First Chapter",
   "rotf":"Rise of the Floodborn", "rise":"Rise of the Floodborn", "floodborn set":"Rise of the Floodborn",
@@ -2394,14 +2427,17 @@ const parseSearchQuery = (input) => {
       break;
     }
   }
-  // Single-token rarity (also try depluralized)
+  // Single-token rarity (also try depluralized and ≥3-char prefix match).
+  // The prefix resolver lets "ench" / "lege" / "epi" / "ico" / "pro" / "rar"
+  // / "com" / "unc" parse as their canonical rarity so the user gets results
+  // mid-word instead of waiting until they type the full rarity name.
   if(!out.filters.rarity){
     for(let i=0; i<tokens.length; i++){
       if(used.has(i)) continue;
       const t = tokens[i];
       const dt = depluralize(t);
-      if(RARITY_ALIASES[t]) { out.filters.rarity = RARITY_ALIASES[t]; used.add(i); break; }
-      if(RARITY_ALIASES[dt]){ out.filters.rarity = RARITY_ALIASES[dt]; used.add(i); break; }
+      const r = resolveRarityPrefix(t) || resolveRarityPrefix(dt);
+      if(r){ out.filters.rarity = r; used.add(i); break; }
     }
   }
 
@@ -2755,6 +2791,7 @@ const matchesCardFilter = (row, f, parsed) => {
         const haystack = [
           (row["Product Name"]||"").toLowerCase(),
           (row.card_type||"").toLowerCase(),
+          (row.text||"").toLowerCase(),
           ...cls
         ].join("  ");
         // Every token from the query must appear somewhere in the haystack.
@@ -3334,7 +3371,6 @@ const GradedPricesTab = ({graded, gradedOwned, onGradedAdjust, onGradedMetaUpdat
             <div>Grader</div>
             <div>Grade</div>
             <div>Latest avg</div>
-            <div>7d avg</div>
             <div>30d avg</div>
             <div>Range (30d)</div>
             <div>Trend</div>
@@ -3354,7 +3390,6 @@ const GradedPricesTab = ({graded, gradedOwned, onGradedAdjust, onGradedMetaUpdat
                 <div class="graded-grader" style=${{color}}>${GRADER_LABEL[g] || g.toUpperCase()}</div>
                 <div class="graded-grade">${grade}</div>
                 <div class="graded-cell graded-cell-main">${fmt(row.ebay_avg_1d)}</div>
-                <div class="graded-cell">${fmt(row.ebay_avg_7d)}</div>
                 <div class="graded-cell">${fmt(row.ebay_avg_30d)}</div>
                 <div class="graded-cell graded-cell-range">
                   ${row.ebay_low_price != null || row.ebay_high_price != null
@@ -3547,7 +3582,16 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const cardType = meta?.card_type;
 
   const hasAnyHistory = (history.normal && history.normal.length > 0) || (history.foil && history.foil.length > 0);
-  const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil});
+  // Chase rarities (Enchanted / Iconic / Epic / Promo) have only one printing
+  // per card — usually stored under group.foil — so the "show foil" toggle
+  // is meaningless and was previously zeroing out the chart when the user
+  // had it unchecked from a prior visit. Force showFoil=true whenever there
+  // is no Normal printing to compare against, so the single-printing line
+  // always renders. The toggle UI is hidden in the same scenario (see the
+  // checkbox guard below) to avoid offering a control that does nothing.
+  const hasBothPrintings = !!(group.normal && group.foil);
+  const effectiveShowFoil = hasBothPrintings ? showFoil : true;
+  const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil: effectiveShowFoil});
   const chartStartMs = computeChartStartMs(rangeKey, customStart, hidePreorders, group.Set);
 
   return html`<div class="card-detail-overlay" onClick=${onClose}>
@@ -3659,7 +3703,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
         <div class="card-detail-history-head">
           ${hasAnyHistory && html`<div class="card-detail-history-legend">
             ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Normal</span>`}
-            ${showFoil && history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
+            ${effectiveShowFoil && history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
             <span class="legend-line-style"><span class="line-solid"/>Low</span>
             <span class="legend-line-style"><span class="line-dashed"/>NM Market</span>
           </div>`}
@@ -3680,7 +3724,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           <div class="checkbox-group" style=${{marginLeft:"auto"}}>
             <label><input type="checkbox" checked=${showLow} onChange=${e=>setShowLow(e.target.checked)}/> <${Tip} text=${TIP_LOW}>Low<//></label>
             <label><input type="checkbox" checked=${showMarket} onChange=${e=>setShowMarket(e.target.checked)}/> <${Tip} text=${TIP_MARKET}>NM Market<//></label>
-            ${group.foil && html`<label title="Show the Foil printing's line on the chart (remembered across cards)."><input type="checkbox" checked=${showFoil} onChange=${e=>setShowFoil(e.target.checked)}/> Foil</label>`}
+            ${hasBothPrintings && html`<label title="Show the Foil printing's line on the chart (remembered across cards)."><input type="checkbox" checked=${showFoil} onChange=${e=>setShowFoil(e.target.checked)}/> Foil</label>`}
           </div>
         </div>
         ${history.loading
@@ -3728,9 +3772,13 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
       <div class="drawer-section">
         <div class="drawer-section-head">Colors</div>
         <div class="cards-chipgroup">
-          ${INKS.map(ink => html`<button key=${ink} class=${"chip "+(filter.inks.has(ink)?"active":"")}
-            style=${{borderLeft:"4px solid "+(BDGE_LIGHT[ink]?.bg||"transparent")}}
-            onClick=${()=>setFilter(f=>({...f,inks:toggleSet(f.inks,ink)}))}>${ink}</button>`)}
+          ${INKS.map(ink => html`<button key=${ink}
+            class=${"chip ink ink-icon-chip "+(filter.inks.has(ink)?"active":"")}
+            style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}}
+            title=${ink} aria-label=${ink}
+            onClick=${()=>setFilter(f=>({...f,inks:toggleSet(f.inks,ink)}))}>
+            <img src=${INK_ICONS[ink]} alt=${ink}/>
+          </button>`)}
         </div>
       </div>
       <div class="drawer-section">
@@ -6914,8 +6962,13 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         </button>`)}
       </div>
       <div class="cards-chipgroup">
-        ${setRarities.map(r => html`<button key=${r} class=${"chip "+(rarityFilter.has(r)?"active":"")}
-          onClick=${()=>setRarityFilter(s => toggleSet(s, r))}>${r}</button>`)}
+        ${setRarities.map(r => html`<button key=${r}
+          class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
+          title=${r} aria-label=${r}
+          onClick=${()=>setRarityFilter(s => toggleSet(s, r))}>
+          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
+            onError=${e=>{ e.target.style.display="none"; }}/>`}
+        </button>`)}
       </div>
       <div class="seg-toggle">
         ${[["all","All"],["complete","Complete"],["incomplete","Incomplete"],["extras","Extras"]].map(([k,l]) =>
@@ -7911,7 +7964,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Screener handoff. Items share the same shape as Screener pushes; the
   // `kind` field is informational only (fetchCardHistory works generically
   // for both since sealed products use Normal printing keyed by product_id).
-  const COMPARE_MAX = 8;
+  const COMPARE_MAX = 18;
   const addToCompare = useCallback((item) => {
     if(!item) return;
     setCompareCards(prev => {
@@ -7920,6 +7973,62 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       return [...prev, item];
     });
   }, []);
+  // Find every variant of a card already in the compare list — defined as
+  // every (card_id, printing) pair that shares the same Product Name.
+  // Covers both: (a) foil vs non-foil printings of the same card_id (LCP
+  // C1 split-printing cards), and (b) different rarity prints of the same
+  // character (Common → Enchanted, distinct card_ids that share the name).
+  // Synthetic compare-list card_ids include "::printing" so multiple
+  // printings of one card_id can coexist as separate series without
+  // colliding on the existing card_id-keyed dedupe.
+  const addAllVariants = useCallback((item) => {
+    if(!item || item.kind !== "card") return;
+    // Original card_id may already be synthetic ("realId::Foil") — strip
+    // the suffix so we can look up the canonical row in `raw`.
+    const realCardId = String(item.card_id || "").split("::")[0];
+    const targetRow = raw.find(r => r.card_id === realCardId);
+    if(!targetRow) return;
+    const targetName = targetRow["Product Name"];
+    if(!targetName) return;
+    const variants = [];
+    const seenPairs = new Set();
+    for(const r of raw){
+      if(r["Product Name"] !== targetName) continue;
+      const printing = r.tcg_printing || "Normal";
+      const key = r.card_id + ":" + printing;
+      if(seenPairs.has(key)) continue;
+      seenPairs.add(key);
+      variants.push(r);
+    }
+    setCompareCards(prev => {
+      const next = [...prev];
+      // Existing dedupe key = same (productId, printing) tuple — that's
+      // what actually identifies a unique price-history series in the
+      // matview, regardless of how the compare-list card_id was synthesized.
+      const existing = new Set(next.map(p => p.productId + ":" + p.printing));
+      for(const v of variants){
+        const printing = v.tcg_printing || "Normal";
+        const dedupeKey = v.tcgplayer_product_id + ":" + printing;
+        if(existing.has(dedupeKey)) continue;
+        if(next.length >= COMPARE_MAX) break;
+        const syntheticId = v.card_id + (printing === "Normal" ? "" : "::" + printing);
+        const printingTag = (printing !== "Normal" && printing !== "Non-Foil")
+          ? (printing === "Holofoil" ? " (Holo)" : " (" + printing + ")")
+          : "";
+        next.push({
+          kind: "card",
+          card_id: syntheticId,
+          productId: v.tcgplayer_product_id,
+          printing,
+          name: (v["Product Name"] || "") + printingTag,
+          sub: `${v.Set || ""}${v.Number?" · #"+String(v.Number).split("/")[0]:""}${v.Rarity?" · "+v.Rarity:""}`,
+          image: v.img_normal || v.img_small || null,
+        });
+        existing.add(dedupeKey);
+      }
+      return next;
+    });
+  }, [raw]);
   const buildCardCompareItem = useCallback((c) => {
     if(!c || !c.card_id) return null;
     const allRows = raw.filter(r => r.card_id === c.card_id);
@@ -8158,14 +8267,28 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         // Drawer filters operate on the underlying card metadata (ink, rarity,
         // cost, type, set, etc.). Skip cards whose meta row fails.
         if(g._meta && !cardPassesHistoryFilter(g._meta)) return false;
-        const q = gradedSearch.trim().toLowerCase();
+        const q = gradedSearch.trim();
         if(!q) return true;
         const m = g._meta || {};
-        const blob = ((m["Product Name"] || m.name || "") + " " + (m.Set || "") + " "
-                    + (g.grader||"") + " " + g.grade).toLowerCase()
-                    .replace(/[^a-z0-9. ]+/g, " ");          // strip punctuation
-        const tokens = q.split(/[\s,]+/).filter(Boolean);
-        return tokens.every(t => blob.includes(t));
+        // Hybrid smart-search: route the query through parseSearchQuery so
+        // dimensional tokens (rarity / ink / set / cost / inkable / partial
+        // rarities like "ench" / "lege") apply to the card meta via the
+        // canonical matcher. Whatever's left in parsed.name (e.g. "mickey",
+        // "psa", "10") gets checked against a wider blob that includes
+        // grader + grade alongside the card name + set — so "mickey psa 10"
+        // / "elsa enchanted" / "fabled iconic" all work the way the
+        // placeholder advertises.
+        const parsed = parseSearchQuery(q);
+        const parsedNoName = {...parsed, name: ""};
+        if(!matchesCardFilter(m, {}, parsedNoName)) return false;
+        if(parsed.name){
+          const blob = ((m["Product Name"] || m.name || "") + " " + (m.Set || "") + " "
+                      + (g.grader||"") + " " + g.grade).toLowerCase()
+                      .replace(/[^a-z0-9. ]+/g, " ");
+          const tokens = parsed.name.toLowerCase().split(/\s+/).filter(Boolean);
+          if(!tokens.every(t => blob.includes(t))) return false;
+        }
+        return true;
       }).slice(0, 250);
 
       // Distinct graders / grades present in the dataset — drives the filter chip rows.
@@ -8313,7 +8436,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                       const gid = `graded-${g.tcgplayer_product_id}-${g.grader}-${g.grade}`;
                       const sel = isCardInCompare(gid);
                       const m = g._meta || {};
-                      const px = g.ebay_avg_30d ?? g.ebay_avg_7d ?? g.ebay_avg_1d;
+                      const px = g.ebay_avg_1d ?? g.ebay_avg_30d ?? g.ebay_avg_7d;
                       return html`<button key=${gid}
                         class=${"history-picker-item picker-multi "+(sel?"active":"")}
                         disabled=${!sel && isFull}
@@ -8393,13 +8516,17 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     </div>`}
                   </div>
                 </div>`}
-                ${compareCards.length > 1 && html`<div class="compare-legend">
+                ${compareCards.length >= 1 && html`<div class="compare-legend">
                   <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>On graph</span>
                   ${compareCards.map((c, i) => html`<span key=${c.card_id} class="compare-chip"
                     style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
                     <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
                     <span class="compare-name">${c.name}</span>
                     ${c.kind === "sealed" ? html`<span class="compare-kind-tag">sealed</span>` : c.kind === "set" ? html`<span class="compare-kind-tag">set EV</span>` : null}
+                    ${c.kind === "card" && compareCards.length < COMPARE_MAX && html`<button class="compare-add-variants"
+                      onClick=${()=>addAllVariants(c)}
+                      title="Add every other printing / rarity variant of this card (Normal, Foil, Cold Foil, Enchanted, Iconic, etc.) to the graph"
+                      aria-label="Add all variants">+ variants</button>`}
                     <button class="compare-remove"
                       onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
                       title="Remove from graph" aria-label="Remove">×</button>
@@ -8660,52 +8787,56 @@ function NamePromptModal({onSave}){
 }
 
 function AvatarPicker({raw, onPick, onClose}){
-  // Same typeahead UX as HomeQuickSearch — single input, suggestion list with
-  // thumbnails. The previous "show a 240-tile grid then filter" version was
-  // overwhelming and didn't render well on mobile. Picking a suggestion
-  // commits it as the avatar and closes the modal.
+  // Typeahead UX matching HomeQuickSearch. Routes through the canonical
+  // smart-search matcher (parseSearchQuery + matchesCardFilter) so "elsa
+  // enchanted" / "ench" / "gets" / "amber legendary" all work the same way
+  // they do everywhere else in the app — see project_search_canonical_matcher
+  // memory for the broader contract.
   const [q, setQ] = useState("");
   const [idx, setIdx] = useState(0);
   const inputRef = useRef(null);
-  // One entry per Product Name. Prefer Normal printing thumbnail + non-chase
-  // rarity for the canonical pick — keeps the avatar art looking like the
-  // base card, not its $400 Enchanted twin.
-  const byCard = useMemo(() => {
-    const m = new Map();
-    const isChase = (rar) => /Enchanted|Iconic|Epic/i.test(rar || "");
+  const isChase = (rar) => /Enchanted|Iconic|Epic/i.test(rar || "");
+  const suggestions = useMemo(() => {
+    const s = q.trim();
+    if(s.length < 2) return [];
+    // Filter raw rows BEFORE deduping per Product Name so rarity / text
+    // filters don't get silently stripped by the dedupe. When the query
+    // explicitly asks for a chase rarity, prefer the chase variant as the
+    // canonical pick; otherwise keep the base printing so the avatar shows
+    // the cheap card's art instead of its $400 Enchanted twin.
+    const parsed = parseSearchQuery(s);
+    const sLow = s.toLowerCase();
+    const wantsChase = parsed.filters.rarity && isChase(parsed.filters.rarity);
+    const byName = new Map();
     for(const r of (raw || [])){
       const name = r["Product Name"];
       if(!name || !r.card_id || !r.img_small) continue;
-      const cur = m.get(name);
-      if(!cur){ m.set(name, r); continue; }
+      if(!matchesCardFilter(r, {}, parsed)) continue;
+      const cur = byName.get(name);
+      if(!cur){ byName.set(name, r); continue; }
       const curChase = isChase(cur.Rarity);
       const rChase   = isChase(r.Rarity);
-      if(curChase && !rChase){ m.set(name, r); continue; }
-      if(!curChase && rChase) continue;
-      if(cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal") m.set(name, r);
+      if(wantsChase){
+        if(curChase && !rChase) continue;
+        if(!curChase && rChase){ byName.set(name, r); continue; }
+      } else {
+        if(curChase && !rChase){ byName.set(name, r); continue; }
+        if(!curChase && rChase) continue;
+      }
+      if(cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal") byName.set(name, r);
     }
-    return Array.from(m.values());
-  }, [raw]);
-  const suggestions = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if(s.length < 2) return [];
-    const tokens = s.split(/\s+/).filter(Boolean);
     const scored = [];
-    for(const r of byCard){
+    for(const r of byName.values()){
       const name = (r["Product Name"] || "").toLowerCase();
-      if(!name) continue;
-      let allHit = true;
-      for(const t of tokens){ if(!name.includes(t)){ allHit = false; break; } }
-      if(!allHit) continue;
       let rank;
-      if(name.startsWith(s))      rank = 0;
-      else if(name.includes(s))   rank = 1;
-      else                        rank = 2;
+      if(name.startsWith(sLow))      rank = 0;
+      else if(name.includes(sLow))   rank = 1;
+      else                           rank = 2;
       scored.push({r, rank, name});
     }
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
     return scored.slice(0, 8).map(x => x.r);
-  }, [q, byCard]);
+  }, [q, raw]);
   useEffect(() => {
     const onKey = e => { if(e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -9366,7 +9497,7 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey}) 
   const chartSeries = useMemo(() => {
     if(!valueSeries || !valueSeries.length) return [];
     return [{
-      label: "Graded value (7d avg)",
+      label: "Graded value",
       color: "var(--accent)",
       dashed: false,
       data: valueSeries.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value})),
@@ -9434,6 +9565,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // split-printing cards) so the user doesn't have to re-search or re-pick.
   const [addPreselectCardId, setAddPreselectCardId] = useState(null);
   const [addPreselectPrinting, setAddPreselectPrinting] = useState(null);
+  const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
   const [loadErr, setLoadErr] = useState(null);
   // Click-to-open: builds a CardDetailModal-shaped "group" from raw rows
@@ -9468,15 +9600,41 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     catch { return false; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:graded:trackCosts", trackCosts?"1":"0"); } catch {} }, [trackCosts]);
-  // Per-device list of card_ids the user has hidden from their tracking
-  // checklist. Excluded from goal counts AND grid rendering until unhidden
-  // via the "Show hidden" footer toggle. Persists locally (not synced to
-  // server). Surfaces on tile via × button next to +.
-  const [hiddenCardIds, setHiddenCardIds] = useState(() => {
-    try { return new Set(JSON.parse(localStorage.getItem("packsink:graded:hidden") || "[]")); }
+  // "Remove from tracking" — per-tile opt-out from set-goal placeholder
+  // checklists. Replaces the older "Hide" feature (2026-05-26 revamp).
+  //
+  // The Set stores composite keys "cardId|printing" (not bare card_ids) so
+  // SPLIT_BY_PRINTING_SETS cards (LCP C1: Let It Go, Dragon Fire, …) can
+  // be removed per-printing — removing the foil Let It Go must not also
+  // remove the non-foil. Helper `removedKey()` builds the composite; all
+  // .has() / .add() / dropRemoved sites route through it.
+  //
+  // Key invariants (unchanged from the original Remove design):
+  //   - OWNED tiles bypass the removal filter. If you own any slot for a
+  //     given (card_id, printing), that tile always renders regardless of
+  //     being in removedCardIds. The old Hide bug (adding a card silently
+  //     failed because its card_id was still in the hidden set) is
+  //     structurally prevented by the owned-bypass in the render filter.
+  //   - There is NO undo UI inside the graded view. Recovery paths:
+  //     (a) acquire the card → tile renders via owned-bypass; or
+  //     (b) re-add the set goal → addGoal() clears removedCardIds entries
+  //         for every (card_id, printing) tuple in the new goal's scope.
+  //   - localStorage key `packsink:graded:removed` (any data from the
+  //     earlier card-id-only version is now treated as no-printing keys
+  //     that never match a current tile — effectively cleared).
+  const removedKey = (cardId, printing) => cardId + "|" + (printing || "Normal");
+  const [removedCardIds, setRemovedCardIds] = useState(() => {
+    try { return new Set(JSON.parse(localStorage.getItem("packsink:graded:removed") || "[]")); }
     catch { return new Set(); }
   });
-  const [showHidden, setShowHidden] = useState(false);
+  const persistRemoved = (next) => {
+    try { localStorage.setItem("packsink:graded:removed", JSON.stringify([...next])); } catch {}
+  };
+  const removeCardFromTracking = useCallback((cardId, printing) => setRemovedCardIds(prev => {
+    const k = removedKey(cardId, printing);
+    if(prev.has(k)) return prev;
+    const next = new Set(prev); next.add(k); persistRemoved(next); return next;
+  }), []);
   // Two-tap remove confirm — clicking an owned slot pill arms it for ~3s;
   // a second click within that window actually removes. Replaces the
   // jarring native confirm() dialog with an inline color/label flip.
@@ -9500,15 +9658,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     catch { return "release"; }
   });
   useEffect(() => { try { localStorage.setItem("packsink:graded:sectionSort", sectionSort); } catch {} }, [sectionSort]);
-  const persistHidden = (next) => {
-    try { localStorage.setItem("packsink:graded:hidden", JSON.stringify([...next])); } catch {}
-  };
-  const hideCard = useCallback((cardId) => setHiddenCardIds(prev => {
-    const next = new Set(prev); next.add(cardId); persistHidden(next); return next;
-  }), []);
-  const unhideCard = useCallback((cardId) => setHiddenCardIds(prev => {
-    const next = new Set(prev); next.delete(cardId); persistHidden(next); return next;
-  }), []);
+  // hideCard / unhideCard / persistHidden removed alongside the Hidden feature.
 
   // Load both user tables + the latest-prices snapshot. In viewer (read-only)
   // mode we use the rows passed in via props and don't fetch goals (they're
@@ -9553,8 +9703,19 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               return r;
             }),
           sbClient.from("graded_collection_goals")
-            .select("goal_id,set_id,extras_bucket,rarities,display_name,inserted_at")
-            .eq("user_id", user.id),
+            .select("goal_id,set_id,extras_bucket,rarities,printings,display_name,inserted_at")
+            .eq("user_id", user.id)
+            .then(async r => {
+              // Schema-tolerant fallback if migration 53 hasn't been applied:
+              // retry without the `printings` column.
+              if(r.error && /column.*printings.*does not exist/i.test(r.error.message || "")){
+                console.warn("graded_collection_goals.printings column missing — run supabase/53_graded_goals_printings.sql");
+                return await sbClient.from("graded_collection_goals")
+                  .select("goal_id,set_id,extras_bucket,rarities,display_name,inserted_at")
+                  .eq("user_id", user.id);
+              }
+              return r;
+            }),
           sbFetchAll("graded_prices_latest", {
             select: "tcgplayer_product_id,printing,grader,grade,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,price_date",
           }).catch(()=>[]),
@@ -9745,9 +9906,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     for(const entry of slotsByKey.values()){
       const meta = findRawByCardAndPrinting(entry.card_id, entry.printing);
       if(!meta) continue;
-      const isHidden = hiddenCardIds.has(entry.card_id);
-      if(isHidden && !showHidden) continue;
       const anyOwned = Array.from(entry.slots.values()).some(s => s.owned);
+      // "Remove from tracking": skip placeholder tiles the user explicitly
+      // removed. Owned tiles bypass — they always render. Composite key
+      // is (card_id, printing) so split-printing sets (LCP C1) can remove
+      // foil and non-foil independently. The user re-adds a removed tile
+      // by either acquiring it (becomes owned → bypasses) or re-adding
+      // the whole set goal (addGoal clears matching entries).
+      if(!anyOwned && removedCardIds.has(removedKey(entry.card_id, entry.printing))) continue;
       if(visFilter === "owned"   && !anyOwned) continue;
       if(visFilter === "tracked" &&  anyOwned) continue;
       const extrasBucket = extrasBucketByCardId.get(entry.card_id);
@@ -9758,7 +9924,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         if(a.owned !== b.owned) return a.owned ? -1 : 1;
         return (parseFloat(b.grade)||0) - (parseFloat(a.grade)||0);
       });
-      bySet.get(sid).push({card: meta, slots: arr, hidden: isHidden, printing: entry.printing});
+      bySet.get(sid).push({card: meta, slots: arr, printing: entry.printing});
     }
     // Helper to grab the best graded price for a (pid, printing, grader,
     // grade) — falls back across printings (matches lookupGradedPx in totals).
@@ -9766,7 +9932,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const bestPx = (pid, pref, grader, grade) => {
       for(const pr of [pref || "Normal", ...tryPrintings]){
         const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
-        if(p) return p.ebay_avg_7d ?? p.ebay_avg_1d ?? p.ebay_avg_30d ?? 0;
+        if(p) return p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? 0;
       }
       return 0;
     };
@@ -9818,7 +9984,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       return a.set_name.localeCompare(b.set_name);
     });
     return setEntries;
-  }, [items, goals, cardById, cardsBySetId, extrasCardsByBucket, setNameById, hiddenCardIds, showHidden, visFilter, sectionSort, priceByKey]);
+  }, [items, goals, cardById, cardsBySetId, extrasCardsByBucket, setNameById, visFilter, sectionSort, priceByKey, removedCardIds]);
 
   // Quick total/value math for the header.
   //   totalCopies  = sum of quantities (every physical card, including dupes)
@@ -9838,7 +10004,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       const tryPrintings = [preferredPrinting || "Normal", "Normal", "Holofoil", "Cold Foil"];
       for(const pr of tryPrintings){
         const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
-        if(p){ return p.ebay_avg_7d ?? p.ebay_avg_1d ?? p.ebay_avg_30d; }
+        if(p){ return p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d; }
       }
       return null;
     };
@@ -9880,6 +10046,41 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       if(ix >= 0){ const out = (prev||[]).slice(); out[ix] = {...out[ix], quantity: row.quantity, updated_at: row.updated_at}; return out; }
       return [...(prev||[]), {card_id, printing: pr, grader, grade, quantity: row.quantity, updated_at: row.updated_at}];
     });
+  }, [user]);
+  // Bulk-add path used by the Bulk Add modal. Single PostgREST upsert
+  // call so adding 20-100 cards in one go is one network round trip
+  // instead of N. On conflict, quantity is set to the new value (matches
+  // the single-add path — existing slots get their qty bumped to the
+  // supplied number rather than added to).
+  const bulkAddItems = useCallback(async (rows) => {
+    if(!user || !Array.isArray(rows) || rows.length === 0) return 0;
+    const nowIso = new Date().toISOString();
+    const payload = rows.map(r => ({
+      user_id: user.id,
+      card_id: r.card_id,
+      printing: r.printing || "Normal",
+      grader: r.grader,
+      grade: r.grade,
+      quantity: Math.max(1, Math.min(99, r.quantity || 1)),
+      updated_at: nowIso,
+    }));
+    const {error} = await sbClient.from("graded_collection_items")
+      .upsert(payload, {onConflict: "user_id,card_id,printing,grader,grade"});
+    if(error){ alert("Bulk save failed: " + error.message); return 0; }
+    // Optimistic local update: merge added rows into items state.
+    setItems(prev => {
+      const next = (prev||[]).slice();
+      for(const p of payload){
+        const ix = next.findIndex(it => it.card_id===p.card_id
+          && (it.printing||"Normal")===p.printing
+          && it.grader===p.grader && it.grade===p.grade);
+        if(ix >= 0) next[ix] = {...next[ix], quantity: p.quantity, updated_at: p.updated_at};
+        else next.push({card_id: p.card_id, printing: p.printing, grader: p.grader,
+          grade: p.grade, quantity: p.quantity, updated_at: p.updated_at});
+      }
+      return next;
+    });
+    return payload.length;
   }, [user]);
   const removeItem = useCallback(async ({card_id, printing, grader, grade}) => {
     if(!user) return;
@@ -9925,18 +10126,55 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       .eq("user_id", user.id).eq("card_id", card_id).eq("printing", pr).eq("grader", grader).eq("grade", grade);
     if(error) console.error("graded meta update failed:", error.message || error);
   }, [user]);
-  const addGoal = useCallback(async ({set_id, extras_bucket, rarities, display_name}) => {
+  const addGoal = useCallback(async ({set_id, extras_bucket, rarities, printings, display_name}) => {
     if(!user) return;
     const row = {
       user_id: user.id,
       set_id: set_id || null,
       extras_bucket: extras_bucket || null,
       rarities: rarities||[],
+      printings: printings && printings.length ? printings : null,
       display_name: display_name||null,
     };
-    const {data, error} = await sbClient.from("graded_collection_goals").insert(row).select().single();
+    // Try with printings; if the column doesn't exist yet (migration 53
+    // not applied), retry without — keeps the UI working pre-deploy and
+    // logs a console hint.
+    let {data, error} = await sbClient.from("graded_collection_goals").insert(row).select().single();
+    if(error && /column.*printings.*does not exist/i.test(error.message || "")){
+      console.warn("graded_collection_goals.printings column missing — run supabase/53_graded_goals_printings.sql. Falling back to no-printing-filter save.");
+      const {printings: _drop, ...legacy} = row;
+      ({data, error} = await sbClient.from("graded_collection_goals").insert(legacy).select().single());
+    }
     if(error){ alert("Save failed: " + error.message); return; }
     setGoals(prev => [...(prev||[]), data]);
+    // Re-adding a set goal is the user's "refresh the placeholder list"
+    // path — clear removedCardIds entries that fall within this goal's
+    // scope so previously-removed (card_id, printing) tiles reappear.
+    // Composite key keys it per-tile, so re-adding TFC clears any
+    // removed Normal-printing TFC tile AND any removed Foil-printing
+    // TFC tile independently (matches the per-printing nature of the
+    // Remove button itself in split-printing sets).
+    const goalCards = extras_bucket
+      ? (extrasCardsByBucket.get(extras_bucket) || [])
+      : (set_id ? (cardsBySetId.get(set_id) || []) : []);
+    const rar = new Set((rarities||[]).map(r => String(r).toLowerCase()));
+    const inGoalCards = rar.size > 0
+      ? goalCards.filter(c => rar.has((c.Rarity||"").toLowerCase()))
+      : goalCards;
+    if(inGoalCards.length){
+      setRemovedCardIds(prev => {
+        if(!prev.size) return prev;
+        const next = new Set(prev); let changed = false;
+        for(const c of inGoalCards){
+          if(!c.card_id) continue;
+          const k = removedKey(c.card_id, c.tcg_printing);
+          if(next.has(k)){ next.delete(k); changed = true; }
+        }
+        if(!changed) return prev;
+        persistRemoved(next);
+        return next;
+      });
+    }
     // Force the new goal's section open even if the user previously
     // collapsed it. Without this, adding a goal looks like it did nothing
     // when that set_id had been collapsed in a prior session.
@@ -9949,7 +10187,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         return next;
       });
     }
-  }, [user]);
+  }, [user, cardsBySetId, extrasCardsByBucket]);
   const removeGoal = useCallback(async (goal_id) => {
     if(!user) return;
     const {error} = await sbClient.from("graded_collection_goals").delete()
@@ -10017,6 +10255,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           title="Jump to set-tracking goals (mobile shortcut)">
           Goals${goals && goals.length ? ` (${goals.length})` : ""}
         </button>`}
+        ${!readOnly && html`<button class="gc-caps-cta gc-add-cta-desktop"
+          onClick=${()=>setBulkAddOpen(true)}
+          title="Add many graded cards at once — pick a set + rarities, default grader/grade, then check the cards to log"
+          style=${{background:"var(--bg-surface)",border:"1px solid var(--accent)",color:"var(--accent)"}}>＋ Bulk add</button>`}
         ${!readOnly && html`<button class="active gc-caps-cta gc-add-cta-desktop" onClick=${()=>setAddOpen(true)}>+ Add graded card</button>`}
       </div>
     </div>
@@ -10087,15 +10329,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                         aria-label=${(hasOwned ? "Add another graded copy of " : "Add to graded collection: ") + (card["Product Name"]||"this card")}
                         title=${hasOwned ? "Add another graded copy" : "Add this card to your graded collection"}
                         onClick=${e=>{ e.stopPropagation(); setAddPreselectCardId(card.card_id); setAddPreselectPrinting(tilePrinting); setAddOpen(true); }}>+</button>`}
-                      ${!readOnly && !hasOwned && (hiddenCardIds.has(card.card_id)
-                        ? html`<button class="gc-card-hide-btn gc-card-hide-btn-unhide"
-                            aria-label=${"Restore " + (card["Product Name"]||"this card") + " to your tracking checklist"}
-                            title="Show this card in your tracking checklist again"
-                            onClick=${e=>{ e.stopPropagation(); unhideCard(card.card_id); }}>↺</button>`
-                        : html`<button class="gc-card-hide-btn"
-                            aria-label=${"Hide " + (card["Product Name"]||"this card") + " from tracking"}
-                            title="Hide this card from tracking — won't count toward your goal % until you unhide it"
-                            onClick=${e=>{ e.stopPropagation(); hideCard(card.card_id); }}>×</button>`)}
+                      ${!readOnly && !hasOwned && html`<button class="gc-card-remove-btn"
+                        aria-label=${"Remove " + (card["Product Name"]||"this card") + " from tracking"}
+                        title="Remove this card from your tracking list. To bring it back: add it to your collection, or re-add the set goal."
+                        onClick=${e=>{ e.stopPropagation(); removeCardFromTracking(card.card_id, tilePrinting); }}>−</button>`}
                       ${card.img_small && html`<img src=${card.img_small} alt="" class="gc-card-img"/>`}
                       <div class="gc-card-body">
                         <div class="gc-card-name" title=${(card["Product Name"]||"") + variantSuffix}>
@@ -10130,7 +10367,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                                   if(refP) break;
                                 }
                               }
-                              const refPx = refP && (refP.ebay_avg_7d ?? refP.ebay_avg_1d ?? refP.ebay_avg_30d);
+                              const refPx = refP && (refP.ebay_avg_1d ?? refP.ebay_avg_30d ?? refP.ebay_avg_7d);
                               return html`<button key=${si} class="gc-slot gc-slot-tracked gc-slot-quickadd"
                                 type="button"
                                 title=${readOnly ? "Tracked — not yet owned" : "Click to log a PSA 10 of this card (uses the printing of this tile). Shift-click for the full Add dialog."}
@@ -10167,7 +10404,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                             // market data or where the user disagrees with the
                             // pulled price. The tile shows a "✎" badge so the
                             // override is visible at a glance.
-                            const apiPx = p && (p.ebay_avg_7d ?? p.ebay_avg_1d ?? p.ebay_avg_30d);
+                            const apiPx = p && (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d);
                             const hasCustom = s.custom_value != null && Number.isFinite(s.custom_value);
                             const px = hasCustom ? s.custom_value : apiPx;
                             const slotTipParts = [(s.grader||"").toUpperCase() + " " + s.grade];
@@ -10255,19 +10492,64 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                   : (cardsBySetId.get(g.set_id) || []);
                 const rar = new Set((g.rarities||[]).map(r => (r||"").toLowerCase()));
                 // Skip rarity filter for Extras (Rarity holds the bucket name).
-                const inGoal = g.extras_bucket
+                let inGoal = g.extras_bucket
                   ? cardsForGoal
                   : cardsForGoal.filter(r => !rar.size || rar.has((r.Rarity||"").toLowerCase()));
-                // Hidden cards drop out of both numerator and denominator.
+                // Printing filter (Foil / Non-Foil), added in mig 53.
+                // Applied only to base rarities (Common/Uncommon/Rare/Super
+                // Rare/Legendary) — chase rarities have one printing per
+                // card and always pass. NULL/empty printings array = no
+                // filter (legacy goals, or chase-only goals where the
+                // picker wasn't surfaced).
+                const printingFilter = g.printings && g.printings.length
+                  ? new Set(g.printings) : null;
+                if(printingFilter){
+                  const CHASE = new Set(["Epic","Enchanted","Iconic","Promo"]);
+                  inGoal = inGoal.filter(r => {
+                    if(CHASE.has(r.Rarity)) return true;
+                    const p = r.tcg_printing;
+                    const cat = (p === "Foil" || p === "Cold Foil" || p === "Holofoil")
+                      ? "Foil" : "Non-Foil";
+                    return printingFilter.has(cat);
+                  });
+                }
                 // For SPLIT_BY_PRINTING_SETS (C1), each printing is its own
                 // tile/slot so count per (card_id, printing) instead of per
                 // card_id — C1 has 7 non-foil + 10 foil = 17 total.
+                // Removed-from-tracking cards drop out of BOTH numerator
+                // and denominator (the user said "remove forever"). Owned
+                // cards bypass the removal filter — they always count.
                 const goalSetName = setNameById.get(g.set_id);
                 const isSplitGoal = !g.extras_bucket && goalSetName && SPLIT_BY_PRINTING_SETS_GLOBAL.has(goalSetName);
+                // Removal filter:
+                //  - Split-printing goals (LCP C1): per-(card_id, printing)
+                //    keying — removing the Foil tile must not also drop
+                //    the Non-Foil from the denominator. Owned bypass is
+                //    per-tile.
+                //  - Non-split goals: only one tile renders per card_id,
+                //    so removing that tile drops the whole card_id from
+                //    the denominator. Owned bypass is per-card_id (any
+                //    printing held).
+                const ownedKeySet = new Set((items||[]).map(it => removedKey(it.card_id, it.printing)));
+                const ownedCardIdSet = new Set((items||[]).map(it => it.card_id));
+                const dropRemovedTile = (cid, p) => {
+                  if(!cid) return true;
+                  const k = removedKey(cid, p);
+                  if(ownedKeySet.has(k)) return false;
+                  return removedCardIds.has(k);
+                };
+                const dropRemovedCard = (cid) => {
+                  if(!cid) return true;
+                  if(ownedCardIdSet.has(cid)) return false;
+                  // Drop if ANY printing of this card_id is in removedCardIds.
+                  for(const k of removedCardIds){
+                    if(k.startsWith(cid + "|")) return true;
+                  }
+                  return false;
+                };
                 const slotsInGoal = isSplitGoal
-                  ? inGoal.filter(r => r.card_id && !hiddenCardIds.has(r.card_id))
-                          .map(r => r.card_id + "|" + (r.tcg_printing || "Normal"))
-                  : [...new Set(inGoal.map(r => r.card_id).filter(cid => cid && !hiddenCardIds.has(cid)))];
+                  ? inGoal.filter(r => !dropRemovedTile(r.card_id, r.tcg_printing)).map(r => r.card_id + "|" + (r.tcg_printing || "Normal"))
+                  : [...new Set(inGoal.map(r => r.card_id).filter(cid => !dropRemovedCard(cid)))];
                 const inGoalIds = new Set(slotsInGoal);
                 const ownedSet = new Set((items||[]).map(it =>
                   isSplitGoal ? (it.card_id + "|" + (it.printing || "Normal")) : it.card_id));
@@ -10279,7 +10561,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                   : (setNameById.get(g.set_id) || g.set_id);
                 return html`<div key=${g.goal_id} class="gc-goal">
                   <div class="gc-goal-name">${g.display_name || targetName || "Goal"}</div>
-                  <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.join(" · ") : " · All rarities"}</div>
+                  <div class="gc-goal-sub muted">${targetName}${g.rarities?.length ? " · " + g.rarities.join(" · ") : " · All rarities"}${g.printings?.length ? " · " + g.printings.join("/") : ""}</div>
                   <div class="gc-goal-progress">
                     <div class="gc-goal-progress-bar"><div class="gc-goal-progress-fill" style=${{width: pct+"%"}}></div></div>
                     <span class="gc-goal-progress-text">${ownedCount} / ${total} ${total ? `· ${pct}%` : ""}</span>
@@ -10290,13 +10572,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                 </div>`;
               })}
         </div>
-        ${hiddenCardIds.size > 0 && html`<div class="gc-side-foot">
-          <button class=${"chip gc-caps-btn" + (showHidden ? " active" : "")}
-            onClick=${()=>setShowHidden(v=>!v)}
-            aria-label=${showHidden ? "Hide cards marked as not chasing" : `Reveal ${hiddenCardIds.size} cards you've hidden from tracking`}>
-            ${showHidden ? "Hide hidden" : `Show hidden (${hiddenCardIds.size})`}
-          </button>
-        </div>`}
+        ${/* "Show hidden" footer removed alongside the Hidden feature. */ ""}
       </aside>`}
     </div>
     ${!readOnly && html`<button class="gc-add-fab active" onClick=${()=>setAddOpen(true)}
@@ -10307,6 +10583,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       preselectPrinting=${addPreselectPrinting}
       onClose=${()=>{ setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}
       onAdd=${async (p) => { await addItem(p); setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}/>`}
+    ${bulkAddOpen && html`<${GradedBulkAddModal}
+      raw=${raw}
+      setIdsByName=${setIdsByName}
+      setNameById=${setNameById}
+      cardsBySetId=${cardsBySetId}
+      onClose=${()=>setBulkAddOpen(false)}
+      onBulkAdd=${async (rows) => { const n = await bulkAddItems(rows); setBulkAddOpen(false); return n; }}/>`}
     ${goalOpen && html`<${GradedCollectionGoalModal}
       setNameById=${setNameById} setIdsByName=${setIdsByName}
       extrasBucketOptions=${extrasBucketOptions}
@@ -10364,37 +10647,33 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
   }, [pickedId, availablePrintings, preselectPrinting]);
 
   const hits = useMemo(() => {
-    const q = query.trim().toLowerCase();
+    const q = query.trim();
     if(q.length < 2 && !pickedId) return [];
-    // Multi-token "all-words-present" search: "elsa spirit" matches
-    // "Elsa - Spirit of Winter" because every token appears somewhere
-    // in the name. Single-token search is substring + fuzzy via the
-    // shared nameMatches helper.
-    const qTokens = q.split(/\s+/).filter(Boolean);
+    // Route through the canonical smart-search matcher so this picker
+    // honors every dimension the rest of the app honors — partial rarity
+    // ("ench" / "lege"), ink, set, cost, inkable, body text ("gets"), etc.
+    // Also keeps a residual "#N" collector-number probe so "ariel #1" still
+    // works without parseSearchQuery understanding it.
+    const parsed = parseSearchQuery(q);
+    // Pull any "#N" tokens out of parsed.name for separate matching against
+    // the collector number — those don't belong in the haystack.
+    const numberTokens = [];
+    if(parsed.name){
+      const filtered = parsed.name.split(/\s+/).filter(t => {
+        if(/^#\d+/.test(t)){ numberTokens.push(t.slice(1)); return false; }
+        return true;
+      }).join(" ");
+      parsed.name = filtered;
+    }
     const seen = new Set();
     const out = [];
     for(const r of (raw||[])){
       if(!r.card_id || seen.has(r.card_id)) continue;
-      const name = (r["Product Name"]||"").toLowerCase();
-      // Search haystack includes rarity, set, and collector number so
-      // "maui ench" or "ariel #1" or "elsa fabled" all surface their card.
-      const haystack = name + " "
-        + (r.Rarity||"").toLowerCase() + " "
-        + (r.Set||"").toLowerCase() + " "
-        + (r.Number ? "#" + String(r.Number).split("/")[0] + " " : "");
-      let ok = false;
-      if(!q){
-        ok = true;
-      } else if(qTokens.length > 1){
-        // Every token must appear somewhere in name/rarity/set.
-        ok = qTokens.every(t => haystack.includes(t));
-      } else {
-        // Single token: fall through to nameMatches for fuzzy support on
-        // the name, then fall back to substring against the full haystack.
-        const fuzzy = typeof nameMatches === "function" && nameMatches(q, r["Product Name"]||"");
-        ok = fuzzy || haystack.includes(q);
+      if(!matchesCardFilter(r, {}, parsed)) continue;
+      if(numberTokens.length){
+        const num = String(r.Number || "").split("/")[0];
+        if(!numberTokens.every(t => num === t || num.startsWith(t))) continue;
       }
-      if(!ok) continue;
       seen.add(r.card_id);
       out.push(r);
       if(out.length >= 50) break;
@@ -10415,7 +10694,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
     }
   }
   const hasPriceData = !!priceRow;
-  const priceVal = priceRow && (priceRow.ebay_avg_7d ?? priceRow.ebay_avg_1d ?? priceRow.ebay_avg_30d);
+  const priceVal = priceRow && (priceRow.ebay_avg_1d ?? priceRow.ebay_avg_30d ?? priceRow.ebay_avg_7d);
 
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:560}}>
@@ -10495,7 +10774,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
             fontSize:12,marginBottom:14,lineHeight:1.5}}>
             ${hasPriceData
               ? html`<span style=${{color:"var(--accent)",fontWeight:700}}>✓ Price data available</span>
-                  · ${grader.toUpperCase()} ${grade} 7d avg: <strong>$${Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})}</strong>`
+                  · ${grader.toUpperCase()} ${grade} latest avg: <strong>$${Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})}</strong>`
               : html`<span style=${{color:"var(--red)",fontWeight:700}}>⚠ No price data for this grader/grade</span>
                   · You can still save it; portfolio value will exclude this slot until a sale is recorded.`}
           </div>
@@ -10517,12 +10796,240 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
   </div>`;
 };
 
+// Bulk-add modal. Pick a set + rarities + printings, set default grader/grade,
+// then check the cards you want to log. Each row optionally overrides the
+// default grader/grade. One PostgREST upsert call commits everything.
+const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClose, onBulkAdd}) => {
+  const [setName, setSetName] = useState("");
+  const [rarities, setRarities] = useState(new Set());
+  const [printings, setPrintings] = useState(new Set(["Non-Foil","Foil"]));
+  const [defGrader, setDefGrader] = useState("psa");
+  const [defGrade, setDefGrade] = useState("10");
+  // Per-row state: { [rowKey]: { checked, grader, grade } }
+  const [rowState, setRowState] = useState({});
+  const [busy, setBusy] = useState(false);
+  const [addedCount, setAddedCount] = useState(null);
+
+  const GRADERS = ["psa","cgc","bgs","sgc","tag"];
+  const GRADES  = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
+  const BASE_RARITIES = ["Common","Uncommon","Rare","Super Rare","Legendary"];
+  const hasBaseRarity = BASE_RARITIES.some(r => rarities.has(r));
+
+  const setOptions = useMemo(() => Array.from(setIdsByName.keys()).sort((a,b) => {
+    const ai = (typeof MAINLINE_RELEASE_ORDER !== "undefined") ? MAINLINE_RELEASE_ORDER.indexOf(a) : -1;
+    const bi = (typeof MAINLINE_RELEASE_ORDER !== "undefined") ? MAINLINE_RELEASE_ORDER.indexOf(b) : -1;
+    if(ai !== bi) return bi - ai;
+    return a.localeCompare(b);
+  }), [setIdsByName]);
+
+  // Build the filtered card list from cardsBySetId. Each row is a unique
+  // (card_id, printing) pair so split-printing sets surface both variants.
+  // Chase rarities bypass the printing filter (one printing per card).
+  const cards = useMemo(() => {
+    const sid = setIdsByName.get(setName);
+    if(!sid) return [];
+    const rar = new Set([...rarities].map(r => r.toLowerCase()));
+    if(!rar.size) return [];
+    const CHASE = new Set(["Epic","Enchanted","Iconic","Promo"]);
+    const printFilter = printings.size > 0 ? printings : null;
+    const out = [];
+    const seen = new Set();
+    for(const r of (cardsBySetId.get(sid) || [])){
+      if(!rar.has((r.Rarity||"").toLowerCase())) continue;
+      const printing = r.tcg_printing || "Normal";
+      const isChase = CHASE.has(r.Rarity);
+      if(!isChase && printFilter){
+        const cat = (printing === "Foil" || printing === "Cold Foil" || printing === "Holofoil")
+          ? "Foil" : "Non-Foil";
+        if(!printFilter.has(cat)) continue;
+      }
+      const key = r.card_id + "|" + printing;
+      if(seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        rowKey: key,
+        card_id: r.card_id,
+        printing,
+        name: r["Product Name"] || "Unknown",
+        rarity: r.Rarity || "",
+        number: (r.Number||"").split("/")[0] || "",
+        img: r.img_small || r.img_normal || null,
+      });
+    }
+    // Sort by collector number ascending, fall back to name.
+    out.sort((a,b) => {
+      const an = parseInt(a.number,10), bn = parseInt(b.number,10);
+      if(Number.isFinite(an) && Number.isFinite(bn) && an !== bn) return an - bn;
+      return a.name.localeCompare(b.name);
+    });
+    return out;
+  }, [setName, rarities, printings, cardsBySetId, setIdsByName]);
+
+  // Reset row state when the visible card set changes (set / rarity /
+  // printing filter changes). Keeps things sane — no leftover ghost checks
+  // for cards that aren't visible anymore.
+  useEffect(() => { setRowState({}); }, [setName, rarities, printings]);
+
+  const toggleCheck = (rowKey) => setRowState(prev => ({
+    ...prev,
+    [rowKey]: {checked: !prev[rowKey]?.checked,
+      grader: prev[rowKey]?.grader ?? defGrader,
+      grade:  prev[rowKey]?.grade  ?? defGrade},
+  }));
+  const setRowGrader = (rowKey, grader) => setRowState(prev => ({
+    ...prev, [rowKey]: {...(prev[rowKey] || {checked:false}), grader},
+  }));
+  const setRowGrade = (rowKey, grade) => setRowState(prev => ({
+    ...prev, [rowKey]: {...(prev[rowKey] || {checked:false}), grade},
+  }));
+  const checkAll = () => setRowState(prev => {
+    const next = {...prev};
+    for(const c of cards){
+      next[c.rowKey] = {checked: true,
+        grader: next[c.rowKey]?.grader ?? defGrader,
+        grade:  next[c.rowKey]?.grade  ?? defGrade};
+    }
+    return next;
+  });
+  const uncheckAll = () => setRowState({});
+
+  const selectedRows = cards.filter(c => rowState[c.rowKey]?.checked);
+  const canSave = selectedRows.length > 0 && !busy;
+
+  const onSubmit = async () => {
+    if(!canSave) return;
+    setBusy(true);
+    const rows = selectedRows.map(c => ({
+      card_id: c.card_id,
+      printing: c.printing,
+      grader: rowState[c.rowKey]?.grader || defGrader,
+      grade:  rowState[c.rowKey]?.grade  || defGrade,
+      quantity: 1,
+    }));
+    const n = await onBulkAdd(rows);
+    setBusy(false);
+    setAddedCount(n);
+  };
+
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:780}}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Bulk add graded cards</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
+      </div>
+      <div class="modal-body" style=${{padding:18,maxHeight:"75vh",overflowY:"auto"}}>
+        ${addedCount != null
+          ? html`<div style=${{padding:"30px 10px",textAlign:"center"}}>
+              <div style=${{fontSize:48,marginBottom:8}}>✓</div>
+              <div style=${{fontSize:16,fontWeight:700,marginBottom:6}}>Added ${addedCount} card${addedCount===1?"":"s"} to your graded collection.</div>
+              <div class="muted" style=${{fontSize:12,marginBottom:14}}>Existing slots with the same (card, printing, grader, grade) had their quantity refreshed.</div>
+              <button class="active" onClick=${onClose} style=${{padding:"7px 16px",fontSize:13}}>Done</button>
+            </div>`
+          : html`<p class="muted" style=${{fontSize:12,margin:"0 0 14px",lineHeight:1.5}}>
+              Pick a set and rarities, set a default grader/grade, then check the cards you want to log. Each row's grader/grade can be overridden individually. Quantity is 1 per card (existing slots get their qty bumped to 1).
+            </p>
+            <label style=${{display:"block",marginBottom:12}}>
+              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Set</div>
+              <select value=${setName} onChange=${e=>setSetName(e.target.value)}
+                style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",
+                  borderRadius:6,background:"var(--bg)",color:"var(--text)",fontSize:13}}>
+                <option value="">— Pick a set —</option>
+                ${setOptions.map(s => html`<option key=${s} value=${s}>${s}</option>`)}
+              </select>
+            </label>
+            <div style=${{marginBottom:12}}>
+              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities ${rarities.size === 0 ? html`<span style=${{color:"var(--red)"}}>· required</span>` : ""}</div>
+              <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
+                ${GRADED_RARITY_OPTIONS.map(r => html`<button key=${r}
+                  class=${"chip chip-with-icon "+(rarities.has(r)?"active":"")}
+                  title=${r} aria-label=${r}
+                  onClick=${()=>setRarities(prev=>{ const n=new Set(prev); n.has(r)?n.delete(r):n.add(r); return n; })}>
+                  ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt="" aria-hidden="true"
+                    onError=${e=>{ e.target.style.display="none"; }}/>`}
+                  <span>${r}</span>
+                </button>`)}
+              </div>
+            </div>
+            ${hasBaseRarity && html`<div style=${{marginBottom:12}}>
+              <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Printing ${printings.size === 0 ? html`<span style=${{color:"var(--red)"}}>· required</span>` : ""}</div>
+              <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
+                ${["Non-Foil","Foil"].map(p => html`<button key=${p}
+                  class=${"chip "+(printings.has(p)?"active":"")}
+                  onClick=${()=>setPrintings(prev=>{ const n=new Set(prev); n.has(p)?n.delete(p):n.add(p); return n; })}>${p}</button>`)}
+              </div>
+              <div class="muted" style=${{fontSize:10,marginTop:4}}>Chase rarities (Epic / Enchanted / Iconic / Promo) bypass this filter — they always show if you've picked their rarity.</div>
+            </div>`}
+            <div style=${{display:"flex",gap:10,marginBottom:14,alignItems:"flex-end",flexWrap:"wrap"}}>
+              <label style=${{flex:"1 1 140px"}}>
+                <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Default grader</div>
+                <select value=${defGrader} onChange=${e=>setDefGrader(e.target.value)}
+                  style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg)",color:"var(--text)",fontSize:13}}>
+                  ${GRADERS.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+                </select>
+              </label>
+              <label style=${{flex:"1 1 140px"}}>
+                <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Default grade</div>
+                <select value=${defGrade} onChange=${e=>setDefGrade(e.target.value)}
+                  style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg)",color:"var(--text)",fontSize:13}}>
+                  ${GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
+                </select>
+              </label>
+            </div>
+            ${cards.length === 0
+              ? html`<div class="muted" style=${{padding:"20px 0",textAlign:"center",fontSize:13}}>
+                  ${setName ? (rarities.size === 0 ? "Pick at least one rarity to see cards." : "No cards match the current filters.") : "Pick a set above to see its cards."}
+                </div>`
+              : html`<div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+                  <div class="muted" style=${{fontSize:11}}>${cards.length} card${cards.length===1?"":"s"} · ${selectedRows.length} selected</div>
+                  <div style=${{display:"flex",gap:6}}>
+                    <button onClick=${checkAll} style=${{fontSize:11,padding:"3px 8px"}}>Check all</button>
+                    <button onClick=${uncheckAll} style=${{fontSize:11,padding:"3px 8px"}}>Uncheck all</button>
+                  </div>
+                </div>
+                <div style=${{border:"1px solid var(--border)",borderRadius:6,maxHeight:340,overflowY:"auto"}}>
+                  ${cards.map(c => {
+                    const st = rowState[c.rowKey] || {};
+                    const checked = !!st.checked;
+                    return html`<div key=${c.rowKey} class="gc-bulk-row"
+                      style=${{display:"grid",gridTemplateColumns:"22px 32px minmax(0,1fr) 76px 60px",gap:6,alignItems:"center",padding:"5px 8px",borderBottom:"1px solid var(--border)",background:checked?"var(--accent-glow)":"transparent",cursor:"pointer"}}
+                      onClick=${()=>toggleCheck(c.rowKey)}>
+                      <input type="checkbox" checked=${checked} onChange=${()=>toggleCheck(c.rowKey)} onClick=${e=>e.stopPropagation()}/>
+                      ${c.img
+                        ? html`<img src=${c.img} alt="" loading="lazy" style=${{width:28,height:39,objectFit:"cover",borderRadius:3}}/>`
+                        : html`<div style=${{width:28,height:39,background:"var(--bg-surface)",borderRadius:3}}/>`}
+                      <div style=${{minWidth:0}}>
+                        <div style=${{fontSize:12,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>${c.name}</div>
+                        <div class="muted" style=${{fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#${c.number || "?"} · ${c.rarity}${c.printing !== "Normal" ? " · " + c.printing : ""}</div>
+                      </div>
+                      <select value=${st.grader || defGrader} onChange=${e=>setRowGrader(c.rowKey, e.target.value)} onClick=${e=>e.stopPropagation()}
+                        style=${{width:"100%",boxSizing:"border-box",padding:"3px 4px",fontSize:11,border:"1px solid var(--btn-border)",borderRadius:4,background:"var(--bg)",color:"var(--text)",minWidth:0}}>
+                        ${GRADERS.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+                      </select>
+                      <select value=${st.grade || defGrade} onChange=${e=>setRowGrade(c.rowKey, e.target.value)} onClick=${e=>e.stopPropagation()}
+                        style=${{width:"100%",boxSizing:"border-box",padding:"3px 4px",fontSize:11,border:"1px solid var(--btn-border)",borderRadius:4,background:"var(--bg)",color:"var(--text)",minWidth:0}}>
+                        ${GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
+                      </select>
+                    </div>`;
+                  })}
+                </div>`}
+            <div style=${{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+              <button onClick=${onClose}>Cancel</button>
+              <button class="active" disabled=${!canSave} onClick=${onSubmit} style=${{padding:"7px 16px",fontSize:13}}>
+                ${busy ? "Saving…" : `Add ${selectedRows.length} card${selectedRows.length===1?"":"s"}`}
+              </button>
+            </div>`}
+      </div>
+    </div>
+  </div>`;
+};
+
 // Modal for adding a Set Tracking goal. Pick set (or Extras bucket) +
 // optional rarities subset.
 const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptions, onClose, onAdd}) => {
   const [setName, setSetName] = useState("");
   const [extrasBucket, setExtrasBucket] = useState("");
   const [rarities, setRarities] = useState(new Set());
+  const [printings, setPrintings] = useState(new Set());
   const [displayName, setDisplayName] = useState("");
   const [busy, setBusy] = useState(false);
   const setOptions = useMemo(() => {
@@ -10534,9 +11041,23 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
     });
   }, [setIdsByName]);
   const isExtras = setName === EXTRAS_SET_NAME;
-  const canSave = isExtras
-    ? !!extrasBucket
-    : (setName && setIdsByName.has(setName));
+  // Base rarities (have foil/non-foil duality). Chase rarities — Epic /
+  // Enchanted / Iconic / Promo — are one printing per card, so the foil
+  // picker is suppressed for chase-only selections. When ANY base rarity
+  // is selected the printing picker becomes required.
+  const BASE_RARITIES = ["Common","Uncommon","Rare","Super Rare","Legendary"];
+  const hasBaseRarity = BASE_RARITIES.some(r => rarities.has(r));
+  // Add-goal gate:
+  //   - Set / Extras-bucket picked
+  //   - At least one rarity selected (no more default-to-all that imports
+  //     hundreds of cards and overwhelms the user)
+  //   - If any base rarity is in the selection, at least one printing
+  //     (Foil / Non-Foil) is also selected
+  const canSave = (isExtras
+      ? !!extrasBucket
+      : (setName && setIdsByName.has(setName)))
+    && (isExtras || rarities.size > 0)
+    && (!hasBaseRarity || printings.size > 0);
 
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:480}}>
@@ -10546,7 +11067,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
       </div>
       <div class="modal-body" style=${{padding:18}}>
         <p class="muted" style=${{fontSize:12,margin:"0 0 14px",lineHeight:1.5}}>
-          Pick a set and (optionally) the rarities you care about. Every matching card shows up in your Graded collection as a "Tracking" placeholder until you log a graded copy.
+          Pick a set and the rarities you care about. Every matching card shows up in your Graded collection as a "Tracking" placeholder until you log a graded copy.
         </p>
         <label style=${{display:"block",marginBottom:12}}>
           <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Set</div>
@@ -10569,7 +11090,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
           <div class="muted" style=${{fontSize:10,marginTop:4}}>Tracks every card in this Extras sub-bucket (e.g. all Palace Heist cards).</div>
         </label>`}
         ${!isExtras && html`<div style=${{marginBottom:12}}>
-          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities</div>
+          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Rarities ${rarities.size === 0 ? html`<span style=${{color:"var(--red)"}}>· required</span>` : ""}</div>
           <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
             ${GRADED_RARITY_OPTIONS.map(r => html`<button key=${r}
               class=${"chip chip-with-icon "+(rarities.has(r)?"active":"")}
@@ -10580,7 +11101,16 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
               <span>${r}</span>
             </button>`)}
           </div>
-          <div class="muted" style=${{fontSize:10,marginTop:4}}>Leave empty to track all rarities in this set.</div>
+          <div class="muted" style=${{fontSize:10,marginTop:4}}>Pick at least one. Most folks don't want every card auto-tracked.</div>
+        </div>`}
+        ${!isExtras && hasBaseRarity && html`<div style=${{marginBottom:12}}>
+          <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Printing ${printings.size === 0 ? html`<span style=${{color:"var(--red)"}}>· required</span>` : ""}</div>
+          <div style=${{display:"flex",flexWrap:"wrap",gap:4}}>
+            ${["Non-Foil","Foil"].map(p => html`<button key=${p}
+              class=${"chip "+(printings.has(p)?"active":"")}
+              onClick=${()=>setPrintings(prev=>{ const n=new Set(prev); n.has(p)?n.delete(p):n.add(p); return n; })}>${p}</button>`)}
+          </div>
+          <div class="muted" style=${{fontSize:10,marginTop:4}}>Common through Legendary print in both foil and non-foil — pick one or both. (Chase rarities like Enchanted / Iconic are foil-only and aren't affected by this filter.)</div>
         </div>`}
         <label style=${{display:"block",marginBottom:14}}>
           <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Display name (optional)</div>
@@ -10594,9 +11124,13 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
           <button onClick=${onClose}>Cancel</button>
           <button class="active" disabled=${!canSave || busy} onClick=${async ()=>{
             setBusy(true);
+            // Only include `printings` when a base rarity is selected;
+            // chase-only goals pass null so they don't accidentally filter
+            // their (foil-only) chase cards.
+            const printingsPayload = hasBaseRarity ? Array.from(printings) : null;
             const payload = isExtras
-              ? {extras_bucket: extrasBucket, rarities: Array.from(rarities), display_name: displayName.trim() || null}
-              : {set_id: setIdsByName.get(setName), rarities: Array.from(rarities), display_name: displayName.trim() || null};
+              ? {extras_bucket: extrasBucket, rarities: Array.from(rarities), printings: null, display_name: displayName.trim() || null}
+              : {set_id: setIdsByName.get(setName), rarities: Array.from(rarities), printings: printingsPayload, display_name: displayName.trim() || null};
             await onAdd(payload);
             setBusy(false);
           }} style=${{padding:"7px 16px",fontSize:13}}>
@@ -11864,6 +12398,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       minPrice, maxPrice, minPct, maxPct, pctWin,
       showAllWins, density, showGraded,
       sortKey, sortDesc,
+      showFoil, showNonFoil,
+      filterCosts: Array.from(filterCosts),
+      filterCardTypes: Array.from(filterCardTypes),
+      filterStrengths: Array.from(filterStrengths),
+      filterWillpowers: Array.from(filterWillpowers),
+      filterLores: Array.from(filterLores),
+      filterInkable, filterLegality,
+      filterKeywords: Array.from(filterKeywords),
+      filterClassifications: Array.from(filterClassifications),
+      filterIllustrators: Array.from(filterIllustrators),
     };
     setSavedViews(prev => [...prev.filter(v => v.name !== clean), {name: clean, ...payload}]);
     if(user){
@@ -11892,6 +12436,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setShowGraded(!!v.showGraded);
     setSortKey(v.sortKey || "abs_pct_1d");
     setSortDesc(v.sortDesc !== false);
+    setShowFoil(v.showFoil !== false);
+    setShowNonFoil(v.showNonFoil !== false);
+    setFilterCosts(new Set(v.filterCosts || []));
+    setFilterCardTypes(new Set(v.filterCardTypes || []));
+    setFilterStrengths(new Set(v.filterStrengths || []));
+    setFilterWillpowers(new Set(v.filterWillpowers || []));
+    setFilterLores(new Set(v.filterLores || []));
+    setFilterInkable(v.filterInkable == null ? null : v.filterInkable);
+    setFilterLegality(v.filterLegality || "");
+    setFilterKeywords(new Set(v.filterKeywords || []));
+    setFilterClassifications(new Set(v.filterClassifications || []));
+    setFilterIllustrators(new Set(v.filterIllustrators || []));
   };
   // Consume the App-pushed view payload from a banner-title click on Home.
   // Apply once, then notify parent so we don't re-fire on prop re-renders.
@@ -11954,6 +12510,27 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [minPct, setMinPct] = useState("");
   const [maxPct, setMaxPct] = useState("");
   const [pctWin, setPctWin] = useState("pct_30d"); // which window the % range applies to
+
+  // Foil / Non-Foil toggles (main UI). Chase rarities — Epic, Enchanted,
+  // Iconic, Promo — bypass these filters entirely because they have only
+  // one printing per card and don't follow the foil/non-foil duality of
+  // base printings.
+  const [showFoil, setShowFoil] = useState(true);
+  const [showNonFoil, setShowNonFoil] = useState(true);
+
+  // Cards-tab parity filters (advanced section): every dimension the
+  // Cards drawer supports, applied via matchesCardFilter against the
+  // catalog row. Default empty = no filter on that dimension.
+  const [filterCosts, setFilterCosts] = useState(() => new Set());
+  const [filterCardTypes, setFilterCardTypes] = useState(() => new Set());
+  const [filterStrengths, setFilterStrengths] = useState(() => new Set());
+  const [filterWillpowers, setFilterWillpowers] = useState(() => new Set());
+  const [filterLores, setFilterLores] = useState(() => new Set());
+  const [filterInkable, setFilterInkable] = useState(null); // null | true | false
+  const [filterLegality, setFilterLegality] = useState(""); // "" | "core" | "infinity"
+  const [filterKeywords, setFilterKeywords] = useState(() => new Set());
+  const [filterClassifications, setFilterClassifications] = useState(() => new Set());
+  const [filterIllustrators, setFilterIllustrators] = useState(() => new Set());
 
   useEffect(() => {
     let cancelled = false;
@@ -12092,6 +12669,22 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return m;
   }, [raw]);
 
+  // Catalog row index keyed by card_id. Used by the Screener's search +
+  // chip-filter pipeline to delegate matching to the canonical
+  // matchesCardFilter (so smart-search behaviors — partial rarity, body
+  // text, classifications, cost/stat operators, inkable, etc. — all work
+  // in the Screener the same way they work in Cards). price_movers rows
+  // only carry name/version/rarity/ink/set_id; the catalog has everything
+  // else. One row per card_id (first wins); printings collapse together
+  // because matching is by card identity not by printing.
+  const catalogByCardId = useMemo(() => {
+    const m = new Map();
+    for(const r of (raw || [])){
+      if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, r);
+    }
+    return m;
+  }, [raw]);
+
   // Raw-row index for graded mode — we splice metadata from the original
   // price_movers row (name/set/rarity/ink/image) onto each synthesized
   // graded row so filters/sorts work without any extra hooks.
@@ -12163,11 +12756,66 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       }
       rows = synth;
     }
-    const q = search.trim().toLowerCase();
+    // Smart-search: route the search box and chip filters (Rarity / Ink /
+    // Set) through the canonical matchesCardFilter against the catalog row.
+    // This gives the Screener the same behavior as Cards — partial rarity
+    // ("ench" → Enchanted), body-text search ("gets" / "gains" / "draws"),
+    // classifications, cost / stat operators ("cost>=5", "lore 3"), inkable,
+    // legality, illustrator, exclusion phrases ("non promo"). Chip filters
+    // and parsed query AND together: clicking Iconic and typing "enchanted
+    // elsa" returns zero (no enchanted iconic Elsa).
+    const parsed = parseSearchQuery(search || "");
+    const chipFilter = {
+      inks: filterInks,
+      rarities: filterRarities,
+      sets: filterSet ? new Set([filterSet]) : undefined,
+      costs: filterCosts,
+      cardTypes: filterCardTypes,
+      strengths: filterStrengths,
+      willpowers: filterWillpowers,
+      lores: filterLores,
+      inkable: filterInkable,
+      legality: filterLegality || undefined,
+      keywords: filterKeywords,
+      classifications: filterClassifications,
+      illustrators: filterIllustrators,
+    };
+    // Foil / Non-Foil filter. Epic / Enchanted / Iconic / Promo rarities
+    // bypass — they have only one printing per card and don't fit the
+    // foil/non-foil duality (e.g. an Enchanted is its own printing, not a
+    // "foil" of anything). Treat them as a third category that always
+    // passes regardless of the foil toggles.
+    const FOIL_PRINTINGS = new Set(["Foil","Cold Foil","Holofoil"]);
+    const NONFOIL_PRINTINGS = new Set(["Normal","Non-Foil"]);
+    const CHASE_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
+    const passesFoilFilter = (r) => {
+      if(CHASE_RARITIES.has(r.rarity)) return true;
+      const p = r.tcg_printing || r.printing;
+      if(FOIL_PRINTINGS.has(p)) return showFoil;
+      if(NONFOIL_PRINTINGS.has(p)) return showNonFoil;
+      // Unknown printing — let it through rather than silently filtering
+      // (defensive against new printing types appearing in TCGCSV).
+      return true;
+    };
     const passes = (r) => {
-      if(filterRarities.size > 0 && !filterRarities.has(r.rarity)) return false;
-      if(filterInks.size > 0 && !filterInks.has(r.ink)) return false;
-      if(filterSet && setNameById[r.set_id] !== filterSet) return false;
+      if(!passesFoilFilter(r)) return false;
+      const catalogRow = catalogByCardId.get(r.card_id);
+      if(catalogRow){
+        if(!matchesCardFilter(catalogRow, chipFilter, parsed)) return false;
+      } else {
+        // Defensive fallback for the rare case where a price_movers row
+        // exists with no matching catalog row (shouldn't happen — the
+        // matview INNER JOINs cards — but keeps the screener functional if
+        // it ever does). Reproduces the legacy inline checks.
+        if(filterRarities.size > 0 && !filterRarities.has(r.rarity)) return false;
+        if(filterInks.size > 0 && !filterInks.has(r.ink)) return false;
+        if(filterSet && setNameById[r.set_id] !== filterSet) return false;
+        const q = (search || "").trim().toLowerCase();
+        if(q){
+          const nm = ((r.name || "") + " " + (r.version || "")).toLowerCase();
+          if(!nm.includes(q)) return false;
+        }
+      }
       // Collection-status filter. Check any printing the user owns of this
       // card_id — we don't require exact printing match because a "missing"
       // filter against a chase card would otherwise hide cards where the
@@ -12187,10 +12835,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         let any = false;
         for(const k of sigFilter) if(sigKeys.has(k)){ any = true; break; }
         if(!any) return false;
-      }
-      if(q){
-        const nm = ((r.name || "") + " " + (r.version || "")).toLowerCase();
-        if(!nm.includes(q)) return false;
       }
       // Advanced numeric filters. priceMode decides which price they apply to.
       const px = priceMode === "market" ? r.market_today : r.low_today;
@@ -12300,7 +12944,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return sd ? bv - av : av - bv;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, gradedSynth, movRowByPid, filterGraders, filterGrades]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, gradedSynth, movRowByPid, filterGraders, filterGrades, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators]);
 
   const onSort = (k) => {
     if(sortKey === k) setSortDesc((d) => !d);
@@ -12310,7 +12954,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
 
   // Order rarities from most rare → least rare (Iconic at top, Common at
   // bottom). CARDS_RARITIES is common → rare; reverse for the screener.
-  // Unknown rarities sink to the end.
+  // Unknown rarities sink to the end. ALL canonical rarities are always
+  // shown — previously the chip list was derived purely from rarities
+  // present in the current window's rows, which dropped Common (and
+  // sometimes Uncommon) from the Gainers/Buyouts/etc presets where cheap
+  // cards rarely show up. Users who want to filter to "commons only" need
+  // the chip to be tappable even when no common is currently visible.
   const rarities = useMemo(() => {
     const present = new Set((state.rows || []).map((r) => r.rarity).filter(Boolean));
     // Include rarities the user has already selected in the filter even if
@@ -12318,6 +12967,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // looks broken (e.g. "Super Rare" set via banner handoff but data is
     // empty for that rarity in this window).
     for(const r of filterRarities) present.add(r);
+    // Always include every canonical Lorcana rarity so the filter chips
+    // are stable regardless of preset/window.
+    for(const r of CARDS_RARITIES) present.add(r);
     const ordered = CARDS_RARITIES.slice().reverse().filter(r => present.has(r));
     const tail = [...present].filter(r => !ordered.includes(r)).sort();
     return [...ordered, ...tail];
@@ -12338,6 +12990,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setCollFilter("all");
     setMinPct("");
     setMaxPct("");
+    setShowFoil(true);
+    setShowNonFoil(true);
+    setFilterCosts(new Set());
+    setFilterCardTypes(new Set());
+    setFilterStrengths(new Set());
+    setFilterWillpowers(new Set());
+    setFilterLores(new Set());
+    setFilterInkable(null);
+    setFilterLegality("");
+    setFilterKeywords(new Set());
+    setFilterClassifications(new Set());
+    setFilterIllustrators(new Set());
     if(showGraded){
       setFilterRarities(preset === "all" ? new Set(["Enchanted"]) : new Set());
       setFilterGraders(new Set());
@@ -12488,9 +13152,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         ${sigFilter.size > 0 && html`<button class="price-db-multiclear"
           onClick=${()=>setSigFilter(new Set())} style=${{marginLeft:4}}>Clear signals</button>`}
       </div>
+      <div class="price-db-collchips" role="group" aria-label="Filter by printing">
+        <button class=${"price-db-collchip"+(showNonFoil?" active":"")}
+          onClick=${()=>setShowNonFoil(v=>!v)}
+          title="Toggle non-foil printings. Epic / Enchanted / Iconic / Promo cards always show — they're neither foil nor non-foil.">Non-Foil</button>
+        <button class=${"price-db-collchip"+(showFoil?" active":"")}
+          onClick=${()=>setShowFoil(v=>!v)}
+          title="Toggle foil printings (Cold Foil / Holofoil / Foil). Epic / Enchanted / Iconic / Promo cards always show — they're neither foil nor non-foil.">Foil</button>
+      </div>
     </div>
     <div class="price-db-filters price-db-filters-primary">
-      <input class="price-db-search" type="search" placeholder="Search by name"
+      <input class="price-db-search" type="search"
+        placeholder="Smart search: 'amber legendary', 'ench elsa', 'gets', 'cost 5'..."
         value=${search} onInput=${(e) => setSearch(e.target.value)}/>
       <select value=${filterSet} onChange=${(e) => setFilterSet(e.target.value)}
         title="Filter by set" style=${{minWidth:160}}>
@@ -12601,6 +13274,98 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           value=${maxPct} onInput=${e => setMaxPct(e.target.value)}/>
         <button class="price-db-advbtn" onClick=${() => { setMinPrice(""); setMaxPrice(""); setMinPct(""); setMaxPct(""); }}>
           Clear ranges
+        </button>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Cost</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:4}}>
+          ${COST_BUCKETS.map(c => html`<button key=${c}
+            class=${"chip cost cost-hex-chip "+(filterCosts.has(c)?"active":"")}
+            onClick=${()=>setFilterCosts(prev=>{ const n=new Set(prev); n.has(c)?n.delete(c):n.add(c); return n; })}
+            title=${c===9?"Cost 9+":"Cost "+c}><${CostHex} n=${c}/></button>`)}
+          ${filterCosts.size > 0 && html`<button class="price-db-advbtn"
+            onClick=${()=>setFilterCosts(new Set())}>Clear</button>`}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Type</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:4}}>
+          ${CARD_TYPES.map(t => html`<button key=${t}
+            class=${"chip "+(filterCardTypes.has(t)?"active":"")}
+            onClick=${()=>setFilterCardTypes(prev=>{ const n=new Set(prev); n.has(t)?n.delete(t):n.add(t); return n; })}>${t}</button>`)}
+          ${filterCardTypes.size > 0 && html`<button class="price-db-advbtn"
+            onClick=${()=>setFilterCardTypes(new Set())}>Clear</button>`}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Inkable</label>
+        <div class="cards-chipgroup" style=${{gap:4}}>
+          <button class=${"chip "+(filterInkable===true?"active":"")}
+            onClick=${()=>setFilterInkable(v=>v===true?null:true)}>Inkable</button>
+          <button class=${"chip "+(filterInkable===false?"active":"")}
+            onClick=${()=>setFilterInkable(v=>v===false?null:false)}>Uninkable</button>
+        </div>
+        <label style=${{marginLeft:16}}>Legality</label>
+        <div class="cards-chipgroup" style=${{gap:4}}>
+          <button class=${"chip "+(filterLegality==="core"?"active":"")}
+            onClick=${()=>setFilterLegality(v=>v==="core"?"":"core")}
+            title="Core Constructed — current rotation">Core</button>
+          <button class=${"chip "+(filterLegality==="infinity"?"active":"")}
+            onClick=${()=>setFilterLegality(v=>v==="infinity"?"":"infinity")}
+            title="Infinity — any legally-built deck">Infinity</button>
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Strength</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:3}}>
+          ${STRENGTH_BUCKETS.map(n => html`<button key=${n}
+            class=${"chip "+(filterStrengths.has(n)?"active":"")}
+            onClick=${()=>setFilterStrengths(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}
+            title=${n===9?"Strength 9+":"Strength "+n}>${n===9?"9+":n}</button>`)}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Willpower</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:3}}>
+          ${WILLPOWER_BUCKETS.map(n => html`<button key=${n}
+            class=${"chip "+(filterWillpowers.has(n)?"active":"")}
+            onClick=${()=>setFilterWillpowers(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}
+            title=${n===9?"Willpower 9+":"Willpower "+n}>${n===9?"9+":n}</button>`)}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Lore</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:3}}>
+          ${LORE_BUCKETS.map(n => html`<button key=${n}
+            class=${"chip "+(filterLores.has(n)?"active":"")}
+            onClick=${()=>setFilterLores(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}
+            title=${"Lore "+n}>${n}</button>`)}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Keywords</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:3}}>
+          ${Array.from(ABILITY_KEYWORDS).sort().map(kw => html`<button key=${kw}
+            class=${"chip "+(filterKeywords.has(kw)?"active":"")}
+            onClick=${()=>setFilterKeywords(prev=>{ const m=new Set(prev); m.has(kw)?m.delete(kw):m.add(kw); return m; })}>${kw}</button>`)}
+          ${filterKeywords.size > 0 && html`<button class="price-db-advbtn"
+            onClick=${()=>setFilterKeywords(new Set())}>Clear</button>`}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <label>Classifications</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:3}}>
+          ${Array.from(CLASSIFICATIONS).sort().map(cls => html`<button key=${cls}
+            class=${"chip "+(filterClassifications.has(cls[0].toUpperCase()+cls.slice(1))?"active":"")}
+            onClick=${()=>{ const canon=cls[0].toUpperCase()+cls.slice(1); setFilterClassifications(prev=>{ const m=new Set(prev); m.has(canon)?m.delete(canon):m.add(canon); return m; }); }}>${cls}</button>`)}
+          ${filterClassifications.size > 0 && html`<button class="price-db-advbtn"
+            onClick=${()=>setFilterClassifications(new Set())}>Clear</button>`}
+        </div>
+      </div>
+      <div class="price-db-adv-row">
+        <button class="price-db-advbtn"
+          onClick=${()=>{ setFilterCosts(new Set()); setFilterCardTypes(new Set()); setFilterStrengths(new Set()); setFilterWillpowers(new Set()); setFilterLores(new Set()); setFilterInkable(null); setFilterLegality(""); setFilterKeywords(new Set()); setFilterClassifications(new Set()); setFilterIllustrators(new Set()); }}>
+          Clear all card filters
         </button>
       </div>
     </div>`}
@@ -12969,6 +13734,62 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
     };
   }, [cards, reducedMotion]);
 
+  // Click-and-drag to scroll horizontally — desktop mouse users can grab
+  // anywhere in the banner strip and drag-pan through the cards (same UX
+  // pattern as a horizontal carousel on most marketplace sites). Mouse-
+  // only handlers; touch devices use native momentum scroll. A 5px
+  // movement threshold separates a real drag from a click-on-tile so
+  // clicking a single tile still opens its detail modal.
+  useEffect(()=>{
+    const el = wrapRef.current;
+    if(!el) return;
+    let isDown = false;
+    let didDrag = false;
+    let startX = 0;
+    let startScroll = 0;
+    let suppressClickUntil = 0;
+    const DRAG_THRESHOLD = 5;
+    const onMouseDown = (e) => {
+      if(e.button !== 0) return;
+      isDown = true; didDrag = false;
+      startX = e.pageX; startScroll = el.scrollLeft;
+      el.style.cursor = "grabbing";
+      lastUserScrollRef.current = performance.now();
+    };
+    const onMouseMove = (e) => {
+      if(!isDown) return;
+      const dx = e.pageX - startX;
+      if(!didDrag && Math.abs(dx) > DRAG_THRESHOLD) didDrag = true;
+      if(didDrag){
+        e.preventDefault();
+        el.scrollLeft = startScroll - dx;
+        lastUserScrollRef.current = performance.now();
+      }
+    };
+    const onMouseUp = () => {
+      if(!isDown) return;
+      if(didDrag) suppressClickUntil = performance.now() + 250;
+      isDown = false; didDrag = false;
+      el.style.cursor = "grab";
+    };
+    const onClickCapture = (e) => {
+      if(performance.now() < suppressClickUntil){
+        e.preventDefault(); e.stopPropagation();
+      }
+    };
+    el.style.cursor = "grab";
+    el.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    el.addEventListener("click", onClickCapture, true);
+    return ()=>{
+      el.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      el.removeEventListener("click", onClickCapture, true);
+    };
+  }, []);
+
   return html`<section style=${{margin:"0 0 10px"}}>
     ${(title || subtitle || controls) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
       ${title ? (onTitleClick
@@ -13324,7 +14145,15 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       for(const s of sortedSections) for(const p of s.sorted) dateSet.add(p.date);
       const dates = Array.from(dateSet).sort();
       const data = [];
-      const cursors = sortedSections.map(() => ({i: 0, lastY: 0}));
+      // Seed each cursor with its section's first known value so dates BEFORE
+      // that section's earliest data point still get its earliest value
+      // (backward-fill). Without this, graded comes online late in the date
+      // axis — TCGPriceLookup history is sparse — and the combined line
+      // drops to (cards + sealed only) for those early dates, then jumps up
+      // when graded's first datapoint hits. This mirrors the backward-fill
+      // computeGradedValueHistory already does WITHIN its own series, just
+      // applied across-sections at sum time.
+      const cursors = sortedSections.map((s) => ({i: 0, lastY: s.sorted[0]?.value || 0}));
       for(const date of dates){
         let total = 0;
         sortedSections.forEach((s, idx) => {
@@ -13504,22 +14333,26 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             No ${moversWin.label} movement in your collection matching the filters.</div>`
         : html`<table class="panel-movers-table"><tbody>
           ${collectionMovers.map(({row, mover, pct}) => {
-            // Foil-printing badge: only show when the row's printing isn't the
-            // base Non-Foil. "Holofoil" → "Holo" to fit in the tight column.
-            // Without this, two rows with the same name (foil vs non-foil)
-            // looked identical and users couldn't tell which printing moved.
-            const printing = row.tcg_printing;
-            const printingLabel = (printing && printing !== "Normal" && printing !== "Non-Foil")
-              ? (printing === "Holofoil" ? "Holo" : printing)
-              : null;
+            // Foil-printing sub-label: Cold Foil only (Holofoil and regular
+            // Foil are not flagged here per UX — Cold Foil is the variant
+            // that meaningfully changes value vs the base printing and is
+            // the one users want to spot at a glance). Label reads "FOIL"
+            // for terseness — the column is narrow and "FOIL" is the
+            // identifier users care about (vs base Normal). Rendered on a
+            // second line below the name so name X-alignment stays
+            // consistent across rows regardless of badge presence.
+            const printingLabel = (row.tcg_printing === "Cold Foil") ? "FOIL" : null;
             return html`<tr key=${row.card_id+":"+row.tcg_printing}
               onClick=${()=>onTileClick && onTileClick(mover)}>
               <td class="panel-movers-img">${row.img_small
                 ? html`<img src=${row.img_small} alt="" loading="lazy"/>`
                 : ""}</td>
-              <td class="panel-movers-name">${row["Product Name"]}${printingLabel
-                ? html` <span class="panel-movers-foil-tag">${printingLabel}</span>`
-                : ""}</td>
+              <td class="panel-movers-name">
+                <div class="panel-movers-name-text">${row["Product Name"]}</div>
+                ${printingLabel
+                  ? html`<div class="panel-movers-foil-tag">${printingLabel}</div>`
+                  : ""}
+              </td>
               <td class="panel-movers-price">${fmt(parseP(mover.low_today))}</td>
               <td class="panel-movers-pct" style=${{color:pctColor(pct)}}>${fmtPct(pct)}</td>
             </tr>`;
@@ -14221,58 +15054,58 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
   const [open, setOpen] = useState(false);
   const [idx, setIdx] = useState(0);
   const inputRef = useRef(null);
-  // Build one entry per Product Name. Enchanted / Iconic / Epic variants
-  // live under different card_ids — collapsing by name avoids duplicate
-  // "Stitch - Carefree Surfer" rows for the Normal + Enchanted printings.
-  // Prefer Normal printing for the thumbnail and prefer non-chase rarities
-  // as the canonical click target so picking the suggestion lands on the
-  // base card, not its $400 Enchanted twin.
-  const byCard = useMemo(() => {
-    const m = new Map();
-    const isChase = (rar) => /Enchanted|Iconic|Epic/i.test(rar || "");
+  const isChase = (rar) => /Enchanted|Iconic|Epic/i.test(rar || "");
+  const suggestions = useMemo(() => {
+    const s = q.trim();
+    if(s.length < 2) return [];
+    // Route through the canonical smart-search matcher (matchesCardFilter +
+    // parseSearchQuery) so the home dropdown behaves IDENTICALLY to the
+    // Cards-tab search the user lands in after picking. Critical ordering:
+    // we MUST filter raw rows BEFORE deduping by Product Name. The old code
+    // pre-collapsed to non-chase rarities first, which silently stripped
+    // Elsa-Enchanted etc. before the rarity:Enchanted filter ever saw them
+    // ("elsa enchanted" zeroed out as a result). Filter first; then collapse
+    // to one row per Product Name preferring whichever variant matches the
+    // query intent (e.g. "elsa enchanted" → Enchanted printing wins; "elsa"
+    // alone → non-chase wins so the click target is the base $-cheap card).
+    const parsed = parseSearchQuery(s);
+    const sLow = s.toLowerCase();
+    const wantsChase = parsed.filters.rarity && isChase(parsed.filters.rarity);
+    const byName = new Map();
     for(const r of (raw || [])){
       const name = r["Product Name"];
       if(!name) continue;
-      const cur = m.get(name);
-      if(!cur){ m.set(name, r); continue; }
-      // Replacement rule: prefer non-chase over chase, then Normal printing.
+      if(!matchesCardFilter(r, {}, parsed)) continue;
+      const cur = byName.get(name);
+      if(!cur){ byName.set(name, r); continue; }
+      // Dedupe rule: when the query intent is a chase rarity, prefer the
+      // chase variant; otherwise prefer non-chase. Tiebreaker: Normal
+      // printing thumbnail.
       const curChase = isChase(cur.Rarity);
       const rChase   = isChase(r.Rarity);
-      if(curChase && !rChase){ m.set(name, r); continue; }
-      if(!curChase && rChase) continue;
+      if(wantsChase){
+        if(curChase && !rChase) continue;
+        if(!curChase && rChase){ byName.set(name, r); continue; }
+      } else {
+        if(curChase && !rChase){ byName.set(name, r); continue; }
+        if(!curChase && rChase) continue;
+      }
       if(cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal"){
-        m.set(name, r);
+        byName.set(name, r);
       }
     }
-    return Array.from(m.values());
-  }, [raw]);
-  const suggestions = useMemo(() => {
-    const s = q.trim().toLowerCase();
-    if(s.length < 2) return [];
-    // Tokenize: every whitespace-separated word must appear somewhere in
-    // the card's Product Name. "stitch surfer" → matches "Stitch - Carefree
-    // Surfer". Within hits, rank by how closely they reflect the query:
-    //   1. Full string startsWith (best — exact name prefix)
-    //   2. Full string includes (substring contiguous)
-    //   3. All tokens present anywhere (default for multi-word queries)
-    const tokens = s.split(/\s+/).filter(Boolean);
     const scored = [];
-    for(const r of byCard){
+    for(const r of byName.values()){
       const name = (r["Product Name"] || "").toLowerCase();
-      if(!name) continue;
-      // Token gate first — cheap reject for non-matches.
-      let allHit = true;
-      for(const t of tokens){ if(!name.includes(t)){ allHit = false; break; } }
-      if(!allHit) continue;
       let rank;
-      if(name.startsWith(s))      rank = 0;
-      else if(name.includes(s))   rank = 1;
-      else                        rank = 2;
+      if(name.startsWith(sLow))      rank = 0;
+      else if(name.includes(sLow))   rank = 1;
+      else                           rank = 2;
       scored.push({r, rank, name});
     }
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
     return scored.slice(0, 8).map(x => x.r);
-  }, [q, byCard]);
+  }, [q, raw]);
   const handleSubmit = () => {
     const txt = q.trim();
     if(!txt) return;
@@ -18071,9 +18904,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         title=${favoriteCount + " user" + (favoriteCount===1?"":"s") + " favorited this deck"}>
         ★ ${favoriteCount}
       </span>`}
-      <div style=${{marginLeft:"auto",display:"flex",gap:6,position:"relative",flexWrap:"wrap",justifyContent:"flex-end"}}>
+      <div class=${"deck-editor-toolbar-actions"+(mobileTab==="cards"?" hide-on-cards-tab":"")}
+        style=${{marginLeft:"auto",display:"flex",gap:6,position:"relative",flexWrap:"wrap",justifyContent:"flex-end"}}>
         ${isOwnDeck && onToggleEditMode && html`<button onClick=${onToggleEditMode}
-          class=${!readOnly ? "active" : ""}
+          class=${"deck-toolbar-keep "+(!readOnly ? "active" : "")}
           style=${{fontSize:12,padding:"5px 10px"}}
           title=${readOnly ? "Edit this deck — open the card browser" : "Done editing — back to view"}>
           ${readOnly ? "✎ Edit" : "✓ Done"}
@@ -18155,7 +18989,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         ${!readOnly && html`<button onClick=${handleImport} style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
         <button onClick=${handleExport} style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export Decklist Text</button>
         ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
-        ${isOwnDeck && onDelete && html`<button onClick=${onDelete} style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
+        ${isOwnDeck && onDelete && html`<button onClick=${onDelete}
+          class="deck-toolbar-keep"
+          style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
       </div>
     </div>
     ${legality.format === "invalid" && html`<div class="deck-legal-issues">
@@ -18248,12 +19084,17 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         const k = item.card_id+":"+item.printing;
         const owned = (ownedShortByKey[k]?.have || 0) >= item.quantity;
         const short = ownedShortByKey[k]?.short || 0;
-        const dimClass = highlightMissing ? (owned ? " owned-dim" : (short>0 ? " missing-pop" : "")) : "";
+        // Flipped 2026-05-26: missing cards FADE (instead of getting a red
+        // border), owned cards render normal. Class name updated from
+        // .owned-dim to .missing-fade so the semantic matches what it does.
+        const dimClass = (highlightMissing && short > 0) ? " missing-fade" : "";
         const cardMax = getDeckLimitForUI(meta["Product Name"]);
         const have = ownedShortByKey[k]?.have || 0;
         const haveCapped = Math.min(have, item.quantity);
+        // X/Y badge: green when fully owned, red when missing copies. Keeps
+        // the same "always shown when highlightMissing is on" gate.
         const ownedFracBadge = highlightMissing
-          ? html`<span class=${"deck-tile-owned-frac"+(haveCapped>=item.quantity?" complete":"")}>${haveCapped}/${item.quantity}</span>`
+          ? html`<span class=${"deck-tile-owned-frac"+(haveCapped>=item.quantity?" complete":" incomplete")}>${haveCapped}/${item.quantity}</span>`
           : null;
         // Deck tiles render at ~150-200px wide so img_small (200w) looks
         // soft when upscaled. Use img_normal (400w) as primary; large is
@@ -18272,12 +19113,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         }
         if(viewLayout === "stacked"){
           const peeks = Math.max(0, item.quantity - 1);
-          return html`<div key=${k} class=${"deck-stack-tile"+(highlightMissing && owned?" owned-dim":"")}
+          return html`<div key=${k} class=${"deck-stack-tile"+(highlightMissing && short > 0?" missing-fade":"")}
             onClick=${()=>openCardModal(item.card_id)}>
             ${Array.from({length: peeks}).map((_, i) => html`<div key=${i} class="deck-stack-peek">
               ${meta.img_small ? html`<img src=${meta.img_small} alt=""/>` : null}
             </div>`)}
-            <div class=${"deck-stack-top"+(highlightMissing && short>0?" missing-pop":"")}>
+            <div class="deck-stack-top">
               <span class="deck-stack-qty">${item.quantity}×</span>
               ${ownedFracBadge}
               ${tileImg
@@ -18331,8 +19172,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
       const listBlock = html`${sectioned.length > 0 && html`<div class="deck-view-toolbar">
         <span class=${"deck-highlight-pill"+(highlightMissing?" on":"")}
           onClick=${()=>setHighlightMissing(v=>!v)}
-          title="Dim cards you already own so the missing ones stand out">
-          <span class="dot"></span>${highlightMissing?"Highlighting missing":"Highlight missing"}
+          title="Fade cards you're missing from your collection so the owned ones stand out">
+          <span class="dot"></span>HIGHLIGHT MISSING
         </span>
         <div ref=${viewDropRef} style=${{position:"relative",marginLeft:"auto"}}>
           <button class="deck-view-trigger" onClick=${()=>setViewDropOpen(o=>!o)}>View ▾</button>
@@ -18387,7 +19228,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           onClick=${()=>setMobileTab("deck")}>Deck</button>
         <button role="tab" aria-selected=${mobileTab==="cards"}
           class=${"deck-editor-mobile-tab"+(mobileTab==="cards"?" active":"")}
-          onClick=${()=>setMobileTab("cards")}>Cards</button>
+          onClick=${()=>setMobileTab("cards")}>${readOnly?"Deck Info":"Cards"}</button>
       </div>
       <div class=${"deck-editor-grid"+(readOnly?" readonly":"")+" mobile-tab-"+mobileTab}>
         ${readOnly
@@ -19678,20 +20519,15 @@ function App(){
       </button>
       <div class="tabs tabs-grid">
         <div class="tabs-row">${TABS_TOP.map(renderTab)}</div>
-        <div class="tabs-row">
-          ${TABS_BOTTOM.map(renderTab)}
-          <button class=${"nav-tab nav-tab--help"+(view==="faq"?" active":"")}
-            onClick=${()=>onTabClick("faq")}
-            title="How it works" aria-label="How it works">
-            <span class="nav-tab-icon">${NAV_ICONS.faq}</span>
-            <span class="nav-tab-label">Help</span>
-          </button>
-        </div>
+        <div class="tabs-row">${TABS_BOTTOM.map(renderTab)}</div>
         ${err&&html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8,alignSelf:"center"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
       </div>
       <div class="top-nav-right">
         <div class="top-nav-right-row top-nav-right-row--primary"
-          ref=${settingsRef} style=${{position:"relative",display:"inline-flex"}}>
+          ref=${settingsRef} style=${{position:"relative",display:"inline-flex",gap:4,alignItems:"center"}}>
+          ${!isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
+            onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
+            title="Install Packs.Ink as an app" aria-label="Install app">📲</button>`}
           ${user
             ? html`<button class="profile-btn" onClick=${()=>setSettingsOpen(o=>!o)}
                 title="Account & settings" aria-expanded=${settingsOpen}>
@@ -19754,8 +20590,9 @@ function App(){
           </div>`}
         </div>
         <div class="top-nav-right-row top-nav-right-row--bubbles">
-          ${!isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle" onClick=${()=>setInstallHelpOpen(true)}
-            title="Install Packs.Ink as an app" aria-label="Install app">\uD83D\uDCF2</button>`}
+          <button class=${"theme-toggle theme-toggle--help"+(view==="faq"?" active":"")}
+            onClick=${()=>onTabClick("faq")}
+            title="How it works" aria-label="How it works">${NAV_ICONS.faq}</button>
           ${showTopBarTheme && html`<button class="theme-toggle" onClick=${toggleTheme} title=${theme==="dark"?"Switch to light":"Switch to dark"}>
             ${theme==="dark"?"\u2600":"\uD83C\uDF19"}
           </button>`}

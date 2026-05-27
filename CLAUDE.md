@@ -42,10 +42,13 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
 ### Mobile top-nav structure (do NOT regress)
 
 - Scroll lives on `.tabs` (middle), NOT on the whole top-nav. Logo + right cluster stay anchored as flex peers.
-- Right cluster on mobile is `flex-direction:column`: row 1 = profile/sign-in pill (collapses to avatar-only on ≤640px — name eats ~80px otherwise), row 2 = bubble controls (install + theme toggle).
-- Help on mobile collapses to icon-only **36×36 chip** (`.nav-tab--help .nav-tab-label{display:none}`). Otherwise the row overflows.
+- Right cluster on mobile is `flex-direction:column` with two rows:
+  - **Row 1**: profile/sign-in pill (collapses to avatar-only on ≤640px) **+ install bubble** (📲, conditional on `!isStandalone && (isIOS || isAndroid)`)
+  - **Row 2**: help bubble (?) + theme toggle bubble (🌙/☀)
+- The install bubble lives in row 1 next to the profile because it **disappears** once the user installs the PWA (`isStandalone` flips true). Having it pair with the profile avatar means row 1 naturally collapses to just-the-avatar post-install, no layout shift. Putting install in row 2 (its old location) pushed row 2 to 3 bubbles wide (~116px) and tipped `ANALYTICS` off the right edge of the scrolling tabs container on phones ≤420px.
+- **Help is a bubble in the right cluster's bubble row** (as of 2026-05-26), NOT a peer chip in tabs row 2. The previous "Help chip inside the tabs row" layout collided with the sign-in pill / profile chip on phones — the chip sat at the right edge of the scrolling tabs row and overlapped the anchored right cluster. Moving Help to `.top-nav-right-row--bubbles` puts it in the same flex container as install + theme, where it can't bump into the sign-in pill above it. Implemented as `<button class="theme-toggle theme-toggle--help">` (inherits bubble shape; `.active` paints accent when view=faq).
 - Every container in the right cluster has `background: var(--bg)` explicitly so the sticky header paints opaquely over scrolled content.
-- **Mobile tap-target floor: 36px** on every top-nav control (`.signin-btn`, `.profile-btn`, `.theme-toggle`, `.nav-tab--help`). Apple HIG recommends 44pt; 36px is the compromise that keeps the two-row nav from growing too tall. Was 26–28px before 2026-05-25 and the profile pill was nearly impossible to hit on iPhone — don't shrink back below 36px.
+- **Mobile tap-target floor: 36px** on every top-nav control (`.signin-btn`, `.profile-btn`, `.theme-toggle`, `.theme-toggle--help`). Apple HIG recommends 44pt; 36px is the compromise that keeps the two-row nav from growing too tall. Was 26–28px before 2026-05-25 and the profile pill was nearly impossible to hit on iPhone — don't shrink back below 36px.
 
 ### iOS safe-area-inset (do NOT regress)
 
@@ -68,7 +71,7 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 - **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs.
 - **`AUX_CACHE_VERSION` sentinel** (Index.html top, added 2026-05-24): per-deploy stamp compared against `packsink:auxCacheVersion` on module load. Mismatch → one-shot wipe of every `packsink:*` key except catalog/auth/install-prefs. **Bump the string to force every existing user's next page load to refresh aux caches** — useful when an ETL/matview change makes those caches stale faster than their TTLs catch. Independent from `CACHE_KEY` (which only invalidates the catalog itself).
 - **Visibility re-probe**: `visibilitychange` + `pageshow` listeners re-run `loadFromSupabase` when the tab/PWA becomes visible again (throttled 60s). Without this, PWA users who background the app would see stale data forever on resume — React tree never remounts.
-- **`img_large` is STRIPPED from catalog cache on write** (writeCache `slim = rows.map(({img_large, ...rest}) => rest)`). Saves ~30%. Sites that prefer it (deck poster, hover preview, detail modal) fall back to `img_normal` gracefully. Don't add img_large back — the 5MB quota is tight.
+- **`img_large` AND `text` are STRIPPED from catalog cache on write** (writeCache `slim = rows.map(r => { const {img_large, text, ...rest} = r; return rest; })`). Saves ~30% (img_large) + ~25% (text). Sites that prefer img_large (deck poster, hover preview, detail modal) fall back to `img_normal` gracefully. The text strip means body-text smart-search ("gets", "gains", etc.) works on the live session after cold-fetch — and on cache replay it gracefully degrades to name+type+classification matching (the matchesCardFilter haystack tolerates `row.text` being undefined). Don't add either back — initially I kept text in cache thinking 5MB had room, but it pushed sealed + movers aux caches into QuotaExceededError. The freshness probe wipes the catalog whenever the ETL has published, so most active users cold-fetch within hours of opening the site and get text-search back daily.
 - **writeCache does three-pass eviction**: (1) `removeItem` before `setItem`, (2) on failure evict every other `packsink:*` key except auth/prefs, (3) retry.
 - Per-view caches use `readJsonCache(key, ttlMs)` / `writeJsonCache(key, data)`:
   - `packsink:movers:v1` (12h), `packsink:screener-movers:v1` (12h), `packsink:following:v1:{uid8}` (30min), `packsink:home:tourneys:v1` (2h), `packsink:hist:v1:{pid}:{printing}` (12h), `packsink:sealed:v1`, `packsink:setsMeta:v1`, `packsink:colvalue:v2:{uid8}:{productsHash}:{rangeKey}`.
@@ -178,7 +181,11 @@ Every card-search surface in the app **must** route through `matchesCardFilter` 
 
 **Surfaces that intentionally do NOT use it:**
 - Set-name search inputs (Price Graphing's "Search sets…" — filters set names, not cards)
-- Screener (different data shape — `price_movers` matview rows, not card-catalog rows)
+- Sealed product picker (Price Graphing's sealed mode — filters sealed catalog, not cards)
+- Artist typeahead (Cards drawer + History drawer — artist-only)
+- Decks list search (filters deck names, not cards)
+
+**Screener uses it via catalog joinback** — `price_movers` matview rows only carry name/version/rarity/ink/set_id, but the Screener has access to `raw` (the catalog) and builds a `catalogByCardId` Map. The filter pass looks up the catalog row by `card_id` and runs `matchesCardFilter(catalogRow, chipFilter, parsed)` against it. This gives the Screener every dimension Cards has — partial rarity, body text, classifications, cost/stat operators, inkable, legality, illustrator, exclusion phrases. Chip filters (filterRarities / filterInks / filterSet) pass through as `f` — clicking the Iconic chip then typing "enchanted elsa" returns zero because the parsed rarity (Enchanted) AND the chip rarity (Iconic) both have to hold.
 
 **Anti-pattern:** Don't re-implement the soft-match or stat-op logic inline. If a new view needs a small filter shim (e.g. chip-only filtering with no parsed query), pass `{inks: chipInks, rarities: chipRarities}` as `f` and `null` as `parsed`.
 
@@ -290,7 +297,7 @@ Migration 48 added optional `amount_paid numeric(12,2)` + `acquired_date date` t
   - Graded: rows already include `amount_paid` / `acquired_date` (no parallel state needed). `updateItemMeta({card_id, grader, grade}, patch)` callback.
 - **Schema-tolerant fetches**: both fetch paths probe with the new columns, retry without on 42703 (column missing) so the frontend still works pre-migration. Safe to deploy code before applying the migration.
 - **Chart gating** (`computeCollectionValueHistory` + `computeGradedValueHistory`): per-key acquired_date map. A slot contributes $0 to dates strictly before its acquired_date so historical value reflects only what the user actually owned at the time. Slots without acquired_date keep the existing earliest-snapshot behavior.
-- **Graded chart backward-fill**: TCGPriceLookup graded `/history` is extremely sparse (avg 10 rows/slot/year, median slot's first row is months into a 1y window). `computeGradedValueHistory` seeds each slot's `prev` with its first known price (backward-fill) so a slot is always represented once we have ANY data for it. Without this, plain forward-fill produced an artificial ramp ($100 → $2500) as more slots came online with their first data point. Acquired_date gating still wins.
+- **Graded chart backward-fill (two places)**: TCGPriceLookup graded `/history` is extremely sparse (avg 10 rows/slot/year, median slot's first row is months into a 1y window). **(1) Per-section:** `computeGradedValueHistory` seeds each slot's `prev` with its first known price so a slot is always represented once we have ANY data for it. Without this, plain forward-fill produced an artificial ramp ($100 → $2500) as more slots came online with their first data point. **(2) Combined-chart sum:** the combined-line builder in `CollectionPanel`'s `chartSeries` memo seeds each section's cursor with `s.sorted[0]?.value` so dates BEFORE a section's earliest data point still receive that section's earliest value. Without this, the combined line dropped to (cards + sealed only) on early dates and then jumped up when graded's first datapoint hit — even though the individual graded line in split mode was flat across the entire range. The two backward-fills compose: per-slot inside graded's own series, then per-section across the sum. Acquired_date gating still wins on the per-slot side.
 
 ## Set conventions
 
@@ -469,7 +476,11 @@ If you add a new multi-column table that needs to work on mobile, follow the sam
 
 ## Home page panel layout (sticky behavior)
 
-`.home-feed` (the Following panel and other home left-column panels) is `position: sticky; top: 8px` on desktop so it pins as the main content scrolls. **Disabled on mobile** (`@media (max-width:1100px)` sets `position: static`) — sticky inside a single-column flex layout causes the panel to visually overlap whatever's above it as the user scrolls. Same breakpoint as `.home-grid` collapse.
+`.home-feed` (the Following panel and Tournament Results banner — both render as `<aside class="home-feed">`) is **NOT sticky** on any viewport as of 2026-05-26.
+
+It was previously `position: sticky; top: 8px` on desktop so the Following panel pinned while the main column scrolled. That broke when the left column ended up containing TWO `.home-feed` instances (Following + the desktop Tournament Results banner) — two sticky elements at the same top offset stack on top of each other once both reach the constraint, with Following visually covering Tournament Results. The mobile @media override (`position: static`) also occasionally lost the cascade race when service-worker caches went stale, producing residual overlap with the CollectionPanel's "Your Top Movers" table on phones.
+
+Letting both panels scroll naturally with the page sidesteps the conflict on both platforms. Don't re-add sticky to `.home-feed` without making it specific to ONE of the two panels — and bear in mind that bumping `sw.js CACHE_VERSION` is mandatory whenever the rule changes, otherwise PWA users will keep painting the old stylesheet.
 
 ## Rarity icons
 
