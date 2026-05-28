@@ -2077,6 +2077,14 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .card-detail-close:hover{background:rgba(0,0,0,0.7);}
 .card-detail-image{flex:0 0 340px;padding:24px;display:flex;align-items:flex-start;justify-content:center;}
 .card-detail-image img{width:100%;max-width:300px;height:auto;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.25);}
+/* In-modal banner tile of the card (canvas-drawn; preview == copied image). */
+.card-tile-preview{position:relative;width:100%;max-width:300px;}
+.card-tile-canvas{display:block;width:100%;height:auto;border-radius:12px;box-shadow:0 4px 16px rgba(0,0,0,0.25);}
+.card-tile-cam{position:absolute;top:8px;right:8px;width:30px;height:30px;display:flex;
+  align-items:center;justify-content:center;background:rgba(0,0,0,0.72);color:#fff;border:none;
+  border-radius:6px;padding:0;cursor:pointer;transition:background 0.15s ease;}
+.card-tile-cam:hover{background:rgba(0,0,0,0.92);}
+.card-tile-cam svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block;}
 .card-detail-body{flex:1;padding:28px 28px 28px 0;}
 .card-detail-body h2{margin:0 0 4px;font-size:22px;color:var(--text);font-weight:600;}
 .card-detail-subtitle{font-size:13px;color:var(--text-dim);margin-bottom:10px;}
@@ -2107,6 +2115,11 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   .card-detail-image{flex:0 0 auto;padding:20px 20px 0;}
   .card-detail-image img{max-width:220px;}
   .card-detail-body{padding:20px;}
+  .card-detail-screener{padding:14px 20px;}
+  .cd-stat{padding:8px 10px;}
+  .cd-stat-grid{grid-template-columns:30px repeat(6,1fr);gap:1px 2px;}
+  .cd-stat-h{font-size:8px;}
+  .cd-stat-v{font-size:10px;}
 }
 /* Line chart -------------------------------------------------------- */
 .line-chart-wrap{position:relative;}
@@ -2244,40 +2257,43 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   font-family:'Nunito Sans',sans-serif;transition:border-color 0.12s,color 0.12s;}
 .card-detail-copy-btn:hover{border-color:var(--accent);color:var(--accent);}
 .card-detail-copy-btn svg{display:block;}
-/* Off-screen portrait poster captured by html2canvas. Laid out (not display:none)
-   so the chart's ResizeObserver measures a real width; parked off-screen.
-   The card art fills the full width (no side whitespace); the card image
-   already carries the card name, so there's no redundant title caption —
-   just the art, the framed chart, and the brand footer. */
-.card-export-poster{position:fixed;left:-10000px;top:0;z-index:-1;pointer-events:none;
-  width:460px;box-sizing:border-box;padding:18px 18px 16px;
-  background:var(--bg-modal);color:var(--text);font-family:'Nunito Sans',sans-serif;
-  display:flex;flex-direction:column;gap:16px;}
-.card-export-poster .cep-art{display:block;}
-.card-export-poster .cep-art img{width:100%;height:auto;border-radius:16px;display:block;
-  box-shadow:0 10px 30px rgba(0,0,0,0.30);}
-.card-export-poster .cep-art-fallback{width:100%;aspect-ratio:5/7;border-radius:16px;
-  background:var(--accent-glow);display:flex;align-items:center;justify-content:center;
-  text-align:center;padding:12px;color:var(--text-muted);font-weight:600;}
-.card-export-poster .cep-chart-frame{background:var(--bg-surface);border:1px solid var(--border);
-  border-radius:16px;padding:16px 16px 12px;}
-/* Single inline line (no flex space-between — html2canvas 1.4.1 collapses
-   row flex with justify-content). */
-.card-export-poster .cep-chart-title{margin-bottom:12px;line-height:1.1;}
-.card-export-poster .cep-chart-title .cep-ch-label{font-family:'Cinzel',serif;font-size:16px;
-  font-weight:700;color:var(--accent);letter-spacing:0.3px;}
-.card-export-poster .cep-chart-title .cep-ch-range{font-size:12px;font-weight:700;letter-spacing:0.3px;
-  color:var(--text-muted);margin-left:7px;}
-/* Text-glyph markers + padding (NOT flex gap or empty styled spans — html2canvas
-   1.4.1 ignores flex gap and drops zero-content marker spans). */
-.card-export-poster .cep-legend{margin-top:14px;font-size:12px;color:var(--text-dim);}
-.card-export-poster .cep-leg-item{display:inline-block;padding-right:20px;}
-.card-export-poster .cep-leg-glyph{font-weight:900;margin-right:3px;color:var(--text-muted);}
-/* Centered footer: logo + wordmark inline (text-align, NOT flex space-between
-   which html2canvas collapses). */
-.card-export-poster .cep-footer{text-align:center;border-top:1px solid var(--border);padding-top:14px;}
-.card-export-poster .cep-footer-logo{height:24px;width:auto;display:inline-block;vertical-align:middle;margin-right:10px;}
-.card-export-poster .cep-footer-txt{font-size:14px;font-weight:800;color:var(--accent);letter-spacing:0.3px;vertical-align:middle;}
+/* ── Card-detail "Price changes" panel + stat rows ─────────────────────
+   Banner-tile-style delta grid (6 windows × LOW/MKT) per printing/variant.
+   (The copy-image export is drawn on a <canvas> in JS — see
+   buildCardPosterBlob — so it needs no CSS and can't be broken by a stale
+   cached stylesheet.) */
+.card-detail-screener{padding:14px 28px;border-top:1px solid var(--border);background:var(--bg);}
+.card-detail-screener-head{display:flex;align-items:center;justify-content:space-between;
+  gap:10px;margin-bottom:10px;flex-wrap:wrap;}
+.cd-screener-title{font-family:'Cinzel',serif;font-size:14px;color:var(--accent);font-weight:600;}
+.cd-variants-btn{font-size:11px;font-weight:600;letter-spacing:0.2px;padding:5px 11px;
+  border-radius:6px;border:1px solid var(--btn-border);background:var(--bg-surface);
+  color:var(--text-dim);cursor:pointer;font-family:'Nunito Sans',sans-serif;
+  transition:border-color 0.12s,color 0.12s;}
+.cd-variants-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.cd-variants-btn:disabled{opacity:0.6;cursor:default;}
+.cd-stat-list{display:flex;flex-direction:column;gap:10px;}
+.cd-stat{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:9px 12px;}
+.cd-stat-id{display:flex;align-items:baseline;flex-wrap:wrap;gap:6px;margin-bottom:7px;}
+.cd-stat-dot{font-size:11px;line-height:1;align-self:center;}
+.cd-stat-name{font-weight:700;font-size:13px;color:var(--text);}
+.cd-stat-sub{font-size:11px;color:var(--text-muted);}
+/* "Buy on TCGplayer" affiliate link — right-aligned on the name line; the
+   price (.cd-stat-px, flex-basis:100%) wraps below it. */
+.cd-stat-buy{margin-left:auto;align-self:center;display:inline-flex;align-items:center;gap:5px;
+  font-size:10px;font-weight:700;letter-spacing:0.2px;padding:4px 9px;border-radius:6px;
+  border:1px solid var(--btn-border);background:var(--bg);color:var(--text-dim);
+  text-decoration:none;white-space:nowrap;transition:border-color 0.12s,color 0.12s,background 0.12s;}
+.cd-stat-buy:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow);}
+.cd-stat-buy svg{width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;display:block;}
+/* flex-basis:100% wraps the price onto its own line deterministically. */
+.cd-stat-px{flex-basis:100%;font-size:12px;color:var(--text-dim);font-variant-numeric:tabular-nums;margin-top:1px;}
+.cd-stat-px b{color:var(--text);font-weight:700;}
+.cd-stat-grid{display:grid;grid-template-columns:34px repeat(6,1fr);gap:2px 4px;align-items:center;}
+.cd-stat-h{font-size:9px;color:var(--text-muted);text-align:center;font-weight:600;letter-spacing:0.3px;}
+.cd-stat-metric{font-size:8px;color:var(--text-muted);font-weight:700;letter-spacing:0.4px;}
+.cd-stat-v{font-size:11px;font-weight:700;text-align:center;font-variant-numeric:tabular-nums;
+  overflow:hidden;white-space:nowrap;min-width:0;}
 .card-detail-history-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;}
 .card-detail-history-toolbar .seg-toggle button{padding:3px 9px;font-size:11px;}
 @media(max-width:700px){

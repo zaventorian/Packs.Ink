@@ -32,7 +32,7 @@
 <script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
   crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="styles.css?v=109">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -78,7 +78,7 @@
   };
 </script>
 <script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-<script src="logo.js"></script>
+<script src="logo.js?v=109"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -288,6 +288,12 @@ const html = htm.bind(React.createElement);
 // Components read this with useContext(TipsContext) and gate their
 // `title` attributes on it. Default on; persisted to localStorage by App.
 const TipsContext = React.createContext(true);
+
+// The full catalog (`raw`) exposed to any deeply-nested component without
+// threading it through every call site. CardDetailModal reads this to find
+// every printing / rarity variant of the open card (rows sharing a Product
+// Name) for the "show all variants" stats expansion.
+const CatalogContext = React.createContext([]);
 
 // Standard tooltip strings — keep wording consistent across views.
 const TIP_LOW = "Lowest active listing on TCGPlayer across any condition. The cheapest copy you could buy right now — a leading-edge price signal, but may be a played copy. For an NM-quality reference, see Market.";
@@ -2008,6 +2014,43 @@ const buildHistorySeries = (normalRows, foilRows, opts={}) => {
   return out;
 };
 
+// Windows for the card-detail "price changes" panel — mirrors the Screener /
+// mover-tile windows so the numbers read the same as everywhere else.
+const CARD_DELTA_WINDOWS = [
+  {key:"1d", label:"1D", days:1},
+  {key:"1w", label:"1W", days:7},
+  {key:"1m", label:"1M", days:30},
+  {key:"3m", label:"3M", days:90},
+  {key:"6m", label:"6M", days:180},
+  {key:"1y", label:"1Y", days:365},
+];
+
+// Compute the % change for each window from a card's raw price-history rows
+// ([{date, low_price, market_price}], ascending). For each window the
+// reference value is the most recent non-null sample on or before
+// (latest_date − N days) — the same "most recent prior sample" semantics the
+// price_movers matview uses (the 1D window resolves to the immediately
+// preceding daily sample). Returns {now, byWin:{<key>: pct|null}}.
+const computeSeriesDeltas = (rows, field) => {
+  const DAY = 86400000;
+  const pts = (rows || [])
+    .map(r => ({ t: Date.parse(r.date), v: (r[field] != null ? parseFloat(r[field]) : null) }))
+    .filter(p => Number.isFinite(p.t) && Number.isFinite(p.v));
+  if(!pts.length) return { now: null, byWin: {} };
+  const last = pts[pts.length - 1];
+  const now = last.v;
+  const byWin = {};
+  for(const w of CARD_DELTA_WINDOWS){
+    const target = last.t - w.days * DAY;
+    let ref = null;
+    for(let i = pts.length - 1; i >= 0; i--){
+      if(pts[i].t <= target){ ref = pts[i]; break; }
+    }
+    byWin[w.key] = (ref && ref.v) ? ((now - ref.v) / ref.v * 100) : null;
+  }
+  return { now, byWin };
+};
+
 // ── Compare-report export ───────────────────────────────────────────────
 // Builds a self-contained SVG of the multi-product compare chart with a
 // Morningstar-style title block, branded footer, and a product table
@@ -3479,6 +3522,76 @@ const fetchGradedPrices = async (productIds) => {
   }
 };
 
+// One "price changes" row for the card-detail screener panel — a banner-tile
+// style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
+// per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
+// poster draws its own rows on a canvas in buildCardPosterBlob).
+const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing}) => {
+  const buyUrl = tcgUrl(productId, printing);
+  return html`
+  <div class="cd-stat">
+    <div class="cd-stat-id">
+      ${color ? html`<span class="cd-stat-dot" style=${{color}}>●</span>` : null}
+      <span class="cd-stat-name">${label}</span>
+      ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
+      ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow"
+        onClick=${e=>e.stopPropagation()} title="Buy this printing on TCGplayer (affiliate link)">
+        Buy on TCGplayer
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+      </a>`}
+      <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+    </div>
+    <div class="cd-stat-grid">
+      <span></span>
+      ${CARD_DELTA_WINDOWS.map(w => html`<span key=${"h"+w.key} class="cd-stat-h">${w.label}</span>`)}
+      <span class="cd-stat-metric">LOW</span>
+      ${CARD_DELTA_WINDOWS.map(w => html`<span key=${"l"+w.key} class="cd-stat-v"
+        style=${{color: pctColor(low.byWin[w.key])}}>${fmtPct(low.byWin[w.key])}</span>`)}
+      <span class="cd-stat-metric">MKT</span>
+      ${CARD_DELTA_WINDOWS.map(w => html`<span key=${"m"+w.key} class="cd-stat-v"
+        style=${{color: pctColor(market.byWin[w.key])}}>${fmtPct(market.byWin[w.key])}</span>`)}
+    </div>
+  </div>`;
+};
+
+// In-modal "banner tile" of the open card — same compact card + prices look as
+// the front-page movers, drawn on a <canvas> so the on-screen preview and the
+// camera-copy image are the EXACT same pixels (no html2canvas, no CSS dependency
+// → can't be broken by a stale cached stylesheet). drawCardTileCanvas is defined
+// alongside the poster engine further down (resolved at render time).
+const CardTilePreview = ({artSrc, name, meta, low, market}) => {
+  const canvasRef = useRef(null);
+  const dateStr = useMemo(() => new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"}), []);
+  useEffect(() => {
+    let cancelled = false;
+    const draw = (artImg, logoImg) => { if(!cancelled && canvasRef.current) drawCardTileCanvas(canvasRef.current, {artImg, logoImg, name, meta, low, market, dateStr}); };
+    Promise.all([loadPosterImage(artSrc), loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png")])
+      .then(([artImg, logoImg]) => {
+        if(cancelled) return;
+        if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => draw(artImg, logoImg)); else draw(artImg, logoImg);
+      });
+    return () => { cancelled = true; };
+  }, [artSrc, name, meta, low, market, dateStr]);
+  const onCopy = (e) => {
+    e.stopPropagation();
+    const canvas = canvasRef.current;
+    if(!canvas) return;
+    flashToast("Copying image…", 4000);
+    const blobP = new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+    const download = (blob) => { const u = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = u; a.download = "packsink-card.png"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 2000); flashToast("Image saved"); };
+    if(navigator.clipboard && window.ClipboardItem){
+      navigator.clipboard.write([new ClipboardItem({"image/png": blobP})]).then(() => flashToast("Card image copied")).catch(() => blobP.then(download).catch(() => flashToast("Couldn't copy image — try again")));
+    } else { blobP.then(download).catch(() => flashToast("Couldn't copy image — try again")); }
+  };
+  return html`<div class="card-tile-preview">
+    <canvas ref=${canvasRef} class="card-tile-canvas"/>
+    <button class="card-tile-cam" onClick=${onCopy} data-h2c-ignore
+      title="Copy this card as an image" aria-label="Copy this card as an image">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    </button>
+  </div>`;
+};
+
 const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
@@ -3508,6 +3621,13 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const [rangeKey, setRangeKey] = useState("all");
   const [customStart, setCustomStart] = useState("");
   const [hidePreorders, setHidePreorders] = useState(true);
+  const catalog = useContext(CatalogContext);
+  // "Show all variants" expands the price-changes panel to include every
+  // other printing / rarity print sharing this card's Product Name (the open
+  // card's own Normal/Foil show by default). Histories are fetched lazily on
+  // first expand; fetchCardHistory caches them.
+  const [variants, setVariants] = useState({open:false, loading:false, data:{}});
+  useEffect(()=>{ setVariants({open:false, loading:false, data:{}}); }, [group?.card_id]);
 
   useEffect(()=>{
     const onKey = (e)=>{ if(e.key === "Escape") onClose(); };
@@ -3518,6 +3638,18 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       document.body.style.overflow = "";
     };
   }, [onClose]);
+
+  // Warm the browser cache for the copy-image export's two assets (the proxied
+  // card art + the logo) when the modal opens, so the canvas draw resolves
+  // instantly inside the click gesture instead of stalling on a cold fetch.
+  useEffect(()=>{
+    try {
+      const src = group && (group.img_large || group.img_normal || group.img_small);
+      if(src){ const a = new Image(); a.crossOrigin = "anonymous";
+        a.src = (typeof src === "string" && src.startsWith("https://cards.lorcast.io/")) ? "/img-proxy/" + src.slice("https://cards.lorcast.io/".length) : src; }
+      const l = new Image(); l.crossOrigin = "anonymous"; l.src = window.location.origin + "/Logos/packs-ink-logo.png";
+    } catch {}
+  }, [group?.card_id]);
 
   // Fetch text + flavor_text + classifications from the cards table on demand.
   useEffect(()=>{
@@ -3594,24 +3726,109 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil: effectiveShowFoil});
   const chartStartMs = computeChartStartMs(rangeKey, customStart, hidePreorders, group.Set);
 
-  // Portrait price-history poster export (card art + chart + footer → clipboard).
-  const posterRef = useRef(null);
+  // Every other (card_id, printing) tuple that shares this card's Product Name
+  // — foil/non-foil of split-printing cards, plus alternate rarity prints
+  // (Common → Enchanted, etc.). Excludes the open card's own Normal/Foil
+  // printings (those always render). Drives the "show all variants" toggle.
+  const variantRows = useMemo(() => {
+    const name = group["Product Name"];
+    if(!name || !catalog || !catalog.length) return [];
+    const shown = new Set();
+    if(group.normal) shown.add(group.card_id + "::" + (group.normal.tcg_printing || "Normal"));
+    if(group.foil)   shown.add(group.card_id + "::" + (group.foil.tcg_printing || "Normal"));
+    const out = [], seen = new Set();
+    for(const r of catalog){
+      if(r["Product Name"] !== name) continue;
+      if(!r.tcgplayer_product_id) continue;
+      const printing = r.tcg_printing || "Normal";
+      const key = r.card_id + "::" + printing;
+      if(shown.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      out.push({ key, row: r, printing });
+    }
+    return out;
+  }, [group.card_id, group["Product Name"], catalog]);
+
+  const toggleVariants = useCallback(() => {
+    if(variants.open){ setVariants(v => ({...v, open:false})); return; }
+    if(Object.keys(variants.data).length >= variantRows.length){ setVariants(v => ({...v, open:true})); return; }
+    setVariants(v => ({...v, open:true, loading:true}));
+    Promise.all(variantRows.map(v =>
+      fetchCardHistory(v.row.tcgplayer_product_id, v.printing)
+        .then(rows => ({key:v.key, rows: rows || []}))
+        .catch(() => ({key:v.key, rows:[]}))
+    )).then(res => {
+      const data = {};
+      for(const r of res) data[r.key] = r.rows;
+      setVariants(v => ({...v, loading:false, data}));
+    });
+  }, [variants.open, variants.data, variantRows]);
+
+  // Rows for the price-changes panel: open card's Normal/Foil always, plus
+  // every other variant once expanded. Same array feeds the copy-image poster.
+  const statRows = useMemo(() => {
+    const rows = [];
+    if(history.normal && history.normal.length) rows.push({
+      key:"__normal", label:"Normal", color:"#1d8d4a", sub:null,
+      productId: group.normal && group.normal.tcgplayer_product_id,
+      printing: (group.normal && group.normal.tcg_printing) || "Normal",
+      low: computeSeriesDeltas(history.normal, "low_price"),
+      market: computeSeriesDeltas(history.normal, "market_price"),
+    });
+    if(history.foil && history.foil.length) rows.push({
+      key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
+      productId: group.foil && group.foil.tcgplayer_product_id,
+      printing: (group.foil && group.foil.tcg_printing) || "Foil",
+      low: computeSeriesDeltas(history.foil, "low_price"),
+      market: computeSeriesDeltas(history.foil, "market_price"),
+    });
+    if(variants.open){
+      for(const v of variantRows){
+        const vr = variants.data[v.key];
+        if(!vr || !vr.length) continue;
+        const tag = (v.printing !== "Normal" && v.printing !== "Non-Foil")
+          ? (v.printing === "Holofoil" ? " Holo" : " " + v.printing) : "";
+        const num = v.row.Number ? " #" + String(v.row.Number).split("/")[0] : "";
+        rows.push({
+          key: v.key,
+          label: (v.row.Rarity || "Variant") + tag,
+          sub: (v.row.Set || "") + num,
+          color: null,
+          productId: v.row.tcgplayer_product_id,
+          printing: v.printing,
+          low: computeSeriesDeltas(vr, "low_price"),
+          market: computeSeriesDeltas(vr, "market_price"),
+        });
+      }
+    }
+    return rows;
+  }, [history, variants, variantRows, group]);
+
+  // Copy-image export inputs (the poster is drawn on a canvas — see
+  // buildCardPosterBlob — so no hidden DOM / html2canvas is needed).
   const proxifyArt = (u) => (typeof u === "string" && u.startsWith("https://cards.lorcast.io/"))
     ? "/img-proxy/" + u.slice("https://cards.lorcast.io/".length) : u;
   const posterArt = proxifyArt(group.img_large || group.img_normal || group.img_small);
   const posterDate = new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
   const posterRangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [])[1] || "";
-  // Absolute URL — relative "Logos/..." doesn't resolve inside html2canvas's clone iframe.
-  const posterLogo = window.location.origin + "/Logos/packs-ink-logo.png";
+
+  // The card's own printing for the in-modal banner tile (Normal preferred,
+  // else the foil/chase printing). meta mirrors the front-page tile's "Rarity ·
+  // Foil" line. Falls back to the plain image until price history has loaded.
+  const tileRow = statRows.find(r => r.key === "__normal") || statRows.find(r => r.key === "__foil") || null;
+  const tileMeta = (group.Rarity || "") + (tileRow && tileRow.key === "__foil" ? " · Foil" : "");
 
   return html`<div class="card-detail-overlay" onClick=${onClose}>
     <div class="card-detail" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="card-detail-top">
         <div class="card-detail-image">
-          ${img
-            ? html`<img src=${img} alt=${group["Product Name"]}/>`
-            : html`<div class="card-img-placeholder" style=${{aspectRatio:"5/7",minHeight:300}}>${group["Product Name"]}</div>`}
+          ${tileRow
+            ? html`<${CardTilePreview} artSrc=${posterArt} name=${group["Product Name"]}
+                meta=${tileMeta} low=${tileRow.low} market=${tileRow.market}/>`
+            : img
+              ? html`<img src=${img} alt=${group["Product Name"]}/>`
+              : html`<div class="card-img-placeholder" style=${{aspectRatio:"5/7",minHeight:300}}>${group["Product Name"]}</div>`}
         </div>
       <div class="card-detail-body">
         <h2 class="title-font">
@@ -3699,6 +3916,22 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       </div>
     </div>
 
+    ${statRows.length > 0 && html`<div class="card-detail-screener">
+      <div class="card-detail-screener-head">
+        <span class="cd-screener-title">Price changes</span>
+        ${variantRows.length > 0 && html`<button class="cd-variants-btn"
+          onClick=${toggleVariants} disabled=${variants.loading}
+          title="Show every other printing and rarity print of this card (Normal, Foil, Enchanted, Iconic, …)">
+          ${variants.loading ? "Loading…" : variants.open ? "− Hide variants" : "+ Show all variants (" + variantRows.length + ")"}
+        </button>`}
+      </div>
+      <div class="cd-stat-list">
+        ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub}
+          color=${r.color} low=${r.low} market=${r.market}
+          productId=${r.productId} printing=${r.printing}/>`)}
+      </div>
+    </div>`}
+
     <div class="card-detail-history-section">
       <div class="card-detail-tabs">
         <button class=${"card-detail-tab"+(detailTab==="history"?" active":"")}
@@ -3718,8 +3951,16 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             <span class="legend-line-style"><span class="line-dashed"/>NM Market</span>
           </div>`}
           ${hasAnyHistory && html`<button class="card-detail-copy-btn"
-            onClick=${()=>copyCardPosterImage(posterRef.current)}
-            title="Copy this price history as an image (card + graph)">
+            onClick=${()=>copyCardPosterImage({
+              artSrc: posterArt,
+              name: group["Product Name"],
+              sub: `${group.Set||""}${group.Number?" · #"+String(group.Number).split("/")[0]:""}${group.Rarity?" · "+group.Rarity:""}`,
+              statRows,
+              chartSeries: clipSeriesFrom(chartSeries, chartStartMs),
+              rangeLabel: posterRangeLabel,
+              dateStr: posterDate,
+            })}
+            title="Copy this card as an image (art + price changes + graph)">
             <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
               <circle cx="12" cy="13" r="4"/>
@@ -3751,29 +3992,6 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           : !hasAnyHistory
             ? html`<div class="chart-empty large">No price history available for this card.</div>`
             : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
-        ${hasAnyHistory && !history.loading && html`<div class="card-export-poster" ref=${posterRef} aria-hidden="true">
-          <div class="cep-art">
-            ${posterArt
-              ? html`<img src=${posterArt} crossorigin="anonymous" alt=""/>`
-              : html`<div class="cep-art-fallback">${group["Product Name"]}</div>`}
-          </div>
-          <div class="cep-chart-frame">
-            <div class="cep-chart-title">
-              <span class="cep-ch-label">Price History</span><span class="cep-ch-range">· ${posterRangeLabel}</span>
-            </div>
-            <${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=420 height=300
-              padding=${{top:14,right:16,bottom:30,left:52}}/>
-            <div class="cep-legend">
-              ${history.normal && history.normal.length > 0 && html`<span class="cep-leg-item"><b class="cep-leg-glyph" style=${{color:"#1d8d4a"}}>●</b> Normal</span>`}
-              ${effectiveShowFoil && history.foil && history.foil.length > 0 && html`<span class="cep-leg-item"><b class="cep-leg-glyph" style=${{color:"#7e54c4"}}>●</b> Foil</span>`}
-              ${showLow && html`<span class="cep-leg-item"><b class="cep-leg-glyph">━</b> Low</span>`}
-              ${showMarket && html`<span class="cep-leg-item"><b class="cep-leg-glyph">┅</b> NM Market</span>`}
-            </div>
-          </div>
-          <div class="cep-footer">
-            <img class="cep-footer-logo" src=${posterLogo} crossorigin="anonymous" alt=""/><span class="cep-footer-txt">packs.ink · ${posterDate}</span>
-          </div>
-        </div>`}
       </div>`}
       ${detailTab === "graded" && html`<${GradedPricesTab} graded=${graded}
         gradedOwned=${gradedOwned} onGradedAdjust=${onGradedAdjust}
@@ -13795,65 +14013,348 @@ const copyMoverTileImage = (tileEl) => {
   }
 };
 
-// Capture the portrait card-history poster (card art + price chart + footer)
-// to a PNG Blob. Same rules as the mover tile: returns a Promise<Blob> so the
-// caller can write to the clipboard synchronously within the user gesture, and
-// ignoreElements skips everything outside the poster subtree so html2canvas
-// doesn't clone the page behind the modal (which can hold 100s of card images
-// → multi-second capture + clipboard-promise timeout). The poster's card art
-// is already a same-origin /img-proxy/ URL so the canvas stays untainted.
-const captureCardPosterBlob = async (posterEl) => {
-  const h2c = await window.__loadHtml2Canvas();
-  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg-modal").trim() || "#ffffff";
-  await new Promise((resolve) => { const p = new Image(); p.crossOrigin = "anonymous"; p.onload = p.onerror = () => resolve(); p.src = window.location.origin + "/Logos/packs-ink-logo.png"; setTimeout(resolve, 3000); });
-  await Promise.all([...posterEl.querySelectorAll("img")].map(im => (im.complete && im.naturalWidth)
-    ? Promise.resolve()
-    : new Promise(res => { im.onload = im.onerror = () => res(); setTimeout(res, 6000); })));
-  // Explicit width/height + windowWidth/windowHeight are REQUIRED here: the
-  // poster is parked off-screen (left:-10000px), and without them html2canvas
-  // sizes the capture to the real viewport width and reflows the poster tall
-  // and narrow. Pinning to the poster's own box size captures it correctly.
-  const pw = posterEl.offsetWidth, ph = posterEl.offsetHeight;
-  const canvas = await h2c(posterEl, {
-    useCORS: true,
-    backgroundColor: bg,
-    scale: 2,
-    logging: false,
-    imageTimeout: 5000,
-    width: pw,
-    height: ph,
-    windowWidth: pw + 40,
-    windowHeight: ph + 40,
-    ignoreElements: (el) => {
-      // Keep the poster subtree + its ancestor chain; skip everything else.
-      if(el === posterEl) return false;
-      if(posterEl.contains(el)) return false;
-      if(el.contains && el.contains(posterEl)) return false;
-      return true;
-    },
-  });
-  return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
-};
+// ── Card price poster (copy-image) — drawn directly onto a <canvas> ─────────
+// Rebuilt away from html2canvas: html2canvas screenshots the live DOM, so the
+// output depended on styles.css being the right version in the browser — and
+// the PWA service worker kept serving a STALE stylesheet, so the poster
+// rendered with missing/old styles (wrong width, ungridded stats). Drawing the
+// poster by hand makes it deterministic and CSS-cache-independent: this code
+// ships inside Index.html (network-first → always fresh), and it paints with
+// explicit geometry + theme colors read live, so a stale styles.css can't
+// break it. Layout matches the card-detail modal: top = card art (left) +
+// price-change stats (right); bottom = price-history chart; footer = brand+date.
 
-const copyCardPosterImage = (posterEl) => {
-  if(!posterEl) return;
-  flashToast("Copying image…", 8000);
-  const blobPromise = captureCardPosterBlob(posterEl);
-  if(navigator.clipboard && window.ClipboardItem){
-    navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
-      .then(() => flashToast("Price history image copied"))
-      .catch(() => flashToast("Couldn't copy image — try again"));
-  } else {
-    blobPromise.then((blob) => {
-      const u = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = u; a.download = "packsink-price-history.png";
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(u), 2000);
-      flashToast("Image saved");
-    }).catch(() => flashToast("Couldn't copy image — try again"));
+// Load an image for canvas compositing. Lorcast art must be proxied (same
+// origin) + crossOrigin so the canvas isn't tainted. Resolves to the element
+// or null (never rejects — a missing image just isn't drawn).
+const loadPosterImage = (src) => new Promise((resolve) => {
+  if(!src) return resolve(null);
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  let done = false;
+  const finish = (ok) => { if(done) return; done = true; resolve(ok && img.naturalWidth > 0 ? img : null); };
+  img.onload = () => finish(true);
+  img.onerror = () => finish(false);
+  img.src = src;
+  setTimeout(() => finish(img.complete), 7000);
+});
+
+// Read the live theme's colors so the export matches the user's current theme.
+// Falls back to dark-theme defaults — the theme vars have been stable across
+// versions, so this works even when styles.css itself is stale.
+const posterPalette = () => {
+  const cv = (n, fb) => { try { const v = getComputedStyle(document.documentElement).getPropertyValue(n).trim(); return v || fb; } catch { return fb; } };
+  return {
+    bg: cv("--bg-modal", "#15131f"), surface: cv("--bg-surface", "rgba(255,255,255,0.05)"),
+    border: cv("--border", "rgba(255,255,255,0.14)"), text: cv("--text", "#f1ede4"),
+    dim: cv("--text-dim", "#bdb6aa"), muted: cv("--text-muted", "#8d8678"),
+    accent: cv("--accent", "#c8a64e"), green: cv("--green", "#27ae60"), red: cv("--red", "#e05a3e"),
+    normal: "#1d8d4a", foil: "#7e54c4",
+  };
+};
+const posterPctColor = (p, P) => p == null ? P.muted : p > 0 ? P.green : p < 0 ? P.red : P.muted;
+
+const roundRectPath = (ctx, x, y, w, h, r) => {
+  r = Math.min(r, w/2, h/2);
+  ctx.beginPath();
+  ctx.moveTo(x+r, y); ctx.arcTo(x+w, y, x+w, y+h, r); ctx.arcTo(x+w, y+h, x, y+h, r);
+  ctx.arcTo(x, y+h, x, y, r); ctx.arcTo(x, y, x+w, y, r); ctx.closePath();
+};
+// Cover-fit (object-fit: cover) an image into a box, center-cropping overflow.
+const drawImageCover = (ctx, img, dx, dy, dw, dh) => {
+  const ir = img.naturalWidth / img.naturalHeight, dr = dw / dh;
+  let sx, sy, sw, sh;
+  if(ir > dr){ sh = img.naturalHeight; sw = sh * dr; sx = (img.naturalWidth - sw)/2; sy = 0; }
+  else { sw = img.naturalWidth; sh = sw / dr; sx = 0; sy = (img.naturalHeight - sh)/2; }
+  ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+};
+const wrapPosterText = (ctx, text, maxW, maxLines) => {
+  const words = String(text || "").trim().split(/\s+/).filter(Boolean);
+  if(!words.length) return [""];
+  const lines = []; let cur = words[0];
+  for(let i=1;i<words.length;i++){
+    const test = cur + " " + words[i];
+    if(ctx.measureText(test).width <= maxW) cur = test;
+    else { lines.push(cur); cur = words[i]; if(lines.length === maxLines){ cur = null; break; } }
+  }
+  if(cur != null && lines.length < maxLines) lines.push(cur);
+  const usedWords = lines.join(" ").split(/\s+/).filter(Boolean).length;
+  if(usedWords < words.length && lines.length){
+    let last = lines[lines.length-1];
+    while(last.length && ctx.measureText(last + "…").width > maxW) last = last.slice(0,-1);
+    lines[lines.length-1] = last.replace(/\s+$/,"") + "…";
+  }
+  return lines;
+};
+// Inline legend (text glyphs), right-aligned to rightX.
+const drawPosterLegend = (ctx, rightX, baselineY, series, P) => {
+  const items = [];
+  if(series.some(s => /^Normal/.test(s.label))) items.push({glyph:"●", color:P.normal, text:"Normal"});
+  if(series.some(s => /^Foil/.test(s.label)))   items.push({glyph:"●", color:P.foil,   text:"Foil"});
+  if(series.some(s => / Low$/.test(s.label)))    items.push({glyph:"━", color:P.muted,  text:"Low"});
+  if(series.some(s => /Market$/.test(s.label)))  items.push({glyph:"┅", color:P.muted,  text:"NM Market"});
+  if(!items.length) return;
+  const GF = "900 11px 'Nunito Sans', sans-serif", TF = "600 11px 'Nunito Sans', sans-serif";
+  const GGAP = 4, IGAP = 12;
+  let total = 0;
+  for(const it of items){ ctx.font = GF; total += ctx.measureText(it.glyph).width + GGAP; ctx.font = TF; total += ctx.measureText(it.text).width + IGAP; }
+  total -= IGAP;
+  ctx.textAlign = "left"; ctx.textBaseline = "alphabetic";
+  let x = rightX - total;
+  for(const it of items){
+    ctx.font = GF; ctx.fillStyle = it.color; ctx.fillText(it.glyph, x, baselineY); x += ctx.measureText(it.glyph).width + GGAP;
+    ctx.font = TF; ctx.fillStyle = P.dim;   ctx.fillText(it.text, x, baselineY);  x += ctx.measureText(it.text).width + IGAP;
   }
 };
+// Line chart into the box (x,y,w,h). Mirrors LineChart's scaling/ticks.
+const drawPosterChart = (ctx, series, x, y, w, h, P) => {
+  const valid = (series || []).map(s => ({color:s.color, dashed:s.dashed, pts:(s.data||[]).filter(p => p && Number.isFinite(p.y))})).filter(s => s.pts.length);
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for(const s of valid) for(const p of s.pts){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
+  if(!Number.isFinite(minX) || !Number.isFinite(maxY)){
+    ctx.fillStyle = P.muted; ctx.font = "12px 'Nunito Sans', sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("No price history", x + w/2, y + h/2); ctx.textAlign = "left"; return;
+  }
+  if(maxX === minX) maxX = minX + 1;
+  const yPad = Math.max(0.01, (maxY-minY)*0.08), yMin = Math.max(0, minY-yPad), yMax = maxY+yPad;
+  const sx = v => x + ((v-minX)/(maxX-minX))*w;
+  const sy = v => y + h - ((v-yMin)/((yMax-yMin)||1))*h;
+  ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  for(const t of niceTicks(yMin, yMax, 4)){
+    const ty = sy(t);
+    ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.setLineDash([2,3]);
+    ctx.beginPath(); ctx.moveTo(x, ty); ctx.lineTo(x+w, ty); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle = P.muted; ctx.font = "9px 'Nunito Sans', sans-serif"; ctx.fillText(fmtTickPrice(t), x-6, ty);
+  }
+  ctx.textBaseline = "alphabetic";
+  const span = maxX - minX, xticks = [minX, (minX+maxX)/2, maxX];
+  ctx.fillStyle = P.muted; ctx.font = "9px 'Nunito Sans', sans-serif";
+  xticks.forEach((t,i) => { ctx.textAlign = i===0?"left":i===2?"right":"center"; ctx.fillText(fmtTickDate(t, span), sx(t), y+h+14); });
+  ctx.textAlign = "left";
+  for(const s of valid){
+    ctx.strokeStyle = s.color; ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
+    ctx.setLineDash(s.dashed ? [5,3] : []);
+    ctx.beginPath();
+    s.pts.forEach((p,i) => { const px = sx(p.x), py = sy(p.y); if(i===0) ctx.moveTo(px,py); else ctx.lineTo(px,py); });
+    ctx.stroke();
+  }
+  ctx.setLineDash([]);
+};
+
+// Build the poster PNG as a Promise<Blob>. The caller passes this promise
+// straight into ClipboardItem inside the click gesture (image loads + drawing
+// resolve a tick later, which is fine — the write is registered synchronously).
+async function buildCardPosterBlob(opts){
+  const { artSrc, name, sub, statRows, chartSeries, rangeLabel, dateStr } = opts;
+  const P = posterPalette();
+  try { if(document.fonts && document.fonts.ready) await document.fonts.ready; } catch {}
+  const [artImg, logoImg] = await Promise.all([
+    loadPosterImage(artSrc),
+    loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png"),
+  ]);
+
+  const SCALE = 2, W = 760, PAD = 26, COLGAP = 22, SECGAP = 18;
+  const artW = 300, artH = Math.round(artW * 7 / 5);
+  const statsX = PAD + artW + COLGAP, statsW = W - PAD - statsX;
+  const CARD_PAD = 11, ROW_H = 17, CARD_GAP = 10;
+  const statCardH = CARD_PAD + 13 + 15 + 10 + (3 * ROW_H) + CARD_PAD;
+
+  const measure = document.createElement("canvas").getContext("2d");
+  measure.font = "700 23px 'Cinzel', Georgia, serif";
+  const titleLines = wrapPosterText(measure, name || "", statsW, 2);
+  const statsHeaderH = titleLines.length * 27 + (sub ? 20 : 0) + 12;
+  const statsBodyH = statRows.length * statCardH + Math.max(0, statRows.length - 1) * CARD_GAP;
+  const topH = Math.max(artH, statsHeaderH + statsBodyH);
+
+  const cfW = W - PAD * 2, INNER = 14, titleH = 26, plotBoxH = 168;
+  const cfH = INNER + titleH + plotBoxH + INNER;
+  const footerH = 46;
+  const H = Math.round(PAD + topH + SECGAP + cfH + SECGAP + footerH + PAD);
+
+  const canvas = document.createElement("canvas");
+  canvas.width = W * SCALE; canvas.height = H * SCALE;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+  ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+
+  // card art (left)
+  roundRectPath(ctx, PAD, PAD, artW, artH, 14);
+  ctx.save(); ctx.clip();
+  if(artImg){ drawImageCover(ctx, artImg, PAD, PAD, artW, artH); }
+  else { ctx.fillStyle = P.surface; ctx.fillRect(PAD, PAD, artW, artH);
+    ctx.fillStyle = P.muted; ctx.font = "600 14px 'Nunito Sans', sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(name || "", PAD + artW/2, PAD + artH/2); ctx.textAlign = "left"; }
+  ctx.restore();
+
+  // stats (right): title + sub
+  let y = PAD;
+  ctx.fillStyle = P.text; ctx.font = "700 23px 'Cinzel', Georgia, serif"; ctx.textAlign = "left";
+  for(const line of titleLines){ y += 24; ctx.fillText(line, statsX, y); }
+  if(sub){ y += 18; ctx.fillStyle = P.muted; ctx.font = "700 12px 'Nunito Sans', sans-serif"; ctx.fillText(String(sub).toUpperCase(), statsX, y); }
+  y += 14;
+
+  // stat cards
+  for(const row of statRows){
+    const cardY = y;
+    roundRectPath(ctx, statsX, cardY, statsW, statCardH, 9);
+    ctx.fillStyle = P.surface; ctx.fill(); ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+    let ly = cardY + CARD_PAD + 12, lx = statsX + 12;
+    if(row.color){ ctx.fillStyle = row.color; ctx.beginPath(); ctx.arc(lx + 3, ly - 4, 4, 0, Math.PI*2); ctx.fill(); lx += 13; }
+    ctx.fillStyle = P.text; ctx.font = "700 13px 'Nunito Sans', sans-serif"; ctx.textAlign = "left";
+    ctx.fillText(row.label || "", lx, ly);
+    if(row.sub){ const nw = ctx.measureText(row.label || "").width; ctx.fillStyle = P.muted; ctx.font = "600 11px 'Nunito Sans', sans-serif"; ctx.fillText(row.sub, lx + nw + 8, ly); }
+    // price line
+    ly += 15; let px = statsX + 12;
+    ctx.fillStyle = P.dim; ctx.font = "600 12px 'Nunito Sans', sans-serif"; ctx.fillText("Low ", px, ly); px += ctx.measureText("Low ").width;
+    ctx.fillStyle = P.text; ctx.font = "700 12px 'Nunito Sans', sans-serif"; ctx.fillText(fmt(row.low.now), px, ly); px += ctx.measureText(fmt(row.low.now)).width;
+    ctx.fillStyle = P.muted; ctx.font = "600 12px 'Nunito Sans', sans-serif"; ctx.fillText("  ·  Mkt ", px, ly); px += ctx.measureText("  ·  Mkt ").width;
+    ctx.fillStyle = P.text; ctx.font = "700 12px 'Nunito Sans', sans-serif"; ctx.fillText(fmt(row.market.now), px, ly);
+    // delta grid
+    const gY = ly + 12, labelW = 34, cellW = (statsW - 24 - labelW) / CARD_DELTA_WINDOWS.length, gx0 = statsX + 12 + labelW;
+    ctx.font = "700 9px 'Nunito Sans', sans-serif"; ctx.fillStyle = P.muted; ctx.textAlign = "center";
+    CARD_DELTA_WINDOWS.forEach((w,i) => ctx.fillText(w.label, gx0 + cellW*i + cellW/2, gY));
+    const drawDeltaRow = (label, src, rowY) => {
+      ctx.textAlign = "left"; ctx.font = "700 8px 'Nunito Sans', sans-serif"; ctx.fillStyle = P.muted; ctx.fillText(label, statsX + 12, rowY);
+      ctx.textAlign = "center"; ctx.font = "700 11px 'Nunito Sans', sans-serif";
+      CARD_DELTA_WINDOWS.forEach((w,i) => { ctx.fillStyle = posterPctColor(src.byWin[w.key], P); ctx.fillText(fmtPct(src.byWin[w.key]), gx0 + cellW*i + cellW/2, rowY); });
+    };
+    drawDeltaRow("LOW", row.low, gY + ROW_H);
+    drawDeltaRow("MKT", row.market, gY + ROW_H*2);
+    ctx.textAlign = "left";
+    y += statCardH + CARD_GAP;
+  }
+
+  // chart frame (bottom)
+  const cfY = PAD + topH + SECGAP;
+  roundRectPath(ctx, PAD, cfY, cfW, cfH, 14);
+  ctx.fillStyle = P.surface; ctx.fill(); ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+  const titleY = cfY + INNER + 14;
+  ctx.textAlign = "left"; ctx.fillStyle = P.accent; ctx.font = "700 15px 'Cinzel', Georgia, serif";
+  ctx.fillText("Price History", PAD + INNER, titleY);
+  const tW = ctx.measureText("Price History").width;
+  ctx.fillStyle = P.muted; ctx.font = "700 12px 'Nunito Sans', sans-serif"; ctx.fillText("· " + (rangeLabel || ""), PAD + INNER + tW + 8, titleY);
+  drawPosterLegend(ctx, PAD + cfW - INNER, titleY, chartSeries || [], P);
+  drawPosterChart(ctx, chartSeries || [], PAD + INNER + 44, cfY + INNER + titleH, cfW - INNER*2 - 44 - 4, plotBoxH - 22, P);
+
+  // footer
+  const fY = cfY + cfH + SECGAP;
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(PAD, fY); ctx.lineTo(W - PAD, fY); ctx.stroke();
+  const footTxt = "packs.ink · " + dateStr;
+  ctx.font = "800 14px 'Nunito Sans', sans-serif";
+  const logoH = 22, logoW = logoImg ? Math.round(logoImg.naturalWidth * (logoH / logoImg.naturalHeight)) : 0;
+  const txtW = ctx.measureText(footTxt).width, totalW = logoW + (logoW ? 10 : 0) + txtW;
+  let fx = (W - totalW) / 2; const fBaseline = fY + 28;
+  if(logoImg){ ctx.drawImage(logoImg, fx, fBaseline - logoH + 3, logoW, logoH); fx += logoW + 10; }
+  ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.fillText(footTxt, fx, fBaseline);
+
+  return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+}
+
+const copyCardPosterImage = (opts) => {
+  if(!opts) return;
+  flashToast("Copying image…", 8000);
+  const blobPromise = buildCardPosterBlob(opts);
+  const download = (blob) => {
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = u; a.download = "packsink-price.png";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+    flashToast("Image saved");
+  };
+  if(navigator.clipboard && window.ClipboardItem){
+    navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
+      .then(() => flashToast("Price image copied to clipboard"))
+      .catch(() => blobPromise.then(download).catch(() => flashToast("Couldn't copy image — try again")));
+  } else {
+    blobPromise.then(download).catch(() => flashToast("Couldn't copy image — try again"));
+  }
+};
+
+// Draw a compact "banner tile" of a card (the front-page mover-tile look) onto
+// a <canvas>: art → name → rarity·foil → Low/Mkt → a 3-window Δ% grid → footer.
+// Used for BOTH the in-modal preview AND its copy-image (same canvas → identical
+// pixels, no html2canvas, no CSS dependency — robust against the SW cache).
+// Returns the laid-out height so the caller can size the element.
+function drawCardTileCanvas(canvas, {artImg, logoImg, name, meta, low, market, dateStr}){
+  const P = posterPalette();
+  const SCALE = 2, W = 300, PAD = 12, R = 10;
+  const artW = W - PAD*2, artH = Math.round(artW * 7 / 5);
+  const wins = CARD_DELTA_WINDOWS.slice(0, 3);
+  const ROW_H = 16;
+
+  const m = canvas.getContext("2d");
+  m.font = "700 16px 'Cinzel', Georgia, serif";
+  const nameLines = wrapPosterText(m, name || "", artW, 2);
+
+  // Lay out vertically, tracking y; the final y + PAD is the canvas height.
+  const heights = {
+    afterArt: PAD + artH + 12,
+    name: nameLines.length * 19,
+    meta: meta ? 16 : 0,
+    prices: 8 + 18 + 18,
+    grid: 14 + ROW_H * 2 + 6,
+    footer: 12 + 24,
+  };
+  const H = heights.afterArt + heights.name + heights.meta + heights.prices + heights.grid + heights.footer + PAD;
+
+  canvas.width = W * SCALE; canvas.height = Math.round(H) * SCALE;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(SCALE, SCALE);
+  ctx.textBaseline = "alphabetic";
+
+  // panel bg + border
+  roundRectPath(ctx, 0.5, 0.5, W-1, H-1, R+2); ctx.fillStyle = P.bg; ctx.fill();
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+
+  // card art
+  roundRectPath(ctx, PAD, PAD, artW, artH, R); ctx.save(); ctx.clip();
+  if(artImg){ drawImageCover(ctx, artImg, PAD, PAD, artW, artH); }
+  else { ctx.fillStyle = P.surface; ctx.fillRect(PAD, PAD, artW, artH);
+    ctx.fillStyle = P.muted; ctx.font = "600 12px 'Nunito Sans', sans-serif"; ctx.textAlign = "center";
+    ctx.fillText(name || "", PAD + artW/2, PAD + artH/2); ctx.textAlign = "left"; }
+  ctx.restore();
+
+  let y = PAD + artH + 12;
+  // name
+  ctx.fillStyle = P.text; ctx.font = "700 16px 'Cinzel', Georgia, serif"; ctx.textAlign = "left";
+  for(const ln of nameLines){ y += 16; ctx.fillText(ln, PAD, y); y += 3; }
+  // meta (rarity · Foil)
+  if(meta){ y += 12; ctx.fillStyle = P.muted; ctx.font = "600 11px 'Nunito Sans', sans-serif"; ctx.fillText(String(meta).toUpperCase(), PAD, y); }
+  // Low / Mkt prices (label left, value right)
+  y += 20;
+  const drawPx = (label, val, yy) => {
+    ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "700 10px 'Nunito Sans', sans-serif"; ctx.fillText(label, PAD, yy);
+    ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = "700 15px 'Nunito Sans', sans-serif"; ctx.fillText(fmt(val), W - PAD, yy);
+  };
+  drawPx("LOW", low.now, y); y += 18; drawPx("MKT", market.now, y);
+  ctx.textAlign = "left";
+  // Δ% grid (3 windows)
+  y += 16;
+  const labelW = 30, gx0 = PAD + labelW, cellW = (W - PAD*2 - labelW) / wins.length;
+  ctx.font = "700 9px 'Nunito Sans', sans-serif"; ctx.fillStyle = P.muted; ctx.textAlign = "center";
+  wins.forEach((w,i) => ctx.fillText(w.label, gx0 + cellW*i + cellW/2, y));
+  const drawDelta = (label, src, yy) => {
+    ctx.textAlign = "left"; ctx.font = "700 8px 'Nunito Sans', sans-serif"; ctx.fillStyle = P.muted; ctx.fillText(label, PAD, yy);
+    ctx.textAlign = "center"; ctx.font = "700 12px 'Nunito Sans', sans-serif";
+    wins.forEach((w,i) => { ctx.fillStyle = posterPctColor(src.byWin[w.key], P); ctx.fillText(fmtPct(src.byWin[w.key]), gx0 + cellW*i + cellW/2, yy); });
+  };
+  drawDelta("LOW", low, y + ROW_H); drawDelta("MKT", market, y + ROW_H*2);
+  ctx.textAlign = "left";
+  y += ROW_H*2 + 12;
+  // footer
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(PAD, y); ctx.lineTo(W - PAD, y); ctx.stroke();
+  const footTxt = "packs.ink · " + dateStr;
+  ctx.font = "800 12px 'Nunito Sans', sans-serif";
+  const lH = 18, lW = logoImg ? Math.round(logoImg.naturalWidth * (lH / logoImg.naturalHeight)) : 0;
+  const tW = ctx.measureText(footTxt).width, tot = lW + (lW ? 8 : 0) + tW;
+  let fx = (W - tot) / 2; const fb = y + 22;
+  if(logoImg){ ctx.drawImage(logoImg, fx, fb - lH + 3, lW, lH); fx += lW + 8; }
+  ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.fillText(footTxt, fx, fb);
+
+  return H;
+}
 
 const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const tips = useContext(TipsContext);
@@ -20769,7 +21270,7 @@ function App(){
   // while data is in flight; cache hits make this instantaneous after the
   // first visit.
 
-  return html`<${TipsContext.Provider} value=${tipsEnabled}><div>
+  return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><div>
     <div class="top-nav">
       <button class="tabs-logo-btn" onClick=${()=>onTabClick("home")}
         title="Home" aria-label="Home">
@@ -20947,7 +21448,7 @@ function App(){
       onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
     ${view==="faq"&&html`<${FAQView}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
-  </div><//>`;
+  </div><//><//>`;
 }
 
 class ErrorBoundary extends React.Component {
