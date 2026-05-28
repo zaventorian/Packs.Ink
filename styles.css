@@ -369,6 +369,20 @@ input[type="checkbox"]{accent-color:var(--accent);}
    ancestor closer than the viewport. */
 .price-db-tablewrap{overflow:auto;max-height:calc(100vh - 280px);
   border:1px solid var(--border);border-radius:8px;}
+/* Landscape phones / short windows: the desktop 280px header reservation eats
+   so much of the viewport that the table itself rendered at 1.5 rows on a
+   411px landscape Android. Drop the cap entirely so the table flows into
+   the page and natural page scroll reveals more rows — instead of forcing
+   the user to scroll inside a 311px "sub-menu" while the page below sits
+   empty. Horizontal scroll on the wrap is preserved (the table is wider
+   than the viewport). Tradeoff: the sticky thead stays anchored to the
+   top of the wrap (its scroll container) and scrolls with the page rather
+   than pinning to the viewport top; pinning the thead to viewport while
+   keeping horizontal scroll needs a structural split of header/body and
+   is deferred. */
+@media (max-height:600px){
+  .price-db-tablewrap{max-height:none;}
+}
 .price-db-table{width:100%;border-collapse:collapse;font-size:12px;}
 .price-db-table thead{position:sticky;top:0;z-index:3;background:var(--bg);}
 .price-db-table thead th{background:var(--bg);border-bottom:1px solid var(--border);
@@ -621,6 +635,12 @@ html[data-theme="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
   .price-db-table th:nth-child(4), .price-db-table td:nth-child(4){display:none;} /* set */
   .price-db-table th:nth-child(5), .price-db-table td:nth-child(5){display:none;} /* rarity */
   .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:110px;max-width:135px;}
+  /* Tighten the icon-only rarity chips so all 9 canonical rarities fit on a
+     single row on phones. At the desktop 4px 10px padding + 3px gap, the
+     9-chip strip (~380px) wrapped the last chip (Promo) onto a second line
+     on a ~375px viewport. Trimmed padding + gap keep them on one line. */
+  .price-db-raritybtns{gap:2px;}
+  .price-db-raritybtn-icon{padding:4px 5px;gap:0;}
 }
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
@@ -1229,6 +1249,31 @@ html[data-theme="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   box-shadow:0 1px 2px rgba(0,0,0,0.3);transition:background 0.15s ease;}
 .mover-tile .mt-tcg-link:hover{background:rgba(0,0,0,0.92);}
 .mover-tile .mt-tcg-link svg{display:block;width:9px;height:9px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+/* Copy-tile-as-image button (top-right of the card art). Always visible,
+   mirroring the always-on TCGPlayer link at bottom-right. */
+.mover-tile .mt-export-btn{position:absolute;top:3px;right:3px;
+  width:16px;height:16px;display:flex;align-items:center;justify-content:center;
+  background:rgba(0,0,0,0.72);color:#fff;border:none;border-radius:3px;
+  padding:0;cursor:pointer;line-height:1;
+  box-shadow:0 1px 2px rgba(0,0,0,0.3);transition:background 0.15s ease;}
+.mover-tile .mt-export-btn:hover{background:rgba(0,0,0,0.92);}
+.mover-tile .mt-export-btn svg{display:block;width:10px;height:10px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;}
+/* Export-only footer row below the delta grid: "packs.ink · <date>" on the
+   left + small logo on the right. display:none in the live tile; the
+   html2canvas clone flips it to flex (see exportMoverTileImage). */
+.mover-tile .mt-export-footer{display:none;align-items:center;justify-content:space-between;
+  gap:6px;border-top:1px solid var(--border);margin-top:2px;padding-top:4px;}
+.mover-tile .mt-export-footer-txt{font-size:7.5px;font-weight:700;letter-spacing:0.2px;
+  color:var(--text-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.mover-tile .mt-export-footer-logo{height:13px;width:auto;flex-shrink:0;display:block;
+  object-fit:contain;}
+/* Transient toast fired by deep-tree actions (mover-tile image export). */
+.packsink-flash-toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));
+  transform:translateX(-50%) translateY(8px);
+  background:var(--accent);color:#fff;padding:9px 16px;border-radius:8px;
+  font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,0.3);
+  opacity:0;pointer-events:none;transition:opacity 0.18s ease,transform 0.18s ease;}
+.packsink-flash-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .mover-tile .mt-name{font-size:9px;font-weight:600;line-height:1.15;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .mover-tile .mt-meta{font-size:8px;color:var(--text-muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
@@ -1877,7 +1922,14 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   .home-grid{display:flex;flex-direction:column;min-width:0;max-width:100%;}
   .home-grid-main{order:1;min-width:0;max-width:100%;overflow:hidden;}
   .home-grid-main > *{min-width:0;max-width:100%;}
-  .home-grid-right{order:2;}
+  /* Drop the sticky from .home-grid-right here. On desktop the right column
+     (EV strip + CollectionPanel) pins so you can keep tracking your portfolio
+     while scrolling the movers feed. On mobile the grid is a single column,
+     so sticky pins the CollectionPanel to the viewport and the Following
+     panel below it scrolls UNDER — both have translucent --bg-surface
+     backgrounds, so the visual is a ghost-overlap of Following's "FOLLOWING"
+     header rendering over CollectionPanel's "Your Top Movers" rows. */
+  .home-grid-right{order:2;position:static;top:auto;}
   .home-left-col{order:3;}
   /* Skinny tournament column: tighter padding, smaller text. Deck name is
      already hidden via .ht-deck{display:none} in the earlier rule. */
@@ -2185,6 +2237,47 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .card-detail-history-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px;}
 .card-detail-history-title{font-family:'Cinzel',serif;font-size:14px;color:var(--accent);font-weight:600;}
 .card-detail-history-legend{display:flex;flex-wrap:wrap;gap:12px;font-size:11px;color:var(--text-dim);}
+/* "Copy image" button in the price-history header — exports the portrait poster. */
+.card-detail-copy-btn{display:inline-flex;align-items:center;gap:6px;
+  padding:5px 11px;font-size:11px;font-weight:700;letter-spacing:0.2px;cursor:pointer;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);border-radius:14px;
+  font-family:'Nunito Sans',sans-serif;transition:border-color 0.12s,color 0.12s;}
+.card-detail-copy-btn:hover{border-color:var(--accent);color:var(--accent);}
+.card-detail-copy-btn svg{display:block;}
+/* Off-screen portrait poster captured by html2canvas. Laid out (not display:none)
+   so the chart's ResizeObserver measures a real width; parked off-screen.
+   The card art fills the full width (no side whitespace); the card image
+   already carries the card name, so there's no redundant title caption —
+   just the art, the framed chart, and the brand footer. */
+.card-export-poster{position:fixed;left:-10000px;top:0;z-index:-1;pointer-events:none;
+  width:460px;box-sizing:border-box;padding:18px 18px 16px;
+  background:var(--bg-modal);color:var(--text);font-family:'Nunito Sans',sans-serif;
+  display:flex;flex-direction:column;gap:16px;}
+.card-export-poster .cep-art{display:block;}
+.card-export-poster .cep-art img{width:100%;height:auto;border-radius:16px;display:block;
+  box-shadow:0 10px 30px rgba(0,0,0,0.30);}
+.card-export-poster .cep-art-fallback{width:100%;aspect-ratio:5/7;border-radius:16px;
+  background:var(--accent-glow);display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:12px;color:var(--text-muted);font-weight:600;}
+.card-export-poster .cep-chart-frame{background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:16px;padding:16px 16px 12px;}
+/* Single inline line (no flex space-between — html2canvas 1.4.1 collapses
+   row flex with justify-content). */
+.card-export-poster .cep-chart-title{margin-bottom:12px;line-height:1.1;}
+.card-export-poster .cep-chart-title .cep-ch-label{font-family:'Cinzel',serif;font-size:16px;
+  font-weight:700;color:var(--accent);letter-spacing:0.3px;}
+.card-export-poster .cep-chart-title .cep-ch-range{font-size:12px;font-weight:700;letter-spacing:0.3px;
+  color:var(--text-muted);margin-left:7px;}
+/* Text-glyph markers + padding (NOT flex gap or empty styled spans — html2canvas
+   1.4.1 ignores flex gap and drops zero-content marker spans). */
+.card-export-poster .cep-legend{margin-top:14px;font-size:12px;color:var(--text-dim);}
+.card-export-poster .cep-leg-item{display:inline-block;padding-right:20px;}
+.card-export-poster .cep-leg-glyph{font-weight:900;margin-right:3px;color:var(--text-muted);}
+/* Centered footer: logo + wordmark inline (text-align, NOT flex space-between
+   which html2canvas collapses). */
+.card-export-poster .cep-footer{text-align:center;border-top:1px solid var(--border);padding-top:14px;}
+.card-export-poster .cep-footer-logo{height:24px;width:auto;display:inline-block;vertical-align:middle;margin-right:10px;}
+.card-export-poster .cep-footer-txt{font-size:14px;font-weight:800;color:var(--accent);letter-spacing:0.3px;vertical-align:middle;}
 .card-detail-history-toolbar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;}
 .card-detail-history-toolbar .seg-toggle button{padding:3px 9px;font-size:11px;}
 @media(max-width:700px){
@@ -3504,10 +3597,15 @@ html[data-theme="dark"] .card-row-price.foil{color:#c0a3ef;}
 .deck-pie-swatch{width:8px;height:8px;border-radius:2px;display:inline-block;}
 .deck-pie-swatch.dual{width:10px;height:10px;border:1px solid rgba(0,0,0,0.55);box-sizing:border-box;}
 html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35);}
-.deck-pie-legend-name .dual-tag{font-size:8px;font-weight:700;letter-spacing:0.4px;
+.deck-pie-legend-name .dual-tag{flex-shrink:0;font-size:8px;font-weight:700;letter-spacing:0.4px;
   text-transform:uppercase;color:var(--accent);background:var(--accent-glow);
-  padding:1px 4px;border-radius:3px;margin-left:3px;vertical-align:middle;}
-.deck-pie-legend-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
+  padding:1px 4px;border-radius:3px;}
+/* Flex container: the name text truncates with ellipsis, the dual pill stays
+   intact (flex-shrink:0). Previously the pill was inline inside the
+   ellipsis-truncating name, so a long dual label (e.g. "Amber/Emerald") clipped
+   the pill mid-render and left a stray empty box fragment on mobile. */
+.deck-pie-legend-name{display:flex;align-items:center;gap:3px;min-width:0;color:var(--text);}
+.deck-pie-legend-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}
 .deck-pie-legend-val{color:var(--text-muted);font-variant-numeric:tabular-nums;}
 
 /* Collection sharing controls inside the settings popover. Mirrors the
@@ -3696,6 +3794,8 @@ html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35
 .gc-goals-jumper{display:none;}
 @media (max-width:900px){ .gc-goals-jumper{display:inline-flex;} }
 .gc-add-fab{display:none;}
+.gc-add-fab-wrap{display:contents;}
+.gc-fab-backdrop,.gc-fab-menu{display:none;}
 @media (max-width:700px){
   .gc-add-cta-desktop{display:none;}
   .gc-add-fab{display:flex;position:fixed;
@@ -3703,9 +3803,30 @@ html[data-theme="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35
     right:max(18px, env(safe-area-inset-right));
     width:56px;height:56px;
     border-radius:50%;font-size:28px;font-weight:800;align-items:center;justify-content:center;
-    padding:0;line-height:1;z-index:50;box-shadow:0 4px 14px rgba(0,0,0,0.35);}
+    padding:0;line-height:1;z-index:62;box-shadow:0 4px 14px rgba(0,0,0,0.35);
+    transition:transform 0.18s ease;}
   .gc-add-fab:active{transform:scale(0.94);}
+  /* Open state: rotate the + into an × to signal "tap to dismiss the menu". */
+  .gc-add-fab-open{transform:rotate(45deg);}
+  .gc-add-fab-open:active{transform:rotate(45deg) scale(0.94);}
+  /* Transparent full-screen catcher so a tap anywhere closes the menu. */
+  .gc-fab-backdrop{display:block;position:fixed;inset:0;z-index:60;background:transparent;}
+  /* Action menu anchored just above the FAB, right-aligned to it. */
+  .gc-fab-menu{display:flex;position:fixed;z-index:61;flex-direction:column;gap:2px;padding:6px;
+    bottom:calc(84px + env(safe-area-inset-bottom));
+    right:max(18px, env(safe-area-inset-right));
+    min-width:208px;background:var(--bg-modal);border:1px solid var(--border);
+    border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
+    animation:gcFabMenuIn 0.14s ease;}
+  .gc-fab-menu-item{display:flex;align-items:center;gap:10px;width:100%;
+    padding:11px 12px;border:none;border-radius:8px;background:transparent;
+    color:var(--text);font-size:14px;font-weight:600;cursor:pointer;text-align:left;
+    font-family:'Nunito Sans',sans-serif;line-height:1.1;}
+  .gc-fab-menu-item:active{background:var(--bg-surface);}
+  .gc-fab-menu-icon{display:inline-flex;align-items:center;justify-content:center;
+    width:24px;height:24px;flex-shrink:0;color:var(--accent);font-size:20px;font-weight:800;line-height:1;}
 }
+@keyframes gcFabMenuIn{from{opacity:0;transform:translateY(6px);}to{opacity:1;transform:translateY(0);}}
 
 /* PSA 10 reference price shown on tracked-but-not-owned cards. Renders
    inside the "Tracking" pill as a secondary chip. */

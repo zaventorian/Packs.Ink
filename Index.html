@@ -3594,6 +3594,16 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil: effectiveShowFoil});
   const chartStartMs = computeChartStartMs(rangeKey, customStart, hidePreorders, group.Set);
 
+  // Portrait price-history poster export (card art + chart + footer → clipboard).
+  const posterRef = useRef(null);
+  const proxifyArt = (u) => (typeof u === "string" && u.startsWith("https://cards.lorcast.io/"))
+    ? "/img-proxy/" + u.slice("https://cards.lorcast.io/".length) : u;
+  const posterArt = proxifyArt(group.img_large || group.img_normal || group.img_small);
+  const posterDate = new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
+  const posterRangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [])[1] || "";
+  // Absolute URL — relative "Logos/..." doesn't resolve inside html2canvas's clone iframe.
+  const posterLogo = window.location.origin + "/Logos/packs-ink-logo.png";
+
   return html`<div class="card-detail-overlay" onClick=${onClose}>
     <div class="card-detail" onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
@@ -3707,6 +3717,15 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             <span class="legend-line-style"><span class="line-solid"/>Low</span>
             <span class="legend-line-style"><span class="line-dashed"/>NM Market</span>
           </div>`}
+          ${hasAnyHistory && html`<button class="card-detail-copy-btn"
+            onClick=${()=>copyCardPosterImage(posterRef.current)}
+            title="Copy this price history as an image (card + graph)">
+            <svg viewBox="0 0 24 24" aria-hidden="true" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+              <circle cx="12" cy="13" r="4"/>
+            </svg>
+            Copy image
+          </button>`}
         </div>
         <div class="card-detail-history-toolbar">
           <div class="seg-toggle">
@@ -3732,6 +3751,29 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           : !hasAnyHistory
             ? html`<div class="chart-empty large">No price history available for this card.</div>`
             : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
+        ${hasAnyHistory && !history.loading && html`<div class="card-export-poster" ref=${posterRef} aria-hidden="true">
+          <div class="cep-art">
+            ${posterArt
+              ? html`<img src=${posterArt} crossorigin="anonymous" alt=""/>`
+              : html`<div class="cep-art-fallback">${group["Product Name"]}</div>`}
+          </div>
+          <div class="cep-chart-frame">
+            <div class="cep-chart-title">
+              <span class="cep-ch-label">Price History</span><span class="cep-ch-range">· ${posterRangeLabel}</span>
+            </div>
+            <${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=420 height=300
+              padding=${{top:14,right:16,bottom:30,left:52}}/>
+            <div class="cep-legend">
+              ${history.normal && history.normal.length > 0 && html`<span class="cep-leg-item"><b class="cep-leg-glyph" style=${{color:"#1d8d4a"}}>●</b> Normal</span>`}
+              ${effectiveShowFoil && history.foil && history.foil.length > 0 && html`<span class="cep-leg-item"><b class="cep-leg-glyph" style=${{color:"#7e54c4"}}>●</b> Foil</span>`}
+              ${showLow && html`<span class="cep-leg-item"><b class="cep-leg-glyph">━</b> Low</span>`}
+              ${showMarket && html`<span class="cep-leg-item"><b class="cep-leg-glyph">┅</b> NM Market</span>`}
+            </div>
+          </div>
+          <div class="cep-footer">
+            <img class="cep-footer-logo" src=${posterLogo} crossorigin="anonymous" alt=""/><span class="cep-footer-txt">packs.ink · ${posterDate}</span>
+          </div>
+        </div>`}
       </div>`}
       ${detailTab === "graded" && html`<${GradedPricesTab} graded=${graded}
         gradedOwned=${gradedOwned} onGradedAdjust=${onGradedAdjust}
@@ -9567,6 +9609,8 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [addPreselectPrinting, setAddPreselectPrinting] = useState(null);
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   const [goalOpen, setGoalOpen] = useState(false);
+  // Mobile FAB action menu (single + button → "Add one" / "Bulk add").
+  const [fabMenuOpen, setFabMenuOpen] = useState(false);
   const [loadErr, setLoadErr] = useState(null);
   // Click-to-open: builds a CardDetailModal-shaped "group" from raw rows
   // and shows the modal anchored to the graded tab.
@@ -10575,8 +10619,24 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         ${/* "Show hidden" footer removed alongside the Hidden feature. */ ""}
       </aside>`}
     </div>
-    ${!readOnly && html`<button class="gc-add-fab active" onClick=${()=>setAddOpen(true)}
-      title="Add a graded card to your collection" aria-label="Add graded card">+</button>`}
+    ${!readOnly && html`<div class="gc-add-fab-wrap">
+      ${fabMenuOpen && html`<div class="gc-fab-backdrop" onClick=${()=>setFabMenuOpen(false)}></div>`}
+      ${fabMenuOpen && html`<div class="gc-fab-menu" role="menu">
+        <button class="gc-fab-menu-item" role="menuitem" onClick=${()=>{ setFabMenuOpen(false); setAddOpen(true); }}>
+          <span class="gc-fab-menu-icon">＋</span>Add a graded card
+        </button>
+        <button class="gc-fab-menu-item" role="menuitem" onClick=${()=>{ setFabMenuOpen(false); setBulkAddOpen(true); }}>
+          <span class="gc-fab-menu-icon">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4 6h11M4 12h11M4 18h7"/><path d="M18 15v6M15 18h6"/>
+            </svg>
+          </span>Bulk add
+        </button>
+      </div>`}
+      <button class=${"gc-add-fab active"+(fabMenuOpen?" gc-add-fab-open":"")} onClick=${()=>setFabMenuOpen(o=>!o)}
+        title="Add graded cards" aria-label="Add graded cards"
+        aria-haspopup="menu" aria-expanded=${fabMenuOpen}>+</button>
+    </div>`}
     ${addOpen && html`<${GradedCollectionAddModal}
       raw=${raw} cardById=${cardById} priceByKey=${priceByKey}
       preselectCardId=${addPreselectCardId}
@@ -13616,10 +13676,192 @@ const pctColor = (p) => {
   return "var(--text-muted)";
 };
 
+// Transient bottom-center toast for actions fired deep in the tree (the
+// mover-tile image export) where a component-level showToast isn't in scope.
+const flashToast = (msg, ms = 2200) => {
+  let el = document.getElementById("packsink-flash-toast");
+  if(!el){
+    el = document.createElement("div");
+    el.id = "packsink-flash-toast";
+    el.className = "packsink-flash-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("show");
+  clearTimeout(el.__hideTimer);
+  el.__hideTimer = setTimeout(() => el.classList.remove("show"), ms);
+};
+
+// Capture a mover tile to a PNG Blob. The capture hides the interactive chrome
+// (export + TCGPlayer buttons, both tagged data-h2c-ignore) and reveals an
+// export-only brand/date footer row (data-export-footer, display:none in the
+// live DOM) inside the html2canvas clone. The card art is re-pointed at the
+// same-origin /img-proxy/ so the canvas isn't tainted — Lorcast's CDN doesn't
+// send CORS headers (same trick the deck/artist posters use). The footer logo
+// is same-origin so it's canvas-safe; we preload it so it's warm in cache.
+//
+// IMPORTANT: this returns a Promise<Blob>. The click handler passes that
+// promise straight into ClipboardItem and calls navigator.clipboard.write
+// SYNCHRONOUSLY within the user gesture — html2canvas is slow (the visible
+// "freeze"), so awaiting it before writing expires the user-activation window
+// and the write rejects with NotAllowedError. Writing first, resolving later,
+// keeps the copy inside the gesture.
+const captureMoverTileBlob = async (tileEl) => {
+  const h2c = await window.__loadHtml2Canvas();
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
+  await new Promise((resolve) => {
+    const pre = new Image();
+    pre.onload = pre.onerror = () => resolve();
+    pre.src = "Logos/packs-ink-logo.png";
+    setTimeout(resolve, 3000);
+  });
+  // Swap the live card art to the same-origin /img-proxy/ URL with crossOrigin
+  // BEFORE capturing, and wait for it to load. Swapping src only inside onclone
+  // races the render — html2canvas paints the tile before the new image loads,
+  // producing a black art box. Capturing an image that's already fully loaded
+  // in the live DOM is reliable. We restore the original src in finally{}.
+  const liveImg = tileEl.querySelector(".mt-img-wrap img");
+  let restoreImg = null;
+  if(liveImg && typeof liveImg.src === "string" && liveImg.src.startsWith("https://cards.lorcast.io/")){
+    const origSrc = liveImg.getAttribute("src");
+    const origCO = liveImg.getAttribute("crossorigin");
+    const proxied = "/img-proxy/" + origSrc.slice("https://cards.lorcast.io/".length);
+    liveImg.crossOrigin = "anonymous";
+    await new Promise((resolve) => {
+      liveImg.onload = liveImg.onerror = () => { liveImg.onload = null; liveImg.onerror = null; resolve(); };
+      liveImg.src = proxied;
+      setTimeout(resolve, 6000);
+    });
+    restoreImg = () => {
+      if(origCO == null) liveImg.removeAttribute("crossorigin"); else liveImg.setAttribute("crossorigin", origCO);
+      liveImg.src = origSrc;
+    };
+  }
+  tileEl.setAttribute("data-exporting", "1");
+  let canvas;
+  try {
+    canvas = await h2c(tileEl, {
+      useCORS: true,
+      backgroundColor: bg,
+      scale: 2,
+      logging: false,
+      imageTimeout: 5000,
+      ignoreElements: (el) => {
+        if(el.hasAttribute && el.hasAttribute("data-h2c-ignore")) return true;
+        // Skip every OTHER mover tile. html2canvas clones the whole document;
+        // with all banners rendered that's 100+ Lorcast AVIFs to decode, which
+        // pushed the capture to ~30s on mobile (and blew past the clipboard
+        // promise's tolerance, so the copy silently failed). Skipping the
+        // sibling tiles drops it to ~1s — only the target tile (tagged
+        // data-exporting) is cloned and rendered.
+        if(el.classList && el.classList.contains("mover-tile") && el.getAttribute("data-exporting") !== "1") return true;
+        return false;
+      },
+      onclone: (doc) => {
+        const root = doc.querySelector('[data-exporting="1"]');
+        if(!root) return;
+        const footer = root.querySelector("[data-export-footer]");
+        if(footer) footer.style.display = "flex";
+      },
+    });
+  } finally {
+    tileEl.removeAttribute("data-exporting");
+    if(restoreImg) restoreImg();
+  }
+  return await new Promise((res, rej) =>
+    canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+};
+
+// Copy a mover tile image to the clipboard. Called from the button's onClick.
+// Must run synchronously up to the clipboard.write call to stay inside the
+// user-activation window (see captureMoverTileBlob). Falls back to a download
+// only when image-clipboard is genuinely unsupported by the browser.
+const copyMoverTileImage = (tileEl) => {
+  flashToast("Copying image…", 8000);
+  const blobPromise = captureMoverTileBlob(tileEl);
+  if(navigator.clipboard && window.ClipboardItem){
+    navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
+      .then(() => flashToast("Tile image copied to clipboard"))
+      .catch(() => flashToast("Couldn't copy image — try again"));
+  } else {
+    blobPromise.then((blob) => {
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = u; a.download = "packsink-card.png";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 2000);
+      flashToast("Image saved");
+    }).catch(() => flashToast("Couldn't copy image — try again"));
+  }
+};
+
+// Capture the portrait card-history poster (card art + price chart + footer)
+// to a PNG Blob. Same rules as the mover tile: returns a Promise<Blob> so the
+// caller can write to the clipboard synchronously within the user gesture, and
+// ignoreElements skips everything outside the poster subtree so html2canvas
+// doesn't clone the page behind the modal (which can hold 100s of card images
+// → multi-second capture + clipboard-promise timeout). The poster's card art
+// is already a same-origin /img-proxy/ URL so the canvas stays untainted.
+const captureCardPosterBlob = async (posterEl) => {
+  const h2c = await window.__loadHtml2Canvas();
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg-modal").trim() || "#ffffff";
+  await new Promise((resolve) => { const p = new Image(); p.crossOrigin = "anonymous"; p.onload = p.onerror = () => resolve(); p.src = window.location.origin + "/Logos/packs-ink-logo.png"; setTimeout(resolve, 3000); });
+  await Promise.all([...posterEl.querySelectorAll("img")].map(im => (im.complete && im.naturalWidth)
+    ? Promise.resolve()
+    : new Promise(res => { im.onload = im.onerror = () => res(); setTimeout(res, 6000); })));
+  // Explicit width/height + windowWidth/windowHeight are REQUIRED here: the
+  // poster is parked off-screen (left:-10000px), and without them html2canvas
+  // sizes the capture to the real viewport width and reflows the poster tall
+  // and narrow. Pinning to the poster's own box size captures it correctly.
+  const pw = posterEl.offsetWidth, ph = posterEl.offsetHeight;
+  const canvas = await h2c(posterEl, {
+    useCORS: true,
+    backgroundColor: bg,
+    scale: 2,
+    logging: false,
+    imageTimeout: 5000,
+    width: pw,
+    height: ph,
+    windowWidth: pw + 40,
+    windowHeight: ph + 40,
+    ignoreElements: (el) => {
+      // Keep the poster subtree + its ancestor chain; skip everything else.
+      if(el === posterEl) return false;
+      if(posterEl.contains(el)) return false;
+      if(el.contains && el.contains(posterEl)) return false;
+      return true;
+    },
+  });
+  return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+};
+
+const copyCardPosterImage = (posterEl) => {
+  if(!posterEl) return;
+  flashToast("Copying image…", 8000);
+  const blobPromise = captureCardPosterBlob(posterEl);
+  if(navigator.clipboard && window.ClipboardItem){
+    navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
+      .then(() => flashToast("Price history image copied"))
+      .catch(() => flashToast("Couldn't copy image — try again"));
+  } else {
+    blobPromise.then((blob) => {
+      const u = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = u; a.download = "packsink-price-history.png";
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(u), 2000);
+      flashToast("Image saved");
+    }).catch(() => flashToast("Couldn't copy image — try again"));
+  }
+};
+
 const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const tips = useContext(TipsContext);
   const url = tcgUrl(card.tcgplayer_product_id, card.printing);
   const name = card.version ? `${card.name} — ${card.version}` : card.name;
+  // Export-only stamp: site brand + today's date. Hidden in the live tile
+  // (CSS display:none) and revealed only inside the html2canvas clone.
+  const exportStamp = "packs.ink · " + new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
   // Prefer image_large (734w) over image_normal (367w) over image_small
   // (200w). Movers banner tiles render at ~200px CSS-width which is 400-600
   // device px on hi-DPI displays — image_normal looks soft, image_large is
@@ -13636,7 +13878,20 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
       ${img
         ? html`<img src=${img} alt=${name} loading="lazy"/>`
         : html`<div class="mt-img-fallback">${name}</div>`}
+      <button class="mt-export-btn" data-h2c-ignore
+          title="Copy this tile as an image" aria-label="Copy this tile as an image"
+          onClick=${(e) => {
+            e.stopPropagation();
+            const tile = e.currentTarget.closest(".mover-tile");
+            if(tile) copyMoverTileImage(tile);
+          }}>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+      </button>
       ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow"
+          data-h2c-ignore
           title="Open on TCGPlayer" aria-label="Open on TCGPlayer"
           onClick=${e=>e.stopPropagation()}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -13666,6 +13921,10 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
       ${wins.map(w => html`<span key=${"m-"+w.key}
         class=${"mt-dval"+(w.key===activeWindow?" active":"")}
         style=${{color:pctColor(card[w.pctMkt])}}>${fmtPct(card[w.pctMkt])}</span>`)}
+    </div>
+    <div class="mt-export-footer" data-export-footer>
+      <span class="mt-export-footer-txt">${exportStamp}</span>
+      <img class="mt-export-footer-logo" src="Logos/packs-ink-logo.png" alt="packs.ink"/>
     </div>
   </div>`;
 };
@@ -18361,7 +18620,7 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
         const nameStyle = gradientPrefix ? null : {color: s.color, fontWeight: 600};
         return html`<div key=${s.k} class=${"deck-pie-legend-row"+(isDual?" dual":"")}>
           <span class=${"deck-pie-swatch"+(isDual?" dual":"")} style=${s.swatch}></span>
-          <span class="deck-pie-legend-name" style=${nameStyle}>${s.k}${isDual?html` <span class="dual-tag">dual</span>`:""}</span>
+          <span class="deck-pie-legend-name" style=${nameStyle}><span class="deck-pie-legend-name-text">${s.k}</span>${isDual?html`<span class="dual-tag">dual</span>`:""}</span>
           <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
         </div>`;
       })}

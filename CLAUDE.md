@@ -234,6 +234,8 @@ The Screener has parity with the Cards browse filters as of 2026-05-26 via the c
 
 - ≤720px: hide the checkbox column (invisible behind sticky NAME anyway), tighten NAME column to 110-135px max. Default no-scroll view fits NAME + Low + NM Market + 1W on a 360px phone. Batch-select via checkbox stays available on tablet/desktop.
 - Filter chips wrap to multiple rows naturally.
+- **Rarity icon chips fit on one line (2026-05-27):** at ≤720px `.price-db-raritybtns` gap drops to 2px and `.price-db-raritybtn-icon` padding drops to `4px 5px` so all 9 canonical rarity chips fit a single row on a ~375px phone (the 9th, Promo, was wrapping at the desktop `4px 10px`/`3px gap` sizing).
+- **Landscape / short viewport (2026-05-27):** `.price-db-tablewrap` normally caps at `max-height: calc(100vh - 280px)` with an internal scroll. On a landscape phone (~411px tall) that left only ~1.5 rows. At `@media (max-height:600px)` the cap is removed (`max-height:none`) so the table flows into natural page scroll instead of a nested "sub-menu". Tradeoff: the sticky `thead` only pins within its scroll container, so once you scroll past the table top the column headers scroll off with it (pinning headers to viewport while keeping horizontal scroll needs a header/body structural split — deferred). Horizontal scroll on the wrap is preserved (table is wider than the viewport).
 
 ## Screener saved views
 
@@ -355,6 +357,8 @@ The old `packsink:graded:hidden` key was swept by the AUX_CACHE_VERSION bump on 
 8. Submit → `bulkAddItems(rows)` does one upsert call with onConflict=`user_id,card_id,printing,grader,grade`
 
 Mobile constraint: the per-row `<select>` elements need explicit `width:100%; box-sizing:border-box; min-width:0` styles, AND the grid template needs `minmax(0, 1fr)` for the name column (not plain `1fr`). Otherwise native select dropdowns render at their browser-determined natural width and overflow their column, clipping past the modal's `overflow:hidden`.
+
+**Mobile entry point (2026-05-27):** there is ONE mobile FAB (`.gc-add-fab`, the `+` button, ≤700px) inside `.gc-add-fab-wrap`. Tapping it toggles `fabMenuOpen` which renders `.gc-fab-menu` (a popup above the FAB) with two items: **Add a graded card** (→ `setAddOpen`) and **Bulk add** (→ `setBulkAddOpen`). `.gc-fab-backdrop` is a transparent full-screen catcher that closes the menu on outside-tap; the FAB rotates the `+` into an `×` (`.gc-add-fab-open`) while open. There is NO separate bulk FAB — an earlier version stacked two FABs; the popup-menu pattern replaced it. Desktop still uses the header chips (`.gc-add-cta-desktop`: "＋ Bulk add" + "+ Add graded card").
 
 ## Graded display: avg_1d primary, avg_30d secondary
 
@@ -542,6 +546,25 @@ Highest wins, tiebreak by iteration order.
 - **Save JPG**: html2canvas → adaptive scale + q=0.85 → recompress (q=0.78 → 0.55) until under 9.5MB (Discord cap).
 - **Print PDF path** preserves dark poster via `print-color-adjust: exact`. `break-inside: avoid` on figures. Pinned to 6 cols via `!important` in `@media print`.
 
+## Copy-to-clipboard image exports (mover tiles + card price-history poster)
+
+Two "copy this as an image" features, both added 2026-05-27, both via html2canvas. They share a hard-won set of html2canvas-1.4.1 patterns — **read these before touching either, or before adding a third image export.**
+
+### Surfaces
+- **Mover banner tile** (`MoverTile`): a camera button (`.mt-export-btn`, top-right of the card art, always visible, `data-h2c-ignore`) → `copyMoverTileImage(tileEl)`. Captures the tile + a normally-hidden footer row (`.mt-export-footer`, `data-export-footer`) showing "packs.ink · <date>" + logo. The footer is `display:none` live, flipped to flex inside the html2canvas clone via `onclone`.
+- **Card price-history poster** (`CardDetailModal` → Price History tab): a "Copy image" button (`.card-detail-copy-btn`) → `copyCardPosterImage(posterRef.current)`. Captures an always-rendered, off-screen **portrait** poster (`.card-export-poster`, `left:-10000px`): full-width card art → framed price chart (a second `LineChart` reflecting the live toggles — range / Low / NM Market / Foil) → "● Foil ━ Low" legend → footer (logo + "packs.ink · date"). NO redundant card-name caption (the card image already shows it).
+
+### The five html2canvas-1.4.1 gotchas baked into these (each cost an iteration)
+1. **Clipboard write must be SYNCHRONOUS within the user gesture.** html2canvas is slow (the visible "freeze"); awaiting it before `clipboard.write` expires the user-activation window → `NotAllowedError`. Pattern: the capture fn returns a `Promise<Blob>`; the click handler calls `navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])` *immediately* (handler is NOT async) and lets the blob resolve later. Same trick the deck poster's Copy button uses.
+2. **`ignoreElements` to avoid cloning the whole document.** html2canvas clones the entire DOM and the browser decodes every `<img>` in the clone iframe — with all mover banners that's 100+ Lorcast AVIFs → ~30s on mobile (and that 30s blew past the clipboard-promise tolerance, so the copy silently failed). Tile: skip every other `.mover-tile` (target tagged `data-exporting`). Poster: skip everything outside the poster subtree + its ancestor chain. Drops capture to ~0.3–1.3s.
+3. **Off-screen capture needs explicit geometry.** An element at `left:-10000px` gets sized to the viewport width and reflows tall-and-narrow. Pass `width`/`height` (= `offsetWidth`/`offsetHeight`) AND `windowWidth`/`windowHeight` to html2canvas to pin it to the element's real box.
+4. **No flex `gap`, no `justify-content:space-between`, no empty styled marker spans.** html2canvas ignores flex gap, collapses row-flex `space-between` to the start, and drops zero-content bordered/`background` marker spans. Use `display:inline-block` + `margin`/`padding` for spacing, `text-align` instead of `space-between`, and **text glyphs** (`●`, `━`, `┅`) for legend markers instead of styled empty spans.
+5. **Image URLs must be absolute + CORS-safe.** Relative `Logos/...` doesn't resolve in the clone iframe → use `window.location.origin + "/Logos/..."`. Lorcast card art (`cards.lorcast.io`) taints the canvas → swap to same-origin `/img-proxy/...` with `crossOrigin="anonymous"` and await its load BEFORE capture (swapping only in `onclone` races the render → black art box). Footer logo is same-origin so it's canvas-safe once absolute. Preload images so they're warm for the clone.
+
+Also: footer text was invisible at `--text-muted` (rgba white 0.35) on dark `--bg-modal` → use `--accent` (gold) so it reads in both themes. `flashToast()` (module-level, near the tile helpers) is a transient bottom-center toast used by both flows since they're too deep in the tree to reach a component `showToast`.
+
+**Known-rough / "edit more later" (per user, 2026-05-27):** the card poster look is "good enough for now" but not final — the chart frame is subtle in dark mode (cleaner in light/cream theme), and the overall polish may get another pass.
+
 ## PWA install nudge
 
 Auto-opens `InstallHelpModal` on visits 2 and 3 (counter at `localStorage["packsink:installVisits"]`). Skipped on visit 1 (no ambush), and entirely when already standalone, on desktop, or after the user clicked "Don't show this again" (`packsink:installDismissed`).
@@ -608,6 +631,8 @@ If you add a new multi-column table that needs to work on mobile, follow the sam
 It was previously `position: sticky; top: 8px` on desktop so the Following panel pinned while the main column scrolled. That broke when the left column ended up containing TWO `.home-feed` instances (Following + the desktop Tournament Results banner) — two sticky elements at the same top offset stack on top of each other once both reach the constraint, with Following visually covering Tournament Results. The mobile @media override (`position: static`) also occasionally lost the cascade race when service-worker caches went stale, producing residual overlap with the CollectionPanel's "Your Top Movers" table on phones.
 
 Letting both panels scroll naturally with the page sidesteps the conflict on both platforms. Don't re-add sticky to `.home-feed` without making it specific to ONE of the two panels — and bear in mind that bumping `sw.js CACHE_VERSION` is mandatory whenever the rule changes, otherwise PWA users will keep painting the old stylesheet.
+
+**`.home-grid-right` was a SECOND sticky, fixed 2026-05-27.** The right column (EV strip + CollectionPanel) has `position: sticky; top: 8px` on desktop — intentional, so the portfolio panel pins while the movers feed scrolls. But the original 2026-05-26 de-sticky fix only touched `.home-feed`, not `.home-grid-right`. On mobile the grid collapses to one column, so the sticky right column pinned the CollectionPanel to the viewport and the Following panel (`.home-left-col`, order:3) scrolled UNDER it — both have translucent `--bg-surface` backgrounds, so it read as a ghost overlap of "FOLLOWING" over "Your Top Movers". Fix: `.home-grid-right{position:static;top:auto;}` inside the `@media (max-width:1100px)` block. Desktop sticky preserved. **Lesson: when killing a sticky-overlap bug, audit EVERY sticky element in that grid, not just the obvious one.**
 
 ## Rarity icons
 
@@ -693,7 +718,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v103`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
+- **`sw.js CACHE_VERSION`** (current `packsink-v105`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes, so if you edit Index.html/styles.css repeatedly within one version, a previously-cached client keeps serving the *first* build it saw under that version. Bump again (or, for a clean local test, use an incognito window — the SW is registered on localhost too) when iterating heavily.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v42**). Bump when row shape changes (v42 added `text` field for body-text search), OR when forcing all users to cold-fetch.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=4**, bumped 2026-05-26 with the full-booster-pack rebake; v=3 was the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
 - **PWA icons baked from `Logos/packs-ink-logo.png`** via `scripts/rebake_icons.py` (Pillow). The script composites the full booster-pack artwork over `#0f0d20` with a 12% inset margin (keeps art clear of iOS/Android squircle masks). 6 outputs: apple-touch-icon.png (180), favicon-16/32/64.png, icon-192.png, icon-512.png. Idempotent — re-run when the source logo changes. Don't rely on `manifest.background_color` for transparent icons; iOS save-to-home-screen ignores it.
