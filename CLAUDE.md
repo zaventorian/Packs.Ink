@@ -159,6 +159,8 @@ Audit scripts: `audit_holofoils.py`, `audit_connecting_foils.py`, `audit_missing
 
 - **Numeric stat operators**: `cost`, `strength`, `willpower`, `lore` accept equality + comparison. Value at `filters[statKey]`, operator at `filters[statKey + "Op"]` (`=`, `>`, `>=`, `<`, `<=`). Forms accepted: `lore 3`, `3 lore`, `lore>=2`, `lore >= 2`, `lore2`. Matchers use `_cmp(rowVal, want, op)`. Null stats fail any non-null filter.
 - **Classification soft match** — card qualifies if EITHER classifications include the word OR product name includes the word. Without this, "elsa spirit" zeroes out (Elsa - Spirit of Winter has no Spirit subtype). Other dimensions stay hard.
+- **Partial-rarity prefix matching** via `resolveRarityPrefix(token)` (Index.html ~line 2232). Any ≥3-char unambiguous prefix of a canonical rarity resolves: `ench`/`enchant`/`enchante` → Enchanted, `leg`/`lege`/`legen` → Legendary, `epi`/`epic`, `ico`/`icon`/`iconi`, `pro`/`prom`/`promo`, `rar`/`rare`, `com`/`comm`/`common`, `unc`/`unco`/`uncom`. **Super Rare is intentionally excluded** — `sup` collides with the `super` classification subtype (Big Hero 6 Super characters). Use `sr` / `super rare` / `superrare` for that one explicitly.
+- **Card body text in the haystack** — `buildRow` carries `text` from `cards.text` onto every row. `matchesCardFilter`'s name-fallback haystack includes `(row.text||"").toLowerCase()` so "gets" / "gains" / "draws" / "banish" / etc surface every card whose printed ability text says that word. Text is stripped on cache write (see "Client cache rules") so an older cached catalog silently degrades to name+type+classification matching without crashing.
 - **Enter key does NOT auto-apply the first suggestion.** `suggestIdx` starts at -1; only arrow keys / hover arm a suggestion. Pressing Enter on free text just commits the typed query (fuzzy matching). Prevents accidental "contains" chip conversion.
 - **`SET_NICKNAMES` deliberately does NOT include single-token character names** ("ursula", "jafar") even though the sets are "Ursula's Return" and "Reign of Jafar". Those tokens are character names too — typing `ursula` in the deck builder should search for the *card*, not promote to the whole set. The longer/unambiguous forms still work (`ursulas`, `ursulas return`, `reign`, `reign of jafar`). Set suggestion dropdown still surfaces the set via prefix match, so users can click through if they meant the set.
 - Catalog must have `cards.strength / willpower / lore / move_cost` columns (migration 43). Cold load probes for `lore`; silently omits all four from `CARDS_COLS` if missing.
@@ -200,9 +202,52 @@ Drawer + toolbar quick-filter chips (icon-only on toolbar):
 
 Drawer-only: Strength / Willpower / Lore (numeric buckets), Type, Set, Keywords, Classifications, Artist.
 
+## Screener filters
+
+The Screener has parity with the Cards browse filters as of 2026-05-26 via the catalog joinback pattern (`catalogByCardId` Map). Three filter tiers:
+
+### Main (always visible)
+- Mode: Raw Prices / Graded (toggle)
+- Preset chips: All / Movers / Gainers / Losers / Buyouts / Crashing / Discount / Premium
+- Window chips: 1D / 1W / 1M / 3M / 6M / 1Y
+- Collection filter (signed-in): All / Owned / Missing
+- Signal filter chips: BUY / CRSH / DISC / PREM / TRND
+- **Foil / Non-Foil chips** — turn off either to drop those printings from results. Chase rarities (Epic / Enchanted / Iconic / Promo) **bypass** the foil/non-foil filter — they have no foil/non-foil duality and always appear regardless of which chip is on. Persisted in saved views.
+- Smart-search input — routes through `matchesCardFilter(catalogRow, chipFilter, parsed)`
+- Set dropdown
+- Ink multi-select
+- Rarity icon chips — **always shows every canonical rarity** (CARDS_RARITIES) regardless of which appear in current results, so users can filter to "commons only" even when commons aren't in the top gainers.
+
+### Advanced panel (collapsed by default — 2026-05-26 expansion)
+- Min/Max price (uses `priceMode` to apply to Low vs NM Market)
+- Min/Max Δ% in chosen window
+- **Type chips** — Character / Action / Item / Location / Song
+- **Cost hex chips** — 1-9+
+- **Inkable** 3-way (Any / Inkable / Uninkable)
+- **Legality** 3-way (Any / Core / Infinity)
+- **Strength / Willpower / Lore** numeric bucket chips
+- **Keywords** multi-select dropdown (Rush, Evasive, Bodyguard, …)
+- **Classifications** multi-select dropdown (Hero, Villain, Princess, …)
+- All advanced filters route through `matchesCardFilter` via `chipFilter` and persist in saved views.
+
+### Mobile
+
+- ≤720px: hide the checkbox column (invisible behind sticky NAME anyway), tighten NAME column to 110-135px max. Default no-scroll view fits NAME + Low + NM Market + 1W on a 360px phone. Batch-select via checkbox stays available on tablet/desktop.
+- Filter chips wrap to multiple rows naturally.
+
 ## Screener saved views
 
-`screener_views(user_id, name, payload jsonb)` — owner-only RLS. Hydrated on sign-in (newest-first); local-only views migrated up on first sign-in if remote table empty. Writes mirror to localStorage for unauth fallback. If migration 44 not deployed (PostgREST 42P01), client logs warning and stays localStorage-only.
+`screener_views(user_id, name, payload jsonb)` — owner-only RLS. Hydrated on sign-in (newest-first); local-only views migrated up on first sign-in if remote table empty. Writes mirror to localStorage for unauth fallback. If migration 44 not deployed (PostgREST 42P01), client logs warning and stays localStorage-only. Saved view payload now includes `showFoil`, `showNonFoil`, and every Advanced filter field.
+
+## Price Graphing Compare
+
+Multi-product overlay chart. Items in `compareCards` array, each: `{kind, card_id, productId, printing, name, sub, image}` where kind ∈ `card | sealed | set`. Drives both the chart and the bottom stats table.
+
+- **COMPARE_MAX = 18** (raised from 8 on 2026-05-26). Picker `Up to N` and `Graph full` tooltips read from the constant so they stay in sync. COMPARE_COLORS cycles through 12 colors — past 12, hues repeat (acceptable; the legend chip's name distinguishes).
+- **`+ variants` button** on each card chip (`.compare-add-variants` class). Scans `raw` for every row sharing the same Product Name and adds each (card_id, printing) tuple as its own series. Covers both: (a) Normal vs Foil printings of the same card_id (LCP C1 split-printing), and (b) different rarity prints of the same character (Common → Enchanted, distinct card_ids that share the name).
+- **Synthetic card_ids for variants**: `realCardId + "::" + printing` (Normal printings keep the real id). Dedupe runs on the actual matview key `(productId, printing)` so clicking "+ variants" twice on the same item is idempotent. Only `kind === "card"` items get the button (sealed/set don't have variants in this sense).
+- **Mover banner drag-to-scroll** (desktop only): `MoversBanner` has a `useEffect` wiring mousedown/mousemove/mouseup on `.movers-wrap`. 5px movement threshold separates a click-on-tile from a drag-pan (so single clicks still open the card detail modal). 250ms click-suppression window after a drag ends prevents the synthesized click from opening whatever tile you released over. Touch devices keep their native momentum scroll (the listeners are mouse-only).
+- **Pickers** (card / sealed / graded / set) all route through their respective canonical matchers — see "Single canonical matcher" section. Graded picker uses a hybrid: parsed dimensional tokens via `matchesCardFilter` against the card meta, residual parsed.name checked against `(name + set + grader + grade)` blob so "mickey psa 10" works alongside "ench elsa".
 
 ## Graded data: `date` vs `price_date`
 
@@ -268,16 +313,65 @@ Two arrays:
 - `packsink:graded:collapsed` — array of set_ids that are collapsed
 - `packsink:graded:display` — "grid" | "compact"
 - `packsink:graded:trackCosts` — "1" | "0"
-- `packsink:graded:hidden` — array of card_ids hidden from tracking checklists
+- `packsink:graded:removed` — array of `"cardId|printing"` composite keys (cards user removed from tracking). Replaces the old `packsink:graded:hidden` key (per-card hide feature was killed 2026-05-26 — see "Remove from tracking" section below).
 - `packsink:graded:visFilter` — "all" | "owned" | "tracked"
 - `packsink:graded:sectionSort` — "release" | "complete" | "value"
 
+## Graded "Remove from tracking" (replaces Hidden feature)
+
+The per-card Hide feature was killed 2026-05-26. It caused a class of bugs where adding a card to your collection silently failed to render the tile because its card_id was still in `packsink:graded:hidden` from a previous accidental × click — the value updated but the user couldn't see the card. **Replacement: "Remove from tracking"** with stricter invariants:
+
+- **Composite (card_id, printing) keys** stored as `"cardId|printing"` strings in `packsink:graded:removed`. Critical for SPLIT_BY_PRINTING_SETS_GLOBAL (LCP C1: Let It Go, Dragon Fire, …) where the same card_id has both Normal and Foil printings as distinct tiles — removing the Foil must NOT also drop the Non-Foil. Helper `removedKey(cid, p)` builds the key; every `.has()` / `.add()` / clear site routes through it.
+- **Owned tiles bypass the removal filter, structurally.** If you own any slot for `(card_id, printing)`, that tile always renders. The render-filter check is `if(!anyOwned && removedCardIds.has(removedKey(entry.card_id, entry.printing))) continue;` — owned-bypass is checked FIRST. Adding a card to your collection → tile reappears immediately.
+- **No undo UI inside the graded view.** Recovery paths:
+  1. Acquire the card → owned-bypass kicks in.
+  2. Re-add the set goal → `addGoal()` clears `removedCardIds` entries for every (card_id, tcg_printing) tuple in the new goal's scope.
+- **Goal denominator handling**: split-printing goals use the per-tile `dropRemovedTile(cid, p)` check (per-printing keying). Non-split goals use the per-card `dropRemovedCard(cid)` check (drops the card_id from the denominator if ANY of its printings is in `removedCardIds`, since non-split sets render one tile per card_id). Owned bypass exists for both.
+
+The old `packsink:graded:hidden` key was swept by the AUX_CACHE_VERSION bump on the deploy that introduced this feature, so we don't inherit stale hidden state from the buggy original.
+
 ## Graded tracking goals
 
-`graded_collection_goals(goal_id, user_id, set_id, extras_bucket, rarities[], display_name)`. **One of `set_id` or `extras_bucket` must be set** (CHECK constraint added in migration 46).
+`graded_collection_goals(goal_id, user_id, set_id, extras_bucket, rarities[], display_name, printings[])`. **One of `set_id` or `extras_bucket` must be set** (CHECK constraint added in migration 46). **Migration 53** adds the `printings text[]` column.
 
-- **Regular set goal**: `set_id` populated. Tracks all cards in that set's `cardsBySetId` matching the rarity filter.
+- **Regular set goal**: `set_id` populated. Tracks all cards in that set's `cardsBySetId` matching the rarity filter AND the printings filter.
 - **Extras goal**: `extras_bucket` populated with a variant_label string ("Deep Trouble" / "Palace Heist" / "Starter Deck Exclusive Foil"). Tracks all cards in `extrasCardsByBucket.get(bucket)`. UI shows these under a synthetic section "Extras & Oddities — <bucket>" via key `__extras:<bucket>`, which sorts after mainline sets.
+- **Goal modal contract (2026-05-26)**:
+  - **Rarities required** — no default-to-all-rarities behavior. The Add button stays disabled until at least one rarity is picked. Most users don't want infinite placeholder cards they then have to remove.
+  - **Printings filter** — when the user selects any *base* rarity (Common, Uncommon, Rare, Super Rare, Legendary), a Foil/Non-Foil chip group appears below rarity. At least one must be picked. Chase rarities (Epic, Enchanted, Iconic, Promo) are inherently single-printing and don't trigger the chip group. Persisted to the `printings text[]` column from migration 53.
+  - **Schema-tolerant**: the goal-insert payload tries with `printings` first; on 42703 (column missing) the client retries without it. Safe to deploy pre-migration.
+
+## Graded "Bulk Add" modal
+
+`GradedBulkAddModal` (Index.html). Adds many graded cards in a single PostgREST upsert (vs N round trips for the single-add modal). Flow:
+
+1. Pick a set + (optional) extras bucket
+2. Pick rarities (multi-select chips)
+3. Pick printings (Foil/Non-Foil) — required when rarities include any base rarity
+4. Pick default grader + default grade dropdowns
+5. Card list renders with one row per (card_id, printing) matching the filters
+6. Per-row: checkbox + thumbnail + name + grader override + grade override (defaults to the modal-level defaults)
+7. "Check all / Uncheck all" buttons for ergonomic batch selection
+8. Submit → `bulkAddItems(rows)` does one upsert call with onConflict=`user_id,card_id,printing,grader,grade`
+
+Mobile constraint: the per-row `<select>` elements need explicit `width:100%; box-sizing:border-box; min-width:0` styles, AND the grid template needs `minmax(0, 1fr)` for the name column (not plain `1fr`). Otherwise native select dropdowns render at their browser-determined natural width and overflow their column, clipping past the modal's `overflow:hidden`.
+
+## Graded display: avg_1d primary, avg_30d secondary
+
+`graded_prices_latest` exposes three eBay-windowed averages: `ebay_avg_1d`, `ebay_avg_7d`, `ebay_avg_30d`. **The display contract changed 2026-05-26: `avg_1d` is primary, `avg_30d` is secondary, `avg_7d` is the last-resort fallback.** Previously `avg_7d` was preferred which was the "weird average" user complaint — for low-volume cards (chase rarities especially) the 7d window collapses a single sale and several stale days into one number that doesn't reflect anything users want.
+
+- The 8 inline fallback chains throughout Index.html (~lines 1687, 1696, 8432, 9893, 9965, 10257, 10294, 10538) all switched from `ebay_avg_7d ?? ebay_avg_1d ?? ebay_avg_30d` → `ebay_avg_1d ?? ebay_avg_30d ?? ebay_avg_7d`.
+- The GradedPricesTab detail table renders all three columns explicitly (header reads "Latest avg · 7d avg · 30d avg") so users can inspect the windowed history — only the SINGLE-PRICE displays elsewhere on the site swapped.
+- "Last Sale + Avg of last 5" was the user's literal request. Not implementable today because TCGPriceLookup only exposes daily aggregates, not individual sale records. See memory `project_future_graded_db.md` for the eventual own-database plan.
+
+## CardDetailModal foil checkbox auto-hide
+
+Chase rarities (Enchanted / Iconic / Epic / Promo) have only one printing per card_id — usually stored under `group.foil`. The "Show foil" checkbox previously rendered whenever `group.foil` existed, even on these single-printing cards. Side effect: if the user had unchecked Foil from a prior visit, the chart would zero out when they opened a chase card.
+
+Fix (`effectiveShowFoil = (group.normal && group.foil) ? showFoil : true`):
+- The checkbox is hidden when only one printing exists (both `group.normal && group.foil` must be truthy for it to render).
+- `buildHistorySeries` receives `showFoil: effectiveShowFoil` so the foil line forces-on when there's no Normal to compare against.
+- The Foil legend swatch also reads `effectiveShowFoil` so it stays in sync.
 
 ## Graded tab — featured chart + inline expand
 
@@ -378,6 +472,39 @@ Click own deck → defaults to **view** (no card browser, no rename); toolbar ha
 - Owner controls (Share/Duplicate/Delete/Export) gate on `isOwnDeck`. Import + rename + Saved + CardBrowser gate on `!readOnly`.
 - Three list layouts (View ▾): compact list, image grid, stacked pile.
 - **CardBrowser ink pre-fill**: `DeckEditor` passes the deck's current `inkColorsInDeck` (1-2 colors) as the `defaultInks` prop. `CardBrowser`'s initial filter state seeds `filter.inks` from that prop *once on mount*. Re-opening the editor re-mounts CardBrowser → re-applies the deck's inks. Edits to chips during the session win after that. Gated to length 1-2 so a malformed/in-flux deck with 3+ inks doesn't auto-apply a weird filter.
+
+### Deck editor mobile bottom bar
+
+At ≤700px the editor renders a `.deck-editor-mobile-tabs` toggle bar that's `position: fixed; bottom: 0; left: 0; right: 0; z-index: 40`. **Was previously sticky top:60px** which got clipped by the variable-height (~80-90px) two-row top-nav, leaving the toggle perpetually half-hidden. Bottom-fixed dodges that entirely and puts the toggle in the thumb zone.
+
+- The bar uses `bottom: -1px` (1px overshoot off-screen) to dodge subpixel rendering gaps where the page background was bleeding through a hairline on some Android renderings.
+- `padding-bottom: calc(9px + env(safe-area-inset-bottom))` — buttons stay above the iPhone home indicator.
+- `body:has(.deck-editor-mobile-tabs){padding-bottom: calc(70px + env(safe-area-inset-bottom))}` reserves vertical space at the page level so the bar doesn't overlay the last deck rows / footer. `:has()` scope means other pages don't get phantom bottom padding.
+- **Tab labels**: edit mode = `Deck` / `Cards`. Read-only = `Deck` / `Deck Info` (the latter shows stats/charts panel since there's no card browser).
+- **CSS rule**: `.deck-editor-grid.readonly.mobile-tab-cards .deck-editor-panel{display:block}` + `.deck-view-list{display:none}` overrides the base `.mobile-tab-cards .deck-editor-panel{display:none}` so the Deck Info tab actually shows the panel in read-only mode.
+- **Toolbar gating**: on the Cards mobile tab, the toolbar action row collapses to just Done + Delete buttons. Other actions (Share / Notes / Mulligan / Export / Import / Duplicate) hide via the `.hide-on-cards-tab > *:not(.deck-toolbar-keep)` CSS rule at ≤700px. Keeps the toolbar from competing with the card browser for vertical real estate.
+
+### HIGHLIGHT MISSING (flipped logic 2026-05-26)
+
+The pill toggle on `DeckEditor`'s list view (`packsink:deckview:highlight` localStorage).
+
+**Current behavior** (flipped):
+- Cards you're **missing** copies of get **faded** (opacity 0.45, `.missing-fade` class on `.deck-row` / `.deck-grid-tile` / `.deck-stack-tile`).
+- Cards you **own** (have all needed copies) render **normally**.
+- X/Y badge on tiles: **green** (`.deck-tile-owned-frac.complete`) when fully owned, **red** (`.deck-tile-owned-frac.incomplete`) when missing.
+
+**Old behavior** (pre-flip): faded owned cards, highlighted missing with a red border (`.missing-pop` class). Removed because the user wanted owned cards to visually pop, not the missing ones. The `.missing-pop` CSS rules were deleted; `.owned-dim` was renamed to `.missing-fade` (the class name now matches what it does post-flip — fades MISSING cards, not owned).
+
+### Deck row mobile compaction
+
+At ≤700px:
+- Cost shield column: 32px → 26px
+- Cost shield icon height: 28px → 24px
+- Inline ink shield: kept (provides a second visual confirmation of ink color alongside the row tint)
+- Grid gap: 8px → 6px
+- Row horizontal padding: 8px → 6px
+- Price chip: smaller font + tighter padding
+- Counter buttons: 18px → 20px (slightly bigger for tap-target ergonomics)
 
 ## Deck import — text parser
 
@@ -566,10 +693,12 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v68`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
-- **Catalog cache version**: `packsink:catalog:vN` (current **v41**). Bump when row shape changes, OR when forcing all users to cold-fetch (e.g. emergency push of fresh data).
-- **PWA icon refresh**: icon URLs include `?v=3` query (bumped 2026-05-26 with the dark-blue rebake) so browsers treat them as new resources. Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
-- **PWA icon backgrounds are baked in, not transparent.** The 5 icon PNGs at the repo root (`apple-touch-icon.png` 180×180, `favicon-32.png`, `favicon-64.png`, `icon-192.png`, `icon-512.png`) were composited over `#0f0d20` on 2026-05-26 — previously they had transparent corners and iOS / Android were filling them with OS defaults (white). `manifest.json` `background_color` is also `#0f0d20`. If you re-export from `Logos/PacksInk.ai`, bake the dark-blue background into each PNG; don't rely on `background_color` alone (iOS PWA save-to-home-screen ignores it).
+- **`sw.js CACHE_VERSION`** (current `packsink-v103`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches. Pre-cache uses `cache.add().catch(null)` per asset. HTML requests are **network-first**, so users get fresh Index.html every visit when online.
+- **Catalog cache version**: `packsink:catalog:vN` (current **v42**). Bump when row shape changes (v42 added `text` field for body-text search), OR when forcing all users to cold-fetch.
+- **PWA icon refresh**: icon URLs include `?v=N` query (current **v=4**, bumped 2026-05-26 with the full-booster-pack rebake; v=3 was the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
+- **PWA icons baked from `Logos/packs-ink-logo.png`** via `scripts/rebake_icons.py` (Pillow). The script composites the full booster-pack artwork over `#0f0d20` with a 12% inset margin (keeps art clear of iOS/Android squircle masks). 6 outputs: apple-touch-icon.png (180), favicon-16/32/64.png, icon-192.png, icon-512.png. Idempotent — re-run when the source logo changes. Don't rely on `manifest.background_color` for transparent icons; iOS save-to-home-screen ignores it.
+- **PWA orientation: `"any"`** (manifest.json). Installed PWAs rotate to landscape now. Was `"portrait"` which locked the orientation — dev-tools rotation emulator worked because that's a tab not a PWA. iOS users need to remove + re-add the home-screen icon to pick up manifest changes (iOS caches the manifest at install time).
+- **mobile-web-app-capable** meta tag added alongside the legacy `apple-mobile-web-app-capable` tag — Chrome deprecated the apple-prefixed variant.
 - **Dev server cache header**: `dev_server.py` sends `Cache-Control: no-store` on HTML/CSS/JS.
 
 ### Misc
