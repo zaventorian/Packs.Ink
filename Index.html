@@ -32,7 +32,7 @@
 <script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
   crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=109">
+<link rel="stylesheet" href="styles.css?v=110">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -78,7 +78,7 @@
   };
 </script>
 <script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-<script src="logo.js?v=109"></script>
+<script src="logo.js?v=110"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -11984,7 +11984,7 @@ function FAQView(){
     <p><strong>Home</strong> — your dashboard. Top movers, your collection value, decks from people you follow, and the latest tournament finishes.</p>
     <p><strong>Screener</strong> — every tracked card as a sortable financial-database-style table. Filter by set, rarity, ink, price band, and movement window (1D / 1W / 1M / 3M / 6M / 1Y).</p>
     <p><strong>Price Graphing</strong> — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
-    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, Average Card Prices, Playset Cost, rarity Heatmap, Sealed pricing, and the Pack/Box simulators.</p>
+    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, Average Card Prices, Playset Cost, rarity Heatmap, Sealed pricing, and the Pack/Box simulators.</p>
     <p><strong>Cards</strong> — browseable visual catalog of every card with filters for ink, rarity, set, and a free-text smart search.</p>
     <p><strong>Collection</strong> — what you own. Three sections (Cards, Sealed, Graded) with set-by-set completion tracking, value over time, and per-section sharing.</p>
     <p><strong>Decks</strong> — your decks, the people you follow, the Discover feed of public decks, and the Tournaments index.</p>
@@ -12310,8 +12310,438 @@ function MonteCarloView({rawData, sets, theme}){
   </div>`;
 }
 
+// ── Trade Comparison Tool ──────────────────────────────────────────────
+// Two-sided card-value comparison for working out a trade between two people
+// (Side A on the left, Side B on the right). Each side is a list of cards
+// with independent Non-Foil / Foil quantities; the tool sums Low + NM Market
+// for both sides and shows the difference so traders can eyeball fairness.
+// Card lookup routes through groupCards + matchesCardFilter so the same
+// smart-search the rest of the app uses (name / ink / rarity / set / cost /
+// body text tokens) works here too.
+const TRADE_PERSIST_KEY = "packsink:trade:v1";
+const tradeMoney = (n) => (typeof n === "number" && !Number.isNaN(n)) ? "$"+n.toFixed(2) : "—";
+const tradeTotalMoney = (n) => "$"+(Number(n)||0).toFixed(2);
+// LCP (C1) Non-Foil/Foil render as two distinct tiles sharing one card_id
+// (SPLIT_BY_PRINTING_SETS), so disambiguate their key by printing.
+const tradeGroupKey = (g) => (g.card_id||"") + (g.isSplitPrinting
+  ? "::" + (g.normal ? "Normal" : (g.foil && g.foil.tcg_printing) || "Foil")
+  : "");
+const tradeFoilLabel = (row) => {
+  const p = row && row.tcg_printing;
+  if(p === "Cold Foil") return "Cold Foil";
+  if(p === "Holofoil")  return "Holo";
+  return "Foil";
+};
+const tradeCardTitle = (g) => (["Enchanted","Iconic","Epic","Promo"].includes(g.Rarity))
+  ? `${g["Product Name"]} (${g.Rarity})` : g["Product Name"];
+
+// URL-safe base64 (handles unicode side names) for the legacy inline trade link.
+const tradeB64UrlEncode = (str) => {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for(const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+};
+const tradeB64UrlDecode = (s) => {
+  let b = s.replace(/-/g,"+").replace(/_/g,"/");
+  while(b.length % 4) b += "=";
+  const bytes = Uint8Array.from(atob(b), c => c.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+};
+// Compact wire format stored in the DB (and the legacy URL blob):
+//   {a:[[key,qN,qF],...], b:[...], n:[nameA,nameB]}
+const tradePayloadObj = (sideA, sideB, nameA, nameB) => {
+  const slim = (arr) => (arr||[]).filter(e => e && e.key && ((e.qN||0)+(e.qF||0) > 0))
+    .map(e => [e.key, e.qN||0, e.qF||0]);
+  return { a: slim(sideA), b: slim(sideB), n: [nameA||"", nameB||""] };
+};
+const expandTradePayload = (obj) => {
+  if(!obj || typeof obj !== "object") return null;
+  const expand = (arr) => (Array.isArray(arr)?arr:[]).map(t => ({key:t[0], qN:t[1]||0, qF:t[2]||0}));
+  return { a: expand(obj.a), b: expand(obj.b), nameA:(obj.n&&obj.n[0])||"", nameB:(obj.n&&obj.n[1])||"" };
+};
+// Legacy inline ?trade= blob — kept so any already-shared links still resolve.
+const encodeTrade = (sideA, sideB, nameA, nameB) => tradeB64UrlEncode(JSON.stringify(tradePayloadObj(sideA, sideB, nameA, nameB)));
+const decodeTrade = (s) => { try { return expandTradePayload(JSON.parse(tradeB64UrlDecode(s))); } catch { return null; } };
+// 22-char URL-safe token (128 bits), mirrors the server's gen_share_token().
+const genTradeToken = () => {
+  const bytes = new Uint8Array(16);
+  (window.crypto || window.msCrypto).getRandomValues(bytes);
+  let bin = "";
+  for(const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
+};
+// Read a share token from either the pretty path (/t/<token>) or ?t=<token>.
+const getTradeShareToken = () => {
+  try {
+    const m = window.location.pathname.match(/^\/t\/([A-Za-z0-9_-]{16,64})$/);
+    if(m) return m[1];
+    return new URLSearchParams(window.location.search).get("t") || null;
+  } catch { return null; }
+};
+// DB round-trip via the SECURITY DEFINER RPCs from migration 54.
+const saveTradeRecord = (token, sideA, sideB, nameA, nameB) =>
+  sbClient.rpc("create_trade", { p_token: token, p_payload: tradePayloadObj(sideA, sideB, nameA, nameB) });
+const fetchTradeRecord = async (token) => {
+  try {
+    const { data, error } = await sbClient.rpc("get_trade", { p_token: token });
+    if(error || !data) return null;
+    return expandTradePayload(data);
+  } catch { return null; }
+};
+
+function TradeView({ raw, shareToken, shareBlob, theme, user, collection, updateQty, onSignIn }){
+  const blankFilter = useMemo(()=>emptyFilter(), []);
+  const [detailGroup, setDetailGroup] = useState(null);
+  const groups = useMemo(()=>groupCards(raw||[]), [raw]);
+  const groupByKey = useMemo(()=>{
+    const m = new Map();
+    for(const g of groups) m.set(tradeGroupKey(g), g);
+    return m;
+  }, [groups]);
+
+  const [query, setQuery] = useState("");
+  const [addSide, setAddSide] = useState("a");
+  const [sideA, setSideA] = useState([]);   // [{key, qN, qF}]
+  const [sideB, setSideB] = useState([]);
+  const [nameA, setNameA] = useState("Side A");
+  const [nameB, setNameB] = useState("Side B");
+  const [resultsOpen, setResultsOpen] = useState(false);
+  const searchWrapRef = useRef(null);
+  const [layout, setLayout] = useState(()=>{
+    try{ return localStorage.getItem("packsink:trade:layout") || "cards"; }catch{ return "cards"; }
+  });
+  useEffect(()=>{ try{ localStorage.setItem("packsink:trade:layout", layout); }catch{} }, [layout]);
+  // Display sort for each side's card list. "added" = insertion order (the
+  // state's own order — never mutated, so this is restorable). Persisted.
+  const [sortMode, setSortMode] = useState(()=>{
+    try{ return localStorage.getItem("packsink:trade:sort") || "added"; }catch{ return "added"; }
+  });
+  useEffect(()=>{ try{ localStorage.setItem("packsink:trade:sort", sortMode); }catch{} }, [sortMode]);
+  const cyclePriceSort = () => setSortMode(m => m === "price-desc" ? "price-asc" : "price-desc");
+
+  // Rehydrate the in-progress trade once the catalog is grouped. We only
+  // keep keys + quantities in localStorage and re-resolve the card objects
+  // from groupByKey so a stale cache can't carry dead references.
+  // Hydrate once the catalog is grouped. A share link (token via prop, captured
+  // by App before its URL-cleanup runs) wins over the locally-saved trade.
+  const hydrated = useRef(false);
+  useEffect(()=>{
+    if(hydrated.current || !groups.length) return;
+    hydrated.current = true;
+    let cancelled = false;
+    const clean = (arr) => (Array.isArray(arr)?arr:[]).filter(e => e && groupByKey.has(e.key));
+    const apply = (payload) => {
+      if(!payload) return;
+      setSideA(clean(payload.a));
+      setSideB(clean(payload.b));
+      if(typeof payload.nameA === "string" && payload.nameA) setNameA(payload.nameA);
+      if(typeof payload.nameB === "string" && payload.nameB) setNameB(payload.nameB);
+    };
+    if(shareToken){
+      fetchTradeRecord(shareToken).then(payload => {
+        if(cancelled) return;
+        if(payload) apply(payload);
+        else flashToast("That trade link is no longer available");
+      });
+    } else if(shareBlob){
+      apply(decodeTrade(shareBlob));
+    } else {
+      try { apply(JSON.parse(localStorage.getItem(TRADE_PERSIST_KEY) || "null")); } catch {}
+    }
+    return () => { cancelled = true; };
+  }, [groups, groupByKey]);
+  const persistReady = useRef(false);
+  useEffect(()=>{
+    // Skip the first invocation (mount): writing the empty default state here
+    // would clobber a saved trade before the hydration effect's setState lands.
+    if(!persistReady.current){ persistReady.current = true; return; }
+    try{ localStorage.setItem(TRADE_PERSIST_KEY, JSON.stringify({a:sideA, b:sideB, nameA, nameB})); }catch{}
+  }, [sideA, sideB, nameA, nameB]);
+
+  // Close the search results dropdown when clicking/tapping outside the box.
+  useEffect(()=>{
+    if(!resultsOpen) return;
+    const onDown = (ev)=>{
+      if(searchWrapRef.current && !searchWrapRef.current.contains(ev.target)) setResultsOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    return ()=>{
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+    };
+  }, [resultsOpen]);
+
+  const parsed = useMemo(()=>parseSearchQuery(query||""), [query]);
+  const matches = useMemo(()=>{
+    if(!query.trim()) return null;
+    return groups
+      .filter(g => matchesCardFilter(g, blankFilter, parsed))
+      .sort((a,b)=> (setRank(b)-setRank(a)) || (collectorNum(a)-collectorNum(b)))
+      .slice(0, 40);
+  }, [groups, query, parsed, blankFilter]);
+
+  const addCard = (g) => {
+    const key = tradeGroupKey(g);
+    const both = g.normal && g.foil;
+    const primary = g.normal ? "qN" : "qF";   // base printing for re-click bumps
+    const setter = addSide === "a" ? setSideA : setSideB;
+    setter(prev => {
+      const i = prev.findIndex(e => e.key === key);
+      // When a card has BOTH printings we can't know which one they mean, so
+      // start at 0/0 and let them pick. Single-printing cards (chase rarities,
+      // or normal-only) default that one printing to 1.
+      if(i === -1) return [...prev, {key, qN: (g.normal && !both) ? 1 : 0, qF: (g.foil && !both) ? 1 : 0}];
+      const next = prev.slice();
+      next[i] = {...next[i], [primary]: (next[i][primary]||0) + 1};
+      return next;
+    });
+  };
+  const changeQty = (side, key, field, delta) => {
+    (side==="a"?setSideA:setSideB)(prev => prev.map(e =>
+      e.key === key ? {...e, [field]: Math.max(0, (e[field]||0) + delta)} : e));
+  };
+  const removeCard = (side, key) =>
+    (side==="a"?setSideA:setSideB)(prev => prev.filter(e => e.key !== key));
+  const clearSide = (side) => (side==="a"?setSideA:setSideB)([]);
+  const clearAll = () => { setSideA([]); setSideB([]); };
+  // Move a single card (with its quantities) to the opposite side. Merges
+  // quantities if the same card already sits on the destination side.
+  const moveCard = (fromSide, key) => {
+    const arr = fromSide==="a" ? sideA : sideB;
+    const entry = arr.find(e => e.key === key);
+    if(!entry) return;
+    (fromSide==="a"?setSideA:setSideB)(prev => prev.filter(e => e.key !== key));
+    (fromSide==="a"?setSideB:setSideA)(prev => {
+      const i = prev.findIndex(e => e.key === key);
+      if(i === -1) return [...prev, {key:entry.key, qN:entry.qN, qF:entry.qF}];
+      const next = prev.slice();
+      next[i] = {...next[i], qN:(next[i].qN||0)+(entry.qN||0), qF:(next[i].qF||0)+(entry.qF||0)};
+      return next;
+    });
+  };
+  // Copy a short share link (packs.ink/?t=<token>) so the other party can open
+  // the comparison to review. The trade is stored in the DB keyed by the token
+  // so the link stays tiny no matter how big the trade is. We use a ?t= query
+  // (not /t/<token>) so the path stays single-segment and the app's relative
+  // asset URLs (styles.css, logo.js, …) keep resolving. We copy the URL
+  // synchronously inside the click (reliable clipboard) and persist in the
+  // background.
+  const shareTrade = () => {
+    if(!sideA.length && !sideB.length){ flashToast("Add some cards first"); return; }
+    const token = genTradeToken();
+    const url = window.location.origin + "/?t=" + token;
+    try { navigator.clipboard && navigator.clipboard.writeText(url); } catch {}
+    flashToast("Trade link copied — send it to the other party");
+    saveTradeRecord(token, sideA, sideB, nameA, nameB).then(
+      ({error}) => { if(error){ console.warn("create_trade failed:", error.message || error); flashToast("Couldn't save the link — tap Share again"); } },
+      (e) => { console.warn("create_trade failed:", e); flashToast("Couldn't save the link — tap Share again"); }
+    );
+  };
+
+  const sideTotals = (side) => {
+    let low=0, mkt=0, units=0, cards=0;
+    for(const e of side){
+      const g = groupByKey.get(e.key);
+      if(!g) continue;
+      let any = false;
+      if(e.qN>0 && g.normal){
+        const l=g.normal["Low Price"], m=g.normal["TCGPlayer Market"];
+        if(typeof l==="number" && !Number.isNaN(l)) low += l*e.qN;
+        if(typeof m==="number" && !Number.isNaN(m)) mkt += m*e.qN;
+        units += e.qN; any = true;
+      }
+      if(e.qF>0 && g.foil){
+        const l=g.foil["Low Price"], m=g.foil["TCGPlayer Market"];
+        if(typeof l==="number" && !Number.isNaN(l)) low += l*e.qF;
+        if(typeof m==="number" && !Number.isNaN(m)) mkt += m*e.qF;
+        units += e.qF; any = true;
+      }
+      if(any) cards++;
+    }
+    return {low, mkt, units, cards};
+  };
+  const ta = sideTotals(sideA), tb = sideTotals(sideB);
+  const diffLow = ta.low - tb.low;
+  const diffMkt = ta.mkt - tb.mkt;
+  const favName = (d) => d > 0.005 ? nameA : (d < -0.005 ? nameB : null);
+
+  const renderPrinting = (side, e, g, field, label, klass) => {
+    const row = klass === "normal" ? g.normal : g.foil;
+    const qty = e[field] || 0;
+    const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
+    return html`<div class=${"trade-printing "+klass}>
+      <span class="trade-pr-label">${label}</span>
+      <div class="trade-qty">
+        <button class="trade-qty-btn" onClick=${()=>changeQty(side, e.key, field, -1)} disabled=${qty<=0}>−</button>
+        <span class="trade-qty-val">${qty}</span>
+        <button class="trade-qty-btn" onClick=${()=>changeQty(side, e.key, field, 1)}>+</button>
+      </div>
+      <span class="trade-pr-prices">
+        <span class="trade-pr-low"><${Tip} text=${TIP_LOW} class="trade-pr-tag">Low<//> ${tradeMoney(row["Low Price"])}</span>
+        <span class="trade-pr-mkt"><${Tip} text=${TIP_MARKET} class="trade-pr-tag">NM<//> ${tradeMoney(row["TCGPlayer Market"])}</span>
+      </span>
+      ${url && html`<a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow" title=${"View "+label+" on TCGplayer"}>↗</a>`}
+    </div>`;
+  };
+
+  // Display-only sort (never mutates the side's state order, so "added" is
+  // always restorable). Unpriced cards sink to the bottom for price sorts.
+  const sortEntries = (entries) => {
+    if(sortMode === "added") return entries;
+    const priceOf = (e) => { const g = groupByKey.get(e.key); const p = g ? getCardPrice(g) : null; return (typeof p === "number" && !Number.isNaN(p)) ? p : null; };
+    const arr = entries.slice();
+    if(sortMode === "price-desc" || sortMode === "price-asc"){
+      const desc = sortMode === "price-desc";
+      arr.sort((a,b)=>{ const pa=priceOf(a), pb=priceOf(b);
+        if(pa==null && pb==null) return 0; if(pa==null) return 1; if(pb==null) return -1;
+        return desc ? pb-pa : pa-pb; });
+    } else if(sortMode === "name"){
+      arr.sort((a,b)=>{ const ga=groupByKey.get(a.key), gb=groupByKey.get(b.key);
+        return (ga?ga["Product Name"]||"":"").localeCompare(gb?gb["Product Name"]||"":""); });
+    } else if(sortMode === "release"){
+      arr.sort((a,b)=>{ const ga=groupByKey.get(a.key), gb=groupByKey.get(b.key);
+        if(!ga||!gb) return 0;
+        return (setRank(gb)-setRank(ga)) || (collectorNum(ga)-collectorNum(gb)); });
+    }
+    return arr;
+  };
+
+  const renderSide = (side, entries, name, setName, t) => html`<div class="trade-side">
+    <div class="trade-side-head">
+      <input class="trade-side-name" value=${name} maxlength="24"
+        onChange=${e=>setName(e.target.value)}
+        onFocus=${e=>e.target.select()} aria-label="Side name"/>
+      ${entries.length>0 && html`<button class="trade-clear-btn" title="Remove every card on this side"
+        onClick=${()=>clearSide(side)}>Clear</button>`}
+    </div>
+    <div class="trade-side-totals">
+      <div class="trade-tot"><span class="trade-tot-lbl">Low</span><span class="trade-tot-val">${tradeTotalMoney(t.low)}</span></div>
+      <div class="trade-tot"><span class="trade-tot-lbl">NM Market</span><span class="trade-tot-val">${tradeTotalMoney(t.mkt)}</span></div>
+    </div>
+    <div class="trade-side-meta">${t.cards} card${t.cards===1?"":"s"} · ${t.units} item${t.units===1?"":"s"}</div>
+    <div class="trade-side-body">
+      ${entries.length===0
+        ? html`<div class="trade-side-empty">No cards yet — set <strong>Add to</strong> above to <strong>${name}</strong>, then search and tap a card.</div>`
+        : sortEntries(entries).map(e => {
+            const g = groupByKey.get(e.key);
+            if(!g) return null;
+            const otherName = side==="a" ? (nameB||"Side B") : (nameA||"Side A");
+            return html`<div key=${e.key} class=${"trade-card"+(layout==="compact"?" compact":"")}>
+              ${layout!=="compact" && html`<img class="trade-card-img trade-card-clickable" src=${proxyImg(g.img_small||g.img_normal)} alt=""
+                loading="lazy" title="View card details" onClick=${()=>setDetailGroup(g)}/>`}
+              <div class="trade-card-main">
+                <div class="trade-card-name trade-card-clickable" title="View card details" onClick=${()=>setDetailGroup(g)}>${tradeCardTitle(g)}</div>
+                ${layout!=="compact" && html`<div class="trade-card-sub">${g.Set}${g.Number?" · #"+String(g.Number).split("/")[0]:""}${(g.ink||(g.inks&&g.inks[0]))?" · "+(g.ink||g.inks[0]):""}</div>`}
+                <div class="trade-printings">
+                  ${g.normal && renderPrinting(side, e, g, "qN", "Non-Foil", "normal")}
+                  ${g.foil   && renderPrinting(side, e, g, "qF", tradeFoilLabel(g.foil), "foil")}
+                </div>
+              </div>
+              <div class="trade-card-actions">
+                <button class="trade-move" title=${"Move to "+otherName} onClick=${()=>moveCard(side, e.key)}>⇄</button>
+                <button class="trade-remove" title="Remove from trade" onClick=${()=>removeCard(side, e.key)}>×</button>
+              </div>
+            </div>`;
+          })}
+    </div>
+  </div>`;
+
+  return html`<div class="trade-view">
+    <p class="trade-intro">Compare the value of a trade. Pick a side with <strong>Add to</strong>, search a card, and tap it to drop it on that side. Adjust the Non-Foil / Foil quantities per card — Packs.Ink totals each side's Low + NM Market value and shows the difference.</p>
+
+    <div class="trade-controls">
+      <div class="trade-addtoggle">
+        <span class="trade-addtoggle-lbl">Add to</span>
+        <div class="seg-toggle trade-seg">
+          <button class=${addSide==="a"?"active":""} onClick=${()=>setAddSide("a")}>${nameA||"Side A"}</button>
+          <button class=${addSide==="b"?"active":""} onClick=${()=>setAddSide("b")}>${nameB||"Side B"}</button>
+        </div>
+      </div>
+      <div class="trade-searchwrap" ref=${searchWrapRef}>
+        <input type="search" class="trade-search"
+          placeholder=${"Search a card to add to "+(addSide==="a"?(nameA||"Side A"):(nameB||"Side B"))+" — name, ink, rarity, set…"}
+          value=${query}
+          onInput=${e=>{ setQuery(e.target.value); setResultsOpen(true); }}
+          onFocus=${()=>setResultsOpen(true)}/>
+        ${resultsOpen && matches != null && html`<div class="trade-results">
+          ${matches.length===0
+            ? html`<div class="trade-results-empty">No cards match "${query}"</div>`
+            : matches.map(g => {
+                const key = tradeGroupKey(g);
+                const inA = sideA.some(e=>e.key===key);
+                const inB = sideB.some(e=>e.key===key);
+                return html`<button key=${key} class="trade-result" onClick=${()=>addCard(g)}>
+                  <img class="trade-result-img" src=${proxyImg(g.img_small||g.img_normal)} alt="" loading="lazy"/>
+                  <span class="trade-result-text">
+                    <span class="trade-result-name">${tradeCardTitle(g)}</span>
+                    <span class="trade-result-sub">${g.Set}${g.Number?" · #"+String(g.Number).split("/")[0]:""}</span>
+                  </span>
+                  <span class="trade-result-px">${tradeMoney(getCardPrice(g))}</span>
+                  ${(inA||inB) && html`<span class="trade-result-in" title="Already on a side">${inA&&inB?"A+B":(inA?"A":"B")}</span>`}
+                </button>`;
+              })}
+        </div>`}
+      </div>
+    </div>
+
+    <div class="trade-diff">
+      <div class="trade-diff-head">
+        <span class="trade-diff-title">Difference</span>
+        <div class="trade-diff-tools">
+          <button class="trade-share-btn" title="Copy a link to this trade for the other party" onClick=${shareTrade}>🔗 Share</button>
+          <button class="trade-share-btn trade-clearall-btn" title="Remove every card from both sides"
+            disabled=${!sideA.length && !sideB.length} onClick=${clearAll}>Clear all</button>
+          <div class="seg-toggle trade-layout-seg" title="Card layout">
+            <button class=${layout==="cards"?"active":""} onClick=${()=>setLayout("cards")}>Cards</button>
+            <button class=${layout==="compact"?"active":""} onClick=${()=>setLayout("compact")}>Compact</button>
+          </div>
+        </div>
+      </div>
+      <div class="trade-diff-rows">
+        <div class="trade-diff-row">
+          <span class="trade-diff-lbl">Low</span>
+          <span class="trade-diff-amt">${tradeTotalMoney(Math.abs(diffLow))}</span>
+          <span class=${"trade-diff-dir"+(favName(diffLow)?"":" even")}
+            title="Side with the higher value">${favName(diffLow) ? "▲ "+favName(diffLow)+" worth more" : "even"}</span>
+        </div>
+        <div class="trade-diff-row">
+          <span class="trade-diff-lbl">NM Market</span>
+          <span class="trade-diff-amt">${tradeTotalMoney(Math.abs(diffMkt))}</span>
+          <span class=${"trade-diff-dir"+(favName(diffMkt)?"":" even")}
+            title="Side with the higher value">${favName(diffMkt) ? "▲ "+favName(diffMkt)+" worth more" : "even"}</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="trade-sortbar">
+      <span class="trade-sort-lbl">Sort</span>
+      <div class="seg-toggle trade-sort-seg">
+        <button class=${sortMode==="added"?"active":""} onClick=${()=>setSortMode("added")}>Added</button>
+        <button class=${sortMode.startsWith("price")?"active":""} onClick=${cyclePriceSort}>${sortMode==="price-asc"?"Price ↑":"Price ↓"}</button>
+        <button class=${sortMode==="name"?"active":""} onClick=${()=>setSortMode("name")}>Name</button>
+        <button class=${sortMode==="release"?"active":""} onClick=${()=>setSortMode("release")}>Release</button>
+      </div>
+    </div>
+
+    <div class="trade-grid">
+      ${renderSide("a", sideA, nameA, setNameA, ta)}
+      ${renderSide("b", sideB, nameB, setNameB, tb)}
+    </div>
+
+    <p class="trade-note"><span class="trade-note-i">ⓘ</span> If a card's <strong>Low</strong> and <strong>NM Market</strong> values differ significantly, check it on TCGplayer to verify the current market price. Market swings, different printings/versions, or lagged data can cause a gap.</p>
+
+    ${detailGroup && html`<${CardDetailModal} group=${detailGroup} theme=${theme}
+      onClose=${()=>setDetailGroup(null)}
+      user=${user} collection=${collection} updateQty=${updateQty}
+      onSignIn=${onSignIn || (()=>{})}/>`}
+  </div>`;
+}
+
 const MARKET_SUBS = [
   ["ev",         "Expected Value"],
+  ["trade",      "Trade Compare"],
   ["sealed",     "Sealed"],
   ["avg",        "Card Averages"],
   ["setval",     "Playset Cost"],
@@ -13777,15 +14207,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
 
 function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
                     excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
-                    user, collection, updateQty, onSignIn, openSetHistory, sealedPrices}){
+                    user, collection, updateQty, onSignIn, openSetHistory, sealedPrices,
+                    incomingTradeToken, incomingTradeBlob, sub, setSub}){
   // Market analytics list sets newest-first so the most relevant sets land
   // at the top of every table. Simulators inherit the same ordering — their
   // set dropdown reads better newest-first anyway.
   const setsNewest = useMemo(()=>sets.slice().reverse(), [sets]);
   // Default to Expected Value every time Analytics is opened. The user
   // explicitly asked for this — landing on EV is the strongest signal of
-  // current market health and the page's "home" view.
-  const [sub, setSub] = useState("ev");
+  // current market health and the page's "home" view. The active sub-tab is
+  // owned by App (so it can mirror it into the URL); we drive it via props.
   const [simKind, setSimKind] = useState(()=>{
     try { return localStorage.getItem("packsink:market:simkind") || "pack"; }
     catch { return "pack"; }
@@ -13828,6 +14259,8 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
       priceMode=${priceMode} setPriceMode=${setPriceMode}
       sealedPrices=${sealedPrices}
       openSetHistory=${openSetHistory}/>`}
+    ${sub==="trade"   && html`<${TradeView} raw=${raw} shareToken=${incomingTradeToken} shareBlob=${incomingTradeBlob}
+      theme=${theme} user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
     ${sub==="avg"     && html`<${AvgView} sets=${setsNewest} avgs=${avgs} nc=${nc} setNc=${setNc}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
       openSetHistory=${openSetHistory}/>`}
@@ -20194,8 +20627,10 @@ function App(){
         token:       p.get("token")      || null,
         user:        p.get("user")       || null,
         collection:  p.get("collection") || null,
+        trade:       p.get("trade")      || null,
+        tradeToken:  getTradeShareToken(),
       };
-    } catch { return {deck: null, token: null, user: null, collection: null}; }
+    } catch { return {deck: null, token: null, user: null, collection: null, trade: null, tradeToken: null}; }
   }, []);
   const [incomingDeckId, setIncomingDeckId] = useState(initialUrlParams.deck);
   // Multi-card compare on the Price Graphing tab. Screener's "Add to Price
@@ -20388,11 +20823,24 @@ function App(){
   // Pick the initial view from (1) ?deck=/?user= query (forces decks),
   // (2) the URL pathname (e.g. /screener, /decks, etc.), (3) home.
   const [view,setView]=useState(() => {
+    if(initialUrlParams.trade || initialUrlParams.tradeToken) return "market";
     if(initialUrlParams.deck || initialUrlParams.user) return "decks";
     if(initialUrlParams.collection) return "collection";
     try { return parseViewFromPath(window.location.pathname) || "home"; }
     catch { return "home"; }
   });
+  // Analytics sub-tab, mirrored into the URL (?a=<sub>) so a refresh keeps you
+  // on the tab and Back/Forward step between tabs you visited. A trade share
+  // link forces the Trade Compare tab.
+  const [marketSub, setMarketSub] = useState(() => {
+    try {
+      if(initialUrlParams.tradeToken || initialUrlParams.trade) return "trade";
+      const a = new URLSearchParams(window.location.search).get("a");
+      if(a && MARKET_SUBS.some(([k]) => k === a)) return a;
+    } catch {}
+    return "ev";
+  });
+  const marketSubSynced = useRef(false);
   // Keep the URL pathname in sync with `view` so back/forward + reload +
   // bookmarks all work. Strips view-specific deep-link params (?deck=,
   // ?collection=, ?token=, ?user=, ?set=, ?tourney=) so navigating from
@@ -20404,7 +20852,7 @@ function App(){
       const current = window.location.pathname.replace(/\/$/, "") || "/";
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
-      const dirtyParams = ["deck","token","user","collection","set","tourney"];
+      const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a"];
       const hadStaleParam = dirtyParams.some(p => url.searchParams.has(p));
       if(current === normalizedTarget && !hadStaleParam) return;
       for(const p of dirtyParams) url.searchParams.delete(p);
@@ -20412,11 +20860,32 @@ function App(){
       window.history.pushState({view}, "", url.toString());
     } catch {/* SSR / blocked storage / no-op */}
   }, [view]);
+  // Mirror the Analytics sub-tab into ?a=<sub> while viewing Analytics.
+  // Defined AFTER the view-sync effect so on entering Analytics it re-adds ?a
+  // after view-sync strips it. First sync on entry uses replaceState (no
+  // spurious history entry for the landing tab); user-driven tab changes use
+  // pushState so Back works. The cur===want guard makes a popstate-driven
+  // setMarketSub a no-op here, avoiding a push loop.
+  useEffect(() => {
+    if(view !== "market"){ marketSubSynced.current = false; return; }
+    try {
+      const url = new URL(window.location.href);
+      const cur = url.searchParams.get("a");
+      const want = marketSub === "ev" ? null : marketSub;
+      if(cur === want){ marketSubSynced.current = true; return; }
+      if(want) url.searchParams.set("a", want); else url.searchParams.delete("a");
+      if(marketSubSynced.current) window.history.pushState({view, a: want}, "", url.toString());
+      else window.history.replaceState(window.history.state, "", url.toString());
+      marketSubSynced.current = true;
+    } catch {/* no-op */}
+  }, [marketSub, view]);
   // Browser back/forward — re-parse the path and update `view`.
   useEffect(() => {
     const onPop = () => {
       try {
         const params = new URLSearchParams(window.location.search);
+        const a = params.get("a");
+        setMarketSub(a && MARKET_SUBS.some(([k]) => k === a) ? a : "ev");
         if(params.get("deck") || params.get("user")){ setView("decks"); return; }
         const colId = params.get("collection");
         if(colId){
@@ -21440,6 +21909,8 @@ function App(){
       excludeIconic=${excludeIconic} setExcludeIconic=${setExcludeIconic}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       sealedPrices=${sealedPrices}
+      incomingTradeToken=${initialUrlParams.tradeToken} incomingTradeBlob=${initialUrlParams.trade}
+      sub=${marketSub} setSub=${setMarketSub}
       openSetHistory=${openSetHistory}/>`}
     ${view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
