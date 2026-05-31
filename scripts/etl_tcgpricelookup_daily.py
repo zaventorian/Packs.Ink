@@ -54,20 +54,38 @@ RETRY_SLEEP = 8
 
 
 def fetch_page(session: requests.Session, key: str, offset: int) -> dict:
-    """Hit /v1/cards/search with one retry pass for transient 429s."""
+    """Hit /v1/cards/search with retries for transient 429s, network errors,
+    and read timeouts. TCGPriceLookup occasionally hangs past the 30s default
+    (run #80 failed at offset=N with a ReadTimeout on what was otherwise a
+    healthy endpoint), so we use a longer per-attempt timeout AND catch the
+    RequestException family so a single slow response is a sleep+retry, not
+    a workflow failure."""
     url = f"{API_BASE}/cards/search"
     params = {"game": GAME_SLUG, "limit": PAGE_SIZE, "offset": offset}
     headers = {"X-API-Key": key, "User-Agent": "packs.ink-etl/1.0"}
+    last_err: Exception | None = None
     for attempt in range(RETRY_ON_RATE):
-        r = session.get(url, params=params, headers=headers, timeout=30)
+        try:
+            r = session.get(url, params=params, headers=headers, timeout=60)
+        except requests.exceptions.RequestException as e:
+            last_err = e
+            print(f"  network error at offset={offset} (attempt {attempt+1}/{RETRY_ON_RATE}): {e}; sleeping {RETRY_SLEEP}s")
+            time.sleep(RETRY_SLEEP)
+            continue
         if r.status_code == 200:
             return r.json()
         if r.status_code == 429 or (r.status_code == 200 and r.text.startswith('{"error": "Rate limit')):
             print(f"  rate limited at offset={offset} (attempt {attempt+1}/{RETRY_ON_RATE}); sleeping {RETRY_SLEEP}s")
             time.sleep(RETRY_SLEEP)
             continue
+        # 5xx — treat like a transient and retry rather than blowing up.
+        if 500 <= r.status_code < 600:
+            last_err = RuntimeError(f"server {r.status_code}: {r.text[:200]}")
+            print(f"  server error {r.status_code} at offset={offset} (attempt {attempt+1}/{RETRY_ON_RATE}); sleeping {RETRY_SLEEP}s")
+            time.sleep(RETRY_SLEEP)
+            continue
         r.raise_for_status()
-    raise RuntimeError(f"persistent rate-limit at offset={offset}")
+    raise RuntimeError(f"persistent failure at offset={offset}: {last_err}")
 
 
 def extract_rows(card: dict, today: str) -> list[dict]:

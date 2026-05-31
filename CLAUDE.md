@@ -17,6 +17,7 @@ Exception: explicit user instruction in the current turn ("push it", "ship this"
   - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
   - **User**: `profiles` (carries collection-sharing visibility + share_token cols), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`, `screener_views`.
   - **Tournament**: `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker on).
+  - **Misc**: `trades` (token-keyed shareable Trade Compare payloads; RLS-locked, access only via `create_trade` / `get_trade` RPCs — migration 54).
   - **Matviews**: `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`, `graded_prices_latest`.
 - **ETL** (`.github/workflows/etl.yml`):
   1. `scripts/etl_tcgcsv_daily.py` — TCGCSV → `prices_daily`, then refreshes the 4 raw-price matviews. Idempotent: skips fetch when today's snapshot is already loaded; exits 0 (not error) when TCGCSV hasn't published yet (>95% byte-identical to yesterday's).
@@ -37,7 +38,7 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
 
 - **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + TCGPriceLookup graded data.
 - **Price Graphing** = per-card history + multi-card Compare (handoff from Screener batch action).
-- **Analytics** = umbrella for calculator-y tools (EV, Card Averages, Playset Cost, Heatmap, Sealed, Simulate).
+- **Analytics** = umbrella for calculator-y tools (EV, Trade Compare, Card Averages, Playset Cost, Heatmap, Sealed, Simulate, Monte Carlo). Sub-tab is reflected in the URL (`?a=<sub>`) — see "Trade Comparison tool".
 
 ### Mobile top-nav structure (do NOT regress)
 
@@ -397,6 +398,79 @@ Migration 48 added optional `amount_paid numeric(12,2)` + `acquired_date date` t
 - **Chart gating** (`computeCollectionValueHistory` + `computeGradedValueHistory`): per-key acquired_date map. A slot contributes $0 to dates strictly before its acquired_date so historical value reflects only what the user actually owned at the time. Slots without acquired_date keep the existing earliest-snapshot behavior.
 - **Graded chart backward-fill (two places)**: TCGPriceLookup graded `/history` is extremely sparse (avg 10 rows/slot/year, median slot's first row is months into a 1y window). **(1) Per-section:** `computeGradedValueHistory` seeds each slot's `prev` with its first known price so a slot is always represented once we have ANY data for it. Without this, plain forward-fill produced an artificial ramp ($100 → $2500) as more slots came online with their first data point. **(2) Combined-chart sum:** the combined-line builder in `CollectionPanel`'s `chartSeries` memo seeds each section's cursor with `s.sorted[0]?.value` so dates BEFORE a section's earliest data point still receive that section's earliest value. Without this, the combined line dropped to (cards + sealed only) on early dates and then jumped up when graded's first datapoint hit — even though the individual graded line in split mode was flat across the entire range. The two backward-fills compose: per-slot inside graded's own series, then per-section across the sum. Acquired_date gating still wins on the per-slot side.
 
+## Collection Value chart: phantom-spike smoothing (migration 55)
+
+TCGCSV's `low_price` is the lowest active listing, not the lowest sale — a single mispriced LP listing pins Low at $99 / $200 / $2,140 for days while NM Market never moves (Black Cauldron Cold Foil 2026-05-14 → 2026-05-26 is the canonical example: ~$14 → $2,140 → $99 → $15 across 13 days, Market stayed $13.62-$14.15 the whole time). Without intervention that single bad listing renders as a multi-thousand-dollar windfall/crash on the Collection Value chart. **Migration 55 adds `prices_daily.low_price_smoothed`** (nullable numeric); the nightly `scripts/smooth_low_prices.py` ETL writes smoothed values for days it identifies as phantom spikes; `computeCollectionValueHistory` reads `r.low_price_smoothed ?? r.low_price` so unflagged days pass through untouched.
+
+**Scoped to the Collection Value rollup ONLY.** Every other surface — card detail Price History, Price Graphing, Compare, Screener, mover banner, `price_movers` matview, "Your Top Movers" home tiles — keeps reading raw `low_price`. Phantom spikes are real market events worth seeing in those views; smoothing only kicks in for "what was my portfolio actually worth on day X" where honesty matters more than realtime signal. The user explicitly wants the spike to appear on the per-card history; only the portfolio rollup should be denoised.
+
+### Algorithm (`scripts/smooth_low_prices.py`)
+
+Two-phase per `(tcgplayer_product_id, printing)` series:
+
+1. **Mark anomalous days.** For each day D with ≥ 15 days of `low_price` data in [D-30, D-1], compute the rolling median. Day is anomalous if `low(D) ≥ 2.5 × median` OR `low(D) ≤ 0.4 × median`.
+2. **Group into stretches** — consecutive anomalous days, tolerating gaps ≤ 3 days (brief mid-phantom returns to baseline like Black Cauldron's May 16 = $13 between May 15 = $119 and May 18 = $61 are part of the same phantom).
+3. **Per-stretch evaluation.** For each stretch `[start, end]`:
+   - **Duration cap:** if `end - start + 1 > 14` days → real move (meta hype etc), leave raw.
+   - **Outer baselines:** median of `[start-30, start-1]` (≥ 15 samples) and `[end+8, end+21]` (≥ 10 samples). Post window starts at end+8 so any tail of the phantom doesn't pollute the post-median.
+   - **Snap-back check:** post within ±30% of pre (`0.7 ≤ post/pre ≤ 1.3`). If not → real move, leave raw.
+   - **Substitution:** every day in the stretch (including intermediate gap days) gets `low_price_smoothed = (pre + post) / 2`.
+
+Median (not trimmed mean) is used throughout for robustness — even when 6 of 20 days in a window are spikes, the median still picks a normal-day value.
+
+**Per-day algorithms don't work — must be stretch-based.** A per-day check can't distinguish "phantom that lasted 13 days" from "real move that lasted 13 days, now over": both look identical (pre ≈ post ≈ old baseline) if pre/post windows reach beyond the deviation. The duration cap is the only thing separating phantom from meta-hype, and it has to be measured against the *full stretch*, not a single day. (Initial implementation was per-day; failed the 14-day-true-move synthetic test case — both endpoints had pre/post matching old baseline.)
+
+**Settling lag is intentional.** Today's row is never smoothed — we can't tell if a current spike is real or phantom yet. The script walks the trailing 60 days but stops at `today - RECENT_SKIP (=7)`. A spike won't be smoothed until ≥ 10 days of post-window data exist AND the median confirms snap-back, so Black Cauldron's May 14-26 stretch starts getting smoothed ~2026-06-13. User explicitly accepts the lag — "chart honesty in the moment matters more than instant historical revision."
+
+### Wiring
+
+- **ETL:** `.github/workflows/etl.yml` `smooth` job, `needs: prices`, fires on the daily safety-net cron + `workflow_dispatch` (job=prices|both). Idempotent — re-runs the trailing 60 days and overwrites as needed. Days outside the eval window stay frozen.
+- **Client:** `fetchCollectionPriceHistory` adds `low_price_smoothed` to the SELECT with schema-tolerant 42703 retry (fetch still works pre-migration). `computeCollectionValueHistory` swaps in the coalesce. Other paths (`fetchCardHistory`, the EV/sealed price-history fetch at ~line 6439) intentionally keep `select: "...low_price..."` raw.
+- **Cache invalidation:** `packsink:colvalue:v2:...` → `v3` (rollup logic changed); `AUX_CACHE_VERSION = "2026-05-30-low-price-smoothed"` wipes every existing user's aux cache on next page load; `sw.js` CACHE_VERSION → `packsink-v111`; `?v=110` → `?v=111` on styles.css/logo.js.
+
+### Tunables
+
+All at the top of `scripts/smooth_low_prices.py`. If outcomes feel off:
+
+- `MAX_PHANTOM_DURATION_DAYS = 14` — phantom-vs-trend dividing line.
+- `UP_SPIKE = 2.5` / `DOWN_SPIKE = 0.4` — anomaly thresholds vs rolling median.
+- `SNAP_LOW = 0.7` / `SNAP_HIGH = 1.3` — post/pre snap-back band.
+- `GAP_TOLERANCE_DAYS = 3` — max gap between anomalous days inside a single stretch.
+- `RECENT_SKIP = 7` — minimum days between today and the most-recent smoothable day.
+
+The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user-facing in plain English. If the algorithm gets retuned, update both the script comments AND the FAQ paragraph.
+
+### Synthetic test cases (run before changing the algorithm)
+
+`scripts/smooth_low_prices.py` exposes `compute_smoothed_for_series(series, eval_start, eval_end)`. Four cases must all hold:
+
+1. **13-day phantom (Black Cauldron shape):** all 13 days smoothed to the surrounding baseline.
+2. **30-day sustained move ($3 → $30 → $3):** 0 days smoothed (duration > 14).
+3. **3-day pump ($3 → $100 → $3):** all 3 days smoothed.
+4. **Step-up with no return ($3 → $30 forever):** 0 days smoothed (post never snaps back).
+
+## Trade Comparison tool (Analytics » Trade Compare)
+
+`TradeView` (Index.html). Two-sided card-value comparison for working out a trade between two people. Search routes through the canonical `matchesCardFilter` (so the same smart-search works). Each side is a `[{key, qN, qF}]` array; the tool sums Low + NM Market and shows the difference.
+
+- **Group key**: `tradeGroupKey(g)` = `card_id` (+ `::Normal`/`::Foil` suffix for SPLIT_BY_PRINTING_SETS cards). Cards re-resolve from a `groupByKey` Map so a stale cache can't carry dead references.
+- **Default quantities on add**: a card with BOTH printings starts at **0/0** (the adder can't know which the other party means — they pick). Single-printing cards (chase: Epic/Enchanted/Iconic/Promo, or normal-only) default that one printing to **1**.
+- **Per-card controls**: ± per printing, a **move-to-other-side** (⇄) button (merges quantities if the card already sits on the destination), remove (×). Header has per-side **Clear** + a **Clear all**. Clicking the card art/name opens the standard `CardDetailModal` (TradeView receives `theme/user/collection/updateQty/onSignIn` from MarketView for this).
+- **Layouts** (`packsink:trade:layout` = `cards`|`compact`): compact drops the image + set/ink line and lays the two printings **side-by-side** (one condensed row) on all widths. The mobile (≤760px) breakpoint also forces side-by-side printings for every card.
+- **Sort** (`packsink:trade:sort` = `added`|`price-desc`|`price-asc`|`name`|`release`): display-only, never mutates the side's stored order (so "Added" is restorable). Unpriced cards sink to the bottom for price sorts.
+- **Tooltips + links**: Low/NM tags use the shared `Tip` (`TIP_LOW`/`TIP_MARKET`); each printing has a `↗` per-SKU TCGplayer affiliate link via `tcgUrl(pid, printing)`.
+
+### Shareable trade links (DB-backed)
+
+The trade is **persisted in the `trades` table keyed by a token**, not stuffed into the URL — the old inline `?trade=<base64>` blob blew past Discord's 2000-char message cap (~16 cards/side). Now the link is a fixed ~45 chars regardless of trade size.
+
+- **Migration 54** (`supabase/54_trade_share_links.sql`): `trades(token pk, payload jsonb, user_id, created_at)`. RLS **on with no policies** — all access via two SECURITY DEFINER RPCs granted to anon+authenticated: `create_trade(p_token, p_payload)` (validates token shape `^[A-Za-z0-9_-]{16,64}$`, caps payload <100KB) and `get_trade(p_token)`.
+- **Share** (`shareTrade`): generates a 22-char token client-side (so the clipboard write is **synchronous** inside the click — reliable in Safari), copies `packs.ink/?t=<token>`, and persists via `saveTradeRecord` in the background. Payload = `{a:[[key,qN,qF],...], b, n:[nameA,nameB]}` (`tradePayloadObj`).
+- **URL form is `?t=<token>`, NOT `/t/<token>`.** A two-segment path breaks every **relative** asset URL (`styles.css`, `logo.js`, ink-icon preloads) — the browser resolves them against `/t/` → SPA fallback serves HTML → `LOGO_B64 is not defined` crash. The single-segment `?t=` keeps the path at `/` so relative assets resolve. (To ever use the pretty `/t/` path, every asset URL must first be made root-absolute.)
+- **Open**: `App.initialUrlParams.tradeToken` (via `getTradeShareToken()`, captured in `useMemo` before the URL-cleanup effect runs) forces `view="market"`; `marketSub` inits to `"trade"`; `TradeView` fetches via `get_trade`, hydrates, and the App view-sync effect cleans the path to `/analytics`. Token is passed down as a **prop** (`shareToken`) — NOT re-read from the URL in the hydration effect, because the catalog loads async and the URL is cleaned before then. Legacy `?trade=` blobs still decode (`decodeTrade`).
+- **Analytics sub-tab routing**: `marketSub` lives in App, mirrored to `?a=<sub>` (added to `dirtyParams` so it's stripped when leaving Analytics). First sync uses `replaceState`, user tab clicks use `pushState` (Back/Forward step through tabs); a popstate handler syncs `marketSub` from `?a=`. This is why refresh keeps the tab. The `if(cur===want) return` guard in the sync effect prevents the popstate→setState→push loop.
+- **localStorage**: `packsink:trade:v1` (`{a,b,nameA,nameB}`) auto-saves the in-progress trade locally; a `?t=` share link takes precedence over it on load.
+
 ## Set conventions
 
 - **`MAINLINE_SETS`** = booster-pack sets (TFC → Attack of the Vines). Used by EV, Pack Sim, Box Sim, Playset Cost, Price Graphing, Card Averages, Heatmap, Home "newest set".
@@ -715,6 +789,10 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 **For the site to show stale data**, both cron-job.org AND the GH safety-net cron would have to fail. cron-job.org alerts on failure to user email; GH cron failures surface as workflow failures.
 
 `permissions: contents: read` is pinned at the workflow level — required when repo workflow permissions setting is anything other than "Read and write".
+
+**Graded ETL retries on transient network errors (2026-05-30).** `fetch_page` in `etl_tcgpricelookup_daily.py` catches `requests.exceptions.RequestException` (parent of ReadTimeout / ConnectionError) inside the existing retry loop, also retries on 5xx, and uses `timeout=60` instead of `30`. Run #80's graded job failed on a single 30s ReadTimeout to api.tcgpricelookup.com; that path now sleep+retries (`RETRY_ON_RATE=8` attempts × `RETRY_SLEEP=8s` = ~64s of patience) before giving up. Terminal failure message includes the last underlying error so you can tell which path (timeout vs 5xx vs persistent 429) hit the wall.
+
+**Phantom-spike smoothing ETL** (`smooth_low_prices.py`, added 2026-05-30) is chained `needs: prices` after the TCGCSV daily ETL. See "Collection Value chart: phantom-spike smoothing" for details. Idempotent; safe to fire alongside cron-job.org + GH safety-net pings.
 
 ### Auth / grants
 
