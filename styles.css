@@ -1767,6 +1767,39 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .home-feed{background:var(--bg-surface);border:1px solid var(--border);
   border-radius:8px;padding:6px 8px 8px;margin-bottom:14px;
   align-self:start;}
+/* Event-news tiles in .home-left-col under Tournament Results. One per
+   active EVENT_TILES entry; each artist name opens ArtistAlleyModal
+   pre-picked. */
+.home-news-tile{background:var(--bg-surface);border:1px solid var(--border);
+  border-radius:8px;padding:8px 10px 10px;width:100%;box-sizing:border-box;
+  margin-bottom:0;align-self:stretch;}
+.home-news-title{font-family:'Cinzel',serif;font-size:12px;font-weight:600;
+  letter-spacing:0.3px;color:var(--accent);margin:0 2px 4px;}
+/* Date + event-page link under the tile title. Single anchor: the date text
+   is what visually labels the link; the ↗ glyph signals the external page. */
+.home-news-event-link{display:inline-flex;align-items:center;gap:5px;
+  font-size:11px;font-weight:600;color:var(--text-dim);
+  margin:0 2px 8px;text-decoration:none;
+  border-bottom:1px dashed transparent;line-height:1.3;
+  transition:color 0.12s,border-color 0.12s;}
+.home-news-event-link[href="#"]{cursor:default;}
+.home-news-event-link:hover{color:var(--accent);}
+.home-news-event-link[href]:not([href="#"]):hover{border-bottom-color:var(--accent);}
+.home-news-event-link-arrow{font-size:10px;line-height:1;}
+.home-news-list{list-style:none;margin:0;padding:0;
+  display:flex;flex-direction:column;gap:1px;}
+.home-news-link{display:flex;width:100%;gap:6px;align-items:center;
+  padding:7px 8px;background:none;border:none;border-radius:5px;
+  cursor:pointer;font-family:'Nunito Sans',sans-serif;text-align:left;
+  color:var(--text);transition:background 0.12s;}
+.home-news-link:hover{background:var(--bg-card);}
+.home-news-link-name{flex:1;min-width:0;font-size:13px;font-weight:600;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.home-news-link:hover .home-news-link-name{color:var(--accent);}
+.home-news-link-chev{flex-shrink:0;color:var(--text-muted);font-size:14px;
+  transition:transform 0.12s,color 0.12s;}
+.home-news-link:hover .home-news-link-chev{color:var(--accent);transform:translateX(2px);}
+
 /* Reusable expand/collapse toggle for home banners (Tournament Results,
    Following). Sticky-look chip at the bottom of the banner. */
 .home-feed-collapse-toggle{display:block;margin:8px auto 2px;padding:5px 12px;
@@ -1999,12 +2032,23 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .collection-panel .panel-dir-toggle label.on-up{color:var(--green);}
 .collection-panel .panel-dir-toggle label.on-down{color:var(--red);}
 .collection-panel .panel-dir-toggle input{margin:0;}
-.collection-panel .panel-movers-table{width:100%;border-collapse:collapse;font-size:11px;}
+/* table-layout:fixed pins the IMG / price / pct columns to their declared
+   widths and gives the name column the remainder. Without this the browser's
+   auto-layout was leaking slack into the IMG cell (it grew to ~170px while
+   the name truncated to 34px). */
+.collection-panel .panel-movers-table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}
 .collection-panel .panel-movers-table tr{cursor:pointer;}
 .collection-panel .panel-movers-table tr:hover{background:var(--bg-surface-hover);}
 .collection-panel .panel-movers-table td{padding:3px 4px;vertical-align:middle;border:none;}
-.collection-panel .panel-movers-img{width:22px;}
-.collection-panel .panel-movers-img img{width:22px;height:31px;object-fit:cover;border-radius:2px;display:block;}
+/* Card thumbnail in "Your Top Movers". Fixed cell width pins the column so
+   the name cell (max-width:0 + flex-grow) reclaims the remaining space —
+   without an explicit width here the table's auto-layout was leaving a big
+   empty gap between thumbnail and name. `object-fit:cover` with a box
+   aspect matching the Lorcast small image (146×204 = ~5:7) means the
+   visible crop is sub-pixel — the whole card art is effectively shown.
+   Specificity bump (td.panel-movers-img) beats the general TD padding. */
+.collection-panel .panel-movers-table td.panel-movers-img{padding:3px 4px;width:40px;}
+.collection-panel .panel-movers-img img{width:32px;height:45px;object-fit:cover;border-radius:3px;display:block;}
 /* Two-line layout: card name (line 1) + optional "FOIL" sub-label (line 2,
    Cold Foil only). The cell uses vertical-align:top and a fixed top
    padding so the name-text always sits at the same Y across rows
@@ -2015,7 +2059,7 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
    above the geometric middle of the 31px image cell — a deliberate
    compromise so two-line rows (name + tag) stay within the row height
    without growing it. */
-.collection-panel .panel-movers-name{max-width:0;line-height:1.15;vertical-align:top;
+.collection-panel .panel-movers-name{line-height:1.15;vertical-align:top;
   padding-top:6px !important;text-align:left;}
 .collection-panel .panel-movers-name-text{overflow:hidden;text-overflow:ellipsis;
   white-space:nowrap;}
@@ -2263,6 +2307,13 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
    buildCardPosterBlob — so it needs no CSS and can't be broken by a stale
    cached stylesheet.) */
 .card-detail-screener{padding:14px 28px;border-top:1px solid var(--border);background:var(--bg);}
+/* Screener entry point: surface price changes + chart first, push the card
+   image + description below. Flex order on the existing column avoids any
+   JSX restructuring. Extra right padding on the first block dodges the
+   absolutely-positioned × close button. */
+.card-detail--price-first .card-detail-screener{order:1;border-top:none;padding-right:60px;}
+.card-detail--price-first .card-detail-history-section{order:2;}
+.card-detail--price-first .card-detail-top{order:3;border-top:1px solid var(--border);}
 .card-detail-screener-head{display:flex;align-items:center;justify-content:space-between;
   gap:10px;margin-bottom:10px;flex-wrap:wrap;}
 .cd-screener-title{font-family:'Cinzel',serif;font-size:14px;color:var(--accent);font-weight:600;}
@@ -3039,7 +3090,7 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-card-actions button.danger:hover{border-color:var(--red);background:rgba(153,27,27,0.08);}
 
 /* Editor: card browser (left) + deck summary panel (right) */
-.deck-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 400px;gap:16px;align-items:start;}
+.deck-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 460px;gap:16px;align-items:start;}
 @media (max-width: 1100px){ .deck-editor-grid{grid-template-columns:1fr;} }
 /* Mobile Cards/Deck tab toggle. Desktop hides it entirely; on phones the
    inactive panel is removed from layout so users see one full-width view
@@ -3241,8 +3292,8 @@ html[data-theme="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
    Mirrors dreamborn's "one line per card" density. */
 .deck-section-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));
   gap:4px 12px;}
-.deck-row{display:grid;grid-template-columns:28px 32px 1fr auto auto;gap:8px;align-items:center;
-  font-size:12px;padding:5px 8px;background:var(--bg-card);border:1px solid var(--border);
+.deck-row{display:grid;grid-template-columns:24px 28px minmax(0,1fr) auto auto;gap:5px;align-items:center;
+  font-size:12px;padding:4px 6px;background:var(--bg-card);border:1px solid var(--border);
   border-radius:6px;min-width:0;}
 .deck-row-costshield{display:inline-flex;align-items:center;justify-content:center;
   flex-shrink:0;color:#c8a846;}
@@ -3256,10 +3307,10 @@ html[data-theme="dark"] .cost-shield-num{fill:#f4f1eb;}
 .deck-row-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text);
   min-width:0;font-weight:500;display:flex;align-items:center;}
 .deck-row-price{font-variant-numeric:tabular-nums;color:var(--green);font-weight:700;
-  font-size:11px;padding:2px 7px;border-radius:5px;background:rgba(22,163,74,0.08);
+  font-size:11px;padding:2px 5px;border-radius:5px;background:rgba(22,163,74,0.08);
   border:1px solid transparent;white-space:nowrap;}
 .deck-row-counter{display:flex;gap:1px;}
-.deck-row-counter button{width:18px;height:18px;border:1px solid var(--border);
+.deck-row-counter button{width:16px;height:18px;border:1px solid var(--border);
   background:var(--bg-card);color:var(--text-dim);font-size:11px;font-weight:700;
   cursor:pointer;border-radius:3px;padding:0;line-height:1;}
 .deck-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
@@ -3272,7 +3323,7 @@ html[data-theme="dark"] .cost-shield-num{fill:#f4f1eb;}
    so the inline shield is a "second visual confirmation" rather than the
    only signal. */
 @media (max-width:700px){
-  .deck-row{grid-template-columns:24px 26px 1fr auto auto;gap:6px;padding:5px 6px;}
+  .deck-row{grid-template-columns:24px 26px minmax(0,1fr) auto auto;gap:5px;padding:4px 6px;}
   .deck-row-costshield .cost-hex-shield-inkable{height:24px;}
   .deck-row-costshield .cost-hex-shield-uninkable{height:22px;width:22px;}
   .deck-row-price{padding:2px 5px;font-size:10px;}
@@ -3327,6 +3378,70 @@ html[data-theme="dark"] .deck-row-ink.dual::after{background:rgba(255,255,255,0.
 .deck-view-layout-row button.active{background:var(--accent-glow);border-color:var(--border-accent);color:var(--accent);}
 .deck-view-select{padding:6px 8px;font-size:12px;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:5px;color:var(--text);}
+
+/* Variant picker — small ▾ chevron next to deck cards that have multiple
+   versions (set reprints / promos / chase rarities sharing the same Product
+   Name). The popover is rendered at editor-level with position:fixed so it
+   sits above tiles with overflow:hidden. */
+.deck-variant-btn{display:inline-flex;align-items:center;justify-content:center;
+  width:18px;height:18px;padding:0;border:1px solid var(--btn-border);
+  background:var(--bg-card);color:var(--text-dim);font-size:10px;line-height:1;
+  border-radius:4px;cursor:pointer;flex-shrink:0;
+  transition:border-color 0.12s,color 0.12s,background 0.12s;}
+.deck-variant-btn:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-glow);}
+/* Inline row version — sits inside .deck-row-name after the name text. */
+.deck-row-name-text{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  min-width:0;flex:1;}
+.deck-variant-btn--row{margin-left:4px;}
+/* Tile version — absolutely positioned UNDER the top-right qty badge so the
+   ink-cost hex (top-left) stays unobscured. Sized to match the qty badge so
+   they read as a vertically-stacked pair. */
+.deck-variant-btn--tile{position:absolute;top:32px;right:5px;z-index:3;
+  width:22px;height:22px;font-size:11px;
+  background:rgba(0,0,0,0.78);border-color:rgba(255,255,255,0.25);color:#fff;
+  box-shadow:0 1px 3px rgba(0,0,0,0.35);}
+.deck-variant-btn--tile:hover{background:rgba(0,0,0,0.9);border-color:var(--accent);color:var(--accent);}
+.deck-stack-top .deck-variant-btn--tile{top:34px;right:7px;}
+/* When HIGHLIGHT MISSING is on, the owned-frac badge takes the slot under
+   the qty badge — nudge the chevron one row further down to clear it. */
+.deck-grid-tile:has(.deck-tile-owned-frac) .deck-variant-btn--tile{top:57px;}
+.deck-stack-tile:has(.deck-tile-owned-frac) .deck-variant-btn--tile{top:59px;}
+/* Popover dropdown — fixed-positioned, anchored by JS to the clicked chevron. */
+.deck-variant-popover{z-index:300;background:var(--bg-modal);border:1px solid var(--border);
+  border-radius:10px;box-shadow:0 12px 28px rgba(0,0,0,0.35);
+  padding:8px 8px 10px;max-height:min(360px,75vh);overflow:auto;}
+.deck-variant-popover-head{font-family:'Cinzel',serif;font-size:11px;font-weight:600;
+  letter-spacing:0.3px;color:var(--accent);margin:2px 4px 6px;}
+.deck-variant-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;}
+.deck-variant-item{display:flex;width:100%;align-items:center;gap:8px;
+  padding:5px 8px;background:none;border:1px solid transparent;border-radius:6px;
+  cursor:pointer;color:var(--text);text-align:left;font-family:'Nunito Sans',sans-serif;
+  transition:background 0.12s,border-color 0.12s;}
+.deck-variant-item:hover:not(:disabled){background:var(--bg-card);border-color:var(--border);}
+.deck-variant-item.current{cursor:default;background:var(--accent-glow);border-color:var(--border-accent);}
+.deck-variant-item:disabled{cursor:default;}
+.deck-variant-thumb{flex-shrink:0;width:34px;height:48px;object-fit:cover;border-radius:3px;
+  display:block;background:var(--bg-surface);}
+.deck-variant-thumb--placeholder{background:var(--bg-card);border:1px dashed var(--border);}
+.deck-variant-meta{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.deck-variant-set{font-size:12px;font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.deck-variant-rarity{font-size:10px;color:var(--text-muted);text-transform:uppercase;
+  letter-spacing:0.4px;font-weight:600;}
+.deck-variant-check{flex-shrink:0;color:var(--accent);font-size:14px;font-weight:700;}
+
+/* Undo Changes button in the deck-editor toolbar. Two-click confirm pattern:
+   default style is muted/destructive-suggestive; once armed (first click) the
+   button paints solid red so the second click is obviously the commit. */
+.deck-toolbar-undo{color:var(--text-dim);}
+.deck-toolbar-undo:hover{border-color:#dc2626;color:#dc2626;}
+.deck-toolbar-undo.armed,
+.deck-toolbar-undo.armed:hover{background:#dc2626;border-color:#dc2626;color:#fff;
+  animation:undo-armed-pulse 1s ease-in-out infinite;}
+@keyframes undo-armed-pulse{
+  0%, 100%{box-shadow:0 0 0 0 rgba(220,38,38,0.45);}
+  50%{box-shadow:0 0 0 4px rgba(220,38,38,0);}
+}
 
 /* Highlight-missing toggle pill. */
 .deck-highlight-pill{display:inline-flex;align-items:center;gap:6px;

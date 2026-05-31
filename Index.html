@@ -32,7 +32,7 @@
 <script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
   crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=110">
+<link rel="stylesheet" href="styles.css?v=122">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -78,7 +78,7 @@
   };
 </script>
 <script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-<script src="logo.js?v=110"></script>
+<script src="logo.js?v=122"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -162,7 +162,7 @@ const CACHE_KEY = "packsink:catalog:v42";
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-05-26-kill-hidden-feature";
+const AUX_CACHE_VERSION = "2026-05-30-low-price-smoothed";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -1716,15 +1716,29 @@ async function fetchCollectionPriceHistory(productIds, sinceDate){
   for(let i=0; i<productIds.length; i+=COLLECTION_HISTORY_BATCH){
     batches.push(productIds.slice(i, i+COLLECTION_HISTORY_BATCH));
   }
-  const results = await Promise.all(batches.map(b => sbFetchAll("prices_daily", {
-    select: "tcgplayer_product_id,printing,date,low_price",
+  // low_price_smoothed (migration 55) lets the rollup ignore phantom-spike
+  // days where a single mispriced listing dragged Low far from baseline.
+  // Schema-tolerant: if the column doesn't exist yet (pre-migration env),
+  // PostgREST 42703s the SELECT — retry without it so the chart still works.
+  const fetchOne = async (b, withSmoothed) => sbFetchAll("prices_daily", {
+    select: withSmoothed
+      ? "tcgplayer_product_id,printing,date,low_price,low_price_smoothed"
+      : "tcgplayer_product_id,printing,date,low_price",
     source: "eq.tcgcsv",
     grade: "eq.raw",
     tcgplayer_product_id: "in.(" + b.join(",") + ")",
     date: "gte." + sinceDate,
     order: "tcgplayer_product_id.asc,printing.asc,date.asc",
-  })));
-  return results.flat();
+  });
+  try {
+    const results = await Promise.all(batches.map(b => fetchOne(b, true)));
+    return results.flat();
+  } catch (e) {
+    const msg = String(e?.message || e);
+    if(!/42703|low_price_smoothed/i.test(msg)) throw e;
+    const results = await Promise.all(batches.map(b => fetchOne(b, false)));
+    return results.flat();
+  }
 }
 
 // djb2-style hash for the (sorted) owned-products string. The full key
@@ -1737,9 +1751,10 @@ function shortHash(s){
 }
 // localStorage key for the persisted collection-value cache.
 function collectionValueCacheKey(userId, productsHash, rangeKey){
-  // v2 = prerelease-spike guard applied. Bump when the rollup logic changes
-  // so stale per-user series get invalidated automatically.
-  return `packsink:colvalue:v2:${(userId||"").slice(0,8)}:${productsHash}:${rangeKey}`;
+  // v3 = phantom-spike smoothing (low_price_smoothed). v2 = prerelease-spike
+  // guard. Bump when the rollup logic changes so stale per-user series get
+  // invalidated automatically.
+  return `packsink:colvalue:v3:${(userId||"").slice(0,8)}:${productsHash}:${rangeKey}`;
 }
 function readCollectionValueCache(key){
   try {
@@ -1797,7 +1812,13 @@ function computeCollectionValueHistory(rows, ownedByProductPrinting, productEarl
     let prev = null, si = 0;
     for(const date of dates){
       while(si < series.length && series[si].date <= date){
-        const p = parseP(series[si].low_price);
+        // low_price_smoothed (migration 55) overrides raw low_price on days
+        // an off-line job has identified as phantom spikes. NULL passes
+        // through to raw low_price so unflagged days are untouched. Scoped
+        // to the collection-value rollup — every other surface (card detail,
+        // Price Graphing, Screener, mover banner) keeps reading raw.
+        const r = series[si];
+        const p = parseP(r.low_price_smoothed ?? r.low_price);
         if(p != null) prev = p;
         si++;
       }
@@ -2419,6 +2440,18 @@ const parseSearchQuery = (input) => {
       }
       if(changed) break;
     }
+  }
+
+  // Pre-pass: extract "artist: <name>". The name extends to the next "word:"
+  // prefix (rarity:, set:, etc.) or end of input, so multi-word artist names
+  // ("Oggy Christiansson", "Ian MacDonald") aren't split by tokenization.
+  // matchesCardFilter does case-insensitive comparison against row.illustrators,
+  // so the lowercased capture is fine.
+  const artistMatch = raw.match(/(?:^|\s)artist:\s*(.+?)(?=\s+\w+:|$)/);
+  if(artistMatch){
+    out.filters.illustrator = artistMatch[1].trim();
+    raw = (raw.slice(0, artistMatch.index) + raw.slice(artistMatch.index + artistMatch[0].length))
+      .replace(/\s+/g, " ").trim();
   }
 
   const tokens = raw.split(/\s+/).filter(Boolean);
@@ -3592,7 +3625,7 @@ const CardTilePreview = ({artSrc, name, meta, low, market}) => {
   </div>`;
 };
 
-const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded}) => {
+const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
   // raw qty) and per-row +/- on the graded tab is enabled via
@@ -3819,7 +3852,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const tileMeta = (group.Rarity || "") + (tileRow && tileRow.key === "__foil" ? " · Foil" : "");
 
   return html`<div class="card-detail-overlay" onClick=${onClose}>
-    <div class="card-detail" onClick=${e=>e.stopPropagation()}>
+    <div class=${"card-detail"+(priceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="card-detail-top">
         <div class="card-detail-image">
@@ -5019,9 +5052,9 @@ const MulliganSimulator = ({deck, cardById, onClose}) => {
 // banner, then serves the PNG as a download. Loading images with
 // crossOrigin="anonymous" works because the Lorcast CDN serves the correct
 // CORS headers; tainted-canvas exports would silently fail otherwise.
-const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
+const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrowseInCards}) => {
   const [query, setQuery] = useState("");
-  const [picked, setPicked] = useState(null);
+  const [picked, setPicked] = useState(initialArtist || null);
   const [error, setError] = useState(null);
 
   // Group raw -> one entry per card_id for the picked artist. Dedupe across
@@ -5339,6 +5372,13 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose}) => {
                     style=${{padding:"8px 18px",fontSize:13}}>
                     Open Poster (Save as PDF)
                   </button>
+                  ${onBrowseInCards && html`<button onClick=${()=>onBrowseInCards(picked)}
+                    style=${{padding:"8px 18px",fontSize:13,border:"1px solid var(--btn-border)",
+                      borderRadius:6,background:"var(--bg)",color:"var(--text)",
+                      fontWeight:600,cursor:"pointer",fontFamily:"'Nunito Sans',sans-serif"}}
+                    title=${"Open the Cards tab filtered to "+picked}>
+                    Browse in Cards
+                  </button>`}
                   <span class="muted" style=${{fontSize:11,lineHeight:1.4}}>
                     Opens in a new tab. Use your browser's print dialog to save as PDF or print.
                   </span>
@@ -5802,7 +5842,11 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       onClose=${()=>setDrawerOpen(false)} onReset=${()=>setFilter(emptyFilter())}/>`}
     ${artistAlleyOpen && html`<${ArtistAlleyModal}
       allIllustrators=${allIllustrators} raw=${raw}
-      onClose=${()=>setArtistAlleyOpen(false)}/>`}
+      onClose=${()=>setArtistAlleyOpen(false)}
+      onBrowseInCards=${(name) => {
+        setFilter(f => ({...f, illustrators: new Set([name])}));
+        setArtistAlleyOpen(false);
+      }}/>`}
   </div>`;
 };
 
@@ -12005,6 +12049,8 @@ function FAQView(){
     <p>Sign in (Google) and start adding cards from <strong>Cards</strong>, the <strong>Screener</strong>, any deck detail page, or by clicking a card's title from a deck list. Use the +/- buttons on the card tile or counter to set quantities for normal and foil copies independently.</p>
     <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets). <strong>Graded</strong> tracks PSA / BGS / CGC certifications with per-grade price tracking. Bulk CSV import is available in the Collection section if you prefer paste-in.</p>
     <p>The Home page's <strong>Collection Value</strong> chart graphs the value of everything you own over time. Pre-release price spikes are filtered out so a brand-new set doesn't inflate your historical value.</p>
+    <p><strong>Phantom-spike smoothing.</strong> TCGPlayer's <strong>Low</strong> is the lowest active listing, not the lowest sale — sometimes a single mispriced listing pins Low at $200 or $2,000 for a few days while nothing actually trades at that number. Without intervention, that single bad listing would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
+    <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
 
     <h2>Building decks</h2>
     <p>Open the <strong>Decks</strong> tab and hit <em>New deck</em>. Add cards from the side panel (works with smart search), and the editor automatically computes <strong>ink legality</strong>, <strong>card count</strong>, <strong>format</strong> (Core Constructed vs Infinity), and the cost-curve / colors / inkable splits.</p>
@@ -14194,6 +14240,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       user=${user} collection=${collection}
       updateQty=${updateQty}
       initialTab=${showGraded ? "graded" : undefined}
+      priceFirst=${true}
       onSignIn=${onSignIn || (() => {})}/>`}
     ${hoverPreview && html`<div class="deck-hover-preview"
       style=${{
@@ -16348,7 +16395,34 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
   </div>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter}) => {
+// Event news tiles — render in .home-left-col (under Tournament Results)
+// on every viewport. Order matters: tiles render top-to-bottom in array
+// order, and the user wants soonest-ending event on top. Each tile is
+// hidden client-side once Date.now() crosses its `expiresAtMs`. To remove
+// permanently, delete the entry; to add another, append to the array.
+const EVENT_TILES = [
+  {
+    id: "dortmund",
+    title: "Dortmund DLC Artist Alley",
+    dateLabel: "Jun 5–7, 2026",
+    eventUrl: "https://www.fanfinity.gg/event/disney-lorcana-tcg-challenge-2026-dortmund/",
+    // Last day of event is June 7 (Europe). CEST = UTC+2 in June, so we
+    // hide the tile at 2026-06-08 00:00 CEST = 2026-06-07 22:00 UTC.
+    expiresAtMs: Date.UTC(2026, 5, 7, 22, 0, 0),
+    artists: ["Alice Pisoni", "Juan Diego Leon", "Cristian Romero"],
+  },
+  {
+    id: "indy",
+    title: "Indianapolis DLC Artist Alley",
+    dateLabel: "Jun 19–21, 2026",
+    eventUrl: "https://www.pastimesevents.com/disneylorcanadlcindy/",
+    // 2026-06-22 00:00 CDT (UTC-5).
+    expiresAtMs: Date.UTC(2026, 5, 22, 5, 0, 0),
+    artists: ["Koni", "Oggy Christiansson", "Ian MacDonald"],
+  },
+];
+
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter, onEventArtistClick}) => {
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
   const goAnalytics  = openView ? (()=>openView("market"))     : null;
@@ -16407,6 +16481,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const [showUp, setShowUp] = useState(true);
   const [showDown, setShowDown] = useState(true);
   const [paused, setPaused] = useState(false);
+  // Event news tiles — one per still-active event in EVENT_TILES (module
+  // scope). State + ArtistAlleyModal live at App level; we just render the
+  // tiles here and call onEventArtistClick when an artist link is tapped.
+  const onEventClick = onEventArtistClick || (() => {});
+  const activeEvents = EVENT_TILES.filter(e => Date.now() < e.expiresAtMs);
   // Most-Valuable banner: "main" (non-chase rarities) vs "chase".
   const [valuableMode, setValuableMode] = useState(() => {
     try {
@@ -16677,6 +16756,26 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           <${TournamentResultsBanner} raw=${raw} openDeckById=${openDeckById} openTournamentById=${openTournamentById}
             openTournamentsList=${openTournamentsList}/>
         </div>
+        ${activeEvents.map(ev => html`<div key=${ev.id} class="home-news-tile">
+          <div class="home-news-title">${ev.title}</div>
+          ${(ev.dateLabel || ev.eventUrl) && html`<a class="home-news-event-link"
+            href=${ev.eventUrl || "#"}
+            target=${ev.eventUrl ? "_blank" : null}
+            rel=${ev.eventUrl ? "noopener noreferrer" : null}
+            title=${ev.eventUrl ? ("Open " + ev.title + " event page (new tab)") : null}>
+            <span>${ev.dateLabel}</span>
+            ${ev.eventUrl && html`<span class="home-news-event-link-arrow" aria-hidden="true">↗</span>`}
+          </a>`}
+          <ul class="home-news-list">
+            ${ev.artists.map(name => html`<li key=${name}>
+              <button class="home-news-link" onClick=${()=>onEventClick(name)}
+                title=${"Open Artist Alley for "+name}>
+                <span class="home-news-link-name">${name}</span>
+                <span class="home-news-link-chev" aria-hidden="true">→</span>
+              </button>
+            </li>`)}
+          </ul>
+        </div>`)}
       </div>
       <div class="home-grid-main">
         <div class="home-toolbar">
@@ -17614,6 +17713,13 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   const [decks, setDecks] = useState(null); // null = loading, [] = empty, [...] = loaded
   const [selectedDeckId, setSelectedDeckId] = useState(null);
   const [editMode, setEditMode] = useState(false);
+  // Snapshot of the deck's cards + meta the moment the user enters edit mode.
+  // Used by the "Undo Changes" button in the deck-editor toolbar to revert
+  // every change made during the current edit session. Cleared when the user
+  // clicks Done (editMode → false) so the next edit session starts fresh.
+  // Shape: { deckId, cards: [{card_id, printing, quantity}], name, description,
+  //          youtube_url, visibility }
+  const [editSnapshot, setEditSnapshot] = useState(null);
   // Push a history entry when entering a deck so browser back lands on the
   // grid instead of skipping past the sub-page. The existing URL-sync effect
   // below will then replaceState (no-op) to keep ?deck= aligned.
@@ -18731,6 +18837,149 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     }
   }, [user, decks]);
 
+  // Swap all copies of a deck card with a different version (same Product Name,
+  // different card_id — different set reprint / promo / chase rarity). Sums
+  // quantities across all printings of the old card_id, deletes those rows,
+  // and inserts a new row for the target card_id at its preferred printing
+  // (Normal first, else whatever single printing exists — chase rarities are
+  // typically Cold Foil only). If the target card_id+printing was already in
+  // the deck, quantities are merged. Optimistic update + rollback on error,
+  // same pattern as updateDeckCard.
+  const swapDeckCardVariant = useCallback(async (deckId, oldCardId, newCardId) => {
+    if(!user || !oldCardId || !newCardId || oldCardId === newCardId) return;
+    const deck = (decks || []).find(d => d.id === deckId);
+    if(!deck) return;
+    const oldRows = (deck.cards || []).filter(c => c.card_id === oldCardId);
+    if(!oldRows.length) return;
+    const totalQty = oldRows.reduce((s, c) => s + (c.quantity || 0), 0);
+    if(totalQty <= 0) return;
+    // Find the preferred printing for the new card_id from the catalog.
+    const newCardRows = (raw || []).filter(r => r.card_id === newCardId);
+    const newPrinting = (newCardRows.find(r => r.tcg_printing === "Normal") || newCardRows[0] || {}).tcg_printing || "Normal";
+    // If the target slot already exists in the deck, sum quantities (the deck
+    // limit check is the user's responsibility — surfaces in the legality pill).
+    const existing = (deck.cards || []).find(c => c.card_id === newCardId && c.printing === newPrinting);
+    const mergedQty = (existing?.quantity || 0) + totalQty;
+    const prev = decks;
+    setDecks(ds => (ds || []).map(d => {
+      if(d.id !== deckId) return d;
+      let cards = (d.cards || []).filter(c => c.card_id !== oldCardId);
+      const idx = cards.findIndex(c => c.card_id === newCardId && c.printing === newPrinting);
+      if(idx >= 0){
+        cards = cards.slice();
+        cards[idx] = {...cards[idx], quantity: mergedQty};
+      } else {
+        cards = cards.concat([{deck_id: deckId, card_id: newCardId, printing: newPrinting, quantity: mergedQty}]);
+      }
+      return {...d, cards};
+    }));
+    setPending(p => p + 1);
+    try {
+      const {error: delErr} = await sbClient.from("deck_cards").delete()
+        .eq("deck_id", deckId).eq("card_id", oldCardId);
+      if(delErr) throw delErr;
+      const {error: upErr} = await sbClient.from("deck_cards")
+        .upsert({deck_id: deckId, card_id: newCardId, printing: newPrinting, quantity: mergedQty},
+                {onConflict: "deck_id,card_id,printing"});
+      if(upErr) throw upErr;
+    } catch(e){
+      console.error("variant swap failed:", e);
+      setDecks(prev);
+      alert("Couldn't swap variant: " + e.message);
+    } finally {
+      setPending(p => Math.max(0, p - 1));
+    }
+  }, [user, decks, raw]);
+
+  // Capture an edit-session snapshot the first time `decks` is non-null while
+  // editMode is true for the current selectedDeckId. Cleared when editMode
+  // flips off (Done) or the user switches to a different deck. The early-
+  // return on existing snapshot for the same deck prevents the auto-save
+  // optimistic updates (which mutate `decks`) from overwriting the snapshot.
+  useEffect(() => {
+    if(!editMode || !selectedDeckId){
+      if(editSnapshot) setEditSnapshot(null);
+      return;
+    }
+    if(editSnapshot && editSnapshot.deckId === selectedDeckId) return;
+    const deck = (decks || []).find(d => d.id === selectedDeckId);
+    if(!deck) return;
+    setEditSnapshot({
+      deckId: selectedDeckId,
+      cards: (deck.cards || []).map(c => ({
+        card_id: c.card_id, printing: c.printing, quantity: c.quantity,
+      })),
+      name: deck.name,
+      description: deck.description || null,
+      youtube_url: deck.youtube_url || null,
+      visibility: deck.visibility,
+    });
+  }, [editMode, selectedDeckId, decks, editSnapshot]);
+
+  // Revert all changes made since entering edit mode. Diff current deck
+  // against the snapshot, issue minimal Supabase ops (delete missing rows,
+  // upsert changed rows, update meta), then locally restore. Optimistic
+  // update with rollback on failure — same pattern as updateDeckCard.
+  const undoEditChanges = useCallback(async (deckId) => {
+    if(!user || !editSnapshot || editSnapshot.deckId !== deckId) return;
+    const deck = (decks || []).find(d => d.id === deckId);
+    if(!deck) return;
+    const SEP = "\x1f";
+    const snapMap = new Map(editSnapshot.cards.map(c => [c.card_id + SEP + c.printing, c.quantity]));
+    const curMap  = new Map((deck.cards || []).map(c => [c.card_id + SEP + c.printing, c.quantity]));
+    const toDelete = [], toUpsert = [];
+    for(const key of curMap.keys()){
+      if(!snapMap.has(key)){
+        const [card_id, printing] = key.split(SEP);
+        toDelete.push({card_id, printing});
+      }
+    }
+    for(const [key, qty] of snapMap){
+      if(curMap.get(key) !== qty){
+        const [card_id, printing] = key.split(SEP);
+        toUpsert.push({deck_id: deckId, card_id, printing, quantity: qty});
+      }
+    }
+    const metaPatch = {};
+    if((deck.name || "") !== (editSnapshot.name || "")) metaPatch.name = editSnapshot.name;
+    if((deck.description || "") !== (editSnapshot.description || "")) metaPatch.description = editSnapshot.description;
+    if((deck.youtube_url || "") !== (editSnapshot.youtube_url || "")) metaPatch.youtube_url = editSnapshot.youtube_url;
+    if(deck.visibility !== editSnapshot.visibility) metaPatch.visibility = editSnapshot.visibility;
+    if(!toDelete.length && !toUpsert.length && !Object.keys(metaPatch).length) return;
+    const prev = decks;
+    setDecks(ds => (ds || []).map(d => {
+      if(d.id !== deckId) return d;
+      return {
+        ...d,
+        ...metaPatch,
+        cards: editSnapshot.cards.map(c => ({deck_id: deckId, ...c})),
+      };
+    }));
+    setPending(p => p + 1);
+    try {
+      for(const c of toDelete){
+        const {error} = await sbClient.from("deck_cards").delete()
+          .eq("deck_id", deckId).eq("card_id", c.card_id).eq("printing", c.printing);
+        if(error) throw error;
+      }
+      if(toUpsert.length){
+        const {error} = await sbClient.from("deck_cards")
+          .upsert(toUpsert, {onConflict: "deck_id,card_id,printing"});
+        if(error) throw error;
+      }
+      if(Object.keys(metaPatch).length){
+        const {error} = await sbClient.from("decks").update(metaPatch).eq("id", deckId);
+        if(error) throw error;
+      }
+    } catch(e){
+      console.error("undo failed:", e);
+      setDecks(prev);
+      alert("Couldn't undo changes: " + e.message);
+    } finally {
+      setPending(p => Math.max(0, p - 1));
+    }
+  }, [user, decks, editSnapshot]);
+
   // Update deck-level metadata (format/tags/description/etc). Optimistic
   // local merge + Supabase update with rollback on failure. Reads the
   // updated row back so trigger-set columns (like share_token, which the
@@ -18904,7 +19153,10 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         onDelete=${()=>deleteDeck(deck.id)}
         onDuplicate=${()=>duplicateDeck(deck.id)}
         onUpdateCard=${(cardId, printing, qty)=>updateDeckCard(deck.id, cardId, printing, qty)}
-        onUpdateMeta=${(patch)=>updateDeckMeta(deck.id, patch)}/>
+        onSwapVariant=${(oldCardId, newCardId)=>swapDeckCardVariant(deck.id, oldCardId, newCardId)}
+        onUpdateMeta=${(patch)=>updateDeckMeta(deck.id, patch)}
+        editSnapshot=${editSnapshot && editSnapshot.deckId === deck.id ? editSnapshot : null}
+        onUndoChanges=${()=>undoEditChanges(deck.id)}/>
       ${toastEl}
     <//>`;
   }
@@ -19609,7 +19861,8 @@ const swatchStyle = (inkKey, gradientPrefix) => {
 const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
-                     onUpdateCard, onUpdateMeta, onToggleEditMode,
+                     onUpdateCard, onSwapVariant, onUpdateMeta, onToggleEditMode,
+                     editSnapshot, onUndoChanges,
                      readOnly, creator, creatorId, isOwnDeck, canAct,
                      isFavorited, onToggleFavorite,
                      isFollowingCreator, onToggleFollowCreator,
@@ -19635,6 +19888,112 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const shareRef = useRef(null);
+  // Variant picker — shared popover (fixed-positioned, anchored to the
+  // clicked chevron via anchorRect). Only one open at a time. The chevron
+  // shows on each card with ≥2 versions (different set/print/rarity sharing
+  // the same Product Name). Selecting a variant calls onSwapVariant which
+  // moves all copies of the old card_id to the new one.
+  // {cardId, variants: [{card_id, set, number, rarity, img_small}, ...], anchorRect}
+  const [variantPicker, setVariantPicker] = useState(null);
+  // Build: Product Name → [{card_id, set, number, rarity, img_small, ink, cost}]
+  // — one entry per card_id (Lorcast prints with the same character/version
+  // share a card_id; different rarities / sets / promos get their own). Sorted
+  // by set release order (newest first) then rarity. Catalog scan is O(n);
+  // memoized so it only re-runs when raw changes.
+  const variantsByName = useMemo(() => {
+    const byName = new Map();
+    for(const r of (raw || [])){
+      const name = r && r["Product Name"];
+      if(!name || !r.card_id) continue;
+      let m = byName.get(name);
+      if(!m){ m = new Map(); byName.set(name, m); }
+      const existing = m.get(r.card_id);
+      if(!existing){
+        m.set(r.card_id, {
+          card_id: r.card_id,
+          set: r.Set || "",
+          number: r.Number || "",
+          rarity: r.Rarity || "",
+          img_small: r.img_small || null,
+          ink: r.ink || null,
+          cost: r.cost ?? null,
+          tcg_printing: r.tcg_printing || "Normal",
+        });
+      } else if(existing.tcg_printing !== "Normal" && r.tcg_printing === "Normal"){
+        // Prefer the Normal printing's image when a card_id has both prints.
+        existing.tcg_printing = "Normal";
+        if(r.img_small) existing.img_small = r.img_small;
+      }
+    }
+    const out = new Map();
+    for(const [name, m] of byName){
+      const arr = Array.from(m.values()).sort((a, b) => {
+        const sa = SET_ORDER.indexOf(a.set), sb = SET_ORDER.indexOf(b.set);
+        if(sa !== sb) return sb - sa;
+        return String(a.number).localeCompare(String(b.number), undefined, {numeric:true});
+      });
+      out.set(name, arr);
+    }
+    return out;
+  }, [raw]);
+  // Close the picker on outside-click / Escape. The popover is rendered with
+  // position:fixed at the editor level so it sits above tiles with
+  // overflow:hidden (grid + stacked layouts).
+  useEffect(() => {
+    if(!variantPicker) return;
+    const onDoc = (e) => {
+      if(e.target.closest && (e.target.closest(".deck-variant-popover")
+        || e.target.closest(".deck-variant-btn"))) return;
+      setVariantPicker(null);
+    };
+    const onKey = (e) => { if(e.key === "Escape") setVariantPicker(null); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [variantPicker]);
+
+  // Edit-session undo. `hasUnsavedChanges` is the diff between the current
+  // deck state and the snapshot captured when the user clicked Edit; the
+  // button only shows when there's actually something to undo. Two-click
+  // confirmation pattern: first click arms (red label + 3s window), second
+  // click commits. Auto-disarms if the user does nothing.
+  const hasUnsavedChanges = useMemo(() => {
+    if(!editSnapshot || editSnapshot.deckId !== deck.id) return false;
+    if((deck.name || "") !== (editSnapshot.name || "")) return true;
+    if((deck.description || "") !== (editSnapshot.description || "")) return true;
+    if((deck.youtube_url || "") !== (editSnapshot.youtube_url || "")) return true;
+    if(deck.visibility !== editSnapshot.visibility) return true;
+    const cur = deck.cards || [];
+    if(cur.length !== editSnapshot.cards.length) return true;
+    const SEP = "\x1f";
+    const snapMap = new Map(editSnapshot.cards.map(c => [c.card_id + SEP + c.printing, c.quantity]));
+    for(const c of cur){
+      if(snapMap.get(c.card_id + SEP + c.printing) !== c.quantity) return true;
+    }
+    return false;
+  }, [editSnapshot, deck]);
+  const [undoArmed, setUndoArmed] = useState(false);
+  useEffect(() => {
+    if(!undoArmed) return;
+    const t = setTimeout(() => setUndoArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [undoArmed]);
+  // Disarm whenever changes are reset to none (e.g. after Undo completes
+  // or the user manually undoes their own edits).
+  useEffect(() => {
+    if(!hasUnsavedChanges && undoArmed) setUndoArmed(false);
+  }, [hasUnsavedChanges, undoArmed]);
+  const handleUndoClick = useCallback(() => {
+    if(undoArmed){
+      setUndoArmed(false);
+      onUndoChanges && onUndoChanges();
+    } else {
+      setUndoArmed(true);
+    }
+  }, [undoArmed, onUndoChanges]);
   // Notes / video popover state. Local mirror of deck.description and
   // deck.youtube_url so the textarea/input can be edited without firing
   // an update on every keystroke; debounced commit on blur or popover close.
@@ -20105,6 +20464,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           title=${readOnly ? "Edit this deck — open the card browser" : "Done editing — back to view"}>
           ${readOnly ? "✎ Edit" : "✓ Done"}
         </button>`}
+        ${!readOnly && hasUnsavedChanges && onUndoChanges && html`<button onClick=${handleUndoClick}
+          class=${"deck-toolbar-keep deck-toolbar-undo"+(undoArmed?" armed":"")}
+          style=${{fontSize:12,padding:"5px 10px"}}
+          title=${undoArmed ? "Click again to discard every change made this edit session" : "Revert to the deck's state when you clicked Edit"}>
+          ${undoArmed ? "⚠ Click again to confirm" : "↶ Undo Changes"}
+        </button>`}
         ${isOwnDeck && html`<div ref=${shareRef} style=${{position:"relative",display:"inline-flex"}}>
           <button onClick=${()=>setShareOpen(o=>!o)}
             class=${visibility==="public" || visibility==="unlisted" ? "active" : ""}
@@ -20270,6 +20635,36 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         </div>`;
       };
 
+      // Builds the small ▾ chevron + its click handler. Returns null when
+      // the card has only one version (no variants to switch to) or in
+      // read-only mode (visitors can't modify the deck).
+      const buildVariantChevron = (item, meta, extraClass) => {
+        if(readOnly || !onSwapVariant) return null;
+        const variants = variantsByName.get(meta["Product Name"]) || [];
+        if(variants.length <= 1) return null;
+        const openPicker = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const rect = e.currentTarget.getBoundingClientRect();
+          setVariantPicker(p => p && p.cardId === item.card_id && p.printing === item.printing
+            ? null
+            : {
+                cardId: item.card_id,
+                printing: item.printing,
+                variants,
+                anchorRect: { top: rect.top, right: rect.right, bottom: rect.bottom, left: rect.left },
+              });
+        };
+        const variantCount = variants.length;
+        return html`<button type="button"
+          class=${"deck-variant-btn"+(extraClass?" "+extraClass:"")}
+          onClick=${openPicker}
+          aria-label=${"Change version (" + variantCount + " available)"}
+          title=${"Change version (" + variantCount + " available)"}>
+          <span aria-hidden="true">▾</span>
+        </button>`;
+      };
+
       const renderItem = (item) => {
         const meta = item.meta || {};
         const price = cheapestCardPrice(cardById[item.card_id] || []);
@@ -20299,6 +20694,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
               ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             <span class="deck-grid-tile-qty">${item.quantity}×</span>
+            ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
             ${ownedFracBadge}
             ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
             ${makeCounter(item, cardMax, "deck-grid-tile-counter")}
@@ -20313,6 +20709,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
             </div>`)}
             <div class="deck-stack-top">
               <span class="deck-stack-qty">${item.quantity}×</span>
+              ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
               ${ownedFracBadge}
               ${tileImg
                 ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`
@@ -20354,7 +20751,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           </span>
           <span class="deck-row-name" title=${meta["Product Name"]}
             onClick=${()=>openCardModal(item.card_id)}
-            style=${{cursor:"pointer"}}>${inkSwatch}${meta["Product Name"] || "(unknown card)"}</span>
+            style=${{cursor:"pointer"}}>
+            ${inkSwatch}
+            <span class="deck-row-name-text">${meta["Product Name"] || "(unknown card)"}</span>
+            ${buildVariantChevron(item, meta, "deck-variant-btn--row")}
+          </span>
           ${price!=null && aff
             ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
@@ -20413,7 +20814,44 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
               : viewLayout === "stacked"
                 ? html`<div class="deck-section-stack">${section.items.map(renderItem)}</div>`
                 : html`<div class="deck-section-list">${section.items.map(renderItem)}</div>`}
-          </div>`)}`;
+          </div>`)}
+      ${variantPicker && (() => {
+        // Anchor below-and-right-aligned to the chevron. Clamp horizontally so
+        // the popover stays inside the viewport on narrow screens; if there's
+        // not enough room below, flip above.
+        const POP_W = 260, POP_H_EST = 320;
+        const ar = variantPicker.anchorRect;
+        let left = Math.min(ar.right - POP_W, window.innerWidth - POP_W - 8);
+        if(left < 8) left = 8;
+        let top = ar.bottom + 6;
+        if(top + POP_H_EST > window.innerHeight - 8) top = Math.max(8, ar.top - POP_H_EST - 6);
+        return html`<div class="deck-variant-popover" style=${{position:"fixed",top:top+"px",left:left+"px",width:POP_W+"px"}}>
+          <div class="deck-variant-popover-head">Choose version</div>
+          <ul class="deck-variant-list">
+            ${variantPicker.variants.map(v => {
+              const isCurrent = v.card_id === variantPicker.cardId;
+              const numShort = v.number ? String(v.number).split("/")[0] : "";
+              return html`<li key=${v.card_id}>
+                <button type="button" class=${"deck-variant-item"+(isCurrent?" current":"")}
+                  disabled=${isCurrent}
+                  onClick=${()=>{
+                    if(!isCurrent) onSwapVariant && onSwapVariant(variantPicker.cardId, v.card_id);
+                    setVariantPicker(null);
+                  }}>
+                  ${v.img_small
+                    ? html`<img src=${v.img_small} alt="" class="deck-variant-thumb" loading="lazy"/>`
+                    : html`<span class="deck-variant-thumb deck-variant-thumb--placeholder"></span>`}
+                  <span class="deck-variant-meta">
+                    <span class="deck-variant-set">${v.set || "—"}${numShort ? " · #" + numShort : ""}</span>
+                    ${v.rarity && html`<span class="deck-variant-rarity">${v.rarity}</span>`}
+                  </span>
+                  ${isCurrent && html`<span class="deck-variant-check" aria-label="Current version">✓</span>`}
+                </button>
+              </li>`;
+            })}
+          </ul>
+        </div>`;
+      })()}`;
 
       return html`<div class="deck-editor-mobile-tabs" role="tablist" aria-label="Deck editor view">
         <button role="tab" aria-selected=${mobileTab==="deck"}
@@ -21026,6 +21464,19 @@ function App(){
       document.removeEventListener("keydown", onKey);
     };
   }, [settingsOpen]);
+  // Event news tiles — render in HomeView's .home-left-col under Tournament
+  // Results. ArtistAlleyModal opens pre-picked when an artist link is tapped.
+  // See EVENT_TILES module-scope constants above.
+  const [indyArtistPick, setIndyArtistPick] = useState(null);
+  const indyAllIllustrators = useMemo(() => {
+    const s = new Set();
+    for(const r of (raw || [])){
+      const ills = r.illustrators;
+      if(!Array.isArray(ills)) continue;
+      for(const n of ills){ if(n) s.add(n); }
+    }
+    return Array.from(s).sort((a,b) => a.localeCompare(b));
+  }, [raw]);
   const [loadProgress,setLoadProgress]=useState({loaded:0,total:0,current:""});
   // Theme: 3-way mode (light / dark / system). `themeMode` is what the user
   // picked; `theme` is the effective value (resolves "system" against the OS
@@ -21841,6 +22292,14 @@ function App(){
       onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false); }}
       onClose=${()=>setAvatarPickerOpen(false)}/>`}
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
+    ${indyArtistPick && html`<${ArtistAlleyModal}
+      allIllustrators=${indyAllIllustrators} raw=${raw}
+      initialArtist=${indyArtistPick}
+      onClose=${()=>setIndyArtistPick(null)}
+      onBrowseInCards=${(name) => {
+        openCardsWithSearch && openCardsWithSearch("artist: " + name);
+        setIndyArtistPick(null);
+      }}/>`}
     ${view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
@@ -21849,7 +22308,8 @@ function App(){
       openTournamentsList=${openTournamentsList}
       openView=${openView} openDecksSection=${openDecksSection}
       openCardsWithSearch=${openCardsWithSearch}
-      openScreenerWithFilter=${openScreenerWithFilter}/>`}
+      openScreenerWithFilter=${openScreenerWithFilter}
+      onEventArtistClick=${setIndyArtistPick}/>`}
     ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}
