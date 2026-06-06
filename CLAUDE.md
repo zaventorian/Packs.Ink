@@ -68,7 +68,7 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 ## Client cache rules
 
-- **Catalog key**: `packsink:catalog:vN` (currently **v41**). Bump N whenever cached row shape changes — old entries silently ignored on version mismatch. 24h TTL with background refresh.
+- **Catalog key**: `packsink:catalog:vN` (currently **v43**). Bump N whenever cached row shape changes — old entries silently ignored on version mismatch. 24h TTL with background refresh.
 - **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs.
 - **`AUX_CACHE_VERSION` sentinel** (Index.html top, added 2026-05-24): per-deploy stamp compared against `packsink:auxCacheVersion` on module load. Mismatch → one-shot wipe of every `packsink:*` key except catalog/auth/install-prefs. **Bump the string to force every existing user's next page load to refresh aux caches** — useful when an ETL/matview change makes those caches stale faster than their TTLs catch. Independent from `CACHE_KEY` (which only invalidates the catalog itself).
 - **Visibility re-probe**: `visibilitychange` + `pageshow` listeners re-run `loadFromSupabase` when the tab/PWA becomes visible again (throttled 60s). Without this, PWA users who background the app would see stale data forever on resume — React tree never remounts.
@@ -106,16 +106,50 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 The prefs-sync effect in `App.jsx` (writes `{themeMode, theme, tipsEnabled, avatarCardId}`) omits `user` from deps and uses `prefsHydrated.current`. Symptoms of regression: catalog fetch takes minutes, "Loading price database…" forever, every tab switch cold-loads.
 
-## Theme: 3-way mode (light / dark / system)
+## Theme: 6 named palettes + 3-mode resolver (2026-06-05 rewrite)
 
-Two pieces of state:
-- **`themeMode`** = the user's pick: `"light" | "dark" | "system"`. Persisted at `localStorage["packsink:themeMode"]` and synced to Supabase auth user_metadata.
-- **`resolvedTheme`** (aliased as `theme` for back-compat) = the effective value applied to `<html data-theme>`. When mode is `"system"`, listens to `prefers-color-scheme` media query and re-resolves on change — this is how "sunset darkmode" works (OS night-shift schedule drives the pref).
-- **Migration**: on first load, reads old `packsink:theme` (light|dark) if `themeMode` key absent. Both keys get written so older code paths reading `packsink:theme` still see the effective value.
-- **`toggleTheme`** (top-bar bubble) flips between explicit light/dark — if currently in `"system"` mode, switches to the OPPOSITE of whatever the OS resolved to (does NOT return to system; that's an explicit pick in the settings popover).
-- **`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
+State is **three independent pieces**, each persisted independently to localStorage AND synced to Supabase user_metadata (cross-device):
+- **`lightTheme`** (`packsink:lightTheme`) — which of the 4 light variants: `parchment` (default) | `sunrise` | `watercolor` | `daydream`.
+- **`darkTheme`** (`packsink:darkTheme`) — which of the 3 dark variants: `velvet` (default) | `aurora` | `black`.
+- **`themeMode`** (`packsink:themeMode`) — `"light" | "dark" | "system"`. Picks which family is currently active.
 
-Settings popover (gear/profile dropdown) has a Theme segmented control (Light / Dark / Match system) — that's the only place to choose System mode.
+Resolution at render time:
+- `themeMode === "light"` → `lightTheme`
+- `themeMode === "dark"` → `darkTheme`
+- `themeMode === "system"` → `osDark ? darkTheme : lightTheme` (matchMedia driven, re-resolves at OS night-shift / sunset).
+
+The `resolvedTheme` (aliased `theme` for back-compat) is what gets written to `<html data-theme>`. The CSS file has one `html[data-theme="..."]` block per named theme — picking one swaps the entire palette atomically.
+
+**Top-bar moon/sun toggle**: behavior depends on `themeMode`:
+- Light or Dark mode: flips `themeMode` to the other side. The user's persistent `lightTheme` / `darkTheme` picks determine which exact variant renders.
+- System mode: applies a **transient in-memory override** (`systemOverride` state, NOT persisted). The override clears on the next OS pref change (matchMedia listener) OR on page reload. Matches spec: "you can override it with the moon, but it will switch back next time system switches."
+
+**Migration paths** (one-shot on first load after this rewrite):
+- If localStorage `themeMode` held a specific theme name (e.g. `"velvet"`), the init infers the family and migrates: `themeMode → "dark"`, `darkTheme → "velvet"`.
+- Old `packsink:lastDarkVariant` / `packsink:lastLightVariant` keys are read as fallback during init.
+- Old `packsink:theme` key is also honored for the same family-inference.
+- Supabase user_metadata hydration mirrors the same logic — old metadata with `themeMode === "aurora"` migrates the same way.
+
+**Theme classification helpers** (`Index.html` ~line 22519):
+- `LIGHT_VARIANTS = ["parchment","sunrise","watercolor","daydream"]`
+- `DARK_VARIANTS  = ["velvet","aurora","black"]`
+- `LIGHT_THEMES` / `DARK_THEMES` Sets include the legacy `"light"` / `"dark"` aliases as well.
+- `isDarkTheme(t)` is checked at every site that branches on theme (e.g. `inkTint`, deck gradient builder). **Never check `theme === "dark"`** — that would miss `aurora` / `velvet` / `black`. Use `theme !== "light"` or `isDarkTheme(t)` or `DARK_THEMES_GLOBAL.has(t)` (the module-scope mirror used by `inkTint`).
+
+**Gradient themes** (sunrise / watercolor / daydream / aurora) hold a CSS `linear-gradient(...)` or `radial-gradient(...)` as their `--bg` value (instead of a hex color). To make this work end-to-end:
+- `body { background-color: var(--bg); }` (NOT `background:`). When `--bg` is a gradient value, `background-color` silently drops it (gradients aren't valid color values) — so the body stays transparent.
+- `body::before { background: var(--bg); position: fixed; inset: 0; z-index: -2; }` — this fullscreen layer is the only thing that actually paints the gradient. Anchored to viewport, scrolls-fixed.
+- The body is `max-width: 1300px`. If body's own `background` rendered a gradient, the 1300px column would seam visibly against the fullscreen `::before`. The `background-color` trick avoids that seam for gradient themes while still working for solid themes.
+
+**Ink tints in dark/gradient modes** (`Index.html` ~line 2420, `INK_TINT_DARK`): values were retuned 2026-06-05 to land on the deep purple Velvet canvas (`#180a22`). Amber/Emerald previously muddied against purple at the old 16% opacity — now sit at 22% with brighter base hues. `INK_TINT_DARK` is also used for the gradient themes (any non-light theme).
+
+**Settings popover layout** (gear/profile dropdown):
+- **Mode**: 3-button segmented control `[Light] [Dark] [System]`
+- **Light theme**: 4-button swatch grid (Parchment / Sunrise / Watercolor / Daydream)
+- **Dark theme**: 3-button swatch grid (Velvet / Aurora / Black)
+- The light-theme grid + dark-theme grid are ALWAYS visible regardless of current mode — picking one updates that family's pref and changes the toggle pair without changing mode.
+
+**`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
 
 ## price_movers matview gotcha
 
@@ -161,8 +195,11 @@ Audit scripts: `audit_holofoils.py`, `audit_connecting_foils.py`, `audit_missing
 - **Numeric stat operators**: `cost`, `strength`, `willpower`, `lore` accept equality + comparison. Value at `filters[statKey]`, operator at `filters[statKey + "Op"]` (`=`, `>`, `>=`, `<`, `<=`). Forms accepted: `lore 3`, `3 lore`, `lore>=2`, `lore >= 2`, `lore2`. Matchers use `_cmp(rowVal, want, op)`. Null stats fail any non-null filter.
 - **Classification soft match** — card qualifies if EITHER classifications include the word OR product name includes the word. Without this, "elsa spirit" zeroes out (Elsa - Spirit of Winter has no Spirit subtype). Other dimensions stay hard.
 - **Partial-rarity prefix matching** via `resolveRarityPrefix(token)` (Index.html ~line 2232). Any ≥3-char unambiguous prefix of a canonical rarity resolves: `ench`/`enchant`/`enchante` → Enchanted, `leg`/`lege`/`legen` → Legendary, `epi`/`epic`, `ico`/`icon`/`iconi`, `pro`/`prom`/`promo`, `rar`/`rare`, `com`/`comm`/`common`, `unc`/`unco`/`uncom`. **Super Rare is intentionally excluded** — `sup` collides with the `super` classification subtype (Big Hero 6 Super characters). Use `sr` / `super rare` / `superrare` for that one explicitly.
-- **Card body text in the haystack** — `buildRow` carries `text` from `cards.text` onto every row. `matchesCardFilter`'s name-fallback haystack includes `(row.text||"").toLowerCase()` so "gets" / "gains" / "draws" / "banish" / etc surface every card whose printed ability text says that word. Text is stripped on cache write (see "Client cache rules") so an older cached catalog silently degrades to name+type+classification matching without crashing.
-- **Enter key does NOT auto-apply the first suggestion.** `suggestIdx` starts at -1; only arrow keys / hover arm a suggestion. Pressing Enter on free text just commits the typed query (fuzzy matching). Prevents accidental "contains" chip conversion.
+- **Card body text in the haystack** — `buildRow` carries `text` from `cards.text` onto every row. `matchesCardFilter`'s name-fallback haystack includes `(row.text||"").toLowerCase()` so "gets" / "gains" / "draws" / "banish" / etc surface every card whose printed ability text says that word. Text is stripped on cache write (see "Client cache rules") so a cached-replay session would silently degrade to name+type+classification matching — `loadFromSupabase` defends against this by lazy-fetching `(id, text)` from the cards table after a cache hit and merging into `raw[]` in memory (keyed by `r.card_id`, NOT `r.id` — buildRow renames the cards-table PK). 1-2 MB one-time per session; doesn't touch localStorage so the aux-cache quota math stays unchanged. Body-text search lights up a few seconds after page load.
+- **`matchMode: "any" | "all"`** — `emptyFilter()` carries `filter.matchMode` persisted to `localStorage["packsink:cardBrowser:matchMode"]` (default `"any"`). FilterDrawer top section "Match terms" radio chips flip it. CardsView's parsed useMemo writes `parsed.matchMode = filter.matchMode || "any"`; `matchesCardFilter` reads it for three things: (a) the `parsed.filters.classifications` array — any-mode `some`, all-mode `every`; (b) `parsed.filters.keywords` array — same; (c) the `parsed.name` haystack token fallback — `tokens.some` vs `tokens.every`. **Back-compat default**: other consumers of parseSearchQuery (deck builder picker, Compare, Price Graphing) pass `parsed` without matchMode, and the matcher defaults to `"all"` when `parsed.matchMode` is undefined — preserves their existing token-AND behavior so only CardsView changes default.
+- **Multi-chip classifications + keywords** — CardsView's chip merge pushes characteristic chips into `parsed.filters.classifications: string[]` and keyword chips into `parsed.filters.keywords: string[]` (was overwriting per chip — "princess + queen" silently dropped princess pre-fix). parseSearchQuery's singletons `parsed.filters.classification` / `parsed.filters.ability_keyword` get promoted into the same arrays at merge time so the matcher only walks one path. matchesCardFilter checks the array first; falls back to the singleton for non-CardsView callers.
+- **Enter on the smart-search input auto-picks `suggestions[0]`.** Pre-fix Enter no-op'd unless the user had arrow-keyed onto a suggestion first. Suggestions are dimension-aware first (color / rarity / characteristic / etc.) with `contains: <text>` as the always-present fallback, so Enter picks the most specific interpretation. Empty input still falls through to "close dropdown + blur".
+- **`name:` pill renamed to `contains:`.** `summarizeParsedQuery` was labeling free-text + contains-chip merged text as `name:` while the matcher actually walked name + body text + classifications + card_type via the haystack fallback. The label was lying about the behavior — fixed by renaming to `contains:`. CardsView's parsedSummary also suppresses the duplicate pill when a `contains:` chip is the only contains source (the chip strip already renders it).
 - **`SET_NICKNAMES` deliberately does NOT include single-token character names** ("ursula", "jafar") even though the sets are "Ursula's Return" and "Reign of Jafar". Those tokens are character names too — typing `ursula` in the deck builder should search for the *card*, not promote to the whole set. The longer/unambiguous forms still work (`ursulas`, `ursulas return`, `reign`, `reign of jafar`). Set suggestion dropdown still surfaces the set via prefix match, so users can click through if they meant the set.
 - Catalog must have `cards.strength / willpower / lore / move_cost` columns (migration 43). Cold load probes for `lore`; silently omits all four from `CARDS_COLS` if missing.
 
@@ -385,6 +422,47 @@ Card detail modal's Graded tab:
 - **Per-row sparkline buttons**: click any row's sparkline → expands a full LineChart inline beneath that row. Multiple rows can expand at once for grade-premium comparison.
 - Helper: `buildGradedSeries(history, grader, grade, label)`. Color map: PSA red, CGC blue, BGS purple, SGC green, TAG orange.
 
+## Sealed enhancements (2026-06-05 — modal + Δ% + Screener)
+
+Three parallel additions made sealed feel like graded:
+
+**1. `SealedDetailModal`** (`Index.html` ~line 9636) — clicking any sealed tile (in `SealedCollectionView`) opens a popup with:
+- Image + name + set + product-type meta
+- Current Low + NM Market side-by-side
+- Owned-qty `+/-` controls when signed in (calls `updateSealedQty(pid, n)`)
+- Optional `CostDateInputs` row when qty > 0 + trackCosts is on
+- 6-window Δ% grid (LOW row × MKT row × 1D/1W/1M/3M/6M/1Y) from `computeSealedDeltas`
+- Inline `LineChart` of `prices_daily` history (lazy-loaded via `fetchCardHistory(pid, "Normal")`)
+- TCGPlayer affiliate buy link
+- Reuses `.card-detail-overlay` + `.card-detail-close` patterns + ESC handler from CardDetailModal
+- Also opened from the Screener row click when the row is a sealed synth row (see #3)
+
+**2. Sealed-tile Δ% toggle** in `SealedCollectionView`:
+- New `Show Δ%` toolbar checkbox (`packsink:sealedColl:showDeltas`)
+- When on, fetches 365 days of `prices_daily` for the user's owned sealed pids via `fetchCollectionPriceHistory(ownedSealedPids, since)` (one batched call)
+- Renders a 4-cell `1D / 1W / 1M / 1Y` grid beneath the price line on each OWNED tile
+- Compute via `computeSealedDeltas(history)` → Map of pid → row
+- Scoped to owned pids only (~typically <20 SKUs); for unowned products users get full history via the modal
+
+**Tiles also show Low + Market simultaneously** when both exist (was previously priceMode-gated). The priceMode toggle still drives the total-value sort + header totals, but the tile surface always renders both numbers so users don't have to flip the toggle to compare.
+
+**3. Screener Sealed mode** — third toggle button alongside Raw/Graded:
+- `showSealed` state (`packsink:screener:showSealed`), mutually exclusive with `showGraded` (mutex useEffect on both)
+- Fetches 365 days of `prices_daily` for ALL sealed pids on first toggle-on, cached in `sealedHistory` state
+- `sealedSynth` memo builds rows shaped like `price_movers` rows (synthetic `card_id: "sealed::<pid>"`, image_small/normal from `image_url`, `display_type` from `deriveSealedDisplayType`, every `pct_*` + `mkt_pct_*` window from `computeSealedDeltas`, plus `_sealedProduct` ref for modal open)
+- Filter chain in sealed mode is parallel to raw/graded but uses sealed-specific predicates:
+  - Name substring search (no `matchesCardFilter` — sealed has no card catalog)
+  - Set dropdown (uses `setNameById`)
+  - Product-type chips (`filterSealedTypes`, persisted in `packsink:screener:filterSealedTypes`) backed by `SEALED_DISPLAY_TYPE_ORDER` — Booster Boxes, Booster Packs, Sleeved Booster Packs, Booster Pack Art Bundles, Illumineer's Troves, Prerelease Packs, Starter Decks, Gift Sets, Bundles, Quests, Sealed, Collector's Edition, Cases & Displays
+  - `collFilter` (All/Owned/Missing) chips check `sealedCollection[pid] > 0` for sealed
+  - Universal price + Δ% bounds + Crashing/Discount/Premium presets work uncapped
+- UI hides Raw-only chips when sealed: ink dropdown, rarity icon chips, foil/non-foil chips
+- Column header shows "Type" instead of "Rarity" in sealed mode; row's printing sub-line shows `display_type`
+- Row click → `SealedDetailModal` via the same `openModal()` helper (detects `_sealedProduct` ref OR `"sealed::"` card_id prefix)
+- `PriceDatabase` props extended: `sealedPrices`, `sealedCollection`, `sealedMeta`, `updateSealedQty`, `updateSealedMeta`
+
+**Shared helper** `computeSealedDeltas(history)` (`Index.html` ~line 1796) — mirrors `computeGradedDeltas` shape. Takes `prices_daily` rows for sealed pids and returns rows with `low_today`, `market_today`, and per-window `pct_*` (Low-driven) + `mkt_pct_*` (Market-driven). Sealed has no foil duality so printing is always `"Normal"`. Uses the same `low_price_smoothed ?? low_price` coalesce as the catalog (migration 55).
+
 ## Cost & date tracking (sealed + graded collection)
 
 Migration 48 added optional `amount_paid numeric(12,2)` + `acquired_date date` to both `sealed_collection_items` and `graded_collection_items`. Both nullable. Shared-collection RPCs (`get_shared_collection_sealed` / `_graded`) recreated with the new columns in their RETURNS TABLE.
@@ -495,6 +573,110 @@ Default 4-of-any-card. `SPECIAL_DECK_LIMITS` in Index.html:
 - `"Microbots"` → Infinity (UI caps at 99)
 
 `getDeckLimit(name)` returns cap. `getDeckLimitForUI(name)` clamps Infinity to 99. `checkDeckLegality` sums by Product Name across variants before comparing. DB constraint relaxed to `quantity <= 99` in migration 28.
+
+## Decks tab — logged-out access (2026-06-05)
+
+The Decks tab is **usable without signing in**. The 5 sub-sections behave differently:
+
+- **Discover** (public decks) — works fully without auth. Default landing section when signed out.
+- **Tournaments** — works fully without auth.
+- **Your Decks** / **Favorites** / **Following** — each section's body renders an inline sign-in CTA (a styled `.empty-state` block with a Sign-In-with-Google button + explanation) instead of crashing or loading empty. Section tabs ARE clickable when signed out (so the structure is discoverable).
+
+Implementation:
+- The unconditional `if(!user) return ...sign-in CTA...` at the top of `DecksView` was removed. The user-section CTAs live inside the per-section render branches.
+- Initial `deckSection` defaults to `"discover"` for signed-out users (vs `"yours"` for signed-in). A separate `useEffect` watches the user prop and bumps signed-out users off any user-specific section onto Discover (without touching the saved-section pref, so signing back in restores their last pick).
+- `decks` state is `null` until first fetch settles. References use `decks?.length || 0` to avoid the brief null-window crash for signed-out users.
+- Per-deck action buttons (Follow / Favorite / Duplicate, in the external-deck banner): `onClick` now falls back to `onSignIn` when `!canAct` (i.e. no user). Previously the buttons rendered "Sign in to favorite" text but the onClick still pointed at the real action (silent no-op or crash). The external-deck `<DeckEditor>` renderer at line ~20089 already had `onToggleFavorite={user ? real : onSignIn}` wired — extended the same pattern to the in-banner buttons.
+
+Public deck access paths (no auth needed):
+- `externalDeck` flow — set via `openExternalDeckEntry()` when a Discover card is clicked. The SECURITY DEFINER RPCs `get_shared_deck(uuid, text)` / `get_shared_deck_cards(uuid, text)` handle the fetch without auth.
+- Incoming URL deep-links (`?deck=<id>` or `?deck=<id>&token=<x>`) hit the same fetch path BEFORE the gate logic — already designed for logged-out shared-link visitors.
+
+## Deck-tile copy actions (🔗 / 📋 / 🖼)
+
+Every deck-card tile in DecksView (owned, Discover, Favorites, Following, the per-tournament tile inside TournamentDetailView) carries three actions. They live inside `.deck-card-actions`, which got `flex-wrap: wrap` to handle the now ≥5-button row on ~260px tiles.
+
+- **🔗 Copy link** — `copyDeckLinkToClipboard(d)` (owned + external) / `copyDeckLinkFromResult(r)` (tournament-detail). Uses `buildShareUrlFor(d)` for owned/external (`null` for private decks → "switch to Unlisted/Public" toast); tournament rows build inline from `r.deck_id` + `r.deck_share_token`. Public decks get a clean `?deck=<id>` (no token); unlisted + tournament decks get `?deck=<id>&token=<x>`.
+- **📋 Copy list** — `copyDeckListToClipboard(d)` (cards already loaded) / `copyDeckListFromResult(r)` (async fetches via `fetchTournamentDeckForCopy` then formats with the existing `deckToText` helper).
+- **🖼 Copy image** — see "Headless deck-poster autoCopy" below. Async lazy fetch on tournament tiles since the `tournament_results_v` feed carries metadata only.
+
+**DeckEditor toolbar Copy-link button (non-owners).** When a non-owner opens a shared deck via deck-editor, the toolbar shows `🔗 Copy link` gated `${!isOwnDeck && shareUrl && ...}`. Reuses the existing `shareUrl` useMemo + `copyShareUrl` callback + `copied` state — flashes "🔗 Copied ✓" same as the owner's Share popover. Owners still see the full `↗ Share` popover (visibility radios + URL row + regenerate-token).
+
+### Headless deck-poster autoCopy
+
+`DeckPosterModal` has `autoCopy` + `onAutoCopyDone(success, blob|err)` props. The poster JSX was extracted into a `posterDom` const so both the visible modal-backdrop branch and the headless branch share the same DOM + the same `wrapRef`/`posterRef`. In autoCopy mode the outer wrap is:
+
+```html
+<div aria-hidden="true" style="position:fixed;left:-100000px;top:0;
+  width:1200px;pointer-events:none;z-index:-1">
+  ${posterDom}
+</div>
+```
+
+useEffect waits for two animation frames (React commit + layout) → awaits every `<img>` inside `posterRef` to finish loading → calls `snapshot()` (the existing html2canvas chain) → `canvas.toBlob` → reports outcome via `onAutoCopyDone`.
+
+**Caller pattern (mirrors mover-tile camera button — the user-activation rule):**
+
+```js
+flashToast("Copying image…", 12000);
+let resolveBlob, rejectBlob;
+const blobPromise = new Promise((res, rej) => { resolveBlob = res; rejectBlob = rej; });
+navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
+  .then(() => flashToast("Deck image copied to clipboard"))
+  .catch(() => flashToast("Couldn't copy image — try the editor's Export button"));
+setPosterAutoState({deck, creatorName, onDone: (ok, blobOrErr) => {
+  setPosterAutoState(null);
+  if(ok) resolveBlob(blobOrErr);
+  else   rejectBlob(blobOrErr || new Error("snapshot failed"));
+}});
+```
+
+The `clipboard.write` call is SYNCHRONOUS inside the user-gesture click, and the browser accepts the blob that resolves seconds later. Verified end-to-end: ~4.4s wall time, 2400×1970 canvas, ~5.5 MB PNG → clipboard. Without ClipboardItem support, `onDone` falls back to a `<a download>` save.
+
+### TournamentDetailView is deck tiles, not a list
+
+The old `tournament-result-row` list (`.tournament-result-open` button + 4-column grid) was replaced with `.deck-card.external.tournament` tiles in a `.deck-list` grid. Background gradient uses module-scope `INK_TINT_DARK` / `INK_TINT_LIGHT` + `DARK_THEMES_GLOBAL` so theme switching matches DecksView's tournament tiles. Place + player render in the trophy line; when `deck_name` is just an ink-only autofill ("Amber/Emerald") the player name promotes to the tile title (same dedupe as the home Tournament Results banner). Lazy deck-fetch uses `tournamentDeckCache = useRef(new Map())` keyed by deck_id so a 2nd copy-button click on the same tile is instant.
+
+The orphaned `.tournament-result-*` and `.tr-*` rule clusters in styles.css are unused — clean up next time the file is touched.
+
+## Cards-tile magnify button + enlarged-card overlay
+
+Every browse-mode tile (`CardTileImpl` outside deck mode) has a tiny `.tile-magnify-btn` (22×22, inline Lucide-style SVG circle+line) in the bottom-left of the image wrap. Opens `openEnlargedCard(group)` directly, skipping the detail-modal popup. Hover-only on desktop (`opacity:0; pointer-events:none` resting → `opacity:0.9; pointer-events:auto` on `.card-tile:hover` / `:focus-within`); always-visible on touch via `@media (hover:none)`. Deck-mode tiles don't render it — they use bottom-left for the `⤢` expand button. Defensive: `.card-tile:has(.tile-expand-btn) .tile-magnify-btn{bottom:42px}` lifts the magnifier above the expand button in any edge case where both render.
+
+**Don't re-introduce the double-click path.** Pre-fix the same intent was wired as `onDoubleClick` on the tile, with a `packsink:close-card-detail` window event the detail modal listened for to dismiss itself. Unreliable because the SINGLE-click that fires first opens the detail modal — on slow devices the modal flashes and the dblclick lands on a freshly-rendered tile underneath. The magnify-button affordance avoids the race.
+
+**Enlarged image must scale UP**. `.enlarged-card-img` now sizes via `width: min(92vw, calc(92vh * 5 / 7), 720px); height: auto; max-height: 92vh`. The pre-fix `max-width: min(92vw, 720px)` left the image at the source's natural ~488×681 (Lorcast `image_normal`), so the "enlarged" view wasn't actually enlarged. The `calc(92vh * 5 / 7)` is the 5:7 card aspect ratio derived width — keeps the image inside the viewport on tall screens.
+
+## SPA navigation: `<a href>` not `<button>` so modifier-clicks work
+
+User complaint: "you can't ctrl+click or right-click open in new tab on links, tabs, etc". A `<button onClick={navigate}>` intercepts EVERY click — Ctrl/Cmd/Shift/Alt-click and middle-click silently fall through to the same SPA navigation instead of opening a new tab, and right-click context menu doesn't offer "Open in new tab".
+
+Fix: nav targets are `<a href={deepLink}>` with module-scope helpers:
+
+```js
+const isModifiedClick = (e) =>
+  e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || (e.button != null && e.button !== 0);
+
+const navCapture = (e) => {
+  if(e.target !== e.currentTarget && e.target.closest("button, a, input, select, label, textarea")){
+    e.preventDefault();
+  }
+};
+
+const navHandler = (fn) => (e) => {
+  if(isModifiedClick(e) || e.defaultPrevented) return;
+  e.preventDefault();
+  fn(e);
+};
+```
+
+`navHandler(fn)` is the standard `onClick` for a nav `<a>`. `navCapture` goes on `onClickCapture` whenever the `<a>` wraps nested `<button>`s (deck tiles, tournament-detail tiles) — a nested button's `stopPropagation` doesn't cancel the `<a>`'s browser-default navigation, so without `navCapture` the browser would navigate AFTER the button's handler fired.
+
+**Surfaces converted:** top-nav tabs (Collection / Cards / Decks / Screener / Price Graphing / Analytics), logo home button, tournament cards in the Decks → Tournaments tab list, owned deck tiles, external deck tiles, tournament-detail deck tiles.
+
+The nested-interactive HTML (button inside `<a>`) is technically invalid but every browser in practice tolerates it, AND the user gets every link affordance: modifier-click opens new tab via browser default, right-click shows "Open in new tab", middle-click works, hover shows the destination URL in the status bar, devtools can copy the link.
+
+**Common bug**: when converting `<button>` → `<a>`, also flip the matching `</button>` → `</a>`. The first pass missed the closing tag on `.tournament-card` and the page broke until the close tag was flipped.
 
 ## Deck sharing model
 
@@ -663,6 +845,7 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 
 - **No "Lorcana Market" h1 or "Click a card for details" subtitle** — both removed 2026-05-26. The search bar sits directly under the top nav. The logo IS the home click target (the title was redundant).
 - **Your Top Movers tiles show a printing badge** when the moving row is the foil printing — class `.panel-movers-foil-tag`, accent-color chip with text "Foil" / "Cold Foil" / "Holo" (Holofoil shortens to "Holo" to fit the tight column). Logic: `row.tcg_printing && row.tcg_printing !== "Normal" && row.tcg_printing !== "Non-Foil"` → render. Lets users tell foil-vs-non-foil movers of the same card apart.
+- **Tournament Results panel: `.ht-place` is `white-space: nowrap`** and `.home-tourney-deck` grid is `auto minmax(0,1fr) auto` (was `28px 1fr auto`). The 28px column wasn't wide enough for `"Top 4"` / `"Top 8"` — the place text wrapped to two lines, doubling row height on the narrow signed-in mobile home grid. Auto-width + nowrap keeps each row on a single line; player column's `minmax(0,1fr)` still shrinks with ellipsis when needed.
 
 ## Mobile top-nav
 
@@ -801,9 +984,9 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v109`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily.
+- **`sw.js CACHE_VERSION`** (current `packsink-v152` — bumped through the 2026-06-11 session for deck-tile copy actions + tournament-detail tile refactor + Cards-tile magnifier + smart-search match-mode + body-text backfill): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v109**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
-- **Catalog cache version**: `packsink:catalog:vN` (current **v42**). Bump when row shape changes (v42 added `text` field for body-text search), OR when forcing all users to cold-fetch.
+- **Catalog cache version**: `packsink:catalog:vN` (current **v43**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=4**, bumped 2026-05-26 with the full-booster-pack rebake; v=3 was the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
 - **PWA icons baked from `Logos/packs-ink-logo.png`** via `scripts/rebake_icons.py` (Pillow). The script composites the full booster-pack artwork over `#0f0d20` with a 12% inset margin (keeps art clear of iOS/Android squircle masks). 6 outputs: apple-touch-icon.png (180), favicon-16/32/64.png, icon-192.png, icon-512.png. Idempotent — re-run when the source logo changes. Don't rely on `manifest.background_color` for transparent icons; iOS save-to-home-screen ignores it.
 - **PWA orientation: `"any"`** (manifest.json). Installed PWAs rotate to landscape now. Was `"portrait"` which locked the orientation — dev-tools rotation emulator worked because that's a tab not a PWA. iOS users need to remove + re-add the home-screen icon to pick up manifest changes (iOS caches the manifest at install time).

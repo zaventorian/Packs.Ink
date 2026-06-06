@@ -1,0 +1,19 @@
+# Long-cache + permissive CORS on proxied Lorcast art.
+#
+# Lorcast (cards.lorcast.io) sends no Cache-Control header, so without an
+# override Netlify edge treats the response as uncacheable — every miss
+# forwards to Lorcast and pulls bandwidth across both legs of the proxy.
+# A 30-day immutable cache lets Netlify's CDN absorb almost the entire
+# load: each edge POP fetches once, then serves locally for a month.
+# Image URLs are content-addressed (Lorcast appends a hash query param when
+# they re-publish), so a long cache won't trap stale art — a new card
+# revision arrives at a new URL the catalog ETL picks up.
+#
+# Access-Control-Allow-Origin: * guarantees canvas exports (deck poster,
+# card poster, mover-tile) stay untainted no matter what Lorcast does with
+# their CORS headers later. The browser only enforces CORS on
+# crossOrigin="anonymous" <img>s — same-origin requests ignore it — but
+# pinning ACAO is free insurance.
+/img-proxy/*
+  Cache-Control: public, max-age=2592000, immutable
+  Access-Control-Allow-Origin: *
