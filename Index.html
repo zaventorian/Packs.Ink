@@ -12928,8 +12928,10 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
             <td class="elo-td-player">
               <button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(r.player_id)}>
                 <${EloPlatformPill} platform=${r.platform}/>
-                <span class="elo-name">${r.display_name}</span>
-                ${aliases.length > 0 && html`<span class="elo-alias">(${aliases.map(a => a.display_name).join(", ")})</span>`}
+                <span class="elo-name-stack">
+                  <span class="elo-name">${r.display_name}</span>
+                  ${aliases.length > 0 && html`<span class="elo-alias">${aliases.map(a => a.display_name).join(", ")}</span>`}
+                </span>
               </button>
             </td>
             <td class="elo-td-record">${r.wins}-${r.losses}-${r.draws}</td>
@@ -24118,6 +24120,7 @@ function App(){
     if(LIGHT_VARIANTS.includes(meta.lightTheme)) setLightTheme(meta.lightTheme);
     if(DARK_VARIANTS.includes(meta.darkTheme))   setDarkTheme(meta.darkTheme);
     if(typeof meta.tipsEnabled === "boolean") setTipsEnabled(meta.tipsEnabled);
+    if(typeof meta.eloPinned === "boolean") setEloPinned(meta.eloPinned);
     if(typeof meta.avatarCardId === "string" || meta.avatarCardId === null) setAvatarCardId(meta.avatarCardId);
   }, [user]);
 
@@ -24134,11 +24137,11 @@ function App(){
   useEffect(() => {
     if(!prefsHydrated.current) return;
     const t = setTimeout(() => {
-      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, avatarCardId}}).catch(e =>
+      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId}}).catch(e =>
         console.error("user prefs sync failed:", e));
     }, 250);
     return () => clearTimeout(t);
-  }, [themeMode, lightTheme, darkTheme, theme, tipsEnabled, avatarCardId]);
+  }, [themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId]);
 
   // Mirror the chosen avatar card's image URL into public.profiles so other
   // users see it on shared decks / creator profiles. Google avatar URLs are
