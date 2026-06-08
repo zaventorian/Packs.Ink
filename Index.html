@@ -12856,6 +12856,688 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   </div>`;
 };
 
+// =============================================================
+// Chicagoland Lorcana ELO (hidden tab at /elo)
+//
+// Reads from public.elo_leaderboard_v + companion views (see
+// supabase/56_elo.sql). Self-contained: three inner tabs
+// (Leaderboard / Tournaments / Player profile). Hidden = no
+// entry in the top nav; reached via /elo directly.
+// =============================================================
+
+function EloPlatformPill({platform, size}){
+  // Visual differentiator for RPH (Ravensburger Play Hub) vs Melee.
+  // Inline SVGs so they pick up theme via currentColor where it makes sense
+  // but keep their brand color for the platform "identity" dot.
+  const s = size || 14;
+  if(platform === "melee"){
+    return html`<span class="elo-pf elo-pf-melee" title="Melee.gg" aria-label="Melee" style=${{width:s+"px",height:s+"px"}}>
+      <span class="elo-pf-stripe"></span><span class="elo-pf-stripe"></span>
+    </span>`;
+  }
+  // default rph
+  return html`<span class="elo-pf elo-pf-rph" title="Ravensburger Play Hub" aria-label="RPH" style=${{width:s+"px",height:s+"px"}}></span>`;
+}
+
+function EloRankBadge({rank}){
+  // Crown icon next to top 10 ranks; just the number otherwise.
+  if(rank > 10) return html`<span class="elo-rank">#${rank}</span>`;
+  return html`<span class="elo-rank elo-rank-top">
+    <svg class="elo-crown" viewBox="0 0 24 18" width="14" height="11" aria-hidden="true">
+      <path d="M2 4 L6 11 L12 2 L18 11 L22 4 L20 16 L4 16 Z" fill="currentColor" stroke="currentColor" stroke-linejoin="round" stroke-width="1"/>
+    </svg>
+    #${rank}
+  </span>`;
+}
+
+// Sortable column header. Clicking the same column flips direction.
+function EloSortTh({label, col, sortCol, sortDir, setSort, className, numeric}){
+  const active = sortCol === col;
+  const arrow = !active ? "" : (sortDir === "asc" ? "▲" : "▼");
+  const next = active ? (sortDir === "asc" ? "desc" : "asc") : (numeric ? "desc" : "asc");
+  return html`<th class="${className||""} elo-th-sortable ${active?"active":""}"
+    onClick=${() => setSort(col, next)}>
+    <span class="elo-th-label">${label}</span>
+    <span class="elo-th-arrow">${arrow}</span>
+  </th>`;
+}
+
+function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, aliasMap}){
+  if(rows === null) return html`<div class="elo-loading">Loading leaderboard…</div>`;
+  if(rows.length === 0) return html`<div class="elo-empty">No players match.</div>`;
+  const aliasesFor = (pid) => (aliasMap && aliasMap.get(pid)) || [];
+  return html`<div class="elo-table-wrap">
+    <table class="elo-table">
+      <thead>
+        <tr>
+          <${EloSortTh} label="Rank"     col="rank"            sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-rank"   numeric=${true}/>
+          <${EloSortTh} label="ELO"      col="current_rating"  sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-elo"    numeric=${true}/>
+          <${EloSortTh} label="Player"   col="display_name"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-player" numeric=${false}/>
+          <${EloSortTh} label="Record"   col="wins"            sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-record" numeric=${true}/>
+          <${EloSortTh} label="MW %"     col="mw_pct"          sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-mw"     numeric=${true}/>
+          <${EloSortTh} label="GW %"     col="gw_pct"          sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-gw"     numeric=${true}/>
+          <${EloSortTh} label="Peak ELO" col="peak_rating"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-th-peak"   numeric=${true}/>
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map(r => {
+          const aliases = aliasesFor(r.player_id);
+          return html`<tr class="elo-row" key=${r.player_id}>
+            <td class="elo-td-rank"><${EloRankBadge} rank=${r.rank}/></td>
+            <td class="elo-td-elo">${Math.round(r.current_rating)}</td>
+            <td class="elo-td-player">
+              <button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(r.player_id)}>
+                <${EloPlatformPill} platform=${r.platform}/>
+                <span class="elo-name">${r.display_name}</span>
+                ${aliases.length > 0 && html`<span class="elo-alias">(${aliases.map(a => a.display_name).join(", ")})</span>`}
+              </button>
+            </td>
+            <td class="elo-td-record">${r.wins}-${r.losses}-${r.draws}</td>
+            <td class="elo-td-mw">${r.mw_pct==null ? "—" : r.mw_pct.toFixed(1)+"%"}</td>
+            <td class="elo-td-gw">${r.gw_pct==null ? "—" : r.gw_pct.toFixed(1)+"%"}</td>
+            <td class="elo-td-peak">${Math.round(r.peak_rating)}</td>
+          </tr>`;
+        })}
+      </tbody>
+    </table>
+  </div>`;
+}
+
+function EloLeaderboard({onPlayerClick, aliasMap}){
+  const [allRows, setAllRows] = useState(null);  // null = loading
+  const [platform, setPlatform] = useState("all"); // all | rph | melee
+  const [search, setSearch] = useState("");
+  const [minMatches, setMinMatches] = useState(5);
+  const [sortCol, setSortCol] = useState("rank");
+  const [sortDir, setSortDir] = useState("asc");
+  const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        // PostgREST defaults to 1000 rows even with .limit() — use the
+        // project's sbFetchAll helper (parallel-range pagination) to actually
+        // get every player. Requires an explicit order= param.
+        const rows = await sbFetchAll("elo_leaderboard_v", {
+          select: "player_id,display_name,platform,current_rating,n_matches,peak_rating,wins,losses,draws,gw_pct,mw_pct,rank",
+          order: "rank.asc",
+        }, null);
+        setAllRows(rows || []);
+      } catch(e){
+        console.error("[elo] leaderboard fetch failed", e);
+        setAllRows([]);
+      }
+    })();
+  }, []);
+
+  const filtered = useMemo(() => {
+    if(!allRows) return null;
+    const q = search.trim().toLowerCase();
+    const rows = allRows.filter(r => {
+      if(r.n_matches < minMatches) return false;
+      if(platform !== "all" && r.platform !== platform) return false;
+      if(q){
+        // Search the canonical name AND any merged aliases so typing "zaven"
+        // finds I&L⟡Zaven (whose canonical-name search doesn't contain the substring
+        // for users with team-prefix handles, but whose melee alias does).
+        const aliasNames = aliasMap ? (aliasMap.get(r.player_id) || []).map(a => a.display_name) : [];
+        const hay = [r.display_name, ...aliasNames].join(" ").toLowerCase();
+        if(!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const dir = sortDir === "asc" ? 1 : -1;
+    return rows.slice().sort((a, b) => {
+      const av = a[sortCol], bv = b[sortCol];
+      if(typeof av === "string" || typeof bv === "string") {
+        return (av || "").localeCompare(bv || "") * dir;
+      }
+      if(av == null && bv == null) return 0;
+      if(av == null) return 1;
+      if(bv == null) return -1;
+      return (av - bv) * dir;
+    });
+  }, [allRows, platform, search, minMatches, sortCol, sortDir, aliasMap]);
+
+  return html`<div class="elo-lb">
+    <div class="elo-toolbar">
+      <div class="elo-chips">
+        <button class="elo-chip ${platform==="all"?"active":""}"   onClick=${()=>setPlatform("all")}>All</button>
+        <button class="elo-chip ${platform==="rph"?"active":""}"   onClick=${()=>setPlatform("rph")}><${EloPlatformPill} platform="rph" size=${10}/> RPH</button>
+        <button class="elo-chip ${platform==="melee"?"active":""}" onClick=${()=>setPlatform("melee")}><${EloPlatformPill} platform="melee" size=${10}/> Melee</button>
+      </div>
+      <div class="elo-toolbar-right">
+        <label class="elo-min-matches">Min matches
+          <select value=${minMatches} onChange=${e => setMinMatches(parseInt(e.target.value, 10))}>
+            <option value="1">1</option>
+            <option value="3">3</option>
+            <option value="5">5</option>
+            <option value="10">10</option>
+            <option value="20">20</option>
+          </select>
+        </label>
+        <input class="elo-search" type="text" placeholder="Search player…"
+               value=${search} onInput=${e=>setSearch(e.target.value)}/>
+      </div>
+    </div>
+    ${filtered && html`<div class="elo-count">${filtered.length} of ${allRows.length} players</div>`}
+    <${EloLeaderboardTable} rows=${filtered} onPlayerClick=${onPlayerClick}
+      sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} aliasMap=${aliasMap}/>
+  </div>`;
+}
+
+function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasMap}){
+  const [profile, setProfile] = useState(null);   // {display_name, platform, rank, ...}
+  const [events, setEvents] = useState(null);      // per-event summaries
+  const [rounds, setRounds] = useState(null);      // round-by-round (chronological)
+  const [eventRanks, setEventRanks] = useState(null); // {event_id: event_rank}
+  const [canonicalId, setCanonicalId] = useState(null);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    if(playerId == null) return;
+    setProfile(null); setEvents(null); setRounds(null); setEventRanks(null);
+    setCanonicalId(null); setError(null);
+    (async () => {
+      try {
+        // Header card stats — leaderboard view already has rank + current + peak + record + gw%
+        const {data: lb, error: e1} = await sbClient.from("elo_leaderboard_v")
+          .select("player_id,display_name,platform,current_rating,n_matches,peak_rating,wins,losses,draws,gw_pct,mw_pct,rank")
+          .eq("player_id", playerId).limit(1);
+        if(e1) throw e1;
+        let canon = playerId;
+        let resolvedProfile = null;
+        // Fallback to elo_players for an aliased / orphan id (no ratings → not in leaderboard view).
+        if(!lb || !lb.length){
+          const {data: p} = await sbClient.from("elo_players")
+            .select("player_id,display_name,platform,merged_into_id")
+            .eq("player_id", playerId).limit(1);
+          if(p && p[0] && p[0].merged_into_id){
+            canon = p[0].merged_into_id;
+            const {data: lb2} = await sbClient.from("elo_leaderboard_v")
+              .select("player_id,display_name,platform,current_rating,n_matches,peak_rating,wins,losses,draws,gw_pct,mw_pct,rank")
+              .eq("player_id", canon).limit(1);
+            resolvedProfile = lb2 && lb2[0] ? lb2[0] : (p[0] ? {...p[0], current_rating:1500, peak_rating:1500, wins:0, losses:0, draws:0, n_matches:0, rank:null, gw_pct:null} : null);
+          } else {
+            resolvedProfile = p && p[0] ? {...p[0], current_rating:1500, peak_rating:1500, wins:0, losses:0, draws:0, n_matches:0, rank:null, gw_pct:null} : null;
+          }
+        } else {
+          canon = lb[0].player_id;
+          resolvedProfile = lb[0];
+        }
+        setCanonicalId(canon);
+        setProfile(resolvedProfile);
+
+        const {data: ev, error: e2} = await sbClient.from("elo_player_events_v")
+          .select("event_id,event_name,store,location,event_date,season,event_platform,wins,losses,draws,mw_pct,start_rating,end_rating,peak_rating_this_event,games_won,total_games,first_rating_id")
+          .eq("player_id", canon)
+          // Two-key sort: most-recent date first, then within same date use the
+          // player's earliest match's rating_id descending (later events at the
+          // same date have higher first_rating_id since rating_ids are assigned
+          // in chronological compute order).
+          .order("event_date", {ascending: false, nullsFirst: false})
+          .order("first_rating_id", {ascending: false});
+        if(e2) throw e2;
+        setEvents(ev || []);
+
+        // Order chronologically by event_date + round_number + table_number,
+        // NOT by rating_id (bigserial reflects Supabase insertion order, which
+        // breaks when a chronologically-earlier season is added in a later
+        // export). rating_id is the final tiebreaker.
+        const {data: rd, error: e3} = await sbClient.from("elo_player_rounds_v")
+          .select("rating_id,event_id,event_name,event_date,round_number,table_number,opponent_id,opponent_name,opponent_platform,opponent_rating,my_games_won,opp_games_won,score,rating_before,rating_after,elo_delta,is_bye")
+          .eq("player_id", canon)
+          .order("event_date", {ascending: false, nullsFirst: false})
+          .order("round_number", {ascending: true})
+          .order("table_number", {ascending: true, nullsFirst: false})
+          .order("rating_id", {ascending: true});
+        if(e3) throw e3;
+        setRounds(rd || []);
+
+        // Per-event final place. event_rank is keyed on (event_id, player_id) — one fetch covers them all.
+        const {data: ranks} = await sbClient.from("elo_event_standings_v")
+          .select("event_id,event_rank")
+          .eq("player_id", canon);
+        const rmap = {};
+        for(const r of (ranks || [])) rmap[r.event_id] = r.event_rank;
+        setEventRanks(rmap);
+      } catch(e){
+        console.error("[elo] player profile fetch failed", e);
+        setError(e.message || String(e));
+      }
+    })();
+  }, [playerId]);
+
+  // Group rounds by event for the per-tournament breakdown.
+  // MUST be declared BEFORE any early return — React hooks rule (error #310).
+  const roundsByEvent = useMemo(() => {
+    const m = new Map();
+    for(const r of (rounds || [])){
+      if(!m.has(r.event_id)) m.set(r.event_id, []);
+      m.get(r.event_id).push(r);
+    }
+    return m;
+  }, [rounds]);
+
+  if(error) return html`<div class="elo-placeholder">
+    <button class="elo-back" onClick=${onBack}>← Back to leaderboard</button>
+    <h3>Couldn't load player</h3><p>${error}</p>
+  </div>`;
+  if(!profile) return html`<div class="elo-loading">Loading player…</div>`;
+
+  const aliases = (aliasMap && canonicalId != null) ? (aliasMap.get(canonicalId) || []) : [];
+  const totalEvents = events ? events.length : null;
+
+  return html`<div class="elo-profile">
+    <button class="elo-back" onClick=${onBack}>← Leaderboard</button>
+
+    <div class="elo-profile-hero">
+      <div class="elo-profile-name">
+        <${EloPlatformPill} platform=${profile.platform} size=${18}/>
+        <h2>${profile.display_name}</h2>
+      </div>
+      ${aliases.length > 0 && html`<div class="elo-profile-aka">
+        <span class="elo-aka-lbl">Also known as:</span>
+        ${aliases.map((a, i) => html`<span key=${a.player_id} class="elo-aka-name">
+          ${i > 0 ? ", " : ""}<${EloPlatformPill} platform=${a.platform} size=${10}/> ${a.display_name}
+        </span>`)}
+      </div>`}
+      <div class="elo-stat-grid">
+        <div class="elo-stat"><div class="elo-stat-lbl">Rank</div><div class="elo-stat-val">${profile.rank ? "#" + profile.rank : "—"}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">ELO</div><div class="elo-stat-val">${Math.round(profile.current_rating)}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Peak</div><div class="elo-stat-val">${Math.round(profile.peak_rating)}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${profile.wins}-${profile.losses}-${profile.draws}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${profile.mw_pct==null ? "—" : profile.mw_pct.toFixed(1)+"%"}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${profile.gw_pct==null ? "—" : profile.gw_pct.toFixed(1)+"%"}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Events</div><div class="elo-stat-val">${totalEvents ?? "—"}</div></div>
+      </div>
+    </div>
+
+    ${events === null ? html`<div class="elo-loading">Loading tournaments…</div>` :
+      events.length === 0 ? html`<div class="elo-empty">No tournaments played yet.</div>` :
+      events.map(ev => {
+        const rounds = roundsByEvent.get(ev.event_id) || [];
+        const oppAvg = rounds.length ?
+          Math.round(rounds.reduce((s, r) => s + (r.opponent_rating || 0), 0) / rounds.length) : null;
+        const gwPct = ev.total_games > 0 ? ((ev.games_won / ev.total_games) * 100) : null;
+        const eloDelta = (ev.end_rating != null && ev.start_rating != null) ?
+          Math.round(ev.end_rating - ev.start_rating) : null;
+        const place = eventRanks ? eventRanks[ev.event_id] : null;
+        return html`<section class="elo-tourney" key=${ev.event_id}>
+          <header class="elo-tourney-head">
+            <h3>
+              <button class="elo-name-btn" onClick=${()=>onEventClick && onEventClick(ev.event_id)}>
+                ${ev.event_name || "Event #" + ev.event_id}${ev.store ? ": " + ev.store + (ev.location ? ", " + ev.location : "") : ""}
+              </button>
+            </h3>
+            <span class="elo-tourney-meta">${ev.event_date || ""}</span>
+          </header>
+          <div class="elo-tourney-stats">
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${place != null ? "#"+place : "—"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">ELO end</div><div class="elo-stat-val">${ev.end_rating != null ? Math.round(ev.end_rating) : "—"}${eloDelta != null ? html`<span class=${"elo-delta " + (eloDelta>=0?"up":"down")}>${eloDelta>=0?"+":""}${eloDelta}</span>` : ""}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${ev.wins}-${ev.losses}-${ev.draws}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${ev.mw_pct==null ? "—" : ev.mw_pct.toFixed(1)+"%"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${gwPct==null ? "—" : gwPct.toFixed(1)+"%"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Opp avg</div><div class="elo-stat-val">${oppAvg ?? "—"}</div></div>
+          </div>
+          ${rounds.length > 0 && html`<table class="elo-rounds-table">
+            <thead><tr>
+              <th>Round</th>
+              <th class="elo-rounds-opp">Opponent</th>
+              <th>Result</th>
+              <th class="elo-rounds-elo">ELO Δ</th>
+            </tr></thead>
+            <tbody>
+              ${rounds.map(r => {
+                if (r.is_bye) {
+                  // Bye row: surfaced from elo_player_rounds_v UNION half so
+                  // the player sees they had R2 bye instead of a gap.
+                  return html`<tr key=${"bye-"+r.event_id+"-"+r.round_number} class="elo-rounds-bye">
+                    <td>${r.round_number}</td>
+                    <td class="elo-rounds-opp"><span class="elo-opp elo-opp-bye">—</span></td>
+                    <td class="elo-rounds-result"><span class="elo-result bye">BYE</span></td>
+                    <td class="elo-rounds-elo"><span class="elo-rounds-bye-dash">—</span></td>
+                  </tr>`;
+                }
+                const isWin  = r.score === 1.0;
+                const isLoss = r.score === 0.0;
+                const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
+                const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
+                const score = (r.my_games_won != null && r.opp_games_won != null) ?
+                  `${r.my_games_won}-${r.opp_games_won}` : "";
+                return html`<tr key=${r.rating_id}>
+                  <td>${r.round_number}</td>
+                  <td class="elo-rounds-opp">
+                    ${r.opponent_id != null
+                      ? html`<button class="elo-name-btn elo-opp" onClick=${()=>onPlayerClick && onPlayerClick(r.opponent_id)}>${r.opponent_name || "—"}</button>`
+                      : html`<span class="elo-opp">${r.opponent_name || "—"}</span>`}
+                    ${r.opponent_rating != null && html`<span class="elo-opp-rating">(${Math.round(r.opponent_rating)})</span>`}
+                  </td>
+                  <td class="elo-rounds-result"><span class="elo-result ${resultClass}">${resultText}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
+                  <td class="elo-rounds-elo">${Math.round(r.rating_after)}<span class=${"elo-delta " + (r.elo_delta>=0?"up":"down")}>${r.elo_delta>=0?"+":""}${r.elo_delta.toFixed(1)}</span></td>
+                </tr>`;
+              })}
+            </tbody>
+          </table>`}
+        </section>`;
+      })}
+  </div>`;
+}
+
+function EloTournaments({onEventClick, onPlayerClick}){
+  const [events, setEvents] = useState(null);
+  const [seasonFilter, setSeasonFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [sortCol, setSortCol] = useState("event_date");
+  const [sortDir, setSortDir] = useState("desc");
+  const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const rows = await sbFetchAll("elo_event_summary_v", {
+          select: "event_id,name,store,location,event_date,season,platform,num_players,rated_players,avg_start_elo,top_seed_elo,champion_name,champion_player_id",
+          order: "event_date.desc.nullslast",
+        }, null);
+        setEvents(rows || []);
+      } catch(e){
+        console.error("[elo] tournaments fetch failed", e);
+        setEvents([]);
+      }
+    })();
+  }, []);
+
+  const seasons = useMemo(() => {
+    if(!events) return [];
+    return Array.from(new Set(events.map(e => e.season).filter(Boolean)));
+  }, [events]);
+
+  const filtered = useMemo(() => {
+    if(!events) return null;
+    const q = search.trim().toLowerCase();
+    const rows = events.filter(e => {
+      if(seasonFilter !== "all" && e.season !== seasonFilter) return false;
+      if(q && !((e.store || "") + " " + (e.location || "") + " " + (e.name || "")).toLowerCase().includes(q)) return false;
+      return true;
+    });
+    const dir = sortDir === "asc" ? 1 : -1;
+    return rows.slice().sort((a, b) => {
+      const av = a[sortCol], bv = b[sortCol];
+      if(typeof av === "string" || typeof bv === "string") return (av || "").localeCompare(bv || "") * dir;
+      if(av == null && bv == null) return 0;
+      if(av == null) return 1; if(bv == null) return -1;
+      return (av - bv) * dir;
+    });
+  }, [events, seasonFilter, search, sortCol, sortDir]);
+
+  return html`<div class="elo-tournaments">
+    <div class="elo-toolbar">
+      <div class="elo-chips">
+        <button class="elo-chip ${seasonFilter==="all"?"active":""}" onClick=${()=>setSeasonFilter("all")}>All seasons</button>
+        ${seasons.map(s => html`<button key=${s} class="elo-chip ${seasonFilter===s?"active":""}" onClick=${()=>setSeasonFilter(s)}>${s}</button>`)}
+      </div>
+      <div class="elo-toolbar-right">
+        <input class="elo-search" type="text" placeholder="Search store / location…"
+               value=${search} onInput=${e=>setSearch(e.target.value)}/>
+      </div>
+    </div>
+    ${filtered && html`<div class="elo-count">${filtered.length} of ${events.length} events</div>`}
+    ${filtered === null ? html`<div class="elo-loading">Loading tournaments…</div>` :
+      filtered.length === 0 ? html`<div class="elo-empty">No tournaments match.</div>` :
+      html`<div class="elo-table-wrap">
+        <table class="elo-table">
+          <thead><tr>
+            <${EloSortTh} label="Date"      col="event_date"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${true}/>
+            <${EloSortTh} label="Store"     col="store"         sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${false}/>
+            <${EloSortTh} label="Location"  col="location"      sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${false}/>
+            <${EloSortTh} label="Players"   col="rated_players" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${true}/>
+            <${EloSortTh} label="Avg ELO"   col="avg_start_elo" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${true}/>
+            <${EloSortTh} label="Champion"  col="champion_name" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${false}/>
+            <${EloSortTh} label="Season"    col="season"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} numeric=${false}/>
+            <th>Platform</th>
+          </tr></thead>
+          <tbody>
+            ${filtered.map(e => html`<tr key=${e.event_id}>
+              <td>${e.event_date || "—"}</td>
+              <td><button class="elo-name-btn" onClick=${()=>onEventClick && onEventClick(e.event_id)}>${e.store || "—"}</button></td>
+              <td>${e.location || "—"}</td>
+              <td>${e.rated_players || e.num_players || "—"}</td>
+              <td>${e.avg_start_elo != null ? e.avg_start_elo : "—"}</td>
+              <td>${e.champion_name
+                ? (e.champion_player_id != null
+                    ? html`<button class="elo-name-btn" onClick=${(ev)=>{ev.stopPropagation(); onPlayerClick && onPlayerClick(e.champion_player_id);}}>${e.champion_name}</button>`
+                    : e.champion_name)
+                : "—"}</td>
+              <td>${e.season || "—"}</td>
+              <td><${EloPlatformPill} platform=${e.platform}/></td>
+            </tr>`)}
+          </tbody>
+        </table>
+      </div>`}
+  </div>`;
+}
+
+function EloEventDetail({eventId, onBack, onPlayerClick}){
+  const [ev, setEv] = useState(null);
+  const [standings, setStandings] = useState(null);
+  const [matches, setMatches] = useState(null);
+  const [activeRound, setActiveRound] = useState(null);
+
+  useEffect(() => {
+    if(eventId == null) return;
+    setEv(null); setStandings(null); setMatches(null); setActiveRound(null);
+    (async () => {
+      try {
+        const {data: e} = await sbClient.from("elo_events").select("*").eq("event_id", eventId).limit(1);
+        setEv(e && e[0] ? e[0] : null);
+
+        const {data: st} = await sbClient.from("elo_event_standings_v")
+          .select("player_id,display_name,platform,wins,losses,draws,points,gw_pct,mw_pct,end_rating,event_rank")
+          .eq("event_id", eventId).order("event_rank", {ascending: true});
+        setStandings(st || []);
+
+        const {data: ms} = await sbClient.from("elo_matches")
+          .select("match_id,round_number,table_number,player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye")
+          .eq("event_id", eventId).order("round_number").order("table_number");
+        setMatches(ms || []);
+        if(ms && ms.length){
+          const rounds = [...new Set(ms.map(m => m.round_number))].sort((a,b)=>a-b);
+          setActiveRound(rounds[0]);
+        }
+      } catch(e){ console.error("[elo] event fetch failed", e); }
+    })();
+  }, [eventId]);
+
+  // Index players for the round table (need names)
+  const playerIndex = useMemo(() => {
+    const idx = new Map();
+    (standings || []).forEach(s => idx.set(s.player_id, s));
+    return idx;
+  }, [standings]);
+
+  const rounds = useMemo(() =>
+    [...new Set((matches || []).map(m => m.round_number))].sort((a,b)=>a-b)
+  , [matches]);
+
+  const roundMatches = useMemo(() =>
+    (matches || []).filter(m => m.round_number === activeRound)
+  , [matches, activeRound]);
+
+  if(!ev) return html`<div class="elo-loading">Loading event…</div>`;
+
+  return html`<div class="elo-event-detail">
+    <button class="elo-back" onClick=${onBack}>← Tournaments</button>
+    <header class="elo-event-head">
+      <h2>${ev.name || ev.store}</h2>
+      <p class="elo-event-meta">
+        ${ev.store || ""}${ev.location ? ", "+ev.location : ""}
+        ${ev.event_date ? " · " + ev.event_date : ""}
+        ${ev.season ? " · " + ev.season : ""}
+        ${ev.num_players ? " · " + ev.num_players + " players" : ""}
+        <${EloPlatformPill} platform=${ev.platform}/>
+      </p>
+    </header>
+
+    <h3 class="elo-event-h3">Final Standings</h3>
+    ${standings === null ? html`<div class="elo-loading">Loading…</div>` :
+      standings.length === 0 ? html`<div class="elo-empty">No standings recorded.</div>` :
+      html`<div class="elo-table-wrap">
+        <table class="elo-table">
+          <thead><tr><th>Place</th><th class="elo-th-player">Player</th><th>Record</th><th>Pts</th><th>MW %</th><th>GW %</th><th>ELO</th></tr></thead>
+          <tbody>
+            ${standings.map(s => html`<tr key=${s.player_id}>
+              <td>#${s.event_rank}</td>
+              <td class="elo-td-player"><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(s.player_id)}>
+                <${EloPlatformPill} platform=${s.platform}/>
+                <span class="elo-name">${s.display_name}</span>
+              </button></td>
+              <td>${s.wins}-${s.losses}-${s.draws}</td>
+              <td>${s.points}</td>
+              <td>${s.mw_pct==null ? "—" : s.mw_pct.toFixed(1)+"%"}</td>
+              <td>${s.gw_pct==null ? "—" : s.gw_pct.toFixed(1)+"%"}</td>
+              <td>${s.end_rating != null ? Math.round(s.end_rating) : "—"}</td>
+            </tr>`)}
+          </tbody>
+        </table>
+      </div>`}
+
+    ${rounds.length > 0 && html`<div class="elo-rounds-nav">
+      ${rounds.map(rn => html`<button key=${rn} class="elo-chip ${activeRound===rn?"active":""}"
+        onClick=${()=>setActiveRound(rn)}>Round ${rn}</button>`)}
+    </div>`}
+
+    ${activeRound != null && html`<div class="elo-table-wrap">
+      <table class="elo-table">
+        <thead><tr><th>Table</th><th>Player 1</th><th>Result</th><th>Player 2</th></tr></thead>
+        <tbody>
+          ${roundMatches.map(m => {
+            if(m.is_bye){
+              const p = playerIndex.get(m.player1_id);
+              return html`<tr key=${m.match_id}><td>—</td>
+                <td><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p?.display_name || m.player1_id}</button></td>
+                <td><span class="elo-result draw">BYE</span></td><td>—</td></tr>`;
+            }
+            const p1 = playerIndex.get(m.player1_id);
+            const p2 = playerIndex.get(m.player2_id);
+            const p1Wins = m.winner_id === m.player1_id;
+            const p2Wins = m.winner_id === m.player2_id;
+            const score = (m.games_won_p1 != null && m.games_won_p2 != null) ?
+              `${m.games_won_p1}-${m.games_won_p2}` : "";
+            return html`<tr key=${m.match_id}>
+              <td>${m.table_number ?? "—"}</td>
+              <td class=${p1Wins?"elo-winner":""}><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p1?.display_name || m.player1_id}</button></td>
+              <td><span class="elo-result ${p1Wins||p2Wins?"win":"draw"}">${p1Wins?"P1 wins":(p2Wins?"P2 wins":"Draw")}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
+              <td class=${p2Wins?"elo-winner":""}><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(m.player2_id)}>${p2?.display_name || m.player2_id}</button></td>
+            </tr>`;
+          })}
+        </tbody>
+      </table>
+    </div>`}
+  </div>`;
+}
+
+function EloView({eloPinned, setEloPinned}){
+  // Inner tab state: leaderboard | tournaments | player | event
+  // Synced to URL params: ?sub=tournaments, ?p=<id>, ?e=<id>
+  // (Avoid ?t=… — Packs.Ink already uses that for Trade tokens.)
+  const [tab, setTab] = useState("leaderboard");
+  const [playerId, setPlayerId] = useState(null);
+  const [eventId, setEventId] = useState(null);
+
+  // Cross-platform alias map: canonical_id -> [{player_id, display_name, platform}, ...]
+  // Used to show "(melee_name)" annotations on the leaderboard + "Also known as:"
+  // line on the player profile. Fetched once on mount, ~180 rows.
+  const [aliasMap, setAliasMap] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const {data} = await sbClient.from("elo_players")
+          .select("player_id,display_name,platform,merged_into_id")
+          .not("merged_into_id", "is", null);
+        const m = new Map();
+        for(const a of (data || [])){
+          if(!m.has(a.merged_into_id)) m.set(a.merged_into_id, []);
+          m.get(a.merged_into_id).push(a);
+        }
+        setAliasMap(m);
+      } catch(e){
+        console.error("[elo] alias fetch failed", e);
+        setAliasMap(new Map());
+      }
+    })();
+  }, []);
+
+  // Parse URL → set state. Used both on mount and on every popstate so
+  // the browser Back/Forward buttons navigate within the ELO view instead
+  // of jumping to the previous Packs.Ink view (or off the site).
+  const applyUrlToState = () => {
+    const sp = new URLSearchParams(window.location.search);
+    const p = sp.get("p"); const e = sp.get("e"); const sub = sp.get("sub");
+    if(p){ setPlayerId(parseInt(p,10)); setEventId(null); setTab("player"); return; }
+    if(e){ setEventId(parseInt(e,10)); setPlayerId(null); setTab("event"); return; }
+    if(sub === "tournaments"){ setTab("tournaments"); setPlayerId(null); setEventId(null); return; }
+    setTab("leaderboard"); setPlayerId(null); setEventId(null);
+  };
+
+  // Mount: read incoming URL once.
+  useEffect(() => { applyUrlToState(); }, []);
+
+  // Browser Back/Forward: re-parse the URL. Setting fromPopstate so the
+  // URL-sync effect below skips pushState on this state transition
+  // (otherwise we'd push a duplicate history entry).
+  const fromPopstate = useRef(false);
+  useEffect(() => {
+    const onPop = () => { fromPopstate.current = true; applyUrlToState(); };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+
+  // State → URL. pushState (not replace) so every inner navigation lands
+  // in browser history and Back works as expected. Skip when this state
+  // change came from a popstate (we'd loop / dupe history). Skip when the
+  // URL already matches (initial mount).
+  useEffect(() => {
+    if(fromPopstate.current){ fromPopstate.current = false; return; }
+    try {
+      const url = new URL(window.location.href);
+      ["p","e","sub"].forEach(k => url.searchParams.delete(k));
+      if(tab === "player" && playerId != null) url.searchParams.set("p", String(playerId));
+      else if(tab === "event" && eventId != null) url.searchParams.set("e", String(eventId));
+      else if(tab === "tournaments") url.searchParams.set("sub", "tournaments");
+      if(url.toString() !== window.location.href){
+        window.history.pushState(window.history.state, "", url.toString());
+      }
+    } catch{}
+  }, [tab, playerId, eventId]);
+
+  const onPlayerClick = (pid) => { setPlayerId(pid); setTab("player"); window.scrollTo({top:0, behavior:"smooth"}); };
+  const onEventClick  = (eid) => { setEventId(eid);  setTab("event");  window.scrollTo({top:0, behavior:"smooth"}); };
+  const backToLeaderboard = () => { setTab("leaderboard"); setPlayerId(null); setEventId(null); };
+  const backToTournaments = () => { setTab("tournaments"); setEventId(null); };
+
+  return html`<div class="elo-view">
+    <header class="elo-hero">
+      <div class="elo-hero-row">
+        <h1 class="elo-title">Chicagoland Lorcana ELO</h1>
+        ${setEloPinned && html`<label class="elo-pin-toggle" title=${eloPinned ? "Hide from Analytics tab (still accessible via /elo)" : "Pin under Analytics tab"}>
+          <input type="checkbox" checked=${!!eloPinned} onChange=${e => setEloPinned(e.target.checked)}/>
+          <span>${eloPinned ? "Pinned to Analytics" : "Pin to Analytics"}</span>
+        </label>`}
+      </div>
+      <p class="elo-sub">Community leaderboard tracking Set Championship results across the Chicagoland region.</p>
+      <nav class="elo-innertabs">
+        <button class=${tab==="leaderboard"||tab==="player"?"active":""} onClick=${backToLeaderboard}>Leaderboard</button>
+        <button class=${tab==="tournaments"||tab==="event"?"active":""} onClick=${()=>{setTab("tournaments"); setEventId(null); setPlayerId(null);}}>Tournaments</button>
+      </nav>
+    </header>
+
+    ${tab==="leaderboard" && html`<${EloLeaderboard} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
+    ${tab==="tournaments" && html`<${EloTournaments} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick}/>`}
+    ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${backToLeaderboard} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
+    ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick}/>`}
+  </div>`;
+}
+
 function FAQView(){
   return html`<div class="faq-section">
     <h2>What is Packs.Ink?</h2>
@@ -13631,6 +14313,10 @@ const MARKET_SUBS = [
   ["heatmap",    "Heatmap"],
   ["sim",        "Simulate"],
   ["montecarlo", "Monte Carlo"],
+  // ELO is always a valid sub-key so /analytics?a=elo deep-links work even
+  // when the user hasn't pinned it. The Analytics tab BAR hides it unless
+  // eloPinned is true (see MarketView's subsList).
+  ["elo",        "Chicagoland ELO"],
 ];
 
 // Morningstar-style financial table of every tracked card, driven by the
@@ -15328,7 +16014,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
 function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
                     excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
                     user, collection, updateQty, onSignIn, openSetHistory, sealedPrices,
-                    incomingTradeToken, incomingTradeBlob, sub, setSub}){
+                    incomingTradeToken, incomingTradeBlob, sub, setSub,
+                    eloPinned, setEloPinned}){
+  // When the user has pinned the Chicagoland Lorcana ELO leaderboard, show it
+  // as the rightmost sub-tab. Stays hidden for everyone else (but the
+  // ?a=elo deep link still works via MARKET_SUBS).
+  const subsList = useMemo(
+    () => eloPinned ? MARKET_SUBS : MARKET_SUBS.filter(([k]) => k !== "elo"),
+    [eloPinned]
+  );
   // Market analytics list sets newest-first so the most relevant sets land
   // at the top of every table. Simulators inherit the same ordering — their
   // set dropdown reads better newest-first anyway.
@@ -15362,10 +16056,11 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
 
   return html`<div>
     <div class="market-subtabs">
-      ${MARKET_SUBS.map(([k,l])=>html`<button key=${k}
+      ${subsList.map(([k,l])=>html`<button key=${k}
         class=${"market-subtab"+(sub===k?" active":"")}
         onClick=${()=>setSub(k)}>${l}</button>`)}
     </div>
+    ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -22499,6 +23194,7 @@ const VIEW_PATHS = {
   collection: "/collection",
   decks:      "/decks",
   faq:        "/how-it-works",
+  elo:        "/elo",   // hidden — Chicagoland Lorcana ELO leaderboard (no nav entry)
 };
 const PATH_TO_VIEW = (() => {
   const m = {};
@@ -23025,6 +23721,16 @@ function App(){
   useEffect(() => {
     try { localStorage.setItem("packsink:tipsEnabled", JSON.stringify(tipsEnabled)); } catch {}
   }, [tipsEnabled]);
+  // ELO leaderboard pin: when true, add the Chicagoland Lorcana ELO view as
+  // a sub-tab under Analytics. Default off — /elo is the hidden direct link
+  // that always works. Toggled from inside the ELO view itself.
+  const [eloPinned, setEloPinned] = useState(() => {
+    try { return localStorage.getItem("packsink:elo:pinned") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:elo:pinned", eloPinned ? "1" : "0"); } catch {}
+  }, [eloPinned]);
   // Card-as-avatar: stored as the card_id of the chosen card. Falls back to
   // Google avatar (frequently 403s) and then the first initial.
   const [avatarCardId, setAvatarCardId] = useState(() => {
@@ -24185,6 +24891,7 @@ function App(){
       sealedPrices=${sealedPrices}
       incomingTradeToken=${initialUrlParams.tradeToken} incomingTradeBlob=${initialUrlParams.trade}
       sub=${marketSub} setSub=${setMarketSub}
+      eloPinned=${eloPinned} setEloPinned=${setEloPinned}
       openSetHistory=${openSetHistory}/>`}
     ${view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
@@ -24194,6 +24901,7 @@ function App(){
       incomingScreenerView=${incomingScreenerView}
       onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
     ${view==="faq"&&html`<${FAQView}/>`}
+    ${view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
   </div><//><//>`;
 }

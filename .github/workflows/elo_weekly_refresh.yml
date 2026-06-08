@@ -1,0 +1,34 @@
+name: ELO weekly refresh
+
+on:
+  schedule:
+    # Monday 11:00 UTC = 6:00 AM CDT / 5:00 AM CST. Hour past dawn in case
+    # any Sunday-night events finish late and the TOs upload Monday morning.
+    - cron: "0 11 * * 1"
+  workflow_dispatch: {}      # also runnable on demand from the Actions tab
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install deps
+        run: |
+          pip install requests openpyxl python-dotenv
+
+      - name: Refresh ELO
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Override the bucket/object name if you set up something different.
+          ELO_DB_BUCKET: elo
+          ELO_DB_OBJECT: lorcana_elo.db
+        run: |
+          python scripts/refresh_elo.py
