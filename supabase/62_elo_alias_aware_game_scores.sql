@@ -24,12 +24,14 @@
 --   - elo_player_events_v       (per-event GW% on profile)
 --   - elo_event_standings_v     (per-event GW% on event detail page)
 --
--- After applying: rerun the export script (no rebuild needed — views read
--- the existing elo_matches / elo_ratings rows; the fix is purely in the join).
+-- Implementation note: we use CREATE OR REPLACE VIEW (not DROP + CREATE)
+-- because elo_event_standings_v has dependents (elo_event_summary_v in
+-- migration 60) that would otherwise require CASCADE. CREATE OR REPLACE is
+-- allowed when the column shape (names + types + order) is unchanged —
+-- which it is here, since we're only modifying JOIN logic.
 
 -- ── 1. elo_player_rounds_v ────────────────────────────────────────────────
-drop view if exists public.elo_player_rounds_v;
-create view public.elo_player_rounds_v
+create or replace view public.elo_player_rounds_v
   with (security_invoker = on)
 as
 -- regular matches (now alias-aware)
@@ -90,8 +92,7 @@ grant select on public.elo_player_rounds_v to anon, authenticated, service_role;
 
 
 -- ── 2. elo_player_events_v ────────────────────────────────────────────────
-drop view if exists public.elo_player_events_v;
-create view public.elo_player_events_v
+create or replace view public.elo_player_events_v
   with (security_invoker = on)
 as
 select rt.player_id,
@@ -133,8 +134,7 @@ grant select on public.elo_player_events_v to anon, authenticated, service_role;
 
 
 -- ── 3. elo_event_standings_v ──────────────────────────────────────────────
-drop view if exists public.elo_event_standings_v;
-create view public.elo_event_standings_v
+create or replace view public.elo_event_standings_v
   with (security_invoker = on)
 as
 with per_event as (
