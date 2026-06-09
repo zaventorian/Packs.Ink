@@ -12890,6 +12890,41 @@ function EloRankBadge({rank}){
   </span>`;
 }
 
+// Build a relative URL for a given ELO view target. Preserves any other query
+// params on the current URL (e.g. ?a=elo for the Analytics-pinned mount) so a
+// new-tab-opened link lands in the same outer view.
+//
+// Targets:
+//   {tab:"leaderboard"}                → "?…" with p/e/sub cleared
+//   {tab:"tournaments"}                → "?…&sub=tournaments"
+//   {tab:"player", playerId:123}       → "?…&p=123"
+//   {tab:"event",  eventId:456}        → "?…&e=456"
+function eloUrlFor(target){
+  let url;
+  try { url = new URL(window.location.href); }
+  catch { return "#"; }
+  ["p","e","sub"].forEach(k => url.searchParams.delete(k));
+  if(target?.tab === "player" && target.playerId != null) url.searchParams.set("p", String(target.playerId));
+  else if(target?.tab === "event" && target.eventId != null) url.searchParams.set("e", String(target.eventId));
+  else if(target?.tab === "tournaments") url.searchParams.set("sub", "tournaments");
+  return url.pathname + (url.search ? url.search : "") + url.hash;
+}
+
+// Anchor-based navigation for ELO views. Renders as a real <a href> so Ctrl/Cmd-
+// click and middle-click open in a new tab (the previous <button onClick> form
+// swallowed those gestures). Plain left-click is intercepted to do SPA-style
+// state navigation via onClick (no full-page reload).
+function EloLink({to, onClick, children, className, title, style}){
+  const href = eloUrlFor(to);
+  const handle = (ev) => {
+    // Let modifier-click, middle-click, and right-click fall through to browser.
+    if(ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return;
+    ev.preventDefault();
+    if(onClick) onClick();
+  };
+  return html`<a href=${href} class=${className} title=${title} style=${style} onClick=${handle}>${children}</a>`;
+}
+
 // Sortable column header. Clicking the same column flips direction.
 function EloSortTh({label, col, sortCol, sortDir, setSort, className, numeric}){
   const active = sortCol === col;
@@ -12926,13 +12961,14 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
             <td class="elo-td-rank"><${EloRankBadge} rank=${r.rank}/></td>
             <td class="elo-td-elo">${Math.round(r.current_rating)}</td>
             <td class="elo-td-player">
-              <button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(r.player_id)}>
+              <${EloLink} to=${{tab:"player", playerId:r.player_id}} className="elo-name-btn"
+                onClick=${()=>onPlayerClick && onPlayerClick(r.player_id)}>
                 <${EloPlatformPill} platform=${r.platform}/>
                 <span class="elo-name-stack">
                   <span class="elo-name">${r.display_name}</span>
                   ${aliases.length > 0 && html`<span class="elo-alias">${aliases.map(a => a.display_name).join(", ")}</span>`}
                 </span>
-              </button>
+              </${EloLink}>
             </td>
             <td class="elo-td-record">${r.wins}-${r.losses}-${r.draws}</td>
             <td class="elo-td-mw">${r.mw_pct==null ? "—" : r.mw_pct.toFixed(1)+"%"}</td>
@@ -13035,11 +13071,21 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   const [eventRanks, setEventRanks] = useState(null); // {event_id: event_rank}
   const [canonicalId, setCanonicalId] = useState(null);
   const [error, setError] = useState(null);
+  // Head-to-head opponent filter. null = not filtered, integer = opponent_id.
+  // Reset on player change (the cleanup-on-playerId effect below).
+  const [h2hOpponentId, setH2hOpponentId] = useState(null);
+  // Searchable combobox state — query text + open/close. Replaces the native
+  // <select> (unreadable in dark mode, no incremental search) with a typeable
+  // filter + click-out-to-close listbox.
+  const [h2hQuery, setH2hQuery] = useState("");
+  const [h2hListOpen, setH2hListOpen] = useState(false);
+  const h2hPickerRef = useRef(null);
 
   useEffect(() => {
     if(playerId == null) return;
     setProfile(null); setEvents(null); setRounds(null); setEventRanks(null);
     setCanonicalId(null); setError(null);
+    setH2hOpponentId(null); setH2hQuery(""); setH2hListOpen(false);  // clear opponent filter when switching profiles
     (async () => {
       try {
         // Header card stats — leaderboard view already has rank + current + peak + record + gw%
@@ -13121,6 +13167,84 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
     return m;
   }, [rounds]);
 
+  // Head-to-head: roll up every opponent this player has faced into a single
+  // summary row each (matches / record / net ELO swing). Sorted by match count
+  // so frequent opponents float to the top of the picker.
+  // Byes don't have an opponent_id; .filter() at the start drops them.
+  const opponentsList = useMemo(() => {
+    const m = new Map();
+    for(const r of (rounds || [])){
+      if(r.opponent_id == null || r.is_bye) continue;
+      let o = m.get(r.opponent_id);
+      if(!o){
+        o = {opponent_id:r.opponent_id, name:r.opponent_name, platform:r.opponent_platform,
+             matches:0, wins:0, losses:0, draws:0, totalDelta:0,
+             lastRating:null, firstDate:r.event_date, lastDate:r.event_date};
+        m.set(r.opponent_id, o);
+      }
+      o.matches++;
+      if(r.score === 1.0) o.wins++;
+      else if(r.score === 0.0) o.losses++;
+      else o.draws++;
+      o.totalDelta += (r.elo_delta || 0);
+      if(r.opponent_rating != null) o.lastRating = r.opponent_rating;
+      // rounds come back ordered date-desc — so firstDate = LAST row we see,
+      // lastDate = FIRST row we see. Capture both.
+      if(r.event_date && (!o.firstDate || r.event_date < o.firstDate)) o.firstDate = r.event_date;
+      if(r.event_date && (!o.lastDate  || r.event_date > o.lastDate )) o.lastDate  = r.event_date;
+    }
+    return Array.from(m.values()).sort((a,b) => b.matches - a.matches || a.name.localeCompare(b.name));
+  }, [rounds]);
+
+  const h2hMatches = useMemo(() => {
+    if(h2hOpponentId == null || !rounds) return null;
+    // Show oldest → newest so the H2H story reads chronologically.
+    return rounds.filter(r => r.opponent_id === h2hOpponentId).slice().reverse();
+  }, [rounds, h2hOpponentId]);
+  const h2hSummary = h2hOpponentId != null
+    ? opponentsList.find(o => o.opponent_id === h2hOpponentId) : null;
+
+  // Filtered options for the searchable picker. Case-insensitive substring
+  // on the canonical name. Empty query → full list.
+  const h2hFiltered = useMemo(() => {
+    const q = h2hQuery.trim().toLowerCase();
+    if(!q) return opponentsList;
+    return opponentsList.filter(o => (o.name || "").toLowerCase().includes(q));
+  }, [opponentsList, h2hQuery]);
+
+  // Click-outside handler closes the listbox. mousedown catches the close
+  // BEFORE a click handler on an option fires (otherwise the picker would
+  // close, the rerender would unmount the option, and the click event
+  // wouldn't dispatch).
+  useEffect(() => {
+    if(!h2hListOpen) return;
+    const onDown = (ev) => {
+      if(h2hPickerRef.current && !h2hPickerRef.current.contains(ev.target)){
+        setH2hListOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [h2hListOpen]);
+
+  // Look up store-name for each event so the event labels can read
+  // "Good Games — Whispers in the Well SC" instead of just the generic
+  // tournament name. Built from the events array (already loaded for the
+  // per-tournament breakdown), so no extra fetch.
+  const eventStoreById = useMemo(() => {
+    const m = new Map();
+    for(const e of (events || [])){
+      if(e.event_id != null) m.set(e.event_id, {store:e.store, location:e.location, name:e.event_name});
+    }
+    return m;
+  }, [events]);
+  const fmtEventLabel = (eventId, fallbackName) => {
+    const e = eventStoreById.get(eventId);
+    const store = e?.store;
+    const name  = e?.name || fallbackName || ("Event #"+eventId);
+    return store ? `${store} — ${name}` : name;
+  };
+
   if(error) return html`<div class="elo-placeholder">
     <button class="elo-back" onClick=${onBack}>← Back to leaderboard</button>
     <h3>Couldn't load player</h3><p>${error}</p>
@@ -13155,6 +13279,82 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       </div>
     </div>
 
+    ${opponentsList.length > 0 && html`<section class="elo-h2h">
+      <div class="elo-h2h-head">
+        <h3>Head-to-Head</h3>
+        <div class="elo-h2h-picker" ref=${h2hPickerRef}>
+          <input class="elo-h2h-search" type="text"
+            placeholder=${h2hSummary ? "" : "Search opponent…"}
+            value=${h2hQuery}
+            onFocus=${()=>setH2hListOpen(true)}
+            onInput=${(e)=>{ setH2hQuery(e.target.value); setH2hListOpen(true); if(h2hOpponentId != null) setH2hOpponentId(null); }}
+            onKeyDown=${(e)=>{ if(e.key === "Escape") setH2hListOpen(false); }}/>
+          ${h2hListOpen && h2hFiltered.length > 0 && html`<ul class="elo-h2h-list" role="listbox">
+            ${h2hFiltered.slice(0, 50).map(o => html`<li key=${o.opponent_id} role="option"
+              class=${"elo-h2h-opt" + (o.opponent_id === h2hOpponentId ? " active" : "")}
+              onMouseDown=${(e)=>{ e.preventDefault(); /* keep input focused */ }}
+              onClick=${()=>{ setH2hOpponentId(o.opponent_id); setH2hQuery(o.name); setH2hListOpen(false); }}>
+              <span class="elo-h2h-opt-name"><${EloPlatformPill} platform=${o.platform} size=${10}/> ${o.name}</span>
+              <span class="elo-h2h-opt-stats">${o.matches} · ${o.wins}-${o.losses}-${o.draws}</span>
+            </li>`)}
+            ${h2hFiltered.length > 50 && html`<li class="elo-h2h-opt-more">+ ${h2hFiltered.length - 50} more — keep typing to narrow…</li>`}
+          </ul>`}
+          ${h2hListOpen && h2hFiltered.length === 0 && html`<ul class="elo-h2h-list" role="listbox">
+            <li class="elo-h2h-opt-more">No matching opponent</li>
+          </ul>`}
+        </div>
+        ${h2hOpponentId != null && html`<button class="elo-h2h-clear"
+          onClick=${()=>{ setH2hOpponentId(null); setH2hQuery(""); setH2hListOpen(false); }}
+          title="Clear opponent filter">✕ Clear</button>`}
+      </div>
+      ${h2hSummary && html`<div class="elo-h2h-card">
+        <div class="elo-h2h-card-head">
+          <span class="elo-h2h-vs">vs</span>
+          <${EloLink} to=${{tab:"player", playerId:h2hSummary.opponent_id}} className="elo-h2h-name"
+            onClick=${()=>onPlayerClick && onPlayerClick(h2hSummary.opponent_id)}>
+            <${EloPlatformPill} platform=${h2hSummary.platform}/>
+            ${h2hSummary.name}
+          </${EloLink}>
+        </div>
+        <div class="elo-tourney-stats">
+          <div class="elo-stat-mini"><div class="elo-stat-lbl">Matches</div><div class="elo-stat-val">${h2hSummary.matches}</div></div>
+          <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${h2hSummary.wins}-${h2hSummary.losses}-${h2hSummary.draws}</div></div>
+          <div class="elo-stat-mini"><div class="elo-stat-lbl">Net ELO</div><div class="elo-stat-val"><span class=${"elo-delta "+(h2hSummary.totalDelta>=0?"up":"down")}>${h2hSummary.totalDelta>=0?"+":""}${h2hSummary.totalDelta.toFixed(1)}</span></div></div>
+          <div class="elo-stat-mini"><div class="elo-stat-lbl">Last ELO</div><div class="elo-stat-val">${h2hSummary.lastRating != null ? Math.round(h2hSummary.lastRating) : "—"}</div></div>
+          <div class="elo-stat-mini"><div class="elo-stat-lbl">First met</div><div class="elo-stat-val">${h2hSummary.firstDate || "—"}</div></div>
+          <div class="elo-stat-mini"><div class="elo-stat-lbl">Last met</div><div class="elo-stat-val">${h2hSummary.lastDate || "—"}</div></div>
+        </div>
+        ${h2hMatches && h2hMatches.length > 0 && html`<table class="elo-rounds-table elo-h2h-table">
+          <thead><tr>
+            <th class="elo-h2h-date">Date</th>
+            <th class="elo-h2h-event">Event</th>
+            <th>R</th>
+            <th>Result</th>
+            <th class="elo-rounds-elo">ELO Δ</th>
+          </tr></thead>
+          <tbody>
+            ${h2hMatches.map(r => {
+              const isWin  = r.score === 1.0;
+              const isLoss = r.score === 0.0;
+              const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
+              const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
+              const score = (r.my_games_won != null && r.opp_games_won != null) ? `${r.my_games_won}-${r.opp_games_won}` : "";
+              return html`<tr key=${r.rating_id}>
+                <td class="elo-h2h-date">${r.event_date || "—"}</td>
+                <td class="elo-h2h-event">
+                  <${EloLink} to=${{tab:"event", eventId:r.event_id}} className="elo-name-btn"
+                    onClick=${()=>onEventClick && onEventClick(r.event_id)}>${fmtEventLabel(r.event_id, r.event_name)}</${EloLink}>
+                </td>
+                <td>${r.round_number}</td>
+                <td class="elo-rounds-result"><span class="elo-result ${resultClass}">${resultText}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
+                <td class="elo-rounds-elo">${Math.round(r.rating_after)}<span class=${"elo-delta " + (r.elo_delta>=0?"up":"down")}>${r.elo_delta>=0?"+":""}${r.elo_delta.toFixed(1)}</span></td>
+              </tr>`;
+            })}
+          </tbody>
+        </table>`}
+      </div>`}
+    </section>`}
+
     ${events === null ? html`<div class="elo-loading">Loading tournaments…</div>` :
       events.length === 0 ? html`<div class="elo-empty">No tournaments played yet.</div>` :
       events.map(ev => {
@@ -13168,9 +13368,10 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         return html`<section class="elo-tourney" key=${ev.event_id}>
           <header class="elo-tourney-head">
             <h3>
-              <button class="elo-name-btn" onClick=${()=>onEventClick && onEventClick(ev.event_id)}>
+              <${EloLink} to=${{tab:"event", eventId:ev.event_id}} className="elo-name-btn"
+                onClick=${()=>onEventClick && onEventClick(ev.event_id)}>
                 ${ev.event_name || "Event #" + ev.event_id}${ev.store ? ": " + ev.store + (ev.location ? ", " + ev.location : "") : ""}
-              </button>
+              </${EloLink}>
             </h3>
             <span class="elo-tourney-meta">${ev.event_date || ""}</span>
           </header>
@@ -13211,7 +13412,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                   <td>${r.round_number}</td>
                   <td class="elo-rounds-opp">
                     ${r.opponent_id != null
-                      ? html`<button class="elo-name-btn elo-opp" onClick=${()=>onPlayerClick && onPlayerClick(r.opponent_id)}>${r.opponent_name || "—"}</button>`
+                      ? html`<${EloLink} to=${{tab:"player", playerId:r.opponent_id}} className="elo-name-btn elo-opp"
+                          onClick=${()=>onPlayerClick && onPlayerClick(r.opponent_id)}>${r.opponent_name || "—"}</${EloLink}>`
                       : html`<span class="elo-opp">${r.opponent_name || "—"}</span>`}
                     ${r.opponent_rating != null && html`<span class="elo-opp-rating">(${Math.round(r.opponent_rating)})</span>`}
                   </td>
@@ -13301,13 +13503,15 @@ function EloTournaments({onEventClick, onPlayerClick}){
           <tbody>
             ${filtered.map(e => html`<tr key=${e.event_id}>
               <td>${e.event_date || "—"}</td>
-              <td><button class="elo-name-btn" onClick=${()=>onEventClick && onEventClick(e.event_id)}>${e.store || "—"}</button></td>
+              <td><${EloLink} to=${{tab:"event", eventId:e.event_id}} className="elo-name-btn"
+                onClick=${()=>onEventClick && onEventClick(e.event_id)}>${e.store || "—"}</${EloLink}></td>
               <td>${e.location || "—"}</td>
               <td>${e.rated_players || e.num_players || "—"}</td>
               <td>${e.avg_start_elo != null ? e.avg_start_elo : "—"}</td>
               <td>${e.champion_name
                 ? (e.champion_player_id != null
-                    ? html`<button class="elo-name-btn" onClick=${(ev)=>{ev.stopPropagation(); onPlayerClick && onPlayerClick(e.champion_player_id);}}>${e.champion_name}</button>`
+                    ? html`<${EloLink} to=${{tab:"player", playerId:e.champion_player_id}} className="elo-name-btn"
+                        onClick=${()=>onPlayerClick && onPlayerClick(e.champion_player_id)}>${e.champion_name}</${EloLink}>`
                     : e.champion_name)
                 : "—"}</td>
               <td>${e.season || "—"}</td>
@@ -13323,6 +13527,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
   const [ev, setEv] = useState(null);
   const [standings, setStandings] = useState(null);
   const [matches, setMatches] = useState(null);
+  const [matchPlayers, setMatchPlayers] = useState(null);
   const [activeRound, setActiveRound] = useState(null);
 
   useEffect(() => {
@@ -13339,23 +13544,42 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
         setStandings(st || []);
 
         const {data: ms} = await sbClient.from("elo_matches")
-          .select("match_id,round_number,table_number,player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye")
+          .select("match_id,round_number,table_number,player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye,source")
           .eq("event_id", eventId).order("round_number").order("table_number");
         setMatches(ms || []);
         if(ms && ms.length){
           const rounds = [...new Set(ms.map(m => m.round_number))].sort((a,b)=>a-b);
           setActiveRound(rounds[0]);
+          // The standings table only includes CANONICAL player_ids, but
+          // matches reference the ORIGINAL player_ids that may have been
+          // merged into someone else (e.g. "ChiTownAvenger" pid=911 merged
+          // into pid=387). Pull display_name + platform for every player_id
+          // we encounter in matches so the round-by-round browser doesn't
+          // fall back to rendering raw integer IDs.
+          const allPids = [...new Set(ms.flatMap(m => [m.player1_id, m.player2_id]).filter(x => x != null))];
+          if(allPids.length){
+            const {data: ps} = await sbClient.from("elo_players")
+              .select("player_id,display_name,platform")
+              .in("player_id", allPids);
+            setMatchPlayers(ps || []);
+          }
         }
       } catch(e){ console.error("[elo] event fetch failed", e); }
     })();
   }, [eventId]);
 
-  // Index players for the round table (need names)
+  // Index players for the round table (need names). Combine the standings
+  // (which have the post-merge canonical names) with the per-match player
+  // lookup (which has names for the ORIGINAL pre-merge player_ids that the
+  // matches table references). Order matters: matchPlayers second so a row
+  // matched by pre-merge ID gets its original display_name, while canonical
+  // IDs still show their merged identity from standings.
   const playerIndex = useMemo(() => {
     const idx = new Map();
     (standings || []).forEach(s => idx.set(s.player_id, s));
+    (matchPlayers || []).forEach(p => { if(!idx.has(p.player_id)) idx.set(p.player_id, p); });
     return idx;
-  }, [standings]);
+  }, [standings, matchPlayers]);
 
   const rounds = useMemo(() =>
     [...new Set((matches || []).map(m => m.round_number))].sort((a,b)=>a-b)
@@ -13377,6 +13601,9 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
         ${ev.season ? " · " + ev.season : ""}
         ${ev.num_players ? " · " + ev.num_players + " players" : ""}
         <${EloPlatformPill} platform=${ev.platform}/>
+        ${ev.platform === "melee"
+          ? html`<a class="elo-event-link" href=${"https://melee.gg/Tournament/View/" + (ev.event_id - 100000000)} target="_blank" rel="noopener">View on melee.gg →</a>`
+          : html`<a class="elo-event-link" href=${"https://tcg.ravensburgerplay.com/events/" + ev.event_id} target="_blank" rel="noopener">View on Play Hub →</a>`}
       </p>
     </header>
 
@@ -13389,10 +13616,11 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
           <tbody>
             ${standings.map(s => html`<tr key=${s.player_id}>
               <td>#${s.event_rank}</td>
-              <td class="elo-td-player"><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(s.player_id)}>
+              <td class="elo-td-player"><${EloLink} to=${{tab:"player", playerId:s.player_id}} className="elo-name-btn"
+                onClick=${()=>onPlayerClick && onPlayerClick(s.player_id)}>
                 <${EloPlatformPill} platform=${s.platform}/>
                 <span class="elo-name">${s.display_name}</span>
-              </button></td>
+              </${EloLink}></td>
               <td>${s.wins}-${s.losses}-${s.draws}</td>
               <td>${s.points}</td>
               <td>${s.mw_pct==null ? "—" : s.mw_pct.toFixed(1)+"%"}</td>
@@ -13416,8 +13644,17 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
             if(m.is_bye){
               const p = playerIndex.get(m.player1_id);
               return html`<tr key=${m.match_id}><td>—</td>
-                <td><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p?.display_name || m.player1_id}</button></td>
+                <td><${EloLink} to=${{tab:"player", playerId:m.player1_id}} className="elo-name-btn"
+                  onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p?.display_name || m.player1_id}</${EloLink}></td>
                 <td><span class="elo-result draw">BYE</span></td><td>—</td></tr>`;
+            }
+            if(m.source === "forfeit"){
+              const p = playerIndex.get(m.player1_id);
+              return html`<tr key=${m.match_id}><td>—</td>
+                <td><${EloLink} to=${{tab:"player", playerId:m.player1_id}} className="elo-name-btn"
+                  onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p?.display_name || m.player1_id}</${EloLink}></td>
+                <td><span class="elo-result loss">LOSS</span> <span class="elo-score">forfeit</span></td>
+                <td>—</td></tr>`;
             }
             const p1 = playerIndex.get(m.player1_id);
             const p2 = playerIndex.get(m.player2_id);
@@ -13427,9 +13664,11 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
               `${m.games_won_p1}-${m.games_won_p2}` : "";
             return html`<tr key=${m.match_id}>
               <td>${m.table_number ?? "—"}</td>
-              <td class=${p1Wins?"elo-winner":""}><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p1?.display_name || m.player1_id}</button></td>
+              <td class=${p1Wins?"elo-winner":""}><${EloLink} to=${{tab:"player", playerId:m.player1_id}} className="elo-name-btn"
+                onClick=${()=>onPlayerClick && onPlayerClick(m.player1_id)}>${p1?.display_name || m.player1_id}</${EloLink}></td>
               <td><span class="elo-result ${p1Wins||p2Wins?"win":"draw"}">${p1Wins?"P1 wins":(p2Wins?"P2 wins":"Draw")}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
-              <td class=${p2Wins?"elo-winner":""}><button class="elo-name-btn" onClick=${()=>onPlayerClick && onPlayerClick(m.player2_id)}>${p2?.display_name || m.player2_id}</button></td>
+              <td class=${p2Wins?"elo-winner":""}><${EloLink} to=${{tab:"player", playerId:m.player2_id}} className="elo-name-btn"
+                onClick=${()=>onPlayerClick && onPlayerClick(m.player2_id)}>${p2?.display_name || m.player2_id}</${EloLink}></td>
             </tr>`;
           })}
         </tbody>
@@ -22787,10 +23026,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           title="Copy the URL for this deck">${copied ? "🔗 Copied ✓" : "🔗 Copy link"}</button>`}
         <button onClick=${()=>setMulliganOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
           title="Simulate drawing your opening hand and mulliganing">🎴 Mulligan</button>
-        <button onClick=${()=>setPosterOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
+        <button onClick=${()=>setPosterOpen(true)} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}}
           title="Open a printable image of this deck (Save as PDF / screenshot)">🖼 Export Image</button>
-        ${!readOnly && html`<button onClick=${handleImport} style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
-        <button onClick=${handleExport} style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export Decklist Text</button>
+        ${!readOnly && html`<button onClick=${handleImport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
+        <button onClick=${handleExport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export Decklist Text</button>
         ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
         ${isOwnDeck && onDelete && html`<button onClick=${onDelete}
           class="deck-toolbar-keep"

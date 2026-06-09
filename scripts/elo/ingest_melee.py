@@ -141,21 +141,34 @@ def ingest_one(tid, store=None, location=None, event_date=None, season=None):
                     competitors = m.get("Competitors", [])
 
                     if len(competitors) < 2:
-                        # forfeit/bye placeholder
+                        # Single-competitor row — could be a bye OR a forfeit:
+                        #   ByeReason set  → real algorithm-assigned bye (no ELO, counts as W)
+                        #   LossReason set → forfeit / no-show (no ELO, counts as L)
+                        # We distinguish via the `source` column so the display
+                        # layer can show "BYE" vs "LOSS (forfeit)" correctly.
                         if competitors and competitors[0].get("Team", {}).get("Players"):
                             p = competitors[0]["Team"]["Players"][0]
                             pid = get_or_create_melee_player(
                                 conn, p["Username"], p.get("DisplayName"), event_id
                             )
-                            # treat as bye only if explicit bye reason; otherwise skip from ELO
-                            is_bye = 1 if m.get("ByeReason") else 1  # both byes and forfeits are no-ELO
-                            conn.execute(
-                                """INSERT OR IGNORE INTO matches
-                                   (event_id, round_id, round_number, round_type, table_number,
-                                    player1_id, player2_id, winner_id, games_won_p1, games_won_p2, is_bye, source)
-                                   VALUES (?, ?, ?, 'PLAY_VS_OPPONENT', ?, ?, NULL, ?, NULL, NULL, ?, 'api')""",
-                                (event_id, rid, round_number, table_number, pid, pid, is_bye),
-                            )
+                            is_forfeit = (m.get("LossReason") is not None
+                                          and m.get("ByeReason") is None)
+                            if is_forfeit:
+                                conn.execute(
+                                    """INSERT OR IGNORE INTO matches
+                                       (event_id, round_id, round_number, round_type, table_number,
+                                        player1_id, player2_id, winner_id, games_won_p1, games_won_p2, is_bye, source)
+                                       VALUES (?, ?, ?, 'PLAY_VS_OPPONENT', ?, ?, NULL, NULL, NULL, NULL, 0, 'forfeit')""",
+                                    (event_id, rid, round_number, table_number, pid),
+                                )
+                            else:
+                                conn.execute(
+                                    """INSERT OR IGNORE INTO matches
+                                       (event_id, round_id, round_number, round_type, table_number,
+                                        player1_id, player2_id, winner_id, games_won_p1, games_won_p2, is_bye, source)
+                                       VALUES (?, ?, ?, 'PLAY_VS_OPPONENT', ?, ?, NULL, ?, NULL, NULL, 1, 'api')""",
+                                    (event_id, rid, round_number, table_number, pid, pid),
+                                )
                             total_matches += 1
                         continue
 
@@ -167,11 +180,30 @@ def ingest_one(tid, store=None, location=None, event_date=None, season=None):
                         continue
                     p1_id = get_or_create_melee_player(conn, u1, pl1.get("DisplayName"), event_id)
                     p2_id = get_or_create_melee_player(conn, u2, pl2.get("DisplayName"), event_id)
-                    gw1 = c1.get("GameWins"); gw2 = c2.get("GameWins")
+                    # Game scores: prefer GameWinsAndGameByes (filled in even when
+                    # the loser's GameWins is null because they didn't confirm
+                    # the result), fall back to GameWins.
+                    gw1 = c1.get("GameWinsAndGameByes")
+                    if gw1 is None: gw1 = c1.get("GameWins")
+                    gw2 = c2.get("GameWinsAndGameByes")
+                    if gw2 is None: gw2 = c2.get("GameWins")
+                    # Winner: ResultString is authoritative ("Username won 2-0-0"
+                    # / "Draw 1-1-1" / ""). Falling back to GameWins alone marked
+                    # thousands of decided matches as draws because the loser's
+                    # GameWins came back null when they didn't confirm the result.
+                    rs = (m.get("ResultString") or "").strip()
+                    rs_low = rs.lower()
                     winner_id = None
-                    if gw1 is not None and gw2 is not None:
-                        if gw1 > gw2: winner_id = p1_id
-                        elif gw2 > gw1: winner_id = p2_id
+                    if m.get("HasResult"):
+                        if rs_low.startswith("draw"):
+                            winner_id = None  # explicit draw
+                        elif rs_low.startswith(f"{(u1 or '').lower()} won"):
+                            winner_id = p1_id
+                        elif rs_low.startswith(f"{(u2 or '').lower()} won"):
+                            winner_id = p2_id
+                        elif gw1 is not None and gw2 is not None:
+                            if gw1 > gw2: winner_id = p1_id
+                            elif gw2 > gw1: winner_id = p2_id
                     conn.execute(
                         """INSERT OR IGNORE INTO matches
                            (event_id, round_id, round_number, round_type, table_number,

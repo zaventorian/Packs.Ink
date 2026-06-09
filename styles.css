@@ -245,6 +245,11 @@ html[data-theme="velvet"], html[data-theme="dark"] {
   --heatmap-text-hi: #f0e0a0;
   --heatmap-text-lo: rgba(255,255,255,0.25);
   --heatmap-color: rgba(200,168,70,VAL);
+  /* Tell the browser to render native form controls (dropdowns, scrollbars,
+     date pickers) in dark mode. Without this, an unstyled <select>'s OPTION
+     menu inherits OS default (white background + dark text on Windows/macOS),
+     which is unreadable when the page chrome is dark velvet. */
+  color-scheme: dark;
 }
 
 html[data-theme="black"] {
@@ -280,6 +285,7 @@ html[data-theme="black"] {
   --heatmap-text-hi: #f0e0a0;
   --heatmap-text-lo: rgba(255,255,255,0.3);
   --heatmap-color: rgba(200,168,70,VAL);
+  color-scheme: dark;
 }
 
 html[data-theme="light"] {
@@ -376,7 +382,11 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .nav-tab-icon{display:inline-flex;align-items:center;justify-content:center;
   width:20px;height:20px;line-height:0;}
 .nav-tab-icon svg{display:block;}
-.nav-tab-label{font-size:10px;line-height:1.1;white-space:nowrap;text-transform:uppercase;}
+.nav-tab-label{font-size:10px;line-height:1.1;white-space:nowrap;text-transform:uppercase;
+  /* text-align:center: when the label wraps to two lines on mobile (e.g. Price /
+     Graphing), the wrapped words should stack centered under the icon rather
+     than left-aligned, which looked off-axis next to the centered icon. */
+  text-align:center;}
 /* Help: rendered as a bubble in the right cluster's bubble row alongside
    install + theme-toggle (moved out of the tabs grid 2026-05-26 so it
    doesn't crowd the Screener/Price Graphing/Analytics row on phones and
@@ -455,11 +465,16 @@ input[type="checkbox"]{accent-color:var(--accent);}
      labels (COLLECTION ~55px, ANALYTICS ~50px, SCREENER ~45px) fit one
      line at this width and stay on one line. Tab heights even out via
      align-items:stretch on .tabs-grid. */
-  .nav-tab{min-width:50px;padding:3px 5px 2px;gap:1px;}
+  .nav-tab{min-width:46px;padding:3px 4px 2px;gap:1px;}
   .nav-tab-icon{width:16px;height:16px;}
   .nav-tab-icon svg{width:14px;height:14px;}
+  /* max-width:58px keeps "Price Graphing" wrapping to two lines (the design
+     intent) while letting one-word labels like "Analytics" / "Collection" /
+     "Screener" stay on one line at their natural Cinzel-rendered width.
+     Centered (inherited from base rule above) so the wrapped text aligns
+     under the icon. */
   .nav-tab-label{font-size:8.5px;white-space:normal;line-height:1.05;
-    max-width:64px;word-break:normal;overflow-wrap:break-word;hyphens:none;}
+    max-width:58px;word-break:normal;overflow-wrap:break-word;hyphens:none;}
   .tabs-row{gap:3px;}
   /* Mobile help bubble — slightly tighter SVG inside the 36×36 bubble so
      it visually balances the install + theme glyphs (which read smaller). */
@@ -4847,9 +4862,15 @@ html[data-theme="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .elo-rank-top{color:#e8c547;display:inline-flex;align-items:center;gap:5px;}
 .elo-crown{color:#e8c547;flex-shrink:0;}
 
+/* Anchor-based now (was <button>) — strip the default <a> underline so
+   the leaderboard doesn't look like a list of hyperlinks. Hover still
+   underlines the inner .elo-name as the "this is a link" affordance.
+   Also strip from descendant alias / opp spans so neither line under-
+   lines without a hover. */
 .elo-name-btn{background:transparent;border:none;padding:0;cursor:pointer;
   color:var(--accent);font:inherit;display:inline-flex;align-items:center;gap:8px;
-  text-align:left;}
+  text-align:left;text-decoration:none;}
+.elo-name-btn,.elo-name-btn:visited{text-decoration:none;}
 .elo-name-btn:hover .elo-name{text-decoration:underline;}
 .elo-name{font-weight:600;}
 
@@ -4872,8 +4893,25 @@ html[data-theme="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 @media (max-width:600px){
   .elo-view{padding:14px 10px 40px;}
   .elo-title{font-size:22px;}
+  /* Title + Pin toggle sit in elo-hero-row. On narrow screens the title takes
+     a full line on its own and the pin toggle wraps below it; align both to
+     the left so the wrapped pin doesn't float weirdly to the far right. */
+  .elo-hero-row{gap:8px;justify-content:flex-start;}
+  /* Inner tabs (Leaderboard / Tournaments) need a touch larger tap target. */
+  .elo-innertabs button{padding:10px 14px;font-size:13.5px;}
   .elo-toolbar{flex-direction:column;align-items:stretch;}
-  .elo-toolbar-right{justify-content:space-between;}
+  /* Filter chips row (All / RPH / Melee) — allow wrap if a 4th chip is
+     ever added; gives the pill icons breathing room. */
+  .elo-chips{flex-wrap:wrap;}
+  /* Min-matches + search row. Previously elo-search had min-width:180px which
+     pushed the row past most phones' viewport on landscape-flip + Safari's
+     navigation-bar shrinkage. Let it flex-grow to fill whatever's left. */
+  .elo-toolbar-right{justify-content:space-between;flex-wrap:wrap;gap:8px;}
+  .elo-search{flex:1 1 140px;min-width:0;}
+  /* Sort arrows can vanish under the column cap on phones — bump arrow
+     emphasis so the user knows a column IS sorted while horizontally
+     scrolling. */
+  .elo-th-arrow{font-size:10px;}
 }
 
 /* ----- condense table: shrink-to-fit instead of stretching to 100% ----- */
@@ -4935,7 +4973,17 @@ html[data-theme="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .elo-tourney-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:12px;}
 .elo-stat-mini{background:var(--bg);border:1px solid var(--btn-border);
   border-radius:8px;padding:8px 10px;text-align:center;}
-.elo-stat-mini .elo-stat-val{font-size:15px;display:inline-flex;align-items:baseline;gap:6px;justify-content:center;}
+/* Was display:inline-flex which sized to content — on a narrow card (2-col
+   mobile grid) the rating + delta would sit on one line that overflowed the
+   rounded box boundary. The delta ("+17") was visually leaking outside the
+   border. Switch to block-level flex so the row is bounded by the parent's
+   width, and flex-wrap lets the delta drop to a new line on the tightest
+   widths instead of clipping. Suppress the .elo-delta's own margin-left
+   inside here since the flex `gap:6px` handles spacing — otherwise we got
+   14px between rating and delta (gap + margin). */
+.elo-stat-mini .elo-stat-val{font-size:15px;display:flex;align-items:baseline;
+  gap:6px;justify-content:center;flex-wrap:wrap;}
+.elo-stat-mini .elo-stat-val .elo-delta{margin-left:0;}
 
 .elo-rounds-table{width:100%;border-collapse:collapse;font-size:12.5px;
   font-variant-numeric:tabular-nums;}
@@ -4990,8 +5038,13 @@ html[data-theme="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
   gap:0;line-height:1.15;}
 .elo-name-stack .elo-name{display:block;}
 .elo-alias{color:var(--text-muted);font-weight:400;font-size:11px;
-  letter-spacing:0.1px;margin:1px 0 0;display:block;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+  letter-spacing:0.1px;margin:1px 0 0;display:block;max-width:100%;
+  /* Was: nowrap + ellipsis. On mobile that hid the melee handle (e.g.
+     "LoL_METALLICFLARE" got clipped to "LoL_METAL…") even though it was
+     the most useful disambiguating info. Allow it to wrap to a 2nd line
+     so the whole handle is visible; word-break ensures very long handles
+     without spaces still wrap cleanly. */
+  white-space:normal;word-break:break-word;line-height:1.2;}
 .elo-name-btn:hover .elo-alias{color:var(--text);}
 
 /* ----- MOBILE leaderboard table -----
@@ -5068,3 +5121,68 @@ html[data-theme="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .elo-result.bye{background:rgba(120,120,120,0.18);color:var(--text-muted);}
 .elo-opp-bye{font-style:italic;}
 .elo-rounds-bye-dash{color:var(--text-muted);}
+
+/* External link out to the original tournament page on the event detail header. */
+.elo-event-link{margin-left:auto;font-size:12px;color:var(--accent);
+  text-decoration:none;font-weight:600;padding:3px 10px;border-radius:12px;
+  background:var(--btn-bg);border:1px solid var(--btn-border);
+  transition:border-color 120ms ease, color 120ms ease;}
+.elo-event-link:hover{border-color:var(--accent);}
+
+/* ----- Head-to-Head section on player profile -----
+   Picker lets the viewer drill into "every match I've played vs <opponent>"
+   with a summary card + full chronological match list. */
+.elo-h2h{margin:18px 0 22px;padding:14px 16px;border:1px solid var(--btn-border);
+  border-radius:12px;background:var(--card-bg);}
+.elo-h2h-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;}
+.elo-h2h-head h3{margin:0;font-size:15px;letter-spacing:0.4px;text-transform:uppercase;
+  color:var(--text-muted);font-weight:600;}
+
+/* Searchable picker: text input + dropdown listbox.
+   - Replaces the prior native <select> which (a) rendered an unstyled white
+     option panel in dark mode and (b) didn't support incremental typing.
+   - Listbox is absolute-positioned beneath the input, capped at ~340px so
+     long opponent rosters scroll instead of pushing layout. */
+.elo-h2h-picker{position:relative;flex:1;min-width:220px;max-width:480px;}
+.elo-h2h-search{width:100%;padding:7px 12px;border-radius:8px;
+  border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--text);
+  font-size:13px;font-family:inherit;box-sizing:border-box;}
+.elo-h2h-search:focus{outline:none;border-color:var(--accent);}
+.elo-h2h-list{position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:30;
+  margin:0;padding:4px 0;list-style:none;
+  background:var(--bg-modal,var(--card-bg));border:1px solid var(--btn-border);
+  border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.35);
+  max-height:340px;overflow-y:auto;}
+.elo-h2h-opt{display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:7px 12px;cursor:pointer;font-size:13px;color:var(--text);
+  transition:background 80ms ease;}
+.elo-h2h-opt:hover,.elo-h2h-opt.active{background:var(--btn-active-bg,var(--accent-glow));}
+.elo-h2h-opt-name{display:inline-flex;align-items:center;gap:6px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;}
+.elo-h2h-opt-stats{color:var(--text-muted);font-size:11.5px;flex:0 0 auto;
+  font-variant-numeric:tabular-nums;}
+.elo-h2h-opt-more{padding:7px 12px;color:var(--text-muted);font-size:12px;
+  font-style:italic;text-align:center;}
+.elo-h2h-clear{padding:5px 12px;border-radius:8px;border:1px solid var(--btn-border);
+  background:var(--btn-bg);color:var(--text-muted);font-size:12px;cursor:pointer;
+  transition:color 120ms ease, border-color 120ms ease;}
+.elo-h2h-clear:hover{color:var(--text);border-color:var(--accent);}
+.elo-h2h-card{margin-top:6px;}
+.elo-h2h-card-head{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-size:15px;}
+.elo-h2h-vs{color:var(--text-muted);font-weight:600;text-transform:uppercase;
+  letter-spacing:0.5px;font-size:11px;}
+.elo-h2h-name{display:inline-flex;align-items:center;gap:6px;text-decoration:none;
+  color:var(--text);font-weight:600;font-size:16px;
+  padding:3px 8px;border-radius:8px;
+  transition:background 120ms ease;}
+.elo-h2h-name:hover{background:var(--btn-bg);color:var(--accent);}
+.elo-h2h-table .elo-h2h-date{white-space:nowrap;color:var(--text-muted);font-size:12px;width:90px;}
+.elo-h2h-table .elo-h2h-event{font-size:12.5px;}
+.elo-h2h-table .elo-h2h-event .elo-name-btn{font-size:12.5px;}
+@media (max-width:600px){
+  .elo-h2h{padding:12px 10px;}
+  .elo-h2h-select{font-size:12px;min-width:0;}
+  /* The full event name + date in the same row gets crowded on phones;
+     stack them by hiding the date column (kept in the picker summary). */
+  .elo-h2h-table .elo-h2h-date{display:none;}
+}

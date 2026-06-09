@@ -15,8 +15,18 @@ from pathlib import Path
 DB_PATH = Path(__file__).parent / "lorcana_elo.db"
 
 
+# Scaling factor (D): controls how rating gaps translate to expected win rate.
+# Chess-standard 400 gives a 200-point gap → 76% expected. We use 1135 to
+# match Elorcana and mtgeloproject — a 200-point gap → 60% expected. The
+# flatter curve is better-suited to high-variance card games where deck draw
+# adds noise the chess-derived 400 doesn't account for. Same K-factor (32),
+# same starting rating (1500) — only the gap→probability mapping changes,
+# which spreads the leaderboard across a wider numeric range without
+# changing relative skill order.
+D = 1135.0
+
 def expected(my_rating, opp_rating):
-    return 1.0 / (1.0 + 10 ** ((opp_rating - my_rating) / 400.0))
+    return 1.0 / (1.0 + 10 ** ((opp_rating - my_rating) / D))
 
 
 def build_resolver(conn):
@@ -40,7 +50,7 @@ def compute(k_factor=32.0, start=1500.0):
     matches = conn.execute(
         """
         SELECT m.match_id, m.event_id, m.round_number, m.table_number,
-               m.player1_id, m.player2_id, m.winner_id, m.is_bye,
+               m.player1_id, m.player2_id, m.winner_id, m.is_bye, m.source,
                e.event_date
         FROM matches m
         JOIN events  e ON e.event_id = m.event_id
@@ -61,6 +71,16 @@ def compute(k_factor=32.0, start=1500.0):
 
     for m in matches:
         if m["is_bye"]:
+            continue
+        # Forfeit rows: single-competitor placeholder where the player no-
+        # showed. Counts as a loss in the player's record (so MW% and the
+        # standings stay honest) but has no opponent, so we can't compute a
+        # rating delta. Emit a flat-rating ratings row so the W/L tally
+        # includes it.
+        if m["source"] == "forfeit" and m["player1_id"] is not None and m["player2_id"] is None:
+            p1 = resolver.get(m["player1_id"], m["player1_id"])
+            r1 = ratings.get(p1, start)
+            history_rows.append((p1, m["match_id"], r1, r1, None, None, 0.0, 0.0))
             continue
         raw_p1, raw_p2, raw_w = m["player1_id"], m["player2_id"], m["winner_id"]
         if raw_p1 is None or raw_p2 is None:

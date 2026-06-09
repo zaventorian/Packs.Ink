@@ -113,9 +113,11 @@ def export_event_standings(conn, sb: Supabase, dry: bool) -> int:
     backfill_official_standings.py. Idempotent on (event_id, player_id)."""
     rows = fetch_all(conn, """
         SELECT event_id, player_id, place, matches_won, matches_lost, matches_drawn,
-               match_points, mw_pct, omw_pct, gw_pct
+               match_points, mw_pct, omw_pct, gw_pct, locked
         FROM event_standings_official
     """)
+    for r in rows:
+        r["locked"] = to_bool(r["locked"])
     if dry:
         print(f"  standings: {len(rows)} rows; first: {rows[0] if rows else None}")
         return len(rows)

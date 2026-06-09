@@ -24,10 +24,15 @@ from __future__ import annotations
 import argparse, json, sqlite3, sys, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from urllib.parse import urlencode
+from urllib.request import Request
+
+import ingest_melee  # opener + parse_rounds helper
 
 DB = Path(__file__).parent / "lorcana_elo.db"
 MELEE_OFFSET = 100_000_000
 RPH_API = "https://api.cloudflare.ravensburgerplay.com/hydraproxy/api/v2/player/events/{eid}/tv/standings/"
+MELEE_STANDINGS_URL = "https://melee.gg/Standing/GetRoundStandings"
 HDR = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 
@@ -83,11 +88,90 @@ def resolve_player_id(conn: sqlite3.Connection, platform: str, display_name: str
 
 
 def fetch_rph_event(event_id: int) -> list[dict] | None:
-    """Returns list of standings dicts, or None on failure."""
+    """Returns list of normalized standings dicts, or None on failure.
+    Each dict: name, rank, mw, ml, md, pts, mw_pct, omw_pct, gw_pct."""
     try:
         d = http_json(RPH_API.format(eid=event_id))
-        return d.get("results") or []
-    except Exception as e:
+        out = []
+        for s in (d.get("results") or []):
+            out.append({
+                "name":   s.get("tv_display_name"),
+                "rank":   s.get("rank"),
+                "mw":     s.get("matches_won"),
+                "ml":     s.get("matches_lost"),
+                "md":     s.get("matches_drawn"),
+                "pts":    s.get("total_match_points"),
+                "mw_pct": round(100 * (s.get("match_win_percentage") or 0), 2),
+                "omw_pct":round(100 * (s.get("opponent_match_win_percentage") or 0), 2),
+                "gw_pct": round(100 * (s.get("game_win_percentage") or 0), 2),
+            })
+        return out
+    except Exception:
+        return None
+
+
+def fetch_melee_event(event_id: int) -> list[dict] | None:
+    """Melee equivalent. Returns normalized standings using the final-round
+    standings from /Standing/GetRoundStandings (the bracket-cut-aware ranking
+    melee renders on the Standings tab)."""
+    tid = event_id - MELEE_OFFSET
+    try:
+        opener = ingest_melee.make_opener()
+        html = ingest_melee.fetch_html(opener, tid)
+        rounds = ingest_melee.parse_rounds(html)
+        if not rounds:
+            return []
+        # Iterate in REVERSE and use the most-recent round that has standings.
+        # If a tournament's bracket round (e.g. SF) was started but never
+        # finished, that round returns 0 standings but the prior round (QF)
+        # still has the complete current rankings.
+        opener.addheaders = [
+            ("User-Agent", ingest_melee.UA),
+            ("Accept", "application/json, text/javascript, */*; q=0.01"),
+            ("X-Requested-With", "XMLHttpRequest"),
+            ("Referer", f"https://melee.gg/Tournament/View/{tid}"),
+            ("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8"),
+        ]
+        d = None
+        for rid, _ in reversed(rounds):
+            form = {
+                "draw": 1, "start": 0, "length": 500,
+                "search[value]": "", "search[regex]": "false",
+                "order[0][column]": 0, "order[0][dir]": "asc",
+                "columns[0][data]": "Rank", "columns[0][name]": "",
+                "columns[0][searchable]": "true", "columns[0][orderable]": "true",
+                "columns[0][search][value]": "", "columns[0][search][regex]": "false",
+                "roundId": rid,
+            }
+            req = Request(MELEE_STANDINGS_URL, data=urlencode(form).encode(), method="POST")
+            with opener.open(req, timeout=30) as r:
+                d_try = json.load(r)
+            if d_try.get("data"):
+                d = d_try
+                break
+        if d is None:
+            return []
+        out = []
+        for s in d.get("data") or []:
+            # Username is melee's stable identity; that's what we keyed players on.
+            team_players = s.get("Team", {}).get("Players") or []
+            if not team_players: continue
+            uname = team_players[0].get("Username")
+            if not uname: continue
+            out.append({
+                "name":    uname,
+                "rank":    s.get("Rank"),
+                "mw":      s.get("MatchWins"),
+                "ml":      s.get("MatchLosses"),
+                "md":      s.get("MatchDraws"),
+                "pts":     s.get("Points"),
+                "mw_pct":  None,  # melee doesn't expose match-win % directly,
+                                  # leave null; the view falls back to compute.
+                "omw_pct": round(100 * (s.get("OpponentMatchWinPercentage") or 0), 2),
+                "gw_pct":  round(100 * (s.get("TeamGameWinPercentage") or 0), 2),
+            })
+        return out
+    except Exception:
         return None
 
 
@@ -103,8 +187,7 @@ def main() -> None:
     conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row
     ensure_local_table(conn)
 
-    q = """SELECT e.event_id, e.platform, e.season
-           FROM events e WHERE e.is_ignored=0 AND e.platform='rph'"""
+    q = "SELECT e.event_id, e.platform, e.season FROM events e WHERE e.is_ignored=0"
     params: list = []
     if args.season:
         q += " AND e.season=?"; params.append(args.season)
@@ -112,44 +195,50 @@ def main() -> None:
         q += " AND e.event_id=?"; params.append(args.event)
     if not args.force:
         q += " AND NOT EXISTS (SELECT 1 FROM event_standings_official o WHERE o.event_id=e.event_id)"
+    # Locked events are ALWAYS skipped — even with --force. These hold hand-
+    # corrected placements where the platform API returned garbage we don't
+    # want to re-clobber (e.g. e276338's bogus Whispers SC Final). To re-fetch
+    # a locked event, manually clear locked=0 in event_standings_official first.
+    q += " AND NOT EXISTS (SELECT 1 FROM event_standings_official o WHERE o.event_id=e.event_id AND o.locked=1)"
     rows = conn.execute(q, params).fetchall()
-    print(f"backfilling {len(rows)} RPH events with {args.workers} workers...")
+    print(f"backfilling {len(rows)} events with {args.workers} workers (RPH + melee)...")
 
-    def work(eid: int):
-        data = fetch_rph_event(eid)
-        return eid, data
+    def work(row):
+        eid, plat = row["event_id"], row["platform"]
+        if plat == "rph":
+            return eid, plat, fetch_rph_event(eid)
+        if plat == "melee":
+            return eid, plat, fetch_melee_event(eid)
+        return eid, plat, None
 
     inserted = unmatched = err = 0
     samples_unmatched = []
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(work, r["event_id"]): r["event_id"] for r in rows}
+        futs = {ex.submit(work, r): r["event_id"] for r in rows}
         done = 0
         for f in as_completed(futs):
-            eid, data = f.result()
+            eid, plat, data = f.result()
             done += 1
             if data is None:
                 err += 1; continue
             if not data:
-                continue  # event hasn't run yet; standings empty
+                continue  # event hasn't run yet
             for s in data:
-                name = s.get("tv_display_name")
+                name = s["name"]
                 if not name: continue
-                pid = resolve_player_id(conn, "rph", name)
+                pid = resolve_player_id(conn, plat, name)
                 if pid is None:
                     unmatched += 1
-                    if len(samples_unmatched) < 6:
-                        samples_unmatched.append(f"e{eid}: {name}")
+                    if len(samples_unmatched) < 8:
+                        samples_unmatched.append(f"e{eid} [{plat}]: {name}")
                     continue
                 conn.execute(
                     """INSERT OR REPLACE INTO event_standings_official
                        (event_id, player_id, place, matches_won, matches_lost, matches_drawn,
                         match_points, mw_pct, omw_pct, gw_pct, fetched_at)
                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
-                    (eid, pid, s.get("rank"), s.get("matches_won"), s.get("matches_lost"),
-                     s.get("matches_drawn"), s.get("total_match_points"),
-                     round(100 * (s.get("match_win_percentage") or 0), 2),
-                     round(100 * (s.get("opponent_match_win_percentage") or 0), 2),
-                     round(100 * (s.get("game_win_percentage") or 0), 2)),
+                    (eid, pid, s["rank"], s["mw"], s["ml"], s["md"], s["pts"],
+                     s["mw_pct"], s["omw_pct"], s["gw_pct"]),
                 )
                 inserted += 1
             if done % 30 == 0:
