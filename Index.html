@@ -32,7 +32,7 @@
 <script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
   crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=154">
+<link rel="stylesheet" href="styles.css?v=155">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -78,7 +78,7 @@
   };
 </script>
 <script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-<script src="logo.js?v=154"></script>
+<script src="logo.js?v=155"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -154,7 +154,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v43";
+const CACHE_KEY = "packsink:catalog:v44";
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -990,16 +990,29 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
   const KEYWORD_NAMES = ["Rush","Reckless","Evasive","Bodyguard","Challenger",
     "Support","Ward","Singer","Resist","Voiceless","Shift","Probe","Lurk",
     "Alert","Boost","Vanish","Puppy Shift","Sing Together","Universal Shift"];
+  // Longest-first so "Puppy Shift" / "Universal Shift" / "Sing Together" beat
+  // their single-word containees when both could match.
+  const KEYWORD_NAMES_SORTED = [...KEYWORD_NAMES].sort((a,b) => b.length - a.length);
   const keywordsByCardId = {};
   for(const c of cardsRows){
     const t = (c.text || "");
     if(!t) continue;
-    const found = [];
-    for(const kw of KEYWORD_NAMES){
-      const re = new RegExp("\\b" + kw + "\\b");
-      if(re.test(t)) found.push(kw);
+    const found = new Set();
+    // A card DECLARES a keyword iff an ability line STARTS with the keyword
+    // name, optionally followed by a numeric value (Shift 4, Resist +1,
+    // Challenger +2, Singer 5) or a reminder-text paren. Pure references like
+    // "Put chosen character with Bodyguard..." or conditional grants like
+    // "this character gains Bodyguard" don't count.
+    for(const line of t.split(/\n+/)){
+      const trimmed = line.trim();
+      if(!trimmed) continue;
+      for(const kw of KEYWORD_NAMES_SORTED){
+        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const re = new RegExp("^" + escaped + "(?:$|\\s+[+\\-]?\\d|\\s*\\()", "i");
+        if(re.test(trimmed)){ found.add(kw); break; }
+      }
     }
-    if(found.length) keywordsByCardId[c.id] = found;
+    if(found.size) keywordsByCardId[c.id] = Array.from(found);
   }
 
   const rows = [];
@@ -3001,15 +3014,13 @@ const matchesCardFilter = (row, f, parsed) => {
       ? parsed.filters.classifications
       : (parsed.filters.classification ? [parsed.filters.classification] : []);
     if(_wantCls.length){
-      // Soft match per term: declared classification match OR Product Name
-      // substring match (so "elsa spirit" still works for Spirit-of-Winter
-      // even though "spirit" isn't a Spirit-class subtype on the card).
+      // STRICT: declared classification only. Previously did a soft match
+      // against the product name too (for "elsa spirit" → Elsa-Spirit-of-Winter),
+      // but that made "characteristic: princess" match any card with "princess"
+      // in its name even when the card isn't classified as Princess. Users who
+      // want a name/text/anywhere match should use the `contains:` chip.
       const cls = (row.classifications || []).map(c => (c||"").toLowerCase());
-      const productName = (row["Product Name"] || "").toLowerCase();
-      const matchOne = (want) => {
-        const w = String(want).toLowerCase();
-        return cls.includes(w) || productName.includes(w);
-      };
+      const matchOne = (want) => cls.includes(String(want).toLowerCase());
       const all = (parsed.matchMode || "all") === "all";
       const ok = all ? _wantCls.every(matchOne) : _wantCls.some(matchOne);
       if(!ok) return false;
@@ -16512,19 +16523,32 @@ const captureMoverTileBlob = async (tileEl) => {
 const copyMoverTileImage = (tileEl) => {
   flashToast("Copying image…", 8000);
   const blobPromise = captureMoverTileBlob(tileEl);
+  blobPromise.catch((err) => { console.error("[mover-copy] capture failed:", err); });
+  const downloadBlob = (blob) => {
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = u; a.download = "packsink-card.png";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+  };
   if(navigator.clipboard && window.ClipboardItem){
     navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
       .then(() => flashToast("Tile image copied to clipboard"))
-      .catch(() => flashToast("Couldn't copy image — try again"));
+      .catch((err) => {
+        console.error("[mover-copy] clipboard.write failed:", err);
+        blobPromise.then((blob) => {
+          downloadBlob(blob);
+          flashToast("Couldn't reach clipboard — downloaded instead");
+        }).catch(() => flashToast("Couldn't copy image — try again"));
+      });
   } else {
     blobPromise.then((blob) => {
-      const u = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = u; a.download = "packsink-card.png";
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(u), 2000);
+      downloadBlob(blob);
       flashToast("Image saved");
-    }).catch(() => flashToast("Couldn't copy image — try again"));
+    }).catch((err) => {
+      console.error("[mover-copy] save failed:", err);
+      flashToast("Couldn't copy image — try again");
+    });
   }
 };
 
