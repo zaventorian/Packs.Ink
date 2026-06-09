@@ -245,11 +245,11 @@ html[data-theme="velvet"], html[data-theme="dark"] {
   --heatmap-text-hi: #f0e0a0;
   --heatmap-text-lo: rgba(255,255,255,0.25);
   --heatmap-color: rgba(200,168,70,VAL);
-  /* Tell the browser to render native form controls (dropdowns, scrollbars,
-     date pickers) in dark mode. Without this, an unstyled <select>'s OPTION
-     menu inherits OS default (white background + dark text on Windows/macOS),
-     which is unreadable when the page chrome is dark velvet. */
-  color-scheme: dark;
+  /* Note: color-scheme:dark was previously set here to fix unreadable
+     <select> dropdowns. Pulled off the root because Samsung Internet
+     applied a tan/cream UA tint to <button> backgrounds (incl. the
+     profile-btn / avatar tile) when color-scheme was at the root level.
+     Form-control fix moved to a dedicated rule below. */
 }
 
 html[data-theme="black"] {
@@ -285,7 +285,6 @@ html[data-theme="black"] {
   --heatmap-text-hi: #f0e0a0;
   --heatmap-text-lo: rgba(255,255,255,0.3);
   --heatmap-color: rgba(200,168,70,VAL);
-  color-scheme: dark;
 }
 
 html[data-theme="light"] {
@@ -323,6 +322,19 @@ html[data-theme="light"] {
   --heatmap-color: rgba(138,109,27,VAL);
 }
 *,*::before,*::after{box-sizing:border-box;}
+
+/* Native form controls (select option panels, scrollbars, focus rings) in
+   dark themes. Was previously applied as `color-scheme: dark` on root, but
+   Samsung Internet (and possibly other Chromium forks) used that signal to
+   apply a UA-default tan tint to <button> backgrounds — visible on the
+   profile-btn / avatar tile on mobile. Scoping to the form controls only
+   keeps dropdown options readable in dark mode without touching buttons. */
+html[data-theme="velvet"] :where(select, input, textarea, option, datalist),
+html[data-theme="dark"]   :where(select, input, textarea, option, datalist),
+html[data-theme="black"]  :where(select, input, textarea, option, datalist){
+  color-scheme: dark;
+}
+
 /* Body padding uses max(designed, safe-area-inset) so iOS notched devices
    (iPhone 14 Pro+, Dynamic Island) pad content away from the Island,
    home indicator, and landscape rounded corners. env() resolves to 0 on
@@ -468,13 +480,13 @@ input[type="checkbox"]{accent-color:var(--accent);}
   .nav-tab{min-width:46px;padding:3px 4px 2px;gap:1px;}
   .nav-tab-icon{width:16px;height:16px;}
   .nav-tab-icon svg{width:14px;height:14px;}
-  /* max-width:58px keeps "Price Graphing" wrapping to two lines (the design
-     intent) while letting one-word labels like "Analytics" / "Collection" /
-     "Screener" stay on one line at their natural Cinzel-rendered width.
-     Centered (inherited from base rule above) so the wrapped text aligns
-     under the icon. */
+  /* max-width:66px is wide enough that single-word 10-char labels like
+     "COLLECTION" stay on one line in Cinzel 8.5px (was clipping the final
+     "N" to a 2nd line at 58px), while 14-char "PRICE GRAPHING" still
+     wraps to two lines (it needs ~76px on one line). Centered (inherited
+     from base rule above) so the wrapped text aligns under the icon. */
   .nav-tab-label{font-size:8.5px;white-space:normal;line-height:1.05;
-    max-width:58px;word-break:normal;overflow-wrap:break-word;hyphens:none;}
+    max-width:66px;word-break:normal;overflow-wrap:break-word;hyphens:none;}
   .tabs-row{gap:3px;}
   /* Mobile help bubble — slightly tighter SVG inside the 36×36 bubble so
      it visually balances the install + theme glyphs (which read smaller). */

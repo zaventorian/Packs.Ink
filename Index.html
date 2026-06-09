@@ -13080,12 +13080,18 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   const [h2hQuery, setH2hQuery] = useState("");
   const [h2hListOpen, setH2hListOpen] = useState(false);
   const h2hPickerRef = useRef(null);
+  // Map: opponent_id -> opponent's CURRENT ELO. Fetched once when rounds load.
+  // Used by the H2H stats card to show "their rating now" (the original
+  // implementation showed `opponent_rating` from the rounds view, which is
+  // their rating BEFORE one specific match — stale and misleading).
+  const [opponentCurrentRatings, setOpponentCurrentRatings] = useState(null);
 
   useEffect(() => {
     if(playerId == null) return;
     setProfile(null); setEvents(null); setRounds(null); setEventRanks(null);
     setCanonicalId(null); setError(null);
     setH2hOpponentId(null); setH2hQuery(""); setH2hListOpen(false);  // clear opponent filter when switching profiles
+    setOpponentCurrentRatings(null);
     (async () => {
       try {
         // Header card stats — leaderboard view already has rank + current + peak + record + gw%
@@ -13149,6 +13155,24 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         const rmap = {};
         for(const r of (ranks || [])) rmap[r.event_id] = r.event_rank;
         setEventRanks(rmap);
+
+        // Opponent CURRENT ratings for the H2H card. The rounds view's
+        // `opponent_rating` is their rating BEFORE one specific match (stale
+        // by the time you're looking at history). Pull each distinct
+        // opponent's current_rating from the leaderboard view so the H2H
+        // card can show "they're rated X right now". Opponents not in the
+        // leaderboard view (e.g. unrated one-event players) map to null.
+        const oppIds = [...new Set((rd || []).map(r => r.opponent_id).filter(x => x != null))];
+        if(oppIds.length){
+          const {data: ratingRows} = await sbClient.from("elo_leaderboard_v")
+            .select("player_id,current_rating")
+            .in("player_id", oppIds);
+          const oppRatingMap = new Map();
+          for(const o of (ratingRows || [])) oppRatingMap.set(o.player_id, o.current_rating);
+          setOpponentCurrentRatings(oppRatingMap);
+        } else {
+          setOpponentCurrentRatings(new Map());
+        }
       } catch(e){
         console.error("[elo] player profile fetch failed", e);
         setError(e.message || String(e));
@@ -13179,7 +13203,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       if(!o){
         o = {opponent_id:r.opponent_id, name:r.opponent_name, platform:r.opponent_platform,
              matches:0, wins:0, losses:0, draws:0, totalDelta:0,
-             lastRating:null, firstDate:r.event_date, lastDate:r.event_date};
+             firstDate:r.event_date, lastDate:r.event_date};
         m.set(r.opponent_id, o);
       }
       o.matches++;
@@ -13187,7 +13211,6 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       else if(r.score === 0.0) o.losses++;
       else o.draws++;
       o.totalDelta += (r.elo_delta || 0);
-      if(r.opponent_rating != null) o.lastRating = r.opponent_rating;
       // rounds come back ordered date-desc — so firstDate = LAST row we see,
       // lastDate = FIRST row we see. Capture both.
       if(r.event_date && (!o.firstDate || r.event_date < o.firstDate)) o.firstDate = r.event_date;
@@ -13320,7 +13343,10 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
           <div class="elo-stat-mini"><div class="elo-stat-lbl">Matches</div><div class="elo-stat-val">${h2hSummary.matches}</div></div>
           <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${h2hSummary.wins}-${h2hSummary.losses}-${h2hSummary.draws}</div></div>
           <div class="elo-stat-mini"><div class="elo-stat-lbl">Net ELO</div><div class="elo-stat-val"><span class=${"elo-delta "+(h2hSummary.totalDelta>=0?"up":"down")}>${h2hSummary.totalDelta>=0?"+":""}${h2hSummary.totalDelta.toFixed(1)}</span></div></div>
-          <div class="elo-stat-mini"><div class="elo-stat-lbl">Last ELO</div><div class="elo-stat-val">${h2hSummary.lastRating != null ? Math.round(h2hSummary.lastRating) : "—"}</div></div>
+          <div class="elo-stat-mini" title="The opponent's current rating on the leaderboard."><div class="elo-stat-lbl">Their ELO</div><div class="elo-stat-val">${(() => {
+            const cur = opponentCurrentRatings && opponentCurrentRatings.get(h2hSummary.opponent_id);
+            return cur != null ? Math.round(cur) : "—";
+          })()}</div></div>
           <div class="elo-stat-mini"><div class="elo-stat-lbl">First met</div><div class="elo-stat-val">${h2hSummary.firstDate || "—"}</div></div>
           <div class="elo-stat-mini"><div class="elo-stat-lbl">Last met</div><div class="elo-stat-val">${h2hSummary.lastDate || "—"}</div></div>
         </div>
