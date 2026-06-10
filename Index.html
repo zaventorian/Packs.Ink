@@ -13235,9 +13235,18 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   // implementation showed `opponent_rating` from the rounds view, which is
   // their rating BEFORE one specific match — stale and misleading).
   const [opponentCurrentRatings, setOpponentCurrentRatings] = useState(null);
+  // false = still fetching; true = fetch settled. Distinguishes "loading" from
+  // "fetched, no such player" so a bad/orphan id shows "not found" instead of a
+  // permanent spinner (profile stays null in both cases).
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if(playerId == null) return;
+    // Guard against a stale response (fast click-through between players)
+    // overwriting the current profile — this effect fires several sequential
+    // awaits keyed on playerId.
+    let cancelled = false;
+    setLoaded(false);
     setProfile(null); setEvents(null); setRounds(null); setEventRanks(null);
     setCanonicalId(null); setError(null);
     setH2hOpponentId(null); setH2hQuery(""); setH2hListOpen(false);  // clear opponent filter when switching profiles
@@ -13269,8 +13278,10 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
           canon = lb[0].player_id;
           resolvedProfile = lb[0];
         }
+        if(cancelled) return;
         setCanonicalId(canon);
         setProfile(resolvedProfile);
+        setLoaded(true);
 
         const {data: ev, error: e2} = await sbClient.from("elo_player_events_v")
           .select("event_id,event_name,store,location,event_date,season,event_platform,wins,losses,draws,mw_pct,start_rating,end_rating,peak_rating_this_event,games_won,total_games,first_rating_id")
@@ -13282,6 +13293,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
           .order("event_date", {ascending: false, nullsFirst: false})
           .order("first_rating_id", {ascending: false});
         if(e2) throw e2;
+        if(cancelled) return;
         setEvents(ev || []);
 
         // Order chronologically by event_date + round_number + table_number,
@@ -13296,6 +13308,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
           .order("table_number", {ascending: true, nullsFirst: false})
           .order("rating_id", {ascending: true});
         if(e3) throw e3;
+        if(cancelled) return;
         setRounds(rd || []);
 
         // Per-event final place. event_rank is keyed on (event_id, player_id) — one fetch covers them all.
@@ -13304,6 +13317,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
           .eq("player_id", canon);
         const rmap = {};
         for(const r of (ranks || [])) rmap[r.event_id] = r.event_rank;
+        if(cancelled) return;
         setEventRanks(rmap);
 
         // Opponent CURRENT ratings for the H2H card. The rounds view's
@@ -13319,15 +13333,19 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
             .in("player_id", oppIds);
           const oppRatingMap = new Map();
           for(const o of (ratingRows || [])) oppRatingMap.set(o.player_id, o.current_rating);
+          if(cancelled) return;
           setOpponentCurrentRatings(oppRatingMap);
         } else {
+          if(cancelled) return;
           setOpponentCurrentRatings(new Map());
         }
       } catch(e){
+        if(cancelled) return;
         console.error("[elo] player profile fetch failed", e);
         setError(e.message || String(e));
       }
     })();
+    return () => { cancelled = true; };
   }, [playerId]);
 
   // Group rounds by event for the per-tournament breakdown.
@@ -13366,7 +13384,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       if(r.event_date && (!o.firstDate || r.event_date < o.firstDate)) o.firstDate = r.event_date;
       if(r.event_date && (!o.lastDate  || r.event_date > o.lastDate )) o.lastDate  = r.event_date;
     }
-    return Array.from(m.values()).sort((a,b) => b.matches - a.matches || a.name.localeCompare(b.name));
+    return Array.from(m.values()).sort((a,b) => b.matches - a.matches || (a.name||"").localeCompare(b.name||""));
   }, [rounds]);
 
   const h2hMatches = useMemo(() => {
@@ -13421,6 +13439,10 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   if(error) return html`<div class="elo-placeholder">
     <button class="elo-back" onClick=${onBack}>← Back to leaderboard</button>
     <h3>Couldn't load player</h3><p>${error}</p>
+  </div>`;
+  if(!profile && loaded) return html`<div class="elo-placeholder">
+    <button class="elo-back" onClick=${onBack}>← Back to leaderboard</button>
+    <h3>Player not found</h3><p>No ranked player matches this link.</p>
   </div>`;
   if(!profile) return html`<div class="elo-loading">Loading player…</div>`;
 
@@ -13708,20 +13730,24 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
 
   useEffect(() => {
     if(eventId == null) return;
+    let cancelled = false;  // drop stale responses when switching events fast
     setEv(null); setStandings(null); setMatches(null); setActiveRound(null);
     (async () => {
       try {
         const {data: e} = await sbClient.from("elo_events").select("*").eq("event_id", eventId).limit(1);
+        if(cancelled) return;
         setEv(e && e[0] ? e[0] : null);
 
         const {data: st} = await sbClient.from("elo_event_standings_v")
           .select("player_id,display_name,platform,wins,losses,draws,points,gw_pct,mw_pct,end_rating,event_rank")
           .eq("event_id", eventId).order("event_rank", {ascending: true});
+        if(cancelled) return;
         setStandings(st || []);
 
         const {data: ms} = await sbClient.from("elo_matches")
           .select("match_id,round_number,table_number,player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye,source")
           .eq("event_id", eventId).order("round_number").order("table_number");
+        if(cancelled) return;
         setMatches(ms || []);
         if(ms && ms.length){
           const rounds = [...new Set(ms.map(m => m.round_number))].sort((a,b)=>a-b);
@@ -13737,11 +13763,13 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
             const {data: ps} = await sbClient.from("elo_players")
               .select("player_id,display_name,platform")
               .in("player_id", allPids);
+            if(cancelled) return;
             setMatchPlayers(ps || []);
           }
         }
-      } catch(e){ console.error("[elo] event fetch failed", e); }
+      } catch(e){ if(!cancelled) console.error("[elo] event fetch failed", e); }
     })();
+    return () => { cancelled = true; };
   }, [eventId]);
 
   // Index players for the round table (need names). Combine the standings
@@ -17467,7 +17495,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             .eq("user_id", user.id);
         }
         if(!cancelled) setGradedItems(r.data || []);
-      });
+      })
+      .catch((e) => { if(!cancelled){ console.warn("graded items fetch failed:", e?.message || e); setGradedItems([]); } });
     return () => { cancelled = true; };
   }, [user]);
   // card_id → tcgplayer_product_id lookup so we can resolve graded item
