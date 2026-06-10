@@ -2,11 +2,20 @@
 # Index.html so client-side path routing works for deep links like
 # packs.ink/decks, packs.ink/screener, packs.ink/analytics, etc.
 #
-# Folders preserved by listing them first so they still serve their own
-# files (images, supabase migration text, etc.) instead of falling through.
+# Logos/ must serve its own image files (used at runtime), so list it first so
+# it doesn't fall through to the SPA shell.
 /Logos/*  /Logos/:splat  200
-/scripts/*  /scripts/:splat  200
-/supabase/*  /supabase/:splat  200
+
+# Internal source/docs are committed at the publish root and would otherwise be
+# served verbatim (Netlify serves an existing file before the SPA fallback). The
+# site never fetches these at runtime, so force a 404 (the trailing ! overrides
+# the on-disk file) to keep ops docs / ETL scripts / migration SQL / the MCP
+# config off the public web. Add new internal paths here if they ship to root.
+/CLAUDE.md    /Index.html  404!
+/handoff.md   /Index.html  404!
+/.mcp.json    /Index.html  404!
+/scripts/*    /Index.html  404!
+/supabase/*   /Index.html  404!
 
 # Image proxy: Lorcast's CDN doesn't send CORS headers, so direct <img> loads
 # can't be drawn to a canvas (needed for the Export Deck Image feature). Proxying
