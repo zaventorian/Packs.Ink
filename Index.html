@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=156">
+<link rel="stylesheet" href="styles.css?v=157">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=156"></script>
+<script src="logo.js?v=157"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -368,6 +368,23 @@ function writeSealedCache(rows){
 
 const {useState,useEffect,useMemo,useCallback,useRef,useContext,useLayoutEffect} = React;
 const html = htm.bind(React.createElement);
+
+// Shared modal-dismiss behavior: close on Escape, and restore focus to whatever
+// element opened the modal when it unmounts (keyboard a11y). Deliberately does
+// NOT auto-focus a field inside the modal (that would pop the mobile keyboard on
+// non-text modals) and does not trap Tab (kept minimal to avoid interfering with
+// native select/range controls). Call once at the top of any dismissible modal.
+const useEscToClose = (onClose) => {
+  useEffect(() => {
+    const prevFocus = document.activeElement;
+    const onKey = (e) => { if(e.key === "Escape" && onClose) onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      if(prevFocus && typeof prevFocus.focus === "function"){ try { prevFocus.focus(); } catch(_){} }
+    };
+  }, []);
+};
 
 // Tooltip visibility — flipped by the user-settings gear in the top bar.
 // Components read this with useContext(TipsContext) and gate their
@@ -724,23 +741,6 @@ const JAPAN_ONLY_NONFOIL = {
   "Snow White|41": "Logos/cards/snow-white-unexpected-houseguest-japanese.png",
 };
 
-// Excluded set names — uses substring matching for robustness
-const EXCLUDED_EXACT = new Set([
-  "D23 Promos","Disney Lorcana Promo Cards","Disney100 Promos","Disney 100",
-  "Illumineer's Quest: Deep Trouble","Illumineer's Quest: Palace Heist",
-  "D23 Collection"
-]);
-const EXCLUDED_SUBSTR = ["epcot","promo set","promo cards","promos","d23","disney 100","illumineer"];
-const isExcluded = name => {
-  if(EXCLUDED_EXACT.has(name)) return true;
-  const lower = name.toLowerCase();
-  // Also exclude anything not in SET_ORDER that contains promo-like keywords
-  if(!SET_ORDER.includes(name)){
-    for(const sub of EXCLUDED_SUBSTR) if(lower.includes(sub)) return true;
-  }
-  return false;
-};
-
 const PULL = {
   "Common":144,"Uncommon":72,"Rare":31.75,"Super Rare":12,"Legendary":4,
   "Common Foil":13,"Uncommon Foil":6,"Rare Foil":3,"Super Rare Foil":1,
@@ -964,7 +964,11 @@ const getRarKey = (r,p) => {
   return null;
 };
 const parseP = s => { if(s==null||s===undefined) return null; if(typeof s==="number") return s; const n=parseFloat(String(s).replace(/[^0-9.]/g,"")); return isNaN(n)?null:n; };
-const fmt = n => n==null?"\u2014":"$"+n.toFixed(2);
+// Canonical USD formatter \u2014 thousands separators + fixed decimals. All the
+// money formatters delegate here so a $1,000+ value renders the same ($12,500.00)
+// everywhere instead of $12500.00 on some surfaces and $12,500.00 on others.
+const fmtUSD = (n, decimals=2) => "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits:decimals, maximumFractionDigits:decimals});
+const fmt = n => n==null?"\u2014":fmtUSD(n);
 const pick = a => a?.length?a[Math.floor(Math.random()*a.length)]:null;
 const wPick = opts => {
   const av=opts.filter(o=>o.p?.length); if(!av.length) return null;
@@ -4438,6 +4442,7 @@ const CLASSIFICATION_DISPLAY = ["Action","Alien","Ally","Broom","Captain",
   "Sorcerer","Storyborn","Super","Tigger","Titan","Toy","Villain","Whisper"];
 
 const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose, onReset}) => {
+  useEscToClose(onClose);
   const [illQuery, setIllQuery] = useState("");
   const visibleIlls = useMemo(() => {
     if(!allIllustrators || !allIllustrators.length) return [];
@@ -4640,6 +4645,7 @@ const proxyImg = (url) => {
 const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentContext, onClose,
                           visibility, onChangeVisibility, isOwner,
                           autoCopy, onAutoCopyDone}) => {
+  useEscToClose(onClose);
   // Card list: one entry per card_id with quantity, sorted into Lorcana's
   // standard section order (chars / actions / songs / items / locations).
   const cards = useMemo(() => {
@@ -5320,6 +5326,7 @@ const fisherYates = (arr) => {
 // one-tap install button (when the beforeinstallprompt event was captured),
 // iOS Safari has to walk through the Share menu manually.
 const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, onClose, onDismissForever}) => {
+  useEscToClose(onClose);
   const [busy, setBusy] = useState(false);
   const doInstall = async () => {
     if(!installEvent) return;
@@ -5521,6 +5528,7 @@ const MulliganSimulator = ({deck, cardById, onClose}) => {
 // crossOrigin="anonymous" works because the Lorcast CDN serves the correct
 // CORS headers; tainted-canvas exports would silently fail otherwise.
 const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrowseInCards}) => {
+  useEscToClose(onClose);
   const [query, setQuery] = useState("");
   const [picked, setPicked] = useState(initialArtist || null);
   const [error, setError] = useState(null);
@@ -5894,7 +5902,13 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   }, [pendingSearch, onConsumedPendingSearch]);
   const [drawerOpen,setDrawerOpen] = useState(false);
   const [artistAlleyOpen, setArtistAlleyOpen] = useState(false);
-  const [sortKey,setSortKey] = useState(sortDefault);
+  const [sortKey,setSortKey] = useState(() => {
+    try { const s = localStorage.getItem("packsink:cardBrowser:sort"); return (s && SORT_COMPARATORS[s]) ? s : sortDefault; }
+    catch { return sortDefault; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:cardBrowser:sort", sortKey); } catch {}
+  }, [sortKey]);
   // Grid (image tiles) vs List (compact rows). Persisted per session in
   // localStorage so toggling once sticks across page navigation.
   const [viewMode, setViewMode] = useState(() => {
@@ -6333,6 +6347,11 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
         onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
     </div>
+    ${grouped.length === 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
+      <div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
+      ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
+        onClick=${()=>setFilter(emptyFilter())} title="Clear all active filters and search">✕ Clear filters & search</button>`}
+    </div>`}
     ${drawerOpen && html`<${FilterDrawer} filter=${filter} setFilter=${setFilter}
       setsByGroup=${setsByGroup} allIllustrators=${allIllustrators}
       onClose=${()=>setDrawerOpen(false)} onReset=${()=>setFilter(emptyFilter())}/>`}
@@ -6436,7 +6455,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       openDeckById && openDeckById(deckRow.id);
     } catch(e){
       console.error("new deck from selection failed:", e);
-      alert("Couldn't create deck: " + (e.message || String(e)));
+      flashToast("Couldn't create deck: " + (e.message || String(e)));
     }
   }, [user, onSignIn, rowByCardId, openDeckById]);
 
@@ -6476,7 +6495,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       showToast(`Added ${upserts.length} card${upserts.length===1?"":"s"} to "${deckName}".`);
     } catch(e){
       console.error("add to deck failed:", e);
-      alert("Couldn't add to deck: " + (e.message || String(e)));
+      flashToast("Couldn't add to deck: " + (e.message || String(e)));
     }
   }, [user, rowByCardId, showToast]);
 
@@ -7598,11 +7617,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     try {
       const res = await bulkUpdateCollection(bulkUndo.prior);
       if(!res || !res.ok){
-        alert("Undo failed: " + (res?.error || "unknown error"));
+        flashToast("Undo failed: " + (res?.error || "unknown error"));
       } else {
         setBulkUndo(null);
       }
-    } catch(e){ alert("Undo failed: " + (e?.message || e)); }
+    } catch(e){ flashToast("Undo failed: " + (e?.message || e)); }
     setBulkUndoBusy(false);
   }, [bulkUndo, bulkUpdateCollection]);
   const [search, setSearch] = useState("");
@@ -7807,7 +7826,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     ${visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
       href=${tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow">
       <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter)}</span>
-      <span class="setdet-buy-missing-price">$${visibleMissing.value.toFixed(2)}<span class="setdet-buy-missing-arrow">↗</span></span>
+      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-arrow">↗</span></span>
     </a>`}
 
     ${(() => {
@@ -7929,6 +7948,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
 // in the current set, in foil / non-foil / both. Builds an `updates` list
 // that's piped through bulkUpdateCollection in one round-trip.
 const BulkAddByRarityModal = ({groups, setRarities, collection, bulkUpdateCollection, onApplied, onClose}) => {
+  useEscToClose(onClose);
   const [copyCount, setCopyCount] = useState(1);          // 1 = master, 4 = playset
   const [foilMode, setFoilMode] = useState("normal");     // "normal" | "foil" | "both"
   const [picked, setPicked] = useState(() => new Set()); // nothing checked by default
@@ -11199,7 +11219,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       quantity: Math.max(1, Math.min(99, quantity || 1)),
       updated_at: new Date().toISOString()};
     const {error} = await sbClient.from("graded_collection_items").upsert(row, {onConflict: "user_id,card_id,printing,grader,grade"});
-    if(error){ alert("Save failed: " + error.message); return; }
+    if(error){ flashToast("Save failed: " + error.message); return; }
     setItems(prev => {
       const ix = (prev||[]).findIndex(p => p.card_id===card_id && (p.printing||"Normal")===pr && p.grader===grader && p.grade===grade);
       if(ix >= 0){ const out = (prev||[]).slice(); out[ix] = {...out[ix], quantity: row.quantity, updated_at: row.updated_at}; return out; }
@@ -11225,7 +11245,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     }));
     const {error} = await sbClient.from("graded_collection_items")
       .upsert(payload, {onConflict: "user_id,card_id,printing,grader,grade"});
-    if(error){ alert("Bulk save failed: " + error.message); return 0; }
+    if(error){ flashToast("Bulk save failed: " + error.message); return 0; }
     // Optimistic local update: merge added rows into items state.
     setItems(prev => {
       const next = (prev||[]).slice();
@@ -11246,7 +11266,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const pr = printing || "Normal";
     const {error} = await sbClient.from("graded_collection_items").delete()
       .eq("user_id", user.id).eq("card_id", card_id).eq("printing", pr).eq("grader", grader).eq("grade", grade);
-    if(error){ alert("Delete failed: " + error.message); return; }
+    if(error){ flashToast("Delete failed: " + error.message); return; }
     setItems(prev => (prev||[]).filter(p => !(p.card_id===card_id && (p.printing||"Normal")===pr && p.grader===grader && p.grade===grade)));
   }, [user]);
   // Delta-bump owned quantity for a (card_id, grader, grade) slot. Positive
@@ -11311,7 +11331,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       const {printings: _drop, ...legacy} = row;
       ({data, error} = await sbClient.from("graded_collection_goals").insert(legacy).select().single());
     }
-    if(error){ alert("Save failed: " + error.message); return; }
+    if(error){ flashToast("Save failed: " + error.message); return; }
     setGoals(prev => [...(prev||[]), data]);
     // Re-adding a set goal is the user's "refresh the placeholder list"
     // path — clear removedCardIds entries that fall within this goal's
@@ -11358,7 +11378,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(!user) return;
     const {error} = await sbClient.from("graded_collection_goals").delete()
       .eq("user_id", user.id).eq("goal_id", goal_id);
-    if(error){ alert("Delete failed: " + error.message); return; }
+    if(error){ flashToast("Delete failed: " + error.message); return; }
     setGoals(prev => (prev||[]).filter(g => g.goal_id !== goal_id));
   }, [user]);
 
@@ -11900,6 +11920,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
 // Modal for adding a graded card to the collection. Search → pick a card →
 // pick grader/grade → validate against graded_prices_latest → save.
 const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, preselectPrinting, onClose, onAdd}) => {
+  useEscToClose(onClose);
   const [query, setQuery] = useState("");
   const [pickedId, setPickedId] = useState(preselectCardId || null);
   const [printing, setPrinting] = useState(preselectPrinting || null);  // resolved once a card is picked
@@ -12085,6 +12106,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
 // then check the cards you want to log. Each row optionally overrides the
 // default grader/grade. One PostgREST upsert call commits everything.
 const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClose, onBulkAdd}) => {
+  useEscToClose(onClose);
   const [setName, setSetName] = useState("");
   const [rarities, setRarities] = useState(new Set());
   const [printings, setPrintings] = useState(new Set(["Non-Foil","Foil"]));
@@ -12311,6 +12333,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
 // Modal for adding a Set Tracking goal. Pick set (or Extras bucket) +
 // optional rarities subset.
 const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptions, onClose, onAdd}) => {
+  useEscToClose(onClose);
   const [setName, setSetName] = useState("");
   const [extrasBucket, setExtrasBucket] = useState("");
   const [rarities, setRarities] = useState(new Set());
@@ -12634,11 +12657,11 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     if(!file) return;
     let text;
     try { text = await file.text(); }
-    catch(e){ alert("Couldn't read file: "+e.message); return; }
+    catch(e){ flashToast("Couldn't read file: "+e.message); return; }
     const report = parseDreambornCsv(text, rowsByName);
-    if(report.error){ alert(report.error); return; }
+    if(report.error){ flashToast(report.error); return; }
     if(!report.entries.length){
-      alert("CSV parsed but no rows have Normal or Foil quantities > 0. Nothing to import.");
+      flashToast("CSV parsed but no rows have Normal or Foil quantities > 0. Nothing to import.");
       return;
     }
     setImportState({report, mode:"replace", busy:false});
@@ -12657,7 +12680,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     const result = await bulkUpdateCollection(updates);
     if(!result || !result.ok){
       const msg = (result && result.error) || "unknown error";
-      alert(`Import failed after writing ${result?.written ?? 0} rows: ${msg}\n\nYour collection has been rolled back to its previous state.`);
+      flashToast(`Import failed (${result?.written ?? 0} rows) — collection rolled back. ${msg}`, 6000);
       setImportState(s => ({...s, busy:false}));
       return;
     }
@@ -13867,8 +13890,12 @@ function EloView({eloPinned, setEloPinned}){
   const applyUrlToState = () => {
     const sp = new URLSearchParams(window.location.search);
     const p = sp.get("p"); const e = sp.get("e"); const sub = sp.get("sub");
-    if(p){ setPlayerId(parseInt(p,10)); setEventId(null); setTab("player"); return; }
-    if(e){ setEventId(parseInt(e,10)); setPlayerId(null); setTab("event"); return; }
+    // Guard against malformed ids (?p=abc) — parseInt would yield NaN, which
+    // then queries .eq("player_id", NaN) and hangs on a permanent spinner.
+    const pid = p != null ? parseInt(p,10) : NaN;
+    const eid = e != null ? parseInt(e,10) : NaN;
+    if(Number.isFinite(pid)){ setPlayerId(pid); setEventId(null); setTab("player"); return; }
+    if(Number.isFinite(eid)){ setEventId(eid); setPlayerId(null); setTab("event"); return; }
     if(sub === "tournaments"){ setTab("tournaments"); setPlayerId(null); setEventId(null); return; }
     setTab("leaderboard"); setPlayerId(null); setEventId(null);
   };
@@ -14278,8 +14305,8 @@ function MonteCarloView({rawData, sets, theme}){
 // smart-search the rest of the app uses (name / ink / rarity / set / cost /
 // body text tokens) works here too.
 const TRADE_PERSIST_KEY = "packsink:trade:v1";
-const tradeMoney = (n) => (typeof n === "number" && !Number.isNaN(n)) ? "$"+n.toFixed(2) : "—";
-const tradeTotalMoney = (n) => "$"+(Number(n)||0).toFixed(2);
+const tradeMoney = (n) => (typeof n === "number" && !Number.isNaN(n)) ? fmtUSD(n) : "—";
+const tradeTotalMoney = (n) => fmtUSD(Number(n)||0);
 // LCP (C1) Non-Foil/Foil render as two distinct tiles sharing one card_id
 // (SPLIT_BY_PRINTING_SETS), so disambiguate their key by printing.
 const tradeGroupKey = (g) => (g.card_id||"") + (g.isSplitPrinting
@@ -14295,12 +14322,6 @@ const tradeCardTitle = (g) => (["Enchanted","Iconic","Epic","Promo"].includes(g.
   ? `${g["Product Name"]} (${g.Rarity})` : g["Product Name"];
 
 // URL-safe base64 (handles unicode side names) for the legacy inline trade link.
-const tradeB64UrlEncode = (str) => {
-  const bytes = new TextEncoder().encode(str);
-  let bin = "";
-  for(const b of bytes) bin += String.fromCharCode(b);
-  return btoa(bin).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,"");
-};
 const tradeB64UrlDecode = (s) => {
   let b = s.replace(/-/g,"+").replace(/_/g,"/");
   while(b.length % 4) b += "=";
@@ -14319,8 +14340,7 @@ const expandTradePayload = (obj) => {
   const expand = (arr) => (Array.isArray(arr)?arr:[]).map(t => ({key:t[0], qN:t[1]||0, qF:t[2]||0}));
   return { a: expand(obj.a), b: expand(obj.b), nameA:(obj.n&&obj.n[0])||"", nameB:(obj.n&&obj.n[1])||"" };
 };
-// Legacy inline ?trade= blob — kept so any already-shared links still resolve.
-const encodeTrade = (sideA, sideB, nameA, nameB) => tradeB64UrlEncode(JSON.stringify(tradePayloadObj(sideA, sideB, nameA, nameB)));
+// Legacy inline ?trade= blob — decode kept so any already-shared links still resolve.
 const decodeTrade = (s) => { try { return expandTradePayload(JSON.parse(tradeB64UrlDecode(s))); } catch { return null; } };
 // 22-char URL-safe token (128 bits), mirrors the server's gen_share_token().
 const genTradeToken = () => {
@@ -14755,26 +14775,7 @@ const MOVER_WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d",
 // save horizontal space and are the convention used by deckbuilders. Maps
 // Lorcast's full set names to a 2-4 letter shorthand; falls through to the
 // full name when no abbrev is defined (e.g. fan-curated promo sets).
-const SET_ABBREV = {
-  "The First Chapter":             "TFC",
-  "Rise of the Floodborn":         "RotF",
-  "Into the Inklands":             "ItI",
-  "Ursula's Return":               "UrR",
-  "Shimmering Skies":              "ShS",
-  "Azurite Sea":                   "AzS",
-  "Archazia's Island":             "ArI",
-  "Reign of Jafar":                "RoJ",
-  "Fabled":                        "FAB",
-  "Whispers in the Well":          "WitW",
-  "Winterspell":                   "WSp",
-  "Wilds Unknown":                 "WU",
-  "Attack of the Vines":           "AoV",
-  "Disney Lorcana Promo Cards":    "Promo",
-  "D23 Promos":                    "D23",
-  "Disney100 Promos":              "D100",
-};
-const fmtMoney = (v) => v == null ? "—" : "$" + Number(v).toFixed(2);
-const fmtPctV  = (v) => v == null ? "—" : (v > 0 ? "+" : "") + Number(v).toFixed(1) + "%";
+const fmtMoney = (v) => v == null ? "—" : fmtUSD(v);
 const pctCls   = (v) => v == null ? "" : v > 0 ? "pct-up" : v < 0 ? "pct-down" : "";
 
 // Lorcast publishes rarities with underscores ("Super_rare", "Super_Rare"
@@ -14790,40 +14791,6 @@ function rarityLabel(r){
 // component) so it can be referenced from the filter useMemo without
 // hitting a temporal-dead-zone error. Generic tooltips — per-card numbers
 // live in the table cells.
-// Compact inline SVG sparkline from the 7 price snapshots the matview
-// carries: low_365d -> low_180d -> low_90d -> low_30d -> low_7d -> low_prev
-// -> low_today. Roughly maps to a 1-year trend at uneven sampling; gives
-// a quick visual cue without an extra DB fetch.
-function priceDbSparkline(r){
-  const pts = [r.low_365d, r.low_180d, r.low_90d, r.low_30d, r.low_7d, r.low_prev, r.low_today]
-    .map(v => (v == null || isNaN(+v)) ? null : +v);
-  const valid = pts.filter(v => v != null);
-  if(valid.length < 2) return html`<span class="muted" style=${{fontSize:9}}>—</span>`;
-  const min = Math.min(...valid);
-  const max = Math.max(...valid);
-  const range = max - min || 1;
-  const W = 64, H = 22;
-  const stepX = pts.length > 1 ? W / (pts.length - 1) : W;
-  // Linear path skipping nulls (breaks the line at gaps).
-  let d = "";
-  let drawing = false;
-  pts.forEach((v, i) => {
-    if(v == null){ drawing = false; return; }
-    const x = i * stepX;
-    const y = H - ((v - min) / range) * H;
-    d += (drawing ? " L " : (d ? " M " : "M ")) + x.toFixed(1) + " " + y.toFixed(1);
-    drawing = true;
-  });
-  const lastValid = pts.findLast ? pts.findLast(v => v != null) : valid[valid.length - 1];
-  const firstValid = valid[0];
-  const trendUp = lastValid > firstValid;
-  const stroke = lastValid === firstValid ? "var(--text-muted)" : (trendUp ? "var(--green)" : "var(--red)");
-  return html`<svg viewBox="0 0 ${W} ${H}" width=${W} height=${H} preserveAspectRatio="none"
-    style=${{display:"block"}}>
-    <path d=${d} fill="none" stroke=${stroke} stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>
-  </svg>`;
-}
-
 function priceDbSignals(r){
   const out = [];
   const hasMarket = r.low_today != null && r.market_today != null && r.market_today > 0;
@@ -16373,7 +16340,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               ${visibleWins.map(([lk, mk]) => {
                 const k = priceMode === "market" ? mk : lk;
                 const v = priceMode === "market" ? r[mk] : r[lk];
-                return html`<td key=${lk} class=${"td-num " + pctCls(v) + (isSortCol(k) ? " sort-active" : "")}>${fmtPctV(v)}</td>`;
+                return html`<td key=${lk} class=${"td-num " + pctCls(v) + (isSortCol(k) ? " sort-active" : "")}>${fmtPct(v)}</td>`;
               })}
               <td>${sigs.map(([sk, icon, title]) => html`<${Tip} key=${sk} text=${title}>
                 <span class=${"price-db-sig sig-"+sk}>${icon}</span>
@@ -19261,13 +19228,6 @@ const DECK_FORMATS = [
 ];
 const getFormat = (key) => DECK_FORMATS.find(f => f.key === key) || DECK_FORMATS[0];
 
-// Decks store the active format as their first tag (or default to Infinity
-// if tags is empty). Keeps the schema simple — no migration needed.
-const deckFormatKey = (deck) => {
-  const t = (deck.tags && deck.tags[0]) || "";
-  return DECK_FORMATS.some(f => f.key === t) ? t : "infinity";
-};
-
 // Lowest current Low/Market price for a card across its printings. Used to
 // price decks (we'd rather pay the cheap version than the foil).
 function cheapestCardPrice(rowsForCardId){
@@ -19389,6 +19349,7 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
 // Admin: edit a tournament's headline fields (name / date / format / # players).
 // Decks themselves stay intact — to rewrite results, delete + re-upload.
 const TournamentEditModal = ({tournament, onClose, onSaved}) => {
+  useEscToClose(onClose);
   const [name, setName] = useState(tournament?.name || "");
   const [eventDate, setEventDate] = useState(tournament?.event_date || "");
   const [format, setFormat] = useState(tournament?.format || "");
@@ -19467,6 +19428,7 @@ const TournamentEditModal = ({tournament, onClose, onSaved}) => {
 // content creates a public deck owned by the uploader + a tournament_decks
 // row that carries the player_name + place for display.
 const TournamentBulkUploadModal = ({raw, user, onClose, onUploaded}) => {
+  useEscToClose(onClose);
   const initialRows = () => Array.from({length: 8}, () => ({
     place: "", player_name: "", deck_name: "", deck_text: "",
   }));
@@ -19630,6 +19592,7 @@ const TournamentBulkUploadModal = ({raw, user, onClose, onUploaded}) => {
 // When `result` is present, edits place/player/deck name (+ deck cards) via
 // admin_update_tournament_deck + admin_replace_tournament_deck_cards.
 const TournamentDeckEditModal = ({tournament, result, raw, onClose, onSaved}) => {
+  useEscToClose(onClose);
   const isEdit = !!result;
   const [place, setPlace] = useState(result?.place || "");
   const [playerName, setPlayerName] = useState(result?.player_name || "");
@@ -19800,6 +19763,7 @@ const TournamentDeckEditModal = ({tournament, result, raw, onClose, onSaved}) =>
 //   - rows WITHOUT a result_id → admin_add_tournament_deck (new)
 //   - original result_ids missing from the form → admin_delete_tournament_deck
 const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) => {
+  useEscToClose(onClose);
   const [tName, setTName] = useState(tournament?.name || "");
   const [tDate, setTDate] = useState(tournament?.event_date || "");
   const [tPlayers, setTPlayers] = useState(tournament?.num_players != null ? String(tournament.num_players) : "");
@@ -20610,7 +20574,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         ...prev,
         [deckId]: Math.max(0, (prev[deckId] || 0) + (wasFavorited ? 1 : -1)),
       }));
-      alert("Couldn't update favorite: " + (e.message || e));
+      flashToast("Couldn't update favorite: " + (e.message || e));
     }
   }, [user, favorites, externalDeck, refreshFavorites]);
 
@@ -20643,7 +20607,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         if(wasFollowing) next.add(creatorId); else next.delete(creatorId);
         return next;
       });
-      alert("Couldn't update follow: " + (e.message || e));
+      flashToast("Couldn't update follow: " + (e.message || e));
     }
   }, [user, userFollows, refreshFollowing]);
 
@@ -21308,7 +21272,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const {data, error} = await sbClient.from("decks")
       .insert({user_id:user.id, name: "New Deck"})
       .select("id").single();
-    if(error){ alert("Couldn't create deck: " + error.message); return; }
+    if(error){ flashToast("Couldn't create deck: " + error.message); return; }
     await refreshDecks();
     openDeckInMode(data.id, "edit");
   }, [user, refreshDecks, openDeckInMode]);
@@ -21320,7 +21284,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const clean = (name || "").trim();
     if(!clean) return false;
     const {error} = await sbClient.from("decks").update({name: clean}).eq("id", deckId);
-    if(error){ alert("Rename failed: " + error.message); return false; }
+    if(error){ flashToast("Rename failed: " + error.message); return false; }
     setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, name: clean} : d));
     return true;
   }, []);
@@ -21347,7 +21311,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
                description: src.description || null,
                inks: src.inks || null, tags: src.tags || null})
       .select("id").single();
-    if(error){ alert("Couldn't duplicate: " + error.message); return; }
+    if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
     const rows = (src.cards||[]).map(c => ({
       deck_id: data.id, card_id: c.card_id, printing: c.printing, quantity: c.quantity,
     }));
@@ -21355,7 +21319,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       const {error: e2} = await sbClient.from("deck_cards").insert(rows);
       if(e2){
         console.error("duplicate-cards failed:", e2);
-        alert(`Duplicated deck (header only) — cards copy failed: ${e2.message}`);
+        flashToast(`Duplicated deck (header only) — cards copy failed: ${e2.message}`);
       }
     }
     await refreshDecks();
@@ -21374,7 +21338,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
                description: src.description || null,
                inks: src.inks || null, tags: src.tags || null})
       .select("id").single();
-    if(error){ alert("Couldn't duplicate: " + error.message); return; }
+    if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
     const rows = (src.cards||[]).map(c => ({
       deck_id: data.id, card_id: c.card_id, printing: c.printing, quantity: c.quantity,
     }));
@@ -21382,7 +21346,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
       const {error: e2} = await sbClient.from("deck_cards").insert(rows);
       if(e2){
         console.error("duplicate-cards (external) failed:", e2);
-        alert(`Saved deck header — couldn't copy cards: ${e2.message}`);
+        flashToast(`Saved deck header — couldn't copy cards: ${e2.message}`);
       }
     }
     await refreshDecks();
@@ -21394,7 +21358,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   const deleteDeck = useCallback(async (deckId) => {
     if(!confirm("Delete this deck? This can't be undone.")) return;
     const {error} = await sbClient.from("decks").delete().eq("id", deckId);
-    if(error){ alert("Delete failed: " + error.message); return; }
+    if(error){ flashToast("Delete failed: " + error.message); return; }
     if(selectedDeckId === deckId) setSelectedDeckId(null);
     await refreshDecks();
   }, [selectedDeckId, refreshDecks]);
@@ -21443,7 +21407,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     } catch(e){
       console.error("deck card update failed:", e);
       setDecks(prev); // rollback
-      alert("Couldn't save card change: " + e.message);
+      flashToast("Couldn't save card change: " + e.message);
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -21497,7 +21461,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     } catch(e){
       console.error("variant swap failed:", e);
       setDecks(prev);
-      alert("Couldn't swap variant: " + e.message);
+      flashToast("Couldn't swap variant: " + e.message);
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -21586,7 +21550,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     } catch(e){
       console.error("undo failed:", e);
       setDecks(prev);
-      alert("Couldn't undo changes: " + e.message);
+      flashToast("Couldn't undo changes: " + e.message);
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -21612,7 +21576,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     } catch(e){
       console.error("deck meta update failed:", e);
       setDecks(prev);
-      alert("Couldn't save: " + e.message);
+      flashToast("Couldn't save: " + e.message);
     } finally {
       setPending(p => Math.max(0, p - 1));
     }
@@ -21624,7 +21588,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const name = next.trim();
     if(!name || name === currentName) return;
     const {error} = await sbClient.from("decks").update({name}).eq("id", deckId);
-    if(error){ alert("Rename failed: " + error.message); return; }
+    if(error){ flashToast("Rename failed: " + error.message); return; }
     await refreshDecks();
   }, [refreshDecks]);
 
@@ -21951,7 +21915,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
                 if(derr) throw derr;
                 setSelectedTournamentId(null);
                 await refreshTournaments();
-              } catch(e) { alert("Delete failed: " + (e?.message || e)); }
+              } catch(e) { flashToast("Delete failed: " + (e?.message || e)); }
             }}
             onAddDeck=${()=>setTournamentDeckEdit({result: null})}
             onEditDeck=${(r)=>setTournamentDeckEdit({result: r})}
@@ -21961,7 +21925,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
                 const {error: derr} = await sbClient.rpc("admin_delete_tournament_deck", {p_result_id: r.result_id});
                 if(derr) throw derr;
                 await refreshTournaments();
-              } catch(e) { alert("Delete failed: " + (e?.message || e)); }
+              } catch(e) { flashToast("Delete failed: " + (e?.message || e)); }
             }}
             theme=${theme}
             onCopyDecklist=${copyDeckListFromResult}
@@ -22772,7 +22736,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
       // Reflect locally so the share URL updates without a refetch.
       onUpdateMeta({share_token: data});
     } catch(e){
-      alert("Couldn't regenerate: " + (e.message || e));
+      flashToast("Couldn't regenerate: " + (e.message || e));
     } finally {
       setRegenerating(false);
     }
@@ -22874,7 +22838,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
 
   const handleExport = useCallback(() => {
     const text = deckToText(deck, cardById);
-    if(!text){ alert("Deck is empty."); return; }
+    if(!text){ flashToast("Deck is empty."); return; }
     setDeckTextValue(text);
     setDeckTextCopied(false);
     setDeckTextModal("export");
@@ -22890,7 +22854,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
     if(text == null || !text.trim()) return;
     const result = parseDeckText(text, raw);
     if(!result.entries.length){
-      alert("No cards matched. Make sure each line is like '4 Cinderella - Stouthearted'.");
+      flashToast("No cards matched. Make sure each line is like '4 Cinderella - Stouthearted'.");
       return;
     }
     const summary = `Match: ${result.entries.length} unique cards (${result.entries.reduce((s,e)=>s+e.quantity,0)} total)`
@@ -24281,7 +24245,6 @@ function App(){
   // which always reflects the resolved theme.
   const LIGHT_VARIANTS = ["parchment","sunrise","watercolor","daydream"];
   const DARK_VARIANTS  = ["velvet","aurora","black"];
-  const LIGHT_THEMES = new Set([...LIGHT_VARIANTS, "light"]);
   const DARK_THEMES  = new Set([...DARK_VARIANTS, "dark"]);
   const VALID_MODES  = ["light","dark","system"];
   const isDarkTheme = (t) => DARK_THEMES.has(t);
