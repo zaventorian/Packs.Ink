@@ -31,6 +31,35 @@
 -->
 <script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
   crossorigin="anonymous"></script>
+<script>
+  // Scrub share tokens from anything Sentry captures. Tokens ride in the URL
+  // query (?t=, ?token=, ?collection=) so a captured error on a share-link page
+  // would otherwise send the token to Sentry. The loader exposes Sentry.onLoad
+  // synchronously; init() here keeps the loader's DSN and adds our beforeSend.
+  if (window.Sentry && window.Sentry.onLoad) {
+    window.Sentry.onLoad(function () {
+      var scrub = function (u) {
+        return typeof u === "string"
+          ? u.replace(/([?&])(t|token|collection)=[^&#]*/gi, "$1$2=[redacted]")
+          : u;
+      };
+      window.Sentry.init({
+        beforeSend: function (event) {
+          try {
+            if (event.request && event.request.url) event.request.url = scrub(event.request.url);
+            if (event.request && event.request.headers && event.request.headers.Referer)
+              event.request.headers.Referer = scrub(event.request.headers.Referer);
+            if (Array.isArray(event.breadcrumbs))
+              event.breadcrumbs.forEach(function (b) {
+                if (b && b.data && typeof b.data.url === "string") b.data.url = scrub(b.data.url);
+              });
+          } catch (e) {}
+          return event;
+        },
+      });
+    });
+  }
+</script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css?v=156">
 <!-- Preload the six ink-shield icons so the home Following feed and other
@@ -56,9 +85,19 @@
 </noscript>
 <a href="/privacy" rel="noopener" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Privacy policy</a>
 <div id="root"></div>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
-<script src="https://unpkg.com/htm@3.1.1/dist/htm.js" crossorigin="anonymous"></script>
+<!-- Exact-version pins + SRI integrity hashes: a malicious republish under a
+     floating tag (react@18, supabase-js@2) or an unpkg compromise can no longer
+     execute in our origin — the browser refuses any script whose bytes don't
+     match the hash. Recompute the hash if you bump a version. -->
+<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
+  integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
+  crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
+  integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
+  crossorigin="anonymous"></script>
+<script src="https://unpkg.com/htm@3.1.1/dist/htm.js"
+  integrity="sha384-iPOMe3E8jVgp/PepuDy7lJvw7L/QP97X5POfi+X1EVyDVQi8Kuv/MooNVB5OFXVN"
+  crossorigin="anonymous"></script>
 <!-- html2canvas: lazy-used by the Export Deck Image feature to snapshot the
      live preview into a real image for Copy/Save. Pulled from a CDN so it
      doesn't bloat the initial load — only fetched once on the first click. -->
@@ -69,6 +108,7 @@
     window.__html2canvasLoading = new Promise((resolve, reject) => {
       const s = document.createElement("script");
       s.src = "https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js";
+      s.integrity = "sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H";
       s.crossOrigin = "anonymous";
       s.onload = () => resolve(window.html2canvas);
       s.onerror = () => reject(new Error("html2canvas failed to load"));
@@ -77,7 +117,9 @@
     return window.__html2canvasLoading;
   };
 </script>
-<script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
+  integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
+  crossorigin="anonymous"></script>
 <script src="logo.js?v=156"></script>
 <script>
 
