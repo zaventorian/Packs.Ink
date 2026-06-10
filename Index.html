@@ -32,7 +32,7 @@
 <script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
   crossorigin="anonymous"></script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=155">
+<link rel="stylesheet" href="styles.css?v=156">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -78,7 +78,7 @@
   };
 </script>
 <script src="https://unpkg.com/@supabase/supabase-js@2" crossorigin="anonymous"></script>
-<script src="logo.js?v=155"></script>
+<script src="logo.js?v=156"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -154,7 +154,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v44";
+const CACHE_KEY = "packsink:catalog:v45";
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -901,7 +901,9 @@ const BDGE_DARK = {
   "Epic":{bg:"rgba(220,150,100,0.2)",fg:"#dc9664"},
   "Iconic":{bg:"rgba(220,100,100,0.2)",fg:"#dc7070"}
 };
-const getBadgeStyle = (r,t) => (t==="dark"?BDGE_DARK:BDGE_LIGHT)[r] || (t==="dark"?BDGE_DARK:BDGE_LIGHT)["Common"];
+// Use the dark-theme SET, not t==="dark" — the latter missed every named dark
+// variant (velvet/aurora/black), so the default Velvet theme got light badges.
+const getBadgeStyle = (r,t) => { const pal = DARK_THEMES_GLOBAL.has(t)?BDGE_DARK:BDGE_LIGHT; return pal[r] || pal["Common"]; };
 
 const normalizeRarity = r => {
   if(!r) return r;
@@ -1012,6 +1014,19 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
   // Longest-first so "Puppy Shift" / "Universal Shift" / "Sing Together" beat
   // their single-word containees when both could match.
   const KEYWORD_NAMES_SORTED = [...KEYWORD_NAMES].sort((a,b) => b.length - a.length);
+  // Precompile once (not per card×line×keyword). lineRe matches a keyword at the
+  // START of an ability line followed by end / a numeric value (Shift 4,
+  // Resist +1, Singer 5) / a reminder paren / a colon (Shift: Discard...) / a
+  // comma (terse "Evasive, Ward" lists). segRe is the tighter test used on
+  // comma-split segments.
+  const KEYWORD_RES = KEYWORD_NAMES_SORTED.map(kw => {
+    const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return {
+      kw,
+      lineRe: new RegExp("^" + escaped + "(?:$|\\s+[+\\-]?\\d|\\s*[(:,])", "i"),
+      segRe:  new RegExp("^" + escaped + "(?:$|\\s+[+\\-]?\\d)", "i"),
+    };
+  });
   const keywordsByCardId = {};
   for(const c of cardsRows){
     const t = (c.text || "");
@@ -1019,16 +1034,30 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     const found = new Set();
     // A card DECLARES a keyword iff an ability line STARTS with the keyword
     // name, optionally followed by a numeric value (Shift 4, Resist +1,
-    // Challenger +2, Singer 5) or a reminder-text paren. Pure references like
-    // "Put chosen character with Bodyguard..." or conditional grants like
-    // "this character gains Bodyguard" don't count.
+    // Challenger +2, Singer 5), a reminder paren, or a colon (Shift: alternate
+    // cost). Pure references ("Put chosen character with Bodyguard...") or
+    // conditional grants ("this character gains Bodyguard") don't count — they
+    // don't start the line with the keyword.
     for(const line of t.split(/\n+/)){
       const trimmed = line.trim();
       if(!trimmed) continue;
-      for(const kw of KEYWORD_NAMES_SORTED){
-        const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const re = new RegExp("^" + escaped + "(?:$|\\s+[+\\-]?\\d|\\s*\\()", "i");
-        if(re.test(trimmed)){ found.add(kw); break; }
+      let lineKw = null;
+      for(const {kw, lineRe} of KEYWORD_RES){
+        if(lineRe.test(trimmed)){ found.add(kw); lineKw = kw; break; }
+      }
+      if(!lineKw) continue;
+      // Terse keyword-list lines join multiple keywords with commas/&/and and
+      // carry NO reminder paren ("Evasive, Ward"). Only split + rescan in that
+      // case, so a granted-ability list ("gains Evasive, Ward" — doesn't start
+      // with a keyword, so lineKw is null above) never reaches here.
+      if(trimmed.indexOf("(") === -1){
+        for(const seg of trimmed.split(/\s*(?:,|&|\band\b)\s*/i)){
+          const s = seg.trim();
+          if(!s) continue;
+          for(const {kw, segRe} of KEYWORD_RES){
+            if(segRe.test(s)){ found.add(kw); break; }
+          }
+        }
       }
     }
     if(found.size) keywordsByCardId[c.id] = Array.from(found);
@@ -1846,8 +1875,11 @@ function computeSealedDeltas(history){
   // Same accessor used everywhere in the catalog — coalesce(low_price_smoothed,
   // low_price) so phantom-spike days get the smoothed value in the rollup if
   // migration 55 is deployed.
-  const lowOf = (r) => Number(r.low_price_smoothed ?? r.low_price ?? null);
-  const mktOf = (r) => Number(r.market_price ?? null);
+  // Return NaN (not 0) when the price is null/absent — Number(null) === 0 would
+  // make a sold-out snapshot (null low_price) read as $0 and render a phantom
+  // -100% crash against the prior real price.
+  const lowOf = (r) => { const v = r.low_price_smoothed ?? r.low_price; return v == null ? NaN : Number(v); };
+  const mktOf = (r) => { const v = r.market_price; return v == null ? NaN : Number(v); };
   const priceNDaysAgo = (pts, days, fieldOf) => {
     const cutMs = todayMs - days * DAY;
     let best = null, bestMs = -Infinity;
@@ -2466,6 +2498,10 @@ const INK_TINT_DARK = {
 // switches on theme) can resolve named themes without needing the
 // App-scoped isDarkTheme. Kept in sync with the inside-App version.
 const DARK_THEMES_GLOBAL = new Set(["aurora","velvet","black","dark"]);
+// Max products in a Price-Graphing comparison. Module-scope so both the Price
+// Graphing builder AND the Screener batch handoff (different components) read
+// the same cap instead of hard-coding their own.
+const COMPARE_MAX = 18;
 const inkTint = (ink, theme) => (ink && (DARK_THEMES_GLOBAL.has(theme)?INK_TINT_DARK[ink]:INK_TINT_LIGHT[ink])) || "transparent";
 
 // ── Smart search aliases ────────────────────────────────────────────────
@@ -2747,13 +2783,21 @@ const parseSearchQuery = (input) => {
         break;
       }
       if(!nxt) continue;
-      // "kw N" / "kw >= N" — handle leading op on the value token too.
+      // "kw N" / "kw >=N" — op may be attached to the value token.
       if(kws.includes(t)){
         const m = nxt.match(/^(>=|<=|>|<|=)?(\d+)$/);
         if(m){
           out.filters[statKey] = parseInt(m[2],10);
           out.filters[statKey + "Op"] = m[1] || "=";
           used.add(i); used.add(i+1);
+          break;
+        }
+        // "kw >= N" — operator is its own token (spaces around it), value next.
+        const nxt2 = tokens[i+2];
+        if(/^(>=|<=|>|<|=)$/.test(nxt) && nxt2 && /^\d+$/.test(nxt2)){
+          out.filters[statKey] = parseInt(nxt2,10);
+          out.filters[statKey + "Op"] = nxt;
+          used.add(i); used.add(i+1); used.add(i+2);
           break;
         }
       }
@@ -8672,7 +8716,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Screener handoff. Items share the same shape as Screener pushes; the
   // `kind` field is informational only (fetchCardHistory works generically
   // for both since sealed products use Normal printing keyed by product_id).
-  const COMPARE_MAX = 18;
+  // COMPARE_MAX is module-scope (shared with the Screener handoff).
   const addToCompare = useCallback((item) => {
     if(!item) return;
     setCompareCards(prev => {
@@ -16186,8 +16230,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             }}>📋 Copy as decklist (paste into a deck)</button>
             <button class="price-db-batchitem"
               onClick=${() => {
-                const cards = selRows.slice(0, 8).map(r => ({
-                  card_id: r.card_id,
+                const cards = selRows.slice(0, COMPARE_MAX).map(r => ({
+                  // Synthesize "::printing" for non-Normal so a card's Normal
+                  // AND Foil rows become distinct compare series instead of
+                  // colliding on the card_id-keyed dedupe + React keys (the
+                  // same convention addAllVariants uses). The real card_id is
+                  // recoverable by splitting on "::"; the series fetch keys off
+                  // (productId, printing) regardless.
+                  card_id: r.card_id + (r.printing && r.printing !== "Normal" ? "::" + r.printing : ""),
                   productId: r.tcgplayer_product_id,
                   printing: r.printing,
                   name: r.name + (r.version ? " - " + r.version : ""),
@@ -16196,7 +16246,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 if(onCompareCards) onCompareCards(cards);
               }}>
               📊 Add to Price Graphing
-              ${selRows.length > 8 && html`<span class="muted" style=${{fontSize:10,marginLeft:4}}>(first 8 of ${selRows.length})</span>`}
+              ${selRows.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:4}}>(first ${COMPARE_MAX} of ${selRows.length})</span>`}
             </button>`;
           })()}
         </div>`}
