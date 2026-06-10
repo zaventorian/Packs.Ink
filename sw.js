@@ -1,11 +1,11 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v155';
+const CACHE_VERSION = 'packsink-v156';
 const CORE_ASSETS = [
   '/',
   '/Index.html',
-  '/styles.css?v=155',
-  '/logo.js?v=155',
+  '/styles.css?v=156',
+  '/logo.js?v=156',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',
@@ -56,8 +56,15 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       fetch(req)
         .then((res) => {
-          const copy = res.clone();
-          caches.open(CACHE_VERSION).then((c) => c.put('/Index.html', copy));
+          // Only overwrite the offline app shell with a successful response for
+          // the SPA itself — NOT a real non-SPA document (/privacy serves the
+          // standalone privacy.html) and NOT a 404/5xx error page. Otherwise
+          // visiting /privacy or hitting a mid-deploy hiccup would make that the
+          // permanent offline shell.
+          if (res.ok && url.pathname !== '/privacy' && url.pathname !== '/privacy.html') {
+            const copy = res.clone();
+            caches.open(CACHE_VERSION).then((c) => c.put('/Index.html', copy));
+          }
           return res;
         })
         .catch(() => caches.match('/Index.html'))
@@ -77,7 +84,9 @@ self.addEventListener('fetch', (event) => {
           if (res.ok) { const copy = res.clone(); caches.open(CACHE_VERSION).then((c) => c.put(req, copy)); }
           return res;
         })
-        .catch(() => caches.match(req))
+        // ignoreSearch so a fresh Index.html asking for styles.css?v=156 can
+        // still fall back to a cached ?v=155 when offline mid-version-bump.
+        .catch(() => caches.match(req, { ignoreSearch: true }))
     );
     return;
   }
