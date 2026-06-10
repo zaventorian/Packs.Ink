@@ -1,3 +1,25 @@
+# Site-wide security headers.
+#
+# Referrer-Policy is the important one: share tokens travel in the URL query
+# (?t=, ?deck=<id>&token=, ?collection=<uuid>&token=). strict-origin-when-cross-
+# origin stops the full URL (with token) from leaking in the Referer header to
+# third parties on outbound navigations (TCGPlayer affiliate links, the YouTube
+# embed, the QR image service). frame-ancestors/X-Frame-Options stop the
+# authenticated, mutating UI from being clickjacked inside a hostile iframe.
+#
+# NOTE: a full script-restricting Content-Security-Policy is deliberately NOT
+# set here — the app is a single no-build Index.html with inline module scripts
+# and inline styles, so a real script-src would need 'unsafe-inline' (defeating
+# the point) or build-step nonces. Tracked as a follow-up. frame-ancestors is
+# safe to ship standalone (it only restricts framing, not script execution).
+/*
+  Referrer-Policy: strict-origin-when-cross-origin
+  X-Frame-Options: DENY
+  X-Content-Type-Options: nosniff
+  Content-Security-Policy: frame-ancestors 'none'
+  Permissions-Policy: geolocation=(), microphone=(), camera=()
+  Strict-Transport-Security: max-age=31536000
+
 # Long-cache + permissive CORS on proxied Lorcast art.
 #
 # Lorcast (cards.lorcast.io) sends no Cache-Control header, so without an
