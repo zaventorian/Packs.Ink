@@ -213,7 +213,9 @@ const AUX_EVICTABLE_PREFIXES = [
   "packsink:setsMeta:",
   "packsink:hist:",
   "packsink:colvalue:",
-  "packsink:home:",       // home:tourneys
+  "packsink:home:tourneys:",   // NOT bare "packsink:home:" — that also matches
+                               // home-panel PREFERENCE keys (colShow*, moversMode,
+                               // followingExpanded, valuableMode, …) which are user state.
   "packsink:following:",
 ];
 const isPriceDerivedAuxKey = (k) =>
@@ -1828,6 +1830,9 @@ function computeGradedDeltas(history){
   };
   const out = [];
   for(const pts of byKey.values()){
+    // Ascending by date so latest is at the tail — PostgREST can return mixed
+    // orderings across pages, so sort defensively (mirrors computeSealedDeltas).
+    pts.sort((a,b) => a.date.localeCompare(b.date));
     const latest = pts[pts.length-1];
     const price = latest.ebay_avg_1d ?? latest.ebay_avg_7d ?? latest.ebay_avg_30d;
     if(price == null) continue;
@@ -11227,8 +11232,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const updateItemMeta = useCallback(async ({card_id, printing, grader, grade}, patch) => {
     if(!user) return;
     const pr = printing || "Normal";
-    setItems(prev => (prev||[]).map(p =>
-      (p.card_id===card_id && (p.printing||"Normal")===pr && p.grader===grader && p.grade===grade) ? {...p, ...patch} : p));
+    const matches = (p) => p.card_id===card_id && (p.printing||"Normal")===pr && p.grader===grader && p.grade===grade;
+    let prevItem;
+    setItems(prev => (prev||[]).map(p => { if(matches(p)){ prevItem = p; return {...p, ...patch}; } return p; }));
     const update = {};
     if("amount_paid"   in patch) update.amount_paid   = patch.amount_paid;
     if("acquired_date" in patch) update.acquired_date = patch.acquired_date;
@@ -11236,7 +11242,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const {error} = await sbClient.from("graded_collection_items")
       .update(update)
       .eq("user_id", user.id).eq("card_id", card_id).eq("printing", pr).eq("grader", grader).eq("grade", grade);
-    if(error) console.error("graded meta update failed:", error.message || error);
+    // supabase-js resolves {error} rather than throwing — roll the optimistic
+    // patch back (same phantom-value guard as updateSealedMeta) on failure.
+    if(error){
+      console.error("graded meta update failed:", error.message || error);
+      if(prevItem) setItems(prev => (prev||[]).map(p => matches(p) ? prevItem : p));
+      flashToast("Couldn't save — change reverted");
+    }
   }, [user]);
   const addGoal = useCallback(async ({set_id, extras_bucket, rarities, printings, display_name}) => {
     if(!user) return;
