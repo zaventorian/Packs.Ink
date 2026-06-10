@@ -57,7 +57,7 @@ def _sb_get(path: str, key: str | None = None) -> list[dict]:
         raise
 
 
-def _sb_rpc(fn: str) -> None:
+def _sb_rpc(fn: str) -> str:
     url = os.environ["SUPABASE_URL"].rstrip("/") + "/rest/v1/rpc/" + fn
     req = urllib.request.Request(
         url,
@@ -70,7 +70,7 @@ def _sb_rpc(fn: str) -> None:
         method="POST",
     )
     with urllib.request.urlopen(req, timeout=300) as r:
-        r.read()
+        return r.read().decode().strip()
 
 
 def latest_dates() -> tuple[str | None, str | None]:
@@ -87,6 +87,16 @@ def latest_dates() -> tuple[str | None, str | None]:
 def main() -> None:
     if not os.environ.get("SUPABASE_URL") or not os.environ.get("SUPABASE_SERVICE_KEY"):
         sys.exit("SUPABASE_URL and SUPABASE_SERVICE_KEY env vars required.")
+
+    # Daily housekeeping: prune trade-share rows older than 30 days (create_trade
+    # is anon-callable and uncapped). Independent of the matview state, so run it
+    # before the up-to-date early returns. Non-fatal — a cleanup hiccup must not
+    # fail the self-heal job.
+    try:
+        deleted = _sb_rpc("cleanup_old_trades")
+        print(f"cleanup_old_trades: pruned {deleted or '0'} expired trade row(s).")
+    except Exception as e:
+        print(f"  WARN: cleanup_old_trades failed (non-fatal): {e}", file=sys.stderr)
 
     mv_date, pd_date = latest_dates()
     print(f"card_prices_latest.max(price_date) = {mv_date}")
