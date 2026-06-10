@@ -131,9 +131,13 @@ jobs:
   metadata:
     name: Lorcast metadata refresh
     runs-on: ubuntu-latest
+    # Weekly only (Sun 22:00 UTC) or an explicit metadata dispatch. Deliberately
+    # NOT triggered by job=='both' — 'both' is the thrice-daily prices+graded
+    # ping from cron-job.org, and the Lorcast catalog only needs a weekly refresh
+    # (running it 3x/day burned Actions minutes + hammered Lorcast's API).
     if: |
       (github.event_name == 'schedule' && github.event.schedule == '0 22 * * 0') ||
-      (github.event_name == 'workflow_dispatch' && (inputs.job == 'metadata' || inputs.job == 'both'))
+      (github.event_name == 'workflow_dispatch' && inputs.job == 'metadata')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
