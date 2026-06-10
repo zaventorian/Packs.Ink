@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=158">
+<link rel="stylesheet" href="styles.css?v=159">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=158"></script>
+<script src="logo.js?v=159"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -196,7 +196,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v46";
+const CACHE_KEY = "packsink:catalog:v47";
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -747,6 +747,15 @@ const CHINA_ONLY_NONFOIL = {
 // Drop the matching image file into Logos/cards/ for it to render.
 const JAPAN_ONLY_NONFOIL = {
   "Snow White|41": "Logos/cards/snow-white-unexpected-houseguest-japanese.png",
+};
+// Regional-exclusive cards that Lorcast DOES index with art (so, unlike
+// CHINA_ONLY_NONFOIL, we keep the Lorcast image — we only need the label +
+// null price/link, which they already have via a null pid). Keyed by
+// "<Product Name>|<collector_number>". Value = the variant_label to surface.
+const REGIONAL_EXCLUSIVE_LABEL = {
+  "Elsa - Snow Queen|38":                "Chinese Exclusive",
+  "Snow White - Unexpected Houseguest|42": "Chinese Exclusive",
+  "Stitch - Little Rocket|43":           "Chinese Exclusive",
 };
 
 const PULL = {
@@ -1331,7 +1340,8 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       const locKey   = name + "|" + (c.collector_number||"");
       const locImg   = CHINA_ONLY_NONFOIL[locKey] ?? JAPAN_ONLY_NONFOIL[locKey] ?? null;
       const locLabel = CHINA_ONLY_NONFOIL[locKey] !== undefined ? "Chinese Exclusive"
-                     : JAPAN_ONLY_NONFOIL[locKey] !== undefined ? "Japanese Exclusive" : null;
+                     : JAPAN_ONLY_NONFOIL[locKey] !== undefined ? "Japanese Exclusive"
+                     : REGIONAL_EXCLUSIVE_LABEL[locKey] || null;
       // Same Year 3 canonical-printing rule as the priced branch — pick
       // only the one synthetic row that actually exists in the print run.
       const y3NumNoPx = setName === "Lorcana Challenge Promo (C2)"
@@ -1339,16 +1349,19 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
         : null;
       const y3CanonicalNoPx = (y3NumNoPx != null) ? YEAR3_PRINTING_BY_NUMBER[y3NumNoPx] : null;
       if(locLabel){
-        // Localized-exclusive printings are Normal-only; the localized
-        // image + label decorate the tile.
+        // Localized-exclusive printings are Normal-only; the label decorates
+        // the tile. When we have a locally-hosted image (Lorcast lacks art)
+        // swap it in; otherwise keep the Lorcast image buildRow already set.
         const row = buildRow(c, setName, rar, name, "Normal", null);
         row.variant_label = locLabel;
         row.tcgplayer_product_id = null;
         row.china_only = CHINA_ONLY_NONFOIL[locKey] !== undefined;
         row.localized_exclusive = locLabel;
-        row.img_small = locImg;
-        row.img_normal = locImg;
-        row.img_large = locImg;
+        if(locImg){
+          row.img_small = locImg;
+          row.img_normal = locImg;
+          row.img_large = locImg;
+        }
         rows.push(row);
       } else if(isChase){
         rows.push(buildRow(c, setName, rar, name, "Holofoil", null));
@@ -3545,8 +3558,16 @@ const setRank = (g) => {
   return idx === -1 ? UNKNOWN_SET_RANK : idx;
 };
 const collectorNum = (g) => {
-  const n = parseInt((g.Number||"").split("/")[0], 10);
-  return Number.isFinite(n) ? n : 99999;
+  const raw = (g.Number||"").split("/")[0].trim();
+  const n = parseInt(raw, 10);
+  if(!Number.isFinite(n)) return 99999;
+  // A lettered suffix (e.g. "24B") must sort immediately AFTER its bare
+  // number ("24") — parseInt collapses both to 24, leaving the tie-break at 0
+  // and the order at the mercy of fetch order. Nudge suffixed numbers up by a
+  // small fraction keyed on the letter (A=.01, B=.02, …) so "24" < "24B".
+  const m = raw.match(/^\d+([A-Za-z])/);
+  const suffix = m ? (m[1].toUpperCase().charCodeAt(0) - 64) / 100 : 0;
+  return n + suffix;
 };
 // Return the numeric price to use for sorting a card group. Prefers Normal
 // Low; falls back to Foil Low when Normal is absent (i.e., chase rarities).
@@ -17037,6 +17058,120 @@ function drawCardTileCanvas(canvas, {artImg, logoImg, name, meta, low, market, d
   return H;
 }
 
+// ── Full mover-banner export — the whole strip of tiles as one image ────────
+// Drawn on a single <canvas> (same CSS-cache-proof rationale as the per-tile
+// poster). Paints each card as a compact tile side-by-side, then one shared
+// footer. Mirrors drawCardTileCanvas's layout so a banner tile reads like the
+// single-tile export.
+function paintMoverTile(ctx, ox, oy, TW, tileH, card, artImg, wins, P){
+  const PAD = 12, R = 10, ROW_H = 16;
+  const artW = TW - PAD*2, artH = Math.round(artW * 7 / 5);
+  const isFoil = card.printing && card.printing !== "Normal";
+  const name = card.version ? `${card.name} — ${card.version}` : card.name;
+  // panel
+  roundRectPath(ctx, ox+0.5, oy+0.5, TW-1, tileH-1, R+2); ctx.fillStyle = P.bg; ctx.fill();
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.stroke();
+  // art
+  roundRectPath(ctx, ox+PAD, oy+PAD, artW, artH, R); ctx.save(); ctx.clip();
+  if(artImg){ drawImageCover(ctx, artImg, ox+PAD, oy+PAD, artW, artH); }
+  else { ctx.fillStyle = P.surface; ctx.fillRect(ox+PAD, oy+PAD, artW, artH); }
+  ctx.restore();
+  let y = oy + PAD + artH + 12;
+  // name (1 line, ellipsised)
+  ctx.fillStyle = P.text; ctx.font = "700 14px 'Cinzel', Georgia, serif"; ctx.textAlign = "left";
+  const nameLine = wrapPosterText(ctx, name || "", artW, 1)[0];
+  y += 15; ctx.fillText(nameLine, ox+PAD, y);
+  // meta
+  y += 15; ctx.fillStyle = P.muted; ctx.font = "600 10px 'Nunito Sans', sans-serif";
+  ctx.fillText(((card.rarity||"") + (isFoil?" · FOIL":"")).toUpperCase().trim(), ox+PAD, y);
+  // Low / Mkt
+  y += 19;
+  const drawPx = (label, val, yy) => {
+    ctx.textAlign = "left"; ctx.fillStyle = P.muted; ctx.font = "700 9px 'Nunito Sans', sans-serif"; ctx.fillText(label, ox+PAD, yy);
+    ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = "700 14px 'Nunito Sans', sans-serif"; ctx.fillText(fmt(parseP(val)), ox+TW-PAD, yy);
+  };
+  drawPx("LOW", card.low_today, y); y += 17; drawPx("MKT", card.market_today, y);
+  ctx.textAlign = "left";
+  // Δ% grid (3 windows × LOW/MKT)
+  y += 16;
+  const labelW = 28, gx0 = ox + PAD + labelW, cellW = (TW - PAD*2 - labelW) / wins.length;
+  ctx.font = "700 8px 'Nunito Sans', sans-serif"; ctx.fillStyle = P.muted; ctx.textAlign = "center";
+  wins.forEach((w,i) => ctx.fillText(w.label, gx0 + cellW*i + cellW/2, y));
+  const drawDelta = (label, pctKey, yy) => {
+    ctx.textAlign = "left"; ctx.font = "700 8px 'Nunito Sans', sans-serif"; ctx.fillStyle = P.muted; ctx.fillText(label, ox+PAD, yy);
+    ctx.textAlign = "center"; ctx.font = "700 11px 'Nunito Sans', sans-serif";
+    wins.forEach((w,i) => { ctx.fillStyle = posterPctColor(card[w[pctKey]], P); ctx.fillText(fmtPct(card[w[pctKey]]), gx0 + cellW*i + cellW/2, yy); });
+  };
+  drawDelta("LOW", "pctLow", y + ROW_H); drawDelta("MKT", "pctMkt", y + ROW_H*2);
+  ctx.textAlign = "left";
+}
+
+async function buildMoverBannerBlob(cards, activeWindow){
+  const P = posterPalette();
+  const SCALE = 2, PAD = 16, TW = 220, GAP = 10, R = 10;
+  const wins = pickVisibleWindows(activeWindow);
+  const list = (cards || []).slice(0, 30); // bound the canvas width
+  if(!list.length) throw new Error("no cards");
+  const artW = TW - 24, artH = Math.round(artW * 7 / 5);
+  // tileH mirrors paintMoverTile's vertical progression (art → name → meta →
+  // 2 prices → header + 2 delta rows), plus top/bottom inner padding.
+  const tileH = 12 + artH + 12 + 15 + 15 + 19 + 17 + 16 + 16*2 + 12;
+  const FOOT_H = 30;
+  const W = PAD + list.length*TW + (list.length-1)*GAP + PAD;
+  const H = PAD + tileH + 10 + FOOT_H + PAD;
+  // Load logo + every card's art (proxied → crossOrigin clean so toBlob works).
+  const [logoImg, ...artImgs] = await Promise.all([
+    loadPosterImage("Logos/packs-ink-logo.png?v=5"),
+    ...list.map(c => {
+      const src = c.image_large || c.image_normal || c.image_small;
+      return src ? loadPosterImage(proxyImg(src)) : Promise.resolve(null);
+    }),
+  ]);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(W*SCALE); canvas.height = Math.round(H*SCALE);
+  const ctx = canvas.getContext("2d"); ctx.scale(SCALE, SCALE); ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+  list.forEach((c, i) => paintMoverTile(ctx, PAD + i*(TW+GAP), PAD, TW, tileH, c, artImgs[i], wins, P));
+  // footer (centered logo + stamp)
+  const fy = PAD + tileH + 10;
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(PAD, fy); ctx.lineTo(W-PAD, fy); ctx.stroke();
+  const footTxt = "packs.ink · " + new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
+  ctx.font = "800 13px 'Nunito Sans', sans-serif";
+  const lH = 20, lW = logoImg ? Math.round(logoImg.naturalWidth * (lH / logoImg.naturalHeight)) : 0;
+  const tW = ctx.measureText(footTxt).width, tot = lW + (lW?8:0) + tW;
+  let fx = (W - tot) / 2; const fb = fy + 22;
+  if(logoImg){ ctx.drawImage(logoImg, fx, fb - lH + 4, lW, lH); fx += lW + 8; }
+  ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.fillText(footTxt, fx, fb);
+  return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+}
+
+// Copy the whole mover banner as one image. Same synchronous-clipboard pattern
+// as copyMoverTileImage so the write stays inside the user gesture.
+const copyMoverBannerImage = (cards, activeWindow) => {
+  flashToast("Copying banner…", 10000);
+  const blobPromise = buildMoverBannerBlob(cards, activeWindow);
+  blobPromise.catch((err) => { console.error("[banner-copy] capture failed:", err); });
+  const downloadBlob = (blob) => {
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = u; a.download = "packsink-movers.png";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(u), 2000);
+  };
+  if(navigator.clipboard && window.ClipboardItem){
+    navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
+      .then(() => flashToast("Banner image copied to clipboard"))
+      .catch((err) => {
+        console.error("[banner-copy] clipboard.write failed:", err);
+        blobPromise.then((blob) => { downloadBlob(blob); flashToast("Couldn't reach clipboard — downloaded instead"); })
+                   .catch(() => flashToast("Couldn't copy banner — try again"));
+      });
+  } else {
+    blobPromise.then((blob) => { downloadBlob(blob); flashToast("Banner image saved"); })
+               .catch(() => flashToast("Couldn't copy banner — try again"));
+  }
+};
+
 const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const tips = useContext(TipsContext);
   const url = tcgUrl(card.tcgplayer_product_id, card.printing);
@@ -17232,7 +17367,7 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
   }, []);
 
   return html`<section style=${{margin:"0 0 10px"}}>
-    ${(title || subtitle || controls) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
+    ${(title || subtitle || controls || cards.length) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
       ${title ? (onTitleClick
         ? html`<button class="home-title-link" onClick=${onTitleClick}
             title="Open Screener with this filter"
@@ -17240,6 +17375,16 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
         : html`<h2 class="title-font" style=${{fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3}}>${title}</h2>`) : null}
       ${controls ? html`<span>${controls}</span>` : null}
       ${subtitle ? html`<span class="muted" style=${{fontSize:10}}>${subtitle}</span>` : null}
+      ${cards.length > 0 && html`<button class="movers-banner-cam" title="Copy this whole banner as an image"
+        aria-label="Copy this whole banner as an image"
+        style=${{marginLeft:"auto"}}
+        onClick=${()=>copyMoverBannerImage(cards, activeWindow)}>
+        <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13"
+          style=${{display:"block",stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}>
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+          <circle cx="12" cy="13" r="4"/>
+        </svg>
+      </button>`}
     </div>` : null}
     ${cards.length === 0
       ? html`<div class="muted" style=${{fontSize:11,padding:"10px 4px"}}>
