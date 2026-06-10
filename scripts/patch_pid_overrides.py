@@ -49,6 +49,9 @@ OVERRIDES = {
     "Will o' the Wisp - Forest Spirit|51": 692483,
     "Mickey Mouse - Playful Sorcerer|7": 559564,
     "Iago - Out of Reach|8": 630086,
+    "Mickey Mouse - True Friend|36": 653906,            # Promo Set 2 — Puzzle Promo
+    "Tinker Bell - Snowflake Collector|33": 673334,     # Promo Set 3 — SC Participant
+    "Tinker Bell - Snowflake Collector|34": 673333,     # Promo Set 3 — SC Championship (foil)
     "Hiro Hamada - Armor Designer|24":  620277,
     "Hiro Hamada - Armor Designer|24B": 620276,
 }
@@ -116,6 +119,19 @@ def main() -> None:
     def tcg_img(pid, w):
         return f"https://tcgplayer-cdn.tcgplayer.com/product/{pid}_{w}w.jpg"
     synthetic_cards = [
+        {  # Elsa - Queen Regent — Promo Set 2 #16 (Launch Location Exclusive,
+           # Lorcast-unindexed). Stats mirror the base Elsa - Queen Regent.
+            "id": "crd_custom_647091_elsa_queen_regent",
+            "set_id": "set_1fd69818f6e44dd79e922f403aa4f6d9",  # Promo Set 2
+            "name": "Elsa", "version": "Queen Regent",
+            "rarity": "Promo", "ink": "Amethyst", "inks": ["Amethyst"],
+            "collector_number": "16", "cost": 4, "inkable": True,
+            "card_type": "Character",
+            "classifications": ["Storyborn","Hero","Queen","Sorcerer"],
+            "text": None, "flavor_text": None,
+            "image_small": tcg_img(647091, 200), "image_normal": tcg_img(647091, 400), "image_large": tcg_img(647091, 400),
+            "tcgplayer_product_id": 647091,
+        },
         {  # Golden Mickey — Challenge Promo (C1) #5 (serial numbered)
             "id": "crd_custom_554628_golden_mickey",
             "set_id": CHALLENGE_PROMO_SET,

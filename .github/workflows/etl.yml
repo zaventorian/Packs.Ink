@@ -151,6 +151,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/load_lorcast.py
+      # Re-apply TCG_PID_OVERRIDES immediately after Lorcast loads. load_lorcast
+      # upserts cards on Lorcast's id and overwrites tcgplayer_product_id with
+      # Lorcast's value (null for promos it hasn't linked), which REVERTS every
+      # manual pid override + drops those cards' prices until re-synced. Running
+      # the patch here keeps promo/override prices flowing past the weekly refresh.
+      - name: Re-apply pid overrides
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/patch_pid_overrides.py
 
   selfheal:
     name: Matview self-heal
