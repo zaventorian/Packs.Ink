@@ -197,17 +197,38 @@ const lorcastToProxy = (url) => {
   return url;
 };
 const AUX_VERSION_KEY   = "packsink:auxCacheVersion";
+// Price-derived auxiliary caches: cheaply rebuildable from Supabase, safe to
+// wipe when the catalog refreshes or we need to free quota. IMPORTANT: this is
+// an ALLOW-LIST. Everything else under packsink:* — theme/display prefs,
+// graded:removed (the "remove from tracking" list, not synced to Supabase),
+// the in-progress trade draft, unauth screener views, install prefs, the
+// catalog, the auth token, this sentinel — is USER STATE and must never be
+// swept by the daily aux wipes. (Previously these wipes were a blanket
+// deny-list that nuked all of the above ~once per ETL day: signed-out users
+// lost their theme daily and the remove-from-tracking list reset for everyone.)
+const AUX_EVICTABLE_PREFIXES = [
+  "packsink:movers:",
+  "packsink:screener-movers:",
+  "packsink:sealed:",
+  "packsink:setsMeta:",
+  "packsink:hist:",
+  "packsink:colvalue:",
+  "packsink:home:",       // home:tourneys
+  "packsink:following:",
+];
+const isPriceDerivedAuxKey = (k) =>
+  typeof k === "string" && AUX_EVICTABLE_PREFIXES.some(p => k.startsWith(p));
+const wipePriceDerivedAuxCaches = () => {
+  try {
+    for(const k of Object.keys(localStorage)){
+      if(isPriceDerivedAuxKey(k)) localStorage.removeItem(k);
+    }
+  } catch {}
+};
 try {
   const prev = localStorage.getItem(AUX_VERSION_KEY);
   if(prev !== AUX_CACHE_VERSION){
-    for(const k of Object.keys(localStorage)){
-      if(!k.startsWith("packsink:")) continue;
-      if(k === CACHE_KEY) continue;
-      if(k === AUX_VERSION_KEY) continue;
-      if(k.startsWith("packsink:auth")) continue;
-      if(k === "packsink:installVisits" || k === "packsink:installDismissed") continue;
-      localStorage.removeItem(k);
-    }
+    wipePriceDerivedAuxCaches();
     localStorage.setItem(AUX_VERSION_KEY, AUX_CACHE_VERSION);
   }
 } catch {}
@@ -264,18 +285,16 @@ function writeCache(rows, latestDate){
   //   1. Delete the old key first so the browser doesn't have to hold both
   //      old + new during the setItem (some browsers count it that way and
   //      reject the write when the sum exceeds quota).
-  //   2. If that still fails, evict every other packsink cache except
-  //      auth — those are rebuildable, the catalog is the expensive one.
+  //   2. If that still fails, evict the price-derived aux caches (hist /
+  //      colvalue / sealed / movers / setsMeta — the bulk of the space and all
+  //      cheaply rebuildable) and retry. This deliberately does NOT touch user
+  //      state (theme/display prefs, graded:removed, trade draft, screener
+  //      views, install prefs) — see AUX_EVICTABLE_PREFIXES.
   //   3. If still failing, give up and warn (next visit will retry).
   try { localStorage.removeItem(CACHE_KEY); localStorage.setItem(CACHE_KEY, payload); return; }
   catch(e){ /* fall through */ }
   try {
-    const keysToDrop = [];
-    for(let i=0; i<localStorage.length; i++){
-      const k = localStorage.key(i);
-      if(k && k.startsWith("packsink:") && k !== CACHE_KEY && !k.startsWith("packsink:theme") && !k.startsWith("packsink:tipsEnabled")) keysToDrop.push(k);
-    }
-    for(const k of keysToDrop) localStorage.removeItem(k);
+    wipePriceDerivedAuxCaches();
     localStorage.setItem(CACHE_KEY, payload);
   } catch(e2){
     console.warn("cache write failed even after eviction:", e2?.message || e2);
@@ -6297,9 +6316,8 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     for(const id of cardIds){
       const row = rowByCardId.get(id);
       if(!row || !row.tcg_printing) continue;
-      const key = id + ":" + row.tcg_printing;
-      const cur = (collection && collection[key]) || 0;
-      updateQty(key, cur + 1);
+      const cur = (collection && collection[id + ":" + row.tcg_printing]) || 0;
+      updateQty(id, row.tcg_printing, cur + 1);
       added++;
     }
     showToast(`Added ${added} card${added===1?"":"s"} to your collection.`);
@@ -22117,12 +22135,16 @@ function parseDeckText(text, raw){
       hit = byName[normalizeCardName(name)] || byName[squashCardName(name)];
     }
     if(!hit){ unmatched.push(`${qty} ${name}${setNum && cn ? ` (${setNum}-${cn})` : ""}`); continue; }
-    entries.push({card_id: hit.card_id, quantity: Math.min(qty, 4), source_line: line});
+    // Cap per the card's real deck limit, not a hard 4 — Dalmatian Puppy
+    // (Puppy Power, 99) and Microbots (unlimited → 99) legitimately exceed 4,
+    // and a hard cap here silently truncated real decks + tournament uploads.
+    const cap = getDeckLimitForUI(hit["Product Name"]);
+    entries.push({card_id: hit.card_id, quantity: Math.min(qty, cap), cap, source_line: line});
   }
-  // Dedupe by card_id (sum quantities, cap at 4).
+  // Dedupe by card_id (sum quantities, cap at the card's deck limit).
   const merged = {};
   for(const e of entries){
-    merged[e.card_id] = Math.min(4, (merged[e.card_id]||0) + e.quantity);
+    merged[e.card_id] = Math.min(e.cap, (merged[e.card_id]||0) + e.quantity);
   }
   return {
     entries: Object.entries(merged).map(([cid, q]) => ({card_id:cid, quantity:q})),
@@ -22369,6 +22391,18 @@ const youtubeIdFromUrl = (url) => {
     }
   } catch {}
   return null;
+};
+
+// Return the URL only if it's a safe http(s) link, else null. User-supplied
+// URL fields (e.g. deck.youtube_url) must pass through this before landing in
+// an href — production React does NOT sanitize javascript:/data: hrefs, so a
+// raw value would be a stored-XSS vector on shared/public decks.
+const safeHttpUrl = (url) => {
+  if(!url || typeof url !== "string") return null;
+  try {
+    const u = new URL(url.trim());
+    return (u.protocol === "http:" || u.protocol === "https:") ? u.href : null;
+  } catch { return null; }
 };
 
 // Background-style swatch for the legend (CSS doesn't share SVG gradient ids
@@ -23140,10 +23174,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
                   title="Deck profile video" allowfullscreen
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
               </div>`
-            : deck.youtube_url && html`<a href=${deck.youtube_url} target="_blank" rel="noopener"
+            : (safeHttpUrl(deck.youtube_url) && html`<a href=${safeHttpUrl(deck.youtube_url)} target="_blank" rel="noopener noreferrer"
                 style=${{display:"block",marginTop:10,fontSize:12,color:"var(--accent)"}}>
                 ▶ ${deck.youtube_url}
-              </a>`}
+              </a>`)}
         </div>`;
       })()}`;
 
@@ -24291,13 +24325,22 @@ function App(){
       const insertRes = await sbClient.from("profiles")
         .upsert({user_id: user.id}, {onConflict: "user_id", ignoreDuplicates: true});
       if(insertRes.error) console.warn("profile upsert failed (run supabase/18_*.sql?):", insertRes.error.message);
-      // Read whatever's there now.
+      // Read whatever's there now. The share token is NOT selected here — it's
+      // revoked from the API roles (migration 63) so it can't be harvested in
+      // bulk; the owner reads their own token via the gated RPC below.
       const {data, error} = await sbClient.from("profiles")
-        .select("user_id,display_name,avatar_url,collection_raw_visibility,collection_sealed_visibility,collection_graded_visibility,collection_share_token")
+        .select("user_id,display_name,avatar_url,collection_raw_visibility,collection_sealed_visibility,collection_graded_visibility")
         .eq("user_id", user.id).maybeSingle();
       if(cancelled) return;
       if(error){ console.warn("profile read failed:", error.message); return; }
-      setProfile(data || {user_id: user.id, display_name: null, avatar_url: null});
+      let prof = data || {user_id: user.id, display_name: null, avatar_url: null};
+      // Owner-only: fetch this user's own collection share token.
+      const setRes = await sbClient.rpc("get_my_collection_settings");
+      if(cancelled) return;
+      if(!setRes.error && Array.isArray(setRes.data) && setRes.data[0]){
+        prof = {...prof, collection_share_token: setRes.data[0].collection_share_token};
+      }
+      setProfile(prof);
       // Prompt for a display name if it's missing (typical for a fresh sign-in).
       if(!data || !data.display_name || !data.display_name.trim()){
         setShowNamePrompt(true);
@@ -24316,11 +24359,11 @@ function App(){
     const {error} = await sbClient.from("profiles")
       .update({[col]: level}).eq("user_id", user.id);
     if(error) return {ok:false, error: error.message};
-    // Re-read so we pick up any token rotation done by the trigger.
-    const {data} = await sbClient.from("profiles")
-      .select("collection_raw_visibility,collection_sealed_visibility,collection_graded_visibility,collection_share_token")
-      .eq("user_id", user.id).maybeSingle();
-    if(data) setProfile(p => ({...(p||{user_id:user.id}), ...data}));
+    // Re-read so we pick up any token rotation done by the trigger. The token
+    // comes from the owner-gated RPC (it's revoked from the table API roles).
+    const {data} = await sbClient.rpc("get_my_collection_settings");
+    const row = Array.isArray(data) ? data[0] : null;
+    if(row) setProfile(p => ({...(p||{user_id:user.id}), ...row}));
     else setProfile(p => ({...(p||{user_id:user.id}), [col]: level}));
     return {ok:true};
   }, [user]);
@@ -24557,7 +24600,9 @@ function App(){
   const updateSealedQty = useCallback(async (productId, newQty)=>{
     if(!user || productId == null) return;
     const pid = parseInt(productId, 10);
+    let prevQty;
     setSealedCollection(c=>{
+      prevQty = c[pid];
       const next = {...c};
       if(newQty<=0) delete next[pid];
       else next[pid] = newQty;
@@ -24565,21 +24610,34 @@ function App(){
     });
     // Deleting the row implicitly drops its purchase metadata too —
     // mirror that locally so the inputs clear if the user re-adds.
+    let prevMeta;
     if(newQty<=0){
-      setSealedMeta(m => { if(!m[pid]) return m; const n = {...m}; delete n[pid]; return n; });
+      setSealedMeta(m => { prevMeta = m[pid]; if(!m[pid]) return m; const n = {...m}; delete n[pid]; return n; });
     }
+    // supabase-js returns {error} rather than throwing — check it and roll the
+    // optimistic state back so the UI never claims a save that didn't happen.
+    let err;
     try {
       if(newQty<=0){
-        await sbClient.from("sealed_collection_items").delete()
+        ({error: err} = await sbClient.from("sealed_collection_items").delete()
           .eq("user_id", user.id).eq("tcgplayer_product_id", pid)
-          .eq("condition","NM");
+          .eq("condition","NM"));
       } else {
-        await sbClient.from("sealed_collection_items").upsert({
+        ({error: err} = await sbClient.from("sealed_collection_items").upsert({
           user_id:user.id, tcgplayer_product_id:pid, condition:"NM", quantity:newQty,
-        }, {onConflict:"user_id,tcgplayer_product_id,condition"});
+        }, {onConflict:"user_id,tcgplayer_product_id,condition"}));
       }
-    } catch(e){
-      console.error("sealed collection update failed:", e);
+    } catch(e){ err = e; }
+    if(err){
+      console.error("sealed collection update failed:", err.message || err);
+      setSealedCollection(c=>{
+        const next = {...c};
+        if(prevQty == null) delete next[pid];
+        else next[pid] = prevQty;
+        return next;
+      });
+      if(newQty<=0 && prevMeta) setSealedMeta(m => ({...m, [pid]: prevMeta}));
+      flashToast("Couldn't save — change reverted");
     }
   }, [user]);
 
@@ -24589,7 +24647,9 @@ function App(){
   const updateSealedMeta = useCallback(async (productId, patch) => {
     if(!user || productId == null) return;
     const pid = parseInt(productId, 10);
+    let prevMeta;
     setSealedMeta(m => {
+      prevMeta = m[pid];
       const cur = m[pid] || {amount_paid:null, acquired_date:null};
       const next = {...cur, ...patch};
       // If both fields nulled, drop the key entirely.
@@ -24598,16 +24658,25 @@ function App(){
       }
       return {...m, [pid]: next};
     });
+    let err;
     try {
       const update = {};
       if("amount_paid"   in patch) update.amount_paid   = patch.amount_paid;
       if("acquired_date" in patch) update.acquired_date = patch.acquired_date;
-      await sbClient.from("sealed_collection_items")
+      ({error: err} = await sbClient.from("sealed_collection_items")
         .update(update)
         .eq("user_id", user.id).eq("tcgplayer_product_id", pid)
-        .eq("condition","NM");
-    } catch(e){
-      console.error("sealed meta update failed:", e);
+        .eq("condition","NM"));
+    } catch(e){ err = e; }
+    if(err){
+      console.error("sealed meta update failed:", err.message || err);
+      setSealedMeta(m => {
+        const out = {...m};
+        if(prevMeta == null) delete out[pid];
+        else out[pid] = prevMeta;
+        return out;
+      });
+      flashToast("Couldn't save — change reverted");
     }
   }, [user]);
 
@@ -24616,24 +24685,38 @@ function App(){
   const updateQty = useCallback(async (cardId, printing, newQty)=>{
     if(!user || !cardId || !printing) return;
     const key = cardId+":"+printing;
+    let prevQty;
     setCollection(c=>{
+      prevQty = c[key];
       const next = {...c};
       if(newQty<=0) delete next[key];
       else next[key] = newQty;
       return next;
     });
+    // supabase-js resolves with {error} on RLS/constraint/auth failure rather
+    // than throwing, so the try/catch alone wouldn't catch it. Check error and
+    // roll the optimistic update back so the UI never shows a phantom quantity.
+    let err;
     try {
       if(newQty<=0){
-        await sbClient.from("collection_items").delete()
+        ({error: err} = await sbClient.from("collection_items").delete()
           .eq("user_id", user.id).eq("card_id", cardId)
-          .eq("printing", printing).eq("condition","NM");
+          .eq("printing", printing).eq("condition","NM"));
       } else {
-        await sbClient.from("collection_items").upsert({
+        ({error: err} = await sbClient.from("collection_items").upsert({
           user_id:user.id, card_id:cardId, printing:printing, condition:"NM", quantity:newQty,
-        }, {onConflict:"user_id,card_id,printing,condition"});
+        }, {onConflict:"user_id,card_id,printing,condition"}));
       }
-    } catch(e){
-      console.error("collection update failed:", e);
+    } catch(e){ err = e; }
+    if(err){
+      console.error("collection update failed:", err.message || err);
+      setCollection(c=>{
+        const next = {...c};
+        if(prevQty == null) delete next[key];
+        else next[key] = prevQty;
+        return next;
+      });
+      flashToast("Couldn't save — change reverted");
     }
   }, [user]);
 
@@ -24796,18 +24879,14 @@ function App(){
             console.log("Catalog cache out of date (server:", serverDate, "cache:", cached.latestDate, "). Refreshing...");
             // Every cache that derives from price data is now stale too —
             // movers, sealed prices, per-card history, set metadata, and the
-            // collection-value rollup. Drop them so the next surface that
-            // needs them refetches fresh instead of serving yesterday's
-            // numbers. (Auth + install prefs + the catalog itself stay.)
-            try {
-              for(const k of Object.keys(localStorage)){
-                if(!k.startsWith("packsink:")) continue;
-                if(k === CACHE_KEY) continue;
-                if(k.startsWith("packsink:auth")) continue;
-                if(k === "packsink:installVisits" || k === "packsink:installDismissed") continue;
-                localStorage.removeItem(k);
-              }
-            } catch {}
+            // collection-value rollup. Drop ONLY those (the price-derived
+            // allow-list) so the next surface that needs them refetches fresh.
+            // User state (theme/display prefs, graded:removed, trade draft,
+            // screener views, install prefs) and the catalog itself are left
+            // untouched — this fires ~once per ETL day so a blanket wipe here
+            // used to reset signed-out users' theme + everyone's
+            // remove-from-tracking list daily.
+            wipePriceDerivedAuxCaches();
           } else {
             return; // probe failed, trust TTL and skip refresh
           }
