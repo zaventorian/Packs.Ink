@@ -203,8 +203,22 @@ def delete_orphans(conn, sb: Supabase, dry: bool) -> None:
     ]:
         sb_ids = fetch_ids(table, col)
         orphans = sb_ids - local_set
+        # Safety guard against catastrophic wipes. An empty local set (or a
+        # huge orphan fraction) almost always means the local SQLite was
+        # empty/corrupt/partial — e.g. a truncated Storage download — NOT that
+        # the user genuinely deleted nearly every row. Sweeping here would
+        # delete the entire remote table and cascade matches→ratings. The
+        # weekly CI exits 0 on an empty-but-valid DB, so nothing else stops it.
+        suspicious = (not local_set) or (bool(sb_ids) and len(orphans) > 0.6 * len(sb_ids))
+        if suspicious and not dry:
+            raise RuntimeError(
+                f"refusing to sweep {table}: {len(orphans)}/{len(sb_ids)} remote rows "
+                f"flagged as orphans (local has {len(local_set)} ids). Local SQLite "
+                f"looks empty/corrupt/partial — aborting before it deletes real data."
+            )
         if dry:
-            print(f"  {table}: {len(orphans)} orphans (would delete)")
+            flag = "  ⚠ SUSPICIOUS — real run would REFUSE" if suspicious else ""
+            print(f"  {table}: {len(orphans)} orphans (would delete){flag}")
         elif orphans:
             # elo_players.first_event_id has no ON DELETE behavior on its FK to
             # elo_events. Before deleting orphan events, clear any first_event_id
