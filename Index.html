@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=157">
+<link rel="stylesheet" href="styles.css?v=158">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=157"></script>
+<script src="logo.js?v=158"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -196,7 +196,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v45";
+const CACHE_KEY = "packsink:catalog:v46";
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -701,6 +701,9 @@ const TCG_PID_OVERRIDES = {
   "Will o' the Wisp - Forest Spirit|51": 692483,
   "Mickey Mouse - Playful Sorcerer|7": 559564,
   "Iago - Out of Reach|8": 630086,
+  "Mickey Mouse - True Friend|36": 653906,            // Promo Set 2 — Puzzle Promo
+  "Tinker Bell - Snowflake Collector|33": 673334,     // Promo Set 3 — SC Participant
+  "Tinker Bell - Snowflake Collector|34": 673333,     // Promo Set 3 — SC Championship (foil)
   // Hiro Hamada Armor Designer — Lorcast bound #24 to 620276, but that's
   // actually the Enchanted "Top 8" copy. The participation copy lives at
   // 620277. Two overrides correct the swap.
@@ -713,6 +716,11 @@ const TCG_PID_OVERRIDES = {
 // catalog so the non-foil slot doesn't show a misleading price/buy link.
 const SUPPRESS_NONFOIL_PIDS = new Set([
   650207, // Mickey Mouse - True Friend (Promo Set 3) — non-foil listings are JP/CN
+  // Holofoil-ONLY promos — no Normal printing exists on TCGPlayer, so the
+  // catalog's default non-foil slot is a phantom (empty counter, no price).
+  559564, // Mickey Mouse - Playful Sorcerer (D23 #7)
+  630086, // Iago - Out of Reach (#8)
+  679565, // Mad Hatter - Unruly Eccentric (#16)
 ]);
 // Same idea, but keyed by "<Product Name>|<collector_number>" for cards whose
 // product_id we don't have (or that share a name across language variants).
@@ -3184,6 +3192,18 @@ const matchesCardFilter = (row, f, parsed) => {
         const ok = all ? tokens.every(t => haystack.includes(t)) : tokens.some(t => haystack.includes(t));
         if(!ok) return false;
       }
+    }
+    // `contains:` chips: phrase substring match against the searchable haystack
+    // (name + type + body text + classifications). Each phrase must appear —
+    // so "a whole new world" matches the song, not every card with an "a".
+    if(parsed.contains && parsed.contains.length){
+      const hay = [
+        (row["Product Name"]||"").toLowerCase(),
+        (row.card_type||"").toLowerCase(),
+        (row.text||"").toLowerCase(),
+        ...((row.classifications||[]).map(c => (c||"").toLowerCase()))
+      ].join("  ");
+      for(const phrase of parsed.contains){ if(!hay.includes(phrase)) return false; }
     }
   }
 
@@ -5994,7 +6014,12 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     if(classifications.length) p.filters.classifications = classifications;
     if(keywords.length)        p.filters.keywords        = keywords;
     if(containsTokens.length){
-      p.name = (p.name ? p.name + " " : "") + containsTokens.join(" ");
+      // `contains:` chips are PHRASE searches (substring), kept SEPARATE from
+      // free-typed `name` tokens. Appending them to `name` made a multi-word
+      // phrase like "a whole new world" get tokenized + any-matched, so the
+      // stopwords "a"/"of" matched every card. matchesCardFilter checks each
+      // phrase as a substring of the name/type/text/classification haystack.
+      p.contains = containsTokens.map(t => String(t).toLowerCase().trim()).filter(Boolean);
     }
     return p;
   }, [parsedFromInput, smartChips, filter.matchMode]);
