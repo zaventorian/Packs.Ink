@@ -33,7 +33,7 @@ import json
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Iterable
 
 import requests
@@ -180,7 +180,10 @@ def main() -> None:
         sys.exit(1)
     sb = Supabase()
     session = requests.Session()
-    today = date.today().isoformat()
+    # UTC, to match the TCGCSV raw ETL's snapshot date. date.today() is LOCAL,
+    # so a near-midnight local run would stamp graded prices a day off from the
+    # raw prices they're displayed alongside.
+    today = datetime.now(timezone.utc).date().isoformat()
 
     # Page through the whole Lorcana catalog. The first response also tells
     # us the true total so we know when to stop.
