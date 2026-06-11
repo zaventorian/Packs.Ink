@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=166">
+<link rel="stylesheet" href="styles.css?v=167">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=166"></script>
+<script src="logo.js?v=167"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -13941,6 +13941,80 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
   </div>`;
 }
 
+// Upcoming Set Championships at the stores we track for ELO — a filtered view
+// of public.set_championships joined to public.elo_tracked_stores (the view
+// public.elo_upcoming_scs). Grouped by local day; tap for full details.
+function EloUpcomingSCs(){
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const [sel, setSel] = useState(null);
+  useEffect(() => {
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0,10);
+        const {data, error} = await sbClient.from("elo_upcoming_scs")
+          .select("event_id,name,set_name,store_name,store_website,city,state,start_datetime,timezone,full_address,latitude,longitude,capacity,cost_cents,currency,gameplay_format,url")
+          .gte("start_datetime", today)
+          .order("start_datetime").limit(500);
+        if(error) throw error;
+        setRows((data || []).map(e => ({...e, _day: scLocalDay(e.start_datetime, e.timezone)})));
+      } catch(e){ setErr(String(e && e.message || e)); }
+    })();
+  }, []);
+
+  if(err) return html`<div class="elo-empty">Couldn't load upcoming events: ${err}</div>`;
+  if(rows === null) return html`<div class="elo-loading">Loading upcoming Set Championships…</div>`;
+  if(rows.length === 0) return html`<div class="elo-empty">No upcoming Set Championships at the stores we track right now.</div>`;
+
+  const groups = [];
+  for(const e of rows){
+    const last = groups[groups.length-1];
+    if(!last || last.day !== e._day) groups.push({day: e._day, label: fmtSCDate(e.start_datetime, e.timezone), items: [e]});
+    else last.items.push(e);
+  }
+  const storeCount = new Set(rows.map(r => r.store_name)).size;
+
+  return html`<div class="elo-upcoming">
+    <p class="elo-upcoming-sub">${rows.length} upcoming Set Championship${rows.length===1?"":"s"} across ${storeCount} stores we track for ELO. Tap an event for details.</p>
+    ${groups.map(g => html`<div key=${g.day} class="elo-up-day">
+      <div class="elo-up-day-head">${g.label}</div>
+      <div class="elo-up-rows">
+        ${g.items.map(e => html`<button key=${e.event_id} class="elo-up-row" onClick=${()=>setSel(e)}>
+          <span class="elo-up-time">${fmtSCTime(e.start_datetime, e.timezone)}</span>
+          <span class="elo-up-main">
+            <span class="elo-up-store">${e.store_name}</span>
+            <span class="elo-up-loc">${e.city}, ${e.state}</span>
+          </span>
+          <span class="elo-up-arrow" aria-hidden="true">›</span>
+        </button>`)}
+      </div>
+    </div>`)}
+    ${sel && (() => {
+      const cost = fmtSCCost(sel.cost_cents, sel.currency);
+      return html`<div class="sc-modal-overlay" onClick=${()=>setSel(null)}>
+        <div class="sc-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-modal="true">
+          <button class="sc-modal-close" onClick=${()=>setSel(null)} aria-label="Close">×</button>
+          <div class="sc-modal-set">${sel.set_name} Set Championship</div>
+          <h3 class="sc-modal-store">${sel.store_name}</h3>
+          ${sel.name && sel.name.toLowerCase() !== `${(sel.set_name||"").toLowerCase()} set championship` && html`<div class="sc-modal-evname">${sel.name}</div>`}
+          <div class="sc-modal-when">${fmtSCDate(sel.start_datetime, sel.timezone)} · ${fmtSCTime(sel.start_datetime, sel.timezone)}</div>
+          <dl class="sc-modal-rows">
+            <div><dt>Where</dt><dd>${sel.full_address || `${sel.city}, ${sel.state}`}</dd></div>
+            ${sel.gameplay_format && html`<div><dt>Format</dt><dd>${sel.gameplay_format}</dd></div>`}
+            ${cost && html`<div><dt>Entry</dt><dd>${cost}</dd></div>`}
+            ${sel.capacity != null && html`<div><dt>Capacity</dt><dd>${sel.capacity} players</dd></div>`}
+          </dl>
+          <div class="sc-modal-actions">
+            <a class="sc-modal-cta" href=${sel.url} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>
+            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
+            ${sel.store_website && html`<a class="sc-modal-link" href=${sel.store_website} target="_blank" rel="noopener noreferrer">Store website ↗</a>`}
+          </div>
+        </div>
+      </div>`;
+    })()}
+  </div>`;
+}
+
 function EloView({eloPinned, setEloPinned}){
   // Inner tab state: leaderboard | tournaments | player | event
   // Synced to URL params: ?sub=tournaments, ?p=<id>, ?e=<id>
@@ -13985,6 +14059,7 @@ function EloView({eloPinned, setEloPinned}){
     if(Number.isFinite(pid)){ setPlayerId(pid); setEventId(null); setTab("player"); return; }
     if(Number.isFinite(eid)){ setEventId(eid); setPlayerId(null); setTab("event"); return; }
     if(sub === "tournaments"){ setTab("tournaments"); setPlayerId(null); setEventId(null); return; }
+    if(sub === "upcoming"){ setTab("upcoming"); setPlayerId(null); setEventId(null); return; }
     setTab("leaderboard"); setPlayerId(null); setEventId(null);
   };
 
@@ -14013,6 +14088,7 @@ function EloView({eloPinned, setEloPinned}){
       if(tab === "player" && playerId != null) url.searchParams.set("p", String(playerId));
       else if(tab === "event" && eventId != null) url.searchParams.set("e", String(eventId));
       else if(tab === "tournaments") url.searchParams.set("sub", "tournaments");
+      else if(tab === "upcoming") url.searchParams.set("sub", "upcoming");
       if(url.toString() !== window.location.href){
         window.history.pushState(window.history.state, "", url.toString());
       }
@@ -14037,11 +14113,13 @@ function EloView({eloPinned, setEloPinned}){
       <nav class="elo-innertabs">
         <button class=${tab==="leaderboard"||tab==="player"?"active":""} onClick=${backToLeaderboard}>Leaderboard</button>
         <button class=${tab==="tournaments"||tab==="event"?"active":""} onClick=${()=>{setTab("tournaments"); setEventId(null); setPlayerId(null);}}>Tournaments</button>
+        <button class=${tab==="upcoming"?"active":""} onClick=${()=>{setTab("upcoming"); setEventId(null); setPlayerId(null);}}>Upcoming SCs</button>
       </nav>
     </header>
 
     ${tab==="leaderboard" && html`<${EloLeaderboard} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="tournaments" && html`<${EloTournaments} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick}/>`}
+    ${tab==="upcoming" && html`<${EloUpcomingSCs}/>`}
     ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${backToLeaderboard} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick}/>`}
   </div>`;
