@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=160">
+<link rel="stylesheet" href="styles.css?v=161">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=160"></script>
+<script src="logo.js?v=161"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -196,7 +196,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v48";
+const CACHE_KEY = "packsink:catalog:v48";  // variants/modal-label are UI-only — no row-shape change since v48
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -4328,6 +4328,8 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           ${group.ink && html`<${Badge} rarity=${group.ink} foil=${false} theme=${theme}/>`}
           <${Badge} rarity=${group.Rarity} foil=${false} theme=${theme}/>
           <span class="card-detail-set">${group.Set}${group.Number?" #"+group.Number.split("/")[0]:""}</span>
+          ${group.variant_label && html`<span class="card-detail-variant-tag"
+            title=${group.localized_exclusive ? "Region-locked printing — no U.S. TCGplayer market" : ""}>${group.variant_label}</span>`}
         </div>
 
         <div class="card-detail-stats">
@@ -6076,6 +6078,53 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
     return groups.slice().sort(cmp);
   },[allGroups, deferredFilter, parsed, sortKey, collection]);
+  // Index every group by its CHARACTER name (the part before " - "; songs &
+  // titled cards with no version key on their whole name). Drives the Variants
+  // band below the results.
+  const groupsByCharacter = useMemo(() => {
+    const m = new Map();
+    for(const g of allGroups){
+      const pn = g["Product Name"] || "";
+      const ch = ((pn.split(" - ")[0] || pn)).trim().toLowerCase();
+      if(!ch) continue;
+      (m.get(ch) || m.set(ch, []).get(ch)).push(g);
+    }
+    return m;
+  }, [allGroups]);
+  // "Variants & other versions": when the user has actually SEARCHED (typed
+  // text or locked a smart chip), surface the matched characters' OTHER
+  // printings/rarities/versions that aren't already in the results — so a
+  // search for "Elsa - Snow Queen" also shows her other cards just below. Only
+  // on an active search (not bare chip-filtering), skipped in Owned-only mode,
+  // and capped so a broad search doesn't dump the whole catalog.
+  const groupKeyOf = useCallback((g) =>
+    (g.card_id || g["Product Name"]) + (g.isSplitPrinting ? "::" + (g.Printing || g.tcg_printing || "") : ""), []);
+  const variantGroups = useMemo(() => {
+    // Browse-mode only — the deck-builder card picker (deckMode) reuses
+    // CardBrowser but shouldn't sprout an extra variants band.
+    if(typeof onDeckQtyChange === "function") return [];
+    const searchActive = (deferredFilter.search || "").trim().length > 0 || smartChips.length > 0;
+    if(!searchActive || deferredFilter.onlyOwned || grouped.length === 0) return [];
+    const shownKeys = new Set();
+    const chars = new Set();
+    for(const g of grouped){
+      shownKeys.add(groupKeyOf(g));
+      const pn = g["Product Name"] || "";
+      const ch = ((pn.split(" - ")[0] || pn)).trim().toLowerCase();
+      if(ch) chars.add(ch);
+    }
+    const out = [], seen = new Set();
+    for(const ch of chars){
+      for(const g of (groupsByCharacter.get(ch) || [])){
+        const k = groupKeyOf(g);
+        if(shownKeys.has(k) || seen.has(k)) continue;
+        seen.add(k); out.push(g);
+      }
+    }
+    const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
+    out.sort(cmp);
+    return out.slice(0, 60);
+  }, [grouped, groupsByCharacter, deferredFilter.search, deferredFilter.onlyOwned, smartChips, sortKey, groupKeyOf, onDeckQtyChange]);
   const isFiltering = filter !== deferredFilter;
   const parsedSummary = useMemo(() => {
     const all = summarizeParsedQuery(parsed);
@@ -6404,6 +6453,26 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
         onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
     </div>
+    ${variantGroups.length > 0 && html`<div class="cards-variants">
+      <div class="cards-variants-head">
+        <span class="cards-variants-title">Variants & other versions</span>
+        <span class="cards-variants-count">${variantGroups.length}${variantGroups.length === 60 ? "+" : ""}</span>
+      </div>
+      <div class="cards-variants-sub">Other printings, rarities & versions of the cards in your search</div>
+      <div class=${viewMode==="list"?"cards-list":"cards-grid"}>
+        ${variantGroups.map((g,i) => html`<${CardTile}
+          key=${"var:"+(g.card_id ? g.card_id : g["Product Name"]+":"+i) + (g.isSplitPrinting ? "::"+(g.Printing||g.tcg_printing||"") : "")}
+          group=${g} collection=${collection} viewMode=${viewMode}
+          onSelectGroup=${onSelectGroup}
+          deckQty=${deckQty ? deckQty(g) : undefined}
+          deckQtyAcrossName=${deckQtyAcrossName ? deckQtyAcrossName(g) : undefined}
+          onDeckQtyChange=${onDeckQtyChange}
+          showOwnedCounter=${showOwnedCounter}
+          selectable=${allowSelect}
+          isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
+          onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
+      </div>
+    </div>`}
     ${grouped.length === 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
       <div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
       ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
