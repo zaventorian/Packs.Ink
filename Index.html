@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=162">
+<link rel="stylesheet" href="styles.css?v=163">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=162"></script>
+<script src="logo.js?v=163"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -3124,9 +3124,6 @@ const groupSetsForFilter = (rawRows) => {
   promo.sort((a,b) => a.localeCompare(b));
   return {normal, promo};
 };
-// Ultra-common words dropped from free-text NAME tokens so a query like
-// "circle of life" isn't broadened by "of" matching unrelated cards.
-const SEARCH_STOPWORDS = new Set(["a","an","the","of","and","to","in","on","for","with","your","you","&","-"]);
 const matchesCardFilter = (row, f, parsed) => {
   // Parsed (smart search) filters — applied first, take precedence for single
   // values when both chip-state and parsed produce the same dimension.
@@ -3202,29 +3199,22 @@ const matchesCardFilter = (row, f, parsed) => {
       // (card_type match), etc. — mirrors how Dreamborn searches.
       if(!nameMatches(parsed.name, row["Product Name"])){
         const q = parsed.name.toLowerCase();
-        const text = (row.text||"").toLowerCase();
-        // Drop stopwords so "circle of life" isn't broadened by "of"; fall
-        // back to raw tokens if filtering empties the query.
-        const _raw = q.split(/\s+/).filter(Boolean);
-        const _noStop = _raw.filter(t => !SEARCH_STOPWORDS.has(t));
-        const tokens = _noStop.length ? _noStop : _raw;
+        const tokens = q.split(/\s+/).filter(Boolean);
         const cls = (row.classifications || []).map(c => (c||"").toLowerCase());
         const haystack = [
           (row["Product Name"]||"").toLowerCase(),
           (row.card_type||"").toLowerCase(),
+          (row.text||"").toLowerCase(),
           ...cls
         ].join("  ");
-        // NAME-ish haystack (name + type + classifications) matches per token;
-        // BODY TEXT matches only as a full phrase below. Per-token body matching
-        // was the breadth bug ("of"/"life" hit thousands of cards' ability text).
-        // matchMode "any" (default): ANY token qualifies, so "woody jessie"
-        // surfaces every Woody and Jessie. "all" requires every token.
+        // matchMode "any" (default in CardsView): card qualifies if ANY token
+        // appears in the haystack, so "woody jessie" surfaces every Woody
+        // and every Jessie. matchMode "all" (or unset, for back-compat with
+        // pickers that pass no matchMode): every token must appear — the
+        // original behavior, used when narrowing.
         const all = (parsed.matchMode || "all") === "all";
-        const nameOk = all ? tokens.every(t => haystack.includes(t)) : tokens.some(t => haystack.includes(t));
-        // Phrase-only body match keeps "draw a card" / "banish" working without
-        // a single common word dragging in unrelated cards.
-        const textOk = q.length >= 3 && text.includes(q);
-        if(!nameOk && !textOk) return false;
+        const ok = all ? tokens.every(t => haystack.includes(t)) : tokens.some(t => haystack.includes(t));
+        if(!ok) return false;
       }
     }
     // `contains:` chips: phrase substring match against the searchable haystack
@@ -6089,39 +6079,6 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     return groups.slice().sort(cmp);
   },[allGroups, deferredFilter, parsed, sortKey, collection]);
   // Unique-per-tile key (card_id, + printing for split-printing sets).
-  const groupKeyOf = useCallback((g) =>
-    (g.card_id || g["Product Name"]) + (g.isSplitPrinting ? "::" + (g.Printing || g.tcg_printing || "") : ""), []);
-  // Name key: collapses a card's rarities/printings (Legendary + Enchanted of
-  // the same name → one card), but keeps split-printing tiles distinct.
-  const nameKeyOf = useCallback((g) =>
-    (g["Product Name"] || "") + (g.isSplitPrinting ? "::" + (g.Printing || g.tcg_printing || "") : ""), []);
-  // On an active SEARCH (typed text or a locked chip), collapse the results to
-  // ONE representative per card name (the base/lowest rarity) and move the
-  // alternate rarities/printings — the Enchanted, foils, reprints — into a
-  // "Variants & other versions" band below. So "circle of life" shows the
-  // Legendary up top and its Enchanted just below, instead of two loose tiles.
-  // Skipped in Owned-only mode and in the deck-builder picker.
-  const { displayGroups, variantGroups } = useMemo(() => {
-    const searchActive = (deferredFilter.search || "").trim().length > 0 || smartChips.length > 0;
-    const deckMode = typeof onDeckQtyChange === "function";
-    if(!searchActive || deferredFilter.onlyOwned || deckMode || grouped.length === 0){
-      return { displayGroups: grouped, variantGroups: [] };
-    }
-    const rank = (g) => { const i = CARDS_RARITIES.indexOf(g.Rarity); return i === -1 ? 99 : i; };
-    const repByName = new Map();
-    for(const g of grouped){
-      const nk = nameKeyOf(g);
-      const prev = repByName.get(nk);
-      if(!prev || rank(g) < rank(prev)) repByName.set(nk, g);
-    }
-    const repCardKeys = new Set([...repByName.values()].map(groupKeyOf));
-    const display = grouped.filter(g => repCardKeys.has(groupKeyOf(g)));
-    // Variants = the matched groups that aren't the representative (other
-    // rarities/printings of a displayed card). Pull from `grouped` so the band
-    // honors the active filters and display + variants == all matches.
-    const variants = grouped.filter(g => !repCardKeys.has(groupKeyOf(g)));
-    return { displayGroups: display, variantGroups: variants.slice(0, 60) };
-  }, [grouped, deferredFilter.search, deferredFilter.onlyOwned, smartChips, onDeckQtyChange, groupKeyOf, nameKeyOf]);
   const isFiltering = filter !== deferredFilter;
   const parsedSummary = useMemo(() => {
     const all = summarizeParsedQuery(parsed);
@@ -6438,7 +6395,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       </div>
     </div>`}
     <div class=${(viewMode==="list"?"cards-list":"cards-grid")+(isFiltering?" cards-pending":"")}>
-      ${displayGroups.map((g,i) => html`<${CardTile}
+      ${grouped.map((g,i) => html`<${CardTile}
         key=${(g.card_id ? g.card_id : g["Product Name"]+":"+i) + (g.isSplitPrinting ? "::"+(g.Printing||g.tcg_printing||"") : "")}
         group=${g} collection=${collection} viewMode=${viewMode}
         onSelectGroup=${onSelectGroup}
@@ -6450,26 +6407,6 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
         onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
     </div>
-    ${variantGroups.length > 0 && html`<div class="cards-variants">
-      <div class="cards-variants-head">
-        <span class="cards-variants-title">Variants & other versions</span>
-        <span class="cards-variants-count">${variantGroups.length}${variantGroups.length === 60 ? "+" : ""}</span>
-      </div>
-      <div class="cards-variants-sub">Other printings, rarities & versions of the cards in your search</div>
-      <div class=${viewMode==="list"?"cards-list":"cards-grid"}>
-        ${variantGroups.map((g,i) => html`<${CardTile}
-          key=${"var:"+(g.card_id ? g.card_id : g["Product Name"]+":"+i) + (g.isSplitPrinting ? "::"+(g.Printing||g.tcg_printing||"") : "")}
-          group=${g} collection=${collection} viewMode=${viewMode}
-          onSelectGroup=${onSelectGroup}
-          deckQty=${deckQty ? deckQty(g) : undefined}
-          deckQtyAcrossName=${deckQtyAcrossName ? deckQtyAcrossName(g) : undefined}
-          onDeckQtyChange=${onDeckQtyChange}
-          showOwnedCounter=${showOwnedCounter}
-          selectable=${allowSelect}
-          isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
-          onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
-      </div>
-    </div>`}
     ${grouped.length === 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
       <div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
       ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
@@ -18903,6 +18840,23 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
     return scored.slice(0, 8).map(x => x.r);
   }, [q, raw]);
+  // Variants of the suggested cards: other distinct printings/rarities sharing
+  // a Product Name with a suggestion (the Enchanted, alternate-art reprints,
+  // etc.) that the one-per-name dedupe above dropped. Shown below the normal
+  // suggestions so "circle of life" surfaces the base AND its Enchanted.
+  const variantSuggestions = useMemo(() => {
+    if(!suggestions.length) return [];
+    const shownNames = new Set(suggestions.map(r => r["Product Name"]));
+    const shownIds = new Set(suggestions.map(r => r.card_id));
+    const byId = new Map();
+    for(const r of (raw || [])){
+      if(!r.card_id || !shownNames.has(r["Product Name"]) || shownIds.has(r.card_id)) continue;
+      const prev = byId.get(r.card_id);
+      // Prefer the Normal printing for the thumbnail.
+      if(!prev || (prev.tcg_printing !== "Normal" && r.tcg_printing === "Normal")) byId.set(r.card_id, r);
+    }
+    return [...byId.values()].slice(0, 8);
+  }, [suggestions, raw]);
   const handleSubmit = () => {
     const txt = q.trim();
     if(!txt) return;
@@ -18948,6 +18902,19 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
           <div class="home-quick-search-item-meta">${r.Set || ""} · ${r.Rarity || ""}</div>
         </div>
       </button>`)}
+      ${variantSuggestions.length > 0 && html`
+        <div class="home-quick-search-divider">Variants & other versions</div>
+        ${variantSuggestions.map(r => html`<button key=${"var:"+r.card_id}
+          class="home-quick-search-item home-quick-search-item--variant"
+          role="option"
+          onMouseDown=${e=>e.preventDefault()}
+          onClick=${()=>handlePick(r)}>
+          ${r.img_small && html`<img src=${r.img_small} alt="" loading="lazy"/>`}
+          <div class="home-quick-search-item-text">
+            <div class="home-quick-search-item-name">${r["Product Name"]}</div>
+            <div class="home-quick-search-item-meta">${r.Set || ""} · ${r.Rarity || ""}</div>
+          </div>
+        </button>`)}`}
     </div>`}
   </div>`;
 };
