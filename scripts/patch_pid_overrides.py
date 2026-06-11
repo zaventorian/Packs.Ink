@@ -58,6 +58,8 @@ OVERRIDES = {
     # tcgplayer_product_id null, so the Holofoil promo had no price. 695330 is
     # the (Foil) SKU. Without this the weekly Lorcast load reverts it to null.
     "Simba - Pride Protector|4": 695330,
+    "Dragon Fire|9": 693401,                          # Lorcana Challenge Y3 (C2) — Lorcast pid null
+    "Stitch - Carefree Snowboarder|207": 675380,      # Winterspell Epic — Lorcast pid null
 }
 
 
@@ -264,6 +266,46 @@ def main() -> None:
         print(f"  upserted {len(synthetic_cards)} synthetic card(s).")
     except Exception as e:
         print(f"  upsert failed: {repr(e)[:300]}")
+
+    # Connecting-art foils: the foil printing is a SEPARATE TCGPlayer SKU that
+    # Lorcast doesn't index. Each needs a cards row carrying the FOIL pid so its
+    # price flows through card_prices_latest; the client's CONNECTING_FOILS map
+    # then renders it under the base card's foil slot and suppresses the
+    # standalone tile (FOIL_COMPANION_PIDS). {foil_pid: base_pid} — mirror of the
+    # Wilds Unknown + Winterspell half of CONNECTING_FOILS in Index.html. (The
+    # Reign of Jafar foils are Lorcast-indexed already, so they're not here.)
+    CONNECTING_FOIL_ROWS = {
+        692015: 692014, 692017: 692016, 692019: 692018, 692021: 692020,
+        692023: 692022, 692025: 692024, 692027: 692026, 692029: 692028,
+        692041: 692040, 692093: 692050, 692180: 692179, 692061: 692060,
+        692063: 692062, 692082: 692081, 692097: 690212, 678861: 675499,
+        678862: 675500, 678863: 676217, 678864: 676218,
+    }
+    print("\nBuilding connecting-foil companion rows (clone base, carry foil pid)...")
+    base_pids = sorted(set(CONNECTING_FOIL_ROWS.values()))
+    clone_cols = ("tcgplayer_product_id,set_id,name,version,collector_number,rarity,ink,"
+                  "inks,cost,inkable,card_type,classifications,text,flavor_text,strength,"
+                  "willpower,lore,move_cost,image_small,image_normal,image_large,illustrators")
+    try:
+        base_rows = sb.select("cards", columns=clone_cols,
+                              filters={"tcgplayer_product_id": f"in.({','.join(str(p) for p in base_pids)})"})
+        by_pid = {r["tcgplayer_product_id"]: r for r in base_rows}
+        foil_rows = []
+        for foil_pid, base_pid in CONNECTING_FOIL_ROWS.items():
+            b = by_pid.get(base_pid)
+            if not b:
+                print(f"  skip foil {foil_pid}: base {base_pid} not in cards")
+                continue
+            row = {k: v for k, v in b.items() if k != "tcgplayer_product_id"}
+            row["id"] = f"crd_custom_{foil_pid}_foil"
+            row["tcgplayer_product_id"] = foil_pid
+            row["collector_number"] = f"{b.get('collector_number') or ''}f"
+            foil_rows.append(row)
+        if foil_rows:
+            sb.upsert("cards", foil_rows, on_conflict="id")
+            print(f"  upserted {len(foil_rows)} connecting-foil row(s).")
+    except Exception as e:
+        print(f"  connecting-foil upsert failed: {repr(e)[:300]}")
 
     print("\nRefreshing card_prices_latest matview...")
     try:
