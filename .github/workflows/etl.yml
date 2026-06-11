@@ -104,6 +104,40 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/smooth_low_prices.py
 
+  reconcile:
+    name: Reconcile catalog (orphan watchdog)
+    runs-on: ubuntu-latest
+    needs: prices
+    # Flags TCGPlayer products that are priced but missing from `cards` AND
+    # `sealed_products` — i.e. singles Lorcast hasn't indexed yet (promos,
+    # Store-Championship cards), which otherwise sit invisible on the site the
+    # way Dash Parr 52/P3 did for a month. Alert-only: it never writes to the
+    # catalog, so it can't fail the ETL. The actionable "missing singles" list
+    # lands in the run's Step Summary and (if RECONCILE_ALERT_WEBHOOK is set) a
+    # Discord ping. Cheap (~19 TCGCSV calls); runs on the daily prices trigger.
+    if: |
+      always() && needs.prices.result == 'success' && (
+        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+        (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
+      )
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      - name: Reconcile catalog
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Optional: a Discord (or Discord-compatible) webhook to get pinged
+          # when a new missing single appears. Unset → report stays in the Step
+          # Summary only.
+          RECONCILE_ALERT_WEBHOOK: ${{ secrets.RECONCILE_ALERT_WEBHOOK }}
+        run: python scripts/reconcile_catalog.py
+
   graded:
     name: TCGPriceLookup graded prices
     runs-on: ubuntu-latest

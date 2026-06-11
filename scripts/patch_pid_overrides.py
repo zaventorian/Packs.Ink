@@ -54,6 +54,10 @@ OVERRIDES = {
     "Tinker Bell - Snowflake Collector|34": 673333,     # Promo Set 3 — SC Championship (foil)
     "Hiro Hamada - Armor Designer|24":  620277,
     "Hiro Hamada - Armor Designer|24B": 620276,
+    # Lorcana Challenge Year 3 (C2) — Lorcast indexes the card but leaves
+    # tcgplayer_product_id null, so the Holofoil promo had no price. 695330 is
+    # the (Foil) SKU. Without this the weekly Lorcast load reverts it to null.
+    "Simba - Pride Protector|4": 695330,
 }
 
 
@@ -191,6 +195,68 @@ def main() -> None:
             "text": None, "flavor_text": None,
             "image_small": tcg_img(634265, 200), "image_normal": tcg_img(634265, 400), "image_large": tcg_img(634265, 400),
             "tcgplayer_product_id": 634265,
+        },
+        # --- Promo Set 3 #52-56: Wilds Unknown Store-Championship promos that
+        # Lorcast does not index. Stats mirror each card's Wilds Unknown base.
+        {  # Dash Parr - Lava Runner — P3 #52 (Cold Foil promo)
+            "id": "crd_custom_692484_dash_lava_runner",
+            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",  # Promo Set 3
+            "name": "Dash Parr", "version": "Lava Runner",
+            "rarity": "Promo", "ink": "Amethyst", "inks": ["Amethyst"],
+            "collector_number": "52", "cost": 4, "inkable": False,
+            "card_type": "Character",
+            "classifications": ["Storyborn", "Super", "Hero"],
+            "text": None, "flavor_text": None,
+            "image_small": tcg_img(692484, 200), "image_normal": tcg_img(692484, 400), "image_large": tcg_img(692484, 400),
+            "tcgplayer_product_id": 692484,
+        },
+        {  # Woody - Jungle Guide — P3 #53 (Store Championship Participant, Normal)
+            "id": "crd_custom_692485_woody_jungle_participant",
+            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
+            "name": "Woody", "version": "Jungle Guide",
+            "rarity": "Promo", "ink": "Amber", "inks": ["Amber"],
+            "collector_number": "53", "cost": 5, "inkable": False,
+            "card_type": "Character",
+            "classifications": ["Floodborn", "Hero", "Toy"],
+            "text": None, "flavor_text": None,
+            "image_small": tcg_img(692485, 200), "image_normal": tcg_img(692485, 400), "image_large": tcg_img(692485, 400),
+            "tcgplayer_product_id": 692485,
+        },
+        {  # Woody - Jungle Guide — P3 #54 (Store Championship, Holofoil)
+            "id": "crd_custom_692486_woody_jungle_sc",
+            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
+            "name": "Woody", "version": "Jungle Guide",
+            "rarity": "Promo", "ink": "Amber", "inks": ["Amber"],
+            "collector_number": "54", "cost": 5, "inkable": False,
+            "card_type": "Character",
+            "classifications": ["Floodborn", "Hero", "Toy"],
+            "text": None, "flavor_text": None,
+            "image_small": tcg_img(692486, 200), "image_normal": tcg_img(692486, 400), "image_large": tcg_img(692486, 400),
+            "tcgplayer_product_id": 692486,
+        },
+        {  # Violet Parr - Learning New Powers — P3 #55 (Cold Foil promo)
+            "id": "crd_custom_692487_violet_new_powers",
+            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
+            "name": "Violet Parr", "version": "Learning New Powers",
+            "rarity": "Promo", "ink": "Amethyst", "inks": ["Amethyst"],
+            "collector_number": "55", "cost": 3, "inkable": True,
+            "card_type": "Character",
+            "classifications": ["Storyborn", "Super", "Hero"],
+            "text": None, "flavor_text": None,
+            "image_small": tcg_img(692487, 200), "image_normal": tcg_img(692487, 400), "image_large": tcg_img(692487, 400),
+            "tcgplayer_product_id": 692487,
+        },
+        {  # Buzz Lightyear - On the Way — P3 #56 (Holofoil promo)
+            "id": "crd_custom_692488_buzz_on_the_way",
+            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
+            "name": "Buzz Lightyear", "version": "On the Way",
+            "rarity": "Promo", "ink": "Emerald", "inks": ["Emerald"],
+            "collector_number": "56", "cost": 3, "inkable": True,
+            "card_type": "Character",
+            "classifications": ["Storyborn", "Hero", "Toy", "Captain"],
+            "text": None, "flavor_text": None,
+            "image_small": tcg_img(692488, 200), "image_normal": tcg_img(692488, 400), "image_large": tcg_img(692488, 400),
+            "tcgplayer_product_id": 692488,
         },
     ]
     try:
