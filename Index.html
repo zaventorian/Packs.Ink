@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=165">
+<link rel="stylesheet" href="styles.css?v=166">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=165"></script>
+<script src="logo.js?v=166"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -18974,7 +18974,16 @@ const UpcomingSCsBox = () => {
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [sel, setSel] = useState(null);
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("packsink:scCollapsed") === "1"; } catch { return false; } });
+  const [dateOn, setDateOn] = useState(() => { try { return localStorage.getItem("packsink:scDateOn") === "1"; } catch { return false; } });
+  const [dateFrom, setDateFrom] = useState(() => { try { return localStorage.getItem("packsink:scDateFrom") || ""; } catch { return ""; } });
+  const [dateTo, setDateTo] = useState(() => { try { return localStorage.getItem("packsink:scDateTo") || ""; } catch { return ""; } });
   const didAuto = useRef(false);
+  useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
+  useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
+  useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dateFrom); } catch {} }, [dateFrom]);
+  useEffect(() => { try { localStorage.setItem("packsink:scDateTo", dateTo); } catch {} }, [dateTo]);
+  const todayStr = new Date().toLocaleDateString("en-CA");
 
   const runSearch = useCallback(async (z, r) => {
     z = String(z || "").trim();
@@ -19016,48 +19025,78 @@ const UpcomingSCsBox = () => {
 
   const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(/^\d{5}$/.test(zip)) runSearch(zip, r); };
 
-  return html`<section class="sc-box">
-    <div class="sc-box-title">Upcoming Set Championships Near Me</div>
-    <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
-      <input class="sc-zip-input" type="text" inputmode="numeric" maxLength=${5}
-        placeholder="ZIP code" value=${zip} aria-label="ZIP code"
-        onInput=${e=>setZip(e.target.value.replace(/[^0-9]/g,"").slice(0,5))}/>
-      <button class="sc-search-btn" type="submit">Search</button>
-    </form>
-    <div class="sc-radius-row" role="group" aria-label="Distance">
-      ${SC_RADII.map(r => html`<button key=${r} type="button"
-        class=${"sc-radius-btn"+(radius===r && !customOpen?" active":"")}
-        onClick=${()=>pickRadius(r)}>${r} mi</button>`)}
-      <button type="button" class=${"sc-radius-btn"+(customOpen?" active":"")}
-        onClick=${()=>setCustomOpen(o=>!o)}>Custom</button>
-      ${customOpen && html`<span class="sc-custom-wrap">
-        <input class="sc-custom-input" type="text" inputmode="numeric" maxLength=${3}
-          placeholder="mi" value=${SC_RADII.includes(radius)?"":String(radius)}
-          aria-label="Custom radius in miles"
-          onInput=${e=>setRadius(parseInt(e.target.value.replace(/[^0-9]/g,"").slice(0,3),10)||0)}
-          onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(/^\d{5}$/.test(zip)) runSearch(zip, radius); } }}/>
-        <button type="button" class="sc-custom-go" onClick=${()=>{ if(/^\d{5}$/.test(zip)) runSearch(zip, radius); }}>Go</button>
-      </span>`}
+  // Optional client-side date filter applied on top of the radius results.
+  const dateActive = dateOn && (dateFrom || dateTo);
+  const visible = (!results || !dateActive) ? results : results.filter(e =>
+    (!dateFrom || (e._day || "") >= dateFrom) && (!dateTo || (e._day || "") <= dateTo));
+
+  return html`<section class=${"sc-box"+(collapsed?" sc-collapsed":"")}>
+    <div class="sc-box-head">
+      <div class="sc-box-title">Upcoming Set Championships Near Me</div>
+      <button class="sc-collapse-btn" type="button" onClick=${()=>setCollapsed(c=>!c)}
+        aria-expanded=${!collapsed} aria-label=${collapsed?"Expand":"Collapse"} title=${collapsed?"Expand":"Collapse"}>
+        ${collapsed ? "▸" : "▾"}
+      </button>
     </div>
-    ${err && html`<div class="sc-msg sc-msg-err">${err}</div>`}
-    ${loading && html`<div class="sc-msg muted">Finding events…</div>`}
-    ${!loading && results && results.length === 0 && html`<div class="sc-msg muted">
-      No Set Championships within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
-    ${!loading && results && results.length > 0 && html`<div class="sc-results">
-      ${origin && html`<div class="sc-results-head">${results.length} near ${origin.city}, ${origin.state}</div>`}
-      <div class="sc-list">
-        ${results.map(e => html`<button key=${e.event_id} class="sc-tile" onClick=${()=>setSel(e)}>
-          <span class="sc-tile-date">${fmtSCDate(e.start_datetime, e.timezone)}</span>
-          <span class="sc-tile-main">
-            <span class="sc-tile-store">${e.store_name}</span>
-            <span class="sc-tile-loc">${e.city}, ${e.state}</span>
-          </span>
-          <span class="sc-tile-mi">${fmtSCMiles(e._mi)}</span>
-        </button>`)}
+    ${!collapsed && html`<div class="sc-box-body">
+      <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
+        <input class="sc-zip-input" type="text" inputmode="numeric" maxLength=${5}
+          placeholder="ZIP code" value=${zip} aria-label="ZIP code"
+          onInput=${e=>setZip(e.target.value.replace(/[^0-9]/g,"").slice(0,5))}/>
+        <button class="sc-search-btn" type="submit">Search</button>
+      </form>
+      <div class="sc-radius-row" role="group" aria-label="Distance">
+        ${SC_RADII.map(r => html`<button key=${r} type="button"
+          class=${"sc-radius-btn"+(radius===r && !customOpen?" active":"")}
+          onClick=${()=>pickRadius(r)}>${r} mi</button>`)}
+        <button type="button" class=${"sc-radius-btn"+(customOpen?" active":"")}
+          onClick=${()=>setCustomOpen(o=>!o)}>Custom</button>
+        ${customOpen && html`<span class="sc-custom-wrap">
+          <input class="sc-custom-input" type="text" inputmode="numeric" maxLength=${3}
+            placeholder="mi" value=${SC_RADII.includes(radius)?"":String(radius)}
+            aria-label="Custom radius in miles"
+            onInput=${e=>setRadius(parseInt(e.target.value.replace(/[^0-9]/g,"").slice(0,3),10)||0)}
+            onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(/^\d{5}$/.test(zip)) runSearch(zip, radius); } }}/>
+          <button type="button" class="sc-custom-go" onClick=${()=>{ if(/^\d{5}$/.test(zip)) runSearch(zip, radius); }}>Go</button>
+        </span>`}
       </div>
+      <div class="sc-date-row">
+        <label class="sc-date-toggle">
+          <input type="checkbox" checked=${dateOn} onChange=${e=>setDateOn(e.target.checked)}/>
+          Filter by date
+        </label>
+        ${dateOn && html`<span class="sc-date-inputs">
+          <input type="date" class="sc-date-input" value=${dateFrom} min=${todayStr}
+            aria-label="From date" onInput=${e=>setDateFrom(e.target.value)}/>
+          <span class="sc-date-dash">–</span>
+          <input type="date" class="sc-date-input" value=${dateTo} min=${dateFrom||todayStr}
+            aria-label="To date" onInput=${e=>setDateTo(e.target.value)}/>
+          ${(dateFrom||dateTo) && html`<button type="button" class="sc-date-clear"
+            title="Clear dates" onClick=${()=>{ setDateFrom(""); setDateTo(""); }}>×</button>`}
+        </span>`}
+      </div>
+      ${err && html`<div class="sc-msg sc-msg-err">${err}</div>`}
+      ${loading && html`<div class="sc-msg muted">Finding events…</div>`}
+      ${!loading && results && results.length === 0 && html`<div class="sc-msg muted">
+        No Set Championships within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
+      ${!loading && results && results.length > 0 && visible.length === 0 && html`<div class="sc-msg muted">
+        No events in that date range. Widen the dates or turn the filter off.</div>`}
+      ${!loading && visible && visible.length > 0 && html`<div class="sc-results">
+        ${origin && html`<div class="sc-results-head">${visible.length}${dateActive?" in range":""} near ${origin.city}, ${origin.state}</div>`}
+        <div class="sc-list">
+          ${visible.map(e => html`<button key=${e.event_id} class="sc-tile" onClick=${()=>setSel(e)}>
+            <span class="sc-tile-date">${fmtSCDate(e.start_datetime, e.timezone)}</span>
+            <span class="sc-tile-main">
+              <span class="sc-tile-store">${e.store_name}</span>
+              <span class="sc-tile-loc">${e.city}, ${e.state}</span>
+            </span>
+            <span class="sc-tile-mi">${fmtSCMiles(e._mi)}</span>
+          </button>`)}
+        </div>
+      </div>`}
+      ${!loading && !results && !err && html`<div class="sc-msg muted">
+        Enter your ZIP to find Wilds Unknown Set Championships near you.</div>`}
     </div>`}
-    ${!loading && !results && !err && html`<div class="sc-msg muted">
-      Enter your ZIP to find Wilds Unknown Set Championships near you.</div>`}
     ${sel && (() => {
       const cost = fmtSCCost(sel.cost_cents, sel.currency);
       return html`<div class="sc-modal-overlay" onClick=${()=>setSel(null)}>
