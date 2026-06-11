@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=167">
+<link rel="stylesheet" href="styles.css?v=168">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=167"></script>
+<script src="logo.js?v=168"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -13781,7 +13781,7 @@ function EloTournaments({onEventClick, onPlayerClick}){
   </div>`;
 }
 
-function EloEventDetail({eventId, onBack, onPlayerClick}){
+function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreClick}){
   const [ev, setEv] = useState(null);
   const [standings, setStandings] = useState(null);
   const [matches, setMatches] = useState(null);
@@ -13868,6 +13868,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
         ${ev.platform === "melee"
           ? html`<a class="elo-event-link" href=${"https://melee.gg/Tournament/View/" + (ev.event_id - 100000000)} target="_blank" rel="noopener">View on melee.gg →</a>`
           : html`<a class="elo-event-link" href=${"https://tcg.ravensburgerplay.com/events/" + ev.event_id} target="_blank" rel="noopener">View on Play Hub →</a>`}
+        ${canViewStore && ev.store && html`<button class="elo-event-link elo-store-link" onClick=${()=>onStoreClick && onStoreClick(ev.store)}>📋 Store report →</button>`}
       </p>
     </header>
 
@@ -13944,7 +13945,94 @@ function EloEventDetail({eventId, onBack, onPlayerClick}){
 // Upcoming Set Championships at the stores we track for ELO — a filtered view
 // of public.set_championships joined to public.elo_tracked_stores (the view
 // public.elo_upcoming_scs). Grouped by local day; tap for full details.
-function EloUpcomingSCs(){
+// Store scouting report (credential-gated): past results at a store + every
+// player who's played there, ranked by current ELO with visit count + last
+// seen. Data via the SECURITY DEFINER RPC get_store_report (checks the
+// credential server-side too). Store identity is matched by normalized name in
+// the RPC, so a set_championships store name links to its elo_events history.
+function EloStoreReport({storeKey, onBack, onPlayerClick, onEventClick}){
+  const [report, setReport] = useState(null);
+  const [err, setErr] = useState(null);
+  useEffect(() => {
+    if(!storeKey) return;
+    setReport(null); setErr(null);
+    (async () => {
+      try {
+        const {data, error} = await sbClient.rpc("get_store_report", {p_store: storeKey});
+        if(error) throw error;
+        setReport(data || {store: storeKey, summary:{}, events:[], players:[]});
+      } catch(e){ setErr(String(e && e.message || e)); }
+    })();
+  }, [storeKey]);
+
+  const fmtD = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
+
+  if(err) return html`<div class="elo-store">
+    <button class="elo-back" onClick=${onBack}>← Back</button>
+    <div class="elo-empty">${/not authorized|permission denied/i.test(err) ? "Store reports are restricted — you don't have access." : "Couldn't load report: "+err}</div>
+  </div>`;
+  if(report === null) return html`<div class="elo-store">
+    <button class="elo-back" onClick=${onBack}>← Back</button>
+    <div class="elo-loading">Loading store report…</div>
+  </div>`;
+
+  const s = report.summary || {};
+  const events = report.events || [];
+  const players = report.players || [];
+  if(events.length === 0) return html`<div class="elo-store">
+    <button class="elo-back" onClick=${onBack}>← Back</button>
+    <h2 class="elo-store-title">${report.store || storeKey}</h2>
+    <div class="elo-empty">No tracked event history for this store yet.</div>
+  </div>`;
+
+  return html`<div class="elo-store">
+    <button class="elo-back" onClick=${onBack}>← Back</button>
+    <h2 class="elo-store-title">${report.store || storeKey}</h2>
+    <div class="elo-store-stats">
+      <div class="elo-store-stat"><span class="n">${s.n_events ?? 0}</span><span class="l">Events</span></div>
+      <div class="elo-store-stat"><span class="n">${s.n_players ?? 0}</span><span class="l">Players</span></div>
+      <div class="elo-store-stat"><span class="n">${s.avg_players ?? "—"}</span><span class="l">Avg / event</span></div>
+      <div class="elo-store-stat"><span class="n">${s.total_attendance ?? 0}</span><span class="l">Total seats</span></div>
+      <div class="elo-store-stat elo-store-stat--wide"><span class="n">${fmtD(s.first_date)} – ${fmtD(s.last_date)}</span><span class="l">Span</span></div>
+    </div>
+
+    <h3 class="elo-store-h3">Players who've come — by current ELO</h3>
+    <div class="elo-table-wrap">
+      <table class="elo-table elo-store-players">
+        <thead><tr>
+          <th class="elo-th-elo">ELO</th><th>Player</th>
+          <th class="num">Visits</th><th>Last here</th>
+          <th class="num">Wins here</th><th class="num">Overall</th>
+        </tr></thead>
+        <tbody>
+          ${players.map(p => html`<tr key=${p.player_id} class="elo-row" onClick=${()=>onPlayerClick && onPlayerClick(p.player_id)}>
+            <td class="elo-store-elo">${p.current_rating != null ? p.current_rating : html`<span class="muted">NR</span>`}
+              ${p.rank ? html`<span class="elo-store-rank">#${p.rank}</span>` : ""}</td>
+            <td class="elo-store-pname">${p.display_name}</td>
+            <td class="num">${p.visits}</td>
+            <td>${fmtD(p.last_seen)}</td>
+            <td class="num">${p.store_wins ? html`<strong>${p.store_wins}</strong>` : html`<span class="muted">—</span>`}</td>
+            <td class="num muted">${p.overall_wins != null ? `${p.overall_wins}–${p.overall_losses}` : "—"}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+    </div>
+
+    <h3 class="elo-store-h3">Past events</h3>
+    <div class="elo-store-events">
+      ${events.map(e => html`<button key=${e.event_id} class="elo-store-event" onClick=${()=>onEventClick && onEventClick(e.event_id)}>
+        <span class="elo-se-date">${fmtD(e.date)}</span>
+        <span class="elo-se-main">
+          <span class="elo-se-name">${e.name}</span>
+          <span class="elo-se-meta">${e.season || ""}${e.winner ? html` · 🏆 ${e.winner}` : ""}</span>
+        </span>
+        <span class="elo-se-players">${e.num_players != null ? e.num_players+"p" : ""}</span>
+      </button>`)}
+    </div>
+  </div>`;
+}
+
+function EloUpcomingSCs({canViewStore, onStoreClick}){
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const [sel, setSel] = useState(null);
@@ -14004,6 +14092,8 @@ function EloUpcomingSCs(){
             ${cost && html`<div><dt>Entry</dt><dd>${cost}</dd></div>`}
             ${sel.capacity != null && html`<div><dt>Capacity</dt><dd>${sel.capacity} players</dd></div>`}
           </dl>
+          ${canViewStore && html`<button class="sc-modal-cta sc-modal-cta--report"
+            onClick=${()=>{ const st = sel.store_name; setSel(null); onStoreClick && onStoreClick(st); }}>📋 Store scouting report</button>`}
           <div class="sc-modal-actions">
             <a class="sc-modal-cta" href=${sel.url} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>
             <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
@@ -14015,13 +14105,24 @@ function EloUpcomingSCs(){
   </div>`;
 }
 
-function EloView({eloPinned, setEloPinned}){
-  // Inner tab state: leaderboard | tournaments | player | event
-  // Synced to URL params: ?sub=tournaments, ?p=<id>, ?e=<id>
+function EloView({eloPinned, setEloPinned, user}){
+  // Inner tab state: leaderboard | tournaments | upcoming | player | event | store
+  // Synced to URL params: ?sub=tournaments, ?p=<id>, ?e=<id>, ?store=<name>
   // (Avoid ?t=… — Packs.Ink already uses that for Trade tokens.)
   const [tab, setTab] = useState("leaderboard");
   const [playerId, setPlayerId] = useState(null);
   const [eventId, setEventId] = useState(null);
+  const [storeKey, setStoreKey] = useState(null);
+  // Credential for the store scouting report (admins now; allowlist later).
+  const [canViewStore, setCanViewStore] = useState(false);
+  useEffect(() => {
+    if(!user){ setCanViewStore(false); return; }
+    let cancelled = false;
+    sbClient.rpc("can_view_store_report")
+      .then(({data}) => { if(!cancelled) setCanViewStore(!!data); })
+      .catch(() => { if(!cancelled) setCanViewStore(false); });
+    return () => { cancelled = true; };
+  }, [user]);
 
   // Cross-platform alias map: canonical_id -> [{player_id, display_name, platform}, ...]
   // Used to show "(melee_name)" annotations on the leaderboard + "Also known as:"
@@ -14051,11 +14152,12 @@ function EloView({eloPinned, setEloPinned}){
   // of jumping to the previous Packs.Ink view (or off the site).
   const applyUrlToState = () => {
     const sp = new URLSearchParams(window.location.search);
-    const p = sp.get("p"); const e = sp.get("e"); const sub = sp.get("sub");
+    const p = sp.get("p"); const e = sp.get("e"); const sub = sp.get("sub"); const store = sp.get("store");
     // Guard against malformed ids (?p=abc) — parseInt would yield NaN, which
     // then queries .eq("player_id", NaN) and hangs on a permanent spinner.
     const pid = p != null ? parseInt(p,10) : NaN;
     const eid = e != null ? parseInt(e,10) : NaN;
+    if(store){ setStoreKey(store); setTab("store"); setPlayerId(null); setEventId(null); return; }
     if(Number.isFinite(pid)){ setPlayerId(pid); setEventId(null); setTab("player"); return; }
     if(Number.isFinite(eid)){ setEventId(eid); setPlayerId(null); setTab("event"); return; }
     if(sub === "tournaments"){ setTab("tournaments"); setPlayerId(null); setEventId(null); return; }
@@ -14084,8 +14186,9 @@ function EloView({eloPinned, setEloPinned}){
     if(fromPopstate.current){ fromPopstate.current = false; return; }
     try {
       const url = new URL(window.location.href);
-      ["p","e","sub"].forEach(k => url.searchParams.delete(k));
-      if(tab === "player" && playerId != null) url.searchParams.set("p", String(playerId));
+      ["p","e","sub","store"].forEach(k => url.searchParams.delete(k));
+      if(tab === "store" && storeKey) url.searchParams.set("store", storeKey);
+      else if(tab === "player" && playerId != null) url.searchParams.set("p", String(playerId));
       else if(tab === "event" && eventId != null) url.searchParams.set("e", String(eventId));
       else if(tab === "tournaments") url.searchParams.set("sub", "tournaments");
       else if(tab === "upcoming") url.searchParams.set("sub", "upcoming");
@@ -14093,11 +14196,12 @@ function EloView({eloPinned, setEloPinned}){
         window.history.pushState(window.history.state, "", url.toString());
       }
     } catch{}
-  }, [tab, playerId, eventId]);
+  }, [tab, playerId, eventId, storeKey]);
 
   const onPlayerClick = (pid) => { setPlayerId(pid); setTab("player"); window.scrollTo({top:0, behavior:"smooth"}); };
   const onEventClick  = (eid) => { setEventId(eid);  setTab("event");  window.scrollTo({top:0, behavior:"smooth"}); };
-  const backToLeaderboard = () => { setTab("leaderboard"); setPlayerId(null); setEventId(null); };
+  const onStoreClick  = (store) => { if(!store) return; setStoreKey(store); setTab("store"); window.scrollTo({top:0, behavior:"smooth"}); };
+  const backToLeaderboard = () => { setTab("leaderboard"); setPlayerId(null); setEventId(null); setStoreKey(null); };
   const backToTournaments = () => { setTab("tournaments"); setEventId(null); };
 
   return html`<div class="elo-view">
@@ -14119,9 +14223,10 @@ function EloView({eloPinned, setEloPinned}){
 
     ${tab==="leaderboard" && html`<${EloLeaderboard} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="tournaments" && html`<${EloTournaments} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick}/>`}
-    ${tab==="upcoming" && html`<${EloUpcomingSCs}/>`}
+    ${tab==="upcoming" && html`<${EloUpcomingSCs} canViewStore=${canViewStore} onStoreClick=${onStoreClick}/>`}
     ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${backToLeaderboard} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
-    ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick}/>`}
+    ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} canViewStore=${canViewStore} onStoreClick=${onStoreClick}/>`}
+    ${tab==="store" && html`<${EloStoreReport} storeKey=${storeKey} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} onEventClick=${onEventClick}/>`}
   </div>`;
 }
 
@@ -16593,7 +16698,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         class=${"market-subtab"+(sub===k?" active":"")}
         onClick=${()=>setSub(k)}>${l}</button>`)}
     </div>
-    ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned}/>`}
+    ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
