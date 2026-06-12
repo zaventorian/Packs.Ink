@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=171">
+<link rel="stylesheet" href="styles.css?v=172">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=171"></script>
+<script src="logo.js?v=172"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -7802,6 +7802,29 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     return {count, value};
   }, [visibleGroups, collection, foilMode, TARGET]);
 
+  // "Buy bulk on TCGplayer" link: a TCGplayer mass-entry cart pre-filled with
+  // every missing copy in the current (filtered) view, so one click loads them
+  // all. Mirrors the deck-editor massEntryUrl builder. Shorts are aggregated by
+  // card name (a card short in both printings becomes one line) since mass-entry
+  // matches on name + set and the buyer picks foil/non-foil in the cart.
+  const missingMassEntryUrl = useMemo(() => {
+    const byName = new Map();
+    for(const g of visibleGroups){
+      const nm = g["Product Name"] || g.name || g.normal?.["Product Name"] || g.foil?.["Product Name"] || "";
+      if(!nm) continue;
+      let short = 0;
+      if(foilMode !== "foil" && g.normal)
+        short += Math.max(0, TARGET - (collection[g.card_id+":"+g.normal.tcg_printing] || 0));
+      if(foilMode !== "normal" && g.foil)
+        short += Math.max(0, TARGET - (collection[g.card_id+":"+g.foil.tcg_printing] || 0));
+      if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
+    }
+    if(!byName.size) return null;
+    const lines = [...byName].map(([nm, n]) => `${n} ${nm}`);
+    const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
+    return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
+  }, [visibleGroups, collection, foilMode, TARGET]);
+
   // Filter-aware "owned value" summary — total $ for cards in the visible
   // view that the user actually owns. Sums every owned copy at current Low
   // (capped at TARGET would feel weird — extras are still real value, so
@@ -7894,9 +7917,9 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     </div>
 
     ${visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
-      href=${tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow">
+      href=${missingMassEntryUrl || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
       <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter)}</span>
-      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-arrow">↗</span></span>
+      <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">Buy bulk on TCGplayer</span><span class="setdet-buy-missing-arrow">↗</span></span>
     </a>`}
 
     ${(() => {
