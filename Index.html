@@ -6933,6 +6933,7 @@ const SEALED_DISPLAY_TYPE_ORDER = [
   "Sealed",
   "Collector's Edition",
   "Cases & Displays",
+  "Puzzles",
 ];
 const SEALED_DISPLAY_TYPE_FOR = {
   "Booster Box":         "Booster Boxes",
@@ -6944,6 +6945,7 @@ const SEALED_DISPLAY_TYPE_FOR = {
   "Prerelease Pack":     "Prerelease Packs",
   "Sealed":              "Sealed",
   "Collector's Edition": "Collector's Edition",
+  "Puzzle":              "Puzzles",
 };
 function deriveSealedDisplayType(item){
   const name = (item.name || "").toLowerCase();
@@ -6972,6 +6974,39 @@ const sealedDisplayTypeRank = (t) => {
   const i = SEALED_DISPLAY_TYPE_ORDER.indexOf(t);
   return i === -1 ? 999 : i;
 };
+
+// Disney Lorcana puzzles (Ravensburger). Not on TCGPlayer and unpriced, so they
+// live here as a static catalog instead of in sealed_products / the price matview,
+// shaped like a sealed_prices row so they flow through the Sealed collection
+// grouping + tiles unchanged. Synthetic pid = 900000000 + Ravensburger SKU (well
+// above TCGPlayer's id range; stable + traceable to the SKU). Ownership still
+// persists in sealed_collection_items (no FK on the product id). Box art:
+// ravensburger.cloud CDN by SKU. Amethyst + Steel are US Disney-Store exclusives.
+const SEALED_PUZZLES = [
+  {sku:12001621, name:"Glimmers of the Realm: Amber",    pieces:1000, exclusive:false},
+  {sku:12001622, name:"Glimmers of the Realm: Amethyst", pieces:1000, exclusive:true},
+  {sku:12001623, name:"Glimmers of the Realm: Emerald",  pieces:1000, exclusive:false},
+  {sku:12001624, name:"Glimmers of the Realm: Ruby",     pieces:1000, exclusive:false},
+  {sku:12001625, name:"Glimmers of the Realm: Sapphire", pieces:1000, exclusive:false},
+  {sku:12001626, name:"Glimmers of the Realm: Steel",    pieces:1000, exclusive:true},
+  {sku:12001661, name:"Winnie the Pooh - Hunny Wizard",  pieces:300,  exclusive:false},
+  {sku:12001660, name:"Moana - Of Motunui",              pieces:300,  exclusive:false},
+  {sku:12001932, name:"Elsa - The Fifth Spirit",         pieces:300,  exclusive:false},
+].map(p => ({
+  tcgplayer_product_id: 900000000 + p.sku,
+  name: p.name,
+  clean_name: p.name,
+  product_type: "Puzzle",
+  set_id: "__puzzles__",
+  printing: "Normal",
+  low_price: null,
+  market_price: null,
+  image_url: `https://ravensburger.cloud/images/produktseiten/520x445/${p.sku}.webp`,
+  buy_url: "https://www.ravensburger.us/en-US/products/disney-lorcana/puzzles",
+  is_puzzle: true,
+  puzzle_pieces: p.pieces,
+  puzzle_exclusive: p.exclusive,
+}));
 // Strip the "Disney Lorcana: " prefix that TCGCSV prepends to every product —
 // the set pill already says where this is from; the prefix is just noise.
 const cleanSealedName = (name) => (name || "").replace(/^Disney Lorcana:\s*/i, "");
@@ -10134,7 +10169,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   // per-card cache (readCardHistCache) — sealed pids slot into the same
   // (pid, printing) keyspace cleanly.
   useEffect(() => {
-    if(!product?.tcgplayer_product_id){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
+    if(!product?.tcgplayer_product_id || product?.is_puzzle){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
     let cancelled = false;
     setHistoryState({loading: true, error: null});
     fetchCardHistory(product.tcgplayer_product_id, "Normal")
@@ -10169,6 +10204,46 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     return out;
   }, [history]);
   if(!product) return null;
+  // Puzzles are unpriced merch — show a trimmed modal (big box art, piece
+  // count, ownership, Ravensburger link) with no price/chart/Δ% sections.
+  if(product.is_puzzle){
+    const pz = product.tcgplayer_product_id;
+    const qz = sealedCollection?.[pz] || 0;
+    const bumpZ = (delta) => { const next = Math.max(0, Math.min(99, qz + delta)); if(next !== qz) updateSealedQty(pz, next); };
+    return html`<div class="card-detail-overlay" onClick=${onClose}>
+      <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
+        <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+        <div class="sealed-detail-head">
+          <div class="sealed-detail-img-wrap">
+            ${product.image_url
+              ? html`<img class="sealed-detail-img" src=${product.image_url} alt=${product.name}/>`
+              : html`<div class="sealed-detail-img-fallback">${product.name||"Puzzle"}</div>`}
+          </div>
+          <div class="sealed-detail-info">
+            <h2 class="sealed-detail-name">${product.name}</h2>
+            <div class="sealed-detail-meta muted">
+              <span>Puzzle</span><span class="sealed-detail-sep">·</span><span>${product.puzzle_pieces} pieces</span>
+              ${product.puzzle_exclusive ? html`<span class="sealed-detail-sep">·</span><span>Disney Store exclusive</span>` : ""}
+            </div>
+            <div class="sealed-detail-prices">
+              <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>Ravensburger puzzle — not sold on TCGplayer, so no market price is tracked.</span>
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow" title="View on Ravensburger">View on Ravensburger ↗</a>`}
+            </div>
+            ${!readOnly && html`<div class="sealed-detail-owncounter">
+              <span class="sealed-detail-owncounter-lbl">Owned</span>
+              <button onClick=${()=>bumpZ(-1)} disabled=${qz<=0} aria-label="Decrease quantity">−</button>
+              <span class=${"sealed-coll-counter-qty"+(qz>0?" has":"")}>${qz}</span>
+              <button onClick=${()=>bumpZ(+1)} disabled=${qz>=99} aria-label="Increase quantity">+</button>
+            </div>`}
+            ${!readOnly && qz > 0 && html`<${CostDateInputs}
+              currentPaid=${sealedMeta?.[pz]?.amount_paid ?? null}
+              currentDate=${sealedMeta?.[pz]?.acquired_date || null}
+              onCommit=${patch => updateSealedMeta(pz, patch)}/>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
   const pid = product.tcgplayer_product_id;
   const qty = sealedCollection?.[pid] || 0;
   const dtype = deriveSealedDisplayType(product);
@@ -10341,7 +10416,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
   // render below doesn't need to branch — set_id doubles as the section
   // key in either mode (using the type string when grouping by type).
   const grouped = useMemo(()=>{
-    const items = (sealedPrices || []).filter(p =>
+    // SEALED_PUZZLES are unpriced static catalog rows merged in so they render
+    // as a "Puzzles" section alongside the priced sealed products.
+    const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single"
     );
     const filtered = (hideUnowned
@@ -10387,7 +10464,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
         || (a.name||"").localeCompare(b.name||""));
       out.push({
         set_id: sid,
-        set_name: sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid),
+        set_name: sid === "__puzzles__" ? "Puzzles" : (sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid)),
         items: list,
       });
     }
@@ -10524,7 +10601,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                   ${section.items.map(item => {
                     const qty = sealedCollection[item.tcgplayer_product_id] || 0;
                     const price = item[priceField];
-                    const url = tcgUrl(item.tcgplayer_product_id);
+                    const url = item.is_puzzle ? item.buy_url : tcgUrl(item.tcgplayer_product_id);
                     const dtype = deriveSealedDisplayType(item);
                     const bump = (delta) => {
                       const next = Math.max(0, Math.min(99, qty + delta));
@@ -10550,13 +10627,15 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                         <div class="gc-card-name" title=${item.name}>${cleanSealedName(item.name)}</div>
                         <div class="gc-card-sub muted">${dtype}</div>
                         <div class="gc-card-raw">
-                          ${showBoth
+                          ${item.is_puzzle
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.puzzle_pieces} pcs${item.puzzle_exclusive ? " · Disney Store excl." : ""}</span>`
+                            : showBoth
                             ? html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lowPx)}</span>
                                    <span class="gc-card-raw-px gc-card-raw-px-secondary"><span class="gc-card-raw-px-lbl">Mkt</span> ${fmt(mktPx)}</span>`
                             : html`<span class="gc-card-raw-px">${useMarket?"NM Market":"Low"} ${fmt(price)}</span>`}
                           ${url && html`<a class="gc-card-buy" href=${url} target="_blank" rel="noopener nofollow"
                               onClick=${e=>e.stopPropagation()}
-                              title="Buy on TCGPlayer">Buy ↗</a>`}
+                              title=${item.is_puzzle ? "View on Ravensburger" : "Buy on TCGPlayer"}>${item.is_puzzle ? "View ↗" : "Buy ↗"}</a>`}
                         </div>
                         ${dRow && html`<div class="gc-card-deltas">
                           <span class="gc-card-delta-cell"><span class="gc-card-delta-lbl">1D</span>
@@ -10568,7 +10647,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                           <span class="gc-card-delta-cell"><span class="gc-card-delta-lbl">1Y</span>
                             <span class="gc-card-delta-val" style=${{color: pctColor(dRow.pct_365d)}}>${fmtPct(dRow.pct_365d)}</span></span>
                         </div>`}
-                        ${qty > 0 && html`<div class="gc-card-owned-value">
+                        ${qty > 0 && !item.is_puzzle && html`<div class="gc-card-owned-value">
                           <span class="muted">Owned value</span>
                           <strong>${fmt((price || 0) * qty)}</strong>
                         </div>`}
