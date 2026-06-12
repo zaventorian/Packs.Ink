@@ -8262,6 +8262,29 @@ const SET_RELEASE_DATES = {
   "Wilds Unknown":         {lgs:"2026-05-08", retail:"2026-05-15"},
 };
 
+// Infer which set a (Store/Set) Championship was for. Many event titles don't
+// name the set, so: (1) prefer an explicit set name in the title, else
+// (2) fall back to the newest set released on/before the event date — i.e. the
+// set that was the current standard-legal release when the event ran. Used to
+// label ELO tournament rows + the event detail.
+const _SET_RELEASE_ASC = Object.entries(SET_RELEASE_DATES)
+  .map(([name, d]) => ({name, lgs: d.lgs}))
+  .sort((a, b) => a.lgs.localeCompare(b.lgs));
+const _normSetName = (s) => (s || "").toLowerCase().replace(/['’‘`]/g, "").replace(/\s+/g, " ").trim();
+const _SET_BY_NAME_LEN = [..._SET_RELEASE_ASC].sort(
+  (a, b) => _normSetName(b.name).length - _normSetName(a.name).length);
+const inferEventSet = (eventName, eventDate) => {
+  const n = _normSetName(eventName);
+  if(n) for(const e of _SET_BY_NAME_LEN){ if(n.includes(_normSetName(e.name))) return e.name; }
+  if(eventDate){
+    const d = String(eventDate).slice(0, 10);
+    let best = null;
+    for(const e of _SET_RELEASE_ASC){ if(e.lgs <= d) best = e.name; else break; }
+    return best;
+  }
+  return null;
+};
+
 // "all" = since release; others are rolling windows ending today.
 // "custom" pairs with a date string from the date picker.
 const RANGE_OPTIONS = [
@@ -13656,6 +13679,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         const eloDelta = (ev.end_rating != null && ev.start_rating != null) ?
           Math.round(ev.end_rating - ev.start_rating) : null;
         const place = eventRanks ? eventRanks[ev.event_id] : null;
+        const scSet = inferEventSet(ev.event_name, ev.event_date);
         return html`<section class="elo-tourney" key=${ev.event_id}>
           <header class="elo-tourney-head">
             <h3>
@@ -13664,7 +13688,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                 ${ev.event_name || "Event #" + ev.event_id}${ev.store ? ": " + ev.store + (ev.location ? ", " + ev.location : "") : ""}
               </${EloLink}>
             </h3>
-            <span class="elo-tourney-meta">${ev.event_date || ""}</span>
+            <span class="elo-tourney-meta">${ev.event_date || ""}${scSet ? html` · <span class="elo-event-set">${scSet}</span>` : ""}</span>
           </header>
           <div class="elo-tourney-stats">
             <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${place != null ? "#"+place : "—"}</div></div>
@@ -13888,6 +13912,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
 
   if(!ev) return html`<div class="elo-loading">Loading event…</div>`;
 
+  const scSet = inferEventSet(ev.name, ev.event_date);
   return html`<div class="elo-event-detail">
     <button class="elo-back" onClick=${onBack}>← Tournaments</button>
     <header class="elo-event-head">
@@ -13895,6 +13920,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
       <p class="elo-event-meta">
         ${ev.store || ""}${ev.location ? ", "+ev.location : ""}
         ${ev.event_date ? " · " + ev.event_date : ""}
+        ${scSet ? html`<span class="elo-event-set" title="Set this championship was for (from the title, or the set current on the event date)"> · ${scSet}</span>` : ""}
         ${ev.season ? " · " + ev.season : ""}
         ${ev.num_players ? " · " + ev.num_players + " players" : ""}
         <${EloPlatformPill} platform=${ev.platform}/>
