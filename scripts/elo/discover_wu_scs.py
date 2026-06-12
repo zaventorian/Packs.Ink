@@ -10,9 +10,24 @@ was retired. The live public events API is:
 Useful filters (snake_case query params; camelCase ones are silently ignored):
   game_slug=disney-lorcana
   display_statuses=upcoming        # only future events
-  name=<text>                      # loose token match against event name
-  ordering=start_datetime          # soonest first
-  page / page_size                 # pagination (page_size up to ~100)
+  name=<text>                      # FUZZY RELEVANCE search — see warning below
+  ordering=start_datetime|id|-id   # soonest first / stable keyset
+  page / page_size                 # pagination (page_size up to ~250)
+
+⚠️  DO NOT trust the `name=` filter as the collection gate. It is a scored
+relevance search with a cutoff, NOT a substring/token filter. Asking for
+name="Wilds Unknown Set Championship" silently DROPS clean matches whose
+title doesn't closely hug that exact phrase — hyphens ("Wilds Unknown -
+Set Championship"), reversed word order ("Set Championship Wilds Unknown"),
+store prefixes, quotes, or non-English titles all score below the threshold
+and vanish. Measured 2026-06-11: the name filter returned ~2203 WU SCs while
+an unfiltered pull found 2269 (~96 real events dropped, incl. event 646568).
+
+So we pull ALL upcoming Lorcana events with NO name filter and decide what's
+an SC locally in `is_target_sc`. A second hazard: deep offset pagination over
+the live ~15k-row index drifts (rows get skipped when events are inserted
+mid-scan), so we union several passes with different orderings — dedup-by-id
+makes the union free.
 
 Each result carries name, store{name,city,state,country,lat,lng,website},
 full_address, start/end_datetime, timezone, registered_user_count, capacity,
@@ -58,34 +73,57 @@ def http_json(url: str, retries: int = 4) -> dict:
     raise last
 
 
-def fetch_all(set_name: str) -> list[dict]:
-    """Page through every upcoming event whose name matches '<set> Set Championship'."""
-    rows: dict[int, dict] = {}
+def fetch_pages(extra: dict, into: dict[int, dict]) -> int:
+    """Page through one upcoming-Lorcana query, merging rows into `into` (keyed
+    by event id). Returns how many unique ids this pass contributed."""
+    before = len(into)
     page = 1
     base = {
         "game_slug": "disney-lorcana",
         "display_statuses": "upcoming",
-        "name": f"{set_name} Set Championship",
-        "ordering": "start_datetime",
-        "page_size": 100,
+        "page_size": 250,
     }
     while True:
-        params = dict(base, page=page)
+        params = dict(base, **extra, page=page)
         d = http_json(API + "?" + urlencode(params))
         results = d.get("results") or []
         if not results:
             break
         for ev in results:
-            rows[ev["id"]] = ev
+            into[ev["id"]] = ev
         total = d.get("count")
-        sys.stdout.write(f"\r  page {page}: {len(rows)} unique so far (api count={total})   ")
+        sys.stdout.write(
+            f"\r  pass {extra.get('ordering') or extra.get('name') or '?'}: "
+            f"page {page}, {len(into)} unique so far (api count={total})   ")
         sys.stdout.flush()
         if not d.get("next"):
             break
         page += 1
-        time.sleep(0.15)
+        time.sleep(0.12)
     print()
-    return list(rows.values())
+    return len(into) - before
+
+
+def fetch_all(set_name: str) -> list[dict]:
+    """Collect EVERY upcoming Lorcana event (not just `set_name`), robustly.
+
+    We deliberately do not filter by name on the server (see the module
+    docstring) — `is_target_sc` does the gating locally. We union several full
+    passes with different orderings so pagination drift on the live index can't
+    silently skip events; a name-relevance pass for `set_name` is folded in as a
+    cheap high-recall safety net for the current set. Dedup is by event id."""
+    union: dict[int, dict] = {}
+    passes = [
+        {"ordering": "id"},               # stable ascending keyset
+        {"ordering": "-id"},              # opposite direction — different drift
+        {"ordering": "start_datetime"},   # soonest-first ordering
+        # cheap relevance net for the requested set (a few pages):
+        {"ordering": "start_datetime", "name": f"{set_name} Set Championship"},
+    ]
+    for p in passes:
+        added = fetch_pages(p, union)
+        print(f"    +{added} new from this pass — {len(union)} total unique")
+    return list(union.values())
 
 
 SC_SET_HINTS = ("set championship",)
@@ -177,7 +215,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="don't write to Supabase")
     args = ap.parse_args()
 
-    print(f"Fetching upcoming '{args.set} Set Championship' events from RPH...")
+    print(f"Pulling ALL upcoming Lorcana events from RPH (no name filter) "
+          f"to find '{args.set}' Set Championships locally...")
     raw = fetch_all(args.set)
     kept = [ev for ev in raw if is_target_sc(ev, args.set)]
     rows = [to_row(ev, args.set) for ev in kept]
@@ -189,7 +228,7 @@ def main() -> None:
     from collections import Counter
     by_country = Counter((r.get("country") or "?") for r in rows)
     print(f"\n{len(rows)} {args.set} Set Championships "
-          f"({len(raw)} raw API hits, {len(kept)} after name filter)")
+          f"({len(raw)} upcoming Lorcana events scanned, {len(kept)} matched the local SC filter)")
     print("  by country:", dict(sorted(by_country.items(), key=lambda kv: -kv[1])))
 
     if args.json:
