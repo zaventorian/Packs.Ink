@@ -36,20 +36,37 @@ cost_in_cents, currency, gameplay_format{name}, display_status.
 Re-runnable: upserts on event_id (merge-duplicates), so running it again just
 refreshes registration counts / new events.
 
+ALL-SETS MODE (`--all-sets`, what the daily workflow runs): instead of scoping
+to one set, capture EVERY upcoming Set Championship and auto-detect which set
+each belongs to by matching its title against the canonical Lorcana set names —
+pulled live from the Supabase `sets` table (kept current by the Lorcast loader).
+So a new set is picked up automatically once it lands in `sets`; no edit here.
+SCs whose title matches no known set are skipped and logged (so the displayed
+`<set> Set Championship` label never goes blank/garbled) and get swept up on a
+later run once the set is in the DB.
+
 Usage:
-    python discover_wu_scs.py                          # Wilds Unknown, all countries -> Supabase
-    python discover_wu_scs.py --set "Wilds Unknown"
+    python discover_wu_scs.py --all-sets               # every set -> Supabase (daily job)
+    python discover_wu_scs.py                          # Wilds Unknown, all countries
+    python discover_wu_scs.py --set "Reign of Jafar"
     python discover_wu_scs.py --country US             # client-side country filter
-    python discover_wu_scs.py --dry-run --json out.json
+    python discover_wu_scs.py --all-sets --dry-run --json out.json
 """
 from __future__ import annotations
-import argparse, json, os, sys, time, urllib.request, urllib.error
+import argparse, json, os, re, sys, time, urllib.request, urllib.error
 from pathlib import Path
 from urllib.parse import urlencode
 
 try:
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parents[1] / ".env")
+except Exception:
+    pass
+
+# Windows consoles default to cp1252, which can't encode some of our progress
+# glyphs (—, …) and would crash on print(). Force UTF-8 (no-op on Linux CI).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
 except Exception:
     pass
 
@@ -104,43 +121,103 @@ def fetch_pages(extra: dict, into: dict[int, dict]) -> int:
     return len(into) - before
 
 
-def fetch_all(set_name: str) -> list[dict]:
-    """Collect EVERY upcoming Lorcana event (not just `set_name`), robustly.
+def fetch_all(name_net: str | None = None) -> list[dict]:
+    """Collect EVERY upcoming Lorcana event, robustly.
 
     We deliberately do not filter by name on the server (see the module
-    docstring) — `is_target_sc` does the gating locally. We union several full
-    passes with different orderings so pagination drift on the live index can't
-    silently skip events; a name-relevance pass for `set_name` is folded in as a
-    cheap high-recall safety net for the current set. Dedup is by event id."""
+    docstring) — the SC gating happens locally. We union several full passes with
+    different orderings so pagination drift on the live index can't silently skip
+    events; an optional `name_net` relevance pass is folded in as a cheap
+    high-recall safety net (e.g. "<set> Set Championship" for single-set mode, or
+    "Set Championship" for all-sets mode). Dedup is by event id."""
     union: dict[int, dict] = {}
     passes = [
         {"ordering": "id"},               # stable ascending keyset
         {"ordering": "-id"},              # opposite direction — different drift
         {"ordering": "start_datetime"},   # soonest-first ordering
-        # cheap relevance net for the requested set (a few pages):
-        {"ordering": "start_datetime", "name": f"{set_name} Set Championship"},
     ]
+    if name_net:
+        # cheap relevance net (a few pages) — drift insurance, not the gate:
+        passes.append({"ordering": "start_datetime", "name": name_net})
     for p in passes:
         added = fetch_pages(p, union)
         print(f"    +{added} new from this pass — {len(union)} total unique")
     return list(union.values())
 
 
-SC_SET_HINTS = ("set championship",)
+# Side events that share "set championship" wording but aren't the main SC.
+SIDE_PATTERNS = ("prerelease", "pre-release", "release party",
+                 "draft", "sealed", "trove", "league night")
+
+# Resilience-only fallback if the Supabase `sets` query fails or a brand-new
+# set's SCs appear before Lorcast adds it to `sets`. The DB is the source of
+# truth — this list need not be exhaustive or perfectly maintained; unmatched
+# sets are skipped+logged, not silently mis-stored. "Attack of the Vines" is
+# pre-seeded as the known-next set so its SCs are caught the moment they post.
+FALLBACK_SETS = (
+    "The First Chapter", "Rise of the Floodborn", "Into the Inklands",
+    "Ursula's Return", "Shimmering Skies", "Azurite Sea", "Archazia's Island",
+    "Reign of Jafar", "Fabled", "Whispers in the Well", "Winterspell",
+    "Wilds Unknown", "Attack of the Vines",
+)
 
 
-def is_target_sc(ev: dict, set_name: str) -> bool:
+def is_sc(ev: dict) -> bool:
+    """True if this looks like a real Set Championship (any set), not a side event."""
     name = (ev.get("name") or "").lower()
     if "set championship" not in name:
         return False
-    # scope to the requested set (the API name filter is loose; pin it here)
-    if set_name.lower() not in name:
-        return False
-    # belt-and-suspenders: drop obvious side events that slipped in
-    if any(k in name for k in ("prerelease", "pre-release", "release party",
-                               "draft", "sealed", "trove", "league night")):
+    if any(k in name for k in SIDE_PATTERNS):
         return False
     return True
+
+
+def is_target_sc(ev: dict, set_name: str) -> bool:
+    # scope to the requested set (the API name filter is loose; pin it here)
+    return is_sc(ev) and set_name.lower() in (ev.get("name") or "").lower()
+
+
+def _norm(s: str) -> str:
+    """Lowercase, unify apostrophes->none, collapse whitespace — so 'Ursula's
+    Return' / 'Ursula’s Return' / 'Ursulas Return' all compare equal."""
+    s = (s or "").lower().replace("’", "'").replace("‘", "'").replace("`", "'")
+    s = s.replace("'", "")
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def fetch_set_names() -> list[dict]:
+    """Canonical Lorcana set names, newest-first by normalized length so longer
+    names win over any shorter name they contain. Source of truth is the
+    Supabase `sets` table (auto-updated by the Lorcast loader); FALLBACK_SETS is
+    unioned in for resilience. Returns dicts {canonical, norm}."""
+    names: set[str] = set(FALLBACK_SETS)
+    if SUPABASE_URL and SERVICE_KEY:
+        try:
+            url = f"{SUPABASE_URL}/rest/v1/sets?select=name"
+            req = urllib.request.Request(url, headers={
+                "apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
+                "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=40) as r:
+                for row in json.loads(r.read().decode("utf-8", "ignore")):
+                    if row.get("name"):
+                        names.add(row["name"])
+            print(f"  set list: {len(names)} names (Supabase sets + fallback)")
+        except Exception as e:
+            print(f"  ! couldn't read `sets` table ({e}); using fallback list only")
+    else:
+        print("  ! no Supabase creds; using fallback set list only")
+    out = [{"canonical": n, "norm": _norm(n)} for n in names if _norm(n)]
+    out.sort(key=lambda d: len(d["norm"]), reverse=True)
+    return out
+
+
+def detect_set(ev_name: str, sets_sorted: list[dict]) -> str | None:
+    """Which canonical set does this SC title name? Longest-normalized match wins."""
+    nt = _norm(ev_name)
+    for d in sets_sorted:
+        if d["norm"] in nt:
+            return d["canonical"]
+    return None
 
 
 def to_row(ev: dict, set_name: str) -> dict:
@@ -208,27 +285,53 @@ def upsert(rows: list[dict], chunk: int = 200) -> None:
 
 
 def main() -> None:
+    from collections import Counter
     ap = argparse.ArgumentParser()
-    ap.add_argument("--set", default="Wilds Unknown", help="set name to scope SCs to")
+    ap.add_argument("--all-sets", action="store_true",
+                    help="capture every set's SCs, auto-detecting the set per event (daily-job mode)")
+    ap.add_argument("--set", default="Wilds Unknown", help="set to scope SCs to (ignored with --all-sets)")
     ap.add_argument("--country", default=None, help="optional client-side ISO country filter, e.g. US")
     ap.add_argument("--json", default=None, help="also dump the rows to this path")
     ap.add_argument("--dry-run", action="store_true", help="don't write to Supabase")
     args = ap.parse_args()
 
-    print(f"Pulling ALL upcoming Lorcana events from RPH (no name filter) "
-          f"to find '{args.set}' Set Championships locally...")
-    raw = fetch_all(args.set)
-    kept = [ev for ev in raw if is_target_sc(ev, args.set)]
-    rows = [to_row(ev, args.set) for ev in kept]
+    if args.all_sets:
+        print("Pulling ALL upcoming Lorcana events from RPH (no name filter), "
+              "auto-detecting each Set Championship's set...")
+        sets_sorted = fetch_set_names()
+        raw = fetch_all(name_net="Set Championship")
+        scs = [ev for ev in raw if is_sc(ev)]
+        rows, unknown = [], []
+        for ev in scs:
+            s = detect_set(ev.get("name") or "", sets_sorted)
+            (rows.append(to_row(ev, s)) if s else unknown.append(ev))
+        label = "all-sets"
+        if unknown:
+            print(f"\n  [!] {len(unknown)} SC(s) matched no known set - SKIPPED (add the set "
+                  f"to the `sets` table / FALLBACK_SETS, or wait for the Lorcast refresh, "
+                  f"then re-run):")
+            for ev in unknown[:25]:
+                print(f"      [{ev.get('id')}] {(ev.get('name') or '')[:72]}")
+            if len(unknown) > 25:
+                print(f"      ... and {len(unknown) - 25} more")
+    else:
+        print(f"Pulling ALL upcoming Lorcana events from RPH (no name filter) "
+              f"to find '{args.set}' Set Championships locally...")
+        raw = fetch_all(name_net=f"{args.set} Set Championship")
+        scs = [ev for ev in raw if is_target_sc(ev, args.set)]
+        rows = [to_row(ev, args.set) for ev in scs]
+        label = args.set
+
     if args.country:
         rows = [r for r in rows if (r.get("country") or "").upper() == args.country.upper()]
-    rows.sort(key=lambda r: (r.get("start_datetime") or "", r.get("country") or ""))
+    rows.sort(key=lambda r: (r.get("set_name") or "", r.get("start_datetime") or "", r.get("country") or ""))
 
-    # country breakdown
-    from collections import Counter
     by_country = Counter((r.get("country") or "?") for r in rows)
-    print(f"\n{len(rows)} {args.set} Set Championships "
-          f"({len(raw)} upcoming Lorcana events scanned, {len(kept)} matched the local SC filter)")
+    print(f"\n{len(rows)} {label} Set Championships "
+          f"({len(raw)} upcoming Lorcana events scanned, {len(scs)} SC events found)")
+    if args.all_sets:
+        by_set = Counter((r.get("set_name") or "?") for r in rows)
+        print("  by set:", dict(sorted(by_set.items(), key=lambda kv: -kv[1])))
     print("  by country:", dict(sorted(by_country.items(), key=lambda kv: -kv[1])))
 
     if args.json:
@@ -239,7 +342,8 @@ def main() -> None:
         print("  (dry run — not writing to Supabase)")
         for r in rows[:8]:
             print(f"    {r['start_datetime'][:10] if r['start_datetime'] else '????-??-??'}  "
-                  f"{(r['name'] or '')[:42]:44}  {(r['store_name'] or '')[:22]:24}  {r.get('country')}")
+                  f"{(r.get('set_name') or '')[:18]:20}  {(r['name'] or '')[:38]:40}  "
+                  f"{(r['store_name'] or '')[:20]:22}  {r.get('country')}")
         return
 
     upsert(rows)

@@ -11,8 +11,10 @@ name: Discover Set Championships
 # re-running is harmless. It does NOT prune events removed from RPH — stale rows
 # linger until a separate guarded cleanup is added.
 #
-# SET ROTATION: when the active set changes, bump the `set_name` default below
-# (one line) — or switch to all-sets discovery so this never needs touching.
+# SET ROTATION IS AUTOMATIC: the scheduled run uses --all-sets, which captures
+# every set's SCs and auto-detects the set per event from the Supabase `sets`
+# table. New sets are picked up the moment Lorcast adds them to `sets` — nothing
+# to edit here. (The optional set_name input below is just for targeted re-pulls.)
 
 permissions:
   contents: read
@@ -25,14 +27,14 @@ on:
   workflow_dispatch:
     inputs:
       set_name:
-        description: "Set to discover SCs for"
+        description: "Leave blank to discover ALL sets; or name one set to re-pull just that"
         required: false
-        default: "Wilds Unknown"
+        default: ""
         type: string
 
 jobs:
   discover:
-    name: Discover SCs for a set
+    name: Discover Set Championships
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -42,11 +44,17 @@ jobs:
           python-version: "3.12"
 
       - name: Discover & upsert Set Championships
-        # On a scheduled run `inputs.set_name` is empty, so fall back to the
-        # current active set here.
+        # Scheduled runs have an empty set_name -> --all-sets. A manual dispatch
+        # with a set_name re-pulls just that set.
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          SET_NAME: ${{ inputs.set_name || 'Wilds Unknown' }}
+          SET_NAME: ${{ inputs.set_name }}
         run: |
-          python scripts/elo/discover_wu_scs.py --set "$SET_NAME"
+          if [ -n "$SET_NAME" ]; then
+            echo "Discovering SCs for set: $SET_NAME"
+            python scripts/elo/discover_wu_scs.py --set "$SET_NAME"
+          else
+            echo "Discovering SCs for ALL sets"
+            python scripts/elo/discover_wu_scs.py --all-sets
+          fi
