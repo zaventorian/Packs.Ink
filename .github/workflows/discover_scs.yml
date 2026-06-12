@@ -1,0 +1,52 @@
+name: Discover Set Championships
+
+# Keeps public.set_championships fresh by re-running the RPH discovery daily.
+# Why daily (not weekly like the ELO refresh): stores create new SCs and adjust
+# events continuously, and the original staleness is exactly what let a Las Vegas
+# SC go missing. SC discovery tolerates a few hours of delay, so GitHub's native
+# `schedule:` cron is fine here — no need for the cron-job.org pinger that the
+# time-critical price ETL uses.
+#
+# The script is idempotent (PostgREST upsert on event_id, merge-duplicates), so
+# re-running is harmless. It does NOT prune events removed from RPH — stale rows
+# linger until a separate guarded cleanup is added.
+#
+# SET ROTATION: when the active set changes, bump the `set_name` default below
+# (one line) — or switch to all-sets discovery so this never needs touching.
+
+permissions:
+  contents: read
+
+on:
+  schedule:
+    # 09:00 UTC daily = 4:00 AM CDT. Off-peak, away from the 01:00/06:00 price
+    # ETL crons. GH cron may slip a couple hours under load — fine for SCs.
+    - cron: "0 9 * * *"
+  workflow_dispatch:
+    inputs:
+      set_name:
+        description: "Set to discover SCs for"
+        required: false
+        default: "Wilds Unknown"
+        type: string
+
+jobs:
+  discover:
+    name: Discover SCs for a set
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Discover & upsert Set Championships
+        # On a scheduled run `inputs.set_name` is empty, so fall back to the
+        # current active set here.
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          SET_NAME: ${{ inputs.set_name || 'Wilds Unknown' }}
+        run: |
+          python scripts/elo/discover_wu_scs.py --set "$SET_NAME"
