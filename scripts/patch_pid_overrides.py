@@ -307,6 +307,33 @@ def main() -> None:
     except Exception as e:
         print(f"  connecting-foil upsert failed: {repr(e)[:300]}")
 
+    # Gift-set oversized jumbo cards. Each carries the oversized TCGPlayer pid so
+    # its Cold-Foil price flows through the matview; EXTRAS_MAP in Index.html
+    # lifts it into the "Gift Set Oversized Cards" Extras bucket and suppresses
+    # the base-set duplicate. {oversized_pid: base_pid}
+    OVERSIZED_EXTRAS = {516778: 485365, 516775: 485364, 539145: 539083, 539148: 536268}
+    print("\nBuilding gift-set oversized companion rows...")
+    try:
+        over_base = sb.select("cards", columns=clone_cols,
+                             filters={"tcgplayer_product_id": f"in.({','.join(str(p) for p in OVERSIZED_EXTRAS.values())})"})
+        over_by_pid = {r["tcgplayer_product_id"]: r for r in over_base}
+        over_rows = []
+        for over_pid, base_pid in OVERSIZED_EXTRAS.items():
+            b = over_by_pid.get(base_pid)
+            if not b:
+                print(f"  skip oversized {over_pid}: base {base_pid} not in cards")
+                continue
+            row = {k: v for k, v in b.items() if k != "tcgplayer_product_id"}
+            row["id"] = f"crd_custom_{over_pid}_oversized"
+            row["tcgplayer_product_id"] = over_pid
+            row["collector_number"] = f"{b.get('collector_number') or ''}O"
+            over_rows.append(row)
+        if over_rows:
+            sb.upsert("cards", over_rows, on_conflict="id")
+            print(f"  upserted {len(over_rows)} oversized row(s).")
+    except Exception as e:
+        print(f"  oversized upsert failed: {repr(e)[:300]}")
+
     print("\nRefreshing card_prices_latest matview...")
     try:
         sb.rpc("refresh_card_prices_latest")
