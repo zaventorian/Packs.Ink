@@ -354,6 +354,15 @@ def main() -> int:
         f"{len(patches)-flagged_total:,} clears to NULL)"
     )
 
+    # A runaway patch count usually means a parameter retune flagged half the
+    # catalog as phantom — loud-log it so the regression is visible in the run.
+    if len(patches) > 2000:
+        print(
+            f"  WARNING: {len(patches):,} patches is unusually high (>2000). "
+            "A normal day is in the low hundreds — check whether an algorithm "
+            "tunable was changed."
+        )
+
     if args.dry_run:
         print("--dry-run: not writing.")
         return 0
@@ -362,31 +371,57 @@ def main() -> int:
         print("No changes.")
         return 0
 
-    # Patch via PostgREST one row at a time — `prices_daily` PK is composite
-    # so the bulk-upsert path needs every row to carry the full PK + every
-    # NOT NULL column. Cheaper to just PATCH with eq filters on the PK.
-    # In practice patches/day across the whole catalog should be in the
-    # low hundreds at most.
+    # Batch the PATCHes. `prices_daily`'s PK is composite (pid, printing, date,
+    # source, grade), so we can't `in.()` on a single column across the whole
+    # set. But within one (printing, date, value) bucket every row shares
+    # printing + date + the target low_price_smoothed value, so we can collapse
+    # them into ONE PATCH that targets `tcgplayer_product_id=in.(...)` +
+    # `printing=eq` + `date=eq` (+ the fixed source/grade). Single-pid buckets
+    # are still one call — no worse than the old serial path.
+    buckets: dict[tuple, list] = defaultdict(list)
+    for p in patches:
+        # NULL clears can't share a bucket key with a real value; use a
+        # sentinel so the clear-to-NULL group is its own bucket.
+        val_key = "__null__" if p["value"] is None else p["value"]
+        buckets[(p["printing"], p["date"], val_key)].append(p["tcgplayer_product_id"])
+
+    # Cap the in.() list per call so a large bucket (e.g. the clear-to-NULL
+    # group on a day many cards qualify+clear) can't blow the PostgREST URL
+    # length limit. 200 pids/call keeps the query string comfortably short.
+    IN_CHUNK = 200
+
     t1 = time.time()
     written = 0
+    calls = 0
     last_print = t1
-    for p in patches:
-        sb.update(
-            "prices_daily",
-            match={
-                "tcgplayer_product_id": p["tcgplayer_product_id"],
-                "printing": p["printing"],
-                "date": p["date"],
-                "source": "tcgcsv",
-                "grade": "raw",
-            },
-            patch={"low_price_smoothed": p["value"]},
-        )
-        written += 1
-        if time.time() - last_print > 5:
-            print(f"  wrote {written}/{len(patches)}")
-            last_print = time.time()
-    print(f"Wrote {written:,} patches in {time.time()-t1:.1f}s")
+    for (printing, d_iso, val_key), pids in buckets.items():
+        value = None if val_key == "__null__" else val_key
+        # Dedup pids defensively (a (printing,date) can only appear once per
+        # pid in `patches`, but be safe).
+        uniq_pids = sorted(set(pids))
+        for chunk_start in range(0, len(uniq_pids), IN_CHUNK):
+            chunk = uniq_pids[chunk_start:chunk_start + IN_CHUNK]
+            in_filter = "in.(" + ",".join(str(x) for x in chunk) + ")"
+            sb.update(
+                "prices_daily",
+                match={
+                    "printing": printing,
+                    "date": d_iso,
+                    "source": "tcgcsv",
+                    "grade": "raw",
+                },
+                params={"tcgplayer_product_id": in_filter},
+                patch={"low_price_smoothed": value},
+            )
+            written += len(chunk)
+            calls += 1
+            if time.time() - last_print > 5:
+                print(f"  wrote {written}/{len(patches)} ({calls} batched calls)")
+                last_print = time.time()
+    print(
+        f"Wrote {written:,} patches in {calls:,} batched calls "
+        f"in {time.time()-t1:.1f}s"
+    )
     return 0
 
 

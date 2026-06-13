@@ -172,7 +172,7 @@ def load_overrides(today: str) -> tuple[list[dict], list[dict]]:
     return inserts, deletes
 
 
-def main() -> None:
+def main() -> int:
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     api_key = os.environ.get("TCGPRICELOOKUP_API_KEY")
     if not api_key:
@@ -187,13 +187,29 @@ def main() -> None:
 
     # Page through the whole Lorcana catalog. The first response also tells
     # us the true total so we know when to stop.
+    #
+    # If one page fails persistently (all retries inside fetch_page exhausted),
+    # we DON'T discard everything collected so far — we log the failure, break
+    # out, and proceed to upsert the partial `all_rows`. A page outage at
+    # offset 5000 shouldn't lose the 5000 rows we already have. We still exit
+    # non-zero at the very end so CI / cron-job.org alerts on the gap.
     all_rows: list[dict] = []
     cards_with_graded = 0
     total_cards = None
     offset = 0
     pages = 0
+    page_failed = False
     while True:
-        data = fetch_page(session, api_key, offset)
+        try:
+            data = fetch_page(session, api_key, offset)
+        except RuntimeError as e:
+            page_failed = True
+            print(
+                f"WARN: page fetch failed permanently at offset={offset} "
+                f"after {pages} successful pages ({len(all_rows)} rows collected "
+                f"so far): {e}. Proceeding to upsert the partial snapshot."
+            )
+            break
         page = data.get("data") or []
         if total_cards is None:
             total_cards = int(data.get("total") or 0)
@@ -220,7 +236,8 @@ def main() -> None:
 
     if not all_rows and not override_inserts:
         print("No graded rows to upsert. Done.")
-        return
+        # Nothing collected AND a page failed → hard fail so we alert.
+        return 1 if page_failed else 0
 
     # Upsert regular TCGPriceLookup rows in batches. Conflict target = PK
     # (tcgplayer_product_id, printing, grader, grade, date), so re-runs
@@ -275,6 +292,13 @@ def main() -> None:
     except Exception as e:
         print(f"WARN: matview refresh failed (run migration 32_graded_prices.sql?): {e}")
 
+    # Partial snapshot was written + matview refreshed, but a page failed
+    # mid-run — exit non-zero so CI / cron-job.org still alerts on the gap.
+    if page_failed:
+        print("FAIL: partial graded snapshot written, but at least one page failed to fetch.")
+        return 1
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

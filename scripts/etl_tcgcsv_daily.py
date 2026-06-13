@@ -49,12 +49,14 @@ def get_json(url: str) -> Any:
 def fetch_groups(category_id: int) -> list[dict]:
     """List of TCGPlayer 'groups' (sets) for a category."""
     data = get_json(f"{TCGCSV_BASE}/{category_id}/groups")
-    return data.get("results") or data
+    # Explicit key-presence check: a valid empty response is {"results": []},
+    # and `... or data` would wrongly fall through to the raw dict for that.
+    return data.get("results") if isinstance(data, dict) and "results" in data else data
 
 
 def fetch_group_prices(category_id: int, group_id: int) -> list[dict]:
     data = get_json(f"{TCGCSV_BASE}/{category_id}/{group_id}/prices")
-    return data.get("results") or data
+    return data.get("results") if isinstance(data, dict) and "results" in data else data
 
 
 def update_set_group_mapping(sb: Supabase, groups: list[dict]) -> None:
@@ -93,6 +95,26 @@ def update_set_group_mapping(sb: Supabase, groups: list[dict]) -> None:
             print(f"  WARNING: {failed}/{len(updates)} set group updates failed")
 
 
+def _latest_snapshot_before(sb: Supabase, snapshot: date) -> str | None:
+    """Return the most-recent prices_daily date strictly before `snapshot`
+    (tcgcsv/raw), or None if there's no prior snapshot at all (first-ever
+    load). Used as a fallback when the immediately-preceding day has no rows
+    so a multi-day ETL gap still compares against the last real data instead
+    of treating a stale TCGCSV file as fresh."""
+    rows = sb.select(
+        "prices_daily",
+        columns="date",
+        limit=1,
+        filters={
+            "source": "eq.tcgcsv",
+            "grade": "eq.raw",
+            "date": f"lt.{snapshot.isoformat()}",
+            "order": "date.desc",
+        },
+    )
+    return rows[0]["date"] if rows else None
+
+
 def detect_duplicate_snapshot(
     sb: Supabase, snapshot: date, new_rows: list[dict], threshold: float = 0.95
 ) -> tuple[float, int]:
@@ -101,16 +123,37 @@ def detect_duplicate_snapshot(
     TCGCSV likely served stale data (or hadn't published today's snapshot yet)
     and we'd be polluting prices_daily with a duplicate that silently zeros
     out 1D movers downstream.
+
+    If the immediately-preceding day (snapshot - 1) has no rows (an ETL gap),
+    fall back to the most-recent available snapshot strictly before today so a
+    2-day gap still compares against real data. Only when there's NO prior
+    snapshot at all (genuine first-ever load) do we return (0.0, 0) = write.
     """
+    compare_date = (snapshot - timedelta(days=1)).isoformat()
     prior = sb.select(
         "prices_daily",
         columns="tcgplayer_product_id,printing,low_price,market_price",
         filters={
             "source": "eq.tcgcsv",
             "grade": "eq.raw",
-            "date": f"eq.{(snapshot - timedelta(days=1)).isoformat()}",
+            "date": f"eq.{compare_date}",
         },
     )
+    if not prior:
+        fallback = _latest_snapshot_before(sb, snapshot)
+        if fallback is None:
+            return (0.0, 0)  # no prior data at all → first-ever load, write it
+        compare_date = fallback
+        print(f"  prior day empty; comparing against last snapshot {compare_date}")
+        prior = sb.select(
+            "prices_daily",
+            columns="tcgplayer_product_id,printing,low_price,market_price",
+            filters={
+                "source": "eq.tcgcsv",
+                "grade": "eq.raw",
+                "date": f"eq.{compare_date}",
+            },
+        )
     prior_by_key: dict[tuple, tuple] = {}
     for r in prior:
         key = (r["tcgplayer_product_id"], r["printing"])

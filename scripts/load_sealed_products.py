@@ -65,12 +65,14 @@ def get_json(url: str) -> Any:
 
 def fetch_groups(category_id: int) -> list[dict]:
     data = get_json(f"{TCGCSV_BASE}/{category_id}/groups")
-    return data.get("results") or data
+    # Explicit key-presence check: a valid empty response is {"results": []},
+    # and `... or data` would wrongly fall through to the raw dict for that.
+    return data.get("results") if isinstance(data, dict) and "results" in data else data
 
 
 def fetch_group_products(category_id: int, group_id: int) -> list[dict]:
     data = get_json(f"{TCGCSV_BASE}/{category_id}/{group_id}/products")
-    return data.get("results") or data
+    return data.get("results") if isinstance(data, dict) and "results" in data else data
 
 
 # SKUs we don't want surfaced even though TCGCSV lists them. Substring match,

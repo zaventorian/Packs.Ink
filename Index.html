@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=172">
+<link rel="stylesheet" href="styles.css?v=173">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=172"></script>
+<script src="logo.js?v=173"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -204,7 +204,7 @@ const CACHE_KEY = "packsink:catalog:v49";  // v49: force cold-fetch for backfill
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-06-11-catalog-reconcile";
+const AUX_CACHE_VERSION = "2026-06-13-review-fixes";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -398,8 +398,8 @@ const TipsContext = React.createContext(true);
 const CatalogContext = React.createContext([]);
 
 // Standard tooltip strings — keep wording consistent across views.
-const TIP_LOW = "Lowest active listing on TCGPlayer across any condition. The cheapest copy you could buy right now — a leading-edge price signal, but may be a played copy. For an NM-quality reference, see Market.";
-const TIP_MARKET = "TCGPlayer's NM Market price — a smoothed algorithmic average of recent Near Mint sales. Lags the Low price but is more stable and reflects what a clean copy actually trades for.";
+const TIP_LOW = "Lowest active listing on TCGplayer across any condition. The cheapest copy you could buy right now — a leading-edge price signal, but may be a played copy. For an NM-quality reference, see Market.";
+const TIP_MARKET = "TCGplayer's NM Market price — a smoothed algorithmic average of recent Near Mint sales. Lags the Low price but is more stable and reflects what a clean copy actually trades for.";
 
 // Custom hover tooltip rendered via portal. Native title= had a long delay
 // and didn't show reliably on small labels. This shows immediately and
@@ -1400,7 +1400,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
 
     // Connecting-art foils: the real foil lives at a separate product_id.
     // Look it up in prices_daily and emit a Cold Foil row that points at
-    // the companion product (TCGPlayer link, history fetch) while keeping
+    // the companion product (TCGplayer link, history fetch) while keeping
     // the same card_id so the collection slot groups under the base card.
     // We also lift the companion's image when available — for extended-art
     // foils the visual is distinct from the base card, and we want the
@@ -1833,6 +1833,10 @@ function computeGradedValueHistory(rows, ownedSlots){
     if(!bySlot[k]) bySlot[k] = [];
     bySlot[k].push(r);
   }
+  // The forward-fill below (and the firstPrice scan) assume each slot series is
+  // date-ascending. PostgREST can reassemble paginated results out of order, so
+  // sort defensively — mirrors computeGradedDeltas / computeSealedDeltas.
+  for(const k in bySlot) bySlot[k].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
   // Resolve each slot to the best-matching printing's series. Tries the
   // slot's stored printing first, then Normal / Holofoil / Cold Foil so
   // mig-50-backfilled "Normal"-default slots for Holofoil-only cards still
@@ -2286,7 +2290,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         stroke="var(--text-muted)" stroke-width="0.7" stroke-dasharray="2,2"/>`}
       ${hovered && hovered.map((h,i) => html`<circle key=${"h"+i}
         cx=${xScale(h.point.x)} cy=${yScale(h.point.y)}
-        r="3.2" fill=${h.series.color} stroke="var(--bg-card)" stroke-width="1.2"/>`)}
+        r="3.2" fill=${h.series.color} stroke="var(--bg-solid)" stroke-width="1.2"/>`)}
     </svg>
     ${hovered && hovered.length > 0 && html`<div class="chart-tooltip" style=${{
         left: tipLeftPct + "%",
@@ -2334,7 +2338,7 @@ const buildHistorySeries = (normalRows, foilRows, opts={}) => {
       });
     }
   };
-  if(normalRows && normalRows.length) seriesFor(normalRows, "#1d8d4a", "Normal");
+  if(normalRows && normalRows.length) seriesFor(normalRows, "#1d8d4a", "Non-Foil");
   if(showFoil && foilRows && foilRows.length) seriesFor(foilRows, "#7e54c4", "Foil");
   return out;
 };
@@ -2500,7 +2504,7 @@ function buildCompareReportSvg({title, subtitle, items, series, colors, footerNo
 
   parts.push(`<line x1="40" x2="${W-40}" y1="${totalH-footerH}" y2="${totalH-footerH}" stroke="#e3e6ea"/>`);
   parts.push(`<text x="40" y="${totalH-12}" font-size="10" fill="#7a8088">${_xmlEscape(footerNote || "Unofficial fan site · not affiliated with Disney or Ravensburger")}</text>`);
-  parts.push(`<text x="${W-40}" y="${totalH-12}" font-size="10" fill="#7a8088" text-anchor="end">Source: TCGCSV / TCGPlayer · Generated ${new Date().toISOString().slice(0,10)}</text>`);
+  parts.push(`<text x="${W-40}" y="${totalH-12}" font-size="10" fill="#7a8088" text-anchor="end">Source: TCGCSV / TCGplayer · Generated ${new Date().toISOString().slice(0,10)}</text>`);
   parts.push('</svg>');
   return parts.join('');
 }
@@ -3509,7 +3513,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
         </svg>
       </button>`}
       <div class="price-row">
-        ${group.normal && html`<${PriceBadge} row=${group.normal} label=${showLabels?"Normal":null} klass="normal"/>`}
+        ${group.normal && html`<${PriceBadge} row=${group.normal} label=${showLabels?"Non-Foil":null} klass="normal"/>`}
         ${group.foil && html`<${PriceBadge} row=${group.foil} label=${showLabels?"Foil":null} klass="foil"/>`}
       </div>
     </div>
@@ -3639,9 +3643,9 @@ const SORT_COMPARATORS = {
 const CollectionCounter = ({qty, onChange}) => html`
   <div class="qty-row">
     <span class="qty-label">Owned</span>
-    <button class="qty-btn" onClick=${()=>onChange(Math.max(0, qty-1))} disabled=${qty<=0}>−</button>
+    <button class="qty-btn" aria-label="Decrease owned quantity" onClick=${()=>onChange(Math.max(0, qty-1))} disabled=${qty<=0}>−</button>
     <span class="qty-display">${qty}</span>
-    <button class="qty-btn" onClick=${()=>onChange(qty+1)}>+</button>
+    <button class="qty-btn" aria-label="Increase owned quantity" onClick=${()=>onChange(qty+1)}>+</button>
   </div>`;
 
 const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
@@ -4250,7 +4254,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const statRows = useMemo(() => {
     const rows = [];
     if(history.normal && history.normal.length) rows.push({
-      key:"__normal", label:"Normal", color:"#1d8d4a", sub:null,
+      key:"__normal", label:"Non-Foil", color:"#1d8d4a", sub:null,
       productId: group.normal && group.normal.tcgplayer_product_id,
       printing: (group.normal && group.normal.tcg_printing) || "Normal",
       low: computeSeriesDeltas(history.normal, "low_price"),
@@ -4439,7 +4443,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       ${detailTab === "history" && html`<div>
         <div class="card-detail-history-head">
           ${hasAnyHistory && html`<div class="card-detail-history-legend">
-            ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Normal</span>`}
+            ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Non-Foil</span>`}
             ${effectiveShowFoil && history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
             <span class="legend-line-style"><span class="line-solid"/>Low</span>
             <span class="legend-line-style"><span class="line-dashed"/>NM Market</span>
@@ -5641,7 +5645,13 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
       setError("Pop-up blocked. Allow pop-ups for this site, then try again.");
       return;
     }
-    const safeArtist = picked.replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    // Escape catalog-sourced strings before interpolating them into the raw
+    // HTML string we document.write() into the poster window. The catalog is
+    // externally sourced (Lorcast), so a hostile Set name or image URL must
+    // not be able to inject markup or break out of an attribute here.
+    const esc = (s) => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    const escAttr = (s) => esc(s).replace(/"/g,"&quot;");
+    const safeArtist = esc(picked);
     // Route Lorcast art through /img-proxy/* so html2canvas (used by the
     // "Copy as Image" button) can read pixels without canvas-taint. The
     // proxy is same-origin (Netlify _redirects in prod, dev_server.py
@@ -5652,9 +5662,9 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
       : url;
     const tiles = cardsForArtist.map(c => `
       <figure>
-        <img src="${proxify(c.img)}" crossorigin="anonymous"
-          alt="${c.name.replace(/"/g,"&quot;")}" loading="eager"/>
-        <figcaption>${c.set} · #${c.number||""}</figcaption>
+        <img src="${escAttr(proxify(c.img))}" crossorigin="anonymous"
+          alt="${escAttr(c.name)}" loading="eager"/>
+        <figcaption>${esc(c.set)} · #${esc(c.number||"")}</figcaption>
       </figure>`).join("");
     const doc = `<!doctype html><html><head>
       <meta charset="utf-8"/>
@@ -5881,7 +5891,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
               ? html`<div class="muted" style=${{fontSize:12,padding:"20px 0"}}>
                   ${allIllustrators?.length
                     ? "No artists match that search."
-                    : "Artist data isn't loaded yet. Run scripts/load_lorcast.py after applying supabase/31_card_illustrators.sql."}
+                    : "Artist data isn't available yet — check back after the next daily update."}
                 </div>`
               : filteredArtists.map(n => html`<button key=${n} class="chip"
                   onClick=${()=>setPicked(n)}>${n}</button>`)}
@@ -5905,6 +5915,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
                   padding:8, background:"var(--bg-surface)", borderRadius:6}}>
                   ${cardsForArtist.map(c => html`<img key=${c.name+c.number+c.set} src=${c.img}
                     style=${{width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:4}}
+                    alt=${c.name+" · "+c.set+" #"+c.number}
                     title=${c.name+" · "+c.set+" #"+c.number}/>`)}
                 </div>
                 <div style=${{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
@@ -6803,7 +6814,7 @@ function EVView({raw, sets, avgs, nc, setNc,
       <div class="ev-header-title">
         <div class="ev-header-eyebrow">Market analytics</div>
         <h2 class="ev-header-h2">Expected Value</h2>
-        <div class="ev-header-sub">Estimated booster-box and pack value at current TCGPlayer ${useMarket?"NM Market":"Low"} prices.</div>
+        <div class="ev-header-sub">Estimated booster-box and pack value at current TCGplayer${useMarket?"NM Market":"Low"} prices.</div>
       </div>
       <div class="ev-toggles">
         <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
@@ -6907,8 +6918,8 @@ function EVView({raw, sets, avgs, nc, setNc,
     <p class="muted" style=${{fontSize:11,marginTop:12}}>
       ${hist.status === "loading" && "Loading history…"}
       ${hist.status === "error" && ("History unavailable: " + hist.error)}
-      ${hist.status === "empty" && "No historical data yet — run the ETL once to populate rarity_avg_daily."}
-      ${hist.status === "ready" && `Prices via Lorcast (TCGPlayer ${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
+      ${hist.status === "empty" && "No historical data yet — check back after the next daily update."}
+      ${hist.status === "ready" && `Prices via Lorcast (TCGplayer ${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
     </p>
   </div>`;
 }
@@ -6979,7 +6990,7 @@ const sealedDisplayTypeRank = (t) => {
 // live here as a static catalog instead of in sealed_products / the price matview,
 // shaped like a sealed_prices row so they flow through the Sealed collection
 // grouping + tiles unchanged. Synthetic pid = 900000000 + Ravensburger SKU (well
-// above TCGPlayer's id range; stable + traceable to the SKU). Ownership still
+// above TCGplayer's id range; stable + traceable to the SKU). Ownership still
 // persists in sealed_collection_items (no FK on the product id). Box art:
 // ravensburger.cloud CDN by SKU. Amethyst + Steel are US Disney-Store exclusives.
 const SEALED_PUZZLES = [
@@ -7153,14 +7164,14 @@ function SealedView({raw, sealedPrices, sets, priceMode, setPriceMode, openSetHi
         <div class="ev-header-eyebrow">Market analytics</div>
         <h2 class="ev-header-h2">Sealed Product</h2>
         <div class="ev-header-sub">
-          Current TCGPlayer ${useMarket?"NM Market":"Low"} prices for every booster box, pack, starter deck, trove and related sealed SKU.
+          Current TCGplayer ${useMarket?"NM Market":"Low"} prices for every booster box, pack, starter deck, trove and related sealed SKU.
         </div>
       </div>
       <${PriceModeToggle} priceMode=${priceMode} setPriceMode=${setPriceMode}/>
     </div>
 
     ${grouped.length === 0 && html`<div class="muted" style=${{fontSize:13,padding:"20px 0"}}>
-      No sealed-product price data yet. Run supabase/16_sealed_prices_latest.sql, then refresh_sealed_prices_latest(), then reload.
+      Sealed price data isn't available right now — check back after the next daily update.
     </div>`}
 
     ${grouped.map(({type, items}) => html`<div class="sealed-set" key=${type}>
@@ -7219,7 +7230,7 @@ function SealedView({raw, sealedPrices, sets, priceMode, setPriceMode, openSetHi
       ${hist.status === "loading" && "Loading price history…"}
       ${hist.status === "error"   && ("History unavailable: " + hist.error)}
       ${hist.status === "empty"   && "No historical price data yet."}
-      ${hist.status === "ready"   && `Prices via TCGPlayer (${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
+      ${hist.status === "ready"   && `Prices via TCGplayer (${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
     </p>
   </div>`;
 }
@@ -7260,7 +7271,7 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, openSetHistory
       <strong>Card Averages</strong> — the typical price per card at each rarity inside a booster. Multiplying the average by the pull rate gives that rarity's contribution to box EV; summing across rarities gives the <em>EV / box</em> row at the bottom. Useful for comparing two sets card-by-card (pick two on the chip strip to reveal a Diff column) or for seeing which rarity is carrying a set's value.
       <ul class="market-explainer-defs">
         <li><strong>Pull rate</strong> — the expected number of cards of that rarity in a single box (24 packs).</li>
-        <li><strong>Avg price</strong> — current average ${useMarket?"TCGPlayer NM Market":"TCGPlayer Low"} price across every card of that rarity in the set.</li>
+        <li><strong>Avg price</strong> — current average ${useMarket?"TCGplayer NM Market":"TCGplayer Low"} price across every card of that rarity in the set.</li>
         <li><strong>${"<$1 → $0"}</strong> — count any card below $1 as $0 before averaging (filters bulk noise).</li>
       </ul>
     </div>
@@ -7338,7 +7349,7 @@ function AvgView({sets, avgs, nc, setNc, priceMode, setPriceMode, openSetHistory
       </table>
     </div>
     <p class="muted" style=${{fontSize:11,marginTop:8}}>
-      Average ${useMarket?"TCGPlayer NM Market":"Low"} price per card by rarity${onlyOne?" for "+onlyOne:""}.
+      Average ${useMarket?"TCGplayer NM Market":"Low"} price per card by rarity${onlyOne?" for "+onlyOne:""}.
       ${showDiff && " A = "+visibleSets[0]+", B = "+visibleSets[1]+". Diff = A − B."}
       ${" "}Pull rates shown are for Sets 1–11. Starting with Wilds Unknown (Set 12), rates differ: 6 Legendaries, ~30 Rares, 0.333 Enchanteds, 2.5 Epics per box.
     </p>
@@ -7569,9 +7580,9 @@ const InlineCounter = ({qty, onChange, disabled}) => {
     <span class="ic-qty ${qty>0?'has':''}">${qty}</span>
   </div>`;
   return html`<div class="inline-counter">
-    <button class="ic-btn" onClick=${e=>{e.stopPropagation(); onChange(Math.max(0,qty-1));}} disabled=${qty<=0||disabled}>−</button>
+    <button class="ic-btn" aria-label="Decrease quantity" onClick=${e=>{e.stopPropagation(); onChange(Math.max(0,qty-1));}} disabled=${qty<=0||disabled}>−</button>
     <span class="ic-qty ${qty>0?'has':''}">${qty}</span>
-    <button class="ic-btn" onClick=${e=>{e.stopPropagation(); onChange(qty+1);}} disabled=${disabled}>+</button>
+    <button class="ic-btn" aria-label="Increase quantity" onClick=${e=>{e.stopPropagation(); onChange(qty+1);}} disabled=${disabled}>+</button>
   </div>`;
 };
 
@@ -8427,7 +8438,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     onConsumedIncomingCompareCards && onConsumedIncomingCompareCards();
   }, [incomingCompareCards, onConsumedIncomingCompareCards]);
   // Prerelease guard: a card's price history is meaningless before its set's
-  // street date — TCGPlayer's pre-release listings sit 10-20x above eventual
+  // street date — TCGplayer's pre-release listings sit 10-20x above eventual
   // floors. Build a (tcgplayer_product_id → earliest-shown-date) map keyed off
   // setsMeta.released_at + 1 day, MAINLINE_SETS only (promos / D23 / Challenge
   // don't have the spike pattern). Mirrors the collection-value chart guard.
@@ -8497,7 +8508,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
               market: r.ebay_avg_30d == null ? null : +r.ebay_avg_30d,
             }));
           } else {
-            // Drop pre-release rows for the card's set (TCGPlayer pre-release
+            // Drop pre-release rows for the card's set (TCGplayer pre-release
             // prices sit 10-20x the eventual floor; including them spikes the
             // very left edge of the chart). productEarliestDate is keyed by
             // pid, so look up via the source card item.
@@ -8867,14 +8878,17 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       .catch(e => {
         if(cancelled) return;
         const msg = String(e?.message || e);
-        // Statement timeout = view exists but isn't materialized → run the SQL
+        // Keep the operator-facing diagnostic in the console; the UI shows
+        // plain user copy (these errors only surface on a misconfig or a
+        // transient timeout, not in normal operation).
+        console.warn("Set EV chart load failed:", msg);
         let friendly;
         if(msg.includes("57014") || msg.includes("timeout")){
-          friendly = "Set EV view timed out — re-run supabase/06_rarity_avg_daily.sql to convert it to a materialized view (then refresh this page).";
+          friendly = "Set EV data is temporarily unavailable — please try again in a moment.";
         } else if(msg.includes("404") || msg.includes("relation") || msg.includes("does not exist")){
-          friendly = "Run supabase/06_rarity_avg_daily.sql in Supabase to enable this chart.";
+          friendly = "Set EV data isn't available right now — check back after the next daily update.";
         } else {
-          friendly = "Set EV chart error: " + msg.slice(0,200);
+          friendly = "Couldn't load the Set EV chart. Please try again.";
         }
         setSetEv({rows:null, loading:false, error: friendly});
       });
@@ -9349,7 +9363,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
               ${sealedPickerData.length === 0
                 ? html`<div class="history-picker-empty">${sealedPrices && sealedPrices.length
                     ? `No products match "${sealedSearch}"`
-                    : "No sealed-product data loaded. Run supabase/16_sealed_prices_latest.sql."}</div>`
+                    : "Sealed price data isn't available right now — check back after the next daily update."}</div>`
                 : sealedPickerData.map(({type, items}) => html`<div key=${type} class="history-picker-group">
                     <div class="history-picker-group-head">${type}</div>
                     ${items.map(item => {
@@ -9400,7 +9414,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 ? html`<div class="history-picker-empty">Loading graded sales…</div>`
                 : gradedFiltered.length === 0
                   ? html`<div class="history-picker-empty">${gradedOptions.length === 0
-                      ? "No graded sales recorded. Run scripts/etl_tcgpricelookup_daily.py to populate."
+                      ? "No graded sales data is available right now — check back after the next daily update."
                       : `No matches for "${gradedSearch}"`}</div>`
                   : gradedFiltered.map(g => {
                       const gid = `graded-${g.tcgplayer_product_id}-${g.grader}-${g.grade}`;
@@ -9482,7 +9496,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     <div class="history-preview-name">${previewItem.name}</div>
                     <div class="history-preview-meta">${previewItem.sub || ""}</div>
                     ${tcgUrl(previewItem.productId) && html`<div class="history-preview-type">
-                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow">View on TCGPlayer ↗</a>
+                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow">View on TCGplayer ↗</a>
                     </div>`}
                   </div>
                 </div>`}
@@ -10635,7 +10649,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                             : html`<span class="gc-card-raw-px">${useMarket?"NM Market":"Low"} ${fmt(price)}</span>`}
                           ${url && html`<a class="gc-card-buy" href=${url} target="_blank" rel="noopener nofollow"
                               onClick=${e=>e.stopPropagation()}
-                              title=${item.is_puzzle ? "View on Ravensburger" : "Buy on TCGPlayer"}>${item.is_puzzle ? "View ↗" : "Buy ↗"}</a>`}
+                              title=${item.is_puzzle ? "View on Ravensburger" : "Buy on TCGplayer"}>${item.is_puzzle ? "View ↗" : "Buy ↗"}</a>`}
                         </div>
                         ${dRow && html`<div class="gc-card-deltas">
                           <span class="gc-card-delta-cell"><span class="gc-card-delta-lbl">1D</span>
@@ -11378,7 +11392,12 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       const tryPrintings = [preferredPrinting || "Normal", "Normal", "Holofoil", "Cold Foil"];
       for(const pr of tryPrintings){
         const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
-        if(p){ return p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d; }
+        if(p){
+          // A matched row with all averages null must NOT shadow a later
+          // printing (e.g. Holofoil) that does carry a price — keep trying.
+          const v = p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d;
+          if(v != null) return v;
+        }
       }
       return null;
     };
@@ -11793,7 +11812,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                           ${card.tcgplayer_product_id && !isCustomVariant && html`<a class="gc-card-buy" href=${tcgUrl(card.tcgplayer_product_id, card.tcg_printing||"Normal")}
                               target="_blank" rel="noopener nofollow"
                               onClick=${e=>e.stopPropagation()}
-                              title="Buy on TCGPlayer">Buy ↗</a>`}
+                              title="Buy on TCGplayer">Buy ↗</a>`}
                         </div>`}
                         <div class="gc-card-slots">
                           ${slots.map((s, si) => {
@@ -13179,7 +13198,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
           <div class="set-progress-name">${setName}</div>
           <div class="set-progress-row">
-            <div class="set-progress-row-label">Normal</div>
+            <div class="set-progress-row-label">Non-Foil</div>
             <div class="set-progress-row-counts">${nOwn} / ${tot.normal} <span class="set-progress-pct">${nPct.toFixed(0)}%</span></div>
             <div class="progress-bar"><div class="progress-fill" style=${{width:nPct+"%"}}/></div>
           </div>
@@ -14481,7 +14500,7 @@ function FAQView(){
     <p>Sign in (Google) and start adding cards from <strong>Cards</strong>, the <strong>Screener</strong>, any deck detail page, or by clicking a card's title from a deck list. Use the +/- buttons on the card tile or counter to set quantities for normal and foil copies independently.</p>
     <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets). <strong>Graded</strong> tracks PSA / BGS / CGC certifications with per-grade price tracking. Bulk CSV import is available in the Collection section if you prefer paste-in.</p>
     <p>The Home page's <strong>Collection Value</strong> chart graphs the value of everything you own over time. Pre-release price spikes are filtered out so a brand-new set doesn't inflate your historical value.</p>
-    <p><strong>Phantom-spike smoothing.</strong> TCGPlayer's <strong>Low</strong> is the lowest active listing, not the lowest sale — sometimes a single mispriced listing pins Low at $200 or $2,000 for a few days while nothing actually trades at that number. Without intervention, that single bad listing would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
+    <p><strong>Phantom-spike smoothing.</strong> TCGplayer's <strong>Low</strong> is the lowest active listing, not the lowest sale — sometimes a single mispriced listing pins Low at $200 or $2,000 for a few days while nothing actually trades at that number. Without intervention, that single bad listing would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
 
     <h2>Building decks</h2>
@@ -14520,12 +14539,12 @@ function FAQView(){
     <p>Tournament results are admin-uploaded. If you run an event and want results listed here, get in touch via the X link below.</p>
 
     <h2>How are prices computed?</h2>
-    <p>Prices come from <strong>TCGPlayer</strong> via TCGCSV and refresh once a day. Two numbers are surfaced for every card; most surfaces let you toggle which one drives totals and charts via the <strong>Low / NM Market</strong> control.</p>
+    <p>Prices come from <strong>TCGplayer</strong> via TCGCSV and refresh once a day. Two numbers are surfaced for every card; most surfaces let you toggle which one drives totals and charts via the <strong>Low / NM Market</strong> control.</p>
     <ul>
-      <li><strong>Low</strong> — the cheapest active TCGPlayer listing for the card, <strong>across any condition</strong>. This matches what TCGPlayer calls "Low Price" on its own listings page. It's the most actionable number for buyers (it's literally the floor), but be aware that the lowest copy may be Lightly Played or worse — clicking through to TCGPlayer will show you the actual condition.</li>
-      <li><strong>NM Market</strong> — TCGPlayer's algorithmic average of recent <strong>Near Mint sales</strong>. Smoother and slower than Low, but the right number for "what's a clean copy actually worth right now."</li>
+      <li><strong>Low</strong> — the cheapest active TCGplayer listing for the card, <strong>across any condition</strong>. This matches what TCGplayer calls "Low Price" on its own listings page. It's the most actionable number for buyers (it's literally the floor), but be aware that the lowest copy may be Lightly Played or worse — clicking through to TCGplayer will show you the actual condition.</li>
+      <li><strong>NM Market</strong> — TCGplayer's algorithmic average of recent <strong>Near Mint sales</strong>. Smoother and slower than Low, but the right number for "what's a clean copy actually worth right now."</li>
     </ul>
-    <p>Per-condition pricing (NM-only Low, LP-only Low, etc.) isn't published by TCGPlayer's public pricing feed, so we don't track it. If you specifically want NM-quality reference value, lean on <strong>NM Market</strong>.</p>
+    <p>Per-condition pricing (NM-only Low, LP-only Low, etc.) isn't published by TCGplayer's public pricing feed, so we don't track it. If you specifically want NM-quality reference value, lean on <strong>NM Market</strong>.</p>
     <p>Graded prices are tracked separately, per grading company and per grade, refreshed daily from TCGPriceLookup.</p>
     <p>Earliest tracked price data is <strong>February 2024</strong>. Sets released before that date show a <strong>*</strong> asterisk where applicable.</p>
 
@@ -14606,7 +14625,7 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
             ${url && html`<a href=${url} target="_blank" rel="noopener nofollow"
               onClick=${e=>e.stopPropagation()}
               class="playset-tcg-btn"
-              title="Open on TCGPlayer">TCG ↗</a>`}
+              title="Open on TCGplayer">TCG ↗</a>`}
           </td>
           <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
           <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
@@ -14704,7 +14723,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
           </td></tr>`}
         <//>`;})}</tbody>
     </table></div>
-    <p class="muted" style=${{fontSize:11,marginTop:8}}>Normal printings only (excludes foils, Enchanted, Epic, Iconic). ${mode==="playset"?"Playset = 4 copies of each card.":"Master Set = 1 copy of each card."} Prices via Lorcast (TCGPlayer).</p>
+    <p class="muted" style=${{fontSize:11,marginTop:8}}>Normal printings only (excludes foils, Enchanted, Epic, Iconic). ${mode==="playset"?"Playset = 4 copies of each card.":"Master Set = 1 copy of each card."} Prices via Lorcast (TCGplayer).</p>
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -14719,7 +14738,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
 
 // Compact Low / Market segmented control rendered inline in each sub-view's
 // filter row. Centralised so the styling and Tip copy stay consistent.
-const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text="Low = lowest active TCGPlayer listing across any condition (may be a played copy). NM Market = TCGPlayer's smoothed average of recent Near Mint sales. Low is more aggressive; NM Market lags but reflects clean-copy value.">
+const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text="Low = lowest active TCGplayer listing across any condition (may be a played copy). NM Market = TCGplayer's smoothed average of recent Near Mint sales. Low is more aggressive; NM Market lags but reflects clean-copy value.">
   <div class="price-mode-toggle" role="group" aria-label="Price source" style=${style||null}>
     <span class="price-mode-label">Price</span>
     <button class=${priceMode==="low"?"active":""}    onClick=${()=>setPriceMode("low")}>Low</button>
@@ -14825,7 +14844,10 @@ const tradeB64UrlDecode = (s) => {
 const tradePayloadObj = (sideA, sideB, nameA, nameB) => {
   const slim = (arr) => (arr||[]).filter(e => e && e.key && ((e.qN||0)+(e.qF||0) > 0))
     .map(e => [e.key, e.qN||0, e.qF||0]);
-  return { a: slim(sideA), b: slim(sideB), n: [nameA||"", nameB||""] };
+  // Clamp side names — they ride inside the <100KB payload cap create_trade
+  // enforces, but a single field shouldn't be allowed to eat the whole budget.
+  const clampName = (s) => String(s||"").slice(0, 80);
+  return { a: slim(sideA), b: slim(sideB), n: [clampName(nameA), clampName(nameB)] };
 };
 const expandTradePayload = (obj) => {
   if(!obj || typeof obj !== "object") return null;
@@ -15045,9 +15067,9 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
     return html`<div class=${"trade-printing "+klass}>
       <span class="trade-pr-label">${label}</span>
       <div class="trade-qty">
-        <button class="trade-qty-btn" onClick=${()=>changeQty(side, e.key, field, -1)} disabled=${qty<=0}>−</button>
+        <button class="trade-qty-btn" aria-label="Decrease quantity" onClick=${()=>changeQty(side, e.key, field, -1)} disabled=${qty<=0}>−</button>
         <span class="trade-qty-val">${qty}</span>
-        <button class="trade-qty-btn" onClick=${()=>changeQty(side, e.key, field, 1)}>+</button>
+        <button class="trade-qty-btn" aria-label="Increase quantity" onClick=${()=>changeQty(side, e.key, field, 1)}>+</button>
       </div>
       <span class="trade-pr-prices">
         <span class="trade-pr-low"><${Tip} text=${TIP_LOW} class="trade-pr-tag">Low<//> ${tradeMoney(row["Low Price"])}</span>
@@ -15748,7 +15770,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // Fall through and background-refresh.
     }
     sbClient.from("price_movers")
-      .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,market_today,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
+      .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
       .limit(10000)
       .then(({data, error}) => {
         if(cancelled) return;
@@ -16447,7 +16469,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     <div class="price-db-modebar" role="group" aria-label="Screener mode">
       <button class=${"price-db-modebtn"+(!showGraded && !showSealed?" active":"")}
         onClick=${()=>{ setShowGraded(false); setShowSealed(false); }}
-        title="TCGPlayer raw card prices — every card printing is a row, sortable by Low / Market / Δ%.">
+        title="TCGplayer raw card prices — every card printing is a row, sortable by Low / Market / Δ%.">
         Raw Prices
       </button>
       <button class=${"price-db-modebtn"+(showGraded?" active":"")}
@@ -16730,7 +16752,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             return html`<a class="price-db-batchitem" href=${buyUrl || "#"} target="_blank"
               rel="noopener nofollow sponsored"
               onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
-              🛒 Buy on TCGPlayer (affiliate cart)
+              🛒 Buy on TCGplayer (affiliate cart)
             </a>
             <button class="price-db-batchitem" onClick=${() => {
               const lines = selRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
@@ -16778,9 +16800,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             ? html`<th class="sortable th-num" onClick=${() => onSort("low")}
                 title="Graded eBay 7d-avg price (with 1d / 30d fallbacks)">Graded Price${arrow("low")}</th>`
             : html`<th class="sortable th-num" onClick=${() => onSort("low")}
-                title="TCGPlayer Low — lowest active listing across any condition">Low${arrow("low")}</th>
+                title="TCGplayer Low — lowest active listing across any condition">Low${arrow("low")}</th>
               <th class="sortable th-num" onClick=${() => onSort("market")}
-                title="TCGPlayer NM Market — smoothed average of recent Near Mint sales">NM Market${arrow("market")}</th>`}
+                title="TCGplayer NM Market — smoothed average of recent Near Mint sales">NM Market${arrow("market")}</th>`}
           ${visibleWins.map(([lk, mk, lbl]) => {
             const k = priceMode === "market" ? mk : lk;
             const active = isSortCol(k) ? " sort-active" : "";
@@ -16815,7 +16837,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                     style=${{cursor:"pointer"}}>${r.name}${r.version ? " - " + r.version : ""}</span>
                   ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
                     rel="noopener nofollow sponsored"
-                    title="Open on TCGPlayer (affiliate link)">↗</a>`}
+                    title="Open on TCGplayer (affiliate link)">↗</a>`}
                 </div>
                 <div class="td-name-meta">
                   ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : (r.printing + " #" + (r.collector_number || "?"))}
@@ -17642,7 +17664,7 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
       </button>
       ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow"
           data-h2c-ignore
-          title="Open on TCGPlayer" aria-label="Open on TCGPlayer"
+          title="Open on TCGplayer" aria-label="Open on TCGplayer"
           onClick=${e=>e.stopPropagation()}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M14 4h6v6"/>
@@ -18602,7 +18624,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick}) => {
     return out;
   }, [sealedPrices]);
   // setsMeta is the authoritative set_id↔name map. Prefer set_id-based
-  // matching so we don't depend on TCGPlayer's product naming staying
+  // matching so we don't depend on TCGplayer's product naming staying
   // exactly in sync with our display names.
   const setIdByName = useMemo(() => {
     const m = {};
@@ -18703,6 +18725,11 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
   useEffect(() => {
     try { localStorage.setItem("packsink:home:followingExpanded", feedExpanded ? "1" : "0"); } catch {}
   }, [feedExpanded]);
+  // Catalog readiness gate. The feed enriches ink/format tags from `raw`; on a
+  // cold load `raw` is still empty when this first runs. We re-run once the
+  // catalog arrives (catalogReady false→true) and never cache un-enriched
+  // entries, so a poisoned cache can't pin missing ink shields for 30 min.
+  const catalogReady = !!(raw && raw.length);
   useEffect(() => {
     if(!user){ setEntries(null); return; }
     let cancelled = false;
@@ -18876,19 +18903,22 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
           };
         });
         setEntries(computedEntries);
-        writeJsonCache(CACHE_KEY, computedEntries);
+        // Only cache once the catalog was available to enrich ink/format —
+        // otherwise we'd persist tag-less entries and the stale-cache early
+        // return would replay them for 30 min even after the catalog loads.
+        if(catalogReady) writeJsonCache(CACHE_KEY, computedEntries);
       } catch(e){
         if(!cancelled) setErr(String(e?.message || e).slice(0, 200));
       }
     })();
     return () => { cancelled = true; };
-    // Deliberately depend on user only — the deck-list query doesn't need
-    // the catalog. raw is consumed below to enrich ink/format tags; if it
-    // hasn't loaded yet, tags appear on the next render (the effect below
-    // re-runs format inference when raw arrives). Old behavior was to wait
-    // for raw, which made Following appear several seconds late on cold
-    // loads when the catalog cache was empty.
-  }, [user]);
+    // Depend on user AND catalogReady. The deck-list query doesn't need the
+    // catalog, so the feed still appears immediately on a cold load (with
+    // whatever inks the decks store). When the catalog finishes loading,
+    // catalogReady flips true and the effect re-runs to enrich ink/format
+    // tags and cache the complete result — fixing the cold-load case where
+    // tags were missing and the un-enriched feed got cached for 30 min.
+  }, [user, catalogReady]);
 
   if(!user){
     return html`<aside class="home-feed">
@@ -19681,13 +19711,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
         if(cancelled) return;
         if(error){
           const msg = String(error.message||error||"");
+          console.warn("Movers load failed:", msg);
           let friendly;
           if(msg.match(/relation|does not exist|404|schema cache/i))
-            friendly = "Run supabase/10_price_movers_matview.sql in Supabase to enable Movers.";
+            friendly = "Movers data isn't available right now — check back after the next daily update.";
           else if(msg.includes("57014") || msg.includes("timeout"))
-            friendly = "Movers query timed out — consider promoting price_movers to a materialized view.";
+            friendly = "Movers data is temporarily unavailable — please try again in a moment.";
           else
-            friendly = "Movers fetch error: " + msg.slice(0,200);
+            friendly = "Couldn't load Movers right now. Please try again.";
           // Only surface error if we have no cached data to show.
           if(!cached) setState({rows:null, loading:false, error:friendly});
         } else {
@@ -19711,7 +19742,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   },[]);
 
   const {chase, rareLeg, promo} = useMemo(()=>{
-    if(!state.rows) return {chase:[], rareLeg:[]};
+    if(!state.rows) return {chase:[], rareLeg:[], promo:[]};
     const win = MOVER_WIN_BY_KEY[windowKey] || MOVER_WIN_BY_KEY["1d"];
     const qualifies = (r) => {
       const pct = r[win.pctLow];
@@ -24079,10 +24110,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         </div>
         ${massEntryUrl
           ? html`<a class="deck-stat shop-cta" href=${massEntryUrl} target="_blank" rel="noopener nofollow sponsored"
-              title="Open all missing cards on TCGPlayer in one mass-entry cart (affiliate link)">
+              title="Open all missing cards on TCGplayer in one mass-entry cart (affiliate link)">
               <div class="deck-stat-lbl">Missing</div>
               <div class="deck-stat-val">$${missingValue.toFixed(2)}</div>
-              <div class="deck-stat-sub">Shop on TCGPlayer ↗</div>
+              <div class="deck-stat-sub">Shop on TCGplayer ↗</div>
             </a>`
           : html`<div class="deck-stat">
               <div class="deck-stat-lbl">Missing</div>
@@ -24139,8 +24170,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         const inc = (e) => { e.preventDefault(); e.stopPropagation();
           onUpdateCard(item.card_id, item.printing, Math.min(cardMax, item.quantity + 1)); };
         return html`<div class=${cls} onClick=${e=>e.stopPropagation()}>
-          <button type="button" onClick=${dec} disabled=${item.quantity<=0}>−</button>
-          <button type="button" onClick=${inc} disabled=${item.quantity>=cardMax}>+</button>
+          <button type="button" aria-label="Decrease quantity" onClick=${dec} disabled=${item.quantity<=0}>−</button>
+          <button type="button" aria-label="Increase quantity" onClick=${inc} disabled=${item.quantity>=cardMax}>+</button>
         </div>`;
       };
 
@@ -24266,7 +24297,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
             ${buildVariantChevron(item, meta, "deck-variant-btn--row")}
           </span>
           ${price!=null && aff
-            ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGPlayer (affiliate)">$${price.toFixed(2)}</a>`
+            ? html`<a class="deck-row-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" title="Shop on TCGplayer (affiliate)">$${price.toFixed(2)}</a>`
             : html`<span class="deck-row-price" style=${{background:"transparent",border:"none",padding:0}}>${price!=null?"$"+price.toFixed(2):"—"}</span>`}
           ${makeCounter(item, cardMax, "deck-row-counter")}
         </div>`;
@@ -25250,7 +25281,17 @@ function App(){
   useEffect(()=>{
     sbClient.auth.getSession().then(({data})=>setUser(data.session?.user||null));
     const {data:{subscription}} = sbClient.auth.onAuthStateChange((_evt, session) => {
-      setUser(session?.user || null);
+      // Keep the SAME user object reference across token refreshes and our own
+      // updateUser() prefs writes (which fire a USER_UPDATED event). Without this
+      // guard, every theme/avatar/tips toggle — and every ~hourly token refresh —
+      // produces a new `user` object, and every [user]-dep effect (collection,
+      // sealed, decks, profile fetches) re-runs, re-paginating the whole
+      // collection on a dark-mode flip. Gate on id so only a real sign-in/out
+      // (id change) propagates a new reference. user_metadata is read only by the
+      // one-shot prefs hydration (prefsHydrated guard) and the stable Google
+      // OAuth avatar/name, so retaining the prior object is safe.
+      const next = session?.user || null;
+      setUser(prev => (prev?.id === next?.id ? prev : next));
     });
     return () => subscription.unsubscribe();
   },[]);
@@ -25722,6 +25763,36 @@ function App(){
           error:`Supabase only persisted ${got} of ${chunk.length} rows in a chunk — your RLS policy on collection_items is rejecting some rows silently. Check that the INSERT/UPDATE policies allow user_id = auth.uid().`};
       }
       written += got;
+    }
+    // Rows zeroed out (qty<=0) must be DELETED server-side. The upsert loop
+    // skips them (line above), and the optimistic local state already drops
+    // the key — but without this delete they persist in collection_items and
+    // silently reappear on the next reload, diverging local from server.
+    // Composite PK is (user_id, card_id, printing, condition); group by
+    // printing so we can batch a card_id=in.(...) delete per printing.
+    const toDelete = new Map();
+    for(const u of updates){
+      if(u.qty > 0) continue;
+      if(!toDelete.has(u.printing)) toDelete.set(u.printing, new Set());
+      toDelete.get(u.printing).add(u.cardId);
+    }
+    for(const [printing, idSet] of toDelete){
+      const ids = Array.from(idSet);
+      for(let i=0; i<ids.length; i+=BULK_UPSERT_CHUNK){
+        const chunk = ids.slice(i, i+BULK_UPSERT_CHUNK);
+        const {error} = await sbClient
+          .from("collection_items")
+          .delete()
+          .eq("user_id", user.id)
+          .eq("printing", printing)
+          .eq("condition", "NM")
+          .in("card_id", chunk);
+        if(error){
+          console.error("bulk collection delete failed:", error);
+          setCollection(prevCollection);
+          return {ok:false, written, error:error.message || String(error)};
+        }
+      }
     }
     return {ok:true, written};
   }, [user, collection]);

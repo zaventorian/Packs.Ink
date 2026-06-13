@@ -94,45 +94,88 @@ class Supabase:
             done = min(i + batch, total)
             print(f"  upserted {table}: {done}/{total}")
 
-    def update(self, table: str, match: dict, patch: dict) -> None:
+    def update(self, table: str, match: dict, patch: dict, params: dict | None = None) -> None:
         """Partial update: PATCH /rest/v1/{table}?col=eq.val with body {col: val, ...}.
         Use this when you only want to change a subset of columns without
-        triggering NOT NULL constraints on the unchanged ones."""
+        triggering NOT NULL constraints on the unchanged ones.
+
+        `match` is the simple-eq form ({col: val} -> col=eq.val); pass `params`
+        instead (raw PostgREST filter strings, e.g. {"id": "in.(1,2,3)"}) when
+        you need a non-eq operator. The two merge; `params` wins on key clash.
+
+        Retries on 5xx / 429 (transient) the same way upsert does — Supabase's
+        statement timeout (57014) and rate limiter are intermittent."""
         if not patch:
             return
         endpoint = f"{self.url}/rest/v1/{table}"
-        params = {k: f"eq.{v}" for k, v in match.items()}
-        r = requests.patch(
-            endpoint,
-            headers=self._headers("return=minimal"),
-            params=params,
-            json=patch,
-            timeout=60,
-        )
-        if not r.ok:
-            raise RuntimeError(
-                f"Patch {table} {match} failed ({r.status_code}): {r.text[:500]}"
-            )
+        q = {k: f"eq.{v}" for k, v in match.items()}
+        if params:
+            q.update(params)
+        last_err: Exception | None = None
+        for attempt in range(4):
+            try:
+                r = requests.patch(
+                    endpoint,
+                    headers=self._headers("return=minimal"),
+                    params=q,
+                    json=patch,
+                    timeout=60,
+                )
+                if r.ok:
+                    return
+                if 400 <= r.status_code < 500 and r.status_code != 429:
+                    raise RuntimeError(
+                        f"Patch {table} {match} failed ({r.status_code}): {r.text[:500]}"
+                    )
+                last_err = RuntimeError(
+                    f"Patch {table} {match} returned {r.status_code}: {r.text[:200]}"
+                )
+            except requests.RequestException as e:
+                last_err = e
+            wait = 2 ** attempt
+            print(f"  retry {attempt + 1}/4 in {wait}s ({last_err})")
+            time.sleep(wait)
+        if last_err is not None:
+            raise last_err
 
     def delete(self, table: str, filters: dict[str, str]) -> list[dict]:
         """Delete rows matching `filters` (eq/in/gte/etc, PostgREST syntax).
         Returns the deleted rows when Prefer=return=representation is set.
-        Requires at least one filter — guards against accidental table wipes."""
+        Requires at least one filter — guards against accidental table wipes.
+
+        Retries on 5xx / 429 (transient) the same way upsert does."""
         if not filters:
             raise ValueError("delete requires at least one filter to prevent table-wide deletes")
         endpoint = f"{self.url}/rest/v1/{table}"
-        r = requests.delete(
-            endpoint,
-            headers=self._headers("return=representation"),
-            params=filters,
-            timeout=60,
-        )
-        if not r.ok:
-            raise RuntimeError(f"Delete {table} {filters} failed ({r.status_code}): {r.text[:500]}")
-        try:
-            return r.json() if r.text else []
-        except Exception:
-            return []
+        last_err: Exception | None = None
+        for attempt in range(4):
+            try:
+                r = requests.delete(
+                    endpoint,
+                    headers=self._headers("return=representation"),
+                    params=filters,
+                    timeout=60,
+                )
+                if r.ok:
+                    try:
+                        return r.json() if r.text else []
+                    except Exception:
+                        return []
+                if 400 <= r.status_code < 500 and r.status_code != 429:
+                    raise RuntimeError(
+                        f"Delete {table} {filters} failed ({r.status_code}): {r.text[:500]}"
+                    )
+                last_err = RuntimeError(
+                    f"Delete {table} {filters} returned {r.status_code}: {r.text[:200]}"
+                )
+            except requests.RequestException as e:
+                last_err = e
+            wait = 2 ** attempt
+            print(f"  retry {attempt + 1}/4 in {wait}s ({last_err})")
+            time.sleep(wait)
+        if last_err is not None:
+            raise last_err
+        return []
 
     def rpc(self, name: str, args: dict | None = None) -> dict | list | None:
         """Call a Postgres function exposed via PostgREST RPC."""

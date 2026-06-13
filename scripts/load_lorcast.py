@@ -140,7 +140,7 @@ def main() -> None:
 
     print("Fetching sets from Lorcast...")
     sets_resp = get_json(f"{LORCAST_BASE}/sets")
-    sets = sets_resp.get("results") if isinstance(sets_resp, dict) else sets_resp
+    sets = sets_resp.get("results") if isinstance(sets_resp, dict) and "results" in sets_resp else sets_resp
     print(f"  found {len(sets)} sets")
 
     set_rows = [transform_set(s) for s in sets]
@@ -154,7 +154,7 @@ def main() -> None:
         sname = s.get("name", sid)
         print(f"Fetching cards for set: {sname}")
         cards_resp = get_json(f"{LORCAST_BASE}/sets/{sid}/cards")
-        cards = cards_resp.get("results") if isinstance(cards_resp, dict) else cards_resp
+        cards = cards_resp.get("results") if isinstance(cards_resp, dict) and "results" in cards_resp else cards_resp
         print(f"  {len(cards)} cards")
         for c in cards:
             row = transform_card(c, sid)

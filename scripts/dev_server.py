@@ -42,6 +42,12 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
     def _proxy_lorcast(self, path: str) -> None:
         """Mirror Netlify's /img-proxy/* → cards.lorcast.io rewrite so the
         Export Deck Image feature can draw images to a canvas locally too."""
+        # Reject path-traversal attempts before building the upstream URL —
+        # a "../" segment could be used to coax the proxy into fetching off
+        # the intended host.
+        if ".." in path:
+            self.send_error(400, "bad proxy path")
+            return
         upstream = "https://cards.lorcast.io/" + path.lstrip("/")
         try:
             req = urllib.request.Request(upstream, headers={"User-Agent": "packs.ink-dev/1.0"})
@@ -86,7 +92,9 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
 
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8766
-    with socketserver.ThreadingTCPServer(("", port), SPAHandler) as httpd:
+    # Bind to loopback only — this is a local dev server; there's no reason to
+    # expose it on the LAN / all interfaces.
+    with socketserver.ThreadingTCPServer(("127.0.0.1", port), SPAHandler) as httpd:
         print(f"Packs.Ink dev server: http://localhost:{port}/")
         print("SPA fallback active — try /decks, /screener, etc. directly.")
         try:
