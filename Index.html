@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=173">
+<link rel="stylesheet" href="styles.css?v=174">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=173"></script>
+<script src="logo.js?v=174"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -5390,6 +5390,68 @@ const fisherYates = (arr) => {
   }
   return a;
 };
+// First-run guided tour — a short click-through carousel for new visitors.
+// Auto-opens once on the first visit (gated by packsink:tourSeen) and is
+// re-openable from the Help page. Steps are plain content, not element-
+// anchored coachmarks, so they survive any layout/responsive change.
+const TOUR_STEPS = [
+  {emoji:"👋", title:"Welcome to Packs.Ink", body:"A market tracker and collection manager for Disney Lorcana. Here's a 30-second tour of what's inside."},
+  {emoji:"🔍", title:"Find any card", body:"Search the whole catalog from the bar up top — or open the Screener for a sortable price database with movers, gainers, buyouts and deep filters."},
+  {emoji:"📈", title:"Track the market", body:"Price Graphing charts a card's history and compares several at once. Analytics adds EV, Trade Compare, Playset Cost and more."},
+  {emoji:"🗂️", title:"Your collection", body:"Sign in with Google to track what you own — raw, sealed and graded — and watch your portfolio's value over time."},
+  {emoji:"🃏", title:"Decks & tournaments", body:"Build decks, browse the community Discover feed, and dig into tournament results. No sign-in needed to look around."},
+  {emoji:"⌨️", title:"Two quick shortcuts", body:"Press / to jump to search, and ? for the full shortcut list. You can reopen this tour anytime from Help."},
+];
+const WelcomeTourModal = ({onClose}) => {
+  useEscToClose(onClose);
+  const [i, setI] = useState(0);
+  const step = TOUR_STEPS[i];
+  const last = i === TOUR_STEPS.length - 1;
+  return html`<div class="card-detail-overlay" onClick=${onClose}>
+    <div class="welcome-tour" onClick=${e=>e.stopPropagation()} role="dialog" aria-label="Welcome tour">
+      <button class="card-detail-close" onClick=${onClose} aria-label="Close tour">×</button>
+      <div class="welcome-tour-emoji" aria-hidden="true">${step.emoji}</div>
+      <h3 class="welcome-tour-title title-font">${step.title}</h3>
+      <p class="welcome-tour-body">${step.body}</p>
+      <div class="welcome-tour-dots">
+        ${TOUR_STEPS.map((_, n) => html`<button key=${n}
+          class=${"welcome-tour-dot" + (n===i ? " active" : "")}
+          aria-label=${"Go to step " + (n+1)} onClick=${()=>setI(n)}/>`)}
+      </div>
+      <div class="welcome-tour-nav">
+        <button class="welcome-tour-skip" onClick=${onClose}>${last ? "Close" : "Skip"}</button>
+        <div class="welcome-tour-nav-right">
+          ${i > 0 && html`<button class="welcome-tour-back" onClick=${()=>setI(i-1)}>Back</button>`}
+          <button class="welcome-tour-next" onClick=${()=> last ? onClose() : setI(i+1)}>
+            ${last ? "Get started" : "Next"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+};
+// Keyboard-shortcut cheat sheet, toggled with "?" (see App's global keydown).
+const KbdShortcutsModal = ({onClose}) => {
+  useEscToClose(onClose);
+  const rows = [
+    ["/", "Jump to the search box"],
+    ["?", "Show / hide this list"],
+    ["Esc", "Close an open dialog, drawer, or menu"],
+    ["Enter", "In search — open the top suggestion"],
+  ];
+  return html`<div class="card-detail-overlay" onClick=${onClose}>
+    <div class="kbd-shortcuts-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-label="Keyboard shortcuts">
+      <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+      <h3 class="title-font" style=${{margin:"0 0 14px",fontSize:18}}>Keyboard shortcuts</h3>
+      <div class="kbd-shortcuts-list">
+        ${rows.map(([k,desc]) => html`<div key=${k} class="kbd-shortcuts-row">
+          <kbd class="kbd-key">${k}</kbd>
+          <span class="kbd-desc">${desc}</span>
+        </div>`)}
+      </div>
+    </div>
+  </div>`;
+};
 // "Install as app" help modal. Platform-aware — Chrome / Android shows a
 // one-tap install button (when the beforeinstallprompt event was captured),
 // iOS Safari has to walk through the Share menu manually.
@@ -9649,6 +9711,7 @@ function DisplayNameEditor({profile, onSave}){
 function CollectionSharingPanel({profile, onChange, onRegenerate}){
   const [savingSection, setSavingSection] = useState(null);
   const [regenBusy, setRegenBusy] = useState(false);
+  const [regenDone, setRegenDone] = useState(false);
   const [copied, setCopied] = useState(null);
   const [err, setErr] = useState(null);
   if(!profile?.user_id) return null;
@@ -9682,7 +9745,11 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
     setRegenBusy(true); setErr(null);
     const r = await onRegenerate();
     setRegenBusy(false);
-    if(!r.ok) setErr(r.error || "Couldn't regenerate");
+    if(!r.ok){ setErr(r.error || "Couldn't regenerate"); return; }
+    // Success affordance to match the "✓ Copied" buttons above.
+    setRegenDone(true);
+    setTimeout(()=>setRegenDone(false), 2200);
+    flashToast("New collection link generated — the old one no longer works.");
   };
   const makeAllPrivate = async () => {
     if(allPrivate) return;
@@ -9723,7 +9790,7 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
     </div>`}
     <div class="collection-sharing-actions">
       ${anyUnlisted && html`<button class="settings-action link" disabled=${regenBusy} onClick=${regen}>
-        ${regenBusy ? "Working…" : "Regenerate unlisted link"}
+        ${regenBusy ? "Working…" : (regenDone ? "✓ New link ready" : "Regenerate unlisted link")}
       </button>`}
       ${!allPrivate && html`<button class="settings-action link danger" onClick=${makeAllPrivate}>
         Make all private
@@ -14470,8 +14537,11 @@ function EloView({eloPinned, setEloPinned, user}){
   </div>`;
 }
 
-function FAQView(){
+function FAQView({onStartTour}){
   return html`<div class="faq-section">
+    ${onStartTour && html`<button class="faq-tour-btn" onClick=${onStartTour}>
+      👋 Take the quick tour
+    </button>`}
     <h2>What is Packs.Ink?</h2>
     <p>Packs.Ink is a market and collection tracker for the Disney Lorcana TCG. Use it to <strong>watch prices and price movement</strong>, <strong>track what you own</strong> (raw, sealed, and graded), <strong>build decks</strong>, and <strong>share lists and tournament results</strong> with the community. Prices update daily.</p>
 
@@ -20934,6 +21004,65 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
   </div>`;
 };
 
+// F13 — cluster tournament decks into archetypes by ink pair (Lorcana's
+// primary archetype axis) and surface popularity + win / top-cut rate across
+// every uploaded tournament. Reads the already-loaded tournamentResults map,
+// so it needs no extra fetch. Card-level "most-played per archetype" is a
+// future add (needs a deck_cards rollup).
+const ArchetypeBreakdown = ({results}) => {
+  const [open, setOpen] = useState(true);
+  const stats = useMemo(() => {
+    const by = new Map();
+    let total = 0;
+    for(const rows of Object.values(results || {})){
+      for(const r of (rows || [])){
+        const rawInks = r.deck_inks;
+        const inks = Array.isArray(rawInks)
+          ? rawInks.filter(Boolean)
+          : (typeof rawInks === "string"
+              ? rawInks.replace(/[{}"]/g, "").split(/[,\/]/).map(s => s.trim()).filter(Boolean)
+              : []);
+        const sorted = inks.slice().sort();
+        const key = sorted.length ? sorted.join("/") : "Unknown";
+        let a = by.get(key);
+        if(!a){ a = {key, inks: sorted, count: 0, wins: 0, top8: 0}; by.set(key, a); }
+        a.count++; total++;
+        if(r.place_rank === 1) a.wins++;
+        if(r.place_rank != null && r.place_rank <= 8) a.top8++;
+      }
+    }
+    return {list: Array.from(by.values()).sort((x, y) => y.count - x.count), total};
+  }, [results]);
+  if(!stats.total) return null;
+  const top = stats.list.slice(0, 12);
+  const max = top[0] ? top[0].count : 1;
+  const iconFor = (ink) => INK_ICONS[ink] || INK_ICONS[ink.charAt(0).toUpperCase() + ink.slice(1).toLowerCase()];
+  return html`<div class="archetype-panel">
+    <button class="archetype-head" onClick=${()=>setOpen(o=>!o)} aria-expanded=${open}>
+      <span class="archetype-head-title">Archetypes by ink pair</span>
+      <span class="archetype-head-sub muted">${stats.list.length} archetypes · ${stats.total} decks tracked</span>
+      <span class="archetype-head-caret">${open ? "▾" : "▸"}</span>
+    </button>
+    ${open && html`<div class="archetype-list">
+      ${top.map(a => html`<div key=${a.key} class="archetype-row">
+        <div class="archetype-inks">
+          ${a.inks.length
+            ? a.inks.map(ink => iconFor(ink)
+                ? html`<img key=${ink} class="archetype-ink-icon" src=${iconFor(ink)} alt=${ink} title=${ink}/>`
+                : html`<span key=${ink} class="archetype-ink-dot"/>`)
+            : html`<span class="archetype-ink-dot"/>`}
+          <span class="archetype-name">${a.key}</span>
+        </div>
+        <div class="archetype-bar-wrap"><div class="archetype-bar" style=${{width:(a.count/max*100).toFixed(1)+"%"}}/></div>
+        <div class="archetype-stat archetype-count">${a.count} <span class="muted">${(a.count/stats.total*100).toFixed(0)}%</span></div>
+        <div class="archetype-stat muted" title="1st-place finishes">🏆 ${a.wins}</div>
+        <div class="archetype-stat muted" title="Top-8 finishes">T8 ${a.top8}</div>
+      </div>`)}
+    </div>`}
+    <div class="archetype-foot muted">Archetype = ink pair across all tracked tournament decks. Most-played cards per archetype coming soon.</div>
+  </div>`;
+};
+
 const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onConsumedIncomingDeckId, incomingShareToken, onConsumedIncomingShareToken, incomingUserId, onConsumedIncomingUserId, incomingTournamentId, onConsumedIncomingTournamentId, ownerDisplayName, openCollectionById, openDeckById, incomingDeckSection, onConsumedIncomingDeckSection, onSignIn, theme}) => {
   // All hooks run unconditionally.
   const [decks, setDecks] = useState(null); // null = loading, [] = empty, [...] = loaded
@@ -22803,6 +22932,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         <button class="active" onClick=${()=>setBulkUploadOpen(true)}
           style=${{padding:"7px 14px",fontSize:13}}>+ Bulk Upload Tournament</button>
       </div>`}
+      ${!selectedTournamentId && tournaments.length > 0 && html`<${ArchetypeBreakdown} results=${tournamentResults}/>`}
       ${selectedTournamentId
         ? html`<${TournamentDetailView}
             tournament=${tournaments.find(t => t.id === selectedTournamentId)}
@@ -23630,6 +23760,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
   // Owner-only: rotate the share token via the SECURITY DEFINER RPC. Any
   // URL that includes the previous token stops working immediately.
   const [regenerating, setRegenerating] = useState(false);
+  const [regenDone, setRegenDone] = useState(false);
   const regenerateShareToken = useCallback(async ()=>{
     if(!onUpdateMeta || regenerating) return;
     if(!confirm("Generate a new share link? The current link will stop working for anyone who has it.")) return;
@@ -23639,6 +23770,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
       if(error) throw error;
       // Reflect locally so the share URL updates without a refetch.
       onUpdateMeta({share_token: data});
+      // Mirror the "Copied ✓" affordance so the user sees the rotate succeeded
+      // (the URL field updates silently otherwise).
+      setRegenDone(true);
+      setTimeout(()=>setRegenDone(false), 2200);
+      flashToast("New share link generated — the old link no longer works.");
     } catch(e){
       flashToast("Couldn't regenerate: " + (e.message || e));
     } finally {
@@ -23897,17 +24033,21 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
   // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
   // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
   const massEntryUrl = useMemo(() => {
-    const lines = [];
+    // Aggregate missing copies by card NAME (mass-entry matches on name + set,
+    // buyer picks foil/non-foil in the cart). Summing by name means a card
+    // short in both printings becomes one line instead of two duplicates.
+    const byName = new Map();
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0];
       const k = c.card_id+":"+c.printing;
       const short = ownedShortByKey[k]?.short || 0;
       if(short > 0 && meta){
         const name = meta["Product Name"] || meta.name || "";
-        if(name) lines.push(`${short} ${name}`);
+        if(name) byName.set(name, (byName.get(name)||0) + short);
       }
     }
-    if(!lines.length) return null;
+    if(!byName.size) return null;
+    const lines = Array.from(byName, ([name, qty]) => `${qty} ${name}`);
     const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
     return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
   }, [deck.cards, cardById, ownedShortByKey]);
@@ -24049,7 +24189,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
               <button class="settings-action link" onClick=${regenerateShareToken}
                 disabled=${regenerating}
                 title="Generate a new share link. The current link stops working for anyone who has it.">
-                ${regenerating ? "Regenerating…" : "↻ Regenerate share link"}
+                ${regenerating ? "Regenerating…" : (regenDone ? "✓ New link ready" : "↻ Regenerate share link")}
               </button>
               <div class="deck-share-note" style=${{marginTop:6}}>
                 Switching back to <strong>Private</strong> also rotates the link automatically.
@@ -25042,6 +25182,38 @@ function App(){
   }, [avatarCardId]);
   const [avatarPickerOpen, setAvatarPickerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // Global keyboard shortcuts. "/" focuses the current view's search box,
+  // "?" toggles the shortcut cheat-sheet. Both ignored while typing in a
+  // field so they never hijack normal input. Esc-to-close is handled by each
+  // modal/drawer's own listener.
+  const [showShortcuts, setShowShortcuts] = useState(false);
+  // First-run guided tour (see WelcomeTourModal). Auto-open is wired below,
+  // after the visit counter is available.
+  const [tourOpen, setTourOpen] = useState(false);
+  const closeTour = useCallback(() => {
+    setTourOpen(false);
+    try { localStorage.setItem("packsink:tourSeen", "1"); } catch {}
+  }, []);
+  useEffect(() => {
+    const onKey = (e) => {
+      if(e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
+      const t = e.target;
+      const typing = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" ||
+        t.tagName === "SELECT" || t.isContentEditable);
+      if(e.key === "/" && !typing){
+        // Focus the most prominent visible search box (placeholder starts with
+        // "Search" — covers "Search every card…", "Search sets…", etc.).
+        const box = Array.from(document.querySelectorAll("input")).find(
+          el => el.offsetParent !== null && /^search/i.test(el.placeholder || ""));
+        if(box){ e.preventDefault(); box.focus(); if(box.select) box.select(); }
+      } else if(e.key === "?" && !typing){
+        e.preventDefault();
+        setShowShortcuts(s => !s);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   // PWA install support — capture the beforeinstallprompt event so we can
   // trigger the native install from our own button. iOS Safari doesn't fire
   // this; users on iOS get manual Share-menu instructions instead.
@@ -25098,6 +25270,16 @@ function App(){
   const dismissInstallForever = () => {
     try { localStorage.setItem("packsink:installDismissed", "1"); } catch {}
   };
+  // Auto-open the welcome tour ONCE for brand-new visitors. Gated to the very
+  // first visit so it never collides with the install nudge (visits 2–3), and
+  // to packsink:tourSeen so it shows at most once. Re-openable from Help.
+  useEffect(() => {
+    let seen = true;
+    try { seen = localStorage.getItem("packsink:tourSeen") === "1"; } catch {}
+    if(seen || autoInstallVisits !== 1) return;
+    const t = setTimeout(() => setTourOpen(true), 700);
+    return () => clearTimeout(t);
+  }, [autoInstallVisits]);
   // Close settings popover on outside click / Escape.
   const settingsRef = useRef(null);
   useEffect(() => {
@@ -26199,6 +26381,8 @@ function App(){
       onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false); }}
       onClose=${()=>setAvatarPickerOpen(false)}/>`}
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
+    ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
+    ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}/>`}
     ${indyArtistPick && html`<${ArtistAlleyModal}
       allIllustrators=${indyAllIllustrators} raw=${raw}
       initialArtist=${indyArtistPick}
@@ -26288,7 +26472,7 @@ function App(){
       sealedMeta=${sealedMeta} updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
       incomingScreenerView=${incomingScreenerView}
       onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
-    ${view==="faq"&&html`<${FAQView}/>`}
+    ${view==="faq"&&html`<${FAQView} onStartTour=${()=>setTourOpen(true)}/>`}
     ${view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
   </div><//><//>`;

@@ -1,0 +1,49 @@
+name: Synthetic Monitor
+
+# What this catches that UptimeRobot does NOT:
+#   UptimeRobot only checks that packs.ink answers HTTP 200. That misses the
+#   real-world failure modes where the site is "up" but useless:
+#     * matview lag — the daily ETL wrote prices_daily but the refresh_*
+#       never ran, so card_prices_latest serves yesterday's (or older) prices.
+#     * a broken ETL — TCGCSV publish missed / errored for days; the catalog
+#       silently freezes while the shell keeps serving 200s.
+#     * an emptied/broken price_movers matview — a refresh that produced 0
+#       rows still returns 200; the Screener + mover banners go blank.
+#     * a bad deploy — a 200 error page or SPA fallback that hydrates but
+#       isn't the real app shell.
+#   This monitor runs two independent server-side checks: matview freshness +
+#   row-count (the data-staleness signal, since prices are client-rendered and
+#   never appear in the HTML) and an app-shell-marker assertion on the deployed
+#   HTML. A failing run exits non-zero so GitHub emails on failure, matching
+#   the ETL alerting model (healthy runs are silent; only real failures notify).
+
+# Minimum permissions: just enough for actions/checkout. No writes.
+permissions:
+  contents: read
+
+on:
+  # Every 2 hours. The failure modes here (stale matview, missed daily ETL,
+  # bad deploy) change at most once a day, so 2h resolution catches them well
+  # within a cycle while keeping the Actions-minute spend modest (~360 short
+  # runs/month) — UptimeRobot already covers hard-down at 5-min granularity.
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    name: Content freshness + deploy health
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      - name: Run synthetic monitor
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: python scripts/synthetic_monitor.py
