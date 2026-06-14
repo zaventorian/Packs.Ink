@@ -58,3 +58,13 @@ jobs:
             echo "Discovering SCs for ALL sets"
             python scripts/elo/discover_wu_scs.py --all-sets
           fi
+
+      # Scrape signed-up rosters for the tracked upcoming SCs, right after the SC
+      # list refreshes (rosters read elo_upcoming_scs, so the fresh SC rows must
+      # land first — hence a chained step in the same job, not a parallel one).
+      # Fails soft per-event; idempotent (REPLACE members + upsert header).
+      - name: Scrape tracked-SC rosters
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/scrape_rosters.py

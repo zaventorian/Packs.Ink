@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=179">
+<link rel="stylesheet" href="styles.css?v=180">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=179"></script>
+<script src="logo.js?v=180"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -14420,8 +14420,83 @@ function EloStoreReport({storeKey, onBack, onPlayerClick, onEventClick, excludeO
   </div>`;
 }
 
-function EloUpcomingSCs({canViewStore, onStoreClick, excludeOrg, setExcludeOrg}){
+// Live signed-up roster + field scouting for one upcoming event (admin-gated).
+// Data via get_event_roster (migration 68) — checks can_view_store_report
+// server-side. Players are joined to their current Elo; unrated show "NR".
+function EloEventRoster({eventId, eventMeta, excludeOrg, onClose, onPlayerClick}){
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  useEscToClose(onClose);
+  useEffect(() => {
+    if(!eventId) return;
+    setData(null); setErr(null);
+    (async () => {
+      try {
+        const {data:d, error} = await sbClient.rpc("get_event_roster", {p_event_id: eventId, p_exclude_org: !!excludeOrg});
+        if(error) throw error;
+        setData(d || {event:{}, field:{}, players:[]});
+      } catch(e){ setErr(String(e && e.message || e)); }
+    })();
+  }, [eventId, excludeOrg]);
+  const ev = (data && data.event) || eventMeta || {};
+  const field = (data && data.field) || {};
+  const players = (data && data.players) || [];
+  const scrapedRel = ev.scraped_at ? relativeTime(ev.scraped_at) : null;
+  const friendlyErr = err && (
+    /not authorized|permission denied/i.test(err) ? "Rosters are restricted — you don't have access."
+    : /could not find the function|PGRST202|does not exist|schema cache/i.test(err) ? "Roster tracking isn't set up yet — apply migration 68 and run the roster scraper."
+    : "Couldn't load the roster: " + err);
+  return html`<div class="sc-modal-overlay" onClick=${onClose}>
+    <div class="sc-modal elo-roster-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-modal="true">
+      <button class="sc-modal-close" onClick=${onClose} aria-label="Close">×</button>
+      <div class="sc-modal-set">Signed-up roster</div>
+      <h3 class="sc-modal-store">${ev.store_name || (eventMeta && eventMeta.store_name) || "Event"}</h3>
+      ${ev.name && html`<div class="sc-modal-evname">${ev.name}</div>`}
+      ${err ? html`<div class="elo-empty">${friendlyErr}</div>`
+        : data === null ? html`<div class="elo-loading">Loading roster…</div>`
+        : html`
+        <div class="elo-roster-field">
+          <div class="elo-store-stat"><span class="n">${field.n_signed_up != null ? field.n_signed_up : players.length}</span><span class="l">Signed up</span></div>
+          ${field.avg_elo != null && html`<div class="elo-store-stat elo-store-stat--elo"><span class="n">${field.avg_elo}</span><span class="l">Avg Elo (rated)</span></div>`}
+          ${field.top_elo != null && html`<div class="elo-store-stat"><span class="n">${field.top_elo}</span><span class="l">Top Elo</span></div>`}
+          <div class="elo-store-stat"><span class="n">${(field.n_rated||0)}/${(field.n_rated||0)+(field.n_unrated||0)}</span><span class="l">Rated</span></div>
+        </div>
+        ${scrapedRel && html`<div class="elo-roster-scraped muted">Roster as of ${scrapedRel}${ev.capacity ? ` · cap ${ev.capacity}` : ""}</div>`}
+        ${players.length === 0
+          ? html`<div class="elo-empty">No roster captured yet — run the roster scraper to pull the signed-up list.</div>`
+          : html`<div class="elo-table-wrap"><table class="elo-table elo-store-players">
+              <thead><tr><th class="elo-th-elo">Elo</th><th>Player</th><th class="num">Record</th></tr></thead>
+              <tbody>
+                ${players.map((p, i) => html`<tr key=${(p.best_identifier||"")+i}
+                    class=${"elo-row"+(p.matched && onPlayerClick ? "" : " elo-row--static")}
+                    onClick=${()=> { if(p.matched && onPlayerClick) onPlayerClick(p.player_id); }}>
+                  <td class="elo-store-elo">${p.current_rating != null ? p.current_rating : html`<span class="muted">NR</span>`}
+                    ${p.rank ? html`<span class="elo-store-rank">#${p.rank}</span>` : ""}</td>
+                  <td class="elo-store-pname">${p.best_identifier}${p.account_name ? html`<span class="elo-roster-acct">${" "+p.account_name}</span>` : ""}</td>
+                  <td class="num muted">${p.current_rating != null ? `${p.wins||0}–${p.losses||0}` : "—"}</td>
+                </tr>`)}
+              </tbody></table></div>`}
+      `}
+    </div>
+  </div>`;
+}
+
+function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, setExcludeOrg}){
   const [rows, setRows] = useState(null);
+  const [rosterEventId, setRosterEventId] = useState(null);
+  const [rosterMeta, setRosterMeta] = useState(null);
+  const [refreshingRosters, setRefreshingRosters] = useState(false);
+  const refreshRosters = async () => {
+    if(refreshingRosters) return;
+    setRefreshingRosters(true);
+    flashToast("Refreshing rosters…", 12000);
+    try {
+      const {data, error} = await sbClient.functions.invoke("refresh-elo-rosters");
+      if(error) throw error;
+      flashToast(`Rosters refreshed — ${(data&&data.events)||0} events, ${(data&&data.players)||0} players`);
+    } catch(e){ flashToast("Couldn't refresh rosters: " + (e && e.message || e)); }
+    finally { setRefreshingRosters(false); }
+  };
   const [err, setErr] = useState(null);
   const [sel, setSel] = useState(null);
   const [strength, setStrength] = useState(null); // {store_id: {avg_elo, n_players}}
@@ -14520,6 +14595,9 @@ function EloUpcomingSCs({canViewStore, onStoreClick, excludeOrg, setExcludeOrg})
         <input type="checkbox" checked=${!!excludeOrg} onChange=${e=>setExcludeOrg(e.target.checked)}/>
         Exclude I&L⟡Zaven & I&L⟡jacobayy from Avg Elo
       </label>`}
+      ${canViewStore && html`<button class="elo-roster-refresh" disabled=${refreshingRosters} onClick=${refreshRosters}
+        title="Pull the current signed-up rosters from Ravensburger Play for every tracked event (admin)">
+        ${refreshingRosters ? "↻ Refreshing rosters…" : "↻ Refresh rosters"}</button>`}
     </div>
     ${geoErr && html`<div class="sc-msg sc-msg-err" style=${{marginBottom:10}}>${geoErr}</div>`}
     ${working.length === 0 && html`<div class="elo-empty">No events within ${radius} mi${origin?` of ${origin.zip}`:""}.</div>`}
@@ -14555,6 +14633,8 @@ function EloUpcomingSCs({canViewStore, onStoreClick, excludeOrg, setExcludeOrg})
           </dl>
           ${canViewStore && html`<button class="sc-modal-cta sc-modal-cta--report"
             onClick=${()=>{ const st = sel.store_name; setSel(null); onStoreClick && onStoreClick(st); }}>📋 Store scouting report</button>`}
+          ${canViewStore && sel.event_id && html`<button class="sc-modal-cta sc-modal-cta--roster"
+            onClick=${()=>{ const id = sel.event_id, meta = {store_name: sel.store_name, name: sel.name, capacity: sel.capacity}; setSel(null); setRosterMeta(meta); setRosterEventId(id); }}>👥 Who's signed up + field Elo</button>`}
           <div class="sc-modal-actions">
             <a class="sc-modal-cta" href=${sel.url} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>
             <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
@@ -14563,6 +14643,8 @@ function EloUpcomingSCs({canViewStore, onStoreClick, excludeOrg, setExcludeOrg})
         </div>
       </div>`;
     })()}
+    ${rosterEventId && html`<${EloEventRoster} eventId=${rosterEventId} eventMeta=${rosterMeta}
+      excludeOrg=${excludeOrg} onClose=${()=>setRosterEventId(null)} onPlayerClick=${onPlayerClick}/>`}
   </div>`;
 }
 
@@ -14688,7 +14770,7 @@ function EloView({eloPinned, setEloPinned, user}){
 
     ${tab==="leaderboard" && html`<${EloLeaderboard} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="tournaments" && html`<${EloTournaments} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick}/>`}
-    ${tab==="upcoming" && html`<${EloUpcomingSCs} canViewStore=${canViewStore} onStoreClick=${onStoreClick} excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg}/>`}
+    ${tab==="upcoming" && html`<${EloUpcomingSCs} canViewStore=${canViewStore} onStoreClick=${onStoreClick} onPlayerClick=${onPlayerClick} excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg}/>`}
     ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${backToLeaderboard} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} canViewStore=${canViewStore} onStoreClick=${onStoreClick}/>`}
     ${tab==="store" && html`<${EloStoreReport} storeKey=${storeKey} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} onEventClick=${onEventClick} excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg}/>`}
