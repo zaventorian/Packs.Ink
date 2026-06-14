@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=175">
+<link rel="stylesheet" href="styles.css?v=176">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=175"></script>
+<script src="logo.js?v=176"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -5434,6 +5434,73 @@ const WelcomeTourModal = ({onClose}) => {
           ${i > 0 && html`<button class="welcome-tour-back" onClick=${()=>setI(i-1)}>Back</button>`}
           <button class="welcome-tour-next" onClick=${()=> last ? onClose() : setI(i+1)}>
             ${last ? "Get started" : "Next"}
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+};
+// Per-section guided tours (G5). Keyed by the App `view` name. Each is a short
+// click-through that auto-opens ONCE per section for users who've completed the
+// welcome tour, and is re-openable anytime from the floating "Tour" button on
+// that section. Plain content (not element-anchored) so layout changes can't
+// break them.
+const SECTION_TOURS = {
+  cards: { title: "Cards", steps: [
+    {emoji:"🃏", title:"Browse every card", body:"The full Lorcana catalog. Search by name, or type natural filters: \"amber rare\", \"lore 3\", \"bodyguard\", even \"princess\" — they all just work."},
+    {emoji:"🎛️", title:"Filter chips", body:"Quick chips up top filter by ink, cost and rarity. Open Filters for the full set — type, keywords, classifications, stats, legality and artist."},
+    {emoji:"🔍", title:"Card details", body:"Click any card for prices, history and a graded breakdown. The ⤢ magnify button on a tile blows the art up full-size."},
+    {emoji:"➕", title:"Track copies", body:"Signed in, the +/- on each tile logs copies into your Collection — Non-Foil and Foil counted separately."},
+  ]},
+  screener: { title: "Screener", steps: [
+    {emoji:"📊", title:"The price database", body:"Every card as a sortable table. Switch Raw / Graded / Sealed with the toggle up top."},
+    {emoji:"⚡", title:"Presets & windows", body:"Preset chips (Movers, Gainers, Buyouts…) and a time window (1D–1Y) reshape the table. Click any column header to sort by it."},
+    {emoji:"🚦", title:"Signals & filters", body:"BUY / CRSH / DISC / PREM tags flag notable price behavior. The Advanced panel adds every filter the Cards page has."},
+    {emoji:"📈", title:"Compare", body:"Tick rows and send them to Price Graphing's Compare chart, or click a row for full detail."},
+  ]},
+  history: { title: "Price Graphing", steps: [
+    {emoji:"📈", title:"Price history", body:"Chart any card's price over time — Low and NM Market, with range buttons to zoom the window."},
+    {emoji:"🆚", title:"Compare", body:"Add several cards (or sealed products, or whole sets) to overlay them on one chart. The \"+ variants\" button pulls in a card's other printings."},
+  ]},
+  market: { title: "Analytics", steps: [
+    {emoji:"🧮", title:"Market tools", body:"A toolbox of calculators for the Lorcana market."},
+    {emoji:"📦", title:"What's inside", body:"Expected Value per box/pack, Trade Compare (values both sides of a trade), Playset Cost, Card Averages, a rarity Heatmap, Sealed pricing, and Pack/Box simulators."},
+    {emoji:"🔗", title:"Shareable", body:"Each tool is a sub-tab and lives in the URL — refresh or share a link and you land back on the same tool."},
+  ]},
+  collection: { title: "Collection", steps: [
+    {emoji:"🗂️", title:"Your collection", body:"Track everything you own once you sign in — raw cards, sealed product, and graded slabs, each in its own section."},
+    {emoji:"💰", title:"Value over time", body:"The Home page charts your portfolio's value over time. Optionally log what you paid and when, for cost-basis tracking."},
+    {emoji:"🔗", title:"Share it", body:"Share a read-only view of any section with a link, or keep everything private — each section's visibility is independent."},
+  ]},
+  decks: { title: "Decks", steps: [
+    {emoji:"🃏", title:"Decks & community", body:"Build your own decks and explore what others are playing — no sign-in needed to look around."},
+    {emoji:"🏆", title:"Sections", body:"Discover = public decks; Tournaments = real event results with an archetype breakdown; Your Decks / Favorites / Following need sign-in."},
+    {emoji:"🛒", title:"Inside a deck", body:"Open a deck for its cost curve, legality, prices, and a one-click \"shop all missing cards\" TCGplayer cart."},
+  ]},
+};
+const GuidedTour = ({title, steps, onClose}) => {
+  useEscToClose(onClose);
+  const [i, setI] = useState(0);
+  const step = steps[i];
+  const last = i === steps.length - 1;
+  return html`<div class="card-detail-overlay" onClick=${onClose}>
+    <div class="welcome-tour" onClick=${e=>e.stopPropagation()} role="dialog" aria-label=${(title||"")+" tour"}>
+      <button class="card-detail-close" onClick=${onClose} aria-label="Close tour">×</button>
+      ${title && html`<div class="welcome-tour-kicker">${title} tour</div>`}
+      <div class="welcome-tour-emoji" aria-hidden="true">${step.emoji}</div>
+      <h3 class="welcome-tour-title title-font">${step.title}</h3>
+      <p class="welcome-tour-body">${step.body}</p>
+      <div class="welcome-tour-dots">
+        ${steps.map((_, n) => html`<button key=${n}
+          class=${"welcome-tour-dot" + (n===i ? " active" : "")}
+          aria-label=${"Go to step " + (n+1)} onClick=${()=>setI(n)}/>`)}
+      </div>
+      <div class="welcome-tour-nav">
+        <button class="welcome-tour-skip" onClick=${onClose}>${last ? "Close" : "Skip"}</button>
+        <div class="welcome-tour-nav-right">
+          ${i > 0 && html`<button class="welcome-tour-back" onClick=${()=>setI(i-1)}>Back</button>`}
+          <button class="welcome-tour-next" onClick=${()=> last ? onClose() : setI(i+1)}>
+            ${last ? "Done" : "Next"}
           </button>
         </div>
       </div>
@@ -25281,6 +25348,13 @@ function App(){
     setTourOpen(false);
     try { localStorage.setItem("packsink:tourSeen", "1"); } catch {}
   }, []);
+  // Per-section guided tours (G5). activeTour holds the view-key of the open
+  // tour (or null). Auto-opens once per section for users who completed the
+  // welcome tour; re-openable anytime via the floating "Tour" button.
+  const [activeTour, setActiveTour] = useState(null);
+  const closeSectionTour = useCallback(() => {
+    setActiveTour(v => { try { if(v) localStorage.setItem("packsink:sectionTourSeen:"+v, "1"); } catch {} return null; });
+  }, []);
   useEffect(() => {
     const onKey = (e) => {
       if(e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -25367,6 +25441,22 @@ function App(){
     const t = setTimeout(() => setTourOpen(true), 700);
     return () => clearTimeout(t);
   }, [autoInstallVisits]);
+  // Auto-open a section's guided tour the first time a welcome-tour-completed
+  // user lands on it (one-time per section). The floating Tour button re-opens
+  // it anytime. Gating on the welcome flag means existing users (who never saw
+  // the welcome auto-open) aren't ambushed — they discover section tours via
+  // the button instead.
+  useEffect(() => {
+    if(!SECTION_TOURS[view]) return;
+    let welcomeSeen = false, secSeen = true;
+    try {
+      welcomeSeen = localStorage.getItem("packsink:tourSeen") === "1";
+      secSeen = localStorage.getItem("packsink:sectionTourSeen:" + view) === "1";
+    } catch {}
+    if(!welcomeSeen || secSeen) return;
+    const t = setTimeout(() => setActiveTour(view), 650);
+    return () => clearTimeout(t);
+  }, [view]);
   // Close settings popover on outside click / Escape.
   const settingsRef = useRef(null);
   useEffect(() => {
@@ -26470,6 +26560,12 @@ function App(){
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
     ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
     ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}/>`}
+    ${activeTour && SECTION_TOURS[activeTour] && html`<${GuidedTour}
+      title=${SECTION_TOURS[activeTour].title} steps=${SECTION_TOURS[activeTour].steps}
+      onClose=${closeSectionTour}/>`}
+    ${SECTION_TOURS[view] && !activeTour && !tourOpen && html`<button class="section-tour-btn"
+      onClick=${()=>setActiveTour(view)}
+      title=${"Take a guided tour of the "+SECTION_TOURS[view].title+" page"}>🧭 Tour</button>`}
     ${indyArtistPick && html`<${ArtistAlleyModal}
       allIllustrators=${indyAllIllustrators} raw=${raw}
       initialArtist=${indyArtistPick}
