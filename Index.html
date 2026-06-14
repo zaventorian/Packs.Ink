@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=180">
+<link rel="stylesheet" href="styles.css?v=181">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=180"></script>
+<script src="logo.js?v=181"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -14423,7 +14423,7 @@ function EloStoreReport({storeKey, onBack, onPlayerClick, onEventClick, excludeO
 // Live signed-up roster + field scouting for one upcoming event (admin-gated).
 // Data via get_event_roster (migration 68) — checks can_view_store_report
 // server-side. Players are joined to their current Elo; unrated show "NR".
-function EloEventRoster({eventId, eventMeta, excludeOrg, onClose, onPlayerClick}){
+function EloEventRoster({eventId, eventMeta, excludeOrg, setExcludeOrg, onClose, onPlayerClick}){
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   useEscToClose(onClose);
@@ -14461,6 +14461,10 @@ function EloEventRoster({eventId, eventMeta, excludeOrg, onClose, onPlayerClick}
           ${field.top_elo != null && html`<div class="elo-store-stat"><span class="n">${field.top_elo}</span><span class="l">Top Elo</span></div>`}
           <div class="elo-store-stat"><span class="n">${(field.n_rated||0)}/${(field.n_rated||0)+(field.n_unrated||0)}</span><span class="l">Rated</span></div>
         </div>
+        ${setExcludeOrg && html`<label class="elo-exclude-toggle">
+          <input type="checkbox" checked=${!!excludeOrg} onChange=${e=>setExcludeOrg(e.target.checked)}/>
+          Exclude I&L⟡Zaven & I&L⟡jacobayy from Avg Elo
+        </label>`}
         ${scrapedRel && html`<div class="elo-roster-scraped muted">Roster as of ${scrapedRel}${ev.capacity ? ` · cap ${ev.capacity}` : ""}</div>`}
         ${players.length === 0
           ? html`<div class="elo-empty">No roster captured yet — run the roster scraper to pull the signed-up list.</div>`
@@ -14644,7 +14648,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
       </div>`;
     })()}
     ${rosterEventId && html`<${EloEventRoster} eventId=${rosterEventId} eventMeta=${rosterMeta}
-      excludeOrg=${excludeOrg} onClose=${()=>setRosterEventId(null)} onPlayerClick=${onPlayerClick}/>`}
+      excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg} onClose=${()=>setRosterEventId(null)} onPlayerClick=${onPlayerClick}/>`}
   </div>`;
 }
 
