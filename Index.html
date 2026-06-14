@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=174">
+<link rel="stylesheet" href="styles.css?v=175">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=174"></script>
+<script src="logo.js?v=175"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -2714,13 +2714,22 @@ const levenshtein = (a, b) => {
 
 // nameMatches: 1) substring exact, 2) multi-token all-words-present,
 // 3) single-token Levenshtein within max(1, len/4).
+// Normalize text for card-name search so it tolerates the punctuation/accents
+// users routinely omit: fold diacritics ("Te Kā" → "te ka", "Café" → "cafe")
+// and drop apostrophes/quote-marks ("Madam Mim's" → "madam mims"). Collapsing
+// the apostrophe (rather than splitting on it) keeps the surrounding letters
+// together so a typed token still lands. Applied to BOTH the query and the
+// card text wherever card names / haystacks are matched.
+const searchNorm = (s) => (s||"")
+  .normalize("NFD").replace(/[̀-ͯ]/g, "")
+  .replace(/['‘’`´]/g, "");
 const nameMatches = (query, name) => {
   if(!query) return true;
-  const q = query.toLowerCase().trim();
-  const c = (name||"").toLowerCase();
+  const q = searchNorm(query.toLowerCase().trim());
+  const c = searchNorm((name||"").toLowerCase());
   if(c.includes(q)) return true;
   const qTokens = q.split(/\s+/).filter(Boolean);
-  const cTokens = c.split(/[\s\-:'"]+/).filter(Boolean);
+  const cTokens = c.split(/[\s\-:"]+/).filter(Boolean);
   if(qTokens.length > 1){
     return qTokens.every(qt => cTokens.some(ct => ct.includes(qt)));
   }
@@ -3212,7 +3221,7 @@ const matchesCardFilter = (row, f, parsed) => {
       // character (classification match), "action" surfaces every action
       // (card_type match), etc. — mirrors how Dreamborn searches.
       if(!nameMatches(parsed.name, row["Product Name"])){
-        const q = parsed.name.toLowerCase();
+        const q = searchNorm(parsed.name.toLowerCase());
         const tokens = q.split(/\s+/).filter(Boolean);
         const cls = (row.classifications || []).map(c => (c||"").toLowerCase());
         const haystack = [
@@ -3227,7 +3236,8 @@ const matchesCardFilter = (row, f, parsed) => {
         // pickers that pass no matchMode): every token must appear — the
         // original behavior, used when narrowing.
         const all = (parsed.matchMode || "all") === "all";
-        const ok = all ? tokens.every(t => haystack.includes(t)) : tokens.some(t => haystack.includes(t));
+        const hayN = searchNorm(haystack);  // so stripped tokens match body text with apostrophes
+        const ok = all ? tokens.every(t => hayN.includes(t)) : tokens.some(t => hayN.includes(t));
         if(!ok) return false;
       }
     }
@@ -3235,13 +3245,13 @@ const matchesCardFilter = (row, f, parsed) => {
     // (name + type + body text + classifications). Each phrase must appear —
     // so "a whole new world" matches the song, not every card with an "a".
     if(parsed.contains && parsed.contains.length){
-      const hay = [
+      const hay = searchNorm([
         (row["Product Name"]||"").toLowerCase(),
         (row.card_type||"").toLowerCase(),
         (row.text||"").toLowerCase(),
         ...((row.classifications||[]).map(c => (c||"").toLowerCase()))
-      ].join("  ");
-      for(const phrase of parsed.contains){ if(!hay.includes(phrase)) return false; }
+      ].join("  "));
+      for(const phrase of parsed.contains){ if(!hay.includes(searchNorm(phrase))) return false; }
     }
   }
 
@@ -9877,12 +9887,14 @@ function AvatarPicker({raw, onPick, onClose}){
       if(cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal") byName.set(name, r);
     }
     const scored = [];
+    const nQ = searchNorm(sLow);  // diacritic/apostrophe-tolerant so "te ka" ranks "Te Kā" and "andys room" ranks "Andy's Room" at the top
     for(const r of byName.values()){
       const name = (r["Product Name"] || "").toLowerCase();
+      const nName = searchNorm(name);
       let rank;
-      if(name.startsWith(sLow))      rank = 0;
-      else if(name.includes(sLow))   rank = 1;
-      else                           rank = 2;
+      if(nName.startsWith(nQ))      rank = 0;
+      else if(nName.includes(nQ))   rank = 1;
+      else                          rank = 2;
       scored.push({r, rank, name});
     }
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
@@ -19333,12 +19345,14 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
       }
     }
     const scored = [];
+    const nQ = searchNorm(sLow);  // diacritic/apostrophe-tolerant so "te ka" ranks "Te Kā" and "andys room" ranks "Andy's Room" at the top
     for(const r of byName.values()){
       const name = (r["Product Name"] || "").toLowerCase();
+      const nName = searchNorm(name);
       let rank;
-      if(name.startsWith(sLow))      rank = 0;
-      else if(name.includes(sLow))   rank = 1;
-      else                           rank = 2;
+      if(nName.startsWith(nQ))      rank = 0;
+      else if(nName.includes(nQ))   rank = 1;
+      else                          rank = 2;
       scored.push({r, rank, name});
     }
     scored.sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
@@ -19497,23 +19511,46 @@ const scZipReady = (zip, country) => (country||"US")==="US"
   ? /^\d{5}$/.test(String(zip||"")) : String(zip||"").trim().length >= 2;
 
 const UpcomingSCsBox = () => {
-  const [zip, setZip] = useState(() => { try { return localStorage.getItem("packsink:scZip") || ""; } catch { return ""; } });
-  const [radius, setRadius] = useState(() => { try { return parseInt(localStorage.getItem("packsink:scRadius"), 10) || 50; } catch { return 50; } });
-  const [customOpen, setCustomOpen] = useState(() => { try { const r = parseInt(localStorage.getItem("packsink:scRadius"), 10); return r && !SC_RADII.includes(r); } catch { return false; } });
+  // Deep-link seed: ?sczip / scc / scdist / scdate let a shared link reproduce
+  // a specific view. Read once in the state initializers (which run before any
+  // App URL-cleanup effect) so the link wins over localStorage on a fresh open.
+  // Pins are intentionally NOT in the URL — they're a personal per-device pref.
+  const scParams = (() => { try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); } })();
+  const pZip = scParams.get("sczip"), pCtry = scParams.get("scc"), pDist = scParams.get("scdist"), pDate = scParams.get("scdate");
+  const [zip, setZip] = useState(() => { try { return pZip || localStorage.getItem("packsink:scZip") || ""; } catch { return pZip || ""; } });
+  const [radius, setRadius] = useState(() => {
+    const fromUrl = parseInt(pDist, 10);
+    if(Number.isFinite(fromUrl) && fromUrl > 0) return Math.min(500, fromUrl);
+    try { return parseInt(localStorage.getItem("packsink:scRadius"), 10) || 50; } catch { return 50; }
+  });
+  const [customOpen, setCustomOpen] = useState(() => { try { const r = parseInt(pDist, 10) || parseInt(localStorage.getItem("packsink:scRadius"), 10); return Number.isFinite(r) && r > 0 && !SC_RADII.includes(r); } catch { return false; } });
   const [origin, setOrigin] = useState(null);
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
   const [sel, setSel] = useState(null);
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("packsink:scCollapsed") === "1"; } catch { return false; } });
-  const [dateOn, setDateOn] = useState(() => { try { return localStorage.getItem("packsink:scDateOn") === "1"; } catch { return false; } });
-  const [dateFrom, setDateFrom] = useState(() => { try { return localStorage.getItem("packsink:scDateFrom") || ""; } catch { return ""; } });
-  const [country, setCountry] = useState(() => { try { return localStorage.getItem("packsink:scCountry") || "US"; } catch { return "US"; } });
+  const [expanded, setExpanded] = useState(() => !!pZip);  // a deep-link opens straight into the full-screen view
+  const [copied, setCopied] = useState(false);
+  const [pinned, setPinned] = useState(() => { try { const p = JSON.parse(localStorage.getItem("packsink:scPinned") || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } });
+  const [dateOn, setDateOn] = useState(() => { try { return pDate ? true : localStorage.getItem("packsink:scDateOn") === "1"; } catch { return !!pDate; } });
+  const [dateFrom, setDateFrom] = useState(() => { try { return pDate || localStorage.getItem("packsink:scDateFrom") || ""; } catch { return pDate || ""; } });
+  const [country, setCountry] = useState(() => { try { return (pCtry || localStorage.getItem("packsink:scCountry") || "US").toUpperCase(); } catch { return "US"; } });
   const didAuto = useRef(false);
   useEffect(() => { try { localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
   useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dateFrom); } catch {} }, [dateFrom]);
+  useEffect(() => { try { localStorage.setItem("packsink:scPinned", JSON.stringify(pinned)); } catch {} }, [pinned]);
+  // Esc exits the full-screen view; lock body scroll while it's open.
+  useEffect(() => {
+    if(!expanded) return;
+    const onKey = (e) => { if(e.key === "Escape") setExpanded(false); };
+    document.addEventListener("keydown", onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.removeEventListener("keydown", onKey); document.body.style.overflow = prevOverflow; };
+  }, [expanded]);
   const todayStr = new Date().toLocaleDateString("en-CA");
 
   const runSearch = useCallback(async (z, r, ctry) => {
@@ -19558,15 +19595,56 @@ const UpcomingSCsBox = () => {
   const dateActive = dateOn && dateFrom;
   const visible = (!results || !dateActive) ? results : results.filter(e => (e._day || "") === dateFrom);
 
-  return html`<section class=${"sc-box"+(collapsed?" sc-collapsed":"")}>
+  const isPinned = (id) => pinned.includes(id);
+  const togglePin = (id) => setPinned(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
+  // Pinned events float to the top (passed events are already excluded by the
+  // start_datetime >= today query, so a pin naturally "expires"). Ties keep the
+  // by-day / closest-first order.
+  const visibleSorted = visible ? visible.slice().sort((a, b) => {
+    const pa = isPinned(a.event_id) ? 0 : 1, pb = isPinned(b.event_id) ? 0 : 1;
+    if(pa !== pb) return pa - pb;
+    return (a._day || "").localeCompare(b._day || "") || a._mi - b._mi;
+  }) : visible;
+  // Shareable link reproducing this exact view (NOT the pins — see above).
+  const buildShareUrl = () => {
+    const u = new URL(window.location.origin + window.location.pathname);
+    if(zip) u.searchParams.set("sczip", zip);
+    u.searchParams.set("scc", country);
+    u.searchParams.set("scdist", String(radius));
+    if(dateActive) u.searchParams.set("scdate", dateFrom);
+    return u.toString();
+  };
+  const copyLink = async () => {
+    try {
+      await navigator.clipboard.writeText(buildShareUrl());
+      setCopied(true); setTimeout(() => setCopied(false), 1600);
+      flashToast("Link copied — opens this view (ZIP, distance, date).");
+    } catch { flashToast("Couldn't copy the link."); }
+  };
+
+  return html`<section class=${"sc-box"+(collapsed&&!expanded?" sc-collapsed":"")+(expanded?" sc-box--expanded":"")}>
     <div class="sc-box-head">
-      <div class="sc-box-title">Upcoming Set Championships Near Me</div>
-      <button class="sc-collapse-btn" type="button" onClick=${()=>setCollapsed(c=>!c)}
-        aria-expanded=${!collapsed} aria-label=${collapsed?"Expand":"Collapse"} title=${collapsed?"Expand":"Collapse"}>
-        ${collapsed ? "▸" : "▾"}
+      <button class="sc-box-title sc-box-title-btn" type="button" onClick=${()=>setExpanded(x=>!x)}
+        title=${expanded?"Exit full screen":"Expand to full screen"}>
+        Upcoming Set Championships Near Me
+        <span class="sc-title-expand-hint" aria-hidden="true">${expanded?"✕":"⤢"}</span>
       </button>
+      <div class="sc-box-head-actions">
+        <button class="sc-copy-link" type="button" onClick=${copyLink}
+          disabled=${!scZipReady(zip, country)}
+          title="Copy a link that reopens this view (ZIP, distance, date)">
+          ${copied ? "✓ Copied" : "🔗 Copy link"}
+        </button>
+        ${expanded
+          ? html`<button class="sc-collapse-btn" type="button" onClick=${()=>setExpanded(false)}
+              aria-label="Exit full screen" title="Exit full screen">✕</button>`
+          : html`<button class="sc-collapse-btn" type="button" onClick=${()=>setCollapsed(c=>!c)}
+              aria-expanded=${!collapsed} aria-label=${collapsed?"Expand":"Collapse"} title=${collapsed?"Expand":"Collapse"}>
+              ${collapsed ? "▸" : "▾"}
+            </button>`}
+      </div>
     </div>
-    ${!collapsed && html`<div class="sc-box-body">
+    ${(!collapsed || expanded) && html`<div class="sc-box-body">
       <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius, country); }}>
         <select class="sc-country-select" value=${country} aria-label="Country"
           onChange=${e=>{ setCountry(e.target.value); setZip(""); setOrigin(null); setResults(null); setErr(null); }}>
@@ -19585,7 +19663,7 @@ const UpcomingSCsBox = () => {
           onClick=${()=>setCustomOpen(o=>!o)}>Custom</button>
         ${customOpen && html`<span class="sc-custom-wrap">
           <input class="sc-custom-input" type="text" inputmode="numeric" maxLength=${3}
-            placeholder="mi" value=${SC_RADII.includes(radius)?"":String(radius)}
+            placeholder="mi" value=${(Number.isFinite(radius) && !SC_RADII.includes(radius)) ? String(radius) : ""}
             aria-label="Custom radius in miles"
             onInput=${e=>setRadius(parseInt(e.target.value.replace(/[^0-9]/g,"").slice(0,3),10)||0)}
             onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(scZipReady(zip, country)) runSearch(zip, radius, country); } }}/>
@@ -19610,17 +19688,26 @@ const UpcomingSCsBox = () => {
         No Set Championships within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
       ${!loading && results && results.length > 0 && visible.length === 0 && html`<div class="sc-msg muted">
         No events on that date. Pick another day or turn the filter off.</div>`}
-      ${!loading && visible && visible.length > 0 && html`<div class="sc-results">
-        ${origin && html`<div class="sc-results-head">${visible.length}${dateActive?" on "+dateFrom:""} near ${origin.city}, ${origin.state}</div>`}
+      ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class="sc-results">
+        ${origin && html`<div class="sc-results-head">${visibleSorted.length}${dateActive?" on "+dateFrom:""} near ${origin.city}, ${origin.state}</div>`}
         <div class="sc-list">
-          ${visible.map(e => html`<button key=${e.event_id} class="sc-tile" onClick=${()=>setSel(e)}>
-            <span class="sc-tile-date">${fmtSCDate(e.start_datetime, e.timezone)}</span>
-            <span class="sc-tile-main">
-              <span class="sc-tile-store">${e.store_name}</span>
-              <span class="sc-tile-loc">${e.city}, ${e.state}</span>
-            </span>
-            <span class="sc-tile-mi">${fmtSCMiles(e._mi)}</span>
-          </button>`)}
+          ${visibleSorted.map(e => html`<div key=${e.event_id} class=${"sc-tile"+(isPinned(e.event_id)?" sc-tile-pinned":"")}>
+            <button class="sc-tile-main-btn" type="button" onClick=${()=>setSel(e)}>
+              <span class="sc-tile-date">
+                ${fmtSCDate(e.start_datetime, e.timezone)}
+                <span class="sc-tile-time">${fmtSCTime(e.start_datetime, e.timezone)}</span>
+              </span>
+              <span class="sc-tile-main">
+                <span class="sc-tile-store">${e.store_name}</span>
+                <span class="sc-tile-loc">${e.city}, ${e.state}</span>
+              </span>
+              <span class="sc-tile-mi">${fmtSCMiles(e._mi)}</span>
+            </button>
+            <button class=${"sc-tile-pin"+(isPinned(e.event_id)?" pinned":"")} type="button"
+              onClick=${()=>togglePin(e.event_id)}
+              aria-label=${isPinned(e.event_id)?"Unpin event":"Pin event to top"}
+              title=${isPinned(e.event_id)?"Unpin":"Pin to top"}>📌</button>
+          </div>`)}
         </div>
       </div>`}
       ${!loading && !results && !err && html`<div class="sc-msg muted">
