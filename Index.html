@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=176">
+<link rel="stylesheet" href="styles.css?v=177">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=176"></script>
+<script src="logo.js?v=177"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -3361,6 +3361,30 @@ const EnlargedCardOverlay = () => {
   </div>`;
 };
 
+// Bulletproof image-export fallback (mostly for mobile, where clipboard/share
+// can fail): shows the captured PNG full-screen so the user can long-press →
+// Save/Copy. Fed by the packsink:show-image-saver event (see deliverImage).
+const ImageSaverOverlay = () => {
+  const [data, setData] = useState(null);
+  const close = () => setData(d => { if(d && d.url){ try { URL.revokeObjectURL(d.url); } catch {} } return null; });
+  useEffect(() => {
+    const onShow = (e) => setData(e.detail || null);
+    const onKey = (e) => { if(e.key === "Escape") close(); };
+    window.addEventListener("packsink:show-image-saver", onShow);
+    window.addEventListener("keydown", onKey);
+    return () => { window.removeEventListener("packsink:show-image-saver", onShow); window.removeEventListener("keydown", onKey); };
+  }, []);
+  if(!data) return null;
+  return html`<div class="image-saver-overlay" onClick=${close}>
+    <div class="image-saver-box" onClick=${e=>e.stopPropagation()}>
+      <button class="image-saver-close" onClick=${close} aria-label="Close">×</button>
+      <div class="image-saver-hint">Press and hold the image to save or copy it</div>
+      <img class="image-saver-img" src=${data.url} alt="Card image to save"/>
+      <a class="image-saver-dl" href=${data.url} download=${data.name}>⬇ Download</a>
+    </div>
+  </div>`;
+};
+
 const PriceBadge = ({row, label, klass}) => {
   if(!row) return null;
   const low = row["Low Price"];
@@ -4047,23 +4071,36 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing})
 // camera-copy image are the EXACT same pixels (no html2canvas, no CSS dependency
 // → can't be broken by a stale cached stylesheet). drawCardTileCanvas is defined
 // alongside the poster engine further down (resolved at render time).
-const CardTilePreview = ({artSrc, name, meta, low, market}) => {
+const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market}) => {
   const canvasRef = useRef(null);
+  // Show a plain <img> until the canvas has painted with REAL art. If the
+  // canvas art load fails (e.g. a CORS / proxy hiccup on the crossOrigin
+  // fetch the canvas requires), we keep that plain <img> visible — a plain
+  // image tag needs no CORS to DISPLAY, so the card art never just vanishes.
+  // Previously a failed art load left drawCardTileCanvas painting a grey
+  // name-only placeholder, which read as "the image disappeared".
+  const [drawn, setDrawn] = useState(false);
   const dateStr = useMemo(() => new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"}), []);
   useEffect(() => {
     let cancelled = false;
-    const draw = (artImg, logoImg) => { if(!cancelled && canvasRef.current) drawCardTileCanvas(canvasRef.current, {artImg, logoImg, name, meta, low, market, dateStr}); };
+    setDrawn(false);
+    const draw = (artImg, logoImg) => {
+      if(cancelled || !canvasRef.current) return;
+      drawCardTileCanvas(canvasRef.current, {artImg, logoImg, name, meta, low, market, dateStr});
+      setDrawn(true);
+    };
     Promise.all([loadPosterImage(artSrc), loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png?v=5")])
       .then(([artImg, logoImg]) => {
-        if(cancelled) return;
+        if(cancelled || !artImg) return;  // no art → leave the plain <img> showing
         if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => draw(artImg, logoImg)); else draw(artImg, logoImg);
-      });
+      })
+      .catch(() => {});
     return () => { cancelled = true; };
   }, [artSrc, name, meta, low, market, dateStr]);
   const onCopy = (e) => {
     e.stopPropagation();
     const canvas = canvasRef.current;
-    if(!canvas) return;
+    if(!canvas || !drawn){ flashToast("Image still loading — try again in a moment"); return; }
     flashToast("Copying image…", 4000);
     const blobP = new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
     const download = (blob) => { const u = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = u; a.download = "packsink-card.png"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(u), 2000); flashToast("Image saved"); };
@@ -4071,12 +4108,14 @@ const CardTilePreview = ({artSrc, name, meta, low, market}) => {
       navigator.clipboard.write([new ClipboardItem({"image/png": blobP})]).then(() => flashToast("Card image copied")).catch(() => blobP.then(download).catch(() => flashToast("Couldn't copy image — try again")));
     } else { blobP.then(download).catch(() => flashToast("Couldn't copy image — try again")); }
   };
+  const fb = fallbackSrc || artSrc;
   return html`<div class="card-tile-preview">
-    <canvas ref=${canvasRef} class="card-tile-canvas"/>
-    <button class="card-tile-cam" onClick=${onCopy} data-h2c-ignore
+    <canvas ref=${canvasRef} class="card-tile-canvas" style=${{display: drawn ? "block" : "none"}}/>
+    ${!drawn && fb && html`<img class="card-tile-canvas" src=${fb} alt=${name||""}/>`}
+    ${drawn && html`<button class="card-tile-cam" onClick=${onCopy} data-h2c-ignore
       title="Copy this card as an image" aria-label="Copy this card as an image">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-    </button>
+    </button>`}
   </div>`;
 };
 
@@ -4330,7 +4369,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           title="Click for enlarged view"
           style=${{cursor:"zoom-in"}}>
           ${tileRow
-            ? html`<${CardTilePreview} artSrc=${posterArt} name=${group["Product Name"]}
+            ? html`<${CardTilePreview} artSrc=${posterArt} fallbackSrc=${img || posterArt} name=${group["Product Name"]}
                 meta=${tileMeta} low=${tileRow.low} market=${tileRow.market}/>`
             : img
               ? html`<img src=${img} alt=${group["Product Name"]}/>`
@@ -5401,6 +5440,12 @@ const fisherYates = (arr) => {
   return a;
 };
 // First-run guided tour — a short click-through carousel for new visitors.
+// Master switch for the onboarding tours (welcome + per-section). HELD OFF for
+// production while the per-section tours are being reworked into interactive
+// coachmarks — they ship dormant (code present, nothing auto-fires, no buttons
+// shown). Preview the work-in-progress on localhost with:
+//   localStorage.setItem("packsink:toursPreview","1")  (then reload)
+const TOURS_ENABLED = (() => { try { return localStorage.getItem("packsink:toursPreview") === "1"; } catch { return false; } })();
 // Auto-opens once on the first visit (gated by packsink:tourSeen) and is
 // re-openable from the Help page. Steps are plain content, not element-
 // anchored coachmarks, so they survive any layout/responsive change.
@@ -17272,36 +17317,63 @@ const captureMoverTileBlob = async (tileEl) => {
 // Must run synchronously up to the clipboard.write call to stay inside the
 // user-activation window (see captureMoverTileBlob). Falls back to a download
 // only when image-clipboard is genuinely unsupported by the browser.
-const copyMoverTileImage = (tileEl) => {
-  flashToast("Copying image…", 8000);
-  const blobPromise = captureMoverTileBlob(tileEl);
-  blobPromise.catch((err) => { console.error("[mover-copy] capture failed:", err); });
-  const downloadBlob = (blob) => {
-    const u = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = u; a.download = "packsink-card.png";
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(u), 2000);
-  };
+// Touch devices = no hover. Used to pick the mobile share path over the
+// desktop deferred-clipboard pattern (which iOS Safari rejects when the blob
+// resolves seconds after the tap — html2canvas is slow — consuming the gesture).
+const isTouchDevice = () => { try { return window.matchMedia("(hover: none)").matches; } catch { return false; } };
+const downloadImageBlob = (blob, name) => {
+  const u = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = u; a.download = name || "packsink-card.png";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(u), 2000);
+};
+// Bulletproof last resort that needs NO clipboard/share permission: pop an
+// in-app overlay showing the PNG so the user can long-press → Save/Copy.
+const showImageSaver = (blob, name) => {
+  const url = URL.createObjectURL(blob);
+  window.dispatchEvent(new CustomEvent("packsink:show-image-saver", {detail:{url, name: name || "packsink-card.png"}}));
+};
+// Shared image-export delivery. Desktop: synchronous deferred-promise clipboard
+// write (fast + reliable). Touch: await the blob then offer the native Share
+// sheet (Copy Photo / Save Image / send), with the long-press overlay as the
+// guaranteed fallback so mobile users ALWAYS get the image.
+const deliverImage = (blobPromise, {name, copiedMsg} = {}) => {
+  const fname = name || "packsink-card.png";
+  if(isTouchDevice()){
+    blobPromise.then(async (blob) => {
+      try {
+        const file = new File([blob], fname, {type:"image/png"});
+        if(navigator.canShare && navigator.canShare({files:[file]}) && navigator.share){
+          await navigator.share({files:[file]});
+          return;  // shared (or the sheet handled copy/save)
+        }
+      } catch(err){
+        if(err && err.name === "AbortError") return;  // user dismissed the sheet
+        console.error("[img-export] share failed:", err);
+      }
+      showImageSaver(blob, fname);  // long-press to save/copy
+    }).catch((err) => { console.error("[img-export] capture failed:", err); flashToast("Couldn't prepare the image — try again"); });
+    return;
+  }
   if(navigator.clipboard && window.ClipboardItem){
     navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
-      .then(() => flashToast("Tile image copied to clipboard"))
+      .then(() => flashToast(copiedMsg || "Image copied to clipboard"))
       .catch((err) => {
-        console.error("[mover-copy] clipboard.write failed:", err);
-        blobPromise.then((blob) => {
-          downloadBlob(blob);
-          flashToast("Couldn't reach clipboard — downloaded instead");
-        }).catch(() => flashToast("Couldn't copy image — try again"));
+        console.error("[img-export] clipboard.write failed:", err);
+        blobPromise.then((blob) => { downloadImageBlob(blob, fname); flashToast("Couldn't reach clipboard — downloaded instead"); })
+          .catch(() => flashToast("Couldn't copy image — try again"));
       });
   } else {
-    blobPromise.then((blob) => {
-      downloadBlob(blob);
-      flashToast("Image saved");
-    }).catch((err) => {
-      console.error("[mover-copy] save failed:", err);
-      flashToast("Couldn't copy image — try again");
-    });
+    blobPromise.then((blob) => { downloadImageBlob(blob, fname); flashToast("Image saved"); })
+      .catch((err) => { console.error("[img-export] save failed:", err); flashToast("Couldn't copy image — try again"); });
   }
+};
+const copyMoverTileImage = (tileEl) => {
+  flashToast(isTouchDevice() ? "Preparing image…" : "Copying image…", 8000);
+  const blobPromise = captureMoverTileBlob(tileEl);
+  blobPromise.catch((err) => { console.error("[mover-copy] capture failed:", err); });
+  deliverImage(blobPromise, {name:"packsink-card.png", copiedMsg:"Tile image copied to clipboard"});
 };
 
 // ── Card price poster (copy-image) — drawn directly onto a <canvas> ─────────
@@ -25437,7 +25509,7 @@ function App(){
   useEffect(() => {
     let seen = true;
     try { seen = localStorage.getItem("packsink:tourSeen") === "1"; } catch {}
-    if(seen || autoInstallVisits !== 1) return;
+    if(!TOURS_ENABLED || seen || autoInstallVisits !== 1) return;
     const t = setTimeout(() => setTourOpen(true), 700);
     return () => clearTimeout(t);
   }, [autoInstallVisits]);
@@ -25447,7 +25519,7 @@ function App(){
   // the welcome auto-open) aren't ambushed — they discover section tours via
   // the button instead.
   useEffect(() => {
-    if(!SECTION_TOURS[view]) return;
+    if(!TOURS_ENABLED || !SECTION_TOURS[view]) return;
     let welcomeSeen = false, secSeen = true;
     try {
       welcomeSeen = localStorage.getItem("packsink:tourSeen") === "1";
@@ -26411,6 +26483,7 @@ function App(){
 
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><div>
     <${EnlargedCardOverlay}/>
+    <${ImageSaverOverlay}/>
     <div class="top-nav">
       <a class="tabs-logo-btn" href="/"
         onClick=${navHandler(()=>onTabClick("home"))}
@@ -26563,7 +26636,7 @@ function App(){
     ${activeTour && SECTION_TOURS[activeTour] && html`<${GuidedTour}
       title=${SECTION_TOURS[activeTour].title} steps=${SECTION_TOURS[activeTour].steps}
       onClose=${closeSectionTour}/>`}
-    ${SECTION_TOURS[view] && !activeTour && !tourOpen && html`<button class="section-tour-btn"
+    ${TOURS_ENABLED && SECTION_TOURS[view] && !activeTour && !tourOpen && html`<button class="section-tour-btn"
       onClick=${()=>setActiveTour(view)}
       title=${"Take a guided tour of the "+SECTION_TOURS[view].title+" page"}>🧭 Tour</button>`}
     ${indyArtistPick && html`<${ArtistAlleyModal}
@@ -26655,7 +26728,7 @@ function App(){
       sealedMeta=${sealedMeta} updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
       incomingScreenerView=${incomingScreenerView}
       onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
-    ${view==="faq"&&html`<${FAQView} onStartTour=${()=>setTourOpen(true)}/>`}
+    ${view==="faq"&&html`<${FAQView} onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}/>`}
     ${view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
   </div><//><//>`;
