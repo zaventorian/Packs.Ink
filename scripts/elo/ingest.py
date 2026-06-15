@@ -7,7 +7,7 @@ Usage:
 
 Idempotent: re-running skips events that already have matches recorded.
 """
-import argparse, json, re, sqlite3, sys, time, urllib.request
+import argparse, json, re, sqlite3, sys, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -15,6 +15,7 @@ HERE = Path(__file__).parent
 DB_PATH = HERE / "lorcana_elo.db"
 SCHEMA = HERE / "schema.sql"
 API = "https://api.cloudflare.ravensburgerplay.com/hydraproxy/api/v2/player/events/{eid}"
+API_META = "https://api.ravensburgerplay.com/api/v2/events/{eid}/"
 HEADERS = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 
 
@@ -88,6 +89,16 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
         num_players = tv.get("starting_player_count")
         phases = tv.get("tournament_phases", [])
 
+        # When date wasn't provided (--ids mode), fetch it from the main events API.
+        if event_date is None:
+            try:
+                meta = http_get(API_META.format(eid=event_id))
+                raw_dt = meta.get("start_datetime") or ""
+                if raw_dt:
+                    event_date = raw_dt[:10]  # "2026-06-13T15:00:00+00:00" → "2026-06-13"
+            except Exception:
+                pass
+
         # collect all rounds with their type label + parent phase type (SWISS vs RANKED_SINGLE_ELIMINATION)
         all_rounds = []  # (round_id, round_number, round_type, phase_type, round_status)
         for ph in phases:
@@ -108,12 +119,21 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
                 )
             return event_id, "queue", f"{name} (no rounds yet — queued for refresh)"
 
-        # pull all rounds
+        # pull all rounds. An UPCOMING round that hasn't started yet (e.g. the
+        # finals of a top cut while the semis are still running) has no matches
+        # endpoint — RPH 404s it. Skip that one round instead of letting it abort
+        # the whole event; it fills in on a later refresh once the round starts.
+        # (Without this, any event mid-top-cut fails to ingest entirely.)
         round_payloads = {}
         for rid, _, _, _, _ in all_rounds:
-            round_payloads[rid] = http_get(
-                API.format(eid=event_id) + f"/tv/matches/?round_id={rid}"
-            )
+            url = API.format(eid=event_id) + f"/tv/matches/?round_id={rid}"
+            try:
+                round_payloads[rid] = http_get(url)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    round_payloads[rid] = {"results": []}
+                else:
+                    raise
 
         # write everything in one transaction
         with conn:
