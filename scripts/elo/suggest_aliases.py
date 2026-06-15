@@ -1,9 +1,16 @@
 """Suggest melee → RPH aliases by name similarity.
 
 Outputs two CSVs:
-  - aliases_auto.csv       : exact + normalized matches (very high confidence;
-                             review then apply directly)
-  - alias_suggestions.csv  : fuzzy matches (review, copy good ones into aliases.csv)
+  - aliases_auto.csv       : exact + normalized melee→rph matches (very high
+                             confidence; review then apply directly)
+  - alias_suggestions.csv  : fuzzy melee→rph matches AND same-platform (rph↔rph /
+                             melee↔melee) name collisions — all REVIEW-ONLY. Same-
+                             platform collisions are never auto-applied because a
+                             shared normalized name is as often two different
+                             people (two "Alex") as one person with two handles
+                             (METALLICFLARE). Each is annotated with shared-store /
+                             shared-opponent evidence; pairs that played each other
+                             are dropped (provably different people).
 
 Tiers:
   exact      melee Username == RPH display_name (confidence 1.00)
@@ -125,6 +132,61 @@ def main():
                 "approve": "",  # blank — user fills 'y' to confirm
             })
 
+    # ---- Same-platform duplicate handles (rph↔rph, melee↔melee) ----
+    # The melee→rph pass never dedupes two accounts on the SAME platform. Two
+    # handles that normalize identically are sometimes one person who re-typed
+    # their name (METALLICFLARE: "LoL_METALLICFLARE" vs "LoL METALLICFLARE") and
+    # just as often DIFFERENT people sharing a common name (two "Alex", two
+    # "John M"). So we SURFACE these for review — NEVER auto-apply — annotated
+    # with evidence (shared stores / shared opponents). A pair that ever played
+    # each other is provably two people and is skipped.
+    canon = conn.execute(
+        "SELECT player_id, display_name, platform FROM players WHERE merged_into_id IS NULL"
+    ).fetchall()
+    by_platform_norm: dict[tuple, list] = {}
+    for r in canon:
+        if norm(r["display_name"]):
+            by_platform_norm.setdefault((r["platform"], norm(r["display_name"])), []).append(r)
+
+    def _mc(pid):
+        return conn.execute("SELECT COUNT(*) FROM matches WHERE player1_id=? OR player2_id=?", (pid, pid)).fetchone()[0]
+    def _stores(pid):
+        return {x[0] for x in conn.execute(
+            "SELECT DISTINCT e.store FROM matches m JOIN events e ON e.event_id=m.event_id "
+            "WHERE (m.player1_id=? OR m.player2_id=?) AND e.store IS NOT NULL", (pid, pid))}
+    def _opps(pid):
+        o = set()
+        for a, b in conn.execute("SELECT player1_id, player2_id FROM matches WHERE player1_id=? OR player2_id=?", (pid, pid)):
+            o.add(b if a == pid else a)
+        o.discard(None); return o
+    def _h2h(a, b):
+        return conn.execute("SELECT COUNT(*) FROM matches WHERE (player1_id=? AND player2_id=?) "
+                            "OR (player1_id=? AND player2_id=?)", (a, b, b, a)).fetchone()[0]
+
+    same_platform = 0
+    for (plat, _n), members in by_platform_norm.items():
+        if len(members) < 2:
+            continue
+        members = sorted(members, key=lambda r: -_mc(r["player_id"]))  # primary = most matches
+        tgt = members[0]
+        for src in members[1:]:
+            if _h2h(src["player_id"], tgt["player_id"]) > 0:
+                continue  # they played each other -> definitely two different people
+            shared_opp = _opps(src["player_id"]) & _opps(tgt["player_id"])
+            shared_store = _stores(src["player_id"]) & _stores(tgt["player_id"])
+            # shared store or >=2 shared opponents = strong same-person signal;
+            # fully disjoint circuits usually mean two different people (low conf).
+            conf = 0.90 if (shared_store or len(shared_opp) >= 2) else 0.50
+            suggest_rows.append({
+                "melee_player_id": src["player_id"], "melee_name": src["display_name"],
+                "rph_player_id": tgt["player_id"], "rph_name": tgt["display_name"],
+                "confidence": conf,
+                "evidence": f"{plat}-collision shared_stores={len(shared_store)} shared_opps={len(shared_opp)}",
+                "melee_matches_played": _mc(src["player_id"]),
+                "approve": "",
+            })
+            same_platform += 1
+
     auto_path = Path(__file__).parent / "aliases_auto.csv"
     sug_path  = Path(__file__).parent / "alias_suggestions.csv"
     cols = ["melee_player_id","melee_name","rph_player_id","rph_name",
@@ -139,6 +201,7 @@ def main():
     print(f"melee players unmerged: {len(melee)}")
     print(f"  exact + normalized matches: {len(auto_rows)} -> {auto_path.name}")
     print(f"  fuzzy candidates (ratio >= {args.min_ratio}): {len(suggest_rows)} -> {sug_path.name}")
+    print(f"  same-platform name collisions surfaced for review (NOT auto-applied): {same_platform}")
     n_with_any = len({r['melee_player_id'] for r in suggest_rows})
     print(f"  unique melee players with at least one fuzzy candidate: {n_with_any}")
     print(f"  melee players with NO candidate at all: {len(melee) - len({r['melee_player_id'] for r in auto_rows} | {r['melee_player_id'] for r in suggest_rows})}")
