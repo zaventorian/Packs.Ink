@@ -54,11 +54,14 @@ import requests
 # ETL cycle of slack before alerting (matches the in-app footer pill's 36h).
 STALE_HOURS = 36
 
-# Minimum plausible row count for the price_movers matview. The live catalog
-# is ~4000+ cards; price_movers carries a row per (card_id, printing) with
-# enough history. A refresh that emptied it, or one that never ran, drops far
-# below this. Anything under this floor is treated as a broken matview.
-MIN_MOVERS_ROWS = 1000
+# Minimum plausible row count for the price_movers matview. price_movers is NOT
+# one-row-per-catalog-card: its WHERE clause keeps only cards with a >= $5 window
+# price (low_prev/7d/30d/90d/180d/365d), i.e. the "movers" worth surfacing. That
+# population is structurally ~450-550 (445 in Dec 2025 → 548 in Jun 2026) and has
+# never approached the catalog size. The floor here only needs to catch a matview
+# that emptied or never refreshed — which crashes to ~0 — so 300 sits well below
+# the real count while still separating healthy (~500+) from broken (~0).
+MIN_MOVERS_ROWS = 300
 
 # Production URL for the deploy-health check.
 SITE_URL = "https://packs.ink/"
