@@ -14,6 +14,14 @@ A store qualifies if ANY of:
      already-ranked players). The geo rule guarantees the core bubble is covered.
   3. CURATED: it's in MANUAL_TRACKED (cross-metro/chain calls the rules can't
      infer, e.g. Game Universe Mequon in the Milwaukee ring).
+  4. HISTORY w/ NO UPCOMING SC: an in-region store we've ingested results for but
+     that has no SC currently in set_championships. Pass 1 only sees stores listed
+     in set_championships (upcoming), so a store whose SCs we added by event_id
+     (the season sheet) but that isn't running one right now stayed untracked —
+     even though it's part of the scene. (The 14 I&L-circuit stores were exactly
+     this: all IL/IN, 1-72 mi out, fully counted in ELO, just off the tab.) We
+     resolve those stores' store_id from a sample event and track the in-region
+     ones. Skipped-by-name once tracked, so it stays cheap after the first run.
 
 The allowlist of "stores we track" is read from Supabase `public.elo_events`
 (the cloud mirror of lorcana_elo.db, kept current by the weekly ELO refresh) —
@@ -47,6 +55,7 @@ except Exception:
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 REGION = {"IL", "IN", "WI", "MI"}  # broad state gate (paired with history match)
+RPH_HDR = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
 norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
 # Geographic auto-track: any US store with an upcoming SC inside this radius of
@@ -106,6 +115,39 @@ def fetch_tracked_store_names() -> set[str]:
     return {norm(r.get("store")) for r in _page("elo_events", "store") if r.get("store")}
 
 
+def history_store_samples() -> dict[str, int]:
+    """{normalized store name -> one sample RPH event_id} over our ELO history,
+    so a store with no upcoming SC can still be resolved to its store_id."""
+    out: dict[str, int] = {}
+    for r in _page("elo_events", "event_id,store"):
+        nm = norm(r.get("store"))
+        if nm and nm not in out and r.get("event_id"):
+            out[nm] = r["event_id"]
+    return out
+
+
+def rph_store_of(event_id: int) -> dict | None:
+    """Resolve {id, name, state} of the store that ran an RPH event. The event
+    detail endpoint exposes the state as `administrative_area_level_1_short`
+    (NOT `state`, which only the list endpoint returns); fall back to parsing it
+    out of full_address ("…, City, ST, ZIP, US")."""
+    url = f"https://api.ravensburgerplay.com/api/v2/events/{event_id}/"
+    try:
+        d = json.loads(urllib.request.urlopen(
+            urllib.request.Request(url, headers=RPH_HDR), timeout=30).read())
+    except Exception:
+        return None
+    st = d.get("store") or {}
+    if not st:
+        return None
+    state = st.get("administrative_area_level_1_short") or st.get("state")
+    if not state:
+        parts = [p.strip() for p in (st.get("full_address") or "").split(",")]
+        if len(parts) >= 3:
+            state = parts[-3]  # …, City, ST, ZIP, Country
+    return {"id": st.get("id"), "name": st.get("name"), "state": state}
+
+
 def upsert(rows: list[dict]) -> None:
     endpoint = f"{SUPABASE_URL}/rest/v1/elo_tracked_stores"
     headers = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
@@ -121,6 +163,8 @@ def upsert(rows: list[dict]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--no-history", action="store_true",
+                    help="skip pass 2 (in-region history stores with no upcoming SC)")
     args = ap.parse_args()
 
     elo_names = fetch_tracked_store_names()
@@ -142,15 +186,39 @@ def main() -> None:
             reason[sid] = "+".join(t for t, on in
                                    (("history", hist), ("geo", near), ("manual", man)) if on)
 
+    # Pass 2 — in-region stores from ELO history that have NO upcoming SC (so pass
+    # 1, which only walks set_championships, never sees them). Resolve store_id
+    # from a sample event; track the IL/IN/WI/MI ones. Already-tracked names are
+    # skipped (no RPH call) so this stays cheap after the first run.
+    if not args.no_history:
+        tracked_norm = {norm(n) for n in matched.values()}
+        n_pass2 = 0
+        for nname, eid in history_store_samples().items():
+            if nname in tracked_norm:
+                continue
+            st = rph_store_of(eid)
+            if not st:
+                continue
+            sid = st.get("id")
+            if sid and sid not in matched and st.get("state") in REGION:
+                matched[sid] = st.get("name") or "?"
+                reason[sid] = "history-no-upcoming"
+                n_pass2 += 1
+        print(f"pass 2: +{n_pass2} in-region history stores with no upcoming SC")
+
     geo_only = [s for s, rs in reason.items() if "geo" in rs and "history" not in rs]
     man_only = [s for s, rs in reason.items() if rs == "manual"]
+    hist_noup = [s for s, rs in reason.items() if rs == "history-no-upcoming"]
     print(f"{len(scs)} set_championships rows scanned → {len(matched)} tracked stores "
-          f"({len(geo_only)} via ≤{RADIUS_MI:.0f}mi geo-rule w/o history, {len(man_only)} curated)")
+          f"({len(geo_only)} via ≤{RADIUS_MI:.0f}mi geo-rule w/o history, "
+          f"{len(hist_noup)} in-region history w/o upcoming SC, {len(man_only)} curated)")
     rows = [{"store_id": sid, "store_name": nm} for sid, nm in sorted(matched.items(), key=lambda kv: kv[1])]
     for r in rows:
-        tag = reason.get(r["store_id"], "")
-        flag = "  ← geo/curated" if r["store_id"] in geo_only or r["store_id"] in man_only else ""
-        print(f"  {r['store_id']:>6}  {r['store_name']}{flag}")
+        sid = r["store_id"]
+        flag = {"history-no-upcoming": "  ← history (no upcoming)"}.get(reason.get(sid, ""), "")
+        if not flag and (sid in geo_only or sid in man_only):
+            flag = "  ← geo/curated"
+        print(f"  {sid:>6}  {r['store_name']}{flag}")
     if args.dry_run:
         print("  (dry run — not writing)")
         return
