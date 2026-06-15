@@ -115,14 +115,21 @@ def fetch_tracked_store_names() -> set[str]:
     return {norm(r.get("store")) for r in _page("elo_events", "store") if r.get("store")}
 
 
-def history_store_samples() -> dict[str, int]:
-    """{normalized store name -> one sample RPH event_id} over our ELO history,
-    so a store with no upcoming SC can still be resolved to its store_id."""
-    out: dict[str, int] = {}
+MELEE_OFFSET = 100_000_000  # melee event_ids are stored +100M; only RPH ids resolve via the RPH API
+
+def history_store_samples(per: int = 3) -> dict[str, list[int]]:
+    """{normalized store name -> up to `per` sample *RPH* event_ids} over our ELO
+    history, so a store with no upcoming SC can still be resolved to its store_id.
+    Keeps several events per store so one deleted/404 event doesn't skip it, and
+    skips melee event_ids (≥100M) which can't be resolved via the RPH events API."""
+    out: dict[str, list[int]] = {}
     for r in _page("elo_events", "event_id,store"):
         nm = norm(r.get("store"))
-        if nm and nm not in out and r.get("event_id"):
-            out[nm] = r["event_id"]
+        eid = r.get("event_id")
+        if nm and eid and eid < MELEE_OFFSET:
+            lst = out.setdefault(nm, [])
+            if len(lst) < per:
+                lst.append(eid)
     return out
 
 
@@ -193,10 +200,11 @@ def main() -> None:
     if not args.no_history:
         tracked_norm = {norm(n) for n in matched.values()}
         n_pass2 = 0
-        for nname, eid in history_store_samples().items():
+        for nname, eids in history_store_samples().items():
             if nname in tracked_norm:
                 continue
-            st = rph_store_of(eid)
+            # try several of the store's events; some may be deleted (404)
+            st = next((s for s in (rph_store_of(e) for e in eids) if s and s.get("id")), None)
             if not st:
                 continue
             sid = st.get("id")
