@@ -144,6 +144,17 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
                 (event_id, name, store, location, event_date, season, num_players, status),
             )
 
+            # Dedup guard against a player's display-name spelling changing between
+            # re-ingests of a not-yet-finished event. A changed name -> new
+            # player_id, so the UNIQUE(...,player1_id) key no longer collides and
+            # INSERT OR IGNORE would add a SECOND row for the same physical match
+            # (there is exactly one table per round). Skip any (round, table) we
+            # already have. Bit "LoL_METALLICFLARE" vs "LoL METALLICFLARE" once —
+            # double-counted whole rounds across two pulls.
+            existing_rt = {(r["round_id"], r["table_number"]) for r in conn.execute(
+                "SELECT round_id, table_number FROM matches "
+                "WHERE event_id=? AND is_bye=0 AND table_number IS NOT NULL", (event_id,))}
+
             for rid, rnum, rtype, phase_type, rstatus in all_rounds:
                 d = round_payloads[rid]
                 for m in d.get("results", []):
@@ -167,6 +178,9 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
 
                     if len(players) < 2:
                         continue
+                    tnum = m.get("table_number")
+                    if tnum is not None and (rid, tnum) in existing_rt:
+                        continue  # same physical match already recorded (see guard above)
                     p1, p2 = sorted(players, key=lambda p: p.get("player_order") or 0)
                     p1_id = get_or_create_player(conn, p1["tv_display_name"], event_id)
                     p2_id = get_or_create_player(conn, p2["tv_display_name"], event_id)
@@ -180,7 +194,7 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
                            (event_id, round_id, round_number, round_type, table_number,
                             player1_id, player2_id, winner_id, games_won_p1, games_won_p2, is_bye)
                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)""",
-                        (event_id, rid, rnum, rtype, m.get("table_number"),
+                        (event_id, rid, rnum, rtype, tnum,
                          p1_id, p2_id, winner_id,
                          p1.get("games_won"), p2.get("games_won")),
                     )
