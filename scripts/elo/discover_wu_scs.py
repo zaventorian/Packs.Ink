@@ -53,7 +53,7 @@ Usage:
     python discover_wu_scs.py --all-sets --dry-run --json out.json
 """
 from __future__ import annotations
-import argparse, json, os, re, sys, time, urllib.request, urllib.error
+import argparse, datetime, json, os, re, sys, time, unicodedata, urllib.request, urllib.error
 from pathlib import Path
 from urllib.parse import urlencode
 
@@ -161,6 +161,42 @@ FALLBACK_SETS = (
     "Wilds Unknown", "Attack of the Vines",
 )
 
+# Stores name the set loosely: they truncate ("Unknown"), reorder ("Unknown
+# Wilds"), fat-finger it ("Unkown"/"Uknown"), abbreviate ("W.U."), or write it
+# in their own language. The canonical-name substring match in detect_set() can't
+# see through any of that, so these SCs were silently dropped (measured 2026-06-14:
+# 58 upcoming SCs, incl. Chicagoland event 586841 "...Joliet *Unknown* Set
+# Championship"). SET_ALIASES maps extra spellings -> canonical set; matched
+# word-boundary on an accent-stripped, punctuation-flattened title so e.g.
+# "Contrées Inconnues" and "W.U." resolve. Each alias must be DISTINCTIVE to its
+# set (don't add a token another set could contain). Bare "unknown"/"wilds" are
+# safe today because only Wilds Unknown owns those words; they stay correct after
+# rotation too (a stray "Unknown SC" is genuinely a Wilds Unknown straggler).
+SET_ALIASES = {
+    "Wilds Unknown": [
+        "wilds unknown", "wilds unkown", "wilds uknown", "wild unknown",
+        "wild unkown", "unknown wilds", "unkown wilds",
+        "unknown", "unkown", "uknown", "wilds", "w u", "wu",
+        "lande sconosciute",                        # Italian
+        "unbekannte wildnis",                       # German
+        "contree inconnue", "contrees inconnues",   # French (sing./plur.)
+        "terres sauvages", "tierras salvajes",      # FR/ES (defensive)
+    ],
+    # Older sets, defensive multilingual/misspelling coverage:
+    "Whispers in the Well": ["whisper in the well"],
+    "Reign of Jafar": ["regne de jafar", "regno di jafar", "reinado de jafar"],
+    "Azurite Sea": ["mare di azurite", "mar de azurita", "mer azurite"],
+    "Archazia's Island": ["archazia island", "isola di archazia", "isla de archazia"],
+    "Shimmering Skies": ["cieli scintillanti", "cielos relucientes"],
+}
+
+# An upcoming Lorcana Set Championship is, by definition, for the *current* set.
+# So when a title names no recognizable set at all ("Set Championship",
+# "Lorcana - Set Championship", "...S12 Set Championship"), default it to the
+# current set instead of dropping it. Constant fallback if the `sets` table read
+# fails; the real value is derived live in fetch_current_set().
+CURRENT_SET_FALLBACK = "Wilds Unknown"
+
 
 def is_sc(ev: dict) -> bool:
     """True if this looks like a real Set Championship (any set), not a side event."""
@@ -183,6 +219,37 @@ def _norm(s: str) -> str:
     s = (s or "").lower().replace("’", "'").replace("‘", "'").replace("`", "'")
     s = s.replace("'", "")
     return re.sub(r"\s+", " ", s).strip()
+
+
+def _norm_loose(s: str) -> str:
+    """Aggressive normalize for alias matching: strip accents (é->e), drop ALL
+    punctuation to single spaces. 'Contrées Inconnues' -> 'contrees inconnues',
+    'W.U.' -> 'w u', 'Wild's Unkown' -> 'wilds unkown'. Used with word-boundary
+    matching so short aliases ('unknown', 'wilds') don't match inside longer words."""
+    s = unicodedata.normalize("NFKD", s or "")
+    s = s.encode("ascii", "ignore").decode("ascii").lower()
+    s = re.sub(r"[^a-z0-9]+", " ", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _clean_text(s):
+    """Defang free-text RPH fields before they reach the DB + the site. RPH does
+    NOT sanitize store/event names — at least one live store name carries a literal
+    <script src=...> tag (store_id 1638, seen 2026-06-14). Strip any HTML tags so
+    the stored value is plain text no matter how the frontend renders it."""
+    if not isinstance(s, str):
+        return s
+    cleaned = re.sub(r"<[^>]*>", "", s).strip()
+    return cleaned or None
+
+
+def _clean_url(u):
+    """Only let http(s) links through to the stored website href (block
+    javascript:/data: and other href-injection schemes)."""
+    if not isinstance(u, str):
+        return None
+    u = u.strip()
+    return u if u.lower().startswith(("http://", "https://")) else None
 
 
 def fetch_set_names() -> list[dict]:
@@ -211,13 +278,69 @@ def fetch_set_names() -> list[dict]:
     return out
 
 
-def detect_set(ev_name: str, sets_sorted: list[dict]) -> str | None:
-    """Which canonical set does this SC title name? Longest-normalized match wins."""
+def build_aliases(sets_sorted: list[dict]) -> list[dict]:
+    """Flatten SET_ALIASES (plus every canonical name, loose-normalized) into a
+    word-boundary match list sorted longest-first so multi-word aliases win over
+    their shorter containees. Including canonical names here is a free robustness
+    net: it catches punctuation/accents the strict _norm substring pass misses
+    (e.g. 'Wilds-Unknown', 'Ursula´s Return')."""
+    known = {d["canonical"] for d in sets_sorted}
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    def add(canonical: str, raw: str):
+        a = _norm_loose(raw)
+        if a and (canonical, a) not in seen:
+            seen.add((canonical, a))
+            out.append({"canonical": canonical, "alias": a})
+    for d in sets_sorted:                       # canonical names, loose form
+        add(d["canonical"], d["canonical"])
+    for canonical, aliases in SET_ALIASES.items():
+        if canonical in known:                  # skip aliases for sets we don't know yet
+            for raw in aliases:
+                add(canonical, raw)
+    out.sort(key=lambda d: len(d["alias"]), reverse=True)
+    return out
+
+
+def detect_set(ev_name: str, sets_sorted: list[dict],
+               aliases_sorted: list[dict] | None = None) -> str | None:
+    """Which canonical set does this SC title name? Strict longest canonical match
+    first; then the curated/loose alias pass (word-boundary) for truncations,
+    misspellings, abbreviations and localized names. None if nothing matches."""
     nt = _norm(ev_name)
     for d in sets_sorted:
         if d["norm"] in nt:
             return d["canonical"]
+    if aliases_sorted:
+        loose = f" {_norm_loose(ev_name)} "
+        for a in aliases_sorted:
+            if f" {a['alias']} " in loose:
+                return a["canonical"]
     return None
+
+
+def fetch_current_set() -> str:
+    """The set every current upcoming SC belongs to: newest already-released
+    *numbered* set (promo/challenge sets have non-numeric codes and are skipped).
+    Auto-advances at set rotation once Lorcast adds the new set to `sets`."""
+    if not (SUPABASE_URL and SERVICE_KEY):
+        return CURRENT_SET_FALLBACK
+    try:
+        today = datetime.date.today().isoformat()
+        url = (f"{SUPABASE_URL}/rest/v1/sets?select=name,code,released_at"
+               f"&order=released_at.desc.nullslast")
+        req = urllib.request.Request(url, headers={
+            "apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
+            "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=40) as r:
+            for row in json.loads(r.read().decode("utf-8", "ignore")):
+                code = str(row.get("code") or "")
+                rel = row.get("released_at") or ""
+                if code.isdigit() and row.get("name") and rel and rel <= today:
+                    return row["name"]
+    except Exception as e:
+        print(f"  ! couldn't derive current set ({e}); using {CURRENT_SET_FALLBACK!r}")
+    return CURRENT_SET_FALLBACK
 
 
 def to_row(ev: dict, set_name: str) -> dict:
@@ -228,17 +351,17 @@ def to_row(ev: dict, set_name: str) -> dict:
     gpf_name = gpf.get("name") if isinstance(gpf, dict) else (gpf or None)
     return {
         "event_id": ev["id"],
-        "name": ev.get("name"),
+        "name": _clean_text(ev.get("name")),
         "set_name": set_name,
         "store_id": st.get("id"),
-        "store_name": st.get("name"),
-        "store_website": st.get("website"),
+        "store_name": _clean_text(st.get("name")),
+        "store_website": _clean_url(st.get("website")),
         "start_datetime": ev.get("start_datetime"),
         "end_datetime": ev.get("end_datetime"),
         "timezone": ev.get("timezone"),
-        "full_address": ev.get("full_address") or st.get("full_address"),
-        "city": st.get("city"),
-        "state": st.get("state"),
+        "full_address": _clean_text(ev.get("full_address") or st.get("full_address")),
+        "city": _clean_text(st.get("city")),
+        "state": _clean_text(st.get("state")),
         "country": st.get("country"),
         "latitude": ev.get("latitude") if ev.get("latitude") is not None else st.get("latitude"),
         "longitude": ev.get("longitude") if ev.get("longitude") is not None else st.get("longitude"),
@@ -293,23 +416,42 @@ def main() -> None:
     ap.add_argument("--country", default=None, help="optional client-side ISO country filter, e.g. US")
     ap.add_argument("--json", default=None, help="also dump the rows to this path")
     ap.add_argument("--dry-run", action="store_true", help="don't write to Supabase")
+    ap.add_argument("--no-default-current", action="store_true",
+                    help="don't default title-less SCs to the current set; SKIP+log them instead")
     args = ap.parse_args()
 
     if args.all_sets:
         print("Pulling ALL upcoming Lorcana events from RPH (no name filter), "
               "auto-detecting each Set Championship's set...")
         sets_sorted = fetch_set_names()
+        aliases_sorted = build_aliases(sets_sorted)
+        current_set = None if args.no_default_current else fetch_current_set()
+        if current_set:
+            print(f"  current set (default for title-less SCs): {current_set!r}")
         raw = fetch_all(name_net="Set Championship")
         scs = [ev for ev in raw if is_sc(ev)]
-        rows, unknown = [], []
+        rows, unknown, defaulted = [], [], []
         for ev in scs:
-            s = detect_set(ev.get("name") or "", sets_sorted)
-            (rows.append(to_row(ev, s)) if s else unknown.append(ev))
+            s = detect_set(ev.get("name") or "", sets_sorted, aliases_sorted)
+            if s:
+                rows.append(to_row(ev, s))
+            elif current_set:                       # title names no set -> it's the current one
+                rows.append(to_row(ev, current_set))
+                defaulted.append(ev)
+            else:
+                unknown.append(ev)
         label = "all-sets"
+        if defaulted:
+            print(f"\n  [i] {len(defaulted)} SC(s) named no set in their title -> "
+                  f"defaulted to current set {current_set!r} (use --no-default-current to skip):")
+            for ev in defaulted[:25]:
+                print(f"      [{ev.get('id')}] {(ev.get('name') or '')[:72]}")
+            if len(defaulted) > 25:
+                print(f"      ... and {len(defaulted) - 25} more")
         if unknown:
             print(f"\n  [!] {len(unknown)} SC(s) matched no known set - SKIPPED (add the set "
-                  f"to the `sets` table / FALLBACK_SETS, or wait for the Lorcast refresh, "
-                  f"then re-run):")
+                  f"to the `sets` table / FALLBACK_SETS or an entry to SET_ALIASES, or wait "
+                  f"for the Lorcast refresh, then re-run):")
             for ev in unknown[:25]:
                 print(f"      [{ev.get('id')}] {(ev.get('name') or '')[:72]}")
             if len(unknown) > 25:
@@ -317,8 +459,14 @@ def main() -> None:
     else:
         print(f"Pulling ALL upcoming Lorcana events from RPH (no name filter) "
               f"to find '{args.set}' Set Championships locally...")
+        # alias-aware scoping: an SC whose title resolves (via canonical OR alias
+        # match) to the requested set — so 'Wilds Unknown' also catches 'Unknown',
+        # 'Lande Sconosciute', 'Wilds Unkown', etc.
+        sets_sorted = fetch_set_names()
+        aliases_sorted = build_aliases(sets_sorted)
         raw = fetch_all(name_net=f"{args.set} Set Championship")
-        scs = [ev for ev in raw if is_target_sc(ev, args.set)]
+        scs = [ev for ev in raw if is_sc(ev)
+               and detect_set(ev.get("name") or "", sets_sorted, aliases_sorted) == args.set]
         rows = [to_row(ev, args.set) for ev in scs]
         label = args.set
 

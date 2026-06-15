@@ -59,9 +59,23 @@ jobs:
             python scripts/elo/discover_wu_scs.py --all-sets
           fi
 
+      # Refresh elo_tracked_stores from the freshly-upserted SCs. A Chicagoland
+      # store (incl. a NEW location of a chain we already track, e.g. "Chupacabra
+      # Games Joliet") only reaches the ELO "Upcoming SCs" tab once its store_id
+      # is in elo_tracked_stores — and without this step that only happened on the
+      # weekly refresh, so newly-discovered stores lagged. Reads its allowlist from
+      # Supabase elo_events (no local DB needed), so it runs fine here. Must come
+      # AFTER discover (needs the fresh set_championships) and BEFORE scrape (which
+      # reads elo_upcoming_scs = set_championships ⋈ elo_tracked_stores).
+      - name: Sync ELO tracked stores
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/sync_elo_tracked_stores.py
+
       # Scrape signed-up rosters for the tracked upcoming SCs, right after the SC
-      # list refreshes (rosters read elo_upcoming_scs, so the fresh SC rows must
-      # land first — hence a chained step in the same job, not a parallel one).
+      # list + tracked stores refresh (rosters read elo_upcoming_scs, so the fresh
+      # rows must land first — hence chained steps in the same job, not parallel).
       # Fails soft per-event; idempotent (REPLACE members + upsert header).
       - name: Scrape tracked-SC rosters
         env:

@@ -1,10 +1,18 @@
 """Sync public.elo_tracked_stores — the RPH store_ids whose Set Championships
 should appear on the ELO section's "Upcoming SCs" tab.
 
-A store qualifies if its name matches a store we already track in the local
-lorcana_elo.db (i.e. we've counted its SCs before) AND it sits in the
-Chicagoland region (IL/IN/WI/MI) — the region guard drops same-name collisions
-like the Victoria-BC "Gauntlet Games" vs our Bradley-IL one.
+A store qualifies if its name matches a store we already track (i.e. we've
+counted its SCs before) AND it sits in the Chicagoland region (IL/IN/WI/MI) —
+the region guard drops same-name collisions like the Victoria-BC "Gauntlet
+Games" vs our Bradley-IL one. New LOCATIONS of a chain we track count too: a
+fresh store_id like "Chupacabra Games Joliet" matches because its name is
+already in our event history — that is exactly how event 586841 should have been
+picked up.
+
+The allowlist of "stores we track" is read from Supabase `public.elo_events`
+(the cloud mirror of lorcana_elo.db, kept current by the weekly ELO refresh) —
+NOT the local SQLite file, which is gitignored and absent in CI. That lets this
+script run in the daily discover workflow on its own.
 
 The site reads the view public.elo_upcoming_scs = set_championships ⋈
 elo_tracked_stores, so adding a store_id here makes ALL its future SCs (already
@@ -15,7 +23,7 @@ Run AFTER discover_wu_scs.py refreshes set_championships:
     python sync_elo_tracked_stores.py --dry-run
 """
 from __future__ import annotations
-import argparse, json, os, re, sqlite3, sys, urllib.request, urllib.error
+import argparse, json, os, re, sys, urllib.request, urllib.error
 from pathlib import Path
 
 try:
@@ -24,21 +32,25 @@ try:
 except Exception:
     pass
 
-DB = Path(__file__).parent / "lorcana_elo.db"
+# Windows consoles default to cp1252 and choke on the → / — glyphs below.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 REGION = {"IL", "IN", "WI", "MI"}  # Chicagoland orbit
 norm = lambda s: re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
 
-def fetch_set_championships() -> list[dict]:
-    """Page through every set_championships row (PostgREST caps at 1000)."""
+def _page(table: str, select: str) -> list[dict]:
+    """Page through a PostgREST table (default cap 1000 rows/response)."""
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set (scripts/.env)")
     out, offset, page = [], 0, 1000
     while True:
-        url = (f"{SUPABASE_URL}/rest/v1/set_championships"
-               f"?select=store_id,store_name,state,country&limit={page}&offset={offset}")
+        url = f"{SUPABASE_URL}/rest/v1/{table}?select={select}&limit={page}&offset={offset}"
         req = urllib.request.Request(url, headers={"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"})
         batch = json.loads(urllib.request.urlopen(req, timeout=60).read())
         out.extend(batch)
@@ -46,6 +58,16 @@ def fetch_set_championships() -> list[dict]:
             break
         offset += page
     return out
+
+
+def fetch_set_championships() -> list[dict]:
+    return _page("set_championships", "store_id,store_name,state,country")
+
+
+def fetch_tracked_store_names() -> set[str]:
+    """Normalized names of every store in our ELO history (Supabase mirror of
+    lorcana_elo.db). This is the allowlist that defines "a store we track"."""
+    return {norm(r.get("store")) for r in _page("elo_events", "store") if r.get("store")}
 
 
 def upsert(rows: list[dict]) -> None:
@@ -65,8 +87,7 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
-    c = sqlite3.connect(DB)
-    elo_names = {norm(r[0]) for r in c.execute("select distinct store from events where store is not null")}
+    elo_names = fetch_tracked_store_names()
     scs = fetch_set_championships()
     matched: dict[int, str] = {}
     for r in scs:
