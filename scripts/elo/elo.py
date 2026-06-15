@@ -9,8 +9,16 @@ Usage:
     python elo.py --k 24 --start 1500   # tweak
     python elo.py --top 20              # show top N leaderboard
 """
-import argparse, sqlite3
+import argparse, sqlite3, sys
 from pathlib import Path
+
+# Windows consoles default to cp1252 and crash printing player names with glyphs
+# like ⟡ / emoji. A non-zero exit here aborts the whole refresh_elo pipeline
+# (after ratings are already computed), so force UTF-8 (no-op on Linux CI).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 DB_PATH = Path(__file__).parent / "lorcana_elo.db"
 
