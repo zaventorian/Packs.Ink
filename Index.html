@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=183">
+<link rel="stylesheet" href="styles.css?v=184">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=183"></script>
+<script src="logo.js?v=184"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -3003,7 +3003,7 @@ const SUGGEST_KIND_LABEL = {
   card_type: "type", keyword: "keyword", cost: "cost",
   inkable: "inkable", legality: "legality", illustrator: "artist", contains: "contains",
 };
-const buildSearchSuggestions = (input, allIllustrators) => {
+const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   const out = [];
   const raw = (input || "").trim();
   if(!raw) return out;
@@ -3061,6 +3061,28 @@ const buildSearchSuggestions = (input, allIllustrators) => {
   // Inkable shortcuts
   if(prefix("inkable") || prefix("ink"))   pushOnce({kind:"inkable", value:true,  label:"inkable: yes", replace:last});
   if(prefix("uninkable") || prefix("nink")) pushOnce({kind:"inkable", value:false, label:"inkable: no",  replace:last});
+  // Card-name matches. The dropdown previously offered ONLY filter dimensions
+  // + a generic `contains` fallback, so a card whose name merely prefixed a
+  // LOOSE dimension (e.g. "go go" → artists Gomes/Godbey/… via name-token
+  // prefix) buried the actual card ("Go Go Tomago"). Surface real card names
+  // here — ranked ABOVE artists — so type-and-Enter finds the card. Match the
+  // FULL input against the name (diacritic/apostrophe-tolerant via searchNorm);
+  // startsWith beats mid-string, shorter names first. Applies as a contains
+  // filter (see applySuggestion). When chips already exist the input is just
+  // the remaining text, so dim+name queries still build token-by-token.
+  if(cardNames && cardNames.length && raw.length >= 2){
+    const q = searchNorm(raw.toLowerCase());
+    const starts = [], mids = [];
+    for(const nm of cardNames){
+      const idx = searchNorm(nm.toLowerCase()).indexOf(q);
+      if(idx < 0) continue;
+      (idx === 0 ? starts : mids).push(nm);
+      if(starts.length >= 5 && mids.length >= 5) break;
+    }
+    const byLen = (a, b) => a.length - b.length || a.localeCompare(b);
+    starts.sort(byLen); mids.sort(byLen);
+    for(const nm of [...starts, ...mids].slice(0, 5)) pushOnce({kind:"name", value:nm, label:nm, replace:raw});
+  }
   // Artist: match against any token of the artist's name. Try the last 1- or
   // 2-token slice so multi-word names ("Nicholas Kole") are reachable.
   if(allIllustrators && allIllustrators.length && last.length >= 2){
@@ -3080,11 +3102,12 @@ const buildSearchSuggestions = (input, allIllustrators) => {
       }
     }
   }
-  // "contains: <input>" is always offered as a fallback so the user can
-  // commit free text as a name-search chip. Replace the whole input.
-  out.push({kind:"contains", value:raw, label:`contains: ${raw}`, replace:raw, isFallback:true});
-  // Cap to 8 to keep the dropdown short. Non-fallback suggestions first.
-  return out.slice(0, 8);
+  // Cap the dimension/name/artist suggestions, then ALWAYS append the free-text
+  // `contains` fallback so it can't be sliced off the bottom when the list
+  // fills up (it's the universal "just search this text" escape hatch).
+  const capped = out.slice(0, 7);
+  capped.push({kind:"contains", value:raw, label:`contains: ${raw}`, replace:raw, isFallback:true});
+  return capped;
 };
 
 // Build a human-readable summary of what the parser extracted (for the
@@ -6233,7 +6256,21 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // already in the smart-search box).
   useEffect(() => {
     if(pendingSearch == null) return;
-    setFilter(f => ({...f, search: pendingSearch}));
+    const q = (pendingSearch || "").trim();
+    // A handoff WITHOUT explicit "dimension:" syntax (the home "Search every
+    // card" bar passes plain text like "go go") is a NAME search → commit it as
+    // a PHRASE `contains` chip so it matches "Go Go Tomago", not every card
+    // whose text contains the lone token "go" (free-text is token-ANY in
+    // CardsView, which returned 250+ false hits — the "feels bad" report).
+    // Handoffs WITH "x:" syntax (e.g. the Artist Alley "artist: <name>" link)
+    // stay as parsed search text. addSmartChip is referenced in-body only (it's
+    // defined later in the component) so it stays OUT of the deps array.
+    if(q && !q.includes(":")){
+      addSmartChip({kind:"contains", value:q});
+      setFilter(f => ({...f, search: ""}));
+    } else {
+      setFilter(f => ({...f, search: q}));
+    }
     onConsumedPendingSearch && onConsumedPendingSearch();
   }, [pendingSearch, onConsumedPendingSearch]);
   const [drawerOpen,setDrawerOpen] = useState(false);
@@ -6445,11 +6482,19 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // Enter would auto-pick suggestion 0 every time, converting fuzzy queries
   // like "elsa spirit" into a strict 'contains' filter the user didn't ask for.
   const [suggestIdx, setSuggestIdx] = useState(-1);
-  const suggestions = useMemo(()=>buildSearchSuggestions(filter.search||"", allIllustrators), [filter.search, allIllustrators]);
+  // Unique card names fed to the smart-search dropdown so it can suggest actual
+  // cards (e.g. "Go Go Tomago"), ranked above loose artist token matches.
+  const cardNameIndex = useMemo(() => {
+    const seen = new Set();
+    for(const r of (raw||[])){ const n = r["Product Name"]; if(n) seen.add(n); }
+    return Array.from(seen);
+  }, [raw]);
+  const suggestions = useMemo(()=>buildSearchSuggestions(filter.search||"", allIllustrators, cardNameIndex), [filter.search, allIllustrators, cardNameIndex]);
   const applySuggestion = useCallback((sug) => {
     if(!sug) return;
-    if(sug.kind === "contains"){
-      // "contains:" commits the whole input as a name-search chip.
+    if(sug.kind === "contains" || sug.kind === "name"){
+      // "contains:" and a picked card name both commit as a name-search chip
+      // (a card name is just a precise contains phrase). Both clear the input.
       addSmartChip({kind:"contains", value:sug.value});
       setFilter(f=>({...f, search:""}));
     } else {
@@ -6503,14 +6548,20 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
             if(e.key === "ArrowDown"){ e.preventDefault(); setSuggestIdx(i => i < 0 ? 0 : (i+1) % suggestions.length); }
             else if(e.key === "ArrowUp"){ e.preventDefault(); setSuggestIdx(i => i < 0 ? suggestions.length-1 : (i-1+suggestions.length) % suggestions.length); }
             else if(e.key === "Enter"){
-              // Auto-commit the first suggestion if none is explicitly armed.
-              // Suggestions are sorted dimension-aware first (color, rarity,
-              // characteristic, etc.) with `contains: <text>` as the always-
-              // present fallback, so Enter picks the most specific match
-              // available. Pre-fix this no-op'd if the user hadn't arrow-keyed
-              // first, which read as "Enter does nothing".
+              // Enter with nothing arrow-armed = "just search what I typed":
+              //   - if the text is EXACTLY a dimension alias (amber, legendary,
+              //     bodyguard, princess, song…) → apply that filter chip;
+              //   - otherwise → the broad `contains:` search of the typed text,
+              //     so "go go" surfaces every Go Go Tomago instead of committing
+              //     a loose artist token-prefix or one specific printing.
+              // Card-name + artist rows stay in the dropdown for an explicit
+              // click / arrow-then-Enter when the user wants a specific one.
               e.preventDefault();
-              const pick = suggestIdx >= 0 ? suggestions[suggestIdx] : suggestions[0];
+              const rawLow = (filter.search||"").trim().toLowerCase();
+              const DIM_KINDS = new Set(["ink","rarity","set","card_type","classification","keyword","legality"]);
+              const exactDim = suggestions.find(s => DIM_KINDS.has(s.kind) && String(s.value).toLowerCase() === rawLow);
+              const pick = suggestIdx >= 0 ? suggestions[suggestIdx]
+                : (exactDim || suggestions.find(s => s.kind === "contains") || suggestions[0]);
               if(pick) applySuggestion(pick);
               else { setSuggestOpen(false); e.target.blur(); }
             }
@@ -24811,7 +24862,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           title="Fade cards you're missing from your collection so the owned ones stand out">
           <span class="dot"></span>HIGHLIGHT MISSING
         </span>
-        <div ref=${viewDropRef} style=${{position:"relative",marginLeft:"auto"}}>
+        <span class="deck-count-tag" title="Cards in deck — Lorcana decks need 60"
+          style=${{marginLeft:"auto",marginRight:"2px",fontSize:"13px",fontWeight:800,whiteSpace:"nowrap",letterSpacing:"0.2px",
+            color: totalCount>=60 ? "var(--accent)" : "var(--text-muted)"}}>
+          ${totalCount}<span style=${{color:"var(--text-muted)",fontWeight:600}}>/60</span>
+        </span>
+        <div ref=${viewDropRef} style=${{position:"relative"}}>
           <button class="deck-view-trigger" onClick=${()=>setViewDropOpen(o=>!o)}>View ▾</button>
           ${viewDropOpen && html`<div class="deck-view-popover">
             <div>
