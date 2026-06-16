@@ -727,7 +727,7 @@ Admin-gated bulk-upload. N player rows → N public decks linked to tournament. 
 - `decks.user_id` nullable (migration 37). "My decks" / "Following" / creator-profile queries filter on `user_id = X` and naturally exclude tournament decks.
 - Per-row inks computed client-side from `parseDeckText` + catalog meta, sent in row payload.
 - **Deck detail tournament badge**: `DeckEditor` accepts `tournamentContext` + `onOpenTournament`. Builds lookup once via `tournamentByDeckId = useMemo(... )`.
-- **Home Tournament Results banner** below Following. Top 4 decks per tournament, newest first, capped 16 total.
+- **Home Tournament Results banner** below Following. Top 8 decks for each of the 4 most-recent non-empty events, newest first. The panel is a fixed-height scroll box: on mobile (chase-row grid) it's height-locked to the movers column (the `.home-feed` is `position:absolute;inset:0` so it contributes zero intrinsic height to the grid row, then scrolls internally); on desktop `.home-tourney-col--desktop .home-tourney-list` caps at `max-height:560px` with internal scroll. Was top-4/16-cap with a mobile 2-deck CSS cap.
 
 ## Deck view / edit modes
 

@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=182">
+<link rel="stylesheet" href="styles.css?v=183">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=182"></script>
+<script src="logo.js?v=183"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -204,7 +204,7 @@ const CACHE_KEY = "packsink:catalog:v49";  // v49: force cold-fetch for backfill
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-06-13-review-fixes";
+const AUX_CACHE_VERSION = "2026-06-15-poster-tourney-filters";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -3148,14 +3148,26 @@ const groupSetsForFilter = (rawRows) => {
   return {normal, promo};
 };
 const matchesCardFilter = (row, f, parsed) => {
+  // A card's full ink list. Dual-ink cards carry two colors (e.g.
+  // ["Amber","Sapphire"]); mono cards carry one. Fall back to the single
+  // `ink` for sample/legacy rows. Both the typed-ink (parsed) and chip
+  // (f.inks) filters below match against this array so a dual-ink card
+  // matches on EITHER of its colors.
+  const cardInks = (row.inks && row.inks.length) ? row.inks : (row.ink ? [row.ink] : []);
+  // A card's type line split into components. Songs carry the full Lorcast
+  // line "Action - Song" — a Song is a SUB-TYPE of Action, so the line holds
+  // both. Matching against the components means the "Song" filter catches
+  // songs AND the "Action" filter also catches songs (a Song IS an Action).
+  // Plain cards have a single component. Without this the simple-category
+  // chips/aliases ("Song", "Action") exact-matched the raw line, so the Song
+  // filter returned nothing and Action silently dropped every song.
+  const cardTypeParts = (row.card_type || "").split(" - ");
   // Parsed (smart search) filters — applied first, take precedence for single
   // values when both chip-state and parsed produce the same dimension.
   if(parsed){
-    if(parsed.filters.ink && row.ink !== parsed.filters.ink) return false;
+    if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink)) return false;
     if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity) return false;
-    if(parsed.filters.card_type){
-      if((row.card_type||"") !== parsed.filters.card_type) return false;
-    }
+    if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
     if(parsed.filters.set && row.Set !== parsed.filters.set) return false;
     const _cmpStat = (rowVal, want, op) => {
       if(want == null) return true;
@@ -3255,8 +3267,23 @@ const matchesCardFilter = (row, f, parsed) => {
     }
   }
 
-  // Chip-state filters (multi-select OR within each, AND across dimensions)
-  if(f.inks && f.inks.size && !f.inks.has(row.ink)) return false;
+  // Chip-state filters (multi-select OR within each, AND across dimensions).
+  // Ink is special-cased by how many colors are selected:
+  //   1 ink   → ANY-match: every card containing it, including dual-ink cards
+  //             that pair it with another color (Amber → Amber AND Amber/x).
+  //   2 inks  → SUBSET-match: only cards whose colors are entirely within the
+  //             pair — Amber+Emerald shows mono-Amber, mono-Emerald, and
+  //             Amber/Emerald, but NOT Amber/Sapphire (off-combo dual). The
+  //             "building a two-color deck" case.
+  //   3+ inks → ANY-match again: at that breadth the subset rule is too
+  //             restrictive, so just show anything containing a picked color.
+  if(f.inks && f.inks.size){
+    if(!cardInks.length) return false;
+    const inkOk = f.inks.size === 2
+      ? cardInks.every(i => f.inks.has(i))
+      : cardInks.some(i => f.inks.has(i));
+    if(!inkOk) return false;
+  }
   if(f.costs && f.costs.size){
     const cost = row.cost==null ? -1 : (row.cost >= 9 ? 9 : row.cost);
     if(!f.costs.has(cost)) return false;
@@ -3279,7 +3306,7 @@ const matchesCardFilter = (row, f, parsed) => {
     if(!f.lores.has(row.lore)) return false;
   }
   if(f.rarities && f.rarities.size && !f.rarities.has(row.Rarity)) return false;
-  if(f.cardTypes && f.cardTypes.size && !f.cardTypes.has(row.card_type)) return false;
+  if(f.cardTypes && f.cardTypes.size && !cardTypeParts.some(t => f.cardTypes.has(t))) return false;
   if(f.sets && f.sets.size && !f.sets.has(row.Set)) return false;
   if(f.inkable===true && row.inkable!==true) return false;
   if(f.inkable===false && row.inkable!==false) return false;
@@ -4773,9 +4800,19 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       else {
         const meta = (cardById[c.card_id]||[])[0];
         if(!meta) continue;
+        // Export quality: feed html2canvas the largest art. It rasterizes the
+        // <img> at the SOURCE bitmap's resolution, so the ~400w /normal/ asset
+        // (the only size in the slimmed catalog cache) left card art soft and
+        // rules text unreadable — worst when the PNG is zoomed on a phone.
+        // Upgrade the proxied URL's size segment to /large/ (Lorcast 734w);
+        // the proxy/Lorcast serve /large/ at the rewritten URL even on
+        // cache-replay sessions (img_large is stripped from cache), so no DB
+        // fetch is needed. Same transform the Mulligan view uses (~line 5775).
+        const rawImg = meta.img_large || meta.img_normal || meta.img_small;
+        const bigImg = rawImg ? rawImg.replace("/normal/", "/large/").replace("/small/", "/large/") : rawImg;
         seen.set(c.card_id, {
           card_id: c.card_id, quantity: c.quantity, meta,
-          img: meta.img_normal || meta.img_small || meta.img_large,
+          img: bigImg,
         });
       }
     }
@@ -5033,7 +5070,13 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       return await h2c(posterRef.current, {
         useCORS: true,
         backgroundColor: null,
-        scale: 2,                  // 2× for retina-quality output
+        scale: 2,                  // 2× for retina-quality output. Do NOT raise:
+                                   // a 60-card poster at scale 3-4 overflows iOS
+                                   // Safari's ~16.78MP canvas cap → blank export.
+        // /large/ card art is a heavier fetch than the old /normal/; give it
+        // headroom past html2canvas's 15s default so a slow proxy image doesn't
+        // render as a blank card box.
+        imageTimeout: 30000,
         logging: false,
         ignoreElements: (el) => el.hasAttribute && el.hasAttribute("data-h2c-ignore"),
       });
@@ -17353,93 +17396,12 @@ const flashToast = (msg, ms = 2200) => {
   el.__hideTimer = setTimeout(() => el.classList.remove("show"), ms);
 };
 
-// Capture a mover tile to a PNG Blob. The capture hides the interactive chrome
-// (export + TCGPlayer buttons, both tagged data-h2c-ignore) and reveals an
-// export-only brand/date footer row (data-export-footer, display:none in the
-// live DOM) inside the html2canvas clone. The card art is re-pointed at the
-// same-origin /img-proxy/ so the canvas isn't tainted — Lorcast's CDN doesn't
-// send CORS headers (same trick the deck/artist posters use). The footer logo
-// is same-origin so it's canvas-safe; we preload it so it's warm in cache.
-//
-// IMPORTANT: this returns a Promise<Blob>. The click handler passes that
-// promise straight into ClipboardItem and calls navigator.clipboard.write
-// SYNCHRONOUSLY within the user gesture — html2canvas is slow (the visible
-// "freeze"), so awaiting it before writing expires the user-activation window
-// and the write rejects with NotAllowedError. Writing first, resolving later,
-// keeps the copy inside the gesture.
-const captureMoverTileBlob = async (tileEl) => {
-  const h2c = await window.__loadHtml2Canvas();
-  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim() || "#ffffff";
-  await new Promise((resolve) => {
-    const pre = new Image();
-    pre.onload = pre.onerror = () => resolve();
-    pre.src = "Logos/packs-ink-logo.png?v=5";
-    setTimeout(resolve, 3000);
-  });
-  // Swap the live card art to the same-origin /img-proxy/ URL with crossOrigin
-  // BEFORE capturing, and wait for it to load. Swapping src only inside onclone
-  // races the render — html2canvas paints the tile before the new image loads,
-  // producing a black art box. Capturing an image that's already fully loaded
-  // in the live DOM is reliable. We restore the original src in finally{}.
-  const liveImg = tileEl.querySelector(".mt-img-wrap img");
-  let restoreImg = null;
-  if(liveImg && typeof liveImg.src === "string" && liveImg.src.startsWith("https://cards.lorcast.io/")){
-    const origSrc = liveImg.getAttribute("src");
-    const origCO = liveImg.getAttribute("crossorigin");
-    const proxied = "/img-proxy/" + origSrc.slice("https://cards.lorcast.io/".length);
-    liveImg.crossOrigin = "anonymous";
-    await new Promise((resolve) => {
-      liveImg.onload = liveImg.onerror = () => { liveImg.onload = null; liveImg.onerror = null; resolve(); };
-      liveImg.src = proxied;
-      setTimeout(resolve, 6000);
-    });
-    restoreImg = () => {
-      if(origCO == null) liveImg.removeAttribute("crossorigin"); else liveImg.setAttribute("crossorigin", origCO);
-      liveImg.src = origSrc;
-    };
-  }
-  tileEl.setAttribute("data-exporting", "1");
-  let canvas;
-  try {
-    canvas = await h2c(tileEl, {
-      useCORS: true,
-      backgroundColor: bg,
-      scale: 2,
-      logging: false,
-      imageTimeout: 5000,
-      ignoreElements: (el) => {
-        if(el.hasAttribute && el.hasAttribute("data-h2c-ignore")) return true;
-        // Skip every OTHER mover tile. html2canvas clones the whole document;
-        // with all banners rendered that's 100+ Lorcast AVIFs to decode, which
-        // pushed the capture to ~30s on mobile (and blew past the clipboard
-        // promise's tolerance, so the copy silently failed). Skipping the
-        // sibling tiles drops it to ~1s — only the target tile (tagged
-        // data-exporting) is cloned and rendered.
-        if(el.classList && el.classList.contains("mover-tile") && el.getAttribute("data-exporting") !== "1") return true;
-        return false;
-      },
-      onclone: (doc) => {
-        const root = doc.querySelector('[data-exporting="1"]');
-        if(!root) return;
-        const footer = root.querySelector("[data-export-footer]");
-        if(footer) footer.style.display = "flex";
-      },
-    });
-  } finally {
-    tileEl.removeAttribute("data-exporting");
-    if(restoreImg) restoreImg();
-  }
-  return await new Promise((res, rej) =>
-    canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
-};
 
-// Copy a mover tile image to the clipboard. Called from the button's onClick.
-// Must run synchronously up to the clipboard.write call to stay inside the
-// user-activation window (see captureMoverTileBlob). Falls back to a download
-// only when image-clipboard is genuinely unsupported by the browser.
-// Touch devices = no hover. Used to pick the mobile share path over the
-// desktop deferred-clipboard pattern (which iOS Safari rejects when the blob
-// resolves seconds after the tap — html2canvas is slow — consuming the gesture).
+// Shared image-export delivery helpers. Desktop runs synchronously up to the
+// clipboard.write call to stay inside the user-activation window (the blob
+// promise resolves later — that's allowed). Touch devices (no hover) take the
+// mobile share path instead, since iOS Safari rejects a deferred clipboard
+// write when the blob resolves seconds after the tap.
 const isTouchDevice = () => { try { return window.matchMedia("(hover: none)").matches; } catch { return false; } };
 const downloadImageBlob = (blob, name) => {
   const u = URL.createObjectURL(blob);
@@ -17489,9 +17451,9 @@ const deliverImage = (blobPromise, {name, copiedMsg} = {}) => {
       .catch((err) => { console.error("[img-export] save failed:", err); flashToast("Couldn't copy image — try again"); });
   }
 };
-const copyMoverTileImage = (tileEl) => {
+const copyMoverTileImage = (card, wins) => {
   flashToast(isTouchDevice() ? "Preparing image…" : "Copying image…", 8000);
-  const blobPromise = captureMoverTileBlob(tileEl);
+  const blobPromise = buildMoverTileBlob(card, wins);
   blobPromise.catch((err) => { console.error("[mover-copy] capture failed:", err); });
   deliverImage(blobPromise, {name:"packsink-card.png", copiedMsg:"Tile image copied to clipboard"});
 };
@@ -17940,6 +17902,48 @@ async function buildMoverBannerBlob(cards, activeWindow, title, rangeLabel){
   return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
 }
 
+// One mover tile as a standalone image — drawn on a <canvas> via the same
+// paintMoverTile the banner export uses. Replaces the old html2canvas per-tile
+// screenshot (captureMoverTileBlob), which depended on a CDN library, was
+// CORS-sensitive, and failed on mobile ("Couldn't prepare the image — try
+// again"). This path loads no external script, can't taint the canvas (art is
+// fetched through the same-origin proxy crossOrigin-clean), is ~instant, and
+// produces a tile pixel-consistent with the banner export.
+async function buildMoverTileBlob(card, wins){
+  if(!card) throw new Error("no card");
+  const P = posterPalette();
+  const SCALE = 2, PAD = 14, TW = 264;
+  const w3 = (wins && wins.length ? wins : MOVER_WINDOWS).slice(0, 3);
+  const artW = TW - 24, artH = Math.round(artW * 7 / 5);
+  // tileH mirrors paintMoverTile's vertical progression (same formula as
+  // buildMoverBannerBlob): art → name → meta → 2 prices → header + 2 delta rows.
+  const tileH = 12 + artH + 12 + 15 + 15 + 19 + 17 + 16 + 16*2 + 12;
+  const FOOT_H = 34;
+  const W = PAD + TW + PAD, H = PAD + tileH + FOOT_H + PAD;
+  const src = card.image_large || card.image_normal || card.image_small;
+  const [logoImg, artImg] = await Promise.all([
+    loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png?v=5"),
+    src ? loadPosterImage(proxyImg(src)) : Promise.resolve(null),
+  ]);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(W*SCALE); canvas.height = Math.round(H*SCALE);
+  const ctx = canvas.getContext("2d"); ctx.scale(SCALE, SCALE); ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+  paintMoverTile(ctx, PAD, PAD, TW, tileH, card, artImg, w3, P);
+  // brand footer (logo + packs.ink · date), centered under the tile
+  const dateStr = new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
+  const fy = PAD + tileH + 10;
+  ctx.strokeStyle = P.border; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(PAD, fy); ctx.lineTo(W-PAD, fy); ctx.stroke();
+  const footTxt = "packs.ink · " + dateStr;
+  ctx.font = "800 12px 'Nunito Sans', sans-serif";
+  const lH = 18, lW = logoImg ? Math.round(logoImg.naturalWidth * (lH / logoImg.naturalHeight)) : 0;
+  const tW = ctx.measureText(footTxt).width, tot = lW + (lW ? 8 : 0) + tW;
+  let fx = (W - tot)/2; const fb = fy + 22;
+  if(logoImg){ ctx.drawImage(logoImg, fx, fb - lH + 3, lW, lH); fx += lW + 8; }
+  ctx.fillStyle = P.accent; ctx.textAlign = "left"; ctx.fillText(footTxt, fx, fb);
+  return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+}
+
 // Copy a mover-banner page (≤10 cards) as one formatted image. Same
 // synchronous-clipboard pattern as copyMoverTileImage so the write stays
 // inside the user gesture.
@@ -17995,8 +17999,7 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
           title="Copy this tile as an image" aria-label="Copy this tile as an image"
           onClick=${(e) => {
             e.stopPropagation();
-            const tile = e.currentTarget.closest(".mover-tile");
-            if(tile) copyMoverTileImage(tile);
+            copyMoverTileImage(card, wins);
           }}>
         <svg viewBox="0 0 24 24" aria-hidden="true">
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
@@ -19465,15 +19468,16 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
         for(const r of (rs || [])){
           (byTournament[r.tournament_id] = byTournament[r.tournament_id] || []).push(r);
         }
-        let totalSoFar = 0;
+        // Top 8 decks for each of the 4 most-recent NON-EMPTY events (we fetch
+        // 8 tournaments above so a recent empty upload doesn't leave a gap).
+        // The panel is a fixed-height scroll box, so the full ~32 rows scroll
+        // inside it rather than growing the box.
         const out = [];
         for(const t of tournaments){
-          if(totalSoFar >= 16) break;
-          const slice = (byTournament[t.id] || []).slice(0, 4);
+          if(out.length >= 4) break;
+          const slice = (byTournament[t.id] || []).slice(0, 8);
           if(!slice.length) continue;
-          const take = slice.slice(0, Math.max(0, 16 - totalSoFar));
-          out.push({tournament: t, decks: take});
-          totalSoFar += take.length;
+          out.push({tournament: t, decks: slice});
         }
         if(!cancelled){ setGroups(out); writeJsonCache(CACHE_KEY, out); }
       } catch(e) {
@@ -19498,9 +19502,9 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
     <div class="home-feed-empty muted">Loading…</div>
   </aside>`;
   if(groups.length === 0) return null;
-  // On mobile, default to the 4 most recent events × 1st place only. The
-  // "Show top 4" toggle reveals all deck rows. Desktop ignores the toggle
-  // via CSS (.home-tourney-deck--collapsed-only is shown always there).
+  // 4 most-recent events, top 8 decks each. The panel is a fixed-height scroll
+  // box (mobile: locked to the chase-movers banner height; desktop: max-height),
+  // so the rows scroll inside it instead of stretching the box taller.
   const visibleGroups = groups.slice(0, 4);
   return html`<aside class="home-feed">
     ${titleEl}
@@ -19561,7 +19565,10 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
 const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
   const [q, setQ] = useState("");
   const [open, setOpen] = useState(false);
-  const [idx, setIdx] = useState(0);
+  // -1 = nothing pre-selected. Enter on a fresh query opens the Cards tab with
+  // the search (the Search-button behavior); only after the user arrow-keys
+  // onto a suggestion (idx >= 0) does Enter jump straight to that card.
+  const [idx, setIdx] = useState(-1);
   const inputRef = useRef(null);
   const isChase = (rar) => /Enchanted|Iconic|Epic/i.test(rar || "");
   const suggestions = useMemo(() => {
@@ -19648,11 +19655,14 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
       value=${q}
       onFocus=${()=>setOpen(true)}
       onBlur=${()=>setTimeout(()=>setOpen(false), 150)}
-      onInput=${e=>{ setQ(e.target.value); setIdx(0); setOpen(true); }}
+      onInput=${e=>{ setQ(e.target.value); setIdx(-1); setOpen(true); }}
       onKeyDown=${e=>{
         if(e.key === "Enter"){
           e.preventDefault();
-          if(open && suggestions.length && idx >= 0 && idx < suggestions.length){
+          // Default Enter = open the Cards tab with this query (same as the
+          // Search button). Only jump straight to a card when the user has
+          // actively arrow-navigated to a suggestion (idx >= 0).
+          if(open && idx >= 0 && idx < suggestions.length){
             handlePick(suggestions[idx]);
           } else {
             handleSubmit();
@@ -19660,7 +19670,7 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
         } else if(e.key === "ArrowDown" && suggestions.length){
           e.preventDefault(); setIdx(i => (i+1) % suggestions.length); setOpen(true);
         } else if(e.key === "ArrowUp" && suggestions.length){
-          e.preventDefault(); setIdx(i => (i-1+suggestions.length) % suggestions.length); setOpen(true);
+          e.preventDefault(); setIdx(i => i <= 0 ? suggestions.length-1 : i-1); setOpen(true);
         } else if(e.key === "Escape"){
           setOpen(false);
         }

@@ -2452,10 +2452,19 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
      — every flex ancestor needs min-height:0 for the scroll to actually work
      instead of overflowing. Rows are tightened so as many fit as possible
      before the scrollbar kicks in. */
-  [data-debug="rareleg-row-tourney"]{display:flex;min-height:0;}
-  [data-debug="rareleg-row-tourney"] > .home-feed{margin-bottom:0;padding:5px 7px;
-    max-height:none;position:static;flex:1;width:100%;min-height:0;
-    display:flex;flex-direction:column;box-sizing:border-box;}
+  [data-debug="rareleg-row-tourney"]{display:flex;min-height:0;position:relative;}
+  /* Take the panel OUT of flow (absolute, inset:0) so the tournament column
+     contributes ZERO intrinsic height to the grid row — the row height is set
+     entirely by the chase-movers column, and this panel fills that height and
+     scrolls internally. Without this, once the content (4 events × top 8)
+     exceeds the movers column it STRETCHES the row (~626px) instead of
+     scrolling. */
+  /* display:flex + margin-bottom:0 need !important to beat the stacked-column
+     `.home-feed{display:block!important;margin-bottom:14px!important}` rule
+     (≤1100px) — our selector is more specific, so !important wins the tie. */
+  [data-debug="rareleg-row-tourney"] > .home-feed{margin-bottom:0 !important;padding:5px 7px;
+    max-height:none;position:absolute;inset:0;width:100%;min-height:0;
+    display:flex !important;flex-direction:column;box-sizing:border-box;}
   [data-debug="rareleg-row-tourney"] .home-tourney-list{gap:6px;flex:1;min-height:0;
     overflow-y:auto;overflow-x:hidden;
     /* Slim, theme-neutral scrollbar so it doesn't fight the gold accents. */
@@ -2464,16 +2473,11 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   [data-debug="rareleg-row-tourney"] .home-tourney-list::-webkit-scrollbar-thumb{
     background:var(--border);border-radius:3px;}
   [data-debug="rareleg-row-tourney"] .home-tourney-block{gap:2px;}
-  /* Cap each event to top 2 (1st + 2nd) in the side-by-side chase-row layout.
-     Full top-4 is desirable in the desktop left-column rendering where there's
-     vertical headroom, but at ≤1100px the panel is grid-paired with the chase
-     movers banner and an unconstrained list stretches the row well past the
-     banner's height (~580px vs ~340px). Capping to two entries puts the column
-     close to the banner's natural height, avoiding the "tall white gap next to
-     short banner" look the user flagged. The fetch still pulls 4 — the
-     remaining two are just hidden in this layout, and the desktop placement
-     (.home-tourney-col--desktop) renders them normally. */
-  [data-debug="rareleg-row-tourney"] .home-tourney-decks li:nth-child(n+3){display:none;}
+  /* No per-event cap here: the panel is height-locked to the chase-movers
+     banner (flex:1 + overflow-y:auto on .home-tourney-list above), so all top-8
+     deck rows for the 4 recent events SCROLL inside the box instead of
+     stretching the row. (Previously capped to top 2 to keep the box near the
+     banner height — but that hid useful rows; scrolling a fixed box is better.) */
   [data-debug="rareleg-row-tourney"] .home-tourney-name{font-size:10px;line-height:1.2;}
   [data-debug="rareleg-row-tourney"] .home-tourney-deck{padding:2px 4px;gap:4px;
     grid-template-columns:16px 1fr auto;font-size:10px;}
@@ -2484,6 +2488,14 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
   [data-debug="rareleg-row-tourney"] .home-tourney-deck .ht-deck{display:none;}
 }
 .home-tourney-list{display:flex;flex-direction:column;gap:10px;}
+/* Desktop: cap the tournament panel and scroll inside it so 4 events × top 8
+   (up to ~32 rows) doesn't balloon the left column. Mobile handles its own
+   height/scroll in the chase-row block above. */
+.home-tourney-col--desktop .home-tourney-list{max-height:560px;overflow-y:auto;
+  overflow-x:hidden;scrollbar-width:thin;}
+.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar{width:5px;}
+.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar-thumb{
+  background:var(--border);border-radius:3px;}
 .home-tourney-block{display:flex;flex-direction:column;gap:4px;}
 .home-tourney-name{font-family:'Cinzel',serif;font-weight:700;font-size:12px;
   color:var(--accent);background:none;border:none;padding:0;cursor:pointer;text-align:left;
