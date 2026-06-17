@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=184">
+<link rel="stylesheet" href="styles.css?v=185">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=184"></script>
+<script src="logo.js?v=185"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -4229,8 +4229,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   useEffect(()=>{
     try {
       const src = group && (group.img_large || group.img_normal || group.img_small);
-      if(src){ const a = new Image(); a.crossOrigin = "anonymous";
-        a.src = (typeof src === "string" && src.startsWith("https://cards.lorcast.io/")) ? "/img-proxy/" + src.slice("https://cards.lorcast.io/".length) : src; }
+      if(src){ const a = new Image(); a.crossOrigin = "anonymous"; a.src = proxyImg(src); }
       const l = new Image(); l.crossOrigin = "anonymous"; l.src = window.location.origin + "/Logos/packs-ink-logo.png?v=5";
     } catch {}
   }, [group?.card_id]);
@@ -4390,9 +4389,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
 
   // Copy-image export inputs (the poster is drawn on a canvas — see
   // buildCardPosterBlob — so no hidden DOM / html2canvas is needed).
-  const proxifyArt = (u) => (typeof u === "string" && u.startsWith("https://cards.lorcast.io/"))
-    ? "/img-proxy/" + u.slice("https://cards.lorcast.io/".length) : u;
-  const posterArt = proxifyArt(group.img_large || group.img_normal || group.img_small);
+  const posterArt = proxyImg(group.img_large || group.img_normal || group.img_small);
   const posterDate = new Date().toLocaleDateString(undefined, {year:"numeric", month:"short", day:"numeric"});
   const posterRangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [])[1] || "";
 
@@ -4795,13 +4792,17 @@ const emptyFilter = () => ({
   })(),
 });
 
-// Same-origin proxy for Lorcast images so they can be drawn onto a canvas
-// (Lorcast's CDN doesn't send CORS headers, which makes canvas exports fail).
-// Netlify rewrites /img-proxy/* to https://cards.lorcast.io/*; the dev server
-// (scripts/dev_server.py) does the same locally.
+// Same-origin proxy for external card art so it can be drawn onto a canvas
+// (neither Lorcast's nor TCGPlayer's CDN sends CORS headers, which makes canvas
+// exports fail). Netlify rewrites /img-proxy/* → cards.lorcast.io and
+// /tcg-img-proxy/* → tcgplayer-cdn.tcgplayer.com; the dev server
+// (scripts/dev_server.py) does the same locally. TCGPlayer art shows up on
+// Lorcast-unindexed promo/extras cards (synthetic catalog rows) and sealed
+// products — without the proxy those render blank in every canvas export.
 const proxyImg = (url) => {
   if(!url || typeof url !== "string") return url;
   if(url.startsWith("https://cards.lorcast.io/")) return "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
+  if(url.startsWith("https://tcgplayer-cdn.tcgplayer.com/")) return "/tcg-img-proxy/" + url.slice("https://tcgplayer-cdn.tcgplayer.com/".length);
   return url;
 };
 
@@ -5382,7 +5383,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   }
 
   return html`<div class="modal-backdrop" onClick=${onClose}>
-    <div class="modal" onClick=${e=>e.stopPropagation()}>
+    <div class="modal modal-poster" onClick=${e=>e.stopPropagation()}>
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>
           Export Deck Image
@@ -5391,6 +5392,19 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
       <div class="modal-body" style=${{padding:18}}>
+        <div class="deck-poster-layout">
+        <div class="deck-poster-controls">
+          <div class="deck-poster-actions">
+            <button class="active" onClick=${copyImage} disabled=${!!busy}>
+              ${busy==="copy" ? "Copying…" : "📋 Copy"}
+            </button>
+            <button onClick=${saveImage} disabled=${!!busy}>
+              ${busy==="save" ? "Saving…" : "💾 Save"}
+            </button>
+          </div>
+          <div class="deck-poster-hint">Right-click the preview for "Save image as…" if the buttons fail.</div>
+          ${toast && html`<div class="poster-toast">${toast}</div>`}
+          ${error && html`<div style=${{color:"var(--red)",fontSize:12}}>${error}</div>`}
         <div class="poster-options">
           <div class="poster-options-group">
             <div class="poster-options-head">Layout</div>
@@ -5471,24 +5485,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             </div>
           </div>
         </div>
-        ${posterDom}
-        <div style=${{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-          <button class="active" onClick=${copyImage} disabled=${!!busy}
-            style=${{padding:"8px 16px",fontSize:13}}>
-            ${busy==="copy" ? "Copying…" : "📋 Copy to clipboard"}
-          </button>
-          <button onClick=${saveImage} disabled=${!!busy}
-            style=${{padding:"8px 16px",fontSize:13}}>
-            ${busy==="save" ? "Saving…" : "💾 Save image"}
-          </button>
-          <span class="muted" style=${{fontSize:11,lineHeight:1.4}}>
-            Right-click the preview for "Save as image…" if buttons fail.
-          </span>
         </div>
-        ${toast && html`<div style=${{marginTop:10,padding:"8px 12px",fontSize:12,fontWeight:600,
-          background:"var(--accent-glow)",border:"1px solid var(--border-accent)",
-          color:"var(--accent)",borderRadius:6}}>${toast}</div>`}
-        ${error && html`<div style=${{padding:"10px 0",color:"var(--red)",fontSize:12}}>${error}</div>`}
+        <div class="deck-poster-preview">${posterDom}</div>
+        </div>
       </div>
     </div>
   </div>`;
@@ -5936,17 +5935,14 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
     const esc = (s) => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const escAttr = (s) => esc(s).replace(/"/g,"&quot;");
     const safeArtist = esc(picked);
-    // Route Lorcast art through /img-proxy/* so html2canvas (used by the
-    // "Copy as Image" button) can read pixels without canvas-taint. The
-    // proxy is same-origin (Netlify _redirects in prod, dev_server.py
-    // locally), and it sends Access-Control-Allow-Origin: * so crossOrigin
-    // works on the <img> too.
-    const proxify = (url) => (typeof url === "string" && url.startsWith("https://cards.lorcast.io/"))
-      ? "/img-proxy/" + url.slice("https://cards.lorcast.io/".length)
-      : url;
+    // Route external art (Lorcast + TCGPlayer) through our same-origin image
+    // proxies so html2canvas (used by the "Copy as Image" button) can read
+    // pixels without canvas-taint. The proxies are same-origin (Netlify
+    // _redirects in prod, dev_server.py locally) and send
+    // Access-Control-Allow-Origin: * so crossOrigin works on the <img> too.
     const tiles = cardsForArtist.map(c => `
       <figure>
-        <img src="${escAttr(proxify(c.img))}" crossorigin="anonymous"
+        <img src="${escAttr(proxyImg(c.img))}" crossorigin="anonymous"
           alt="${escAttr(c.name)}" loading="eager"/>
         <figcaption>${esc(c.set)} · #${esc(c.number||"")}</figcaption>
       </figure>`).join("");
@@ -13752,6 +13748,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   const [events, setEvents] = useState(null);      // per-event summaries
   const [rounds, setRounds] = useState(null);      // round-by-round (chronological)
   const [eventRanks, setEventRanks] = useState(null); // {event_id: event_rank}
+  const [eventFieldSizes, setEventFieldSizes] = useState(null); // {event_id: total_players}
   const [canonicalId, setCanonicalId] = useState(null);
   const [error, setError] = useState(null);
   // Head-to-head opponent filter. null = not filtered, integer = opponent_id.
@@ -13780,7 +13777,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
     // awaits keyed on playerId.
     let cancelled = false;
     setLoaded(false);
-    setProfile(null); setEvents(null); setRounds(null); setEventRanks(null);
+    setProfile(null); setEvents(null); setRounds(null); setEventRanks(null); setEventFieldSizes(null);
     setCanonicalId(null); setError(null);
     setH2hOpponentId(null); setH2hQuery(""); setH2hListOpen(false);  // clear opponent filter when switching profiles
     setOpponentCurrentRatings(null);
@@ -13852,6 +13849,21 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         for(const r of (ranks || [])) rmap[r.event_id] = r.event_rank;
         if(cancelled) return;
         setEventRanks(rmap);
+
+        // Per-event field size (total players) so the Place stat reads "#5 / 17".
+        // num_players is the official headcount (often null for older events);
+        // rated_players is our standings field size — it matches num_players when
+        // a count is reported and is the reliable fallback when it isn't.
+        const evIds = [...new Set((ev || []).map(e => e.event_id).filter(x => x != null))];
+        if(evIds.length){
+          const {data: summ} = await sbClient.from("elo_event_summary_v")
+            .select("event_id,num_players,rated_players")
+            .in("event_id", evIds);
+          const fmap = {};
+          for(const s of (summ || [])) fmap[s.event_id] = s.num_players ?? s.rated_players ?? null;
+          if(cancelled) return;
+          setEventFieldSizes(fmap);
+        }
 
         // Opponent CURRENT ratings for the H2H card. The rounds view's
         // `opponent_rating` is their rating BEFORE one specific match (stale
@@ -14096,6 +14108,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         const eloDelta = (ev.end_rating != null && ev.start_rating != null) ?
           Math.round(ev.end_rating - ev.start_rating) : null;
         const place = eventRanks ? eventRanks[ev.event_id] : null;
+        const fieldSize = eventFieldSizes ? eventFieldSizes[ev.event_id] : null;
         const scSet = inferEventSet(ev.event_name, ev.event_date);
         return html`<section class="elo-tourney" key=${ev.event_id}>
           <header class="elo-tourney-head">
@@ -14108,7 +14121,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
             <span class="elo-tourney-meta">${ev.event_date || ""}${scSet ? html` · <span class="elo-event-set">${scSet}</span>` : ""}</span>
           </header>
           <div class="elo-tourney-stats">
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${place != null ? "#"+place : "—"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${place != null ? html`<span class="elo-place">#${place}${fieldSize ? html`<span class="elo-place-field"> / ${fieldSize}</span>` : ""}</span>` : "—"}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">Elo end</div><div class="elo-stat-val">${ev.end_rating != null ? Math.round(ev.end_rating) : "—"}${eloDelta != null ? html`<span class=${"elo-delta " + (eloDelta>=0?"up":"down")}>${eloDelta>=0?"+":""}${eloDelta}</span>` : ""}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${ev.wins}-${ev.losses}-${ev.draws}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${ev.mw_pct==null ? "—" : ev.mw_pct.toFixed(1)+"%"}</div></div>
@@ -23714,21 +23727,23 @@ const EditableDeckName = ({name, onSave}) => {
     onClick=${()=>setEditing(true)}>${name}</h2>`;
 };
 
-// Stable color picker for the card-type pie — mirrors common deckbuilder
-// palettes (characters dominate so we use the accent gold for them).
-// Pie-chart palettes that intentionally avoid the six ink colors so the
-// Inkable / Types pies don't get visually confused with the Colors pie.
+// Card-type pie palette — anchored on the site's gold accent for the dominant
+// Character slice so the pie reads on-brand, with muted jewel tones (teal /
+// amethyst / bronze / sage) for the rest that fit the velvet+gold theme rather
+// than the old clashing Tailwind pink/cyan/orange.
 const TYPE_PIE_COLOR = (name) => ({
-  "Character":     "#ec4899",  // pink-500
-  "Action":        "#06b6d4",  // cyan-500
-  "Item":          "#f97316",  // orange-500
-  "Location":      "#84cc16",  // lime-500
-  "Action - Song": "#0891b2",  // cyan-600 (slightly darker so songs read as a sub-variant)
+  "Character":     "var(--accent)",  // gold — the site's signature accent
+  "Action":        "#3f8e88",        // muted teal
+  "Action - Song": "#8a6fc0",        // amethyst (echoes the velvet theme)
+  "Item":          "#c07f3c",        // bronze
+  "Location":      "#6f9e57",        // sage green
   "Other":         "var(--text-muted)",
 }[name] || "var(--text-muted)");
+// Inkable pie mirrors the site's inkwell language: gold = inkable (the gold
+// shield), near-black = uninkable (the black cost number on a borderless card).
 const INKABLE_PIE_COLOR = (name) =>
-  name === "Inkable" ? "#14b8a6" :        // teal-500 (positive, not amber)
-  name === "Non-Inkable" ? "#fb7185" :    // rose-400 (negative, not ruby)
+  name === "Inkable" ? "var(--accent)" :  // gold
+  name === "Uninkable" ? "#15161c" :      // near-black
   "var(--text-muted)";
 // Neutral charcoal for the dual-ink slice in the Colors pie. The bar chart
 // keeps the diagonal gradient (visible at the larger sizes), but pie slices
@@ -23861,19 +23876,21 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
     <div class="deck-pie-title">${title}</div>
     <svg viewBox="0 0 80 80" width="80" height="80">
       <defs>${defsList}</defs>
-      ${slices.map(s => html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)} fill=${s.color}/>`)}
+      ${slices.map(s => html`<path key=${s.k} d=${pieSlicePath(CX, CY, R, s.start, s.end)} fill=${s.color} stroke="rgba(120,120,120,0.45)" stroke-width="0.75"/>`)}
     </svg>
     <div class="deck-pie-legend">
       ${slices.map(s => {
         const isDual = (s.k||"").includes("/");
-        // For non-gradient (Inkable/Types) pies, color the legend name to
-        // match the slice. For gradient (Colors) pie, keep the name in the
-        // default text color since the swatch already does the gradient/dual
-        // duty and a colored name competes with the ink color naming.
-        const nameStyle = gradientPrefix ? null : {color: s.color, fontWeight: 600};
+        // Every pie now uses a colored swatch + default-color name (Colors pie
+        // already did). Non-gradient pies (Inkable/Types) get a solid swatch in
+        // the slice color with a hairline border so dark swatches (e.g. the
+        // near-black Uninkable slice) stay visible — coloring the name instead
+        // made "Uninkable" black-on-black unreadable in dark themes.
+        const sw = gradientPrefix ? s.swatch
+          : {background: s.color, border: "1px solid rgba(128,128,128,0.45)", boxSizing: "border-box"};
         return html`<div key=${s.k} class=${"deck-pie-legend-row"+(isDual?" dual":"")}>
-          <span class=${"deck-pie-swatch"+(isDual?" dual":"")} style=${s.swatch}></span>
-          <span class="deck-pie-legend-name" style=${nameStyle}><span class="deck-pie-legend-name-text">${s.k}</span>${isDual?html`<span class="dual-tag">dual</span>`:""}</span>
+          <span class=${"deck-pie-swatch"+(isDual?" dual":"")} style=${sw}></span>
+          <span class="deck-pie-legend-name"><span class="deck-pie-legend-name-text">${s.k}</span>${isDual?html`<span class="dual-tag">dual</span>`:""}</span>
           <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
         </div>`;
       })}
@@ -24680,7 +24697,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           <${DeckPie} title="Colors" data=${aggregates.inkCount}
             gradientPrefix="colors-pie"
             colorOf=${name => (INK_COLORS[name]?.border) || "var(--text-muted)"}/>
-          <${DeckPie} title="Inkable" data=${{Inkable:aggregates.inkable, "Non-Inkable":aggregates.nonInkable}}
+          <${DeckPie} title="Inkable" data=${{Inkable:aggregates.inkable, Uninkable:aggregates.nonInkable}}
             colorOf=${INKABLE_PIE_COLOR}/>
           <${DeckPie} title="Types" data=${aggregates.typeCount}
             colorOf=${TYPE_PIE_COLOR}/>

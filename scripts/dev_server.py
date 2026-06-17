@@ -39,16 +39,17 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store, max-age=0")
         super().end_headers()
 
-    def _proxy_lorcast(self, path: str) -> None:
-        """Mirror Netlify's /img-proxy/* → cards.lorcast.io rewrite so the
-        Export Deck Image feature can draw images to a canvas locally too."""
+    def _proxy_image(self, upstream_base: str, path: str) -> None:
+        """Mirror Netlify's image-proxy rewrites (/img-proxy/* → cards.lorcast.io,
+        /tcg-img-proxy/* → tcgplayer-cdn.tcgplayer.com) so canvas-export features
+        can draw cross-origin art locally too — both CDNs omit CORS headers."""
         # Reject path-traversal attempts before building the upstream URL —
         # a "../" segment could be used to coax the proxy into fetching off
         # the intended host.
         if ".." in path:
             self.send_error(400, "bad proxy path")
             return
-        upstream = "https://cards.lorcast.io/" + path.lstrip("/")
+        upstream = upstream_base + path.lstrip("/")
         try:
             req = urllib.request.Request(upstream, headers={"User-Agent": "packs.ink-dev/1.0"})
             with urllib.request.urlopen(req, timeout=15) as resp:
@@ -65,7 +66,9 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         url_path = parsed.path or "/"
         if url_path.startswith("/img-proxy/"):
-            return self._proxy_lorcast(url_path[len("/img-proxy/"):])
+            return self._proxy_image("https://cards.lorcast.io/", url_path[len("/img-proxy/"):])
+        if url_path.startswith("/tcg-img-proxy/"):
+            return self._proxy_image("https://tcgplayer-cdn.tcgplayer.com/", url_path[len("/tcg-img-proxy/"):])
         # Mirror Netlify's pretty URL: /privacy serves the static privacy.html.
         if url_path == "/privacy":
             self.path = "/privacy.html"
