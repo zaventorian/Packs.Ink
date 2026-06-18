@@ -51,7 +51,15 @@ def main() -> None:
             return
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
+        # --disable-blink-features=AutomationControlled drops the
+        # navigator.webdriver flag, which is the main signal eBay/Google use to
+        # decide a browser is "not secure" / automated. Doesn't defeat Google's
+        # full bot check (use eBay's email-code login, NOT "Sign in with
+        # Google"), but cuts down on eBay-side challenge redirects.
+        browser = p.chromium.launch(
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"],
+        )
         context = browser.new_context(
             viewport={"width": 1400, "height": 900},
             user_agent=(
@@ -80,22 +88,58 @@ def main() -> None:
 
         input("Press Enter once you're logged in and Terapeak loads... ")
 
-        # Sanity check: confirm we can reach Terapeak after login
-        page.goto(TERAPEAK_URL)
-        page.wait_for_load_state("domcontentloaded")
-        title = page.title()
-        url = page.url
-        if "signin" in url.lower() or "login" in url.lower():
-            sys.exit(
-                f"Still on a sign-in page (url={url}). Login didn't take. "
-                "Try again."
-            )
-
+        # Save the session FIRST so a flaky verification nav can never lose it.
+        # (eBay redirects mid-navigation, which makes page.goto raise
+        # "interrupted by another navigation" — that must NOT cost us the login.)
         context.storage_state(path=str(SESSION_STATE))
         print()
         print(f"Saved session state to {SESSION_STATE}")
+
+        try:
+            print(f"Current page when you pressed Enter: {page.url}")
+        except Exception:
+            pass
+
+        # Best-effort verification: try to reach Terapeak and report the final
+        # URL. wait_until='commit' + a manual settle tolerates eBay's redirect
+        # chains instead of throwing on them.
+        final_url, title = "", ""
+        try:
+            page.goto(TERAPEAK_URL, wait_until="commit", timeout=30000)
+            page.wait_for_timeout(5000)  # let any redirect chain settle
+        except Exception as e:
+            print(f"[note] verification nav reported: {type(e).__name__}: {e}")
+        try:
+            page.wait_for_load_state("domcontentloaded", timeout=10000)
+        except Exception:
+            pass
+        try:
+            final_url = page.url
+            title = page.title()
+        except Exception:
+            pass
+
+        print(f"Final URL after Terapeak check: {final_url}")
         print(f"Final page title: {title!r}")
-        print(f"Final URL: {url}")
+
+        low = final_url.lower()
+        if "/sh/research" in low:
+            print("[ok] Reached Terapeak Product Research. Re-saving session "
+                  "with Seller Hub cookies.")
+            try:
+                context.storage_state(path=str(SESSION_STATE))
+            except Exception:
+                pass
+        elif "signin" in low or "login" in low or "accounts.google" in low:
+            print("[warn] Bounced to a sign-in page — the session isn't fully "
+                  "authenticated. Log in with eBay's EMAIL/TEXT CODE (not the "
+                  "Google button), then load /sh/research BY HAND in the window "
+                  "and confirm the research table renders BEFORE pressing Enter.")
+        else:
+            print("[warn] Did NOT land on /sh/research. Most likely the burner "
+                  "account doesn't have Seller Hub / Product Research access yet "
+                  "(seller-registration / Store gate). Session is still saved; "
+                  "tell me the Final URL above and we'll sort the access path.")
         print()
         print("You can now run: python scripts/terapeak_scrape.py")
 

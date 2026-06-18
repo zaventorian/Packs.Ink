@@ -138,7 +138,10 @@ def build_search_url(
     limit: int = RESULTS_PER_PAGE,
     marketplace: str = "ALL",
     category_id: str = "0",
+    sorting: str = "-datelastsold",
     tz: str = "America/Chicago",
+    end_ms: int | None = None,
+    start_ms: int | None = None,
 ) -> str:
     """Construct a Terapeak Product Research URL.
 
@@ -146,21 +149,34 @@ def build_search_url(
               segments, include the literal quotes, e.g. '"Lorcana" "PSA"'.
     days_back: 1095 = 3 years (max). Use small values for daily incremental.
     offset, limit: pagination. offset is 0-indexed.
-    marketplace: "ALL" for all eBay sites combined, or "EBAY-US" for US only.
+    marketplace: "ALL" = all eBay sites combined (default, matches the working
+                 manual search), or "EBAY-US" for US only.
     category_id: 0 = All Categories.
+    sorting: "-datelastsold" = newest sale first; "datelastsold" (no "-") =
+             OLDEST first, used for the resumable backfill (new sales land at
+             the newest/high-offset end, so already-covered low offsets stay
+             stable). Without an explicit sort, eBay falls back to best-match
+             and floats high-volume accessory listings (slab cases, stands) to
+             the top — the pollution we saw on the first run.
+    end_ms, start_ms: fix the date window explicitly (epoch ms). Pass these for
+             a multi-day backfill so the window doesn't slide forward each call
+             and shift offsets. Default: now and now - days_back.
     tz: timezone string; doesn't affect data but eBay puts it in the URL.
     """
-    now_ms = int(time.time() * 1000)
-    start_ms = int((time.time() - days_back * 86400) * 1000)
+    if end_ms is None:
+        end_ms = int(time.time() * 1000)
+    if start_ms is None:
+        start_ms = int((time.time() - days_back * 86400) * 1000)
     params = {
         "marketplace": marketplace,
         "keywords": keywords,
         "dayRange": str(days_back),
-        "endDate": str(now_ms),
+        "endDate": str(end_ms),
         "startDate": str(start_ms),
         "categoryId": category_id,
         "offset": str(offset),
         "limit": str(limit),
+        "sorting": sorting,
         "tabName": "SOLD",
         "tz": tz,
     }
@@ -314,18 +330,31 @@ def _parse_one_row(row_el) -> dict:
             pass
         return None
 
-    # Title — usually in a link element
-    title = text('a[href*="/itm/"]') or text('h3') or text('[data-test*="title" i]')
-
-    # eBay item URL → itemId
+    # Title + eBay item id. The current Terapeak DOM carries both on the
+    # product-name span:
+    #   <div class="...__product-info-name"><span data-item-id="385...">Title</span></div>
+    # There is NO <a href="/itm/..."> in this render — the old selector matched
+    # 0 links and dropped every row. Fall back to an /itm/ anchor for older
+    # renders, and synthesize the listing URL from the id when absent.
+    title = (
+        text('.research-table-row__product-info-name [data-item-id]')
+        or text('.research-table-row__product-info-name')
+        or text('[data-item-id]')
+        or text('a[href*="/itm/"]')
+        or text('h3')
+    )
+    item_id = attr('[data-item-id]', 'data-item-id')
     item_url = attr('a[href*="/itm/"]', "href")
-    item_id = None
-    if item_url:
+    if not item_id and item_url:
         m = re.search(r'/itm/(?:[^/]+/)?(\d+)', item_url)
         item_id = m.group(1) if m else None
+    if item_id and not item_url:
+        item_url = f"https://www.ebay.com/itm/{item_id}"
 
-    # Thumbnail image URL
+    # Thumbnail image URL (protocol-relative // -> https)
     thumb = attr('img', 'src') or attr('img', 'data-src')
+    if thumb and thumb.startswith("//"):
+        thumb = "https:" + thumb
 
     # The Terapeak table columns from the screenshot:
     #   Listing | Actions | Avg sold price | Avg shipping | Total sold |
@@ -398,67 +427,150 @@ def _parse_int(s: str | None) -> int | None:
 # Search runner
 # --------------------------------------------------------------------------
 
+def _row_key(r: dict) -> str:
+    """Dedup key. Prefer item_id; fall back to a title/price/date composite for
+    the rare row that has no item id."""
+    return r.get("item_id") or (
+        f"{r.get('title')}|{r.get('avg_sold_price')}|{r.get('date_last_sold_text')}"
+    )
+
+
+def _load_progress(path: Path) -> dict:
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_progress(path: Path, data: dict) -> None:
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+
+def _load_seen(out_path: Path) -> set[str]:
+    """Item keys already on disk, so a resumed run dedups against prior pages."""
+    seen: set[str] = set()
+    if out_path.exists():
+        for line in out_path.open(encoding="utf-8"):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                seen.add(_row_key(json.loads(line)))
+            except Exception:
+                pass
+    return seen
+
+
 def scrape_query(
     page: Page,
     keywords: str,
     *,
+    out_path: Path,
+    progress_path: Path,
+    sorting: str = "-datelastsold",
+    end_ms: int | None = None,
+    start_ms: int | None = None,
     days_back: int = 1095,
     max_pages: int | None = None,
-    save_snapshots: bool = True,
-) -> list[dict]:
-    """Run one keyword search. Paginates until empty page or max_pages."""
-    all_rows: list[dict] = []
-    offset = 0
+    save_snapshots: bool = False,
+) -> int:
+    """Scrape one keyword search, appending rows INCREMENTALLY and resuming.
+
+    Built for the multi-day 3-year backfill: every page is flushed to `out_path`
+    (JSONL) immediately and `progress_path` records the next offset + the fixed
+    date window, so a CAPTCHA/crash never loses collected rows and a re-run picks
+    up where it left off. Use sorting="datelastsold" (oldest first) for the
+    backfill — new sales land at the newest/high-offset end, so already-covered
+    low offsets stay stable across days.
+
+    End detection tolerates resume-overlap (a few already-seen pages right at the
+    resume point) via a consecutive-all-duplicate counter rather than stopping on
+    the first all-dup page. Returns the cumulative saved-row count.
+    """
+    seen = _load_seen(out_path)
+    prog = _load_progress(progress_path)
+    offset = int(prog.get("offset", 0))
+    total = len(seen)
+    # Reuse the fixed window from a prior run so offsets stay stable across days.
+    end_ms = prog.get("end_ms") or end_ms
+    start_ms = prog.get("start_ms") or start_ms
+    if offset:
+        print(f"  resuming at offset={offset} ({total} rows already on disk)")
+
+    out_f = out_path.open("a", encoding="utf-8")
     page_num = 0
-
-    while True:
-        page_num += 1
-        url = build_search_url(keywords, days_back=days_back, offset=offset)
-        print(f"  page {page_num} (offset={offset})")
-        page.goto(url, wait_until="domcontentloaded")
-        assert_authenticated(page)
-
-        # Wait for the results area to render. We don't know the exact
-        # selector yet, so wait for either a table or a "no results" marker
-        # OR a brief networkidle.
-        try:
-            page.wait_for_load_state("networkidle", timeout=15000)
-        except Exception:
-            pass
-
-        human_sleep(DELAY_AFTER_NAV)
-        human_mouse_jitter(page)
-        human_scroll(page)
-
-        if page_num == 1:
-            ensure_all_sites(page)
+    consec_dup = 0
+    try:
+        while True:
+            page_num += 1
+            url = build_search_url(
+                keywords, days_back=days_back, offset=offset,
+                sorting=sorting, end_ms=end_ms, start_ms=start_ms,
+            )
+            print(f"  page {page_num} (offset={offset})")
+            page.goto(url, wait_until="domcontentloaded")
+            assert_authenticated(page)
+            # Wait for the results table to actually RENDER rows before parsing.
+            # parse_rows can match 50 placeholder/skeleton rows that have no
+            # title yet — a render race that looks like an empty page (it bit the
+            # oldest-first run). Wait for a real listing link to appear first; if
+            # none shows up, it's a genuinely empty page (true end of results).
+            try:
+                page.wait_for_selector(
+                    '.research-table-row [data-item-id]', timeout=20000)
+            except Exception:
+                try:
+                    page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
             human_sleep(DELAY_AFTER_NAV)
+            human_mouse_jitter(page)
+            human_scroll(page)
 
-        if save_snapshots:
-            snap_path = save_snapshot(page, keywords, offset)
-            print(f"    [snap] saved {snap_path.name}")
+            if save_snapshots:
+                snap_path = save_snapshot(page, keywords, offset)
+                print(f"    [snap] saved {snap_path.name}")
 
-        rows = parse_rows(page)
-        if not rows:
-            print(f"    [info] no rows on this page; stopping")
-            break
+            rows = parse_rows(page)
+            n_new = 0
+            for r in rows:
+                k = _row_key(r)
+                if k not in seen:
+                    seen.add(k)
+                    out_f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                    n_new += 1
+            out_f.flush()
+            total += n_new
+            last_date = rows[-1].get("date_last_sold_text") if rows else None
+            print(f"    page {page_num}: +{n_new} new "
+                  f"(saved total: {total}) last_sold={last_date}")
 
-        all_rows.extend(rows)
-        print(f"    [data] +{len(rows)} rows (running total: {len(all_rows)})")
+            if not rows:
+                print("    [info] empty page; reached the end")
+                break
+            if n_new == 0:
+                consec_dup += 1
+                if consec_dup >= 3:
+                    print("    [info] 3 consecutive all-duplicate pages; done")
+                    break
+            else:
+                consec_dup = 0
 
-        # If we got a partial page, we're at the end
-        if len(rows) < RESULTS_PER_PAGE:
-            print(f"    [info] partial page ({len(rows)} < {RESULTS_PER_PAGE}); done")
-            break
+            offset += RESULTS_PER_PAGE
+            _save_progress(progress_path, {
+                "offset": offset, "count": total, "last_date": last_date,
+                "end_ms": end_ms, "start_ms": start_ms,
+            })
+            if max_pages and page_num >= max_pages:
+                print(f"    [info] hit max_pages={max_pages}; stopping")
+                break
+            human_sleep(DELAY_BETWEEN_PAGES)
+    finally:
+        out_f.close()
 
-        if max_pages and page_num >= max_pages:
-            print(f"    [info] hit max_pages={max_pages}; stopping")
-            break
-
-        offset += RESULTS_PER_PAGE
-        human_sleep(DELAY_BETWEEN_PAGES)
-
-    return all_rows
+    return total
 
 
 # --------------------------------------------------------------------------
@@ -470,14 +582,6 @@ def slugify(s: str) -> str:
     s = re.sub(r'[^\w\s-]', '', s).strip()
     s = re.sub(r'[\s_-]+', '_', s)
     return s.lower() or "query"
-
-
-def write_jsonl(rows: list[dict], path: Path) -> None:
-    """Write one dict per line to a JSONL file."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
 # --------------------------------------------------------------------------
@@ -503,46 +607,97 @@ def main() -> None:
         help="Run without UI window. Use for VPS/cron. Default: headful for dev.",
     )
     p.add_argument(
-        "--no-snapshots", action="store_true",
-        help="Don't save raw HTML snapshots (smaller disk footprint)",
+        "--oldest-first", action="store_true",
+        help="Sort oldest sale first (sorting=datelastsold). Use for the "
+             "resumable 3-year backfill so already-covered offsets stay stable "
+             "as new sales land at the newest end. Default: newest first.",
+    )
+    p.add_argument(
+        "--snapshots", action="store_true",
+        help="Save raw HTML snapshots per page (debugging). Off by default — a "
+             "full backfill would write thousands of ~1MB files.",
+    )
+    p.add_argument(
+        "--cdp", nargs="?", const="http://localhost:9222", default=None,
+        metavar="URL",
+        help="Attach to an ALREADY-RUNNING Chrome via the DevTools Protocol "
+             "instead of launching a fresh Playwright browser. Start Chrome "
+             "yourself with --remote-debugging-port=9222, log the burner "
+             "account in + clear any CAPTCHA by hand, then run with --cdp. A "
+             "user-launched Chrome doesn't advertise automation, so hCaptcha "
+             "renders normally. Bare --cdp uses http://localhost:9222.",
     )
     args = p.parse_args()
 
-    if not SESSION_STATE.exists():
+    if not args.cdp and not SESSION_STATE.exists():
         sys.exit(
             f"No session state at {SESSION_STATE}.\n"
-            "Run: python scripts/terapeak_login.py first."
+            "Run: python scripts/terapeak_login.py first "
+            "(or use --cdp to attach to a real Chrome you control)."
         )
 
     keywords = args.keyword or DEFAULT_KEYWORDS
     OUTPUT_DIR.mkdir(exist_ok=True)
-    run_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    sorting = "datelastsold" if args.oldest_first else "-datelastsold"
+    # Fix the date window once at run start so multi-day backfills don't drift
+    # (each query also persists its own copy in its .progress.json on resume).
+    end_ms = int(time.time() * 1000)
+    start_ms = int((time.time() - args.days * 86400) * 1000)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=args.headless)
-        context = browser.new_context(
-            storage_state=str(SESSION_STATE),
-            viewport={"width": 1400, "height": 900},
-            locale="en-US",
-        )
-        page = context.new_page()
+        if args.cdp:
+            # Attach to a real, user-launched Chrome. Because that browser was
+            # NOT started by Playwright, it doesn't set navigator.webdriver or
+            # show the automation banner, so eBay/hCaptcha treat it like a
+            # human's browser. We reuse its existing (default) context, which
+            # carries the burner login + any CAPTCHA the user already cleared.
+            print(f"Attaching to Chrome over CDP at {args.cdp} ...")
+            browser = p.chromium.connect_over_cdp(args.cdp)
+            context = (
+                browser.contexts[0] if browser.contexts else browser.new_context()
+            )
+            page = context.pages[0] if context.pages else context.new_page()
+            owns_browser = False
+        else:
+            # Same anti-detection flag as the login script: drop
+            # navigator.webdriver so eBay is less likely to throw the splashui
+            # CAPTCHA at us. Keep the user-agent identical to the one used at
+            # login so the saved session's fingerprint stays consistent.
+            browser = p.chromium.launch(
+                headless=args.headless,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            context = browser.new_context(
+                storage_state=str(SESSION_STATE),
+                viewport={"width": 1400, "height": 900},
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/131.0.0.0 Safari/537.36"
+                ),
+                locale="en-US",
+            )
+            page = context.new_page()
+            owns_browser = True
 
         total_rows = 0
         for kw in keywords:
             print(f"\n=== query: {kw} ===")
+            slug = slugify(kw)
+            out_path = OUTPUT_DIR / f"{slug}.jsonl"
+            progress_path = OUTPUT_DIR / f"{slug}.progress.json"
             try:
-                rows = scrape_query(
+                count = scrape_query(
                     page, kw,
-                    days_back=args.days,
-                    max_pages=args.max_pages,
-                    save_snapshots=not args.no_snapshots,
+                    out_path=out_path, progress_path=progress_path,
+                    sorting=sorting, end_ms=end_ms, start_ms=start_ms,
+                    days_back=args.days, max_pages=args.max_pages,
+                    save_snapshots=args.snapshots,
                 )
-                outfile = OUTPUT_DIR / f"{slugify(kw)}_{run_stamp}.jsonl"
-                write_jsonl(rows, outfile)
-                print(f"  wrote {len(rows)} rows -> {outfile.name}")
-                total_rows += len(rows)
+                print(f"  {count} rows total on disk -> {out_path.name}")
+                total_rows += count
             except SystemExit:
-                raise  # auth failure - bail completely
+                raise  # auth/captcha failure - bail completely
             except Exception as e:
                 print(f"  ERROR on '{kw}': {type(e).__name__}: {e}")
 
@@ -553,7 +708,9 @@ def main() -> None:
                 time.sleep(pause)
 
         print(f"\nDone. {total_rows} total rows across {len(keywords)} queries.")
-        browser.close()
+        # In CDP mode the browser belongs to the user — leave it open.
+        if owns_browser:
+            browser.close()
 
 
 if __name__ == "__main__":
