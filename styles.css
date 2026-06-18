@@ -1764,32 +1764,75 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    product images are landscape, not portrait). Reuses the .gc-* class
    structure for layout consistency with Graded; only the bits that differ
    live under .sealed-coll. */
-.sealed-coll .gc-set-grid{grid-template-columns:repeat(3,1fr);}
-@media (max-width:1100px){.sealed-coll .gc-set-grid{grid-template-columns:repeat(2,1fr);}}
-@media (max-width:640px){.sealed-coll .gc-set-grid{grid-template-columns:1fr;}}
+/* Auto-fill so wide screens pack ~5 columns (was a wasteful fixed 3) and
+   the grid steps down gracefully as the viewport narrows. Mobile is forced
+   to 2 columns (was a single awkward column). */
+.sealed-coll .gc-set-grid{grid-template-columns:repeat(auto-fill, minmax(250px, 1fr));
+  align-items:start;}
+/* Compact (image-off) tiles are pure text, so pack them tighter horizontally
+   too — narrower min means more columns and far less wasted width. */
+.sealed-coll .gc-set-grid.gc-compact{grid-template-columns:repeat(auto-fill, minmax(190px, 1fr));}
+@media (max-width:640px){
+  .sealed-coll .gc-set-grid{grid-template-columns:repeat(2, minmax(0,1fr));}
+  .sealed-coll .gc-set-grid.gc-compact{grid-template-columns:repeat(2, minmax(0,1fr));}
+  .sealed-coll .gc-card{padding:6px;gap:7px;}
+  .sealed-coll .gc-card-img.sealed-card-img{width:40px;height:40px;}
+  /* Image-grid tiles are too narrow at 2-col to fit value + counter on one
+     line (the value clipped). Stack them: value on its own line, counter
+     right below. Reserve the value line height so owned/unowned stay equal.
+     Compact (image-off) tiles have the width to stay inline. */
+  .sealed-coll .gc-set-grid:not(.gc-compact) .gc-card-foot{flex-direction:column;
+    align-items:stretch;gap:2px;}
+  .sealed-coll .gc-set-grid:not(.gc-compact) .gc-card-foot-meta{min-height:14px;}
+  .sealed-coll .gc-set-grid:not(.gc-compact) .gc-card-foot .sealed-coll-counter{align-self:flex-end;}
+}
 /* Sealed tile = thumbnail on the left, info on the right (same row layout
    as the Graded tile, which makes the column more scannable than a stack
    of large box-art images). Image kept compact so a Booster-Box thumbnail
    doesn't dominate the tile. */
-.sealed-coll .gc-card{flex-direction:row;gap:10px;padding:8px;align-items:stretch;}
+.sealed-coll .gc-card{flex-direction:row;gap:10px;padding:8px;align-items:flex-start;}
 .sealed-coll .gc-card-img.sealed-card-img{width:56px;height:56px;flex-shrink:0;
   object-fit:contain;background:rgba(255,255,255,0.06);padding:4px;border-radius:6px;
   align-self:flex-start;}
-/* Body is a 3-row grid so price+buy and the counter always land on the same
-   y across the grid — tiles in a row stay the same height even when one
-   name wraps to two lines. The 1fr middle row absorbs height differences. */
-.sealed-coll .gc-card-body{display:grid;grid-template-rows:auto 1fr auto;
-  gap:4px;min-width:0;flex:1;min-height:64px;}
+/* Content packs to the top and the tile sizes to its content (the grid no
+   longer stretches rows — see align-items:start above). Previously a 1fr
+   middle row + 64px min-height force-aligned price/counter across a row,
+   which left big empty gaps on short tiles and ballooned the compact view. */
+.sealed-coll .gc-card-body{display:flex;flex-direction:column;
+  gap:3px;min-width:0;flex:1;}
 .sealed-coll .gc-card-name{white-space:normal;font-size:12px;line-height:1.25;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .sealed-coll .gc-card-sub{font-size:10px;}
 .sealed-coll .gc-card-name-row{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;}
 .sealed-coll .gc-card-raw{display:flex;justify-content:space-between;align-items:center;gap:6px;
-  margin-top:auto;font-size:11px;}
-.sealed-coll .sealed-coll-counter{justify-self:end;align-self:end;}
-.gc-card-owned-value{display:flex;justify-content:space-between;align-items:baseline;
-  font-size:11px;padding-top:4px;border-top:1px dashed var(--border);margin-top:2px;}
-.gc-card-owned-value strong{color:var(--green);font-weight:700;font-size:12px;}
+  margin-top:2px;font-size:11px;}
+/* Booster-pack 3-art completion checklist (each set's pack has 3 cover arts
+   with no separate SKU). Lives inline in the footer-meta (left of the counter)
+   so it doesn't add a row / grow the tile. Three numbered toggle dots; filled
+   = owned. */
+.gc-pack-arts{display:inline-flex;align-items:center;gap:2px;min-width:0;}
+.gc-pack-art-dot{width:15px;height:15px;border-radius:50%;border:1px solid var(--border);
+  background:var(--bg-card);color:var(--text-muted);font-size:8.5px;font-weight:700;line-height:1;
+  cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;flex-shrink:0;
+  transition:border-color 0.1s,background 0.1s,color 0.1s;}
+.gc-pack-art-dot:hover{border-color:var(--accent);color:var(--accent);}
+.gc-pack-art-dot.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+/* Owned value tucked after the art dots (packs have no foot-meta value slot). */
+.gc-pack-val{font-size:9px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums;
+  margin-left:3px;white-space:nowrap;flex-shrink:0;}
+/* Footer row: owned value (+ return) left, qty counter right. Always present
+   so owned and unowned tiles are the same height (was an extra stacked
+   "Owned value" line that made owned tiles taller). */
+.sealed-coll .gc-card-foot{display:flex;align-items:center;justify-content:space-between;
+  gap:8px;margin-top:auto;padding-top:3px;}
+.sealed-coll .gc-card-foot-meta{display:flex;flex-direction:column;gap:0;min-width:0;line-height:1.1;}
+.sealed-coll .gc-card-foot-val{font-size:12px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums;}
+.sealed-coll .gc-card-foot-ret{font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}
+/* Smaller counter (scoped to the sealed view — the detail modal's counter is
+   outside .sealed-coll and keeps its size). */
+.sealed-coll .sealed-coll-counter{flex-shrink:0;padding:2px;gap:2px;}
+.sealed-coll .sealed-coll-counter button{width:22px;height:22px;font-size:13px;}
+.sealed-coll .sealed-coll-counter-qty{min-width:17px;font-size:13px;}
 /* (Duplicate .gc-card-owned rule on line ~1179 removed — canonical rule
    lives just below at .gc-card.gc-card-owned to win on specificity.) */
 /* Optional "amount paid + acquired date" inputs on owned rows. Rendered
@@ -1808,6 +1851,9 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .gc-slot-meta-row{display:flex;flex-direction:column;gap:3px;}
 .gc-slot-meta-row .cost-date-row{margin-top:0;padding-top:0;border-top:none;}
 .gc-slot-meta-tag{font-size:9px;font-weight:700;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase;}
+/* Slot header line: grade tag (left) + personal return (right). */
+.gc-slot-meta-head{display:flex;justify-content:space-between;align-items:baseline;gap:8px;}
+.gc-slot-return{font-size:10.5px;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}
 /* (Canonical owned style lives at .gc-card.gc-card-owned a few lines down.) */
 /* Compact mode strips the image so more SKUs fit per page. */
 .sealed-coll .gc-set-grid.gc-compact .gc-card .sealed-card-img{display:none;}
@@ -4170,20 +4216,27 @@ html[data-mode="dark"] .card-row-price.foil{color:#c0a3ef;}
   cursor:pointer;border-radius:3px;padding:0;line-height:1;}
 .card-row-counter button:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
 .card-row-counter button:disabled{opacity:0.3;cursor:not-allowed;}
-/* Compact deck-builder row: no image, just ink + cost + name + counter. */
-.card-row-compact{grid-template-columns:14px 30px 1fr auto;column-gap:8px;padding:4px 8px;}
-.card-row-ink-swatch{width:14px;height:14px;border-radius:50%;flex-shrink:0;
-  border:1px solid rgba(0,0,0,0.15);}
-.card-row-cost-hex{display:inline-flex;align-items:center;justify-content:center;
-  width:30px;height:30px;flex-shrink:0;}
-.card-row-cost-hex .cost-hex{width:28px;height:28px;display:block;}
+/* Compact deck-builder row: no image, just ink + cost + name + counter.
+   Mirrors the real deck list (deck-row): official ink-shield PNG(s) + the
+   inkable/uninkable cost shield instead of a bare color dot + plain hex. */
+.card-row-compact{grid-template-columns:42px 32px 1fr auto;column-gap:6px;padding:4px 8px;}
+.card-row-ink-shields{display:inline-flex;align-items:center;justify-content:center;
+  gap:2px;flex-shrink:0;}
+.card-row-ink-shield{width:18px;height:18px;display:block;object-fit:contain;}
+.card-row-costshield{display:inline-flex;align-items:center;justify-content:center;
+  flex-shrink:0;color:#c8a846;}
+.card-row-costshield .cost-hex-shield-inkable{height:26px;width:auto;display:block;}
+.card-row-costshield .cost-hex-shield-uninkable{height:24px;width:24px;display:block;}
 .card-row-name-btn{appearance:none;background:transparent;border:none;padding:0;margin:0;
   font-family:inherit;font-size:13px;font-weight:600;color:var(--text);text-align:left;
   cursor:pointer;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .card-row-name-btn:hover{color:var(--accent);text-decoration:underline;}
 @media (max-width:640px){
-  .card-row-compact{column-gap:6px;padding:3px 6px;}
+  .card-row-compact{grid-template-columns:40px 30px 1fr auto;column-gap:6px;padding:3px 6px;}
   .card-row-counter button{width:32px;height:30px;}
+  .card-row-ink-shield{width:17px;height:17px;}
+  .card-row-costshield .cost-hex-shield-inkable{height:24px;}
+  .card-row-costshield .cost-hex-shield-uninkable{height:22px;width:22px;}
 }
 
 /* Expand button shown only in deck mode: opens the detail modal so the tile
@@ -4284,7 +4337,12 @@ html[data-mode="dark"] .card-row-price.foil{color:#c0a3ef;}
 .deck-charts{margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);}
 .deck-chart{margin-bottom:10px;}
 .deck-chart-title{font-size:10px;font-weight:600;color:var(--text-muted);
-  letter-spacing:0.5px;text-transform:uppercase;margin-bottom:4px;}
+  letter-spacing:0.5px;text-transform:uppercase;margin-bottom:4px;
+  display:flex;align-items:baseline;gap:8px;}
+/* Inline card/unique count on the Cost curve header line. Mixed-case, pushed
+   to the right edge, never uppercased like the section label. */
+.deck-chart-count{margin-left:auto;text-transform:none;letter-spacing:0;
+  font-weight:700;color:var(--text-dim);font-variant-numeric:tabular-nums;white-space:nowrap;}
 .deck-chart svg{display:block;background:var(--bg-card);border-radius:5px;}
 .deck-pie-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
 .deck-pie{background:var(--bg-card);border-radius:5px;padding:6px;

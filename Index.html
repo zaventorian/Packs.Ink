@@ -61,7 +61,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=185">
+<link rel="stylesheet" href="styles.css?v=186">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +120,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=185"></script>
+<script src="logo.js?v=186"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -3517,16 +3517,15 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
     if(deckMode){
       return html`<div class=${"card-row card-row-compact"+(isSelected?" is-selected":"")} onClick=${onClick}>
         ${checkboxEl}
-        <div class="card-row-ink-swatch" aria-hidden="true" style=${
-          inkList.length === 1
-            ? {background: INK_COLORS[inkList[0]]?.border || "var(--text-muted)"}
-            : inkList.length === 2
-              ? {background:`linear-gradient(135deg, ${INK_COLORS[inkList[0]]?.border || "#888"} 0 50%, ${INK_COLORS[inkList[1]]?.border || "#888"} 50% 100%)`}
-              : {background:"var(--text-muted)"}
-        }></div>
-        ${group.cost != null && html`<span class="card-row-cost-hex" aria-hidden="true">
-          <${CostHex} n=${group.cost >= 9 ? 9 : group.cost}/>
-        </span>`}
+        <span class="card-row-ink-shields" title=${inkList.join(" / ")||undefined} aria-hidden="true">
+          ${inkList.map(ink => INK_ICONS[ink]
+            ? html`<img key=${ink} src=${INK_ICONS[ink]} alt="" class="card-row-ink-shield"/>`
+            : null)}
+        </span>
+        <span class="card-row-costshield"
+          title=${group.inkable===false?`Cost ${group.cost ?? "—"} · Uninkable`:`Cost ${group.cost ?? "—"} · Inkable`}>
+          ${group.cost != null && html`<${CostInkShield} cost=${group.cost} inkable=${group.inkable !== false}/>`}
+        </span>
         <button class="card-row-name-btn" onClick=${onExpand} title="View card details">
           ${productName}
         </button>
@@ -7242,16 +7241,15 @@ const SEALED_DISPLAY_TYPE_ORDER = [
   "Booster Boxes",
   "Booster Packs",
   "Sleeved Booster Packs",
-  "Booster Pack Art Bundles",
   "Illumineer's Troves",
   "Prerelease Packs",
   "Starter Decks",
   "Gift Sets",
   "Bundles",
   "Quests",
-  "Sealed",
   "Collector's Edition",
-  "Cases & Displays",
+  "Cases",
+  "Other Displays / Cases",
   "Puzzles",
 ];
 const SEALED_DISPLAY_TYPE_FOR = {
@@ -7266,17 +7264,26 @@ const SEALED_DISPLAY_TYPE_FOR = {
   "Collector's Edition": "Collector's Edition",
   "Puzzle":              "Puzzles",
 };
+// Bundle / aggregate listings suppressed from every sealed browse surface:
+// "[Set of N]" multi-unit listings (2-3 starter decks, or all 3 pack arts,
+// sold as one SKU) and the art-bundle SKUs. Neither maps to a single tracked
+// product. The "2-Player Starter Set" is a real product and is NOT matched.
+function isHiddenSealedListing(item){
+  const name = (item.name || "").toLowerCase();
+  return name.includes("[set of ") || name.includes("art bundle");
+}
 function deriveSealedDisplayType(item){
   const name = (item.name || "").toLowerCase();
-  // Cases & Displays — multi-unit retail containers regardless of parent
-  // type. " case" with leading space avoids mid-word false positives;
+  // Cases & displays. Booster-box cases (the popular ones) get their own
+  // "Cases" section; every other case/display lands in "Other Displays /
+  // Cases". " case" needs a leading space to dodge mid-word false positives;
   // "display" matches "Starter Deck Display" and similar.
-  if(name.includes(" case") || / display( |$)/.test(name)) return "Cases & Displays";
-  // Pack sub-variants: split the loader's single "Booster Pack" bucket into
-  // basic / sleeved / art bundle so they show up as distinct sections.
+  if(name.includes("booster box case")) return "Cases";
+  if(name.includes(" case") || / display( |$)/.test(name)) return "Other Displays / Cases";
+  // Pack sub-variants: basic vs sleeved. Art-bundle SKUs are filtered out
+  // upstream (isHiddenSealedListing) so they never reach here.
   if(item.product_type === "Booster Pack"){
-    if(name.includes("art bundle")) return "Booster Pack Art Bundles";
-    if(name.includes("sleeved"))    return "Sleeved Booster Packs";
+    if(name.includes("sleeved")) return "Sleeved Booster Packs";
     return "Booster Packs";
   }
   // Special-edition "Collection Starter Set" and "Starter Blister Bundle"
@@ -7286,6 +7293,13 @@ function deriveSealedDisplayType(item){
     if(name.includes("collection starter") || name.includes("starter blister")){
       return "Bundles";
     }
+  }
+  // The catch-all "Sealed" product_type holds only D23 collections (→
+  // Collector's Edition) and the Gateway box (→ Quests). Reroute both so the
+  // generic "Sealed" section disappears entirely.
+  if(item.product_type === "Sealed"){
+    if(name.includes("d23")) return "Collector's Edition";
+    if(name.includes("gateway")) return "Quests";
   }
   return SEALED_DISPLAY_TYPE_FOR[item.product_type] || item.product_type || "Other Sealed";
 }
@@ -7363,7 +7377,7 @@ function SealedView({raw, sealedPrices, sets, priceMode, setPriceMode, openSetHi
   // excluded — they're individual cards, not sealed product.
   const grouped = useMemo(()=>{
     const items = (sealedPrices || []).filter(p =>
-      p.printing === "Normal" && p.product_type !== "Promo Single"
+      p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const byType = new Map();
     for(const item of items){
@@ -9127,6 +9141,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     const filtered = sealedPrices.filter(p =>
       p.printing === "Normal" &&
       p.product_type !== "Promo Single" &&
+      !isHiddenSealedListing(p) &&
       (!q || cleanSealedName(p.name).toLowerCase().includes(q))
     );
     const byType = new Map();
@@ -10665,9 +10680,11 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   </div>`;
 };
 
-function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, onSignIn, readOnly, compareMode, viewerOwnSealedCollection}){
+function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, onSignIn, readOnly, compareMode, viewerOwnSealedCollection}){
   sealedMeta = sealedMeta || {};
   updateSealedMeta = updateSealedMeta || (()=>{});
+  packArts = packArts || {};
+  updatePackArt = updatePackArt || (()=>{});
   // "Track cost & date" toggle. Off by default — most users don't want
   // extra inputs cluttering the rows. Persisted per device.
   const [trackCosts, setTrackCosts] = useState(()=>{
@@ -10748,7 +10765,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     // SEALED_PUZZLES are unpriced static catalog rows merged in so they render
     // as a "Puzzles" section alongside the priced sealed products.
     const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
-      p.printing === "Normal" && p.product_type !== "Promo Single"
+      p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const filtered = (hideUnowned
       ? items.filter(p => (sealedCollection[p.tcgplayer_product_id] || 0) > 0)
@@ -10805,6 +10822,18 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     });
     return out;
   }, [sealedPrices, sealedCollection, hideUnowned, setNameById, readOnly, compareMode, viewerOwnSealedCollection, groupBy]);
+
+  // Collapse / expand every section at once. Writes the full id list (or an
+  // empty list) straight to the same localStorage key toggleCollapsed uses.
+  const collapseAll = () => {
+    const all = new Set(grouped.map(s => s.set_id));
+    setCollapsedSets(all);
+    try { localStorage.setItem("packsink:sealedColl:collapsed", JSON.stringify([...all])); } catch {}
+  };
+  const expandAll = () => {
+    setCollapsedSets(new Set());
+    try { localStorage.setItem("packsink:sealedColl:collapsed", "[]"); } catch {}
+  };
 
   // Owned sealed pids — driver for the optional Δ% history fetch.
   const ownedSealedPids = useMemo(() =>
@@ -10880,6 +10909,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
           <button class=${displayMode==="grid"?"active":""} onClick=${()=>setDisplayMode("grid")}>Grid</button>
           <button class=${displayMode==="compact"?"active":""} onClick=${()=>setDisplayMode("compact")}>Compact</button>
         </div>
+        <div class="seg-toggle" title="Collapse or expand every section">
+          <button type="button" onClick=${collapseAll}>Collapse all</button>
+          <button type="button" onClick=${expandAll}>Expand all</button>
+        </div>
         <div class="market-sim-kind" role="group" aria-label="Price source">
           <button class=${priceMode==="low"?"active":""} onClick=${()=>setPriceMode("low")}>Low</button>
           <button class=${priceMode==="market"?"active":""} onClick=${()=>setPriceMode("market")}>NM Market</button>
@@ -10932,6 +10965,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     const price = item[priceField];
                     const url = item.is_puzzle ? item.buy_url : tcgUrl(item.tcgplayer_product_id);
                     const dtype = deriveSealedDisplayType(item);
+                    // Booster packs have 3 cover-art variants (no separate
+                    // SKU); show a 3-art completion checklist on those tiles.
+                    const isPackType = !readOnly && (dtype === "Booster Packs" || dtype === "Sleeved Booster Packs");
+                    const ownedArts = packArts[item.tcgplayer_product_id] || {};
+                    const ownedArtCount = [1,2,3].filter(i => ownedArts[i]).length;
                     const bump = (delta) => {
                       const next = Math.max(0, Math.min(99, qty + delta));
                       if(next !== qty) updateSealedQty(item.tcgplayer_product_id, next);
@@ -10948,6 +10986,16 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     // pid). Hidden on tracked-only/un-owned tiles since the
                     // fetch only covers owned pids.
                     const dRow = (showDeltas && tileDeltasByPid) ? tileDeltasByPid.get(item.tcgplayer_product_id) : null;
+                    // Personal return — cost basis (what you paid for this
+                    // holding) vs its value now (priceMode price × qty). Only
+                    // when cost-tracking is on and a paid amount is recorded.
+                    const paidSealed = sealedMeta[item.tcgplayer_product_id]?.amount_paid;
+                    const paidNum = paidSealed != null ? Number(paidSealed) : null;
+                    const ownedValSealed = (price || 0) * qty;
+                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle
+                      && paidNum != null && Number.isFinite(paidNum) && paidNum > 0;
+                    const retSealed = hasRetSealed ? ownedValSealed - paidNum : null;
+                    const retPctSealed = hasRetSealed ? (retSealed/paidNum)*100 : null;
                     return html`<div key=${item.tcgplayer_product_id} class=${"gc-card gc-card-clickable"+(qty>0?" gc-card-owned":"")}
                         onClick=${()=>setSelectedProduct(item)}
                         title="View price history and details">
@@ -10976,19 +11024,44 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                           <span class="gc-card-delta-cell"><span class="gc-card-delta-lbl">1Y</span>
                             <span class="gc-card-delta-val" style=${{color: pctColor(dRow.pct_365d)}}>${fmtPct(dRow.pct_365d)}</span></span>
                         </div>`}
-                        ${qty > 0 && !item.is_puzzle && html`<div class="gc-card-owned-value">
-                          <span class="muted">Owned value</span>
-                          <strong>${fmt((price || 0) * qty)}</strong>
-                        </div>`}
-                        ${readOnly
-                          ? html`<div class="sealed-coll-counter sealed-coll-counter-readonly">
-                              <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>×${qty}</span>
-                            </div>`
-                          : html`<div class="sealed-coll-counter" onClick=${e=>e.stopPropagation()}>
-                              <button onClick=${(e)=>{ e.stopPropagation(); bump(-1); }} disabled=${qty<=0} aria-label="Decrease">−</button>
-                              <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
-                              <button onClick=${(e)=>{ e.stopPropagation(); bump(+1); }} disabled=${qty>=99} aria-label="Increase">+</button>
-                            </div>`}
+                        ${/* Footer: owned value/return OR (for packs) the 3-art
+                            checklist on the left; qty counter on the right. One
+                            row so every tile is the same height. */ null}
+                        <div class="gc-card-foot">
+                          <div class="gc-card-foot-meta">
+                            ${isPackType
+                              ? html`<span class="gc-pack-arts" title="Which of this set's 3 booster-pack arts you own — click to toggle">
+                                  ${[1,2,3].map(i => html`<button key=${i} type="button"
+                                    class=${"gc-pack-art-dot"+(ownedArts[i]?" on":"")}
+                                    aria-pressed=${!!ownedArts[i]}
+                                    title=${(ownedArts[i]?"Owned":"Not owned")+" — art "+i+" (click to toggle)"}
+                                    onClick=${e=>{ e.stopPropagation();
+                                      const willOwn = !ownedArts[i];
+                                      updatePackArt(item.tcgplayer_product_id, i, willOwn);
+                                      // Owning N arts implies you own ≥ N packs — bump qty up
+                                      // to match (never down) so "3 arts, 0 owned" can't happen.
+                                      if(willOwn){
+                                        const need = ownedArtCount + 1;
+                                        if(qty < need) updateSealedQty(item.tcgplayer_product_id, need);
+                                      }
+                                    }}>${i}</button>`)}
+                                  ${qty > 0 && !item.is_puzzle && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                </span>`
+                              : html`
+                                ${qty > 0 && !item.is_puzzle && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${"Now " + fmt(ownedValSealed) + " · paid " + fmt(paidNum)}
+                                  style=${{color: retSealed>=0?"var(--green)":"var(--red)"}}>${retSealed>=0?"+":""}${fmt(retSealed)} (${fmtPct(retPctSealed)})</span>`}`}
+                          </div>
+                          ${readOnly
+                            ? html`<div class="sealed-coll-counter sealed-coll-counter-readonly">
+                                <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>×${qty}</span>
+                              </div>`
+                            : html`<div class="sealed-coll-counter" onClick=${e=>e.stopPropagation()}>
+                                <button onClick=${(e)=>{ e.stopPropagation(); bump(-1); }} disabled=${qty<=0} aria-label="Decrease">−</button>
+                                <span class=${"sealed-coll-counter-qty"+(qty>0?" has":"")}>${qty}</span>
+                                <button onClick=${(e)=>{ e.stopPropagation(); bump(+1); }} disabled=${qty>=99} aria-label="Increase">+</button>
+                              </div>`}
+                        </div>
                         ${!readOnly && trackCosts && qty>0 && html`<div onClick=${e=>e.stopPropagation()}><${CostDateInputs}
                           currentPaid=${sealedMeta[item.tcgplayer_product_id]?.amount_paid ?? null}
                           currentDate=${sealedMeta[item.tcgplayer_product_id]?.acquired_date || null}
@@ -12102,6 +12175,23 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     const hasOwned = slots.some(s => s.owned);
                     const tilePrinting = printing || "Normal";
                     const showPrintingTag = isSplitSection || (card.Set && SPLIT_BY_PRINTING_SETS_GLOBAL.has(card.Set));
+                    // Resolve a slot's current graded $ for the cost-basis
+                    // return chip — mirrors the slot-pill lookup (custom value
+                    // wins, else preferred printing → Normal/Holo/Cold fallback).
+                    const resolveSlotPx = (s) => {
+                      if(s.custom_value != null && Number.isFinite(s.custom_value)) return s.custom_value;
+                      if(isCustomVariant) return null;
+                      const sp = s.printing || tilePrinting;
+                      let p = priceByKey.get(card.tcgplayer_product_id + "|" + sp + "|" + s.grader + "|" + s.grade);
+                      if(!p){
+                        for(const pr of ["Normal","Holofoil","Cold Foil"]){
+                          if(pr === sp) continue;
+                          p = priceByKey.get(card.tcgplayer_product_id + "|" + pr + "|" + s.grader + "|" + s.grade);
+                          if(p) break;
+                        }
+                      }
+                      return p ? (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? null) : null;
+                    };
                     return html`<div key=${card.card_id + "::" + tilePrinting}
                         class=${"gc-card gc-card-clickable " + (hasOwned ? "gc-card-owned" : "gc-card-tracked-only") + (hidden ? " gc-card-hidden" : "")}
                         style=${tileBg ? {background: tileBg} : null}
@@ -12242,15 +12332,27 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                           })}
                         </div>
                         ${!readOnly && trackCosts && slots.some(s => s.owned) && html`<div class="gc-slot-meta-list" onClick=${e=>e.stopPropagation()}>
-                          ${slots.filter(s => s.owned).map((s, si) => html`<div key=${si} class="gc-slot-meta-row">
-                            <span class="gc-slot-meta-tag">${(s.grader||"").toUpperCase()} ${s.grade}</span>
+                          ${slots.filter(s => s.owned).map((s, si) => {
+                            const paidG = s.amount_paid != null ? Number(s.amount_paid) : null;
+                            const pxNowG = resolveSlotPx(s);
+                            const valNowG = pxNowG != null ? pxNowG * (s.qty || 0) : null;
+                            const hasRetG = paidG != null && Number.isFinite(paidG) && paidG > 0 && valNowG != null;
+                            const retG = hasRetG ? valNowG - paidG : null;
+                            const retPctG = hasRetG ? (retG/paidG)*100 : null;
+                            return html`<div key=${si} class="gc-slot-meta-row">
+                            <div class="gc-slot-meta-head">
+                              <span class="gc-slot-meta-tag">${(s.grader||"").toUpperCase()} ${s.grade}</span>
+                              ${hasRetG && html`<span class="gc-slot-return" title=${"Now " + fmt(valNowG) + " · paid " + fmt(paidG)}
+                                style=${{color: retG>=0?"var(--green)":"var(--red)"}}>${retG>=0?"+":""}${fmt(retG)} (${fmtPct(retPctG)})</span>`}
+                            </div>
                             <${CostDateInputs}
                               currentPaid=${s.amount_paid ?? null}
                               currentDate=${s.acquired_date || null}
                               currentCustomValue=${s.custom_value ?? null}
                               showCustomValue=${true}
                               onCommit=${patch => updateItemMeta({card_id: card.card_id, printing: s.printing || tilePrinting, grader: s.grader, grade: s.grade}, patch)}/>
-                          </div>`)}
+                          </div>`;
+                          })}
                         </div>`}
                       </div>
                     </div>`;
@@ -12979,7 +13081,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
   </div>`;
 };
 
-const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded}) => {
+const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded}) => {
   const isViewerMode = !!viewerContext;
   const viewerVis = viewerContext?.data?.visibility || {raw:false, sealed:false, graded:false};
   // Comparison filter for viewer mode: "all" | "missing" | "shared".
@@ -13383,6 +13485,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
           sealedMeta=${sealedMeta || {}}
           updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta || (()=>{})}
+          packArts=${packArts || {}} updatePackArt=${updatePackArt || (()=>{})}
           onSignIn=${onSignIn}
           readOnly=${isViewerMode}
           compareMode=${canCompare ? compareMode : "all"}
@@ -16292,7 +16395,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     }
     const out = [];
     for(const p of sealedPrices){
-      if(p.printing !== "Normal" || p.product_type === "Promo Single") continue;
+      if(p.printing !== "Normal" || p.product_type === "Promo Single" || isHiddenSealedListing(p)) continue;
       const d = deltaByPid.get(p.tcgplayer_product_id);
       const lowToday    = d ? d.low_today    : (p.low_price != null ? Number(p.low_price) : null);
       const marketToday = d ? d.market_today : (p.market_price != null ? Number(p.market_price) : null);
@@ -23776,7 +23879,7 @@ const resolveInkFill = (inkKey, idPrefix) => {
   return {fill: `url(#${id})`, defs};
 };
 
-const DeckCostChart = ({costByInk}) => {
+const DeckCostChart = ({costByInk, cardCountLabel, uniqueCount}) => {
   const buckets = [1,2,3,4,5,6,7,8,9];
   const totals = buckets.map(c => {
     const row = costByInk[c] || {};
@@ -23803,7 +23906,9 @@ const DeckCostChart = ({costByInk}) => {
   }
   const getFill = (inkKey) => fillCache[inkKey] || "var(--text-muted)";
   return html`<div class="deck-chart">
-    <div class="deck-chart-title">Cost curve</div>
+    <div class="deck-chart-title">Cost curve
+      ${cardCountLabel != null && html`<span class="deck-chart-count">Cards: ${cardCountLabel}${uniqueCount != null ? html` · Unique: ${uniqueCount}` : ""}</span>`}
+    </div>
     <svg viewBox="0 0 ${W} ${H}" width="100%" height=${H} preserveAspectRatio="none">
       <defs>${defsList}</defs>
       ${buckets.map((c, i) => {
@@ -23890,7 +23995,9 @@ const DeckPie = ({title, data, colorOf, gradientPrefix}) => {
           : {background: s.color, border: "1px solid rgba(128,128,128,0.45)", boxSizing: "border-box"};
         return html`<div key=${s.k} class=${"deck-pie-legend-row"+(isDual?" dual":"")}>
           <span class=${"deck-pie-swatch"+(isDual?" dual":"")} style=${sw}></span>
-          <span class="deck-pie-legend-name"><span class="deck-pie-legend-name-text">${s.k}</span>${isDual?html`<span class="dual-tag">dual</span>`:""}</span>
+          <span class="deck-pie-legend-name">${isDual
+            ? html`<span class="dual-tag">DUAL</span>`
+            : html`<span class="deck-pie-legend-name-text">${s.k}</span>`}</span>
           <span class="deck-pie-legend-val">${Number.isInteger(s.v) ? s.v : s.v.toFixed(1)}</span>
         </div>`;
       })}
@@ -24351,6 +24458,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
   }, [deckTextValue]);
 
   const totalCount = (deck.cards||[]).reduce((s,c)=>s+c.quantity, 0);
+  const uniqueCount = (deck.cards||[]).filter(c => (c.quantity||0) > 0).length;
+  // "60/60" only while short of the 60-card minimum; at/above 60 just the
+  // number (63/60 is a legal deck, so the "/60" reads as an error there).
+  const cardCountLabel = totalCount < 60 ? `${totalCount}/60` : `${totalCount}`;
   const totalValue = (deck.cards||[]).reduce((s,c) => {
     const rows = cardById[c.card_id] || [];
     return s + (cheapestCardPrice(rows) || 0) * c.quantity;
@@ -24671,7 +24782,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
         <div class="deck-stat">
           <div class="deck-stat-lbl">Total value</div>
           <div class="deck-stat-val green">$${totalValue.toFixed(2)}</div>
-          <div class="deck-stat-sub">${totalCount} / 60 cards</div>
+          <div class="deck-stat-sub">full deck</div>
         </div>
         <div class="deck-stat">
           <div class="deck-stat-lbl">Owned</div>
@@ -24692,7 +24803,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
             </div>`}
       </div>
       ${totalCount > 0 && html`<div class="deck-charts">
-        <${DeckCostChart} costByInk=${aggregates.costByInk}/>
+        <${DeckCostChart} costByInk=${aggregates.costByInk} cardCountLabel=${cardCountLabel} uniqueCount=${uniqueCount}/>
         <div class="deck-pie-row">
           <${DeckPie} title="Colors" data=${aggregates.inkCount}
             gradientPrefix="colors-pie"
@@ -24879,11 +24990,23 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
           title="Fade cards you're missing from your collection so the owned ones stand out">
           <span class="dot"></span>HIGHLIGHT MISSING
         </span>
-        <span class="deck-count-tag" title="Cards in deck — Lorcana decks need 60"
-          style=${{marginLeft:"auto",marginRight:"2px",fontSize:"13px",fontWeight:800,whiteSpace:"nowrap",letterSpacing:"0.2px",
-            color: totalCount>=60 ? "var(--accent)" : "var(--text-muted)"}}>
-          ${totalCount}<span style=${{color:"var(--text-muted)",fontWeight:600}}>/60</span>
-        </span>
+        <div style=${{marginLeft:"auto",marginRight:"2px",display:"flex",flexDirection:"column",alignItems:"flex-end",gap:"3px"}}>
+          <span class="deck-count-tag" title=${`${totalCount} cards · ${uniqueCount} unique — Lorcana decks need at least 60`}
+            style=${{fontSize:"13px",fontWeight:800,whiteSpace:"nowrap",letterSpacing:"0.2px",
+              display:"flex",alignItems:"baseline",gap:"5px",
+              color: totalCount>=60 ? "var(--accent)" : "var(--text-muted)"}}>
+            ${cardCountLabel}
+            <span style=${{color:"var(--text-muted)",fontWeight:600,fontSize:"11px"}}>· ${uniqueCount} unique</span>
+          </span>
+          ${(aggregates.inkable + aggregates.nonInkable) > 0 && html`<div class="deck-card-inkable">
+            <span class="deck-ink-chip" title=${aggregates.inkable + " inkable card" + (aggregates.inkable===1?"":"s") + " (can be used as ink)"}>
+              <${InkableHex}/><span>${aggregates.inkable}</span>
+            </span>
+            <span class="deck-ink-chip" title=${aggregates.nonInkable + " uninkable card" + (aggregates.nonInkable===1?"":"s")}>
+              <${UninkableHex}/><span>${aggregates.nonInkable}</span>
+            </span>
+          </div>`}
+        </div>
         <div ref=${viewDropRef} style=${{position:"relative"}}>
           <button class="deck-view-trigger" onClick=${()=>setViewDropOpen(o=>!o)}>View ▾</button>
           ${viewDropOpen && html`<div class="deck-view-popover">
@@ -25913,6 +26036,11 @@ function App(){
   // Sealed view's "Track cost & date" inputs and the value-chart's per-item
   // acquired-date gating.
   const [sealedMeta, setSealedMeta] = useState({});
+  // Booster-pack art-variant ownership: { [pid]: {1:true, 2:true, 3:true} }.
+  // Each set's pack has 3 cover arts that TCGPlayer doesn't sell separately,
+  // so this is a manual completion checklist persisted in sealed_pack_arts.
+  // Presence of an art index = owned.
+  const [packArts, setPackArts] = useState({});
   // Tracks the post-sign-in fetch so the Home panel can show a "loading"
   // state instead of the "empty collection" CTA during the round-trip.
   const [collectionLoading, setCollectionLoading] = useState(false);
@@ -26221,6 +26349,66 @@ function App(){
       setSealedMeta(meta);
     })();
     return ()=>{ cancelled = true; };
+  }, [user]);
+
+  // Booster-pack art-variant ownership fetch. Separate effect so a missing
+  // table (pre-migration-72) or transient error doesn't block the sealed qty
+  // load above. Silently no-ops on 42P01 (table not deployed yet).
+  useEffect(()=>{
+    if(!user){ setPackArts({}); return; }
+    let cancelled = false;
+    (async ()=>{
+      const {data, error} = await sbClient
+        .from("sealed_pack_arts")
+        .select("tcgplayer_product_id,art_index");
+      if(cancelled) return;
+      if(error){
+        console.warn("pack-art fetch failed (run supabase/72_*.sql?):", error.message || error);
+        return;
+      }
+      const map = {};
+      for(const row of (data || [])){
+        (map[row.tcgplayer_product_id] ||= {})[row.art_index] = true;
+      }
+      setPackArts(map);
+    })();
+    return ()=>{ cancelled = true; };
+  }, [user]);
+
+  // Toggle ownership of one of a pack's 3 art variants. Presence-based:
+  // owned → insert a row, un-owned → delete it. Optimistic with rollback.
+  const updatePackArt = useCallback(async (productId, artIndex, owned)=>{
+    if(!user || productId == null) return;
+    const pid = parseInt(productId, 10);
+    const idx = Number(artIndex);
+    let prev;
+    setPackArts(m => {
+      prev = m[pid] ? {...m[pid]} : null;
+      const cur = {...(m[pid] || {})};
+      if(owned) cur[idx] = true; else delete cur[idx];
+      const next = {...m};
+      if(Object.keys(cur).length) next[pid] = cur; else delete next[pid];
+      return next;
+    });
+    let err;
+    try {
+      if(owned){
+        // ignoreDuplicates → ON CONFLICT DO NOTHING (needs only INSERT). A
+        // plain DO-UPDATE upsert would require the UPDATE grant we don't give
+        // this table (presence-only rows — nothing to update).
+        ({error: err} = await sbClient.from("sealed_pack_arts").upsert({
+          user_id:user.id, tcgplayer_product_id:pid, art_index:idx,
+        }, {onConflict:"user_id,tcgplayer_product_id,art_index", ignoreDuplicates:true}));
+      } else {
+        ({error: err} = await sbClient.from("sealed_pack_arts").delete()
+          .eq("user_id", user.id).eq("tcgplayer_product_id", pid).eq("art_index", idx));
+      }
+    } catch(e){ err = e; }
+    if(err){
+      console.error("pack-art update failed:", err.message || err);
+      setPackArts(m => { const next = {...m}; if(prev) next[pid] = prev; else delete next[pid]; return next; });
+      flashToast("Couldn't save — change reverted");
+    }
   }, [user]);
 
   // Optimistically bump local state, then persist to Supabase.
@@ -26884,6 +27072,8 @@ function App(){
       sealedMeta=${viewedCollectionId ? (viewedCollectionData?.sealedMeta || {}) : sealedMeta}
       updateSealedQty=${viewedCollectionId ? (()=>{}) : updateSealedQty}
       updateSealedMeta=${viewedCollectionId ? (()=>{}) : updateSealedMeta}
+      packArts=${viewedCollectionId ? {} : packArts}
+      updatePackArt=${viewedCollectionId ? (()=>{}) : updatePackArt}
       tabClickNonce=${tabClickNonce}
       onSignIn=${signIn} theme=${theme}
       currentUser=${user}
