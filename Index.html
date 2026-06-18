@@ -44,6 +44,23 @@
           : u;
       };
       window.Sentry.init({
+        // Drop known browser/extension noise that isn't our code:
+        //  - ResizeObserver loop notices are benign (the observer just defers a frame)
+        //  - runtime.sendMessage comes from a user's browser extension
+        //  - "Script error." is the opaque cross-origin onerror with zero detail
+        ignoreErrors: [
+          "ResizeObserver loop completed with undelivered notifications",
+          "ResizeObserver loop limit exceeded",
+          "Invalid call to runtime.sendMessage",
+          /^Script error\.?$/,
+        ],
+        // Errors originating in browser extensions, not packs.ink.
+        denyUrls: [
+          /extensions\//i,
+          /^chrome-extension:\/\//i,
+          /^moz-extension:\/\//i,
+          /^safari-(web-)?extension:\/\//i,
+        ],
         beforeSend: function (event) {
           try {
             if (event.request && event.request.url) event.request.url = scrub(event.request.url);
@@ -61,7 +78,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=186">
+<link rel="stylesheet" href="styles.css?v=187">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -120,7 +137,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=186"></script>
+<script src="logo.js?v=187"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
