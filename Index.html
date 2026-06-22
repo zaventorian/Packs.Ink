@@ -78,7 +78,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=187">
+<link rel="stylesheet" href="styles.css?v=188">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -137,7 +137,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=187"></script>
+<script src="logo.js?v=188"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -13736,6 +13736,19 @@ function EloSortTh({label, col, sortCol, sortDir, setSort, className, numeric}){
   </th>`;
 }
 
+// Special-case alias suppression: a player can ask to hide specific old handles
+// from the public alias line (leaderboard row + profile "Also known as"). Keyed
+// by canonical display name → regex matched against alias display_names to hide.
+// METALLICFLARE asked to drop his old "LoL …" handles (he kept one clean name).
+// Display-only — aliasMap itself is untouched so search still matches the hidden
+// handles. If he ever renames again, revisit this entry.
+const ELO_ALIAS_HIDE = { "METALLICFLARE": /lol/i };
+function eloVisibleAliases(canonicalName, aliases){
+  const rx = ELO_ALIAS_HIDE[canonicalName];
+  const list = aliases || [];
+  return rx ? list.filter(a => !rx.test(a.display_name || "")) : list;
+}
+
 function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, aliasMap}){
   if(rows === null) return html`<div class="elo-loading">Loading leaderboard…</div>`;
   if(rows.length === 0) return html`<div class="elo-empty">No players match.</div>`;
@@ -13755,7 +13768,7 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
       </thead>
       <tbody>
         ${rows.map(r => {
-          const aliases = aliasesFor(r.player_id);
+          const aliases = eloVisibleAliases(r.display_name, aliasesFor(r.player_id));
           return html`<tr class="elo-row" key=${r.player_id}>
             <td class="elo-td-rank"><${EloRankBadge} rank=${r.rank}/></td>
             <td class="elo-td-elo">${Math.round(r.current_rating)}</td>
@@ -14111,7 +14124,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   </div>`;
   if(!profile) return html`<div class="elo-loading">Loading player…</div>`;
 
-  const aliases = (aliasMap && canonicalId != null) ? (aliasMap.get(canonicalId) || []) : [];
+  const aliases = eloVisibleAliases(profile.display_name,
+    (aliasMap && canonicalId != null) ? (aliasMap.get(canonicalId) || []) : []);
   const totalEvents = events ? events.length : null;
 
   return html`<div class="elo-profile">
