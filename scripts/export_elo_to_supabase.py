@@ -74,6 +74,24 @@ def export_players(conn, sb: Supabase, dry: bool) -> int:
         merged = fetch_all(conn, "SELECT COUNT(*) AS n FROM players WHERE merged_into_id IS NOT NULL")
         print(f"  players: {len(rows)} rows ({merged[0]['n']} have merge targets); first: {rows[0] if rows else None}")
         return len(rows)
+
+    # --- Park moved names first (defeats the (platform,display_name) UNIQUE key) ---
+    # A bulk upsert can't replicate SQLite's transactional stash-then-rename, so a
+    # player taking a name another not-yet-updated remote row still holds 23505s on
+    # elo_players_platform_display_name_key (e.g. a RENAME+MERGE where the absorbed
+    # player still holds the new name in Supabase). Park every player whose name
+    # changed since the last export onto a unique sentinel, freeing all contested
+    # names before we assign the real ones. This is sufficient: apply_renames
+    # guarantees no two LOCAL players share a name, so any remote holder of a
+    # contested name is necessarily one of these moved players.
+    remote = {r["player_id"]: r["display_name"]
+              for r in sb.select("elo_players", "player_id,display_name")}
+    moved = [r for r in rows if remote.get(r["player_id"]) != r["display_name"]]
+    if moved:
+        park = [{**r, "display_name": f"__migrate__{r['player_id']}"} for r in moved]
+        print(f"  parking {len(park)} moved name(s) on sentinels first")
+        sb.upsert("elo_players", park, on_conflict="player_id")
+
     sb.upsert("elo_players", rows, on_conflict="player_id")
 
     merge_rows = fetch_all(
