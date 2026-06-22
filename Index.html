@@ -1,6 +1,28 @@
 ﻿<!DOCTYPE html>
-<html lang="en" data-theme="light" data-mode="light">
+<html lang="en" data-theme="aurora" data-mode="dark">
 <head>
+<script>
+/* Pre-paint theme boot: resolve the saved theme (default = dark / Aurora) and set
+   data-theme/data-mode on <html> BEFORE first paint, so the dark default doesn't
+   flash light on load. React re-applies the identical logic on mount (App ~25976);
+   this only owns the first frame. */
+(function(){
+  try{
+    var LIGHT=["parchment","sunrise","watercolor","daydream"], DARK=["velvet","aurora","black"];
+    var mode=localStorage.getItem("packsink:themeMode");
+    var lt=localStorage.getItem("packsink:lightTheme"); if(LIGHT.indexOf(lt)<0) lt="parchment";
+    var dt=localStorage.getItem("packsink:darkTheme");  if(DARK.indexOf(dt)<0)  dt="aurora";
+    if(LIGHT.indexOf(mode)>=0) mode="light";
+    else if(DARK.indexOf(mode)>=0) mode="dark";
+    else if(mode!=="light"&&mode!=="dark"&&mode!=="system") mode="dark"; /* first-time / unknown → dark */
+    var resolved = mode==="light" ? lt : mode==="dark" ? dt
+      : ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? dt : lt);
+    var el=document.documentElement;
+    el.setAttribute("data-theme", resolved);
+    el.setAttribute("data-mode", DARK.indexOf(resolved)>=0 ? "dark" : "light");
+  }catch(e){}
+})();
+</script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Packs.Ink</title>
@@ -78,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=188">
+<link rel="stylesheet" href="styles.css?v=189">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -137,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=188"></script>
+<script src="logo.js?v=189"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -8038,7 +8060,14 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
   return " · " + parts.join(" · ");
 };
 
+// Sentinel "set" that flips CollectionSetDetail into a flat, owned-only grid
+// spanning EVERY set — the "All Cards You Own" view. Reuses the entire set-detail
+// machinery (tiles, smart-search, ink/rarity chips, sort) so e.g. filtering to
+// Enchanted + sorting by price shows every Enchanted you own across all sets.
+const ALL_CARDS_VIEW = "__all_owned__";
+
 const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, readOnly, compareMode, viewerOwnCollection}) => {
+  const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
   // EITHER printing in the group — a Normal-only owned card by the viewer
@@ -8101,7 +8130,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   const SECTION_SPLIT_SETS = SECTION_SPLIT_SETS_GLOBAL;
   const isChallengePromoC1 = SECTION_SPLIT_SETS.has(setName);
   const [foilMode, setFoilMode] = useState(isExtrasView ? "foil" : "either"); // "either" | "normal" | "foil"
-  const [sortKey, setSortKeyState] = useState("num");
+  const [sortKey, setSortKeyState] = useState(allMode ? "price-desc" : "num");
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Per-card target: 1 for Master Set, 4 for Playset, etc. Passed in from
   // CollectionView's top-level segmented toggle. Falls back to 1 if missing
@@ -8109,13 +8138,16 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   const TARGET = Math.max(1, copies || 1);
 
   const groups = useMemo(()=>{
-    const filtered = raw.filter(r => r.Set === setName);
+    // allMode: every main-set card (owned-only filtering happens in
+    // visibleGroups so a +/- doesn't force a full re-group). Otherwise one set.
+    const filtered = allMode ? raw.filter(r => SET_ORDER.includes(r.Set))
+                             : raw.filter(r => r.Set === setName);
     const out = groupCards(filtered);
     const cmp = SORT_COMPARATORS[sortKey];
     if(cmp) out.sort(cmp);
     else out.sort((a,b) => collectorNum(a) - collectorNum(b));
     return out;
-  }, [raw, setName, sortKey]);
+  }, [raw, setName, sortKey, allMode]);
 
   // Rarities actually present in this set, in the standard display order.
   const setRarities = useMemo(()=>{
@@ -8134,6 +8166,12 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     // the `f` argument the canonical matcher expects.
     const chipFilter = {inks: inkFilter, rarities: rarityFilter};
     return groups.filter(g => {
+      if(allMode){
+        // "All Cards You Own" — keep only groups with at least one owned printing.
+        const nK = g.normal ? g.card_id+":"+g.normal.tcg_printing : null;
+        const fK = g.foil   ? g.card_id+":"+g.foil.tcg_printing   : null;
+        if(!((nK && (collection[nK]||0)>0) || (fK && (collection[fK]||0)>0))) return false;
+      }
       if(!matchesCompare(g)) return false;
       if(!matchesCardFilter(g, chipFilter, parsed)) return false;
 
@@ -8238,16 +8276,16 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   return html`<div>
     <div class="setdet-header">
       <button class="setdet-back" onClick=${onBack}>← Back to Collection</button>
-      <h2 class="title-font setdet-title">${setName}</h2>
-      <div class="setdet-count">${visibleGroups.length} / ${groups.length} cards</div>
-      ${user && bulkUpdateCollection && html`<button class="setdet-bulk-add" onClick=${()=>setBulkAddOpen(true)}
+      <h2 class="title-font setdet-title">${allMode ? "All Cards You Own" : setName}</h2>
+      <div class="setdet-count">${visibleGroups.length}${allMode ? "" : " / "+groups.length} cards</div>
+      ${!allMode && user && bulkUpdateCollection && html`<button class="setdet-bulk-add" onClick=${()=>setBulkAddOpen(true)}
         title="Bulk-add cards by rarity — e.g. a master set of Commons + Uncommons or a playset of Enchanteds">
         ＋ Bulk Add
       </button>`}
     </div>
 
     <div class="setdet-toolbar">
-      <input type="search" class="setdet-search" placeholder="Search this set..."
+      <input type="search" class="setdet-search" placeholder=${allMode ? "Search all your cards..." : "Search this set..."}
         value=${search} onInput=${e=>setSearch(e.target.value)}/>
       <div class="cards-chipgroup">
         ${INKS.map(ink => html`<button key=${ink} class=${"chip ink ink-icon-chip "+(inkFilter.has(ink)?"active":"")}
@@ -8294,14 +8332,14 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         <div class="setdet-stat-val green">$${visibleOwned.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="setdet-stat-sub">${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</div>
       </div>
-      <div class="setdet-stat">
+      ${!allMode && html`<div class="setdet-stat">
         <div class="setdet-stat-lbl">Missing value</div>
         <div class="setdet-stat-val red">$${visibleMissing.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${copies===1?"master":copies===4?"playset":copies+"×"} set</div>
-      </div>
+      </div>`}
     </div>
 
-    ${visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
+    ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
       href=${missingMassEntryUrl || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
       <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter)}</span>
       <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">Buy bulk on TCGplayer</span><span class="setdet-buy-missing-arrow">↗</span></span>
@@ -13527,6 +13565,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           <option value="3">3</option><option value="4">4</option>
         </select>
       </label>
+      <button class="import-csv-btn allcards-btn" onClick=${()=>setSelectedSet(ALL_CARDS_VIEW)}
+        title="View every card you own across all sets in one sortable, filterable grid">▦ All Cards</button>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
         title="Import a collection CSV">Import CSV</button>`}
       ${!isViewerMode && html`<input ref=${importFileRef} type="file" accept=".csv,text/csv" style=${{display:"none"}}
@@ -25983,7 +26023,7 @@ function App(){
       if(LIGHT_VARIANTS.includes(m) || m === "light") return "light";
       if(DARK_VARIANTS.includes(m)  || m === "dark")  return "dark";
     } catch {}
-    return "light";
+    return "dark"; // first-time users default to dark mode (Aurora via darkTheme)
   });
   // Transient override for System mode — when the user manually flips via
   // the moon button in System mode, this holds "light" or "dark" until
