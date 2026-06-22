@@ -11261,6 +11261,138 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey}) 
   </div>`;
 };
 
+// "My Cards" — a flat, owned-only grid of graded slabs, mirroring the raw
+// collection's All Cards view: ☰/▦ list↔grid toggle, sort, search, grader +
+// foil filters. Separate from the goal/set-completion tracking view. Receives
+// the already-built maps from GradedCollectionView so it does no fetching.
+const GRADED_OWNED_SORTS = {
+  "value-desc": (a,b)=> (b.value||0)*(b.qty||1) - (a.value||0)*(a.qty||1),
+  "value-asc":  (a,b)=> (a.value||0)*(a.qty||1) - (b.value||0)*(b.qty||1),
+  "name":       (a,b)=> (a.name||"").localeCompare(b.name||""),
+  "set":        (a,b)=> (SET_ORDER.indexOf(b.set) - SET_ORDER.indexOf(a.set)) || (a.name||"").localeCompare(b.name||""),
+  "grade":      (a,b)=> (parseFloat(b.grade)||0) - (parseFloat(a.grade)||0),
+  "grader":     (a,b)=> (a.grader||"").localeCompare(b.grader||"") || (parseFloat(b.grade)||0)-(parseFloat(a.grade)||0),
+};
+const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
+  const [viewMode, setViewMode] = useState(()=>{ try { return localStorage.getItem("packsink:gradedOwned:view")||"grid"; } catch { return "grid"; } });
+  useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:view", viewMode); } catch {} }, [viewMode]);
+  const [sortKey, setSortKey] = useState("value-desc");
+  const [search, setSearch] = useState("");
+  const [graderFilter, setGraderFilter] = useState(new Set());
+  const [foilMode, setFoilMode] = useState("either"); // either | normal | foil
+
+  const valueOf = (it, meta) => {
+    const cv = (it.custom_value != null && Number.isFinite(Number(it.custom_value))) ? Number(it.custom_value) : null;
+    if(cv != null) return cv;
+    if(!meta || !meta.tcgplayer_product_id) return null;
+    for(const pr of [it.printing || meta.tcg_printing || "Normal", "Normal", "Holofoil", "Cold Foil"]){
+      const p = priceByKey.get(meta.tcgplayer_product_id + "|" + pr + "|" + it.grader + "|" + it.grade);
+      if(p){ const v = p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d; if(v != null) return v; }
+    }
+    return null;
+  };
+
+  const entries = useMemo(()=>{
+    const out = [];
+    for(const it of (items||[])){
+      if((it.quantity||0) <= 0) continue;
+      const meta = cardById.get(it.card_id);
+      const nm = meta?.["Product Name"] || it.card_id;
+      const dash = nm.indexOf(" - ");
+      const inkList = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
+      out.push({
+        it, meta,
+        printing: it.printing || meta?.tcg_printing || "Normal",
+        name: dash > 0 ? nm.slice(0, dash) : nm,
+        sub:  dash > 0 ? nm.slice(dash + 3) : "",
+        set: meta?.Set || "",
+        image: meta?.img_normal || meta?.img_small || meta?.img_large || null,
+        grader: it.grader, grade: it.grade, qty: it.quantity,
+        value: valueOf(it, meta),
+        custom: it.custom_value != null && Number.isFinite(Number(it.custom_value)),
+        inkList,
+      });
+    }
+    return out;
+  }, [items, cardById, priceByKey]);
+
+  const graders = useMemo(()=> Array.from(new Set(entries.map(e=>e.grader).filter(Boolean))).sort(), [entries]);
+
+  const visible = useMemo(()=>{
+    const q = (search||"").trim().toLowerCase();
+    let list = entries.filter(e=>{
+      if(graderFilter.size && !graderFilter.has(e.grader)) return false;
+      if(foilMode === "foil"   && e.printing === "Normal") return false;
+      if(foilMode === "normal" && e.printing !== "Normal") return false;
+      if(q && !((e.name+" "+e.sub+" "+e.set+" "+e.grader+" "+e.grade).toLowerCase().includes(q))) return false;
+      return true;
+    });
+    const cmp = GRADED_OWNED_SORTS[sortKey];
+    return cmp ? list.slice().sort(cmp) : list;
+  }, [entries, search, graderFilter, foilMode, sortKey]);
+
+  const totalValue = useMemo(()=> visible.reduce((s,e)=> s + (e.value||0)*(e.qty||1), 0), [visible]);
+  const printLabel = (p)=> p === "Normal" ? "Non-foil" : p === "Cold Foil" ? "Foil" : p === "Holofoil" ? "Holo" : p;
+  const gradeBadge = (e)=> html`<span class="gco-grade" style=${{background: GRADER_COLOR[(e.grader||"").toLowerCase()] || "#888"}}>${(e.grader||"").toUpperCase()} ${e.grade}</span>`;
+  const valStr = (e)=> e.value != null ? (e.custom ? "✎ " : "") + fmt(e.value) : "—";
+
+  if(!entries.length) return html`<div class="gc-empty">
+    <div class="gc-empty-title">No graded cards owned yet</div>
+    <div class="gc-empty-sub">Log a graded copy and it'll show up here in a sortable grid.</div>
+  </div>`;
+
+  return html`<div class="gco-wrap">
+    <div class="gco-toolbar">
+      <input type="search" class="setdet-search" placeholder="Search your graded cards..."
+        value=${search} onInput=${e=>setSearch(e.target.value)}/>
+      ${graders.length > 1 && html`<div class="cards-chipgroup">
+        ${graders.map(g => html`<button key=${g} class=${"chip "+(graderFilter.has(g)?"active":"")}
+          onClick=${()=>setGraderFilter(s=>toggleSet(s,g))}>${g.toUpperCase()}</button>`)}
+      </div>`}
+      <div class="seg-toggle">
+        ${[["either","Either"],["normal","Non-foil"],["foil","Foil"]].map(([k,l]) =>
+          html`<button key=${k} class=${foilMode===k?"active":""} onClick=${()=>setFoilMode(k)}>${l}</button>`)}
+      </div>
+      <select value=${sortKey} onChange=${e=>setSortKey(e.target.value)} class="setdet-sort" title="Sort">
+        <option value="value-desc">Value ↓</option>
+        <option value="value-asc">Value ↑</option>
+        <option value="name">Name (A→Z)</option>
+        <option value="set">Set</option>
+        <option value="grade">Grade ↓</option>
+        <option value="grader">Grader</option>
+      </select>
+      <div class="setdet-view-toggle">
+        <button class=${viewMode==="list"?"active":""} onClick=${()=>setViewMode("list")} title="Compact list">☰</button>
+        <button class=${viewMode==="grid"?"active":""} onClick=${()=>setViewMode("grid")} title="Card grid">▦</button>
+      </div>
+    </div>
+    <div class="gco-summary">${visible.length} card${visible.length===1?"":"s"} · <span class="green">${fmt(totalValue)}</span></div>
+    ${viewMode === "grid"
+      ? html`<div class="gco-grid">${visible.map((e,i) => html`<button key=${i} class="gco-tile" onClick=${()=>onOpen(e.it.card_id)}
+          style=${{background: e.inkList.length===2 ? `linear-gradient(135deg, ${inkTint(e.inkList[0],theme)}, ${inkTint(e.inkList[1],theme)})` : e.inkList.length===1 ? inkTint(e.inkList[0],theme) : undefined}}>
+          <div class="gco-img-wrap">
+            ${e.image ? html`<img src=${e.image} alt=${e.name} loading="lazy"/>` : html`<div class="gco-noimg"></div>`}
+            ${gradeBadge(e)}
+            ${e.printing !== "Normal" && html`<span class="gco-foil">${printLabel(e.printing)}</span>`}
+            ${e.qty > 1 && html`<span class="gco-qty">×${e.qty}</span>`}
+          </div>
+          <div class="gco-name">${e.name}</div>
+          ${e.sub && html`<div class="gco-sub">${e.sub}</div>`}
+          <div class=${"gco-val"+(e.custom?" custom":"")}>${valStr(e)}</div>
+        </button>`)}</div>`
+      : html`<div class="gco-list">${visible.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id)}>
+          <div class="gco-row-thumb">${e.image ? html`<img src=${e.image} alt=${e.name} loading="lazy"/>` : ""}</div>
+          <div class="gco-row-main">
+            <div class="gco-row-name">${e.name}</div>
+            <div class="gco-row-sub">${e.sub}${e.set ? " · "+e.set : ""}</div>
+          </div>
+          ${gradeBadge(e)}
+          <div class="gco-row-print">${printLabel(e.printing)}</div>
+          <div class=${"gco-row-val"+(e.custom?" custom":"")}>${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</div>
+        </button>`)}</div>`}
+  </div>`;
+};
+
 const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded}) => {
   const [items, setItems] = useState(null);          // owned graded cards
   const [goals, setGoals] = useState(null);          // tracking goals
@@ -11318,6 +11450,12 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     catch { return "grid"; }
   });
   useEffect(() => { try { localStorage.setItem("packsink:graded:display", displayMode); } catch {} }, [displayMode]);
+  // "tracking" = goal/set-completion sections (default) · "owned" = flat My Cards grid.
+  const [gradedView, setGradedView] = useState(() => {
+    try { return localStorage.getItem("packsink:graded:view") || "tracking"; }
+    catch { return "tracking"; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:graded:view", gradedView); } catch {} }, [gradedView]);
   // Portfolio value chart range. Defaults to "All" for graded because the
   // dataset is much sparser than raw — most slots only have a few months of
   // history, so a 3m default often shows almost nothing.
@@ -12116,7 +12254,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         ${totals.totalCopies !== totals.uniqueCards && html`<div class="gc-stat"><div class="gc-stat-val">${totals.totalCopies}</div><div class="gc-stat-lbl">Total copies owned</div></div>`}
       </div>
       <div class="graded-collection-header-actions gc-caps-row">
-        ${grouped.length > 0 && html`<button class="chip gc-caps-btn"
+        <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, or track set / rarity goals">
+          <button class=${gradedView==="tracking"?"active":""} onClick=${()=>setGradedView("tracking")}>Tracking</button>
+          <button class=${gradedView==="owned"?"active":""} onClick=${()=>setGradedView("owned")}>My Cards</button>
+        </div>
+        ${gradedView==="tracking" && grouped.length > 0 && html`<button class="chip gc-caps-btn"
           onClick=${() => {
             const anyCollapsed = grouped.some(s => collapsedSets.has(s.set_id));
             const next = new Set(anyCollapsed ? [] : grouped.map(s => s.set_id));
@@ -12126,6 +12268,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           title="Toggle all set sections at once">
           ${grouped.some(s => collapsedSets.has(s.set_id)) ? "Expand all" : "Collapse all"}
         </button>`}
+        ${gradedView==="tracking" && html`<span style=${{display:"contents"}}>
         <div class="seg-toggle gc-caps-seg" title="Filter to owned, tracked-only (not-yet-owned placeholders), or all">
           <button class=${visFilter==="all"?"active":""} onClick=${()=>setVisFilter("all")}>All</button>
           <button class=${visFilter==="owned"?"active":""} onClick=${()=>setVisFilter("owned")}>Owned</button>
@@ -12141,6 +12284,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           <button class=${displayMode==="grid"?"active":""} onClick=${()=>setDisplayMode("grid")}>Grid</button>
           <button class=${displayMode==="compact"?"active":""} onClick=${()=>setDisplayMode("compact")}>Compact</button>
         </div>
+        </span>`}
         ${!readOnly && html`<label class="sealed-coll-flag gc-caps-flag"
           title="Show 1D / 1W / 1M price change on each owned slot">
           <input type="checkbox" checked=${showDeltas} onChange=${e=>setShowDeltas(e.target.checked)}/>
@@ -12157,7 +12301,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
             </span>
           </span>
         </label>`}
-        ${!readOnly && html`<button class="chip gc-caps-btn gc-goals-jumper"
+        ${!readOnly && gradedView==="tracking" && html`<button class="chip gc-caps-btn gc-goals-jumper"
           onClick=${()=>{
             const el = document.getElementById("graded-goals-panel");
             if(el){ el.scrollIntoView({behavior:"smooth", block:"start"}); }
@@ -12178,7 +12322,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
-        ${grouped.length === 0
+        ${gradedView === "owned"
+          ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
+              raw=${raw} theme=${theme}
+              onOpen=${(cid)=>{ const matching=(raw||[]).filter(r=>r.card_id===cid); const groups=matching.length?groupCards(matching):[]; if(groups[0]) setSelectedGroup(groups[0]); }}/>`
+          : grouped.length === 0
           ? html`<div class="gc-empty">
               <div class="gc-empty-title">Start tracking your graded Lorcana</div>
               <div class="gc-empty-sub">Two ways in — log copies you already own, or set a goal to chase a specific set or rarity. You can do both.</div>
@@ -12435,7 +12583,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               </div>`;
             })}
       </div>
-      ${!readOnly && html`<aside class="graded-collection-side" id="graded-goals-panel">
+      ${!readOnly && gradedView==="tracking" && html`<aside class="graded-collection-side" id="graded-goals-panel">
         <div class="gc-side-head">
           <span>Set Tracking</span>
           <button class="active gc-caps-cta gc-caps-cta-sm" onClick=${()=>setGoalOpen(true)}>+ Add</button>
