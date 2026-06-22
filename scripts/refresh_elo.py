@@ -5,11 +5,12 @@ or locally. Steps:
   2. Re-ingest every event in `scripts/elo/season_files/wilds_unknown.xlsx`
      (the smart skip in event_already_ingested() only re-pulls non-finished
      events, so this is cheap on subsequent runs)
-  3. Run alias auto-merge for any new player handles
-  4. Apply any approved aliases (manual review CSV could be committed)
-  5. Recompute ELO from scratch
-  6. Push to Supabase + clean up orphans
-  7. Upload the updated SQLite DB back to Supabase Storage
+  3. Detect + auto-apply high-confidence RPH account renames
+  4. Run alias auto-merge for any new player handles
+  5. Apply any approved aliases (manual review CSV could be committed)
+  6. Recompute ELO from scratch
+  7. Push to Supabase + clean up orphans
+  8. Upload the updated SQLite DB back to Supabase Storage
 
 Designed to fail fast on any error so a partial state doesn't get persisted.
 
@@ -52,6 +53,16 @@ def main() -> None:
 
     run([sys.executable, "ingest.py", "--xlsx", str(args.xlsx),
          "--season", args.season, "--workers", "8"], cwd=ELO_DIR)
+
+    # Detect + apply RPH account renames. RPH has no stable user_id, so a renamed
+    # account denormalizes its NEW display name onto historical matches — we re-scan
+    # events and auto-apply only renames where the new name has overtaken nearly all
+    # of a player's matches (high-confidence). Best-effort: detect_renames exits 0
+    # even if RPH is unreachable, so it never blocks the weekly recompute; apply
+    # is idempotent. Runs before the cross-platform alias merge so RPH canonical
+    # names are settled before melee->rph matching keys on them.
+    run([sys.executable, "detect_renames.py", "--auto-approve", "--workers", "8"], cwd=ELO_DIR)
+    run([sys.executable, "apply_renames.py", "rename_candidates.csv"], cwd=ELO_DIR)
 
     # Auto-merge new player names. apply_aliases.py is idempotent.
     run([sys.executable, "suggest_aliases.py"], cwd=ELO_DIR)

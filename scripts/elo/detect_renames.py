@@ -16,10 +16,17 @@ Usage:
     python detect_renames.py --season "Fabled..." # scan one season only
     python detect_renames.py --workers 8
 """
-import argparse, csv, json, sqlite3, urllib.request, time
+import argparse, csv, json, sqlite3, sys, urllib.request, time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
+# Player names contain emoji / mathematical-bold glyphs (🦁, 𝙎𝙃𝙄𝙁𝙏). Windows
+# consoles default to cp1252 and crash on print(); force UTF-8 (no-op on Linux CI).
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
 
 HERE = Path(__file__).parent
 DB_PATH = HERE / "lorcana_elo.db"
@@ -102,6 +109,14 @@ def main():
     ap.add_argument("--workers", type=int, default=6)
     ap.add_argument("--min-evidence", type=int, default=2,
                     help="surface a (player, new_name) pair only when it shows up in this many matches")
+    ap.add_argument("--auto-approve", action="store_true",
+                    help="mark approve=y on high-confidence renames so apply_renames.py runs headless "
+                         "(used by the weekly refresh). Off by default — manual runs stay review-only.")
+    ap.add_argument("--auto-approve-min-ratio", type=float, default=0.9,
+                    help="auto-approve only when the new name covers this fraction of the player's matches "
+                         "(RPH denormalizes a rename onto ALL of a player's history, so a true rename → ~1.0)")
+    ap.add_argument("--auto-approve-min-evidence", type=int, default=3,
+                    help="absolute floor on confirming matches before a rename can auto-apply")
     args = ap.parse_args()
 
     conn = sqlite3.connect(DB_PATH); conn.row_factory = sqlite3.Row
@@ -160,6 +175,26 @@ def main():
             "evidence_events": "; ".join(info["evidence"]),
             "approve": "",
         })
+
+    if args.auto_approve:
+        # A new name claimed by >1 db player is ambiguous (two people sharing a
+        # handle, or a data glitch) — auto-applying both would collapse distinct
+        # players. Only auto-approve names claimed by exactly ONE keeper; leave
+        # the rest blank for manual review.
+        claimants = defaultdict(set)
+        for c in candidates:
+            claimants[c["candidate_new_name"]].add(c["db_player_id"])
+        auto_n = 0
+        for c in candidates:
+            total = c["total_db_matches"]
+            cover = (c["evidence_count"] / total) if total else 0
+            if (len(claimants[c["candidate_new_name"]]) == 1
+                    and c["evidence_count"] >= args.auto_approve_min_evidence
+                    and cover >= args.auto_approve_min_ratio):
+                c["approve"] = "y"
+                auto_n += 1
+        print(f"auto-approved {auto_n} high-confidence rename(s) "
+              f"(cover >= {args.auto_approve_min_ratio}, evidence >= {args.auto_approve_min_evidence})")
 
     candidates.sort(key=lambda r: (-r["evidence_count"], r["current_db_name"]))
 
