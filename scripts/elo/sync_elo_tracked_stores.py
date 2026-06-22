@@ -88,13 +88,16 @@ def _dist_mi(lat, lng):
     return 2 * 3958.8 * math.asin(math.sqrt(h))
 
 
-def _page(table: str, select: str) -> list[dict]:
-    """Page through a PostgREST table (default cap 1000 rows/response)."""
+def _page(table: str, select: str, where: str = "") -> list[dict]:
+    """Page through a PostgREST table (default cap 1000 rows/response).
+    `where` is an optional raw PostgREST filter appended to each request."""
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set (scripts/.env)")
     out, offset, page = [], 0, 1000
     while True:
         url = f"{SUPABASE_URL}/rest/v1/{table}?select={select}&limit={page}&offset={offset}"
+        if where:
+            url += f"&{where}"
         req = urllib.request.Request(url, headers={"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}"})
         batch = json.loads(urllib.request.urlopen(req, timeout=60).read())
         out.extend(batch)
@@ -111,8 +114,10 @@ def fetch_set_championships() -> list[dict]:
 
 def fetch_tracked_store_names() -> set[str]:
     """Normalized names of every store in our ELO history (Supabase mirror of
-    lorcana_elo.db). This is the allowlist that defines "a store we track"."""
-    return {norm(r.get("store")) for r in _page("elo_events", "store") if r.get("store")}
+    lorcana_elo.db). This is the allowlist that defines "a store we track".
+    Ignored events (is_ignored=true) are NOT history — a store whose events are
+    all ignored (e.g. an out-of-scope store we dropped) must not re-qualify."""
+    return {norm(r.get("store")) for r in _page("elo_events", "store", "is_ignored=eq.false") if r.get("store")}
 
 
 MELEE_OFFSET = 100_000_000  # melee event_ids are stored +100M; only RPH ids resolve via the RPH API
@@ -123,7 +128,7 @@ def history_store_samples(per: int = 3) -> dict[str, list[int]]:
     Keeps several events per store so one deleted/404 event doesn't skip it, and
     skips melee event_ids (≥100M) which can't be resolved via the RPH events API."""
     out: dict[str, list[int]] = {}
-    for r in _page("elo_events", "event_id,store"):
+    for r in _page("elo_events", "event_id,store", "is_ignored=eq.false"):
         nm = norm(r.get("store"))
         eid = r.get("event_id")
         if nm and eid and eid < MELEE_OFFSET:

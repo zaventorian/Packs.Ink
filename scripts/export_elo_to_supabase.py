@@ -288,6 +288,30 @@ def delete_orphans(conn, sb: Supabase, dry: bool) -> None:
             total += len(batch)
         print(f"  elo_ratings: deleted ratings under {total} merged-source player_ids")
 
+    # elo_ratings orphans from IGNORED events: elo.py never produces ratings for
+    # matches in is_ignored events, but a prior export (when the event was live)
+    # left their ratings in Supabase. The upsert won't overwrite them (different
+    # rows) and the orphan passes above won't catch them (the match/event still
+    # exist locally, just flagged ignored). Without this, dropping a store from
+    # scope via is_ignored leaves it on the leaderboard + in player history.
+    ignored_match_ids = [r["match_id"] for r in fetch_all(conn,
+        "SELECT m.match_id FROM matches m JOIN events e ON e.event_id=m.event_id WHERE e.is_ignored=1")]
+    if dry:
+        print(f"  elo_ratings (in ignored events): {len(ignored_match_ids)} matches' ratings (would delete)")
+    elif ignored_match_ids:
+        total = 0
+        for i in range(0, len(ignored_match_ids), 200):
+            batch = ignored_match_ids[i:i+200]
+            r = requests.delete(
+                f"{sb.url}/rest/v1/elo_ratings?match_id=in.({','.join(str(x) for x in batch)})",
+                headers={**sb._headers(), "Prefer": "return=minimal"},
+                timeout=60,
+            )
+            if not r.ok:
+                raise RuntimeError(f"delete ignored-event ratings failed: {r.status_code} {r.text[:200]}")
+            total += len(batch)
+        print(f"  elo_ratings: swept ratings for {total} matches in ignored events")
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
