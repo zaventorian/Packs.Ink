@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=189">
+<link rel="stylesheet" href="styles.css?v=191">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=189"></script>
+<script src="logo.js?v=191"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -435,6 +435,14 @@ const TipsContext = React.createContext(true);
 // every printing / rarity variant of the open card (rows sharing a Product
 // Name) for the "show all variants" stats expansion.
 const CatalogContext = React.createContext([]);
+
+// Whether the signed-in account may see the NEW graded experience (per-sale
+// eBay scatter from graded_sales — Last Sold / Avg of Last 5). Gated by the
+// graded_premium_viewers allowlist (migration 73) via can_view_graded_premium().
+// Everyone else keeps the legacy TCGPriceLookup graded view. Provided once at
+// the App root so CardDetailModal / PriceDatabase / GradedCollectionView can
+// read it without threading a prop through every call site.
+const GradedPremiumContext = React.createContext(false);
 
 // Standard tooltip strings — keep wording consistent across views.
 const TIP_LOW = "Lowest active listing on TCGplayer across any condition. The cheapest copy you could buy right now — a leading-edge price signal, but may be a played copy. For an NM-quality reference, see Market.";
@@ -2667,41 +2675,55 @@ const RARITY_ALIASES = {
 // "sr" or the full "super rare" / "superrare" aliases for that one.
 const _RARITY_PREFIX_TARGETS = ["Common","Uncommon","Rare","Legendary","Enchanted","Epic","Iconic","Promo"];
 const resolveRarityPrefix = (token) => {
-  if(!token || token.length < 3) return null;
+  if(!token) return null;
   const t = String(token).toLowerCase();
-  if(RARITY_ALIASES[t]) return RARITY_ALIASES[t];
+  if(RARITY_ALIASES[t]) return RARITY_ALIASES[t];   // exact alias (e.g. "sr") wins before the length guard
+  if(t.length < 3) return null;                     // otherwise need ≥3 chars for a prefix match
   const hits = _RARITY_PREFIX_TARGETS.filter(r => r.toLowerCase().startsWith(t));
   return hits.length === 1 ? hits[0] : null;
 };
 const SET_NICKNAMES = {
-  "tfc":"The First Chapter", "first chapter":"The First Chapter",
-  "rotf":"Rise of the Floodborn", "rise":"Rise of the Floodborn", "floodborn set":"Rise of the Floodborn",
-  "iti":"Into the Inklands", "inklands":"Into the Inklands", "into the inklands":"Into the Inklands",
-  "ursulas":"Ursula's Return", "ursulas return":"Ursula's Return",
+  "tfc":"The First Chapter", "first chapter":"The First Chapter", "chapter 1":"The First Chapter",
+  "rotf":"Rise of the Floodborn", "rise":"Rise of the Floodborn", "floodborn set":"Rise of the Floodborn", "rise of the floodborn":"Rise of the Floodborn",
+  "iti":"Into the Inklands", "inklands":"Into the Inklands", "into the inklands":"Into the Inklands", "into inklands":"Into the Inklands",
+  "ursulas":"Ursula's Return", "ursulas return":"Ursula's Return", "ursula return":"Ursula's Return",
   "shimmering":"Shimmering Skies", "skies":"Shimmering Skies", "shimmering skies":"Shimmering Skies",
   "azurite":"Azurite Sea", "azurite sea":"Azurite Sea",
-  "archazia":"Archazia's Island", "archazias island":"Archazia's Island",
-  "reign":"Reign of Jafar", "reign of jafar":"Reign of Jafar",
+  "archazia":"Archazia's Island", "archazias island":"Archazia's Island", "archazia island":"Archazia's Island",
+  "reign":"Reign of Jafar", "reign of jafar":"Reign of Jafar", "reign jafar":"Reign of Jafar",
   "fabled":"Fabled",
-  "whispers":"Whispers in the Well", "whispers in the well":"Whispers in the Well", "well":"Whispers in the Well",
-  "winterspell":"Winterspell", "winter":"Winterspell",
-  "wilds":"Wilds Unknown", "wilds unknown":"Wilds Unknown",
+  "whispers":"Whispers in the Well", "whispers in the well":"Whispers in the Well", "whispers well":"Whispers in the Well", "witw":"Whispers in the Well",
+  "winterspell":"Winterspell", "winter spell":"Winterspell",
+  "wilds":"Wilds Unknown", "wilds unknown":"Wilds Unknown", "wu":"Wilds Unknown",
+  "vines":"Attack of the Vines", "attack of the vines":"Attack of the Vines", "aov":"Attack of the Vines",
+  // Promo & special sets
+  "promo set 1":"Promo Set 1", "promo 1":"Promo Set 1", "ps1":"Promo Set 1",
+  "promo set 2":"Promo Set 2", "promo 2":"Promo Set 2", "ps2":"Promo Set 2",
+  "promo set 3":"Promo Set 3", "promo 3":"Promo Set 3", "ps3":"Promo Set 3",
+  "d23":"D23 Collection", "d23 collection":"D23 Collection",
+  "epcot":"EPCOT Festival of the Arts", "epcot festival":"EPCOT Festival of the Arts", "festival of the arts":"EPCOT Festival of the Arts",
+  "challenge promo":"Lorcana Challenge Promo (C1)", "c1":"Lorcana Challenge Promo (C1)", "lcp1":"Lorcana Challenge Promo (C1)",
+  "c2":"Lorcana Challenge Promo (C2)", "lcp2":"Lorcana Challenge Promo (C2)",
+  "extras":"Extras & Oddities", "oddities":"Extras & Oddities", "extras and oddities":"Extras & Oddities",
 };
 const CARD_TYPE_ALIASES = {
   character:"Character", action:"Action", item:"Item",
   location:"Location", song:"Song",
 };
+// Only classifications that ACTUALLY appear on cards. "spirit"/"witch"/"cat"/
+// "dog"/"animal"/"wizard"/"soldier"/"merfolk"/"undead"/"duke" were listed but
+// no card carries them — as strict filters they returned 0; dropped here so a
+// bare "spirit"/"witch"/"cat" falls through to a name/haystack search (which
+// still includes the classifications array) instead of dead-ending.
 const CLASSIFICATIONS = new Set([
   "storyborn","floodborn","dreamborn",
   "hero","villain","ally",
   "princess","prince","king","queen",
   "alien","robot","deity",
-  "pirate","knight","soldier","captain",
-  "fairy","witch","sorcerer","wizard",
+  "pirate","knight","captain",
+  "fairy","sorcerer",
   "dragon","inventor",
-  "puppy","dog","cat","animal",
-  "merfolk","undead","spirit",
-  "musketeer","duke","broom","seven dwarfs",
+  "puppy","broom","seven dwarfs",
   "detective","dinosaur","gargoyle","ghost","giant",
   "hunny","hyena","illusion","madrigal","mentor",
   "racer","super","tigger","titan","toy","whisper",
@@ -2714,9 +2736,9 @@ const ABILITY_KEYWORDS = new Set([
   "puppy shift","sing together","universal shift",
 ]);
 const STAT_KEYWORDS = {
-  cost:      ["cost"],
+  cost:      ["cost","costs"],
   strength:  ["strength","str"],
-  willpower: ["willpower","wil","will"],
+  willpower: ["willpower","wil","will","wp"],
   lore:      ["lore"],
 };
 
@@ -2785,34 +2807,139 @@ const nameMatches = (query, name) => {
   return false;
 };
 
+// Extract price intent ("under $5", "over $20", "$5-$10", "$5", "cheap",
+// "expensive"/"valuable") into out.filters.priceMin / priceMax, returning the
+// query with the matched price text removed. Run BEFORE hyphen normalization so
+// "$5-10" ranges survive. A bare "$N" is read as "under $N". Thresholds: cheap
+// ≤ $1, expensive ≥ $20. Under/over without a "$" are left alone (those usually
+// mean cost, not price).
+const _extractPrice = (s, out) => {
+  let m;
+  if((m = s.match(/\$\s*(\d+(?:\.\d+)?)\s*(?:-|to)\s*\$?\s*(\d+(?:\.\d+)?)/))){
+    out.filters.priceMin = +m[1]; out.filters.priceMax = +m[2]; s = s.replace(m[0], " ");
+  }
+  if(out.filters.priceMax == null && (m = s.match(/(?:under|below|less than|cheaper than|<=?)\s*\$\s*(\d+(?:\.\d+)?)/))){
+    out.filters.priceMax = +m[1]; s = s.replace(m[0], " ");
+  }
+  if(out.filters.priceMin == null && (m = s.match(/(?:over|above|more than|>=?)\s*\$\s*(\d+(?:\.\d+)?)/))){
+    out.filters.priceMin = +m[1]; s = s.replace(m[0], " ");
+  }
+  if(out.filters.priceMax == null && (m = s.match(/(?:price|value)\s*(?:under|below|<=?)?\s*\$?\s*(\d+(?:\.\d+)?)/))){
+    out.filters.priceMax = +m[1]; s = s.replace(m[0], " ");
+  }
+  if(out.filters.priceMin == null && out.filters.priceMax == null && (m = s.match(/\$\s*(\d+(?:\.\d+)?)/))){
+    out.filters.priceMax = +m[1]; s = s.replace(m[0], " ");
+  }
+  if(/\bcheap\b/.test(s)){ if(out.filters.priceMax == null) out.filters.priceMax = 1; s = s.replace(/\bcheap\b/g, " "); }
+  if(/\b(?:expensive|pricey|valuable)\b/.test(s)){ if(out.filters.priceMin == null) out.filters.priceMin = 20; s = s.replace(/\b(?:expensive|pricey|valuable)\b/g, " "); }
+  return s.replace(/\s+/g, " ").trim();
+};
+
+// Resolve a single word (or "super rare") to its filter dimension + canonical
+// value, or null. Used by exclusion ("-rush", "not amber") and the typo pass.
+const _resolveDimWord = (w) => {
+  const word = (w||"").toLowerCase().trim();
+  if(!word) return null;
+  const dp = depluralize(word);
+  let v;
+  if((v = resolveRarityPrefix(word) || resolveRarityPrefix(dp))) return {kind:"rarity", value:v};
+  if(INK_ALIASES[word]) return {kind:"ink", value:INK_ALIASES[word]};
+  if(ABILITY_KEYWORDS.has(word)) return {kind:"keyword", value:word};
+  if(CLASSIFICATIONS.has(word)) return {kind:"classification", value:word[0].toUpperCase()+word.slice(1)};
+  if(CLASSIFICATIONS.has(dp))   return {kind:"classification", value:dp[0].toUpperCase()+dp.slice(1)};
+  if(CARD_TYPE_ALIASES[word]) return {kind:"type", value:CARD_TYPE_ALIASES[word]};
+  if(CARD_TYPE_ALIASES[dp])   return {kind:"type", value:CARD_TYPE_ALIASES[dp]};
+  return null;
+};
+const _addExclude = (out, d) => {
+  if(!d) return;
+  if(d.kind==="rarity") out.excludeRarities.add(d.value);
+  else if(d.kind==="ink") out.excludeInks.add(d.value);
+  else if(d.kind==="type") out.excludeTypes.add(d.value);
+  else if(d.kind==="keyword") out.excludeKeywords.add(String(d.value).toLowerCase());
+  else if(d.kind==="classification") out.excludeClassifications.add(String(d.value).toLowerCase());
+};
+
+// Narrow typo tolerance: single-word dimension terms ≥6 chars (evasive, legendary,
+// enchanted, sapphire, villain, character…). A leftover ≥6-char token that's
+// Levenshtein-1 from exactly ONE of these resolves to it ("evsive"→evasive,
+// "legndary"→legendary). The ≥6 floor + uniqueness guard keep short names safe
+// (sally/hero/cat/ally never get hijacked; "princes" is ambiguous → left as-is).
+const _FUZZY_DIM_VOCAB = (() => {
+  const v = [];
+  const add = (w, kind, value) => { if(w && w.length >= 6 && !w.includes(" ")) v.push({word:w, kind, value}); };
+  for(const [k,val] of Object.entries(INK_ALIASES)) add(k, "ink", val);
+  for(const [k,val] of Object.entries(RARITY_ALIASES)) add(k, "rarity", val);
+  for(const w of ABILITY_KEYWORDS) add(w, "keyword", w);
+  for(const w of CLASSIFICATIONS) add(w, "classification", w[0].toUpperCase()+w.slice(1));
+  for(const [k,val] of Object.entries(CARD_TYPE_ALIASES)) add(k, "type", val);
+  return v;
+})();
+// One adjacent transposition (e.g. "villian"↔"villain") — standard Levenshtein
+// scores that as 2, so check it explicitly to catch the common swap typos.
+const _isTranspose = (a, b) => {
+  if(a.length !== b.length) return false;
+  const d = [];
+  for(let i=0;i<a.length;i++) if(a[i]!==b[i]){ d.push(i); if(d.length>2) return false; }
+  return d.length===2 && d[1]===d[0]+1 && a[d[0]]===b[d[1]] && a[d[1]]===b[d[0]];
+};
+const _fuzzyDim = (token) => {
+  const t = (token||"").toLowerCase();
+  if(t.length < 6) return null;
+  let hit = null, n = 0;
+  for(const e of _FUZZY_DIM_VOCAB){
+    if(Math.abs(e.word.length - t.length) > 1) continue;
+    if(e.word === t) return e;                 // exact (already handled upstream, but cheap)
+    if(levenshtein(t, e.word) <= 1 || _isTranspose(t, e.word)){ hit = e; if(++n > 1) return null; }  // ambiguous → bail
+  }
+  return n === 1 ? hit : null;
+};
+
 // Parse a free-form search box query into structured filters + name query.
 // Greedy: each token can only contribute to one filter; remaining tokens
 // become the name query.
 const parseSearchQuery = (input) => {
-  const out = {name:"", filters:{}, excludeRarities:new Set()};
+  const out = {name:"", filters:{}, excludeRarities:new Set(),
+    excludeInks:new Set(), excludeKeywords:new Set(),
+    excludeClassifications:new Set(), excludeTypes:new Set()};
   if(!input || !input.trim()) return out;
 
-  // Normalize hyphens to spaces so "non-promo" == "non promo", "super-rare" == "super rare", etc.
-  let raw = input.toLowerCase().trim().replace(/-/g, " ").replace(/\s+/g, " ");
+  // Price intent ("$5-10", "under $5", "cheap", "expensive"…) — parsed before
+  // hyphen normalization so a "$5-10" range survives.
+  let lowered = _extractPrice(input.toLowerCase().trim(), out);
 
-  // Pre-pass: extract "non/no/not/without X" exclusion phrases
+  // "-X" minus-exclusion (token-leading hyphen, e.g. "-rush", "-amber", "-enchanted").
+  // Done before hyphen normalization, and only when X resolves to a real dimension
+  // (so "spider-man"-style mid-word hyphens, already normalized below, are untouched).
+  lowered = lowered.replace(/(^|\s)-([a-z][a-z]+)\b/g, (mm, pre, word) => {
+    const d = _resolveDimWord(word);
+    if(d){ _addExclude(out, d); return pre || " "; }
+    return mm;
+  });
+
+  // Normalize hyphens to spaces so "non-promo" == "non promo", "super-rare" == "super rare", etc.
+  let raw = lowered.replace(/-/g, " ").replace(/\s+/g, " ").trim();
+
+  // Pre-pass: "non/no/not/without/exclude X" exclusion — any dimension (rarity,
+  // ink, keyword, classification, type), 2-word "super rare" first.
   const EXCL_PREFIXES = ["non ", "no ", "not ", "without ", "exclude "];
   let changed = true;
   while(changed){
     changed = false;
     for(const pfx of EXCL_PREFIXES){
-      // find pfx + rarity alias
-      for(const alias of Object.keys(RARITY_ALIASES).sort((a,b)=>b.length-a.length)){
-        const phrase = pfx + alias;
-        const idx = raw.indexOf(phrase);
-        if(idx >= 0){
-          out.excludeRarities.add(RARITY_ALIASES[alias]);
-          raw = (raw.slice(0,idx) + raw.slice(idx+phrase.length)).replace(/\s+/g," ").trim();
-          changed = true;
-          break;
-        }
+      const idx = raw.indexOf(pfx);
+      if(idx < 0) continue;
+      const after = raw.slice(idx + pfx.length).split(" ");
+      let d = null, take = 0;
+      if(after[0] && after[1]){ d = _resolveDimWord(after[0]+" "+after[1]); if(d) take = 2; }
+      if(!d && after[0]){ d = _resolveDimWord(after[0]); if(d) take = 1; }
+      if(d){
+        _addExclude(out, d);
+        const rm = pfx + after.slice(0, take).join(" ");
+        raw = (raw.slice(0, idx) + " " + raw.slice(idx + rm.length)).replace(/\s+/g, " ").trim();
+        changed = true;
+        break;
       }
-      if(changed) break;
     }
   }
 
@@ -3025,6 +3152,19 @@ const parseSearchQuery = (input) => {
     }
   }
 
+  // Typo tolerance (narrow): a leftover ≥6-char token that's Levenshtein-1 from
+  // exactly one dimension term fills that dimension if still empty.
+  for(let i=0; i<tokens.length; i++){
+    if(used.has(i) || tokens[i].length < 6) continue;
+    const d = _fuzzyDim(tokens[i]);
+    if(!d) continue;
+    if(d.kind==="rarity" && !out.filters.rarity){ out.filters.rarity = d.value; used.add(i); }
+    else if(d.kind==="ink" && !out.filters.ink){ out.filters.ink = d.value; used.add(i); }
+    else if(d.kind==="keyword" && !out.filters.ability_keyword){ out.filters.ability_keyword = d.value; used.add(i); }
+    else if(d.kind==="classification" && !out.filters.classification){ out.filters.classification = d.value; used.add(i); }
+    else if(d.kind==="type" && !out.filters.card_type){ out.filters.card_type = d.value; used.add(i); }
+  }
+
   // Remaining tokens → name query (with depluralization)
   const nameTokens = tokens.filter((_,i) => !used.has(i));
   out.name = nameTokens.map(depluralize).join(" ").trim();
@@ -3209,6 +3349,15 @@ const groupSetsForFilter = (rawRows) => {
   promo.sort((a,b) => a.localeCompare(b));
   return {normal, promo};
 };
+// Min/max price across a card's printings (Low → Market). Works on a group
+// ({normal,foil} sub-rows) or a flat catalog row. null when wholly unpriced.
+const _cardPriceRange = (g) => {
+  const vals = [];
+  const pick = o => { if(!o) return; const v = o["Low Price"] ?? o["TCGPlayer Market"] ?? o["Market Price"]; if(v != null) vals.push(+v); };
+  pick(g.normal); pick(g.foil);
+  if(!vals.length) pick(g);
+  return vals.length ? {min: Math.min(...vals), max: Math.max(...vals)} : null;
+};
 const matchesCardFilter = (row, f, parsed) => {
   // A card's full ink list. Dual-ink cards carry two colors (e.g.
   // ["Amber","Sapphire"]); mono cards carry one. Fall back to the single
@@ -3256,14 +3405,19 @@ const matchesCardFilter = (row, f, parsed) => {
     const _wantCls = (parsed.filters.classifications && parsed.filters.classifications.length)
       ? parsed.filters.classifications
       : (parsed.filters.classification ? [parsed.filters.classification] : []);
+    // When a free-text name query coexists, a classification/keyword word is
+    // ALSO satisfied if it appears in the card's name or version — so "elsa
+    // spirit" finds Elsa - Spirit of Winter ("Spirit" lives in the version, not
+    // the classifications array). With NO name (bare word or a chip), the check
+    // stays STRICT so "characteristic: princess" / typed "princess" only matches
+    // declared Princesses. Soft haystack is name+type only (version words live
+    // there) to avoid body-text noise.
+    const _softHay = parsed.name
+      ? searchNorm(((row["Product Name"]||"") + " " + (row.card_type||"")).toLowerCase())
+      : null;
     if(_wantCls.length){
-      // STRICT: declared classification only. Previously did a soft match
-      // against the product name too (for "elsa spirit" → Elsa-Spirit-of-Winter),
-      // but that made "characteristic: princess" match any card with "princess"
-      // in its name even when the card isn't classified as Princess. Users who
-      // want a name/text/anywhere match should use the `contains:` chip.
       const cls = (row.classifications || []).map(c => (c||"").toLowerCase());
-      const matchOne = (want) => cls.includes(String(want).toLowerCase());
+      const matchOne = (want) => { const w = String(want).toLowerCase(); return cls.includes(w) || (_softHay && _softHay.includes(searchNorm(w))); };
       const all = (parsed.matchMode || "all") === "all";
       const ok = all ? _wantCls.every(matchOne) : _wantCls.some(matchOne);
       if(!ok) return false;
@@ -3273,7 +3427,7 @@ const matchesCardFilter = (row, f, parsed) => {
       : (parsed.filters.ability_keyword ? [parsed.filters.ability_keyword] : []);
     if(_wantKw.length){
       const kws = (row.keywords || []).map(k => (k||"").toLowerCase());
-      const matchOne = (want) => kws.includes(String(want).toLowerCase());
+      const matchOne = (want) => { const w = String(want).toLowerCase(); return kws.includes(w) || (_softHay && _softHay.includes(searchNorm(w))); };
       const all = (parsed.matchMode || "all") === "all";
       const ok = all ? _wantKw.every(matchOne) : _wantKw.some(matchOne);
       if(!ok) return false;
@@ -3288,6 +3442,24 @@ const matchesCardFilter = (row, f, parsed) => {
       if(!ills.includes(parsed.filters.illustrator.toLowerCase())) return false;
     }
     if(parsed.excludeRarities && parsed.excludeRarities.size && parsed.excludeRarities.has(row.Rarity)) return false;
+    if(parsed.excludeInks && parsed.excludeInks.size){
+      const inks = (row.inks && row.inks.length) ? row.inks : (row.ink ? [row.ink] : []);
+      if(inks.some(i => parsed.excludeInks.has(i))) return false;
+    }
+    if(parsed.excludeTypes && parsed.excludeTypes.size && parsed.excludeTypes.has(row.card_type)) return false;
+    if(parsed.excludeKeywords && parsed.excludeKeywords.size){
+      if((row.keywords||[]).some(k => parsed.excludeKeywords.has((k||"").toLowerCase()))) return false;
+    }
+    if(parsed.excludeClassifications && parsed.excludeClassifications.size){
+      if((row.classifications||[]).some(c => parsed.excludeClassifications.has((c||"").toLowerCase()))) return false;
+    }
+    // Price intent. "under $5" → cheapest printing ≤ 5; "over $20" → dearest ≥ 20.
+    if(parsed.filters.priceMin != null || parsed.filters.priceMax != null){
+      const pr = _cardPriceRange(row);
+      if(!pr) return false;  // unpriced cards can't satisfy a price filter
+      if(parsed.filters.priceMax != null && pr.min > parsed.filters.priceMax) return false;
+      if(parsed.filters.priceMin != null && pr.max < parsed.filters.priceMin) return false;
+    }
     if(parsed.name){
       // Primary: fuzzy match against name (handles transposed letters,
       // partial subtitles, etc.). Fallback: substring match against the
@@ -3304,12 +3476,13 @@ const matchesCardFilter = (row, f, parsed) => {
           (row.text||"").toLowerCase(),
           ...cls
         ].join("  ");
-        // matchMode "any" (default in CardsView): card qualifies if ANY token
-        // appears in the haystack, so "woody jessie" surfaces every Woody
-        // and every Jessie. matchMode "all" (or unset, for back-compat with
-        // pickers that pass no matchMode): every token must appear — the
-        // original behavior, used when narrowing.
-        const all = (parsed.matchMode || "all") === "all";
+        // Name-token AND/OR is driven by `nameMatchMode` (set by smartCardFilter's
+        // two-pass), falling back to matchMode then "all". The two-pass tries AND
+        // first (every token must appear → "elsa ice" = the Elsa-Ice cards, not
+        // 121) and only falls back to OR if AND finds nothing (so "frozen elsa"
+        // still surfaces every Elsa). Callers that don't go through the two-pass
+        // keep their old matchMode behavior.
+        const all = (parsed.nameMatchMode || parsed.matchMode || "all") === "all";
         const hayN = searchNorm(haystack);  // so stripped tokens match body text with apostrophes
         const ok = all ? tokens.every(t => hayN.includes(t)) : tokens.some(t => hayN.includes(t));
         if(!ok) return false;
@@ -3325,7 +3498,13 @@ const matchesCardFilter = (row, f, parsed) => {
         (row.text||"").toLowerCase(),
         ...((row.classifications||[]).map(c => (c||"").toLowerCase()))
       ].join("  "));
-      for(const phrase of parsed.contains){ if(!hay.includes(searchNorm(phrase))) return false; }
+      for(const phrase of parsed.contains){
+        const pn = searchNorm(phrase);
+        if(hay.includes(pn)) continue;                 // contiguous phrase
+        const toks = pn.split(/\s+/).filter(Boolean);  // else require every token (spans the " - " in "Stitch - Rock Star")
+        if(toks.length > 1 && toks.every(t => hay.includes(t))) continue;
+        return false;
+      }
     }
   }
 
@@ -3395,6 +3574,23 @@ const matchesCardFilter = (row, f, parsed) => {
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
   return true;
+};
+
+// AND-name-first filtering with an OR fallback. A multi-word name query is tried
+// with EVERY token required first ("elsa ice" → only the Elsa-Ice cards, not 121);
+// if that strict pass finds nothing, it falls back to ANY token ("frozen elsa" →
+// every Elsa, since no Elsa card literally says "frozen"). Single-token names and
+// no-name queries pass straight through unchanged. Chip matchMode (multi-select
+// any/all) is untouched — only the name tokens get the two-pass via nameMatchMode.
+// Used by the free-text card surfaces (Cards, All Cards, graded My Cards).
+const smartCardFilter = (items, f, parsed) => {
+  const nm = parsed && parsed.name ? parsed.name.trim() : "";
+  if(!nm || nm.split(/\s+/).filter(Boolean).length < 2){
+    return items.filter(g => matchesCardFilter(g, f, parsed));
+  }
+  const strict = items.filter(g => matchesCardFilter(g, f, {...parsed, nameMatchMode: "all"}));
+  if(strict.length) return strict;
+  return items.filter(g => matchesCardFilter(g, f, {...parsed, nameMatchMode: "any"}));
 };
 
 const toggleSet = (s, v) => { const n=new Set(s); n.has(v)?n.delete(v):n.add(v); return n; };
@@ -3689,6 +3885,7 @@ const groupCards = (rows) => {
 
 // Sort options. Default: newest set first, then collector number ascending.
 const SORT_OPTIONS = [
+  {key:"relevance", label:"Best match"},
   {key:"set-new",   label:"Set: newest first"},
   {key:"set-old",   label:"Set: oldest first"},
   {key:"name",      label:"Name (A→Z)"},
@@ -3758,6 +3955,27 @@ const SORT_COMPARATORS = {
   "cost-desc": (a,b) => ((b.cost ?? -1)  - (a.cost ?? -1))  || (collectorNum(a) - collectorNum(b)),
   "price-asc": (a,b) => priceCompare(a, b, false),
   "price-desc":(a,b) => priceCompare(a, b, true),
+};
+
+// Relevance score for the "Best match" sort: how well a card's name matches the
+// typed query. Exact name / character name > starts-with > contiguous substring
+// > all tokens in the character name > all tokens in the full name > some tokens
+// > text/classification-only. Floats "Te Kā" above "Inspector Te-zuka", and the
+// real Elsa-Ice cards above any substring noise. Ties broken by set-new order.
+const _relevanceScore = (g, qname) => {
+  const q = searchNorm((qname||"").toLowerCase().trim());
+  if(!q) return 0;
+  const full = searchNorm((g["Product Name"]||"").toLowerCase());
+  const charName = full.split(" - ")[0];
+  if(full === q || charName === q) return 1000;
+  if(charName.startsWith(q)) return 850;
+  if(full.startsWith(q)) return 800;
+  if(full.includes(q)) return 600;
+  const toks = q.split(/\s+/).filter(Boolean);
+  if(toks.length && toks.every(t => charName.includes(t))) return 500;
+  if(toks.length && toks.every(t => full.includes(t)))     return 400;
+  const hits = toks.filter(t => full.includes(t)).length;
+  return hits ? 200 + hits * 10 : 100;
 };
 
 // Detail modal — opens when a card tile is clicked. Image left, metadata +
@@ -4122,6 +4340,266 @@ const fetchGradedPrices = async (productIds) => {
   }
 };
 
+// Premium graded view: every individual eBay sale we've recorded for a card
+// (graded_sales, migration 71). One row = one sold slab. Ordered oldest→newest
+// (sbFetchAll needs an explicit order to paginate without overlap).
+const fetchGradedSales = async (cardId) => {
+  if(!cardId) return [];
+  try {
+    return await sbFetchAll("graded_sales", {
+      select: "item_id,title,listing_url,image_url,sale_price,shipping,sold_date,listing_type,grader,grade,printing,bids",
+      card_id: "eq." + cardId,
+      order: "sold_date.asc",
+    }) || [];
+  } catch(e){
+    console.warn("graded sales fetch failed:", e?.message || e);
+    return [];
+  }
+};
+
+// Time-vs-price scatter of individual sales for the premium graded view. Each
+// dot is one sale. preserveAspectRatio="none" + a resize-observed viewBox keeps
+// the SVG 1:1 with rendered pixels so the dots stay round (same trick LineChart
+// uses). colorOf(point)->css color; onSelect(point) fires on dot click; hover
+// shows a thumbnail peek. Points carry the full sale row plus {id, x(ms), y(price)}.
+const ScatterChart = ({points, height=260, width=920, colorOf, onSelect, selectedId}) => {
+  const wrapRef = useRef(null);
+  const [measuredW, setMeasuredW] = useState(width);
+  const [hover, setHover] = useState(null); // {idx, vx, vy}
+  useEffect(() => {
+    if(!wrapRef.current || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect?.width;
+      if(w && w > 0) setMeasuredW(Math.round(w));
+    });
+    ro.observe(wrapRef.current);
+    return () => ro.disconnect();
+  }, []);
+  width = measuredW;
+  const padding = {top:14, right:16, bottom:24, left:54};
+  const valids = (points||[]).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if(!valids.length) return html`<div class="chart-empty large">No sales to plot.</div>`;
+
+  let minX=Infinity, maxX=-Infinity, minY=Infinity, maxY=-Infinity;
+  for(const p of valids){
+    if(p.x<minX) minX=p.x; if(p.x>maxX) maxX=p.x;
+    if(p.y<minY) minY=p.y; if(p.y>maxY) maxY=p.y;
+  }
+  if(maxX===minX){ minX-=86400000; maxX+=86400000; } // single-day spread → ±1 day pad
+  const yPad = Math.max(0.01, (maxY-minY)*0.1);
+  const yMin = Math.max(0, minY-yPad);
+  const yMax = maxY+yPad;
+  const innerW = width-padding.left-padding.right;
+  const innerH = height-padding.top-padding.bottom;
+  const xScale = (x)=> padding.left + ((x-minX)/(maxX-minX||1))*innerW;
+  const yScale = (y)=> padding.top + innerH - ((y-yMin)/(yMax-yMin||1))*innerH;
+  const yTicks = niceTicks(yMin, yMax, 4);
+  const xTicks = [minX, (minX+maxX)/2, maxX];
+  const scaled = valids.map((p,i)=>({p, i, cx:xScale(p.x), cy:yScale(p.y)}));
+
+  const onMove = (e)=>{
+    const el = wrapRef.current; if(!el) return;
+    const rect = el.getBoundingClientRect();
+    const vx = ((e.clientX-rect.left)/rect.width)*width;
+    const vy = ((e.clientY-rect.top)/rect.height)*height;
+    let best=null, bd=Infinity;
+    for(const s of scaled){
+      const d = (s.cx-vx)**2 + (s.cy-vy)**2;
+      if(d<bd){ bd=d; best=s; }
+    }
+    if(best && bd <= 20*20) setHover({idx:best.i, vx:best.cx, vy:best.cy});
+    else setHover(null);
+  };
+  const onLeave = ()=> setHover(null);
+
+  const hp = hover != null ? valids[hover.idx] : null;
+  const tipLeftPct = hp ? (hover.vx/width)*100 : null;
+  const tipTopPct  = hp ? (hover.vy/height)*100 : null;
+
+  return html`<div class="scatter-chart-wrap" ref=${wrapRef}>
+    <svg viewBox=${`0 0 ${width} ${height}`} class="scatter-chart" preserveAspectRatio="none"
+      style=${{width:"100%", height:height+"px"}}
+      onMouseMove=${onMove} onMouseLeave=${onLeave}>
+      ${yTicks.map(t => html`<line key=${"g"+t} x1=${padding.left} x2=${width-padding.right}
+        y1=${yScale(t)} y2=${yScale(t)} stroke="var(--border)" stroke-dasharray="2,3" stroke-width="0.6"/>`)}
+      ${yTicks.map(t => html`<text key=${"yl"+t} x=${padding.left-6} y=${yScale(t)+3.5}
+        text-anchor="end" font-size="9" fill="var(--text-muted)">${fmtTickPrice(t)}</text>`)}
+      ${xTicks.map((t,i) => html`<text key=${"xl"+i} x=${xScale(t)} y=${height-6}
+        text-anchor=${i===0?"start":i===xTicks.length-1?"end":"middle"}
+        font-size="9" fill="var(--text-muted)">${fmtTickDate(t, maxX-minX)}</text>`)}
+      ${scaled.map(s => {
+        const col = colorOf ? colorOf(s.p) : "#888";
+        const isSel = selectedId != null && s.p.id === selectedId;
+        const isHov = hover != null && hover.idx === s.i;
+        return html`<circle key=${"d"+s.i} cx=${s.cx.toFixed(1)} cy=${s.cy.toFixed(1)}
+          r=${isSel?5.5:isHov?5:3.6} fill=${col}
+          fill-opacity=${isSel||isHov?1:0.78}
+          stroke=${isSel?"var(--text)":"var(--bg-solid)"} stroke-width=${isSel?1.4:0.8}
+          style=${{cursor:"pointer"}}
+          onClick=${()=> onSelect && onSelect(s.p)}/>`;
+      })}
+    </svg>
+    ${hp && html`<div class="scatter-tooltip" style=${{
+        left: tipLeftPct+"%", top: tipTopPct+"%",
+        transform: `translate(${tipLeftPct>70?"-105%":"14px"}, ${tipTopPct<30?"14px":"-105%"})`
+      }}>
+      ${hp.image_url && html`<img class="scatter-tip-img" src=${hp.image_url} alt="" loading="lazy"/>`}
+      <div class="scatter-tip-body">
+        <div class="scatter-tip-grade" style=${{color: colorOf?colorOf(hp):"#888"}}>
+          ${(hp.grader||"").toUpperCase()} ${hp.grade || "—"}</div>
+        <div class="scatter-tip-price">$${Number(hp.y).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+        <div class="scatter-tip-meta">${fmtTooltipDate(hp.x)}${hp.listing_type==="auction"?" · auction":hp.listing_type==="fixed_price"?" · fixed":""}</div>
+        <div class="scatter-tip-hint">click for links</div>
+      </div>
+    </div>`}
+  </div>`;
+};
+
+// The premium replacement for GradedPricesTab. Renders the per-sale scatter,
+// the headline Last Sold + Average of Last 5 for the selected (grader, grade),
+// combo chips, a click-to-pin sale detail with eBay listing + image links, and
+// a recent-sales table. `sales` = raw graded_sales rows for the open card_id.
+const GradedSalesTab = ({sales, loading}) => {
+  const [combo, setCombo]     = useState(null);   // "grader|grade" or null=default
+  const [showAll, setShowAll] = useState(false);  // plot every grader at once
+  const [sel, setSel]         = useState(null);   // pinned sale detail
+  useEffect(()=>{ setSel(null); setShowAll(false); setCombo(null); }, [sales]);
+
+  const graded = useMemo(()=> (sales||[]).filter(s => s.grade != null && s.sale_price != null), [sales]);
+  const combos = useMemo(()=>{
+    const m = new Map();
+    for(const s of graded){
+      const g = (s.grader||"").toLowerCase();
+      const key = g + "|" + s.grade;
+      if(!m.has(key)) m.set(key, {key, grader:g, grade:String(s.grade), sales:[]});
+      m.get(key).sales.push(s);
+    }
+    const arr = [...m.values()];
+    for(const c of arr){
+      c.sales.sort((a,b)=> (b.sold_date||"").localeCompare(a.sold_date||"")); // newest first
+      c.count   = c.sales.length;
+      c.lastSold = c.sales[0];
+      const five = c.sales.slice(0,5);
+      c.avg5  = five.reduce((s,x)=> s+Number(x.sale_price), 0) / five.length;
+      c.avg5n = five.length;
+    }
+    const gi = (g)=>{ const i = GRADER_ORDER.indexOf(g); return i<0?99:i; };
+    arr.sort((a,b)=> gi(a.grader)-gi(b.grader) || (parseFloat(b.grade)-parseFloat(a.grade)));
+    return arr;
+  }, [graded]);
+
+  if(loading) return html`<div class="chart-empty large">Loading graded sales…</div>`;
+  if(!sales || !sales.length) return html`<div class="chart-empty large">No graded sales recorded for this card yet.</div>`;
+
+  const comboByKey = new Map(combos.map(c=>[c.key,c]));
+  const defaultKey = comboByKey.has("psa|10") ? "psa|10" : (combos[0] && combos[0].key);
+  const activeKey  = (combo && comboByKey.has(combo)) ? combo : defaultKey;
+  const active     = comboByKey.get(activeKey);
+  const plotAll    = showAll || combos.length === 0;
+
+  const colorOf = (p)=> GRADER_COLOR[(p.grader||"").toLowerCase()] || "#888";
+  const toPoint = (s)=> ({...s, id:s.item_id, x:Date.parse((s.sold_date||"")+"T00:00:00Z"), y:Number(s.sale_price)});
+  const plotSales = plotAll
+    ? (sales||[]).filter(s => s.sale_price != null)
+    : (active ? active.sales : []);
+  const points = plotSales.map(toPoint).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+
+  const tableSales = plotAll
+    ? [...(sales||[])].filter(s => s.sale_price != null).sort((a,b)=>(b.sold_date||"").localeCompare(a.sold_date||""))
+    : (active ? active.sales : []);
+
+  const money  = (v)=> v==null?"—":"$"+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const money0 = (v)=> v==null?"—":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
+  const dstr   = (d)=> d ? fmtTooltipDate(Date.parse(d+"T00:00:00Z")) : "—";
+
+  return html`<div class="graded-sales-tab">
+    <div class="graded-tab-explain">
+      Every individual graded sale we've recorded from eBay — each dot is one sold slab.
+      Hover a dot for a quick peek, click it for the listing + photo. Headline values use the selected grade.
+    </div>
+
+    ${active && !showAll && html`<div class="gs-headline">
+      <div class="gs-headline-combo" style=${{color: GRADER_COLOR[active.grader]||"#888"}}>
+        ${(GRADER_LABEL[active.grader]||active.grader.toUpperCase())} ${active.grade}
+      </div>
+      <div class="gs-headline-stats">
+        <div class="gs-stat">
+          <div class="gs-stat-lbl">Last Sold</div>
+          <div class="gs-stat-val">${money(active.lastSold.sale_price)}</div>
+          <div class="gs-stat-sub">${dstr(active.lastSold.sold_date)}${active.lastSold.listing_type==="auction"?" · auction":""}</div>
+        </div>
+        <div class="gs-stat">
+          <div class="gs-stat-lbl">Avg of Last ${active.avg5n}</div>
+          <div class="gs-stat-val">${money(active.avg5)}</div>
+          <div class="gs-stat-sub">${active.count} sale${active.count===1?"":"s"} recorded</div>
+        </div>
+      </div>
+    </div>`}
+
+    ${combos.length > 0 && html`<div class="gs-combo-chips">
+      ${combos.map(c => html`<button key=${c.key} type="button"
+        class=${"gs-combo-chip"+(c.key===activeKey && !showAll?" active":"")}
+        style=${c.key===activeKey && !showAll ? {borderColor: GRADER_COLOR[c.grader], color: GRADER_COLOR[c.grader]} : null}
+        onClick=${()=>{ setShowAll(false); setCombo(c.key); }}>
+        <span class="gs-chip-dot" style=${{background: GRADER_COLOR[c.grader]||"#888"}}></span>
+        ${(GRADER_LABEL[c.grader]||c.grader.toUpperCase())} ${c.grade}
+        <span class="gs-chip-count">${c.count}</span>
+      </button>`)}
+      ${combos.length > 1 && html`<button type="button"
+        class=${"gs-combo-chip gs-combo-all"+(showAll?" active":"")}
+        onClick=${()=>setShowAll(v=>!v)}>All graders</button>`}
+    </div>`}
+
+    <div class="gs-chart">
+      <${ScatterChart} points=${points} height=${260}
+        colorOf=${colorOf} selectedId=${sel?.item_id}
+        onSelect=${(p)=> setSel(p)}/>
+    </div>
+
+    ${sel && html`<div class="gs-sale-detail">
+      ${sel.image_url && html`<a href=${sel.image_url} target="_blank" rel="noopener nofollow" class="gs-sale-detail-imgwrap">
+        <img src=${sel.image_url} alt="" class="gs-sale-detail-img"/></a>`}
+      <div class="gs-sale-detail-body">
+        <div class="gs-sale-detail-title">${sel.title || "eBay graded sale"}</div>
+        <div class="gs-sale-detail-line">
+          <span class="gs-sale-detail-grade" style=${{color: GRADER_COLOR[(sel.grader||'').toLowerCase()]||"#888"}}>
+            ${(sel.grader||"").toUpperCase()} ${sel.grade||"—"}</span>
+          <span class="gs-sale-detail-price">${money(sel.sale_price)}</span>
+          ${sel.shipping ? html`<span class="muted">+ ${money(sel.shipping)} ship</span>` : null}
+          <span class="muted">${dstr(sel.sold_date)}</span>
+          ${sel.listing_type ? html`<span class="muted">${sel.listing_type==="auction"?"auction":"fixed price"}</span>` : null}
+          ${sel.printing ? html`<span class="muted">${sel.printing}</span>` : null}
+        </div>
+        <div class="gs-sale-detail-links">
+          ${sel.listing_url && html`<a href=${sel.listing_url} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>`}
+          ${sel.image_url && html`<a href=${sel.image_url} target="_blank" rel="noopener nofollow">Open image ↗</a>`}
+        </div>
+      </div>
+      <button class="gs-sale-detail-close" type="button" onClick=${()=>setSel(null)} aria-label="Close detail">×</button>
+    </div>`}
+
+    <div class="gs-table-wrap">
+      <table class="gs-table">
+        <thead><tr><th>Date</th><th>Grader</th><th>Grade</th><th class="num">Price</th><th class="num">Ship</th><th>Type</th><th></th></tr></thead>
+        <tbody>
+          ${tableSales.slice(0, 200).map(s => html`<tr key=${s.item_id}
+            class=${"gs-table-row"+(sel?.item_id===s.item_id?" sel":"")}
+            onClick=${()=>setSel({...s})}>
+            <td>${dstr(s.sold_date)}</td>
+            <td style=${{color: GRADER_COLOR[(s.grader||'').toLowerCase()]||"inherit"}}>${(s.grader||"").toUpperCase()}</td>
+            <td>${s.grade||"—"}</td>
+            <td class="num">${money(s.sale_price)}</td>
+            <td class="num muted">${s.shipping?money0(s.shipping):"—"}</td>
+            <td class="muted">${s.listing_type==="auction"?"auction":s.listing_type==="fixed_price"?"fixed":"—"}</td>
+            <td>${s.listing_url && html`<a href=${s.listing_url} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title="View on eBay">↗</a>`}</td>
+          </tr>`)}
+        </tbody>
+      </table>
+      ${tableSales.length > 200 && html`<div class="muted gs-table-more">Showing 200 most recent of ${tableSales.length} sales.</div>`}
+    </div>
+  </div>`;
+};
+
 // One "price changes" row for the card-detail screener panel — a banner-tile
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
@@ -4216,6 +4694,11 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const tips = useContext(TipsContext);
   const [history, setHistory] = useState({normal:null, foil:null, loading:true});
   const [graded, setGraded] = useState({latest: [], history: [], loading: true});
+  // Premium graded path (graded_premium_viewers): per-sale rows from graded_sales.
+  // Only fetched when gradedPremium is true; the legacy `graded` state stays
+  // empty in that case (and vice-versa).
+  const gradedPremium = useContext(GradedPremiumContext);
+  const [gradedSales, setGradedSales] = useState({rows: [], loading: true});
   const [detailTab, setDetailTab] = useState(initialTab === "graded" ? "graded" : "history");
   // text + flavor_text aren't cached in `raw` (too big for localStorage),
   // so fetch them on demand when the modal opens.
@@ -4283,9 +4766,21 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
     return ()=>{ cancelled = true; };
   }, [group?.card_id]);
 
-  // Fetch graded prices (eBay PSA/BGS/CGC/SGC/TAG) for both printings.
+  // Fetch graded data. Premium accounts get per-sale graded_sales (scatter +
+  // Last Sold / Avg-5); everyone else gets the legacy TCGPriceLookup averages
+  // keyed by TCGPlayer product id.
   useEffect(()=>{
     let cancelled = false;
+    if(gradedPremium){
+      setGraded({latest: [], history: [], loading: false});
+      if(!group?.card_id){ setGradedSales({rows: [], loading: false}); return; }
+      setGradedSales({rows: [], loading: true});
+      fetchGradedSales(group.card_id).then(rows => {
+        if(!cancelled) setGradedSales({rows: rows || [], loading: false});
+      });
+      return () => { cancelled = true; };
+    }
+    setGradedSales({rows: [], loading: false});
     setGraded({latest: [], history: [], loading: true});
     const pids = [];
     if(group?.normal?.tcgplayer_product_id) pids.push(group.normal.tcgplayer_product_id);
@@ -4295,7 +4790,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       if(!cancelled) setGraded({...res, loading: false});
     });
     return () => { cancelled = true; };
-  }, [group?.card_id]);
+  }, [group?.card_id, gradedPremium]);
 
   // Fetch price history when the group changes
   useEffect(()=>{
@@ -4571,7 +5066,8 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
         <button class=${"card-detail-tab"+(detailTab==="graded"?" active":"")}
           onClick=${()=>setDetailTab("graded")}>
           Graded
-          ${graded.latest.length > 0 && html`<span class="card-detail-tab-count">${graded.latest.length}</span>`}
+          ${(gradedPremium ? gradedSales.rows.length : graded.latest.length) > 0
+            && html`<span class="card-detail-tab-count">${gradedPremium ? gradedSales.rows.length : graded.latest.length}</span>`}
         </button>
       </div>
       ${detailTab === "history" && html`<div>
@@ -4625,9 +5121,11 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             ? html`<div class="chart-empty large">No price history available for this card.</div>`
             : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
       </div>`}
-      ${detailTab === "graded" && html`<${GradedPricesTab} graded=${graded}
-        gradedOwned=${gradedOwned} onGradedAdjust=${onGradedAdjust}
-        onGradedMetaUpdate=${onGradedMetaUpdate}/>`}
+      ${detailTab === "graded" && (gradedPremium
+        ? html`<${GradedSalesTab} sales=${gradedSales.rows} loading=${gradedSales.loading}/>`
+        : html`<${GradedPricesTab} graded=${graded}
+            gradedOwned=${gradedOwned} onGradedAdjust=${onGradedAdjust}
+            onGradedMetaUpdate=${onGradedMetaUpdate}/>`)}
     </div>
   </div>
   </div>`;
@@ -4829,6 +5327,26 @@ const emptyFilter = () => ({
     catch { return "any"; }
   })(),
 });
+
+// Persist/restore a full filter object (Sets → arrays). Used by the All Cards
+// view so its Filters-drawer selections survive across visits.
+const FILTER_SET_KEYS = ["inks","costs","rarities","cardTypes","sets","classifications","keywords","illustrators","strengths","willpowers","lores"];
+const serializeFilter = (f) => {
+  const o = {...f};
+  for(const k of FILTER_SET_KEYS) o[k] = Array.from(f[k] || []);
+  return JSON.stringify(o);
+};
+const deserializeFilter = (s) => {
+  const f = emptyFilter();
+  try {
+    const o = JSON.parse(s || "{}");
+    for(const k of Object.keys(f)){
+      if(FILTER_SET_KEYS.includes(k)) f[k] = new Set(Array.isArray(o[k]) ? o[k] : []);
+      else if(o[k] !== undefined) f[k] = o[k];
+    }
+  } catch {}
+  return f;
+};
 
 // Same-origin proxy for external card art so it can be drawn onto a canvas
 // (neither Lorcast's nor TCGPlayer's CDN sends CORS headers, which makes canvas
@@ -6269,7 +6787,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
 // unchanged tiles when filters change.
 const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       deckQtyAcrossName,
-                      sortDefault="set-new",
+                      sortDefault="relevance",
                       selectable, isAuthed, onSignIn,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
@@ -6310,8 +6828,16 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   const [drawerOpen,setDrawerOpen] = useState(false);
   const [artistAlleyOpen, setArtistAlleyOpen] = useState(false);
   const [sortKey,setSortKey] = useState(() => {
-    try { const s = localStorage.getItem("packsink:cardBrowser:sort"); return (s && SORT_COMPARATORS[s]) ? s : sortDefault; }
-    catch { return sortDefault; }
+    try {
+      let s = localStorage.getItem("packsink:cardBrowser:sort");
+      // One-time migration: old default "set-new" → "relevance" (which IS set-new
+      // when just browsing, best-match when there's a search). Guarded so anyone
+      // who re-picks "Set: newest first" afterward keeps it.
+      if(s === "set-new" && !localStorage.getItem("packsink:cardBrowser:sortMig")){
+        localStorage.setItem("packsink:cardBrowser:sortMig","1"); s = "relevance";
+      }
+      return (s && (s === "relevance" || SORT_COMPARATORS[s])) ? s : sortDefault;
+    } catch { return sortDefault; }
   });
   useEffect(() => {
     try { localStorage.setItem("packsink:cardBrowser:sort", sortKey); } catch {}
@@ -6417,7 +6943,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // CardTile actually short-circuit unchanged tiles.
   const allGroups = useMemo(() => groupCards(raw), [raw]);
   const grouped = useMemo(()=>{
-    let groups = allGroups.filter(g => matchesCardFilter(g, deferredFilter, parsed));
+    let groups = smartCardFilter(allGroups, deferredFilter, parsed);
     // "Only show cards in my collection" toggle. A group qualifies if the
     // user owns >=1 of either its Normal or Foil printing. Collection map is
     // keyed by `card_id:tcg_printing` (see CollectionView).
@@ -6427,6 +6953,16 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         const fKey = g.foil   ? g.card_id + ":" + g.foil.tcg_printing   : null;
         return (nKey && collection[nKey] > 0) || (fKey && collection[fKey] > 0);
       });
+    }
+    if(sortKey === "relevance"){
+      // Best match: score by name relevance when there's a query, else fall back
+      // to set-new (so plain browsing keeps the newest-first order).
+      if(parsed.name && parsed.name.trim()){
+        const sc = new Map();
+        for(const g of groups) sc.set(g, _relevanceScore(g, parsed.name));
+        return groups.slice().sort((a,b)=> (sc.get(b)-sc.get(a)) || SORT_COMPARATORS["set-new"](a,b));
+      }
+      return groups.slice().sort(SORT_COMPARATORS["set-new"]);
     }
     const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
     return groups.slice().sort(cmp);
@@ -8060,13 +8596,15 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
   return " · " + parts.join(" · ");
 };
 
-// Sentinel "set" that flips CollectionSetDetail into a flat, owned-only grid
-// spanning EVERY set — the "All Cards You Own" view. Reuses the entire set-detail
-// machinery (tiles, smart-search, ink/rarity chips, sort) so e.g. filtering to
-// Enchanted + sorting by price shows every Enchanted you own across all sets.
-const ALL_CARDS_VIEW = "__all_owned__";
+// Sentinel "set" that flips CollectionSetDetail into the "All Cards" view —
+// the FULL catalog across every set (owned + unowned), with the normal copies
+// (Master/Play), complete/incomplete, and foil toggles. Reuses the entire
+// set-detail machinery (tiles, smart-search, ink/rarity chips, sort); defaults
+// to a by-set newest→oldest sort with per-set section headers. e.g. filter to
+// Enchanted to browse every Enchanted in the game and see which you own.
+const ALL_CARDS_VIEW = "__all_cards__";
 
-const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, readOnly, compareMode, viewerOwnCollection}) => {
+const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection}) => {
   const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
@@ -8083,7 +8621,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     if(compareMode === "shared")  return viewerHas;
     return true;
   };
-  const [viewMode, setViewMode] = useState("list");
+  // In All Cards mode, sort + filters persist (per-set views stay ephemeral).
+  const [viewMode, setViewMode] = useState(()=>{ try { return allMode ? (localStorage.getItem("packsink:allCards:view")||"list") : "list"; } catch { return "list"; } });
   const [bulkAddOpen, setBulkAddOpen] = useState(false);
   // Undo state — populated by the bulk-add modal's onApplied callback.
   // Holds the snapshot of prior quantities + a summary line for the toast.
@@ -8109,10 +8648,10 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     setBulkUndoBusy(false);
   }, [bulkUndo, bulkUpdateCollection]);
   const [search, setSearch] = useState("");
-  const [inkFilter, setInkFilter] = useState(new Set());
-  const [rarityFilter, setRarityFilter] = useState(new Set());
+  const [inkFilter, setInkFilter] = useState(()=>{ try { return allMode ? new Set(JSON.parse(localStorage.getItem("packsink:allCards:inks")||"[]")) : new Set(); } catch { return new Set(); } });
+  const [rarityFilter, setRarityFilter] = useState(()=>{ try { return allMode ? new Set(JSON.parse(localStorage.getItem("packsink:allCards:rarities")||"[]")) : new Set(); } catch { return new Set(); } });
   // "all" | "complete" | "incomplete" | "extras" — applied vs current foil mode
-  const [statusFilter, setStatusFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState(()=>{ try { return allMode ? (localStorage.getItem("packsink:allCards:status")||"all") : "all"; } catch { return "all"; } });
   // Extras & Oddities cards are all foil-only by design (Holofoil starter-
   // deck variants, etc.), so the foil-mode toggle is hidden in that view
   // and the state is locked to "foil".
@@ -8129,9 +8668,33 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // collector numbers so each card naturally appears once per section.
   const SECTION_SPLIT_SETS = SECTION_SPLIT_SETS_GLOBAL;
   const isChallengePromoC1 = SECTION_SPLIT_SETS.has(setName);
-  const [foilMode, setFoilMode] = useState(isExtrasView ? "foil" : "either"); // "either" | "normal" | "foil"
-  const [sortKey, setSortKeyState] = useState(allMode ? "price-desc" : "num");
+  const [foilMode, setFoilMode] = useState(()=>{ try { return isExtrasView ? "foil" : (allMode ? (localStorage.getItem("packsink:allCards:foil")||"either") : "either"); } catch { return isExtrasView ? "foil" : "either"; } });
+  const [sortKey, setSortKeyState] = useState(()=>{ try { return allMode ? (localStorage.getItem("packsink:allCards:sort")||"set-new") : "num"; } catch { return allMode ? "set-new" : "num"; } });
   const [selectedGroup, setSelectedGroup] = useState(null);
+  // Persist All Cards sort + filters so the view is the same next visit.
+  useEffect(()=>{ if(!allMode) return; try {
+    localStorage.setItem("packsink:allCards:view", viewMode);
+    localStorage.setItem("packsink:allCards:sort", sortKey);
+    localStorage.setItem("packsink:allCards:foil", foilMode);
+    localStorage.setItem("packsink:allCards:status", statusFilter);
+    localStorage.setItem("packsink:allCards:inks", JSON.stringify([...inkFilter]));
+    localStorage.setItem("packsink:allCards:rarities", JSON.stringify([...rarityFilter]));
+  } catch {} }, [allMode, viewMode, sortKey, foilMode, statusFilter, inkFilter, rarityFilter]);
+  // All Cards: the full Cards-tab Filters drawer + an optional set-divider toggle.
+  const [separateBySet, setSeparateBySet] = useState(()=>{ try { return allMode && localStorage.getItem("packsink:allCards:separate")==="1"; } catch { return false; } });
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerFilter, setDrawerFilter] = useState(()=> allMode ? deserializeFilter(typeof localStorage!=="undefined" ? localStorage.getItem("packsink:allCards:filter") : null) : emptyFilter());
+  const setsByGroupAll = useMemo(()=> allMode ? groupSetsForFilter(raw) : null, [raw, allMode]);
+  const allIllustratorsAll = useMemo(()=>{
+    if(!allMode) return [];
+    const s = new Set();
+    for(const r of raw){ if(Array.isArray(r.illustrators)) for(const n of r.illustrators) if(n) s.add(n); }
+    return Array.from(s).sort((a,b)=>a.localeCompare(b));
+  }, [raw, allMode]);
+  useEffect(()=>{ if(!allMode) return; try {
+    localStorage.setItem("packsink:allCards:separate", separateBySet ? "1" : "0");
+    localStorage.setItem("packsink:allCards:filter", serializeFilter(drawerFilter));
+  } catch {} }, [allMode, separateBySet, drawerFilter]);
   // Per-card target: 1 for Master Set, 4 for Playset, etc. Passed in from
   // CollectionView's top-level segmented toggle. Falls back to 1 if missing
   // so the set detail view still works in isolation.
@@ -8156,24 +8719,20 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   }, [groups]);
 
   const visibleGroups = useMemo(() => {
-    const parsed = parseSearchQuery(search||"");
-    // Delegate smart-search matching to the canonical matchesCardFilter so
-    // every search input in the app behaves identically. Previously this
-    // view only honored name + ink + rarity, so e.g. "Woody Enchanted"
-    // worked but "elsa spirit" did not — the classification soft-match,
-    // numeric stat filters, card_type, keyword, etc. were silently ignored.
-    // We package the existing chip filters (inkFilter, rarityFilter) into
-    // the `f` argument the canonical matcher expects.
-    const chipFilter = {inks: inkFilter, rarities: rarityFilter};
-    return groups.filter(g => {
-      if(allMode){
-        // "All Cards You Own" — keep only groups with at least one owned printing.
+    // All Cards routes through the full Cards-tab Filters drawer (drawerFilter,
+    // its own search). Per-set views keep their inline ink/rarity chips. Both
+    // run the canonical matchesCardFilter so every dimension behaves identically.
+    const parsed = parseSearchQuery((allMode ? (drawerFilter.search||"") : search) || "");
+    if(allMode) parsed.matchMode = drawerFilter.matchMode || "any";
+    const chipFilter = allMode ? drawerFilter : {inks: inkFilter, rarities: rarityFilter};
+    const predicate = (g, p) => {
+      if(!matchesCompare(g)) return false;
+      if(!matchesCardFilter(g, chipFilter, p)) return false;
+      if(allMode && drawerFilter.onlyOwned){
         const nK = g.normal ? g.card_id+":"+g.normal.tcg_printing : null;
         const fK = g.foil   ? g.card_id+":"+g.foil.tcg_printing   : null;
         if(!((nK && (collection[nK]||0)>0) || (fK && (collection[fK]||0)>0))) return false;
       }
-      if(!matchesCompare(g)) return false;
-      if(!matchesCardFilter(g, chipFilter, parsed)) return false;
 
       // For the active foil mode, count which printings are "in scope" and
       // how complete the user is on each.
@@ -8195,8 +8754,17 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       // foilMode='normal'), only "all" should include it.
       if(!nApplies && !fApplies && statusFilter !== "all") return false;
       return true;
-    });
-  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection]);
+    };
+    // In All Cards mode (matchMode "any"), run the same AND-name-first / OR-fallback
+    // two-pass as the Cards tab so a multi-word name isn't drowned in OR noise.
+    const _multiName = (parsed.name||"").trim().split(/\s+/).filter(Boolean).length > 1;
+    if(allMode && _multiName){
+      const strict = groups.filter(g => predicate(g, {...parsed, nameMatchMode:"all"}));
+      if(strict.length) return strict;
+      return groups.filter(g => predicate(g, {...parsed, nameMatchMode:"any"}));
+    }
+    return groups.filter(g => predicate(g, parsed));
+  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter]);
 
   // Filter-aware "missing" summary — for each visible printing, counts the
   // copies the user is SHORT of TARGET (Master Set = 1, Playset = 4). Value
@@ -8276,8 +8844,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   return html`<div>
     <div class="setdet-header">
       <button class="setdet-back" onClick=${onBack}>← Back to Collection</button>
-      <h2 class="title-font setdet-title">${allMode ? "All Cards You Own" : setName}</h2>
-      <div class="setdet-count">${visibleGroups.length}${allMode ? "" : " / "+groups.length} cards</div>
+      <h2 class="title-font setdet-title">${allMode ? "All Cards" : setName}</h2>
+      <div class="setdet-count">${visibleGroups.length} / ${groups.length} cards</div>
       ${!allMode && user && bulkUpdateCollection && html`<button class="setdet-bulk-add" onClick=${()=>setBulkAddOpen(true)}
         title="Bulk-add cards by rarity — e.g. a master set of Commons + Uncommons or a playset of Enchanteds">
         ＋ Bulk Add
@@ -8285,25 +8853,33 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     </div>
 
     <div class="setdet-toolbar">
-      <input type="search" class="setdet-search" placeholder=${allMode ? "Search all your cards..." : "Search this set..."}
-        value=${search} onInput=${e=>setSearch(e.target.value)}/>
-      <div class="cards-chipgroup">
-        ${INKS.map(ink => html`<button key=${ink} class=${"chip ink ink-icon-chip "+(inkFilter.has(ink)?"active":"")}
-          style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}}
-          title=${ink} aria-label=${ink}
-          onClick=${()=>setInkFilter(s => toggleSet(s, ink))}>
-          <img src=${INK_ICONS[ink]} alt=${ink}/>
-        </button>`)}
-      </div>
-      <div class="cards-chipgroup">
-        ${setRarities.map(r => html`<button key=${r}
-          class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
-          title=${r} aria-label=${r}
-          onClick=${()=>setRarityFilter(s => toggleSet(s, r))}>
-          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r}
-            onError=${e=>{ e.target.style.display="none"; }}/>`}
-        </button>`)}
-      </div>
+      <input type="search" class="setdet-search" placeholder=${allMode ? "Search all cards..." : "Search this set..."}
+        value=${allMode ? (drawerFilter.search||"") : search}
+        onInput=${e=> allMode ? setDrawerFilter(f=>({...f, search:e.target.value})) : setSearch(e.target.value)}/>
+      ${allMode
+        ? html`<button class=${"import-csv-btn setdet-filters-btn"+(countActiveFilters(drawerFilter)>0?" has-active":"")} onClick=${()=>setDrawerOpen(true)}
+            title="Open the full filter panel — ink, cost, rarity, type, keywords, classifications, stats, sets, artist…">
+            ⚙ Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
+          </button>
+          <button class=${"chip"+(separateBySet?" active":"")} onClick=${()=>setSeparateBySet(v=>!v)}
+            title="Group the list into per-set sections with headers">⊟ Separate by set</button>`
+        : html`<span style=${{display:"contents"}}>
+          <div class="cards-chipgroup">
+            ${INKS.map(ink => html`<button key=${ink} class=${"chip ink ink-icon-chip "+(inkFilter.has(ink)?"active":"")}
+              style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}} title=${ink} aria-label=${ink}
+              onClick=${()=>setInkFilter(s => toggleSet(s, ink))}><img src=${INK_ICONS[ink]} alt=${ink}/></button>`)}
+          </div>
+          <div class="cards-chipgroup">
+            ${setRarities.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
+              title=${r} aria-label=${r} onClick=${()=>setRarityFilter(s => toggleSet(s, r))}>
+              ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
+            </button>`)}
+          </div>
+        </span>`}
+      ${allMode && setCopies && html`<div class="seg-toggle" title="Completion target per card — Master Set = 1 copy, Play Set = 4">
+        <button class=${copies===1?"active":""} onClick=${()=>setCopies(1)}>Master</button>
+        <button class=${copies===4?"active":""} onClick=${()=>setCopies(4)}>Play</button>
+      </div>`}
       <div class="seg-toggle">
         ${[["all","All"],["complete","Complete"],["incomplete","Incomplete"],["extras","Extras"]].map(([k,l]) =>
           html`<button key=${k} class=${statusFilter===k?"active":""} onClick=${()=>setStatusFilter(k)}>${l}</button>`)}
@@ -8313,6 +8889,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           html`<button key=${k} class=${foilMode===k?"active":""} onClick=${()=>setFoilMode(k)}>${l}</button>`)}
       </div>`}
       <select value=${sortKey} onChange=${e=>setSortKeyState(e.target.value)} class="setdet-sort" title="Sort">
+        ${allMode && html`<option value="set-new">Set · newest first</option>`}
+        ${allMode && html`<option value="set-old">Set · oldest first</option>`}
         <option value="num">#  Collector</option>
         <option value="name">Name (A→Z)</option>
         <option value="cost-asc">Cost ↑</option>
@@ -8332,11 +8910,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         <div class="setdet-stat-val green">$${visibleOwned.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="setdet-stat-sub">${visibleOwned.count.toLocaleString()} card${visibleOwned.count===1?'':'s'}</div>
       </div>
-      ${!allMode && html`<div class="setdet-stat">
+      <div class="setdet-stat">
         <div class="setdet-stat-lbl">Missing value</div>
         <div class="setdet-stat-val red">$${visibleMissing.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${copies===1?"master":copies===4?"playset":copies+"×"} set</div>
-      </div>`}
+        <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${copies===1?"master":copies===4?"playset":copies+"×"} ${allMode ? "(all sets)" : "set"}</div>
+      </div>
     </div>
 
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
@@ -8357,6 +8935,19 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
             {key: "non-foil", label: "Non-Foil", items: visibleGroups.filter(g => g.normal), printingMode: "normal"},
             {key: "foil",     label: "Foil",                  items: visibleGroups.filter(g => g.foil),   printingMode: "foil"},
           ];
+        }
+        if(allMode){
+          // Flat by default; only the "Separate by set" toggle adds per-set
+          // headers. visibleGroups is already in sort order, so Map insertion
+          // order = display order (sort by set first for clean sections).
+          if(!separateBySet) return [{key: "__all__", label: null, items: visibleGroups}];
+          const setBuckets = new Map();
+          for(const g of visibleGroups){
+            const k = g.Set || "Other";
+            if(!setBuckets.has(k)) setBuckets.set(k, []);
+            setBuckets.get(k).push(g);
+          }
+          return Array.from(setBuckets, ([k, items]) => ({key: k, label: k, items}));
         }
         if(!isExtrasView) return [{key: setName, label: null, items: visibleGroups}];
         const buckets = new Map();
@@ -8396,7 +8987,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         };
       };
       const renderItems = (items, printingMode) => viewMode === "list"
-        ? html`<div class=${"setdet-list-grid"+(isPromoSet?" setdet-list-grid--promo":"")}>${items.map(gOrig => {
+        ? html`<div class=${"setdet-list-grid"+(isPromoSet?" setdet-list-grid--promo":"")+(allMode?" setdet-list-grid--rowflow":"")}>${items.map(gOrig => {
             const g = projectForPrinting(gOrig, printingMode);
             const nKey = g.normal ? g.card_id+":"+g.normal.tcg_printing : null;
             const fKey = g.foil   ? g.card_id+":"+g.foil.tcg_printing   : null;
@@ -8436,6 +9027,9 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       </div>`);
     })()}
 
+    ${allMode && drawerOpen && html`<${FilterDrawer} filter=${drawerFilter} setFilter=${setDrawerFilter}
+      setsByGroup=${setsByGroupAll} allIllustrators=${allIllustratorsAll}
+      onClose=${()=>setDrawerOpen(false)} onReset=${()=>setDrawerFilter(emptyFilter())}/>`}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -11265,21 +11859,43 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey}) 
 // collection's All Cards view: ☰/▦ list↔grid toggle, sort, search, grader +
 // foil filters. Separate from the goal/set-completion tracking view. Receives
 // the already-built maps from GradedCollectionView so it does no fetching.
+const GRADED_OWNED_SR = (s)=>{ const i = SET_ORDER.indexOf(s); return i === -1 ? UNKNOWN_SET_RANK : i; };
+const _gcoBySet = (dir) => (a,b) => {
+  const ar = GRADED_OWNED_SR(a.set), br = GRADED_OWNED_SR(b.set);
+  if(ar === UNKNOWN_SET_RANK && br !== UNKNOWN_SET_RANK) return 1;
+  if(br === UNKNOWN_SET_RANK && ar !== UNKNOWN_SET_RANK) return -1;
+  return (dir * (ar - br)) || ((a.cn||0) - (b.cn||0)) || ((parseFloat(b.grade)||0) - (parseFloat(a.grade)||0));
+};
 const GRADED_OWNED_SORTS = {
+  "set-new":    _gcoBySet(-1),  // newest set first (higher SET_ORDER index), then collector #, then grade
+  "set-old":    _gcoBySet(1),
   "value-desc": (a,b)=> (b.value||0)*(b.qty||1) - (a.value||0)*(a.qty||1),
   "value-asc":  (a,b)=> (a.value||0)*(a.qty||1) - (b.value||0)*(b.qty||1),
   "name":       (a,b)=> (a.name||"").localeCompare(b.name||""),
-  "set":        (a,b)=> (SET_ORDER.indexOf(b.set) - SET_ORDER.indexOf(a.set)) || (a.name||"").localeCompare(b.name||""),
-  "grade":      (a,b)=> (parseFloat(b.grade)||0) - (parseFloat(a.grade)||0),
+  "grade-desc": (a,b)=> (parseFloat(b.grade)||0) - (parseFloat(a.grade)||0),
+  "grade-asc":  (a,b)=> (parseFloat(a.grade)||0) - (parseFloat(b.grade)||0),
   "grader":     (a,b)=> (a.grader||"").localeCompare(b.grader||"") || (parseFloat(b.grade)||0)-(parseFloat(a.grade)||0),
 };
+// Chase rarities are inherently single-printing (no Normal/Foil duality), so the
+// foil badge is never shown for them — it's reserved for the foil copy of a
+// normal card that exists in both Normal and Cold Foil.
+const GRADED_CHASE_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
 const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
-  const [viewMode, setViewMode] = useState(()=>{ try { return localStorage.getItem("packsink:gradedOwned:view")||"grid"; } catch { return "grid"; } });
+  // All sort + filter selections persist to localStorage so the view is the
+  // same next time you open it.
+  const lsStr = (k,d)=>{ try { return localStorage.getItem(k) || d; } catch { return d; } };
+  const lsSet = (k)=>{ try { return new Set(JSON.parse(localStorage.getItem(k)||"[]")); } catch { return new Set(); } };
+  const [viewMode, setViewMode]       = useState(()=> lsStr("packsink:gradedOwned:view","grid"));
+  const [sortKey, setSortKey]         = useState(()=> lsStr("packsink:gradedOwned:sort","set-new"));
+  const [graderFilter, setGraderFilter] = useState(()=> lsSet("packsink:gradedOwned:graders"));
+  const [separateBySet, setSeparateBySet] = useState(()=> lsStr("packsink:gradedOwned:separate","0")==="1");
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerFilter, setDrawerFilter] = useState(()=>{ try { return deserializeFilter(localStorage.getItem("packsink:gradedOwned:filter")); } catch { return emptyFilter(); } });
   useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:view", viewMode); } catch {} }, [viewMode]);
-  const [sortKey, setSortKey] = useState("value-desc");
-  const [search, setSearch] = useState("");
-  const [graderFilter, setGraderFilter] = useState(new Set());
-  const [foilMode, setFoilMode] = useState("either"); // either | normal | foil
+  useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:sort", sortKey); } catch {} }, [sortKey]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:graders", JSON.stringify([...graderFilter])); } catch {} }, [graderFilter]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:separate", separateBySet?"1":"0"); } catch {} }, [separateBySet]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:gradedOwned:filter", serializeFilter(drawerFilter)); } catch {} }, [drawerFilter]);
 
   const valueOf = (it, meta) => {
     const cv = (it.custom_value != null && Number.isFinite(Number(it.custom_value))) ? Number(it.custom_value) : null;
@@ -11306,6 +11922,8 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
         name: dash > 0 ? nm.slice(0, dash) : nm,
         sub:  dash > 0 ? nm.slice(dash + 3) : "",
         set: meta?.Set || "",
+        rarity: meta ? normalizeRarity(meta.Rarity) : "",
+        cn: meta ? collectorNum(meta) : 0,
         image: meta?.img_normal || meta?.img_small || meta?.img_large || null,
         grader: it.grader, grade: it.grade, qty: it.quantity,
         value: valueOf(it, meta),
@@ -11316,23 +11934,55 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
     return out;
   }, [items, cardById, priceByKey]);
 
-  const graders = useMemo(()=> Array.from(new Set(entries.map(e=>e.grader).filter(Boolean))).sort(), [entries]);
+  const graders  = useMemo(()=> Array.from(new Set(entries.map(e=>e.grader).filter(Boolean))).sort(), [entries]);
+  const setsByGroup = useMemo(()=> groupSetsForFilter(raw), [raw]);
+  const allIllustrators = useMemo(()=>{
+    const s = new Set();
+    for(const r of raw){ if(Array.isArray(r.illustrators)) for(const n of r.illustrators) if(n) s.add(n); }
+    return Array.from(s).sort((a,b)=>a.localeCompare(b));
+  }, [raw]);
 
   const visible = useMemo(()=>{
-    const q = (search||"").trim().toLowerCase();
-    let list = entries.filter(e=>{
+    // grader + foil are graded-specific (inline). Everything else (ink, rarity,
+    // cost, type, keywords, classifications, stats, sets, artist, search) runs
+    // through the full Cards-tab Filters drawer via the canonical matcher.
+    const parsed = parseSearchQuery(drawerFilter.search || "");
+    parsed.matchMode = drawerFilter.matchMode || "any";
+    const activeDrawer = countActiveFilters(drawerFilter) > 0 || (drawerFilter.search||"").trim();
+    const pred = (e, p) => {
       if(graderFilter.size && !graderFilter.has(e.grader)) return false;
-      if(foilMode === "foil"   && e.printing === "Normal") return false;
-      if(foilMode === "normal" && e.printing !== "Normal") return false;
-      if(q && !((e.name+" "+e.sub+" "+e.set+" "+e.grader+" "+e.grade).toLowerCase().includes(q))) return false;
+      if(activeDrawer){
+        if(!e.meta) return false;               // no catalog row → can't match drawer dims
+        if(!matchesCardFilter(e.meta, drawerFilter, p)) return false;
+      }
       return true;
-    });
+    };
+    // AND-name-first / OR-fallback (same two-pass as the Cards tab).
+    const _multi = (parsed.name||"").trim().split(/\s+/).filter(Boolean).length > 1;
+    let list;
+    if(activeDrawer && _multi){
+      list = entries.filter(e => pred(e, {...parsed, nameMatchMode:"all"}));
+      if(!list.length) list = entries.filter(e => pred(e, {...parsed, nameMatchMode:"any"}));
+    } else {
+      list = entries.filter(e => pred(e, parsed));
+    }
     const cmp = GRADED_OWNED_SORTS[sortKey];
     return cmp ? list.slice().sort(cmp) : list;
-  }, [entries, search, graderFilter, foilMode, sortKey]);
+  }, [entries, graderFilter, sortKey, drawerFilter]);
+
+  // Optional per-set sectioning (visible is already in sort order → Map insertion
+  // order = display order; sort by set first for clean sections).
+  const buckets = useMemo(()=>{
+    if(!separateBySet) return [{key:"__all__", label:null, items:visible}];
+    const m = new Map();
+    for(const e of visible){ const k = e.set || "Other"; if(!m.has(k)) m.set(k,[]); m.get(k).push(e); }
+    return Array.from(m, ([k,items])=>({key:k, label:k, items}));
+  }, [visible, separateBySet]);
 
   const totalValue = useMemo(()=> visible.reduce((s,e)=> s + (e.value||0)*(e.qty||1), 0), [visible]);
-  const printLabel = (p)=> p === "Normal" ? "Non-foil" : p === "Cold Foil" ? "Foil" : p === "Holofoil" ? "Holo" : p;
+  // Foil badge: only the foil copy of a NON-chase card (it has Normal + Cold Foil).
+  const showFoilBadge = (e)=> !GRADED_CHASE_RARITIES.has(e.rarity) && e.printing !== "Normal";
+  const printCell = (e)=> GRADED_CHASE_RARITIES.has(e.rarity) ? "" : (e.printing === "Normal" ? "Non-foil" : "Foil");
   const gradeBadge = (e)=> html`<span class="gco-grade" style=${{background: GRADER_COLOR[(e.grader||"").toLowerCase()] || "#888"}}>${(e.grader||"").toUpperCase()} ${e.grade}</span>`;
   const valStr = (e)=> e.value != null ? (e.custom ? "✎ " : "") + fmt(e.value) : "—";
 
@@ -11344,21 +11994,25 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   return html`<div class="gco-wrap">
     <div class="gco-toolbar">
       <input type="search" class="setdet-search" placeholder="Search your graded cards..."
-        value=${search} onInput=${e=>setSearch(e.target.value)}/>
+        value=${drawerFilter.search||""} onInput=${e=>setDrawerFilter(f=>({...f, search:e.target.value}))}/>
+      <button class=${"import-csv-btn setdet-filters-btn"+(countActiveFilters(drawerFilter)>0?" has-active":"")} onClick=${()=>setDrawerOpen(true)}
+        title="Open the full filter panel — ink, cost, rarity, type, keywords, classifications, stats, sets, artist…">
+        ⚙ Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
+      </button>
+      <button class=${"chip"+(separateBySet?" active":"")} onClick=${()=>setSeparateBySet(v=>!v)}
+        title="Group into per-set sections with headers">⊟ Separate by set</button>
       ${graders.length > 1 && html`<div class="cards-chipgroup">
         ${graders.map(g => html`<button key=${g} class=${"chip "+(graderFilter.has(g)?"active":"")}
           onClick=${()=>setGraderFilter(s=>toggleSet(s,g))}>${g.toUpperCase()}</button>`)}
       </div>`}
-      <div class="seg-toggle">
-        ${[["either","Either"],["normal","Non-foil"],["foil","Foil"]].map(([k,l]) =>
-          html`<button key=${k} class=${foilMode===k?"active":""} onClick=${()=>setFoilMode(k)}>${l}</button>`)}
-      </div>
       <select value=${sortKey} onChange=${e=>setSortKey(e.target.value)} class="setdet-sort" title="Sort">
-        <option value="value-desc">Value ↓</option>
-        <option value="value-asc">Value ↑</option>
+        <option value="set-new">Set · newest first</option>
+        <option value="set-old">Set · oldest first</option>
+        <option value="value-desc">Value · high → low</option>
+        <option value="value-asc">Value · low → high</option>
+        <option value="grade-desc">Grade · high → low</option>
+        <option value="grade-asc">Grade · low → high</option>
         <option value="name">Name (A→Z)</option>
-        <option value="set">Set</option>
-        <option value="grade">Grade ↓</option>
         <option value="grader">Grader</option>
       </select>
       <div class="setdet-view-toggle">
@@ -11367,29 +12021,30 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
       </div>
     </div>
     <div class="gco-summary">${visible.length} card${visible.length===1?"":"s"} · <span class="green">${fmt(totalValue)}</span></div>
-    ${viewMode === "grid"
-      ? html`<div class="gco-grid">${visible.map((e,i) => html`<button key=${i} class="gco-tile" onClick=${()=>onOpen(e.it.card_id)}
-          style=${{background: e.inkList.length===2 ? `linear-gradient(135deg, ${inkTint(e.inkList[0],theme)}, ${inkTint(e.inkList[1],theme)})` : e.inkList.length===1 ? inkTint(e.inkList[0],theme) : undefined}}>
-          <div class="gco-img-wrap">
-            ${e.image ? html`<img src=${e.image} alt=${e.name} loading="lazy"/>` : html`<div class="gco-noimg"></div>`}
+    ${buckets.map(b => html`<div class="gco-bucket" key=${b.key}>
+      ${b.label && html`<div class="gco-bucket-head">${b.label}</div>`}
+      ${viewMode === "grid"
+        ? html`<div class="gco-grid">${b.items.map((e,i) => html`<button key=${i} class="gco-tile" onClick=${()=>onOpen(e.it.card_id)}
+            style=${{background: e.inkList.length===2 ? `linear-gradient(135deg, ${inkTint(e.inkList[0],theme)}, ${inkTint(e.inkList[1],theme)})` : e.inkList.length===1 ? inkTint(e.inkList[0],theme) : undefined}}>
+            <div class="gco-img-wrap">
+              ${e.image ? html`<img src=${e.image} alt=${e.name} loading="lazy"/>` : html`<div class="gco-noimg"></div>`}
+              ${gradeBadge(e)}
+              ${showFoilBadge(e) && html`<span class="gco-foil">Foil</span>`}
+              ${e.qty > 1 && html`<span class="gco-qty">×${e.qty}</span>`}
+            </div>
+            <div class="gco-name">${e.name}</div>
+            ${e.sub && html`<div class="gco-sub">${e.sub}</div>`}
+            <div class=${"gco-val"+(e.custom?" custom":"")}>${valStr(e)}</div>
+          </button>`)}</div>`
+        : html`<div class="gco-list">${b.items.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id)}>
+            <span class="gco-row-name">${e.name}</span>
             ${gradeBadge(e)}
-            ${e.printing !== "Normal" && html`<span class="gco-foil">${printLabel(e.printing)}</span>`}
-            ${e.qty > 1 && html`<span class="gco-qty">×${e.qty}</span>`}
-          </div>
-          <div class="gco-name">${e.name}</div>
-          ${e.sub && html`<div class="gco-sub">${e.sub}</div>`}
-          <div class=${"gco-val"+(e.custom?" custom":"")}>${valStr(e)}</div>
-        </button>`)}</div>`
-      : html`<div class="gco-list">${visible.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id)}>
-          <div class="gco-row-thumb">${e.image ? html`<img src=${e.image} alt=${e.name} loading="lazy"/>` : ""}</div>
-          <div class="gco-row-main">
-            <div class="gco-row-name">${e.name}</div>
-            <div class="gco-row-sub">${e.sub}${e.set ? " · "+e.set : ""}</div>
-          </div>
-          ${gradeBadge(e)}
-          <div class="gco-row-print">${printLabel(e.printing)}</div>
-          <div class=${"gco-row-val"+(e.custom?" custom":"")}>${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</div>
-        </button>`)}</div>`}
+            <span class=${"gco-row-val"+(e.custom?" custom":"")}>${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</span>
+          </button>`)}</div>`}
+    </div>`)}
+    ${drawerOpen && html`<${FilterDrawer} filter=${drawerFilter} setFilter=${setDrawerFilter}
+      setsByGroup=${setsByGroup} allIllustrators=${allIllustrators}
+      onClose=${()=>setDrawerOpen(false)} onReset=${()=>setDrawerFilter(emptyFilter())}/>`}
   </div>`;
 };
 
@@ -12283,6 +12938,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         <div class="seg-toggle gc-caps-seg" title="Display mode">
           <button class=${displayMode==="grid"?"active":""} onClick=${()=>setDisplayMode("grid")}>Grid</button>
           <button class=${displayMode==="compact"?"active":""} onClick=${()=>setDisplayMode("compact")}>Compact</button>
+          <button class=${displayMode==="poster"?"active":""} onClick=${()=>setDisplayMode("poster")}>Posters</button>
         </div>
         </span>`}
         ${!readOnly && html`<label class="sealed-coll-flag gc-caps-flag"
@@ -12344,7 +13000,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               const collapsed = collapsedSets.has(section.set_id);
               const ownedInSet = section.cards.filter(c => c.slots.some(s => s.owned)).length;
               const isSplitSection = SECTION_SPLIT_SETS_GLOBAL.has(section.set_name);
-              const renderCards = (cardEntries) => html`<div class=${"gc-set-grid"+(displayMode==="compact"?" gc-compact":"")}>
+              const renderCards = (cardEntries) => html`<div class=${displayMode==="poster" ? "gco-grid" : ("gc-set-grid"+(displayMode==="compact"?" gc-compact":""))}>
                   ${cardEntries.map(({card, slots, hidden, printing}) => {
                     // Build a CardDetailModal-shaped group from raw rows for
                     // this card_id. groupCards() merges Normal + Foil rows
@@ -12395,6 +13051,39 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                       }
                       return p ? (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? null) : null;
                     };
+                    // POSTER mode: full card image like the My Cards tiles, with
+                    // grade badge(s) + value overlaid. Cards you don't own render
+                    // translucent (the goal-board look).
+                    if(displayMode === "poster"){
+                      const ownedSlots = slots.filter(s => s.owned);
+                      let posterVal = null;
+                      if(ownedSlots.length){
+                        posterVal = ownedSlots.reduce((sum,s)=> sum + (resolveSlotPx(s)||0)*(s.qty||1), 0) || null;
+                      } else if(!isCustomVariant){
+                        let refP = priceByKey.get(card.tcgplayer_product_id + "|" + tilePrinting + "|psa|10");
+                        if(!refP) for(const pr of ["Normal","Holofoil","Cold Foil"]){ if(pr===tilePrinting) continue; refP = priceByKey.get(card.tcgplayer_product_id+"|"+pr+"|psa|10"); if(refP) break; }
+                        posterVal = refP ? (refP.ebay_avg_1d ?? refP.ebay_avg_30d ?? refP.ebay_avg_7d ?? null) : null;
+                      }
+                      const pImg = card.img_normal || card.img_small;
+                      const totalQty = ownedSlots.reduce((n,s)=>n+(s.qty||0),0);
+                      return html`<div key=${card.card_id + "::" + tilePrinting}
+                          class=${"gco-tile gc-poster"+(hasOwned?"":" gc-poster-unowned")+(hidden?" gc-card-hidden":"")}
+                          style=${tileBg ? {background: tileBg} : null}
+                          onClick=${openDetail} title=${(card["Product Name"]||"") + (hasOwned?"":" — tracked, not owned")}>
+                        <div class="gco-img-wrap">
+                          ${pImg ? html`<img src=${pImg} alt="" loading="lazy"/>` : html`<div class="gco-noimg"></div>`}
+                          <div class="gc-poster-grades">
+                            ${slots.map((s,si)=> html`<span key=${si} class=${"gco-grade"+(s.owned?"":" gc-grade-tracked")}
+                              style=${{background: GRADER_COLOR[(s.grader||"").toLowerCase()]||"#888"}}>${(s.grader||"").toUpperCase()} ${s.grade}</span>`)}
+                          </div>
+                          ${totalQty > 1 && html`<span class="gco-qty">×${totalQty}</span>`}
+                          ${!readOnly && html`<button class="gc-card-add-btn" title=${hasOwned?"Add another graded copy":"Add to graded collection"}
+                            onClick=${e=>{ e.stopPropagation(); setAddPreselectCardId(card.card_id); setAddPreselectPrinting(tilePrinting); setAddOpen(true); }}>+</button>`}
+                        </div>
+                        <div class="gco-name">${card["Product Name"]||"Unknown"}</div>
+                        <div class=${"gco-val"+(hasOwned?"":" gc-poster-refval")}>${posterVal!=null ? (hasOwned?"":"~")+fmt(posterVal) : (hasOwned?"—":"")}</div>
+                      </div>`;
+                    }
                     return html`<div key=${card.card_id + "::" + tilePrinting}
                         class=${"gc-card gc-card-clickable " + (hasOwned ? "gc-card-owned" : "gc-card-tracked-only") + (hidden ? " gc-card-hidden" : "")}
                         style=${tileBg ? {background: tileBg} : null}
@@ -13547,7 +14236,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   if(selectedSet) return html`<${CollectionSetDetail} setName=${selectedSet} raw=${raw}
     collection=${collection} updateQty=${updateQty} bulkUpdateCollection=${bulkUpdateCollection}
     onBack=${()=>setSelectedSet(null)} theme=${theme}
-    user=${user} onSignIn=${onSignIn} copies=${copies}
+    user=${user} onSignIn=${onSignIn} copies=${copies} setCopies=${isViewerMode ? null : setCopies}
     readOnly=${isViewerMode}
     compareMode=${canCompare ? compareMode : "all"}
     viewerOwnCollection=${viewerOwnCollection || null}/>`;
@@ -13714,7 +14403,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         </select>
       </label>
       <button class="import-csv-btn allcards-btn" onClick=${()=>setSelectedSet(ALL_CARDS_VIEW)}
-        title="View every card you own across all sets in one sortable, filterable grid">▦ All Cards</button>
+        title="Browse every card across all sets in one grid — sort, filter, and see which you own">▦ All Cards</button>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
         title="Import a collection CSV">Import CSV</button>`}
       ${!isViewerMode && html`<input ref=${importFileRef} type="file" accept=".csv,text/csv" style=${{display:"none"}}
@@ -13936,6 +14625,18 @@ function eloVisibleAliases(canonicalName, aliases){
   const list = aliases || [];
   return rx ? list.filter(a => !rx.test(a.display_name || "")) : list;
 }
+
+// Per-player profile flair — a tiny card badge shown next to the name on the
+// EloPlayerProfile page ONLY (never on the leaderboard). Keyed by normalized
+// display name. Image = Mickey Mouse - Brave Little Tailor, Challenge Promo (C1)
+// Prize Foil (the gold /500 foil).
+const ELO_FLAIR_MICKEY = "https://tcgplayer-cdn.tcgplayer.com/product/554628_400w.jpg";
+const ELO_NAME_FLAIR = {
+  jbaum:     {img: ELO_FLAIR_MICKEY, title: "Mickey Mouse - Brave Little Tailor (Prize Foil)"},
+  oberon125: {img: ELO_FLAIR_MICKEY, title: "Mickey Mouse - Brave Little Tailor (Prize Foil)"},
+  tomasz:    {img: ELO_FLAIR_MICKEY, title: "Mickey Mouse - Brave Little Tailor (Prize Foil)"},
+};
+const eloFlairFor = (name) => ELO_NAME_FLAIR[(name||"").toLowerCase().replace(/[^a-z0-9]/g,"")] || null;
 
 function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, aliasMap}){
   if(rows === null) return html`<div class="elo-loading">Loading leaderboard…</div>`;
@@ -14323,6 +15024,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       <div class="elo-profile-name">
         <${EloPlatformPill} platform=${profile.platform} size=${18}/>
         <h2>${profile.display_name}</h2>
+        ${(()=>{ const f = eloFlairFor(profile.display_name); return f && html`<img class="elo-name-flair" src=${f.img} alt="" title=${f.title} loading="lazy"/>`; })()}
       </div>
       ${aliases.length > 0 && html`<div class="elo-profile-aka">
         <span class="elo-aka-lbl">Also known as:</span>
@@ -26263,6 +26965,11 @@ function App(){
   // Tracks the post-sign-in fetch so the Home panel can show a "loading"
   // state instead of the "empty collection" CTA during the round-trip.
   const [collectionLoading, setCollectionLoading] = useState(false);
+  // Allowlist gate for the new graded experience (graded_premium_viewers,
+  // migration 73). When true, every graded surface swaps from the legacy
+  // TCGPriceLookup data to the per-sale graded_sales scatter (Last Sold / Avg
+  // of Last 5). Mirrors the can_view_store_report pattern.
+  const [canViewGradedPremium, setCanViewGradedPremium] = useState(false);
 
   // Track auth state. Supabase SDK auto-detects OAuth redirect on page load.
   useEffect(()=>{
@@ -26282,6 +26989,25 @@ function App(){
     });
     return () => subscription.unsubscribe();
   },[]);
+
+  // Resolve the graded-premium allowlist flag on sign-in. Server-side
+  // SECURITY DEFINER RPC (auth.uid()-scoped) so the gate can't be spoofed
+  // client-side. Cleared on sign-out. On localhost only, a localStorage flag
+  // (packsink:gradedPreview=1) forces the new view on for design/QA without
+  // signing in — same localhost-gated preview pattern as the onboarding tours.
+  useEffect(()=>{
+    try {
+      if(location.hostname === "localhost" && localStorage.getItem("packsink:gradedPreview") === "1"){
+        setCanViewGradedPremium(true); return;
+      }
+    } catch {}
+    if(!user){ setCanViewGradedPremium(false); return; }
+    let cancelled = false;
+    sbClient.rpc("can_view_graded_premium")
+      .then(({data}) => { if(!cancelled) setCanViewGradedPremium(!!data); })
+      .catch(() => { if(!cancelled) setCanViewGradedPremium(false); });
+    return () => { cancelled = true; };
+  }, [user]);
 
   // Public profile state — display name + avatar URL the rest of the world
   // sees on your shared decks. Distinct from auth.users metadata (which is
@@ -27097,7 +27823,7 @@ function App(){
   // while data is in flight; cache hits make this instantaneous after the
   // first visit.
 
-  return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><div>
+  return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
     <div class="top-nav">
@@ -27349,7 +28075,7 @@ function App(){
     ${view==="faq"&&html`<${FAQView} onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}/>`}
     ${view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
-  </div><//><//>`;
+  </div><//><//><//>`;
 }
 
 class ErrorBoundary extends React.Component {
