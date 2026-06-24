@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=207">
+<link rel="stylesheet" href="styles.css?v=208">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=207"></script>
+<script src="logo.js?v=208"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -270,6 +270,11 @@ const PRINTING_VARIANT_LABEL = {"Foil": "Top Prize", "Non-Foil": "Prize Wall"};
 const VARIANT_BADGE_HIDE = new Set(["", "Normal", "Unknown", "Holofoil", "Cold Foil"]);
 // The variant badge label for a printing value, or null if it shouldn't be badged.
 const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIANT_LABEL[p] || p) : null;
+// Normalize any printing string into one of two foil buckets, for the
+// Normal/Foil version tabs on ordinary (non-version-split) x/204 cards. Any
+// foil/cold-foil/holo finish → "Foil"; everything else (incl. untagged) → "Non-Foil".
+const GRADED_FOIL_PRINTINGS = new Set(["foil", "cold foil", "holofoil", "holo"]);
+const gradedFoilBucket = (p) => GRADED_FOIL_PRINTINGS.has((p || "").toLowerCase().trim()) ? "Foil" : "Non-Foil";
 // Printing options the graded Add dialog should offer for split cards whose variant
 // isn't a separate raw catalog row (Genie Two Swords, Peter Pan Text Error). Keyed by
 // card_id; values are the printing strings stored on the owned slot (must match the
@@ -5296,35 +5301,56 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const [gradedPrintingFilter, setGradedPrintingFilter] = useState(null);
   // Lifted graded combos + focus so the price tile, price-changes box, and the
   // scatter all share the same featured (grader, grade). Premium only.
-  const isSplitCard = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set) || SPLIT_PRINTING_CARD_IDS.has(group.card_id);
-  // Distinct printing/variant values present in this card's sales (only meaningful
-  // for split cards), sorted for a stable toggle order.
+  // VERSION-split = genuinely different cards sharing a card_id (C1 Prize Wall/
+  // Top Prize, Genie Two Swords, Peter Pan Text Error) — keyed on the raw printing.
+  const isVersionSplit = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set) || SPLIT_PRINTING_CARD_IDS.has(group.card_id);
+  // FOIL-split = an ordinary x/204 card that has BOTH foil and non-foil graded
+  // sales → gets Non-Foil / Foil tabs too (computed from the per-card sales, so
+  // no rollup/matview change needed; the tile + scatter derive from these sales).
+  const isFoilSplit = useMemo(()=>{
+    if(isVersionSplit) return false;
+    let f = false, n = false;
+    for(const r of (gradedSales.rows||[])){
+      if(gradedFoilBucket(r.printing) === "Foil") f = true; else n = true;
+      if(f && n) return true;
+    }
+    return false;
+  }, [isVersionSplit, gradedSales.rows]);
+  const isSplitCard = isVersionSplit || isFoilSplit;
+  // Distinct version values present in this card's sales, base printing first.
   const cardPrintings = useMemo(()=> {
-    if(!isSplitCard) return [];
+    if(isFoilSplit) return ["Non-Foil", "Foil"];
+    if(!isVersionSplit) return [];
     const s = new Set();
     for(const r of (gradedSales.rows||[])) if(r.printing) s.add(r.printing);
-    // Stable order: base printing (Normal / Non-Foil) first, then variants.
     return [...s].sort((a,b)=>{
       const rank = (p)=> (p==="Normal"||p==="Non-Foil") ? 0 : 1;
       return rank(a)-rank(b) || a.localeCompare(b);
     });
-  }, [isSplitCard, gradedSales.rows]);
+  }, [isVersionSplit, isFoilSplit, gradedSales.rows]);
+  // Card-context label/badge for a version. C1 → Top Prize/Prize Wall; foil-split
+  // mainline → plain Foil/Non-Foil (NEVER the C1 names); version cards → variant.
+  const splitLabel = (p) => isFoilSplit ? p : (PRINTING_VARIANT_LABEL[p] || p);
+  // Badge shows the distinguishing version only: foil-split badges "Foil" (Non-Foil
+  // is baseline → no badge); version cards use the variant badge.
+  const splitBadge = (p) => isFoilSplit ? (p === "Foil" ? "Foil" : null) : variantBadge(p);
   // Once sales load, lock the version filter onto the version the card was
-  // opened to (initialPrinting from a screener/tile click), else the base
-  // printing. Never "All" — split cards are never combined.
+  // opened to (initialPrinting from a screener/tile click — normalized to a foil
+  // bucket for foil-split cards), else the base printing. Never combined.
   useEffect(()=>{
     if(!isSplitCard || !cardPrintings.length) return;
     setGradedPrintingFilter(prev => {
       if(prev && cardPrintings.includes(prev)) return prev;
-      if(initialPrinting && cardPrintings.includes(initialPrinting)) return initialPrinting;
+      const want = isFoilSplit ? (initialPrinting ? gradedFoilBucket(initialPrinting) : null) : initialPrinting;
+      if(want && cardPrintings.includes(want)) return want;
       return cardPrintings[0];
     });
-  }, [isSplitCard, cardPrintings, initialPrinting]);
-  const gradedRowsView = useMemo(()=> (
-    (!isSplitCard || !gradedPrintingFilter)
-      ? gradedSales.rows
-      : gradedSales.rows.filter(r => (r.printing || "Unknown") === gradedPrintingFilter)
-  ), [isSplitCard, gradedPrintingFilter, gradedSales.rows]);
+  }, [isSplitCard, isFoilSplit, cardPrintings, initialPrinting]);
+  const gradedRowsView = useMemo(()=> {
+    if(!isSplitCard || !gradedPrintingFilter) return gradedSales.rows;
+    if(isFoilSplit) return gradedSales.rows.filter(r => gradedFoilBucket(r.printing) === gradedPrintingFilter);
+    return gradedSales.rows.filter(r => (r.printing || "Unknown") === gradedPrintingFilter);
+  }, [isSplitCard, isFoilSplit, gradedPrintingFilter, gradedSales.rows]);
   const gradedCombos = useMemo(()=> buildGradedCombos(gradedRowsView), [gradedRowsView]);
   const gradedDefaultKey = useMemo(()=> {
     const has = (k)=> gradedCombos.some(c=>c.key===k);
@@ -5588,7 +5614,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       market: {now: win.avg5, byWin: bw},
       wins: [{key:"1w",label:"1W"},{key:"1m",label:"1M"},{key:"3m",label:"3M"}],
       meta: (group.Rarity ? group.Rarity + " · " : "") + (GRADER_LABEL[focus.grader]||focus.grader.toUpperCase()) + " " + focus.grade
-            + (isSplitCard && variantBadge(gradedPrintingFilter) ? " · " + variantBadge(gradedPrintingFilter) : ""),
+            + (isSplitCard && splitBadge(gradedPrintingFilter) ? " · " + splitBadge(gradedPrintingFilter) : ""),
     };
   })();
 
@@ -5630,14 +5656,14 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       <div class="card-detail-body">
         <h2 class="title-font">
           ${group["Product Name"]}
-          ${group.isSplitPrinting && html`<span style=${{
+          ${group.isSplitPrinting && detailTab !== "graded" && html`<span style=${{
               marginLeft:8,fontSize:12,fontWeight:700,letterSpacing:0.4,
               padding:"3px 8px",borderRadius:6,verticalAlign:"middle",
               background: group.foil ? "rgba(85,55,140,0.18)" : "rgba(22,101,52,0.18)",
               color:     group.foil ? "#7e54c4"               : "#1d8d4a",
               border:    group.foil ? "1px solid #7e54c4"     : "1px solid #1d8d4a",
             }}>${group.foil ? "PRIZE FOIL" : "PRIZE WALL"}</span>`}
-          ${detailTab === "graded" && isSplitCard && variantBadge(gradedPrintingFilter) && html`<span class="variant-badge">${variantBadge(gradedPrintingFilter)}</span>`}
+          ${detailTab === "graded" && isSplitCard && splitBadge(gradedPrintingFilter) && html`<span class="variant-badge">${splitBadge(gradedPrintingFilter)}</span>`}
         </h2>
         ${classifications.length > 0 && html`<div class="card-detail-subtitle">${classifications.join(" • ")}</div>`}
         <div class="card-detail-meta">
@@ -5806,7 +5832,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       </div>`}
       ${detailTab === "graded" && gradedPremium && isSplitCard && cardPrintings.length >= 2 && html`<div class="graded-printing-toggle seg-toggle">
         ${cardPrintings.map(p=>html`<button key=${p}
-          class=${gradedPrintingFilter===p?"active":""} onClick=${()=>setGradedPrintingFilter(p)}>${PRINTING_VARIANT_LABEL[p]||p}</button>`)}
+          class=${gradedPrintingFilter===p?"active":""} onClick=${()=>setGradedPrintingFilter(p)}>${splitLabel(p)}</button>`)}
       </div>`}
       ${detailTab === "graded" && (gradedPremium
         ? html`<${GradedSalesTab} sales=${gradedRowsView} loading=${gradedSales.loading}
