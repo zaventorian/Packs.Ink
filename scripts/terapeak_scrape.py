@@ -50,7 +50,7 @@ import random
 import re
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import quote_plus
 
@@ -463,6 +463,69 @@ def _load_seen(out_path: Path) -> set[str]:
     return seen
 
 
+def _load_page_rows(page: Page, url: str, save_snapshots: bool,
+                    keywords: str, snap_tag: int) -> list[dict]:
+    """Navigate to one results page and return parsed rows. Waits for the table
+    to actually render (a real [data-item-id] row) to beat the skeleton-row
+    render race. Raises SystemExit (via assert_authenticated) on a challenge."""
+    # Retry the navigation on a transient timeout / nav error. A single
+    # page.goto timeout used to be swallowed by main()'s per-query handler,
+    # making the scraper exit 0 and the watchdog FALSELY declare the backfill
+    # complete (it stopped at PSA window 7/19 overnight on one blip). Retry
+    # here; if it still fails, raise SystemExit so the scraper exits NON-zero
+    # and the watchdog resumes from progress instead of thinking it finished.
+    last_err = None
+    for attempt in range(4):
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            break
+        except Exception as e:
+            last_err = e
+            print(f"    [nav retry {attempt + 1}/4] {type(e).__name__}: {str(e)[:70]}")
+            try:
+                page.wait_for_timeout(5000)
+            except Exception:
+                pass
+    else:
+        sys.exit(f"navigation failed after 4 retries: {last_err}")
+    assert_authenticated(page)
+    try:
+        page.wait_for_selector('.research-table-row [data-item-id]', timeout=20000)
+    except Exception:
+        try:
+            page.wait_for_load_state("networkidle", timeout=8000)
+        except Exception:
+            pass
+    human_sleep(DELAY_AFTER_NAV)
+    human_mouse_jitter(page)
+    human_scroll(page)
+    if save_snapshots:
+        snap_path = save_snapshot(page, keywords, snap_tag)
+        print(f"    [snap] saved {snap_path.name}")
+    return parse_rows(page)
+
+
+def _iso_to_ms(s: str) -> int:
+    dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    return int(dt.timestamp() * 1000)
+
+
+def _ms_to_date(ms: int) -> str:
+    return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).strftime("%Y-%m-%d")
+
+
+def _build_windows(start_ms: int, end_ms: int, window_days: int) -> list[tuple[int, int]]:
+    """Split [start_ms, end_ms] into consecutive window_days-sized windows."""
+    step = window_days * 86400 * 1000
+    wins: list[tuple[int, int]] = []
+    s = start_ms
+    while s < end_ms:
+        e = min(s + step, end_ms)
+        wins.append((s, e))
+        s = e
+    return wins
+
+
 def scrape_query(
     page: Page,
     keywords: str,
@@ -510,30 +573,7 @@ def scrape_query(
                 sorting=sorting, end_ms=end_ms, start_ms=start_ms,
             )
             print(f"  page {page_num} (offset={offset})")
-            page.goto(url, wait_until="domcontentloaded")
-            assert_authenticated(page)
-            # Wait for the results table to actually RENDER rows before parsing.
-            # parse_rows can match 50 placeholder/skeleton rows that have no
-            # title yet — a render race that looks like an empty page (it bit the
-            # oldest-first run). Wait for a real listing link to appear first; if
-            # none shows up, it's a genuinely empty page (true end of results).
-            try:
-                page.wait_for_selector(
-                    '.research-table-row [data-item-id]', timeout=20000)
-            except Exception:
-                try:
-                    page.wait_for_load_state("networkidle", timeout=8000)
-                except Exception:
-                    pass
-            human_sleep(DELAY_AFTER_NAV)
-            human_mouse_jitter(page)
-            human_scroll(page)
-
-            if save_snapshots:
-                snap_path = save_snapshot(page, keywords, offset)
-                print(f"    [snap] saved {snap_path.name}")
-
-            rows = parse_rows(page)
+            rows = _load_page_rows(page, url, save_snapshots, keywords, offset)
             n_new = 0
             for r in rows:
                 k = _row_key(r)
@@ -573,6 +613,83 @@ def scrape_query(
     return total
 
 
+def scrape_query_windowed(
+    page: Page,
+    keywords: str,
+    *,
+    out_path: Path,
+    progress_path: Path,
+    windows: list[tuple[int, int]],
+    sorting: str = "datelastsold",
+    save_snapshots: bool = False,
+) -> int:
+    """Scrape one query across a SEQUENCE of date windows to defeat Terapeak's
+    hard 10,000-offset pagination cap (hit by high-volume graders like PSA).
+
+    Each window is small enough that its own offset pagination finishes under the
+    cap. Within a window we paginate to the GENUINE end (an empty page) — NOT the
+    consec-duplicate heuristic — so the boundary window that overlaps
+    already-scraped data still reaches its new rows instead of stopping on the
+    leading dupes. Rows append + dedup to the shared per-query file. Resumable
+    per window via progress_path: {done:[idx...], cur_idx, cur_offset}.
+    """
+    seen = _load_seen(out_path)
+    prog = _load_progress(progress_path)
+    done = set(prog.get("done", []))
+    cur_idx = int(prog.get("cur_idx", 0))
+    cur_offset = int(prog.get("cur_offset", 0))
+    total = len(seen)
+
+    out_f = out_path.open("a", encoding="utf-8")
+    try:
+        for idx, (s_ms, e_ms) in enumerate(windows):
+            if idx in done:
+                continue
+            offset = cur_offset if idx == cur_idx else 0
+            print(f"  window {idx + 1}/{len(windows)} "
+                  f"[{_ms_to_date(s_ms)} .. {_ms_to_date(e_ms)}] from offset {offset}")
+            while True:
+                url = build_search_url(
+                    keywords, offset=offset, sorting=sorting,
+                    end_ms=e_ms, start_ms=s_ms,
+                )
+                rows = _load_page_rows(page, url, save_snapshots, keywords, offset)
+                n_new = 0
+                for r in rows:
+                    k = _row_key(r)
+                    if k not in seen:
+                        seen.add(k)
+                        out_f.write(json.dumps(r, ensure_ascii=False) + "\n")
+                        n_new += 1
+                out_f.flush()
+                total += n_new
+                last_date = rows[-1].get("date_last_sold_text") if rows else None
+                print(f"    win{idx + 1} off{offset}: +{n_new} new "
+                      f"({len(rows)} parsed, total {total}) last_sold={last_date}")
+
+                if not rows:
+                    break  # genuine end of this window
+                offset += RESULTS_PER_PAGE
+                _save_progress(progress_path, {
+                    "done": sorted(done), "cur_idx": idx, "cur_offset": offset,
+                })
+                if offset >= 10000:
+                    print(f"    [warn] window {idx + 1} hit the 10000 offset cap — "
+                          f"shrink --window-days; rows in this window are missing")
+                    break
+                human_sleep(DELAY_BETWEEN_PAGES)
+
+            done.add(idx)
+            _save_progress(progress_path, {
+                "done": sorted(done), "cur_idx": idx + 1, "cur_offset": 0,
+            })
+            human_sleep(DELAY_AFTER_NAV)
+    finally:
+        out_f.close()
+
+    return total
+
+
 # --------------------------------------------------------------------------
 # Output
 # --------------------------------------------------------------------------
@@ -599,6 +716,12 @@ def main() -> None:
         help="Search keyword (can repeat). Default: 6 graded queries.",
     )
     p.add_argument(
+        "--grader", metavar="NAME", action="append", default=None,
+        help='Convenience: scrape a grader by name (repeatable). --grader PSA '
+             'expands to \'"Lorcana" "PSA"\'; pass several (--grader CGC '
+             '--grader BGS) to scrape multiple without shell-quoting the quotes.',
+    )
+    p.add_argument(
         "--max-pages", type=int, default=None,
         help="Cap pages per query (useful for testing). Default: unlimited",
     )
@@ -616,6 +739,20 @@ def main() -> None:
         "--snapshots", action="store_true",
         help="Save raw HTML snapshots per page (debugging). Off by default — a "
              "full backfill would write thousands of ~1MB files.",
+    )
+    p.add_argument(
+        "--window-days", type=int, default=None, metavar="N",
+        help="Scrape each query in N-day date windows to beat Terapeak's hard "
+             "10000-offset cap (needed for high-volume graders like PSA whose "
+             "3-year total exceeds 10000). ~60 is a safe size. Default: off.",
+    )
+    p.add_argument(
+        "--start", metavar="YYYY-MM-DD", default=None,
+        help="Window range start (default: now - --days). Used with --window-days.",
+    )
+    p.add_argument(
+        "--end", metavar="YYYY-MM-DD", default=None,
+        help="Window range end (default: now). Used with --window-days.",
     )
     p.add_argument(
         "--cdp", nargs="?", const="http://localhost:9222", default=None,
@@ -636,7 +773,10 @@ def main() -> None:
             "(or use --cdp to attach to a real Chrome you control)."
         )
 
-    keywords = args.keyword or DEFAULT_KEYWORDS
+    if args.grader:
+        keywords = [f'"Lorcana" "{g}"' for g in args.grader]
+    else:
+        keywords = args.keyword or DEFAULT_KEYWORDS
     OUTPUT_DIR.mkdir(exist_ok=True)
     sorting = "datelastsold" if args.oldest_first else "-datelastsold"
     # Fix the date window once at run start so multi-day backfills don't drift
@@ -685,15 +825,29 @@ def main() -> None:
             print(f"\n=== query: {kw} ===")
             slug = slugify(kw)
             out_path = OUTPUT_DIR / f"{slug}.jsonl"
-            progress_path = OUTPUT_DIR / f"{slug}.progress.json"
             try:
-                count = scrape_query(
-                    page, kw,
-                    out_path=out_path, progress_path=progress_path,
-                    sorting=sorting, end_ms=end_ms, start_ms=start_ms,
-                    days_back=args.days, max_pages=args.max_pages,
-                    save_snapshots=args.snapshots,
-                )
+                if args.window_days:
+                    ws = _iso_to_ms(args.start) if args.start else start_ms
+                    we = _iso_to_ms(args.end) if args.end else end_ms
+                    windows = _build_windows(ws, we, args.window_days)
+                    wprog = OUTPUT_DIR / f"{slug}.win.progress.json"
+                    print(f"  windowed: {len(windows)} x {args.window_days}d "
+                          f"[{_ms_to_date(ws)} .. {_ms_to_date(we)}]")
+                    count = scrape_query_windowed(
+                        page, kw,
+                        out_path=out_path, progress_path=wprog,
+                        windows=windows, sorting=sorting,
+                        save_snapshots=args.snapshots,
+                    )
+                else:
+                    progress_path = OUTPUT_DIR / f"{slug}.progress.json"
+                    count = scrape_query(
+                        page, kw,
+                        out_path=out_path, progress_path=progress_path,
+                        sorting=sorting, end_ms=end_ms, start_ms=start_ms,
+                        days_back=args.days, max_pages=args.max_pages,
+                        save_snapshots=args.snapshots,
+                    )
                 print(f"  {count} rows total on disk -> {out_path.name}")
                 total_rows += count
             except SystemExit:

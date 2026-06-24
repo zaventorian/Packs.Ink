@@ -29,10 +29,12 @@ create table if not exists public.graded_sales (
   source_query   text,                        -- which grader sweep found it (debug)
   scraped_at     timestamptz default now(),
   -- derived (filled LATER by the matcher; null until attributed) --
-  card_id        text references public.cards(id),
-  grader         text,                        -- PSA | CGC | BGS | SGC | TAG
-  grade          text,                        -- 10 | 9.5 | 9 | ...
-  printing       text                         -- Foil | Non-Foil
+  card_id          text references public.cards(id),
+  grader           text,                      -- PSA | CGC | BGS | SGC | TAG
+  grade            text,                      -- 10 | 9.5 | 9 | ...  (null = grade only on slab)
+  printing         text,                      -- Foil | Non-Foil
+  match_confidence numeric(5,3),              -- matcher score (higher = more certain)
+  cn_conflict      boolean default false      -- title collector# disagrees with matched card# (review/slab-OCR)
 );
 
 -- Rollup keys: per (card_id, grader, grade) ordered by sold_date for

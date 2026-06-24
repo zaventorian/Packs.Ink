@@ -90,7 +90,7 @@ def run_once(args: list[str]):
 
 
 def main() -> None:
-    args = [sys.executable, str(SCRAPER), "--oldest-first", "--cdp"] + sys.argv[1:]
+    args = [sys.executable, str(SCRAPER), "--cdp"] + sys.argv[1:]
     attempt = 0
     stuck = 0
     while True:
