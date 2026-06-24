@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=213">
+<link rel="stylesheet" href="styles.css?v=214">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=213"></script>
+<script src="logo.js?v=214"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -4709,7 +4709,7 @@ const computeGradedSaleWindows = (comboSales) => {
 // trendline + click-to-pin sale detail. focusKey/onFocusChange are optional
 // controlled props — when the card-detail price tile owns the focus, it passes
 // them down + hideHeadline so the headline isn't duplicated.
-const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, hideHeadline, onReport, canEditGraded, onEditGraded, rawHistory}) => {
+const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, hideHeadline, onReport, canEditGraded, onEditGraded, rawHistory, posterMeta}) => {
   const [selectedKeys, setSelectedKeys]       = useState(()=>new Set());
   const [focusKeyInternal, setFocusKeyInternal] = useState(null);
   const [showTrend, setShowTrend] = useState(false);
@@ -4853,6 +4853,12 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
         style=${rawOverlay.market?{borderColor:"#3b82f6",color:"#3b82f6"}:null}
         onClick=${()=>setRawOverlay(o=>({...o,market:!o.market}))}
         title="Overlay the ungraded (raw) NM Market price history">┅ Raw Mkt</button>`}
+      ${posterMeta && html`<button type="button" class="gs-combo-chip gs-copy-img"
+        onClick=${()=> copyGradedPosterImage({...posterMeta, combos, featured:focus, series, rawLines, showTrend})}
+        title="Copy this card's graded sales as an image (art + price changes + grade list + scatter)">
+        <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style=${{verticalAlign:"-2px",marginRight:"4px"}}>
+          <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
+        </svg>Copy image</button>`}
     </div>`}
 
     <div class="gs-chart">
@@ -5869,6 +5875,12 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
         ? html`<${GradedSalesTab} sales=${gradedRowsView} loading=${gradedSales.loading}
             focusKey=${gradedFocusKey} onFocusChange=${setGradedFocusKey} hideHeadline=${true}
             rawHistory=${(history && history.normal) || null}
+            posterMeta=${{
+              artSrc: posterArt,
+              name: group["Product Name"],
+              sub: `${group.Set||""}${group.Number?" · #"+String(group.Number).split("/")[0]:""}${group.Rarity?" · "+group.Rarity:""}${isSplitCard && splitBadge(gradedPrintingFilter) ? " · "+splitBadge(gradedPrintingFilter) : ""}`,
+              dateStr: posterDate,
+            }}
             onReport=${user ? (s)=>setReportSale(s) : null}
             canEditGraded=${isGradedAdmin} onEditGraded=${(s)=>setEditSale(s)}/>`
         : html`<${GradedPricesTab} graded=${graded}
@@ -19895,6 +19907,236 @@ const copyCardPosterImage = (opts) => {
   } else {
     blobPromise.then(download).catch(() => flashToast("Couldn't copy image — try again"));
   }
+};
+
+// ── Graded sales poster (copy-image) — per-sale scatter + grade price list ───
+// The graded counterpart to buildCardPosterBlob: card art + the focused grade's
+// Last Sold / Avg-of-5 / windowed Δ%, a price list of every grade (last + avg),
+// and the dot scatter the user has open (color = grader, shape = grade, with any
+// overlays / trendline / raw lines). Canvas-drawn → CSS-cache-proof.
+
+// Trace a scatter marker onto the current path (mirrors scatterShapePath). "wye"
+// is an open (stroke-only) marker; every other shape is a closed fill.
+const tracePosterShape = (ctx, shape, cx, cy, r) => {
+  ctx.beginPath();
+  switch(shape){
+    case "square":   { const s=r*0.92; ctx.rect(cx-s, cy-s, 2*s, 2*s); break; }
+    case "diamond":  { const s=r*1.3;  ctx.moveTo(cx,cy-s); ctx.lineTo(cx+s,cy); ctx.lineTo(cx,cy+s); ctx.lineTo(cx-s,cy); ctx.closePath(); break; }
+    case "triangle": { const s=r*1.25; ctx.moveTo(cx,cy-s); ctx.lineTo(cx+s,cy+s*0.8); ctx.lineTo(cx-s,cy+s*0.8); ctx.closePath(); break; }
+    case "cross":    { const t=r*0.42,a=r*1.15;
+      ctx.moveTo(cx-t,cy-a); ctx.lineTo(cx+t,cy-a); ctx.lineTo(cx+t,cy-t); ctx.lineTo(cx+a,cy-t);
+      ctx.lineTo(cx+a,cy+t); ctx.lineTo(cx+t,cy+t); ctx.lineTo(cx+t,cy+a); ctx.lineTo(cx-t,cy+a);
+      ctx.lineTo(cx-t,cy+t); ctx.lineTo(cx-a,cy+t); ctx.lineTo(cx-a,cy-t); ctx.lineTo(cx-t,cy-t); ctx.closePath(); break; }
+    case "wye":      { const a=r*1.2; ctx.moveTo(cx,cy); ctx.lineTo(cx,cy-a); ctx.moveTo(cx,cy); ctx.lineTo(cx+a*0.87,cy+a*0.5); ctx.moveTo(cx,cy); ctx.lineTo(cx-a*0.87,cy+a*0.5); break; }
+    case "hexagon":  { const s=r*1.15; ctx.moveTo(cx+s,cy); ctx.lineTo(cx+s*0.5,cy+s*0.87); ctx.lineTo(cx-s*0.5,cy+s*0.87); ctx.lineTo(cx-s,cy); ctx.lineTo(cx-s*0.5,cy-s*0.87); ctx.lineTo(cx+s*0.5,cy-s*0.87); ctx.closePath(); break; }
+    default:         ctx.arc(cx, cy, r, 0, Math.PI*2);
+  }
+};
+// Small inline marker for the legend / grade rows.
+const drawPosterMarker = (ctx, shape, cx, cy, color, P) => {
+  tracePosterShape(ctx, shape||"circle", cx, cy, 4);
+  if(shape === "wye"){ ctx.strokeStyle = color; ctx.lineWidth = 1.4; ctx.stroke(); }
+  else { ctx.fillStyle = color; ctx.fill(); ctx.strokeStyle = P.bg; ctx.lineWidth = 0.6; ctx.stroke(); }
+};
+const gradeKeyLabel = (key) => { const [g, gr] = String(key||"").split("|"); return (GRADER_LABEL[g] || (g||"").toUpperCase()) + " " + (gr||""); };
+// Visible-series legend (shape + grader/grade), right-aligned to rightX.
+const drawGradedLegend = (ctx, rightX, baselineY, series, P) => {
+  const items = (series||[]).slice(0, 5).map(s => ({color:s.color, shape:s.shape, text:gradeKeyLabel(s.key)}));
+  const extra = Math.max(0, (series||[]).length - items.length);
+  if(!items.length) return;
+  const TF = "700 11px 'Nunito Sans', sans-serif", MARK = 12, GAP = 5, IGAP = 12;
+  let total = 0;
+  ctx.font = TF;
+  for(const it of items) total += MARK + GAP + ctx.measureText(it.text).width + IGAP;
+  const extraTxt = extra ? "+" + extra : "";
+  if(extra) total += ctx.measureText(extraTxt).width + IGAP;
+  total -= IGAP;
+  let x = rightX - total;
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  for(const it of items){
+    drawPosterMarker(ctx, it.shape, x + MARK/2, baselineY - 1, it.color, P); x += MARK + GAP;
+    ctx.fillStyle = P.dim; ctx.font = TF; ctx.fillText(it.text, x, baselineY); x += ctx.measureText(it.text).width + IGAP;
+  }
+  if(extra){ ctx.fillStyle = P.muted; ctx.fillText(extraTxt, x, baselineY); }
+  ctx.textBaseline = "alphabetic";
+};
+// Per-sale scatter into the box (x,y,w,h). Mirrors ScatterChart's scaling +
+// drawPosterChart's ticks. series=[{key,color,shape,points:[{x(ms),y(price)}]}],
+// lines=raw overlays [{color,dash,pts}], showTrend=least-squares per series.
+const drawPosterScatter = (ctx, series, lines, showTrend, x, y, w, h, P) => {
+  const flat = [];
+  for(const s of (series||[])) for(const p of (s.points||[])) if(Number.isFinite(p.x)&&Number.isFinite(p.y)) flat.push({p, color:s.color, shape:s.shape});
+  if(!flat.length){ ctx.fillStyle=P.muted; ctx.font="12px 'Nunito Sans', sans-serif"; ctx.textAlign="center"; ctx.fillText("No sales to plot", x+w/2, y+h/2); ctx.textAlign="left"; return; }
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for(const {p} of flat){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
+  const clipped = (lines||[]).map(L=>({color:L.color, dash:L.dash||"", pts:(L.pts||L.points||[]).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)&&p.x>=minX&&p.x<=maxX)})).filter(L=>L.pts.length>=2);
+  for(const L of clipped) for(const p of L.pts){ if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
+  if(maxX===minX){ minX-=86400000; maxX+=86400000; }
+  const yPad=Math.max(0.01,(maxY-minY)*0.1), yMin=Math.max(0,minY-yPad), yMax=maxY+yPad;
+  const sx=v=> x + ((v-minX)/((maxX-minX)||1))*w;
+  const sy=v=> y + h - ((v-yMin)/((yMax-yMin)||1))*h;
+  ctx.textAlign="right"; ctx.textBaseline="middle";
+  for(const t of niceTicks(yMin,yMax,4)){
+    const ty=sy(t);
+    ctx.strokeStyle=P.border; ctx.lineWidth=1; ctx.setLineDash([2,3]); ctx.beginPath(); ctx.moveTo(x,ty); ctx.lineTo(x+w,ty); ctx.stroke(); ctx.setLineDash([]);
+    ctx.fillStyle=P.muted; ctx.font="9px 'Nunito Sans', sans-serif"; ctx.fillText(fmtTickPrice(t), x-6, ty);
+  }
+  ctx.textBaseline="alphabetic";
+  const span=maxX-minX, xticks=[minX,(minX+maxX)/2,maxX];
+  ctx.fillStyle=P.muted; ctx.font="9px 'Nunito Sans', sans-serif";
+  xticks.forEach((t,i)=>{ ctx.textAlign=i===0?"left":i===2?"right":"center"; ctx.fillText(fmtTickDate(t,span), sx(t), y+h+14); });
+  ctx.textAlign="left";
+  if(showTrend){
+    for(const s of (series||[])){
+      const pts=(s.points||[]).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));
+      if(pts.length<2) continue;
+      let n=pts.length,Sx=0,Sy=0,Sxx=0,Sxy=0,x1=Infinity,x2=-Infinity;
+      for(const p of pts){ Sx+=p.x;Sy+=p.y;Sxx+=p.x*p.x;Sxy+=p.x*p.y; if(p.x<x1)x1=p.x; if(p.x>x2)x2=p.x; }
+      const den=n*Sxx-Sx*Sx; if(den===0) continue;
+      const m=(n*Sxy-Sx*Sy)/den, b=(Sy-m*Sx)/n;
+      ctx.strokeStyle=s.color; ctx.globalAlpha=0.65; ctx.lineWidth=1.5; ctx.setLineDash([5,4]);
+      ctx.beginPath(); ctx.moveTo(sx(x1),sy(m*x1+b)); ctx.lineTo(sx(x2),sy(m*x2+b)); ctx.stroke();
+      ctx.setLineDash([]); ctx.globalAlpha=1;
+    }
+  }
+  for(const L of clipped){
+    ctx.strokeStyle=L.color; ctx.globalAlpha=0.7; ctx.lineWidth=1.4; ctx.lineJoin="round"; ctx.lineCap="round";
+    ctx.setLineDash(L.dash ? L.dash.split(",").map(Number) : []);
+    ctx.beginPath(); L.pts.forEach((p,i)=>{ const px=sx(p.x),py=sy(p.y); if(i===0)ctx.moveTo(px,py); else ctx.lineTo(px,py); }); ctx.stroke();
+    ctx.setLineDash([]); ctx.globalAlpha=1;
+  }
+  for(const {p,color,shape} of flat){
+    const cx=sx(p.x), cy=sy(p.y);
+    tracePosterShape(ctx, shape||"circle", cx, cy, 3.6);
+    if(shape==="wye"){ ctx.strokeStyle=color; ctx.lineWidth=1.6; ctx.stroke(); }
+    else { ctx.fillStyle=color; ctx.globalAlpha=0.85; ctx.fill(); ctx.globalAlpha=1; ctx.strokeStyle=P.bg; ctx.lineWidth=0.7; ctx.stroke(); }
+  }
+};
+
+async function buildGradedPosterBlob(opts){
+  const { artSrc, name, sub, combos, featured, series, rawLines, showTrend, dateStr } = opts;
+  const P = posterPalette();
+  try { if(document.fonts && document.fonts.ready) await document.fonts.ready; } catch {}
+  const [artImg, logoImg] = await Promise.all([
+    loadPosterImage(artSrc),
+    loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png?v=5"),
+  ]);
+  const SCALE=2, W=760, PAD=26, COLGAP=22, SECGAP=18;
+  const artW=300, artH=Math.round(artW*7/5);
+  const statsX=PAD+artW+COLGAP, statsW=W-PAD-statsX;
+  const money  = (v)=> v==null?"—":"$"+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+  const money0 = (v)=> v==null?"—":"$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
+  const WINS = [["1w","1W"],["1m","1M"],["3m","3M"],["6m","6M"],["1y","1Y"]];
+  const win = (featured && featured.sales) ? computeGradedSaleWindows(featured.sales) : null;
+
+  const measure=document.createElement("canvas").getContext("2d");
+  measure.font="700 22px 'Cinzel', Georgia, serif";
+  const titleLines=wrapPosterText(measure, name||"", statsW, 2);
+
+  const topH=artH;
+  const cfW=W-PAD*2, INNER=14, titleH=24, plotBoxH=200;
+  const cfH=INNER+titleH+plotBoxH+INNER;
+  const footerH=46;
+  const H=Math.round(PAD+topH+SECGAP+cfH+SECGAP+footerH+PAD);
+
+  const canvas=document.createElement("canvas");
+  canvas.width=W*SCALE; canvas.height=H*SCALE;
+  const ctx=canvas.getContext("2d");
+  ctx.scale(SCALE,SCALE); ctx.textBaseline="alphabetic";
+  ctx.fillStyle=P.bg; ctx.fillRect(0,0,W,H);
+
+  // card art (left)
+  roundRectPath(ctx, PAD, PAD, artW, artH, 14); ctx.save(); ctx.clip();
+  if(artImg){ drawImageCover(ctx, artImg, PAD, PAD, artW, artH); }
+  else { ctx.fillStyle=P.surface; ctx.fillRect(PAD,PAD,artW,artH);
+    ctx.fillStyle=P.muted; ctx.font="600 14px 'Nunito Sans', sans-serif"; ctx.textAlign="center"; ctx.fillText(name||"", PAD+artW/2, PAD+artH/2); ctx.textAlign="left"; }
+  ctx.restore();
+
+  // right column: title + sub
+  let y=PAD;
+  ctx.fillStyle=P.text; ctx.font="700 22px 'Cinzel', Georgia, serif"; ctx.textAlign="left";
+  for(const ln of titleLines){ y+=23; ctx.fillText(ln, statsX, y); }
+  if(sub){ y+=17; ctx.fillStyle=P.muted; ctx.font="700 11px 'Nunito Sans', sans-serif"; ctx.fillText(String(sub).toUpperCase(), statsX, y); }
+  y+=14;
+
+  // featured grade stat card
+  if(win && featured){
+    const gLabel=(GRADER_LABEL[featured.grader]||featured.grader.toUpperCase())+" "+featured.grade;
+    const cardH=112, cardTop=y;
+    roundRectPath(ctx, statsX, cardTop, statsW, cardH, 9); ctx.fillStyle=P.surface; ctx.fill(); ctx.strokeStyle=P.border; ctx.lineWidth=1; ctx.stroke();
+    ctx.textAlign="left"; ctx.fillStyle=featured.color||P.text; ctx.font="800 14px 'Nunito Sans', sans-serif"; ctx.fillText(gLabel, statsX+12, cardTop+24);
+    const hw=ctx.measureText(gLabel).width; ctx.fillStyle=P.muted; ctx.font="600 11px 'Nunito Sans', sans-serif"; ctx.fillText("· "+win.count+" sale"+(win.count===1?"":"s"), statsX+12+hw+8, cardTop+24);
+    const colW=(statsW-24)/2, bsLabelY=cardTop+42;
+    const drawBig=(lbl,val,bx)=>{
+      ctx.fillStyle=P.muted; ctx.font="700 9px 'Nunito Sans', sans-serif"; ctx.fillText(lbl.toUpperCase(), bx, bsLabelY);
+      ctx.fillStyle=P.text; ctx.font="800 21px 'Nunito Sans', sans-serif"; ctx.fillText(money(val), bx, bsLabelY+22);
+    };
+    drawBig("Last Sold", win.lastSold, statsX+12);
+    drawBig("Avg of Last "+win.avg5n, win.avg5, statsX+12+colW);
+    const gx0=statsX+12, cellW=(statsW-24)/WINS.length, dWinY=bsLabelY+40;
+    ctx.font="700 9px 'Nunito Sans', sans-serif"; ctx.fillStyle=P.muted; ctx.textAlign="center";
+    WINS.forEach(([k,lbl],i)=> ctx.fillText(lbl, gx0+cellW*i+cellW/2, dWinY));
+    ctx.font="800 12px 'Nunito Sans', sans-serif";
+    WINS.forEach(([k,lbl],i)=>{ ctx.fillStyle=posterPctColor(win["pct_"+k], P); ctx.fillText(fmtPct(win["pct_"+k]), gx0+cellW*i+cellW/2, dWinY+16); });
+    ctx.textAlign="left";
+    y=cardTop+cardH+14;
+  }
+
+  // grade price list (all grades — last + avg)
+  if((combos||[]).length){
+    ctx.fillStyle=P.accent; ctx.font="700 13px 'Cinzel', Georgia, serif"; ctx.textAlign="left"; y+=12; ctx.fillText("All grades", statsX, y);
+    const xAvg=statsX+statsW, xLast=statsX+statsW-86, nameX=statsX+16;
+    y+=4;
+    ctx.font="700 8px 'Nunito Sans', sans-serif"; ctx.fillStyle=P.muted;
+    ctx.textAlign="left";  ctx.fillText("GRADE", statsX, y+10);
+    ctx.textAlign="right"; ctx.fillText("LAST", xLast, y+10); ctx.fillText("AVG 5", xAvg, y+10);
+    ctx.textAlign="left";
+    let ry=y+10+16;
+    const ROW=20, bottom=PAD+artH;
+    const maxRows=Math.max(0, Math.floor((bottom - (ry-12)) / ROW));
+    const show=(combos.length>maxRows) ? combos.slice(0, Math.max(0,maxRows-1)) : combos;
+    for(const c of show){
+      drawPosterMarker(ctx, c.shape, statsX+5, ry-4, c.color, P);
+      ctx.textAlign="left"; ctx.fillStyle=c.color||P.text; ctx.font="700 12px 'Nunito Sans', sans-serif";
+      ctx.fillText((GRADER_LABEL[c.grader]||c.grader.toUpperCase())+" "+c.grade, nameX, ry);
+      ctx.textAlign="right"; ctx.fillStyle=P.text; ctx.font="700 12px 'Nunito Sans', sans-serif"; ctx.fillText(money0(c.lastSold && c.lastSold.sale_price), xLast, ry);
+      ctx.fillStyle=P.dim; ctx.fillText(money0(c.avg5), xAvg, ry);
+      ctx.textAlign="left";
+      ry+=ROW;
+    }
+    if(show.length < combos.length){ ctx.fillStyle=P.muted; ctx.font="600 10px 'Nunito Sans', sans-serif"; ctx.fillText("+ "+(combos.length-show.length)+" more grades", statsX, ry+2); }
+  }
+
+  // scatter (bottom)
+  const cfY=PAD+topH+SECGAP;
+  roundRectPath(ctx, PAD, cfY, cfW, cfH, 14); ctx.fillStyle=P.surface; ctx.fill(); ctx.strokeStyle=P.border; ctx.lineWidth=1; ctx.stroke();
+  const titleY=cfY+INNER+14;
+  ctx.textAlign="left"; ctx.fillStyle=P.accent; ctx.font="700 15px 'Cinzel', Georgia, serif"; ctx.fillText("Graded Sales", PAD+INNER, titleY);
+  const tW=ctx.measureText("Graded Sales").width;
+  ctx.fillStyle=P.muted; ctx.font="700 11px 'Nunito Sans', sans-serif"; ctx.fillText("· each dot is one sold slab", PAD+INNER+tW+8, titleY);
+  drawGradedLegend(ctx, PAD+cfW-INNER, titleY, series, P);
+  drawPosterScatter(ctx, series, rawLines, showTrend, PAD+INNER+44, cfY+INNER+titleH, cfW-INNER*2-44-4, plotBoxH-22, P);
+
+  // footer
+  const fY=cfY+cfH+SECGAP;
+  ctx.strokeStyle=P.border; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(PAD,fY); ctx.lineTo(W-PAD,fY); ctx.stroke();
+  const footTxt="packs.ink · "+dateStr;
+  ctx.font="800 14px 'Nunito Sans', sans-serif";
+  const logoH=22, logoW=logoImg ? Math.round(logoImg.naturalWidth*(logoH/logoImg.naturalHeight)) : 0;
+  const txtW=ctx.measureText(footTxt).width, totalW=logoW+(logoW?10:0)+txtW;
+  let fx=(W-totalW)/2; const fBaseline=fY+28;
+  if(logoImg){ ctx.drawImage(logoImg, fx, fBaseline-logoH+3, logoW, logoH); fx+=logoW+10; }
+  ctx.fillStyle=P.accent; ctx.textAlign="left"; ctx.fillText(footTxt, fx, fBaseline);
+
+  return await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+}
+
+const copyGradedPosterImage = (opts) => {
+  if(!opts || !opts.featured){ flashToast("Pick a grade to feature first"); return; }
+  flashToast(isTouchDevice() ? "Preparing image…" : "Copying image…", 8000);
+  const blobPromise = buildGradedPosterBlob(opts);
+  blobPromise.catch((err) => console.error("[graded-poster] capture failed:", err));
+  deliverImage(blobPromise, {name:"packsink-graded.png", copiedMsg:"Graded image copied to clipboard"});
 };
 
 // Draw a compact "banner tile" of a card (the front-page mover-tile look) onto
