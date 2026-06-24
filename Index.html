@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=214">
+<link rel="stylesheet" href="styles.css?v=216">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=214"></script>
+<script src="logo.js?v=216"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -3269,6 +3269,11 @@ const parseSearchQuery = (input) => {
     if(t === "infinity"){
       out.filters.legality = "infinity"; used.add(i); break;
     }
+    if(t === "japan"){
+      out.filters.legality = "japan"; used.add(i);
+      if(tokens[i+1] === "core") used.add(i+1);  // consume the trailing "core" of "japan core"
+      break;
+    }
   }
 
   // Inkwell: "ink" or "inkable" → inkable=true; "unink" or "uninkable" → inkable=false
@@ -3367,6 +3372,9 @@ const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   if("infinity".startsWith(last)){
     pushOnce({kind:"legality", value:"infinity", label:"legality: infinity", replace:last});
   }
+  if(last.length >= 2 && "japan".startsWith(last)){
+    pushOnce({kind:"legality", value:"japan", label:"legality: japan core", replace:last});
+  }
   // Inkable shortcuts
   if(prefix("inkable") || prefix("ink"))   pushOnce({kind:"inkable", value:true,  label:"inkable: yes", replace:last});
   if(prefix("uninkable") || prefix("nink")) pushOnce({kind:"inkable", value:false, label:"inkable: no",  replace:last});
@@ -3442,6 +3450,7 @@ const summarizeParsedQuery = (parsed) => {
   if(parsed.filters.inkable === false) parts.push("Uninkable");
   if(parsed.filters.legality === "core")     parts.push("Core Constructed");
   if(parsed.filters.legality === "infinity") parts.push("Infinity");
+  if(parsed.filters.legality === "japan")    parts.push("Japan Core");
   for(const r of parsed.excludeRarities) parts.push("not "+r);
   // Leftover free text + any `contains:` chip both feed parsed.name (they end
   // up the same broad-haystack search internally), so the honest label is
@@ -3566,6 +3575,7 @@ const matchesCardFilter = (row, f, parsed) => {
       const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets()) : null;
       if(coreSets && !coreSets.has(row.Set)) return false;
     }
+    if(parsed.filters.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
     // "infinity" legality is a no-op filter — any mainline-legal card qualifies.
     if(parsed.filters.illustrator){
       const ills = (row.illustrators||[]).map(s => (s||"").toLowerCase());
@@ -3703,6 +3713,7 @@ const matchesCardFilter = (row, f, parsed) => {
     const coreSets = typeof computeCoreSets === "function" ? new Set(computeCoreSets()) : null;
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
+  if(f.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
   return true;
 };
 
@@ -4726,6 +4737,19 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
     if(rawOverlay.market) out.push({color:"#3b82f6", dash:"5,4", points: rawHistory.map(r=>({x:Date.parse(r.date), y:r.market_price!=null?parseFloat(r.market_price):null}))});
     return out;
   }, [rawHistory, rawOverlay]);
+  // Latest raw (ungraded) Low / NM-Market — most recent non-null of each, for the
+  // quick raw-price line under the graded stat card on the copy-image poster.
+  const rawLatest = useMemo(() => {
+    if(!rawHistory || !rawHistory.length) return null;
+    let low=null, lowD=-Infinity, mkt=null, mktD=-Infinity;
+    for(const r of rawHistory){
+      const t = Date.parse(r.date);
+      if(!Number.isFinite(t)) continue;
+      if(r.low_price!=null    && t>=lowD){ low=parseFloat(r.low_price);    lowD=t; }
+      if(r.market_price!=null && t>=mktD){ mkt=parseFloat(r.market_price); mktD=t; }
+    }
+    return (low!=null || mkt!=null) ? {low, market:mkt} : null;
+  }, [rawHistory]);
 
   const combos      = useMemo(()=> buildGradedCombos(sales), [sales]);
   const comboByKey  = useMemo(()=> new Map(combos.map(c=>[c.key,c])), [combos]);
@@ -4854,7 +4878,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
         onClick=${()=>setRawOverlay(o=>({...o,market:!o.market}))}
         title="Overlay the ungraded (raw) NM Market price history">┅ Raw Mkt</button>`}
       ${posterMeta && html`<button type="button" class="gs-combo-chip gs-copy-img"
-        onClick=${()=> copyGradedPosterImage({...posterMeta, combos, featured:focus, series, rawLines, showTrend})}
+        onClick=${()=> copyGradedPosterImage({...posterMeta, combos, featured:focus, series, rawLines, showTrend, rawLatest})}
         title="Copy this card's graded sales as an image (art + price changes + grade list + scatter)">
         <svg viewBox="0 0 24 24" aria-hidden="true" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style=${{verticalAlign:"-2px",marginRight:"4px"}}>
           <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
@@ -5998,6 +6022,20 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         <div class="cards-chipgroup">
           <button class=${"chip "+(filter.inkable===true?"active":"")} onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===true?null:true}))}>Inkable</button>
           <button class=${"chip "+(filter.inkable===false?"active":"")} onClick=${()=>setFilter(f=>({...f,inkable:f.inkable===false?null:false}))}>Uninkable</button>
+        </div>
+      </div>
+      <div class="drawer-section">
+        <div class="drawer-section-head">Legality</div>
+        <div class="cards-chipgroup">
+          <button class=${"chip "+(filter.legality==="core"?"active":"")}
+            title="Core Constructed — only cards legal in the current rotation"
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="core"?null:"core"}))}>Core</button>
+          <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
+            title="Infinity — every mainline-legal card"
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
+          <button class=${"chip "+(filter.legality==="japan"?"active":"")}
+            title="Japan Core — cards released in Japan (sets 1–9 + Wilds Unknown, plus the released cards from Whispers in the Well & Winterspell)"
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="japan"?null:"japan"}))}>Japan Core</button>
         </div>
       </div>
       <div class="drawer-section">
@@ -7958,6 +7996,9 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
           <button class=${"chip "+(filter.legality==="infinity"?"active":"")}
             title="Infinity — every mainline-legal card"
             onClick=${()=>setFilter(f=>({...f,legality:f.legality==="infinity"?null:"infinity"}))}>Infinity</button>
+          <button class=${"chip "+(filter.legality==="japan"?"active":"")}
+            title="Japan Core — cards released in Japan (sets 1–9 + Wilds Unknown, plus the released cards from Whispers in the Well & Winterspell)"
+            onClick=${()=>setFilter(f=>({...f,legality:f.legality==="japan"?null:"japan"}))}>Japan Core</button>
           ${collection && html`<button
             class=${"chip "+(filter.onlyOwned?"active":"")}
             title="Show only cards you own (Normal or Foil)"
@@ -9249,7 +9290,14 @@ const InlineCounter = ({qty, onChange, disabled}) => {
   </div>`;
 };
 
-const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle}) => {
+// ✦ badge shown when a slot is completed via a graded slab (or sent-to-grading
+// placeholder). Hover text spells out the completion-only / no-deck-copy rule.
+const GradedMarkBadge = ({mark}) => mark ? html`<span class=${"sd-graded-mark "+mark.type}
+  title=${mark.type==="graded"
+    ? `You own a graded ${mark.label} copy — it checks off set completion (but not deck-legal copies). Its value lives in your Graded totals.`
+    : `Sent for grading${mark.label?" ("+mark.label+")":""} — checks off completion (not deck copies) until the slab returns.`}>✦</span>` : null;
+
+const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, mark, onGrade}) => {
   const num = (group.Number||"").split("/")[0] || "—";
   const nLow = group.normal && group.normal["Low Price"];
   const fLow = group.foil   && group.foil["Low Price"];
@@ -9298,9 +9346,11 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
         onError=${e=>{ e.target.style.display = "none"; }}/>`}
     </span>
     <div class="sd-row-name-wrap">
-      <span class="sd-row-name" title=${group["Product Name"]}>${group["Product Name"]}</span>
+      <span class="sd-row-name" title=${group["Product Name"]}>${group["Product Name"]}<${GradedMarkBadge} mark=${mark}/></span>
       ${subtitle && html`<span class="sd-row-subtitle">${subtitle}</span>`}
     </div>
+    ${onGrade && html`<button class="sd-row-grade-btn" title="Add a graded copy or send this card for grading"
+      onClick=${e=>{ e.stopPropagation(); onGrade(); }}>◆</button>`}
     <div class="sd-row-prices">
       ${showN && html`<a class="sd-row-price normal" href=${tcgUrl(group.normal.tcgplayer_product_id,"Normal")} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
       ${showF && html`<a class="sd-row-price foil" href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
@@ -9318,7 +9368,7 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
   </div>`;
 };
 
-const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle}) => {
+const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, mark, onGrade}) => {
   const num = (group.Number||"").split("/")[0] || "—";
   const img = group.img_small || group.img_normal;
   const price = (group.normal && group.normal["Low Price"]) ?? (group.foil && group.foil["Low Price"]);
@@ -9328,10 +9378,12 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
     ${img
       ? html`<img class="sd-tile-img" src=${img} alt=${group["Product Name"]} loading="lazy" onClick=${onOpen}/>`
       : html`<div class="sd-tile-img-placeholder" onClick=${onOpen}>${group["Product Name"]}</div>`}
+    ${onGrade && html`<button class="sd-tile-grade-btn" title="Add a graded copy or send this card for grading"
+      onClick=${e=>{ e.stopPropagation(); onGrade(); }}>◆</button>`}
     <div class="sd-tile-info" onClick=${onOpen}>
       <span class="sd-tile-num">#${num}</span>
       <div class="sd-tile-name-wrap">
-        <span class="sd-tile-name" title=${group["Product Name"]}>${group["Product Name"]}</span>
+        <span class="sd-tile-name" title=${group["Product Name"]}>${group["Product Name"]}<${GradedMarkBadge} mark=${mark}/></span>
         ${subtitle && html`<span class="sd-tile-subtitle">${subtitle}</span>`}
       </div>
       ${price!=null && html`<span class="sd-tile-price">$${price.toFixed(2)}</span>`}
@@ -9370,7 +9422,7 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
 // Enchanted to browse every Enchanted in the game and see which you own.
 const ALL_CARDS_VIEW = "__all_cards__";
 
-const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection}) => {
+const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedSlotQty, pendingSlotQty, onGradedChanged}) => {
   const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
@@ -9437,6 +9489,10 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   const [foilMode, setFoilMode] = useState(()=>{ try { return isExtrasView ? "foil" : (allMode ? (localStorage.getItem("packsink:allCards:foil")||"either") : "either"); } catch { return isExtrasView ? "foil" : "either"; } });
   const [sortKey, setSortKeyState] = useState(()=>{ try { return allMode ? (localStorage.getItem("packsink:allCards:sort")||"set-new") : "num"; } catch { return allMode ? "set-new" : "num"; } });
   const [selectedGroup, setSelectedGroup] = useState(null);
+  // The raw card the user clicked "◆ grade" on — opens GradeFromRawModal to
+  // log a graded copy or send the card for grading (both additive — raw qty
+  // is only touched if the user opts in).
+  const [gradeFromRaw, setGradeFromRaw] = useState(null);
   // Persist All Cards sort + filters so the view is the same next visit.
   useEffect(()=>{ if(!allMode) return; try {
     localStorage.setItem("packsink:allCards:view", viewMode);
@@ -9465,6 +9521,23 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // CollectionView's top-level segmented toggle. Falls back to 1 if missing
   // so the set detail view still works in isolation.
   const TARGET = Math.max(1, copies || 1);
+
+  // Graded + pending-grading coverage for raw set completion (maps keyed
+  // `card_id|Normal` / `card_id|FOIL`, passed from CollectionView). A covered
+  // slot counts toward completion (drops out of "missing") but never adds raw
+  // value. slotMark() picks the ✦ badge: a real slab wins over an at-grader.
+  const G_SLOT = gradedSlotQty || new Map();
+  const P_SLOT = pendingSlotQty || new Map();
+  const slotCover = useCallback((cid, tcgPrinting) => {
+    const bk = cid + "|" + (tcgPrinting==="Normal" ? "Normal" : "FOIL");
+    return (G_SLOT.get(bk)||0) + (P_SLOT.get(bk)||0);
+  }, [gradedSlotQty, pendingSlotQty]);
+  const slotMark = useCallback((cid, tcgPrinting) => {
+    const bk = cid + "|" + (tcgPrinting==="Normal" ? "Normal" : "FOIL");
+    if((G_SLOT.get(bk)||0) > 0) return "graded";
+    if((P_SLOT.get(bk)||0) > 0) return "pending";
+    return null;
+  }, [gradedSlotQty, pendingSlotQty]);
 
   const groups = useMemo(()=>{
     // allMode: every main-set card (owned-only filtering happens in
@@ -9497,17 +9570,23 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       if(allMode && drawerFilter.onlyOwned){
         const nK = g.normal ? g.card_id+":"+g.normal.tcg_printing : null;
         const fK = g.foil   ? g.card_id+":"+g.foil.tcg_printing   : null;
-        if(!((nK && (collection[nK]||0)>0) || (fK && (collection[fK]||0)>0))) return false;
+        const ownedRaw = (nK && (collection[nK]||0)>0) || (fK && (collection[fK]||0)>0);
+        const ownedGraded = (g.normal && slotCover(g.card_id, g.normal.tcg_printing)>0)
+                         || (g.foil   && slotCover(g.card_id, g.foil.tcg_printing)>0);
+        if(!(ownedRaw || ownedGraded)) return false;
       }
 
       // For the active foil mode, count which printings are "in scope" and
-      // how complete the user is on each.
+      // how complete the user is on each. Graded/pending copies satisfy the
+      // slot for completeness (shortfall) but never count as extras.
       const nApplies = foilMode !== "foil"   && !!g.normal;
       const fApplies = foilMode !== "normal" && !!g.foil;
       const ownN = nApplies ? (collection[g.card_id+":"+g.normal.tcg_printing] || 0) : null;
       const ownF = fApplies ? (collection[g.card_id+":"+g.foil.tcg_printing]   || 0) : null;
-      const shortN = nApplies ? Math.max(0, TARGET - ownN) : 0;
-      const shortF = fApplies ? Math.max(0, TARGET - ownF) : 0;
+      const covN = nApplies ? slotCover(g.card_id, g.normal.tcg_printing) : 0;
+      const covF = fApplies ? slotCover(g.card_id, g.foil.tcg_printing)   : 0;
+      const shortN = nApplies ? Math.max(0, TARGET - (ownN + covN)) : 0;
+      const shortF = fApplies ? Math.max(0, TARGET - (ownF + covF)) : 0;
       const overN  = nApplies ? Math.max(0, ownN - TARGET) : 0;
       const overF  = fApplies ? Math.max(0, ownF - TARGET) : 0;
       const totalShort = shortN + shortF;
@@ -9530,7 +9609,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       return groups.filter(g => predicate(g, {...parsed, nameMatchMode:"any"}));
     }
     return groups.filter(g => predicate(g, parsed));
-  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter]);
+  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, gradedSlotQty, pendingSlotQty]);
 
   // Filter-aware "missing" summary — for each visible printing, counts the
   // copies the user is SHORT of TARGET (Master Set = 1, Playset = 4). Value
@@ -9540,7 +9619,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     let count = 0, value = 0;
     for(const g of visibleGroups){
       if(foilMode !== "foil" && g.normal){
-        const qty = collection[g.card_id+":"+g.normal.tcg_printing] || 0;
+        const qty = (collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing);
         const short = Math.max(0, TARGET - qty);
         if(short > 0){
           count += short;
@@ -9548,7 +9627,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         }
       }
       if(foilMode !== "normal" && g.foil){
-        const qty = collection[g.card_id+":"+g.foil.tcg_printing] || 0;
+        const qty = (collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing);
         const short = Math.max(0, TARGET - qty);
         if(short > 0){
           count += short;
@@ -9557,7 +9636,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       }
     }
     return {count, value};
-  }, [visibleGroups, collection, foilMode, TARGET]);
+  }, [visibleGroups, collection, foilMode, TARGET, slotCover]);
 
   // "Buy bulk on TCGplayer" link: a TCGplayer mass-entry cart pre-filled with
   // every missing copy in the current (filtered) view, so one click loads them
@@ -9571,9 +9650,9 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       if(!nm) continue;
       let short = 0;
       if(foilMode !== "foil" && g.normal)
-        short += Math.max(0, TARGET - (collection[g.card_id+":"+g.normal.tcg_printing] || 0));
+        short += Math.max(0, TARGET - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
       if(foilMode !== "normal" && g.foil)
-        short += Math.max(0, TARGET - (collection[g.card_id+":"+g.foil.tcg_printing] || 0));
+        short += Math.max(0, TARGET - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
       if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
     }
     if(!byName.size) return null;
@@ -9752,6 +9831,19 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           img_large:  sub.img_large  || g.img_large,
         };
       };
+      // Combine the per-slot graded/pending marks into one row badge — a real
+      // slab (graded) wins over an at-grader (pending); label names the
+      // printing(s) so the foil-vs-non-foil distinction stays honest.
+      const computeMark = (g) => {
+        const nMark = g.normal ? slotMark(g.card_id, g.normal.tcg_printing) : null;
+        const fMark = g.foil   ? slotMark(g.card_id, g.foil.tcg_printing)   : null;
+        if(!nMark && !fMark) return null;
+        const type = (nMark==="graded" || fMark==="graded") ? "graded" : "pending";
+        const sides = [];
+        if(nMark===type) sides.push("non-foil");
+        if(fMark===type) sides.push("foil");
+        return {type, label: sides.length===2 ? "both printings" : (sides[0]||"")};
+      };
       const renderItems = (items, printingMode) => viewMode === "list"
         ? html`<div class=${"setdet-list-grid"+(isPromoSet?" setdet-list-grid--promo":"")+(allMode?" setdet-list-grid--rowflow":"")}>${items.map(gOrig => {
             const g = projectForPrinting(gOrig, printingMode);
@@ -9768,7 +9860,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               onNormal=${!readOnly && showNormal && nKey ? (q)=>updateQty(g.card_id, g.normal.tcg_printing, q) : null}
               onFoil=${!readOnly && showFoil && fKey ? (q)=>updateQty(g.card_id, g.foil.tcg_printing, q) : null}
               showNormalSide=${showNormal} showFoilSide=${showFoil}
-              subtitle=${subtitle}
+              subtitle=${subtitle} mark=${computeMark(g)}
+              onGrade=${!readOnly && user ? ()=>setGradeFromRaw(g) : null}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`
         : html`<div class="setdet-card-grid">${items.map(gOrig => {
@@ -9784,7 +9877,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               onNormal=${!readOnly && showNormal && nKey ? (q)=>updateQty(g.card_id, g.normal.tcg_printing, q) : null}
               onFoil=${!readOnly && showFoil && fKey ? (q)=>updateQty(g.card_id, g.foil.tcg_printing, q) : null}
               showNormalSide=${showNormal} showFoilSide=${showFoil}
-              subtitle=${subtitle}
+              subtitle=${subtitle} mark=${computeMark(g)}
+              onGrade=${!readOnly && user ? ()=>setGradeFromRaw(g) : null}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`;
       return groupsByOrigin.map(bucket => html`<div key=${bucket.key} class="setdet-origin-bucket">
@@ -9799,6 +9893,10 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${gradeFromRaw && html`<${GradeFromRawModal} group=${gradeFromRaw} user=${user}
+      collection=${collection} updateQty=${updateQty}
+      onClose=${()=>setGradeFromRaw(null)}
+      onDone=${()=>{ setGradeFromRaw(null); onGradedChanged && onGradedChanged(); }}/>`}
     ${bulkAddOpen && html`<${BulkAddByRarityModal}
       groups=${groups} setRarities=${setRarities} collection=${collection}
       bulkUpdateCollection=${bulkUpdateCollection}
@@ -9816,6 +9914,128 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       <button class="setdet-undo-close" onClick=${()=>setBulkUndo(null)}
         title="Dismiss" aria-label="Dismiss">×</button>
     </div>`}
+  </div>`;
+};
+
+// Launched from a raw set-detail tile's "◆ grade" button. Two paths, both
+// ADDITIVE to your graded layer (raw qty is only touched if you opt in):
+//   • "Own it graded" → writes a graded_collection_items row (slab you have).
+//   • "Send for grading" → writes a grading_submissions row (To submit / At
+//     grader) that later graduates into a real graded copy from the Graded tab.
+// Either way the card now checks off raw set completion (see slotCover).
+const GRADE_FROM_RAW_GRADES = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
+const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone}) => {
+  useEscToClose(onClose);
+  const printingOpts = [];
+  if(group.normal) printingOpts.push({key:"normal", label:"Non-Foil", tcg: group.normal.tcg_printing});
+  if(group.foil)   printingOpts.push({key:"foil",   label:"Foil",     tcg: group.foil.tcg_printing});
+  const [mode, setMode] = useState("own");          // "own" | "send"
+  const [printingKey, setPrintingKey] = useState(printingOpts[0]?.key || "normal");
+  const [grader, setGrader] = useState("psa");
+  const [grade, setGrade] = useState("10");
+  const [status, setStatus] = useState("to_submit"); // "to_submit" | "at_grader"
+  const [intendedGrader, setIntendedGrader] = useState("");
+  const [submittedOn, setSubmittedOn] = useState("");
+  const [dropRaw, setDropRaw] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const sel = printingOpts.find(p => p.key === printingKey) || printingOpts[0] || {tcg:"Normal"};
+  const tcg = sel.tcg || "Normal";
+  const rawQty = collection[group.card_id+":"+tcg] || 0;
+  const thumb = group.img_small || group.img_normal;
+
+  const save = useCallback(async () => {
+    if(!user) return;
+    setBusy(true);
+    try {
+      const slot = canonicalGradedSlot(group.card_id, tcg);
+      if(mode === "own"){
+        const {error} = await sbClient.from("graded_collection_items").upsert({
+          user_id: user.id, card_id: slot.card_id, printing: slot.printing,
+          grader, grade, quantity: 1, updated_at: new Date().toISOString(),
+        }, {onConflict: "user_id,card_id,printing,grader,grade"});
+        if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+      } else {
+        const {error} = await sbClient.from("grading_submissions").insert({
+          user_id: user.id, card_id: slot.card_id, printing: slot.printing,
+          intended_grader: intendedGrader || null, status, quantity: 1,
+          submitted_on: (status === "at_grader" && submittedOn) ? submittedOn : null,
+        });
+        if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+      }
+      if(dropRaw && rawQty > 0) await updateQty(group.card_id, tcg, rawQty - 1);
+      flashToast(mode === "own" ? "Graded copy added — it now checks off this set." : "Added to your grading queue.");
+      onDone();
+    } catch(e){ flashToast("Save failed: " + (e?.message || e)); setBusy(false); }
+  }, [user, group, tcg, mode, grader, grade, status, intendedGrader, submittedOn, dropRaw, rawQty, updateQty, onDone]);
+
+  return html`<div class="gfr-overlay" onClick=${onClose}>
+    <div class="gfr-modal" onClick=${e=>e.stopPropagation()}>
+      <button class="gfr-close" onClick=${onClose} aria-label="Close">×</button>
+      <div class="gfr-head">
+        ${thumb && html`<img class="gfr-thumb" src=${thumb} alt=${group["Product Name"]}/>`}
+        <div>
+          <div class="gfr-title">${group["Product Name"]}</div>
+          <div class="gfr-sub">${group.Set || ""}</div>
+        </div>
+      </div>
+
+      <div class="seg-toggle gfr-seg">
+        <button class=${mode==="own"?"active":""} onClick=${()=>setMode("own")}>I own it graded</button>
+        <button class=${mode==="send"?"active":""} onClick=${()=>setMode("send")}>Send for grading</button>
+      </div>
+
+      ${printingOpts.length > 1 && html`<label class="gfr-field"><span>Printing</span>
+        <div class="seg-toggle">
+          ${printingOpts.map(p => html`<button key=${p.key} class=${printingKey===p.key?"active":""}
+            onClick=${()=>setPrintingKey(p.key)}>${p.label}</button>`)}
+        </div>
+      </label>`}
+
+      ${mode === "own"
+        ? html`<div class="gfr-row">
+            <label class="gfr-field"><span>Grader</span>
+              <select value=${grader} onChange=${e=>setGrader(e.target.value)}>
+                ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+              </select>
+            </label>
+            <label class="gfr-field"><span>Grade</span>
+              <select value=${grade} onChange=${e=>setGrade(e.target.value)}>
+                ${GRADE_FROM_RAW_GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
+              </select>
+            </label>
+          </div>`
+        : html`<div>
+            <label class="gfr-field"><span>Stage</span>
+              <div class="seg-toggle">
+                <button class=${status==="to_submit"?"active":""} onClick=${()=>setStatus("to_submit")}>To submit</button>
+                <button class=${status==="at_grader"?"active":""} onClick=${()=>setStatus("at_grader")}>At grader</button>
+              </div>
+            </label>
+            <div class="gfr-row">
+              <label class="gfr-field"><span>Grader (optional)</span>
+                <select value=${intendedGrader} onChange=${e=>setIntendedGrader(e.target.value)}>
+                  <option value="">—</option>
+                  ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+                </select>
+              </label>
+              ${status==="at_grader" && html`<label class="gfr-field"><span>Sent on (optional)</span>
+                <input type="date" value=${submittedOn} onChange=${e=>setSubmittedOn(e.target.value)}/>
+              </label>`}
+            </div>
+          </div>`}
+
+      ${rawQty > 0 && html`<label class="gfr-droprraw">
+        <input type="checkbox" checked=${dropRaw} onChange=${e=>setDropRaw(e.target.checked)}/>
+        <span>Also remove 1 from my raw ${sel.label||""} count (you own ${rawQty}) — for when you graded one of your loose copies.</span>
+      </label>`}
+
+      <p class="gfr-note">Graded copies check off your set completion but don't add raw value or count as deck-legal copies.</p>
+
+      <div class="gfr-actions">
+        <button onClick=${onClose} disabled=${busy}>Cancel</button>
+        <button class="active" onClick=${save} disabled=${busy}>${busy ? "Saving…" : (mode==="own" ? "Add graded copy" : "Add to grading queue")}</button>
+      </div>
+    </div>
   </div>`;
 };
 
@@ -12861,10 +13081,93 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   </div>`;
 };
 
-const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded}) => {
+// Slab came back from the grader → pick the grade and graduate the queue row
+// into a real graded_collection_items copy.
+const GRADING_QUEUE_GRADES = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
+const GraduateSubmissionModal = ({sub, meta, onClose, onGraduate}) => {
+  useEscToClose(onClose);
+  const [grader, setGrader] = useState(sub.intended_grader || "psa");
+  const [grade, setGrade] = useState("10");
+  const [busy, setBusy] = useState(false);
+  return html`<div class="gfr-overlay" onClick=${onClose}>
+    <div class="gfr-modal" onClick=${e=>e.stopPropagation()}>
+      <button class="gfr-close" onClick=${onClose} aria-label="Close">×</button>
+      <div class="gfr-head">
+        ${meta?.img_small && html`<img class="gfr-thumb" src=${meta.img_small} alt=""/>`}
+        <div>
+          <div class="gfr-title">${meta?.["Product Name"] || sub.card_id}</div>
+          <div class="gfr-sub">Graduate to your graded collection</div>
+        </div>
+      </div>
+      <div class="gfr-row">
+        <label class="gfr-field"><span>Grader</span>
+          <select value=${grader} onChange=${e=>setGrader(e.target.value)}>
+            ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+          </select>
+        </label>
+        <label class="gfr-field"><span>Grade</span>
+          <select value=${grade} onChange=${e=>setGrade(e.target.value)}>
+            ${GRADING_QUEUE_GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
+          </select>
+        </label>
+      </div>
+      <div class="gfr-actions">
+        <button onClick=${onClose} disabled=${busy}>Cancel</button>
+        <button class="active" disabled=${busy} onClick=${async ()=>{ setBusy(true); const ok = await onGraduate(grader, grade); if(!ok) setBusy(false); }}>${busy?"Saving…":"Add the slab"}</button>
+      </div>
+    </div>
+  </div>`;
+};
+
+// The "Sent for grading" queue panel inside the Graded tab. Lists pending
+// submissions with a clickable To-submit ⇄ At-grader stage chip, a Graduate
+// action (slab returned), and remove. Empty state still offers the entry point.
+const GradingQueueSection = ({submissions, cardById, onAdd, onUpdate, onRemove, onGraduate}) => {
+  const [collapsed, setCollapsed] = useState(false);
+  const [graduateSub, setGraduateSub] = useState(null);
+  if(!submissions || submissions.length === 0){
+    return html`<div class="gq-section gq-empty">
+      <button class="gq-add-btn" onClick=${onAdd} title="Track a card you've sent (or are about to send) for grading">＋ Send a card for grading</button>
+    </div>`;
+  }
+  return html`<div class="gq-section">
+    <div class="gq-head">
+      <button class="gq-head-toggle" onClick=${()=>setCollapsed(c=>!c)}>
+        <span class="gq-caret">${collapsed?"▸":"▾"}</span>
+        <span class="gq-title">Sent for grading</span>
+        <span class="gq-count">${submissions.length}</span>
+      </button>
+      <button class="gq-add-btn" onClick=${onAdd}>＋ Send a card</button>
+    </div>
+    ${!collapsed && html`<div class="gq-list">
+      ${submissions.map(s => {
+        const meta = cardById.get(s.card_id);
+        return html`<div key=${s.id} class="gq-row">
+          ${meta?.img_small && html`<img class="gq-thumb" src=${meta.img_small} alt="" loading="lazy"/>`}
+          <div class="gq-rowmain">
+            <div class="gq-name">${meta?.["Product Name"] || s.card_id}</div>
+            <div class="gq-meta">${(s.printing && s.printing!=="Normal") ? s.printing+" · " : ""}${s.intended_grader ? s.intended_grader.toUpperCase() : "grader TBD"}${s.submitted_on ? " · sent "+s.submitted_on : ""}</div>
+          </div>
+          <button class=${"gq-status "+s.status} title="Click to flip stage"
+            onClick=${()=>onUpdate(s.id, {status: s.status==="at_grader" ? "to_submit" : "at_grader"})}>${s.status==="at_grader" ? "At grader" : "To submit"}</button>
+          <button class="gq-graduate" title="Slab came back — add the grade" onClick=${()=>setGraduateSub(s)}>Graduate ▸</button>
+          <button class="gq-remove" title="Remove from queue" onClick=${()=>onRemove(s.id)}>×</button>
+        </div>`;
+      })}
+    </div>`}
+    ${graduateSub && html`<${GraduateSubmissionModal} sub=${graduateSub} meta=${cardById.get(graduateSub.card_id)}
+      onClose=${()=>setGraduateSub(null)}
+      onGraduate=${async (grader, grade) => { const ok = await onGraduate(graduateSub, grader, grade); if(ok) setGraduateSub(null); return ok; }}/>`}
+  </div>`;
+};
+
+const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded, onOwnershipChanged}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   const [items, setItems] = useState(null);          // owned graded cards
   const [goals, setGoals] = useState(null);          // tracking goals
+  const [submissions, setSubmissions] = useState([]); // grading_submissions (the "sent for grading" queue)
+  const [queueAddOpen, setQueueAddOpen] = useState(false);
+  const [graduateFor, setGraduateFor] = useState(null); // submission row being graduated
   const [latestPrices, setLatestPrices] = useState(null); // graded_prices_latest cache
   const [rollup, setRollup] = useState(null);        // graded_sales_rollup (premium)
   const [addOpen, setAddOpen] = useState(false);
@@ -13735,6 +14038,74 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     setGoals(prev => (prev||[]).filter(g => g.goal_id !== goal_id));
   }, [user]);
 
+  // ── "Sent for grading" queue (migration 84) ────────────────────────────
+  // Separate lightweight table — pending cards have no grade yet, so they
+  // can't live in graded_collection_items. Schema-tolerant: if the table
+  // isn't there (pre-migration) we just render no queue.
+  const reloadSubmissions = useCallback(async () => {
+    if(readOnly || !user){ setSubmissions([]); return; }
+    const r = await sbClient.from("grading_submissions")
+      .select("id,card_id,printing,intended_grader,status,quantity,submitted_on,created_at")
+      .eq("user_id", user.id)
+      .order("created_at", {ascending:false})
+      .then(x=>x).catch(()=>({data:[], error:true}));
+    setSubmissions(r.error ? [] : (r.data || []));
+  }, [user, readOnly]);
+  useEffect(() => { reloadSubmissions(); }, [reloadSubmissions]);
+
+  const addSubmission = useCallback(async ({card_id, printing, intended_grader, status, submitted_on}) => {
+    if(!user) return;
+    const slot = canonicalGradedSlot(card_id, printing);
+    const {error} = await sbClient.from("grading_submissions").insert({
+      user_id: user.id, card_id: slot.card_id, printing: slot.printing,
+      intended_grader: intended_grader || null, status: status || "to_submit",
+      quantity: 1, submitted_on: submitted_on || null,
+    });
+    if(error){ flashToast("Save failed: " + error.message); return; }
+    await reloadSubmissions();
+  }, [user, reloadSubmissions]);
+
+  const updateSubmission = useCallback(async (id, patch) => {
+    if(!user) return;
+    setSubmissions(prev => prev.map(s => s.id===id ? {...s, ...patch} : s));
+    const {error} = await sbClient.from("grading_submissions")
+      .update({...patch, updated_at: new Date().toISOString()})
+      .eq("user_id", user.id).eq("id", id);
+    if(error){ flashToast("Update failed: " + error.message); reloadSubmissions(); }
+  }, [user, reloadSubmissions]);
+
+  const removeSubmission = useCallback(async (id) => {
+    if(!user) return;
+    setSubmissions(prev => prev.filter(s => s.id !== id));
+    const {error} = await sbClient.from("grading_submissions").delete()
+      .eq("user_id", user.id).eq("id", id);
+    if(error){ flashToast("Delete failed: " + error.message); reloadSubmissions(); }
+  }, [user, reloadSubmissions]);
+
+  // Graduate: a slab came back. Insert the real graded copy FIRST, then drop
+  // the submission only on success (so a failed insert leaves the queue intact).
+  const graduateSubmission = useCallback(async (sub, grader, grade) => {
+    if(!user || !sub) return false;
+    const slot = canonicalGradedSlot(sub.card_id, sub.printing);
+    const {error} = await sbClient.from("graded_collection_items").upsert({
+      user_id: user.id, card_id: slot.card_id, printing: slot.printing,
+      grader, grade, quantity: sub.quantity || 1, updated_at: new Date().toISOString(),
+    }, {onConflict: "user_id,card_id,printing,grader,grade"});
+    if(error){ flashToast("Couldn't add graded copy: " + error.message); return false; }
+    setItems(prev => {
+      const ix = (prev||[]).findIndex(p => p.card_id===slot.card_id && (p.printing||"Normal")===slot.printing && p.grader===grader && p.grade===grade);
+      if(ix>=0){ const out=(prev||[]).slice(); out[ix]={...out[ix], quantity: sub.quantity||1}; return out; }
+      return [...(prev||[]), {card_id: slot.card_id, printing: slot.printing, grader, grade, quantity: sub.quantity||1, updated_at: new Date().toISOString()}];
+    });
+    await removeSubmission(sub.id);
+    flashToast("Graduated to your graded collection 🎉");
+    return true;
+  }, [user, removeSubmission]);
+
+  // Keep the parent (CollectionView raw completion %) in sync whenever owned
+  // graded items OR the pending queue change.
+  useEffect(() => { if(onOwnershipChanged) onOwnershipChanged(); }, [items, submissions]);
+
   if(!user) return html`<div class="muted" style=${{fontSize:13,padding:"30px 0",textAlign:"center"}}>
     Sign in to track your graded collection.
     <button class="active" onClick=${onSignIn} style=${{marginLeft:10,padding:"7px 14px",fontSize:12}}>Sign in</button>
@@ -13881,6 +14252,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
+        ${!readOnly && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
+          onAdd=${()=>setQueueAddOpen(true)}
+          onUpdate=${updateSubmission} onRemove=${removeSubmission} onGraduate=${graduateSubmission}/>`}
         ${gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
               raw=${raw} theme=${theme} onOpen=${openCardAt}/>`
@@ -14307,6 +14681,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       preselectPrinting=${addPreselectPrinting}
       onClose=${()=>{ setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}
       onAdd=${async (p) => { await addItem(p); setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}/>`}
+    ${queueAddOpen && html`<${GradedCollectionAddModal}
+      raw=${raw} cardById=${cardById} priceByKey=${priceByKey}
+      queueMode=${true}
+      onClose=${()=>setQueueAddOpen(false)}
+      onSendToQueue=${async (p) => { await addSubmission(p); setQueueAddOpen(false); }}/>`}
     ${bulkAddOpen && html`<${GradedBulkAddModal}
       raw=${raw}
       setIdsByName=${setIdsByName}
@@ -14339,7 +14718,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
 
 // Modal for adding a graded card to the collection. Search → pick a card →
 // pick grader/grade → validate against graded_prices_latest → save.
-const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, preselectPrinting, onClose, onAdd}) => {
+const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, preselectPrinting, onClose, onAdd, queueMode, onSendToQueue}) => {
   useEscToClose(onClose);
   const [query, setQuery] = useState("");
   const [pickedId, setPickedId] = useState(preselectCardId || null);
@@ -14348,6 +14727,10 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
   const [grade, setGrade] = useState("10");
   const [qty, setQty] = useState("1");
   const [busy, setBusy] = useState(false);
+  // Queue mode (send-for-grading): no grade yet, just an intended grader +
+  // stage. Reuses the entire card-search/printing picker above.
+  const [status, setStatus] = useState("to_submit");   // "to_submit" | "at_grader"
+  const [submittedOn, setSubmittedOn] = useState("");
 
   // Find ALL raw rows for the picked card (split-printing cards have two).
   // Drives the printing picker — single-printing cards skip the picker.
@@ -14430,7 +14813,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:560}}>
       <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Add a graded card</h2>
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${queueMode ? "Send a card for grading" : "Add a graded card"}</h2>
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
       <div class="modal-body" style=${{padding:18}}>
@@ -14474,6 +14857,45 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
             </div>
             <div class="muted" style=${{fontSize:10,marginTop:4}}>This card has distinct printings/variants — pick the one you own.</div>
           </label>`}
+          ${queueMode
+            ? html`<div>
+                <div style=${{marginBottom:12}}>
+                  <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Stage</div>
+                  <div class="seg-toggle">
+                    <button class=${status==="to_submit"?"active":""} onClick=${()=>setStatus("to_submit")}>To submit</button>
+                    <button class=${status==="at_grader"?"active":""} onClick=${()=>setStatus("at_grader")}>At grader</button>
+                  </div>
+                </div>
+                <div style=${{display:"grid",gridTemplateColumns:status==="at_grader"?"1fr 1fr":"1fr",gap:10,marginBottom:14}}>
+                  <label>
+                    <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Grader (optional)</div>
+                    <select value=${grader} onChange=${e=>setGrader(e.target.value)}
+                      style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
+                      <option value="">—</option>
+                      ${["psa","cgc","bgs","sgc","tag"].map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+                    </select>
+                  </label>
+                  ${status==="at_grader" && html`<label>
+                    <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Sent on (optional)</div>
+                    <input type="date" value=${submittedOn} onChange=${e=>setSubmittedOn(e.target.value)}
+                      style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}/>
+                  </label>`}
+                </div>
+                <div style=${{display:"flex",gap:8,justifyContent:"flex-end"}}>
+                  <button onClick=${onClose}>Cancel</button>
+                  <button class="active" disabled=${busy} onClick=${async ()=>{
+                    setBusy(true);
+                    const slot = canonicalGradedSlot(picked.card_id, printing || picked.tcg_printing || "Normal");
+                    await onSendToQueue({card_id: slot.card_id, printing: slot.printing,
+                      intended_grader: grader === "psa" ? grader : (grader || null),
+                      status, submitted_on: (status==="at_grader" && submittedOn) ? submittedOn : null});
+                    setBusy(false);
+                  }} style=${{padding:"7px 16px",fontSize:13}}>
+                    ${busy ? "Adding…" : "Add to grading queue"}
+                  </button>
+                </div>
+              </div>`
+            : html`<div>
           <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr 80px",gap:10,marginBottom:12}}>
             <label>
               <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Grader</div>
@@ -14524,6 +14946,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
               ${busy ? "Saving…" : "Save to collection"}
             </button>
           </div>
+        </div>`}
         </div>`}
       </div>
     </div>
@@ -14956,6 +15379,65 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     }
     return m;
   }, [raw]);
+  // First raw row per card_id (for rarity/set lookup of graded/pending copies,
+  // which carry only card_id + printing, not the full catalog row).
+  const cardById = useMemo(()=>{
+    const m = new Map();
+    for(const r of raw) if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, r);
+    return m;
+  }, [raw]);
+
+  // Graded + pending-grading ownership feeds the RAW completion meters: a
+  // slabbed (or sent-to-grading) copy checks off the set slot WITHOUT adding
+  // raw value or deck-legal copies. Lightweight fetch (card_id + printing +
+  // quantity only) — kept separate from GradedCollectionView's rich fetch,
+  // and refreshed via reloadGradedOwnership() after any graded/submission
+  // mutation so the raw % updates without a full reload.
+  const [gradedOwnRows, setGradedOwnRows] = useState([]);
+  const [pendingRows, setPendingRows] = useState([]);
+  const reloadGradedOwnership = useCallback(async () => {
+    if(!user || isViewerMode){ setGradedOwnRows([]); setPendingRows([]); return; }
+    try {
+      const [gi, ps] = await Promise.all([
+        sbClient.from("graded_collection_items").select("card_id,printing,quantity").eq("user_id", user.id)
+          .then(r => r.error ? sbClient.from("graded_collection_items").select("card_id,quantity").eq("user_id", user.id) : r)
+          .catch(()=>({data:[]})),
+        sbClient.from("grading_submissions").select("card_id,printing,quantity").eq("user_id", user.id)
+          .then(r => r.error ? {data:[]} : r)
+          .catch(()=>({data:[]})),
+      ]);
+      setGradedOwnRows(gi.data || []);
+      setPendingRows(ps.data || []);
+    } catch { /* leave prior */ }
+  }, [user, isViewerMode]);
+  useEffect(() => { reloadGradedOwnership(); }, [reloadGradedOwnership]);
+
+  // Map graded/pending ownership to raw set slots. Bucket = "Normal" for
+  // non-foil, "FOIL" for any foil printing (Holofoil / Cold Foil / Foil all
+  // collapse to the card's single foil slot — printing-exact in the
+  // non-foil/foil sense). slotQty merges both kinds for missing/needed math;
+  // the split maps drive the per-tile ✦ asterisk (graded vs at-grader).
+  const gradedCompletion = useMemo(() => {
+    const gradedSlotQty = new Map();
+    const pendingSlotQty = new Map();
+    const slotQty = new Map();
+    const bucketKey = (cid, printing) => cid + "|" + ((printing||"Normal")==="Normal" ? "Normal" : "FOIL");
+    const add = (map, k, n) => map.set(k, (map.get(k)||0) + n);
+    for(const r of gradedOwnRows){
+      if(!r.card_id) continue;
+      const k = bucketKey(r.card_id, r.printing), q = Math.max(1, r.quantity||1);
+      add(gradedSlotQty, k, q); add(slotQty, k, q);
+    }
+    for(const r of pendingRows){
+      if(!r.card_id) continue;
+      const k = bucketKey(r.card_id, r.printing), q = Math.max(1, r.quantity||1);
+      add(pendingSlotQty, k, q); add(slotQty, k, q);
+    }
+    return {gradedSlotQty, pendingSlotQty, slotQty};
+  }, [gradedOwnRows, pendingRows]);
+  const coverFor = useCallback((cid, tcgPrinting) =>
+    gradedCompletion.slotQty.get(cid + "|" + (tcgPrinting==="Normal" ? "Normal" : "FOIL")) || 0,
+  [gradedCompletion]);
 
   // Index for CSV import: normalized Product Name → [raw rows]. Used to
   // resolve Dreamborn export rows (which key on Name + collector number)
@@ -15022,16 +15504,31 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       else if(card.tcg_printing === "Normal") s.normal.add(card.card_id);
       else s.foil.add(card.card_id);
     }
+    // Graded + pending-grading copies also check off the slot (completion
+    // only — no value, no deck copies). Bucket by the card's rarity (chase
+    // cards) or by the graded item's own printing (non-foil vs foil).
+    for(const r of [...gradedOwnRows, ...pendingRows]){
+      const card = cardById.get(r.card_id);
+      if(!card || !SET_ORDER.includes(card.Set)) continue;
+      const s = ensure(card.Set);
+      if(card.Rarity === "Enchanted")     s.enchanted.add(r.card_id);
+      else if(card.Rarity === "Iconic")   s.iconic.add(r.card_id);
+      else if(card.Rarity === "Epic")     s.epic.add(r.card_id);
+      else if((r.printing||"Normal") === "Normal") s.normal.add(r.card_id);
+      else s.foil.add(r.card_id);
+    }
     return m;
-  }, [collection, cardByKey]);
+  }, [collection, cardByKey, cardById, gradedOwnRows, pendingRows]);
 
   // Compute missing $ and extras $ relative to the chosen copies target.
   // Iterate every main-set (card, printing) pair: needed=copies, owned=qty,
   // missing += max(0, needed-owned)*price, extras += max(0, owned-needed)*price.
   const valueStats = useMemo(()=>{
     let totalValue = 0, totalCards = 0, totalUnique = 0;
-    let missing = 0, extras = 0;
+    let missing = 0, extras = 0, ownedTowardNeed = 0;
     const seenKey = new Set();
+    const creditedCover = new Set();
+    const seenBucket = new Set();
 
     // Iterate main-set products in raw to compute missing
     for(const r of raw){
@@ -15043,10 +15540,31 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       const qty = collection[key] || 0;
       const price = r["Low Price"] ?? r["TCGPlayer Market"] ?? 0;
       const need = copies;
-      const short = Math.max(0, need - qty);
+      // Graded/pending copies reduce what you're MISSING (not your owned/
+      // extras value — those stay raw-priced to avoid double-counting the
+      // graded value that already lives in the Graded totals). Credit once
+      // per card_id+bucket so foil-label variants don't double-offset.
+      const ck = r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL");
+      const cover = creditedCover.has(ck) ? 0 : (gradedCompletion.slotQty.get(ck)||0);
+      if(cover) creditedCover.add(ck);
+      const short = Math.max(0, need - (qty + cover));
       const over  = Math.max(0, qty - need);
       missing += short * price;
       extras  += over  * price;
+      // Owned-toward-need for the headline master/play %: raw + graded/pending
+      // cover, capped at the target. Dedupe by rarity-or-foil bucket so the
+      // denominator (setCardLists totals) and numerator agree, and skip the
+      // Extras bucket (curio, excluded from the completion goal).
+      if(r.Set !== EXTRAS_SET_NAME){
+        const bk = (r.Rarity==="Enchanted"||r.Rarity==="Iconic"||r.Rarity==="Epic") ? r.Rarity
+                 : (r.tcg_printing==="Normal" ? "Normal" : "FOIL");
+        const dk = r.card_id+"|"+bk;
+        if(!seenBucket.has(dk)){
+          seenBucket.add(dk);
+          const bcover = gradedCompletion.slotQty.get(r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL")) || 0;
+          ownedTowardNeed += Math.min(copies, qty + bcover);
+        }
+      }
     }
     // Total value across ALL owned cards (including non-main-set if any)
     for(const [key, qty] of Object.entries(collection)){
@@ -15059,19 +15577,23 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         totalValue += price * qty;
       }
     }
-    return {totalValue, totalCards, totalUnique, missing, extras};
-  }, [raw, collection, cardByKey, copies]);
+    return {totalValue, totalCards, totalUnique, missing, extras, ownedTowardNeed};
+  }, [raw, collection, cardByKey, copies, gradedCompletion]);
 
   // For per-set missing dollar amounts — same logic, scoped to a set.
   const setMissing = useMemo(()=>{
     const m = {};
+    const creditedCover = new Set();
     for(const r of raw){
       if(!SET_ORDER.includes(r.Set)) continue;
       if(!r.card_id || !r.tcg_printing) continue;
       const key = r.card_id+":"+r.tcg_printing;
       const qty = collection[key] || 0;
       const need = copies;
-      const short = Math.max(0, need - qty);
+      const ck = r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL");
+      const cover = creditedCover.has(ck) ? 0 : (gradedCompletion.slotQty.get(ck)||0);
+      if(cover) creditedCover.add(ck);
+      const short = Math.max(0, need - (qty + cover));
       if(short === 0) continue;
       const price = r["Low Price"] ?? r["TCGPlayer Market"] ?? 0;
       if(!m[r.Set]) m[r.Set] = {count:0, value:0};
@@ -15079,7 +15601,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       m[r.Set].value += short * price;
     }
     return m;
-  }, [raw, collection, copies]);
+  }, [raw, collection, copies, gradedCompletion]);
 
   const handleImportFile = useCallback(async (file) => {
     if(!file) return;
@@ -15144,6 +15666,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     user=${user} onSignIn=${onSignIn} copies=${copies} setCopies=${isViewerMode ? null : setCopies}
     readOnly=${isViewerMode}
     compareMode=${canCompare ? compareMode : "all"}
+    gradedSlotQty=${gradedCompletion.gradedSlotQty} pendingSlotQty=${gradedCompletion.pendingSlotQty}
+    onGradedChanged=${reloadGradedOwnership}
     viewerOwnCollection=${viewerOwnCollection || null}/>`;
 
   const {totalValue, totalCards, totalUnique, missing, extras} = valueStats;
@@ -15154,19 +15678,15 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   // printings. Extras & Oddities is a curio bucket (starter-deck-exclusive
   // foils etc), not part of the mainline "complete the set" goal — exclude
   // it from both totals so the headline % isn't artificially deflated.
-  let totalNeeded = 0, totalOwnedTowardNeed = 0;
+  let totalNeeded = 0;
   for(const k of Object.keys(setCardLists)){
     if(k === EXTRAS_SET_NAME) continue;
     const tot = setTotals[k];
     totalNeeded += (tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic) * copies;
   }
-  for(const [key, qty] of Object.entries(collection)){
-    if(qty<=0) continue;
-    const card = cardByKey[key];
-    if(!card || !SET_ORDER.includes(card.Set)) continue;
-    if(card.Set === EXTRAS_SET_NAME) continue;
-    totalOwnedTowardNeed += Math.min(qty, copies);
-  }
+  // Includes graded/pending coverage (computed inside valueStats so the raw
+  // catalog is scanned only once and the result is memoized).
+  const totalOwnedTowardNeed = valueStats.ownedTowardNeed;
   const masterPct = totalNeeded ? (totalOwnedTowardNeed / totalNeeded * 100) : 0;
 
   // Viewer-mode: if the user lands on a tab whose section isn't visible
@@ -15291,6 +15811,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       ? html`<${GradedCollectionView} raw=${raw} user=${user} onSignIn=${onSignIn} theme=${theme}
           readOnly=${isViewerMode}
           viewedGradedRows=${isViewerMode ? viewerContext.data?.gradedRows || [] : null}
+          onOwnershipChanged=${isViewerMode ? null : reloadGradedOwnership}
           onJumpToScreenerGraded=${isViewerMode ? null : onJumpToScreenerGraded}/>`
       : effectiveSection === null
       ? html`<div class="empty-state"><p>No sections of this collection are visible to you.</p></div>`
@@ -19260,6 +19781,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           <button class=${"chip "+(filterLegality==="infinity"?"active":"")}
             onClick=${()=>setFilterLegality(v=>v==="infinity"?"":"infinity")}
             title="Infinity — any legally-built deck">Infinity</button>
+          <button class=${"chip "+(filterLegality==="japan"?"active":"")}
+            onClick=${()=>setFilterLegality(v=>v==="japan"?"":"japan")}
+            title="Japan Core — cards released in Japan (sets 1–9 + Wilds Unknown, plus the released cards from Whispers in the Well & Winterspell)">Japan Core</button>
         </div>
       </div>
       <div class="price-db-adv-row">
@@ -20014,7 +20538,7 @@ const drawPosterScatter = (ctx, series, lines, showTrend, x, y, w, h, P) => {
 };
 
 async function buildGradedPosterBlob(opts){
-  const { artSrc, name, sub, combos, featured, series, rawLines, showTrend, dateStr } = opts;
+  const { artSrc, name, sub, combos, featured, series, rawLines, showTrend, dateStr, rawLatest } = opts;
   const P = posterPalette();
   try { if(document.fonts && document.fonts.ready) await document.fonts.ready; } catch {}
   const [artImg, logoImg] = await Promise.all([
@@ -20080,6 +20604,24 @@ async function buildGradedPosterBlob(opts){
     WINS.forEach(([k,lbl],i)=>{ ctx.fillStyle=posterPctColor(win["pct_"+k], P); ctx.fillText(fmtPct(win["pct_"+k]), gx0+cellW*i+cellW/2, dWinY+16); });
     ctx.textAlign="left";
     y=cardTop+cardH+14;
+  }
+
+  // raw (ungraded) Low / NM-Market quick-line under the graded stat card —
+  // labels tinted to match the chart's Raw Low (green) / Raw Mkt (blue) overlays.
+  if(rawLatest && (rawLatest.low!=null || rawLatest.market!=null)){
+    ctx.textAlign="left"; ctx.textBaseline="alphabetic";
+    let rx=statsX;
+    ctx.fillStyle=P.muted; ctx.font="800 9px 'Nunito Sans', sans-serif";
+    ctx.fillText("RAW", rx, y); rx += ctx.measureText("RAW").width + 11;
+    const drawRaw=(lbl,val,col)=>{
+      const L=lbl.toUpperCase();
+      ctx.fillStyle=col; ctx.font="700 9px 'Nunito Sans', sans-serif"; ctx.fillText(L, rx, y); rx += ctx.measureText(L).width + 5;
+      const v=money(val);
+      ctx.fillStyle=P.text; ctx.font="800 13px 'Nunito Sans', sans-serif"; ctx.fillText(v, rx, y); rx += ctx.measureText(v).width + 16;
+    };
+    if(rawLatest.low!=null)    drawRaw("Low", rawLatest.low, "#1d8d4a");
+    if(rawLatest.market!=null) drawRaw("NM Market", rawLatest.market, "#3b82f6");
+    y += 12;
   }
 
   // grade price list (all grades — last + avg)
@@ -23045,6 +23587,71 @@ const DECK_FORMATS = [
    legalSets: () => new Set(computeCoreSets())},
 ];
 const getFormat = (key) => DECK_FORMATS.find(f => f.key === key) || DECK_FORMATS[0];
+
+// ── Japan Core legality ──────────────────────────────────────────────
+// Japan's release schedule runs behind: sets 1–9 + Wilds Unknown (12) are
+// fully out, but sets 10 (Whispers in the Well) and 11 (Winterspell) have
+// only PARTIALLY released — only the specific cards listed below are legal
+// from those two sets (e.g. Grandmother Willow, in Winterspell but not on
+// the list, is NOT Japan-legal). Promos are excluded entirely.
+//   When set 13 (Attack of the Vines) reaches Japan, the rest of 10/11 will
+//   have released too — at that point move Whispers/Winterspell into
+//   JAPAN_CORE_FULL_SETS (or clear the partial gating) and add set 13.
+const JAPAN_CORE_FULL_SETS = new Set([
+  "The First Chapter", "Rise of the Floodborn", "Into the Inklands", "Ursula's Return",
+  "Shimmering Skies", "Azurite Sea", "Archazia's Island", "Reign of Jafar", "Fabled",
+  "Wilds Unknown",
+]);
+const JAPAN_CORE_PARTIAL_SETS = new Set(["Whispers in the Well", "Winterspell"]);
+// Match by Product Name ("Name - Version"), punctuation/case-insensitive.
+const _jpNorm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+const JAPAN_CORE_PARTIAL_NAMES = new Set([
+  // Winterspell (set 11) — released-in-Japan cards
+  "Beast - Snowfield Troublemaker", "White Rabbit - Late Again", "Timon - Snowball Swiper",
+  "Stitch - High Badness Level", "Stitch - Carefree Snowboarder", "Lilo - Snow Artist",
+  "Pudge - Controls the Weather", "Pumbaa - Winter Warthog", "David - Protective Snowboarder",
+  "Fangmeyer - Icy Officer", "Lilo - Rock Star", "Pleakley - Arctic Naturalist",
+  "Jumba Jookiba - Prolific Inventor", "Nani - Stage Manager", "Reuben - Sandwich Expert",
+  "Angel - Siren Singer", "Eeyore - In the Way", "Anna - Soothing Sister",
+  "Kristoff - Icy Explorer", "Anna - Little Sister", "Christopher Robin - Joining the Fun",
+  "Heihei - Persistent Presence", "Pua - Disgruntled Pig", "Sven - Leaping Reindeer",
+  "Mystical Inkcaster", "The Frozen Vine - Monstrous Plant", "Minnie Mouse - Spinning Skater",
+  "Copper - On the Scent", "Liquidator - Iced Over", "Negaduck - Evil Doppelganger",
+  "Negaduck - Public Enemy Number One", "Elsa - Ice Artisan", "Elsa - Concerned Sister",
+  "Piglet - Entranced by Snow", "Honker Muddlefoot - Timid Genius", "Darkwing Duck - Drake Mallard",
+  "Piglet - Cocoa Maker", "Darkwing Duck - Dashing Gadgeteer", "Splatter Phoenix - Rejected Artist",
+  "Launchpad - Hideout Defender", "Gantu - Hamsterviel's Accomplice", "Nani - No Worries",
+  "Gigi - Best in Snow", "Grand Councilwoman - Galactic Authority", "Judy Hopps - Snowball Patrol",
+  "Lilo - Bundled Up",
+  "Raging Storm", "Akood et Emuti", "Ohana Means Family", "Do You Want to Build A Snowman?",
+  "Strike A Good Match", "Nani's Payback", "Grab Your Bow", "Let It Go", "Distract", "Blue Smoke",
+  "Darkwing's Gas Device",
+  "Beast's Castle - Winter Gardens",
+  // Whispers in the Well (set 10) — released-in-Japan cards
+  "Elsa - Exploring the Unknown", "Scrooge McDuck - S.H.U.S.H. Agent", "Higgins - Undercover Officer",
+  "Olaf - Helping Hand", "Big Nose - Lovesick Poet", "Vladimir - Ceramic Unicorn Fan",
+  "Hook Hand - Unexpectedly Friendly", "Launchpad - Exceptional Pilot", "Goldie O'Gilt - Cunning Prospector",
+  "Peter Pan - High Flyer", "Tinker Bell - Fancy Footwork", "Tinker Bell - Temperamental Fairy",
+  "Hercules - Mighty Leader", "Judy Hopps - On the Case", "Genie - Investigative Mind",
+  "Judy Hopps - Lead Detective", "Cinderella - Dream Come True", "Judy Hopps - Uncovering Clues",
+  "Pluto - Clever Cluefinder", "Mickey Mouse - Detective", "Donald Duck - Ghost Hunter",
+  "Francine - Eyeing the Evidence", "Nick Wilde - Sly Fox Sleuth", "Minnie Mouse - Ghost Hunter",
+  "The Horseman Strikes!", "Search for Clues", "Or Rewrite History!", "Can't Hold It Back Anymore",
+  "Putting It All Together", "Malicious, Mean, and Scary", "Dragon Fire", "Promising Lead", "Spooky Sight",
+  "Junior Woodchuck Guidebook", "The Black Cauldron", "Detective's Badge", "The Robot Queen",
+  "The Sword of Hercules",
+  "The Great Illuminary - Abandoned Laboratory", "Duckburg - Funso's Funzone",
+  "White Agony Plains - Golden Lagoon", "Illuminary Tunnels - Linked Caverns",
+].map(_jpNorm));
+// A catalog row is Japan-Core-legal if its set is fully released there, OR it
+// is one of the explicitly-released cards from a partially-released set.
+const isJapanCoreLegal = (row) => {
+  if(!row) return false;
+  const set = row.Set;
+  if(JAPAN_CORE_FULL_SETS.has(set)) return true;
+  if(JAPAN_CORE_PARTIAL_SETS.has(set)) return JAPAN_CORE_PARTIAL_NAMES.has(_jpNorm(row["Product Name"]));
+  return false;
+};
 
 // Lowest current Low/Market price for a card across its printings. Used to
 // price decks (we'd rather pay the cheap version than the foil).
