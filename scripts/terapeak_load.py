@@ -84,10 +84,15 @@ FOREIGN_CODE_RE = re.compile(r"\b(ZH|JA|JP|JPN|JAP|KR|KOR|CN|CHN|GER|DEU|FR|FRA)
 # "german"/"deutsch" word above).
 DE_TAG_RE = re.compile(r"\bDE\b")
 DE_VIL_RE = re.compile(r"de\s+vil", re.I)
+# German umlaut/eszett — English Lorcana titles never have these, so they're a clean
+# German marker (catches "Rückkehr", "Hüter", "Mäuse", "Domäne", "Legendär", etc.).
+GERMAN_CHAR_RE = re.compile(r"[äöüÄÖÜß]")
 
 
 def is_foreign_lang(title: str) -> bool:
     t = title or ""
+    if GERMAN_CHAR_RE.search(t):
+        return True
     if FOREIGN_WORD_RE.search(t) or FOREIGN_CODE_RE.search(t):
         return True
     return bool(DE_TAG_RE.search(t) and not DE_VIL_RE.search(t))

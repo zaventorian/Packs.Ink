@@ -24,7 +24,7 @@ from ocr_slab_audit import (SB_URL, HEAD, UA, DELAY, WORKERS, crop_label,
                             ocr_tesseract, refresh_rollup)
 
 C1_SET = "set_e0eb34fc0fbb446886f84c34381d4dce"
-FOIL_RE = re.compile(r"top\s*\d*\s*prize|challenge\s*event|champ|seriali[sz]ed|world\s*champ", re.I)
+FOIL_RE = re.compile(r"top\s*\d*\s*prize|top\s*(?:4|8|16|32|64)\b|challenge\s*event|champ|seriali[sz]ed|world\s*champ", re.I)
 # "prize wall" is the key non-foil marker printed on the slab ("PRIZE WALL EXCLUSIVE")
 # — omitting it dumped ~100 Prize Wall sales into Unknown.
 NONFOIL_RE = re.compile(r"prize\s*wall|participation|side\s*event", re.I)

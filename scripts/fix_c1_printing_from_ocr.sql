@@ -7,7 +7,7 @@
 -- 11 -> 103.) Re-run after any reload that re-OCRs/re-loads C1.
 update graded_sales set printing='Foil'
 where card_id in (select id from cards where set_id='set_e0eb34fc0fbb446886f84c34381d4dce')
-  and not excluded and slab_ocr ~* 'top\s*[0-9]*\s*prize|challenge\s*event|champ|seriali[sz]ed|world\s*champ';
+  and not excluded and slab_ocr ~* 'top\s*[0-9]*\s*prize|top\s*(4|8|16|32|64)\y|challenge\s*event|champ|seriali[sz]ed|world\s*champ';
 
 update graded_sales set printing='Non-Foil'
 where card_id in (select id from cards where set_id='set_e0eb34fc0fbb446886f84c34381d4dce')

@@ -17,6 +17,8 @@ where not excluded and (
     or title ~ '\y(FR|FRA)\y'
     or title ~* '\y(french|francais|française|francaise)\y'
     or title ~* '\y(italian|italiano|italien|italienne)\y'
+    or title ~ '[äöüÄÖÜß]'   -- German umlaut/eszett — never in an English Lorcana title
+    or title ~* 'flutgestalten'  -- "Floodborn" (DE), no umlaut
 );
 
 select public.refresh_graded_sales_rollup();

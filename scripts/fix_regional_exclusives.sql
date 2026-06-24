@@ -18,9 +18,11 @@ update graded_sales set card_id='crd_a204f84909b6469c95cf671500547b35', excluded
 where title ~* 'true friend' and title ~* 'japan|jpn|tokyo|\yja\y'
   and title !~* 'chin|chinajoy|\yzh\y|mandarin';
 
--- Belt-and-suspenders: a sale correctly matched to ANY zh/ja exclusive card should be
--- visible (the foreignness IS the card).
+-- Belt-and-suspenders: a sale correctly matched to ANY regional-exclusive card should
+-- be visible (the foreignness IS the card). Exclusive cards are flagged by a zh/ja
+-- collector-number suffix (Mickey True Friend #25zh/#25ja) OR a _zh/_ja card_id suffix
+-- (Snow White - Unexpected Houseguest #41 = crd_promo1_41_snowwhite_uhg_ja).
 update graded_sales g set excluded=false
-from cards c where c.id=g.card_id and c.collector_number ~ '(zh|ja)$' and g.excluded;
+from cards c where c.id=g.card_id and (c.collector_number ~ '(zh|ja)$' or c.id ~ '_(ja|zh)$') and g.excluded;
 
 select public.refresh_graded_sales_rollup();
