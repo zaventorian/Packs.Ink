@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=216">
+<link rel="stylesheet" href="styles.css?v=217">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=216"></script>
+<script src="logo.js?v=217"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9422,7 +9422,7 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
 // Enchanted to browse every Enchanted in the game and see which you own.
 const ALL_CARDS_VIEW = "__all_cards__";
 
-const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedSlotQty, pendingSlotQty, onGradedChanged}) => {
+const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedSlotQty, pendingSlotQty, onGradedChanged, gradedPremium}) => {
   const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
@@ -9861,7 +9861,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               onFoil=${!readOnly && showFoil && fKey ? (q)=>updateQty(g.card_id, g.foil.tcg_printing, q) : null}
               showNormalSide=${showNormal} showFoilSide=${showFoil}
               subtitle=${subtitle} mark=${computeMark(g)}
-              onGrade=${!readOnly && user ? ()=>setGradeFromRaw(g) : null}
+              onGrade=${!readOnly && user && gradedPremium ? ()=>setGradeFromRaw(g) : null}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`
         : html`<div class="setdet-card-grid">${items.map(gOrig => {
@@ -9878,7 +9878,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               onFoil=${!readOnly && showFoil && fKey ? (q)=>updateQty(g.card_id, g.foil.tcg_printing, q) : null}
               showNormalSide=${showNormal} showFoilSide=${showFoil}
               subtitle=${subtitle} mark=${computeMark(g)}
-              onGrade=${!readOnly && user ? ()=>setGradeFromRaw(g) : null}
+              onGrade=${!readOnly && user && gradedPremium ? ()=>setGradeFromRaw(g) : null}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`;
       return groupsByOrigin.map(bucket => html`<div key=${bucket.key} class="setdet-origin-bucket">
@@ -9924,7 +9924,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
 //     grader) that later graduates into a real graded copy from the Graded tab.
 // Either way the card now checks off raw set completion (see slotCover).
 const GRADE_FROM_RAW_GRADES = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
-const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone}) => {
+// onGradeOwned / onSendToQueue are optional: when the modal is opened from the
+// Graded tab they route through GradedCollectionView's own addItem/addSubmission
+// (so its state + the raw-completion sync update live). From the raw set-detail
+// page they're absent and the modal writes to Supabase directly.
+const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone, onGradeOwned, onSendToQueue}) => {
   useEscToClose(onClose);
   const printingOpts = [];
   if(group.normal) printingOpts.push({key:"normal", label:"Non-Foil", tcg: group.normal.tcg_printing});
@@ -9949,24 +9953,31 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone}
     try {
       const slot = canonicalGradedSlot(group.card_id, tcg);
       if(mode === "own"){
-        const {error} = await sbClient.from("graded_collection_items").upsert({
-          user_id: user.id, card_id: slot.card_id, printing: slot.printing,
-          grader, grade, quantity: 1, updated_at: new Date().toISOString(),
-        }, {onConflict: "user_id,card_id,printing,grader,grade"});
-        if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+        if(onGradeOwned){
+          await onGradeOwned({card_id: slot.card_id, printing: slot.printing, grader, grade, quantity: 1});
+        } else {
+          const {error} = await sbClient.from("graded_collection_items").upsert({
+            user_id: user.id, card_id: slot.card_id, printing: slot.printing,
+            grader, grade, quantity: 1, updated_at: new Date().toISOString(),
+          }, {onConflict: "user_id,card_id,printing,grader,grade"});
+          if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+        }
       } else {
-        const {error} = await sbClient.from("grading_submissions").insert({
-          user_id: user.id, card_id: slot.card_id, printing: slot.printing,
-          intended_grader: intendedGrader || null, status, quantity: 1,
-          submitted_on: (status === "at_grader" && submittedOn) ? submittedOn : null,
-        });
-        if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+        const payload = {card_id: slot.card_id, printing: slot.printing,
+          intended_grader: intendedGrader || null, status,
+          submitted_on: (status === "at_grader" && submittedOn) ? submittedOn : null};
+        if(onSendToQueue){
+          await onSendToQueue(payload);
+        } else {
+          const {error} = await sbClient.from("grading_submissions").insert({user_id: user.id, quantity: 1, ...payload});
+          if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
+        }
       }
       if(dropRaw && rawQty > 0) await updateQty(group.card_id, tcg, rawQty - 1);
       flashToast(mode === "own" ? "Graded copy added — it now checks off this set." : "Added to your grading queue.");
       onDone();
     } catch(e){ flashToast("Save failed: " + (e?.message || e)); setBusy(false); }
-  }, [user, group, tcg, mode, grader, grade, status, intendedGrader, submittedOn, dropRaw, rawQty, updateQty, onDone]);
+  }, [user, group, tcg, mode, grader, grade, status, intendedGrader, submittedOn, dropRaw, rawQty, updateQty, onDone, onGradeOwned, onSendToQueue]);
 
   return html`<div class="gfr-overlay" onClick=${onClose}>
     <div class="gfr-modal" onClick=${e=>e.stopPropagation()}>
@@ -13081,6 +13092,84 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   </div>`;
 };
 
+// "Grade from your collection" — a filterable browser of the user's owned RAW
+// cards (chase/promo focus), each opening GradeFromRawModal to send-to-grading
+// or log a graded copy. Lives as a third Graded-tab view mode (premium only).
+const GRADE_FROM_COLL_CHASE = ["Epic","Enchanted","Iconic","Promo"];
+const GradeFromCollectionPanel = ({raw, collection, user, updateQty, onGradeOwned, onSendToQueue}) => {
+  const [search, setSearch] = useState("");
+  const [rarityFilter, setRarityFilter] = useState(() => new Set());
+  const [gradeTarget, setGradeTarget] = useState(null);
+
+  // Owned raw cards only — filter the catalog to owned card_ids FIRST (cheap),
+  // then group. Sorted most-valuable-first since that's what people grade.
+  const ownedGroups = useMemo(() => {
+    const ownedIds = new Set();
+    for(const key in collection){
+      if((collection[key]||0) > 0) ownedIds.add(key.slice(0, key.lastIndexOf(":")));
+    }
+    if(!ownedIds.size) return [];
+    const groups = groupCards((raw||[]).filter(r => r.card_id && ownedIds.has(r.card_id)));
+    const pr = g => Math.max(g.normal?.["Low Price"]||0, g.foil?.["Low Price"]||0, g.normal?.["TCGPlayer Market"]||0, g.foil?.["TCGPlayer Market"]||0);
+    groups.sort((a,b) => pr(b) - pr(a));
+    return groups;
+  }, [raw, collection]);
+
+  const visible = useMemo(() => {
+    const parsed = parseSearchQuery(search);
+    const f = {rarities: rarityFilter};
+    return ownedGroups.filter(g => matchesCardFilter(g, f, parsed));
+  }, [ownedGroups, search, rarityFilter]);
+
+  const chaseActive = GRADE_FROM_COLL_CHASE.every(r => rarityFilter.has(r)) && rarityFilter.size === GRADE_FROM_COLL_CHASE.length;
+  const toggleRarity = (r) => setRarityFilter(s => { const n = new Set(s); n.has(r) ? n.delete(r) : n.add(r); return n; });
+
+  return html`<div class="gfc-panel">
+    <div class="gfc-intro">Pick a card you own to send it for grading or log a slab you already have. Only graded copies count toward your set completion — raw copies stay deck-legal.</div>
+    <div class="gfc-toolbar">
+      <input type="search" class="gfc-search" placeholder="Search your collection…"
+        value=${search} onInput=${e=>setSearch(e.target.value)}/>
+      <button class=${"chip gfc-chase"+(chaseActive?" active":"")}
+        onClick=${()=>setRarityFilter(chaseActive ? new Set() : new Set(GRADE_FROM_COLL_CHASE))}
+        title="Filter to chase rarities + promos — what most people grade">★ Chase & Promo</button>
+      <div class="gfc-raritychips">
+        ${CARDS_RARITIES.map(r => html`<button key=${r} class=${"chip chip-rarity-only "+(rarityFilter.has(r)?"active":"")}
+          title=${r} aria-label=${r} onClick=${()=>toggleRarity(r)}>
+          ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
+        </button>`)}
+      </div>
+    </div>
+    ${ownedGroups.length === 0
+      ? html`<div class="gfc-empty">You don't own any raw cards yet. Add cards in the Collection tab first, then grade them from here.</div>`
+      : visible.length === 0
+        ? html`<div class="gfc-empty">No owned cards match that filter.</div>`
+        : html`<div class="gfc-grid">
+          ${visible.map(g => {
+            const img = g.img_small || g.img_normal;
+            const owns = [];
+            if(g.normal){ const q = collection[g.card_id+":"+g.normal.tcg_printing]||0; if(q>0) owns.push({label:"Non-Foil", q}); }
+            if(g.foil){   const q = collection[g.card_id+":"+g.foil.tcg_printing]||0;   if(q>0) owns.push({label:"Foil", q}); }
+            return html`<button key=${g.card_id} class="gfc-tile" onClick=${()=>setGradeTarget(g)}
+              title="Grade this card">
+              ${img ? html`<img class="gfc-tile-img" src=${img} alt="" loading="lazy"/>` : html`<div class="gfc-tile-img gfc-noimg"></div>`}
+              <div class="gfc-tile-body">
+                <div class="gfc-tile-name">${g["Product Name"]}</div>
+                <div class="gfc-tile-meta">
+                  ${RARITY_ICONS[g.Rarity] && html`<img class="gfc-tile-rar" src=${RARITY_ICONS[g.Rarity]} alt=${g.Rarity}/>`}
+                  ${owns.map(o => html`<span key=${o.label} class="gfc-own-pill">${o.label}${o.q>1?" ×"+o.q:""}</span>`)}
+                </div>
+              </div>
+              <span class="gfc-tile-cta">◆ Grade</span>
+            </button>`;
+          })}
+        </div>`}
+    ${gradeTarget && html`<${GradeFromRawModal} group=${gradeTarget} user=${user}
+      collection=${collection} updateQty=${updateQty}
+      onGradeOwned=${onGradeOwned} onSendToQueue=${onSendToQueue}
+      onClose=${()=>setGradeTarget(null)} onDone=${()=>setGradeTarget(null)}/>`}
+  </div>`;
+};
+
 // Slab came back from the grader → pick the grade and graduate the queue row
 // into a real graded_collection_items copy.
 const GRADING_QUEUE_GRADES = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
@@ -13161,7 +13250,7 @@ const GradingQueueSection = ({submissions, cardById, onAdd, onUpdate, onRemove, 
   </div>`;
 };
 
-const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded, onOwnershipChanged}) => {
+const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded, onOwnershipChanged, collection, updateQty}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   const [items, setItems] = useState(null);          // owned graded cards
   const [goals, setGoals] = useState(null);          // tracking goals
@@ -14183,9 +14272,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         ${totals.totalCopies !== totals.uniqueCards && html`<div class="gc-stat"><div class="gc-stat-val">${totals.totalCopies}</div><div class="gc-stat-lbl">Total copies owned</div></div>`}
       </div>
       <div class="graded-collection-header-actions gc-caps-row">
-        <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, or track set / rarity goals">
+        <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, track set / rarity goals, or grade cards from your collection">
           <button class=${gradedView==="tracking"?"active":""} onClick=${()=>setGradedView("tracking")}>Tracking</button>
           <button class=${gradedView==="owned"?"active":""} onClick=${()=>setGradedView("owned")}>My Cards</button>
+          ${!readOnly && gradedPremium && html`<button class=${gradedView==="collection"?"active":""} onClick=${()=>setGradedView("collection")}>Grade a Card</button>`}
         </div>
         ${gradedView==="tracking" && grouped.length > 0 && html`<button class="chip gc-caps-btn"
           onClick=${() => {
@@ -14252,10 +14342,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
-        ${!readOnly && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
+        ${!readOnly && gradedPremium && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
           onAdd=${()=>setQueueAddOpen(true)}
           onUpdate=${updateSubmission} onRemove=${removeSubmission} onGraduate=${graduateSubmission}/>`}
-        ${gradedView === "owned"
+        ${gradedView === "collection" && gradedPremium
+          ? html`<${GradeFromCollectionPanel} raw=${raw} collection=${collection||{}} user=${user}
+              updateQty=${updateQty||(()=>{})} onGradeOwned=${addItem} onSendToQueue=${addSubmission}/>`
+          : gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
               raw=${raw} theme=${theme} onOpen=${openCardAt}/>`
           : grouped.length === 0
@@ -15303,6 +15396,9 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
 
 const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded}) => {
   const isViewerMode = !!viewerContext;
+  // The whole graded↔raw sync (graded copies checking off raw completion + the
+  // ◆ grade affordance) is premium-gated, same as the graded price data.
+  const gradedPremium = useContext(GradedPremiumContext);
   const viewerVis = viewerContext?.data?.visibility || {raw:false, sealed:false, graded:false};
   // Comparison filter for viewer mode: "all" | "missing" | "shared".
   // Only meaningful when the viewer is signed in and has their own collection.
@@ -15396,7 +15492,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   const [gradedOwnRows, setGradedOwnRows] = useState([]);
   const [pendingRows, setPendingRows] = useState([]);
   const reloadGradedOwnership = useCallback(async () => {
-    if(!user || isViewerMode){ setGradedOwnRows([]); setPendingRows([]); return; }
+    if(!user || isViewerMode || !gradedPremium){ setGradedOwnRows([]); setPendingRows([]); return; }
     try {
       const [gi, ps] = await Promise.all([
         sbClient.from("graded_collection_items").select("card_id,printing,quantity").eq("user_id", user.id)
@@ -15409,7 +15505,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       setGradedOwnRows(gi.data || []);
       setPendingRows(ps.data || []);
     } catch { /* leave prior */ }
-  }, [user, isViewerMode]);
+  }, [user, isViewerMode, gradedPremium]);
   useEffect(() => { reloadGradedOwnership(); }, [reloadGradedOwnership]);
 
   // Map graded/pending ownership to raw set slots. Bucket = "Normal" for
@@ -15667,7 +15763,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     readOnly=${isViewerMode}
     compareMode=${canCompare ? compareMode : "all"}
     gradedSlotQty=${gradedCompletion.gradedSlotQty} pendingSlotQty=${gradedCompletion.pendingSlotQty}
-    onGradedChanged=${reloadGradedOwnership}
+    onGradedChanged=${reloadGradedOwnership} gradedPremium=${gradedPremium}
     viewerOwnCollection=${viewerOwnCollection || null}/>`;
 
   const {totalValue, totalCards, totalUnique, missing, extras} = valueStats;
@@ -15812,6 +15908,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           readOnly=${isViewerMode}
           viewedGradedRows=${isViewerMode ? viewerContext.data?.gradedRows || [] : null}
           onOwnershipChanged=${isViewerMode ? null : reloadGradedOwnership}
+          collection=${collection} updateQty=${updateQty}
           onJumpToScreenerGraded=${isViewerMode ? null : onJumpToScreenerGraded}/>`
       : effectiveSection === null
       ? html`<div class="empty-state"><p>No sections of this collection are visible to you.</p></div>`
