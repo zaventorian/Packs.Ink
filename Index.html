@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=208">
+<link rel="stylesheet" href="styles.css?v=209">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=208"></script>
+<script src="logo.js?v=209"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -275,6 +275,15 @@ const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIAN
 // foil/cold-foil/holo finish → "Foil"; everything else (incl. untagged) → "Non-Foil".
 const GRADED_FOIL_PRINTINGS = new Set(["foil", "cold foil", "holofoil", "holo"]);
 const gradedFoilBucket = (p) => GRADED_FOIL_PRINTINGS.has((p || "").toLowerCase().trim()) ? "Foil" : "Non-Foil";
+// Raw market price of a catalog row, used as a PLACEHOLDER value for graded
+// copies of cards that have no graded-sales data yet (so they still contribute
+// to collection value instead of counting as $0). Low → Market fallback.
+const rawPlaceholderPx = (meta) => {
+  if(!meta) return null;
+  const v = meta["Low Price"] ?? meta["TCGPlayer Market"] ?? meta["Market Price"];
+  const n = v == null ? null : Number(v);
+  return (Number.isFinite(n) && n > 0) ? n : null;
+};
 // Printing options the graded Add dialog should offer for split cards whose variant
 // isn't a separate raw catalog row (Genie Two Swords, Peter Pan Text Error). Keyed by
 // card_id; values are the printing strings stored on the owned slot (must match the
@@ -5596,7 +5605,14 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   // else the foil/chase printing). meta mirrors the front-page tile's "Rarity ·
   // Foil" line. Falls back to the plain image until price history has loaded.
   const tileRow = statRows.find(r => r.key === "__normal") || statRows.find(r => r.key === "__foil") || null;
-  const tileMeta = (group.Rarity || "") + (tileRow && tileRow.key === "__foil" ? " · Foil" : "");
+  // Only tag "· Foil" when the card genuinely has BOTH a non-foil and a foil
+  // printing (x/204 split). A foil-ONLY card (Deep Trouble / quest / chase) has
+  // no other version, so the "Foil" qualifier is noise — drop it.
+  const tileMeta = (group.Rarity || "") + (tileRow && tileRow.key === "__foil" && group.normal && group.foil ? " · Foil" : "");
+  // Raw market price for this card — shown as a "~Raw $X" placeholder value in the
+  // graded panel when the card has no graded sales yet (matches collection valuation).
+  const gradedRawRef = tileRow ? (tileRow.low ?? tileRow.market ?? null) : null;
+  const hasNoGradedSales = gradedPremium && (gradedSales.rows||[]).length === 0;
   // Graded mode: the copyable card tile shows the focused combo's Last Sold /
   // Avg-of-5 + 1W/1M/3M change + a "<GRADER> <grade>" note instead of raw Low/Mkt.
   // Plain compute (not a hook) so it's safe to sit before the return.
@@ -5697,6 +5713,10 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
               onClick=${onAddGraded}
               title="Open the Add Graded Card dialog preselected for this card">+ Add graded copy</button>`}
           </div>
+          ${hasNoGradedSales && gradedRawRef != null && html`<div class="card-detail-graded-rawref muted"
+            title="No graded sales recorded for this card yet — we value your graded copies at the raw market price as a placeholder until real graded sales come in.">
+            No graded sales yet — using <strong>~Raw $${Number(gradedRawRef).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</strong> as a placeholder value.
+          </div>`}
           ${(gradedOwned||[]).length > 0 && typeof onGradedMetaUpdate === "function" && html`<div class="card-detail-graded-owned-help muted">
             For each copy you own: <strong>Paid</strong> = what it cost you (used by the value chart's acquired-date gating),
             <strong>Acquired</strong> = date you got it (chart credits value only from that date forward),
@@ -5736,7 +5756,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             qty=${collection[group.card_id+":"+group.normal.tcg_printing]||0}
             onQtyChange=${user ? (q)=>updateQty(group.card_id, group.normal.tcg_printing, q) : null}/>`}
           ${group.foil && html`<${PrintingBlock} row=${group.foil}
-            title=${group.isChase ? group.Rarity : "Foil"}
+            title=${group.isChase ? group.Rarity : (group.normal ? "Foil" : (group.Rarity || ""))}
             qty=${collection[group.card_id+":"+group.foil.tcg_printing]||0}
             onQtyChange=${user ? (q)=>updateQty(group.card_id, group.foil.tcg_printing, q) : null}/>`}
         </div>`}
@@ -12670,6 +12690,8 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
     }
     return null;
   };
+  // The graded value (custom override or eBay average), or null when this card
+  // has no graded-sales data — callers fall back to rawPlaceholderPx.
   const valueOf = (it, meta) => {
     const cv = (it.custom_value != null && Number.isFinite(Number(it.custom_value))) ? Number(it.custom_value) : null;
     if(cv != null) return cv;
@@ -12690,6 +12712,8 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
       const nm = meta?.["Product Name"] || it.card_id;
       const dash = nm.indexOf(" - ");
       const inkList = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
+      const gradedVal = valueOf(it, meta);
+      const rawPh = gradedVal == null ? rawPlaceholderPx(meta) : null;
       out.push({
         it, meta,
         printing: it.printing || meta?.tcg_printing || "Normal",
@@ -12700,9 +12724,11 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
         cn: meta ? collectorNum(meta) : 0,
         image: meta?.img_normal || meta?.img_small || meta?.img_large || null,
         grader: it.grader, grade: it.grade, qty: it.quantity,
-        value: valueOf(it, meta),
+        value: gradedVal != null ? gradedVal : rawPh,
         lastSold: lastSoldOf(it, meta),
         custom: it.custom_value != null && Number.isFinite(Number(it.custom_value)),
+        // No graded sales → we're showing the raw market price as a placeholder.
+        rawPlaceholder: gradedVal == null && rawPh != null,
         inkList,
       });
     }
@@ -12759,9 +12785,12 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   const showFoilBadge = (e)=> !GRADED_CHASE_RARITIES.has(e.rarity) && e.printing !== "Normal";
   const printCell = (e)=> GRADED_CHASE_RARITIES.has(e.rarity) ? "" : (e.printing === "Normal" ? "Non-foil" : "Foil");
   const gradeBadge = (e)=> html`<span class="gco-grade" style=${{background: GRADER_COLOR[(e.grader||"").toLowerCase()] || "#888"}}>${(e.grader||"").toUpperCase()} ${e.grade}</span>`;
-  const valStr = (e)=> e.value != null ? (e.custom ? "✎ " : "") + fmt(e.value) : "—";
+  const valStr = (e)=> e.value != null ? (e.rawPlaceholder ? "~" : (e.custom ? "✎ " : "")) + fmt(e.value) : "—";
   // Premium: show Last Sold + Avg-5 side by side (like Low / Market for raw).
-  const valBlock = (e)=> (gradedPremium && e.lastSold != null && !e.custom)
+  // No graded sales yet → a single "~Raw $X" placeholder (raw market price).
+  const valBlock = (e)=> e.rawPlaceholder
+    ? html`<div class="gco-val gco-val-raw" title="No graded sales recorded yet — using the raw market price as a placeholder value">~Raw ${fmt(e.value)}</div>`
+    : (gradedPremium && e.lastSold != null && !e.custom)
     ? html`<div class="gco-val-pair">
         <span class="gco-vp-item"><span class="gco-vp-num">${fmt(e.lastSold)}</span><span class="gco-vp-lbl">last sold</span></span>
         <span class="gco-vp-item"><span class="gco-vp-num">${e.value!=null?fmt(e.value):"—"}</span><span class="gco-vp-lbl">avg last 5</span></span>
@@ -13440,7 +13469,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         const ownedSlots = c.slots.filter(s => s.owned);
         if(ownedSlots.length) ownedTiles++;
         for(const s of ownedSlots){
-          ownedValue += bestPx(c.card.tcgplayer_product_id, c.printing || s.printing, s.grader, s.grade) * (s.qty || 0);
+          // Graded price → raw-price placeholder (cards with no graded sales yet).
+          const px = bestPx(c.card.tcgplayer_product_id, c.printing || s.printing, s.grader, s.grade) || rawPlaceholderPx(c.card) || 0;
+          ownedValue += px * (s.qty || 0);
         }
       }
       return {
@@ -13523,9 +13554,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       if(customPx != null){
         value += customPx * it.quantity;
       } else if(meta){
-        // Now that items track printing, use it directly. Falls back to
-        // catalog printing then Normal for legacy rows.
-        const px = lookupGradedPx(meta.tcgplayer_product_id, it.grader, it.grade, it.printing || meta.tcg_printing);
+        // Graded average → raw-price placeholder for cards with no graded sales
+        // yet, so they still count toward collection value (not $0).
+        const px = lookupGradedPx(meta.tcgplayer_product_id, it.grader, it.grade, it.printing || meta.tcg_printing) ?? rawPlaceholderPx(meta);
         if(px) value += px * it.quantity;
       }
     }
