@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=212">
+<link rel="stylesheet" href="styles.css?v=213">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=212"></script>
+<script src="logo.js?v=213"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -4427,8 +4427,6 @@ const GradedPricesTab = ({graded, gradedOwned, onGradedAdjust, onGradedMetaUpdat
             <${CostDateInputs}
               currentPaid=${(metaByKey.get(key) || {}).amount_paid ?? null}
               currentDate=${(metaByKey.get(key) || {}).acquired_date || null}
-              currentCustomValue=${(metaByKey.get(key) || {}).custom_value ?? null}
-              showCustomValue=${true}
               onCommit=${patch => onGradedMetaUpdate(g, grade, printing, patch)}/>
           </div>`}
             </${React.Fragment}>`;
@@ -5326,11 +5324,13 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   // FOIL-split = an ordinary x/204 card that has BOTH foil and non-foil graded
   // sales → gets Non-Foil / Foil tabs too (computed from the per-card sales, so
   // no rollup/matview change needed; the tile + scatter derive from these sales).
-  // ONLY mainline booster (x/204) cards have a real non-foil/cold-foil duality —
-  // Extras/quest/promo cards are single-printing (their untagged sales are just
-  // foils without the keyword, so don't split them into a phantom "Non-Foil" tab).
+  // ONLY mainline booster (x/204) BASE-rarity cards have a real non-foil/cold-foil
+  // duality — chase rarities (Enchanted/Iconic/Epic) are single-printing foil-only
+  // (their untagged sales are just foils without the keyword), and Extras/quest/
+  // promo cards too. Don't split those into a phantom "Non-Foil" tab. (Mirrors the
+  // rollup's cards.foil_split criteria so the card detail + collection agree.)
   const isFoilSplit = useMemo(()=>{
-    if(isVersionSplit || !MAINLINE_SETS.includes(group.Set)) return false;
+    if(isVersionSplit || !MAINLINE_SETS.includes(group.Set) || GRADED_CHASE_RARITIES.has(group.Rarity)) return false;
     let f = false, n = false;
     for(const r of (gradedSales.rows||[])){
       if(gradedFoilBucket(r.printing) === "Foil") f = true; else n = true;
@@ -5755,8 +5755,6 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
                     ${typeof onGradedMetaUpdate === "function" && html`<${CostDateInputs}
                       currentPaid=${it.amount_paid != null ? Number(it.amount_paid) : null}
                       currentDate=${it.acquired_date || null}
-                      currentCustomValue=${it.custom_value != null ? Number(it.custom_value) : null}
-                      showCustomValue=${true}
                       onCommit=${patch => onGradedMetaUpdate(it.grader, it.grade, it.printing||"Normal", patch)}/>`}
                   </div>`)}
               </div>`
@@ -11871,16 +11869,14 @@ const SealedValueChart = ({sealedCollection, sealedPrices, rangeKey, setRangeKey
 //   currentPaid : number | null
 //   currentDate : "YYYY-MM-DD" | null
 //   onCommit({amount_paid?, acquired_date?})  // only sends keys that changed
-const CostDateInputs = ({currentPaid, currentDate, currentCustomValue, showCustomValue, onCommit}) => {
+const CostDateInputs = ({currentPaid, currentDate, onCommit}) => {
   const [paid, setPaid] = useState(currentPaid != null ? String(currentPaid) : "");
   const [date, setDate] = useState(currentDate || "");
-  const [custom, setCustom] = useState(currentCustomValue != null ? String(currentCustomValue) : "");
   // Re-sync when the parent's view of the row changes (e.g. cancellation,
   // optimistic update from elsewhere). Comparing strings keeps the cursor
   // stable while the user is typing.
   useEffect(()=>{ setPaid(currentPaid != null ? String(currentPaid) : ""); }, [currentPaid]);
   useEffect(()=>{ setDate(currentDate || ""); }, [currentDate]);
-  useEffect(()=>{ setCustom(currentCustomValue != null ? String(currentCustomValue) : ""); }, [currentCustomValue]);
   const commitPaid = () => {
     const v = paid.trim();
     const next = v === "" ? null : Number(v);
@@ -11893,14 +11889,6 @@ const CostDateInputs = ({currentPaid, currentDate, currentCustomValue, showCusto
     const v = date.trim() || null;
     if(v === (currentDate || null)) return;
     onCommit({acquired_date: v});
-  };
-  const commitCustom = () => {
-    const v = custom.trim();
-    const next = v === "" ? null : Number(v);
-    if(next != null && !Number.isFinite(next)) return;
-    const prev = currentCustomValue != null ? Number(currentCustomValue) : null;
-    if(next === prev) return;
-    onCommit({custom_value: next});
   };
   return html`<div class="cost-date-row" onClick=${e=>e.stopPropagation()}>
     <label class="cost-date-field">
@@ -11921,17 +11909,6 @@ const CostDateInputs = ({currentPaid, currentDate, currentCustomValue, showCusto
         onBlur=${commitDate}
         onKeyDown=${e=>{ if(e.key==="Enter") e.target.blur(); }}/>
     </label>
-    ${showCustomValue && html`<label class="cost-date-field" title="When set, overrides the auto-pulled graded market price for this slot. Leave blank to use the market price.">
-      <span class="cost-date-lbl">Value</span>
-      <span class="cost-date-input-wrap">
-        <span class="cost-date-prefix">$</span>
-        <input type="number" inputmode="decimal" step="0.01" min="0"
-          value=${custom} placeholder="auto"
-          onChange=${e=>setCustom(e.target.value)}
-          onBlur=${commitCustom}
-          onKeyDown=${e=>{ if(e.key==="Enter") e.target.blur(); }}/>
-      </span>
-    </label>`}
   </div>`;
 };
 
@@ -12703,11 +12680,9 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
     }
     return null;
   };
-  // The graded value (custom override or eBay average), or null when this card
-  // has no graded-sales data — callers fall back to rawPlaceholderPx.
+  // The graded value (eBay average), or null when this card has no graded-sales
+  // data — callers fall back to rawPlaceholderPx.
   const valueOf = (it, meta) => {
-    const cv = (it.custom_value != null && Number.isFinite(Number(it.custom_value))) ? Number(it.custom_value) : null;
-    if(cv != null) return cv;
     const p = pxRowOf(it, meta);
     return p ? (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d) : null;
   };
@@ -12739,7 +12714,6 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
         grader: it.grader, grade: it.grade, qty: it.quantity,
         value: gradedVal != null ? gradedVal : rawPh,
         lastSold: lastSoldOf(it, meta),
-        custom: it.custom_value != null && Number.isFinite(Number(it.custom_value)),
         // No graded sales → we're showing the raw market price as a placeholder.
         rawPlaceholder: gradedVal == null && rawPh != null,
         inkList,
@@ -12801,17 +12775,17 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   const showFoilBadge = (e)=> !GRADED_CHASE_RARITIES.has(e.rarity) && e.printing !== "Normal" && MAINLINE_SETS.includes(e.set);
   const printCell = (e)=> (GRADED_CHASE_RARITIES.has(e.rarity) || !MAINLINE_SETS.includes(e.set)) ? "" : (e.printing === "Normal" ? "Non-foil" : "Foil");
   const gradeBadge = (e)=> html`<span class="gco-grade" style=${{background: GRADER_COLOR[(e.grader||"").toLowerCase()] || "#888"}}>${(e.grader||"").toUpperCase()} ${e.grade}</span>`;
-  const valStr = (e)=> e.value != null ? (e.rawPlaceholder ? "~" : (e.custom ? "✎ " : "")) + fmt(e.value) : "—";
+  const valStr = (e)=> e.value != null ? (e.rawPlaceholder ? "~" : "") + fmt(e.value) : "—";
   // Premium: show Last Sold + Avg-5 side by side (like Low / Market for raw).
   // No graded sales yet → a single "~Raw $X" placeholder (raw market price).
   const valBlock = (e)=> e.rawPlaceholder
     ? html`<div class="gco-val gco-val-raw" title="No graded sales recorded yet — using the raw market price as a placeholder value">~Raw ${fmt(e.value)}</div>`
-    : (gradedPremium && e.lastSold != null && !e.custom)
+    : (gradedPremium && e.lastSold != null)
     ? html`<div class="gco-val-pair">
         <span class="gco-vp-item"><span class="gco-vp-num">${fmt(e.lastSold)}</span><span class="gco-vp-lbl">last sold</span></span>
         <span class="gco-vp-item"><span class="gco-vp-num">${e.value!=null?fmt(e.value):"—"}</span><span class="gco-vp-lbl">avg last 5</span></span>
       </div>`
-    : html`<div class=${"gco-val"+(e.custom?" custom":"")}>${valStr(e)}</div>`;
+    : html`<div class="gco-val">${valStr(e)}</div>`;
 
   if(!entries.length) return html`<div class="gc-empty">
     <div class="gc-empty-title">No graded cards owned yet</div>
@@ -12866,7 +12840,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
         : html`<div class="gco-list">${b.items.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id, e.it.printing)}>
             <span class="gco-row-name">${e.name}</span>
             ${gradeBadge(e)}
-            <span class=${"gco-row-val"+(e.custom?" custom":"")}>${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</span>
+            <span class="gco-row-val">${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</span>
           </button>`)}</div>`}
     </div>`)}
     ${drawerOpen && html`<${FilterDrawer} filter=${drawerFilter} setFilter=${setDrawerFilter}
@@ -13378,7 +13352,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         printing: it.printing || "Normal",
         amount_paid: it.amount_paid != null ? Number(it.amount_paid) : null,
         acquired_date: it.acquired_date || null,
-        custom_value: it.custom_value != null ? Number(it.custom_value) : null,
       });
     }
     // Tracked goals add placeholder slots when no graded copy is owned.
@@ -13562,14 +13535,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       totalCopies += it.quantity;
       uniqueCardIds.add(it.card_id);
       const meta = cardById.get(it.card_id);
-      // Per-slot custom value override (mig 51) wins over the API price —
-      // lets users supply a value for cards TCGPriceLookup has no data on,
-      // and correct prices they disagree with.
-      const customPx = (it.custom_value != null && Number.isFinite(Number(it.custom_value)))
-        ? Number(it.custom_value) : null;
-      if(customPx != null){
-        value += customPx * it.quantity;
-      } else if(meta){
+      if(meta){
         // Graded average → raw-price placeholder for cards with no graded sales
         // yet, so they still count toward collection value (not $0).
         const px = lookupGradedPx(meta.tcgplayer_product_id, it.grader, it.grade, it.printing || meta.tcg_printing) ?? rawPlaceholderPx(meta);
@@ -13963,10 +13929,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     // Top Prize / Prize Wall) — null for the plain base printing.
                     const printBadge = variantBadge(tilePrinting);
                     // Resolve a slot's current graded $ for the cost-basis
-                    // return chip — mirrors the slot-pill lookup (custom value
-                    // wins, else preferred printing → Normal/Holo/Cold fallback).
+                    // return chip — mirrors the slot-pill lookup (preferred
+                    // printing → Normal/Holo/Cold fallback).
                     const resolveSlotPx = (s) => {
-                      if(s.custom_value != null && Number.isFinite(s.custom_value)) return s.custom_value;
                       if(isCustomVariant) return null;
                       const sp = s.printing || tilePrinting;
                       let p = priceByKey.get(card.tcgplayer_product_id + "|" + sp + "|" + s.grader + "|" + s.grade);
@@ -14093,16 +14058,8 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                                 }
                               }
                             }
-                            // Per-slot custom value (mig 51) overrides the API
-                            // price entirely — used for slots with no graded
-                            // market data or where the user disagrees with the
-                            // pulled price. The tile shows a "✎" badge so the
-                            // override is visible at a glance.
-                            const apiPx = p && (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d);
-                            const hasCustom = s.custom_value != null && Number.isFinite(s.custom_value);
-                            const px = hasCustom ? s.custom_value : apiPx;
+                            const px = p && (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d);
                             const slotTipParts = [(s.grader||"").toUpperCase() + " " + s.grade];
-                            if(hasCustom) slotTipParts.push("Custom value (overrides API)");
                             if(s.acquired_date) slotTipParts.push("Acquired " + s.acquired_date);
                             if(s.amount_paid != null) slotTipParts.push("Paid $" + Number(s.amount_paid).toLocaleString(undefined,{maximumFractionDigits:2}));
                             const slotArmKey = card.card_id + "|" + slotPrinting + "|" + s.grader + "|" + s.grade;
@@ -14138,7 +14095,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                                     return html`<span class="gc-slot-main">
                                       <span class="gc-slot-tag">${(s.grader||"").toUpperCase()} ${s.grade}</span>
                                       <span class="gc-slot-qty">×${s.qty}</span>
-                                      ${px != null && html`<span class=${"gc-slot-px"+(hasCustom?" gc-slot-px-custom":"")}>${hasCustom?"✎ ":""}$${Number(px).toLocaleString(undefined,{maximumFractionDigits:0})}</span>`}
+                                      ${px != null && html`<span class="gc-slot-px">$${Number(px).toLocaleString(undefined,{maximumFractionDigits:0})}</span>`}
                                     </span>
                                     ${showDeltas && html`<span class="gc-slot-deltas">
                                       <span class="gc-slot-delta-cell"><span class="gc-slot-delta-lbl">1D</span>
@@ -14169,8 +14126,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                             <${CostDateInputs}
                               currentPaid=${s.amount_paid ?? null}
                               currentDate=${s.acquired_date || null}
-                              currentCustomValue=${s.custom_value ?? null}
-                              showCustomValue=${true}
                               onCommit=${patch => updateItemMeta({card_id: card.card_id, printing: s.printing || tilePrinting, grader: s.grader, grade: s.grade}, patch)}/>
                           </div>`;
                           })}
