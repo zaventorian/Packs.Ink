@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=209">
+<link rel="stylesheet" href="styles.css?v=210">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=209"></script>
+<script src="logo.js?v=210"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -235,7 +235,7 @@ async function sbFetchAll(path, params, token){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v49";  // v49: force cold-fetch for backfilled cards (P3 promos, connecting foils, oversized, Dragon Fire/Stitch/Simba pids)
+const CACHE_KEY = "packsink:catalog:v50";  // v50: Extras quest/gift tiles now use the real card_id (was extras:<pid>) + Deep Trouble Piglet is a real card — force cold-fetch so owned-item card_ids line up
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -243,7 +243,7 @@ const CACHE_KEY = "packsink:catalog:v49";  // v49: force cold-fetch for backfill
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-06-15-poster-tourney-filters";
+const AUX_CACHE_VERSION = "2026-06-24-extras-real-cardid";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -694,17 +694,7 @@ const EXTRAS_MAP = {
   544485: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Mickey Mouse - Playful Sorcerer (cn 225)
   544492: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Yen Sid - Powerful Sorcerer    (cn 223)
   544494: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Mulan - Elite Archer           (cn 224)
-  544487: {
-    originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true,
-    standalone: {
-      name: "Piglet", version: "Pooh Pirate Captain",
-      rarity: "Super Rare", collector_number: "223",
-      ink: "Amber", cost: 2, inkable: true, card_type: "Character",
-      classifications: ["Dreamborn","Hero","Captain","Pirate"],
-      image_small:  "https://tcgplayer-cdn.tcgplayer.com/product/544487_200w.jpg",
-      image_normal: "https://tcgplayer-cdn.tcgplayer.com/product/544487_400w.jpg",
-    },
-  }, // Piglet - Pooh Pirate Captain (cn 223) — not in cards table; standalone
+  544487: {originSet:"Illumineer's Quest – Deep Trouble", variantLabel:"Deep Trouble", excludeFromBaseSet:true}, // Piglet - Pooh Pirate Captain (cn 223) — real cards row crd_custom_544487_piglet_pooh (see supabase/82_quest_card_piglet.sql); was a client-only standalone, which left its graded eBay sales orphaned onto the booster #16
 
   // Illumineer's Quest: Palace Heist (Q2) — 4 quest-reward cards Lorcast
   // doesn't index. Real cards rows are inserted by patch_pid_overrides.py
@@ -1545,7 +1535,11 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
   // collide with the base card's collection slot.
   for(const [pidStr, info] of Object.entries(EXTRAS_MAP)){
     const pid = parseInt(pidStr, 10);
-    const baseCard = cardsRows.find(c => c.tcgplayer_product_id === pid);
+    // Prefer the Lorcast-indexed row over a crd_custom_* duplicate (Palace Heist
+    // pids ended up with BOTH) so the tile lines up with the card graded sales
+    // were attributed to.
+    const baseMatches = cardsRows.filter(c => c.tcgplayer_product_id === pid);
+    const baseCard = baseMatches.find(c => !String(c.id).startsWith("crd_custom_")) || baseMatches[0] || null;
     // Fall back to standalone metadata for cards Lorcast doesn't index
     // (e.g. Illumineer's Quest products). Both paths converge on a
     // baseCard-shaped object that buildRow can consume.
@@ -1566,7 +1560,12 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     const printingTag = foilPrice ? foilPrice.printing : "Cold Foil";
     const syntheticCard = {
       ...seed,
-      id: "extras:" + pid,
+      // excludeFromBaseSet cards (quest rewards, gift oversized) are dropped from
+      // their origin set (see the `continue` above), so the Extras tile is the
+      // ONLY tile for this card_id — use the REAL card_id so graded sales (matched
+      // to it) + owned copies line up. Other Extras keep a synthetic id so they
+      // don't collide with the base-set tile that's still emitted.
+      id: (info.excludeFromBaseSet && baseCard) ? baseCard.id : ("extras:" + pid),
       // set_id stays as base for image lookups etc, but the buildRow's
       // setName arg overrides the displayed set.
     };
