@@ -49,11 +49,34 @@ GRADE_RE_REV = re.compile(GVAL + r"\s*(" + GR + r")\b", re.I)
 
 LOT_RE = re.compile(
     r"\b(lot|lots|bundle|bundles|playset|joblot|job lot|wholesale|bulk|"
-    r"complete set|master set|full set|base set|set of \d|\d+\s*card set|"
+    r"sequential|pair|duo|trio|"  # multi-card / sequential-cert SET markers (NOT "quad" — a BGS subgrade term)
+    r"complete set|master set|full set|base set|set of \d|\d+[\s-]*card[\s-]*set|"
     r"pick your|you pick|your pick|pick a|pick \d|you choose|choose your|"
     r"choose a|multi[- ]?buy|[2-9]\d*\s+cards\b|x\s?\d{2,}|\d{2,}\s?x)\b",
     re.I,
 )
+# Multi-card signals not expressible as a single LOT_RE keyword:
+#  (a) a small "Nx"/"xN" copy-count multiplier (7x, x4, 3X) — but NOT when the title
+#      mentions "sword", which spares the Genie "2X Sword" / "Double Sword Error"
+#      single-card variant (a tracked card selling $400-$2,295).
+#  (b) two graded tokens joined by a connector ("Cinderella PSA 10 + PSA 10 Ursula",
+#      "X & Y", "... and ...") = two different cards in one listing. The "+" is
+#      space-flanked so it doesn't fire on a grade like "BGS 9.5+".
+MULTIPLIER_RE = re.compile(r"\b([2-9]\s?x|x\s?[2-9])\b", re.I)
+SWORD_RE = re.compile(r"sword", re.I)
+CONNECTOR_RE = re.compile(r"(&|\sand\s|\splus\s| \+ )", re.I)
+GRADE_TOKEN_RE = re.compile(
+    r"(?:PSA|CGC|BGS|SGC|TAG|BECKETT)\s*\.?\s*"
+    r"(?:10|9\.5|9|8\.5|8|7\.5|7)", re.I)
+
+
+def is_multi_card(title: str) -> bool:
+    t = title or ""
+    if MULTIPLIER_RE.search(t) and not SWORD_RE.search(t):
+        return True
+    if CONNECTOR_RE.search(t) and len(GRADE_TOKEN_RE.findall(t)) >= 2:
+        return True
+    return False
 # sealed product (not a graded single)
 SEALED_RE = re.compile(
     r"\b(booster box|booster pack|sleeved booster|illumineer'?s? trove|trove|"
@@ -100,7 +123,7 @@ def classify(title: str, file_grader: str):
     t = title or ""
     if OTHER_TCG_RE.search(t):
         return "EXCLUDE_OTHER_TCG", None, None
-    if LOT_RE.search(t):
+    if LOT_RE.search(t) or is_multi_card(t):
         return "EXCLUDE_LOT", None, None
     if SEALED_RE.search(t):
         return "EXCLUDE_SEALED", None, None
