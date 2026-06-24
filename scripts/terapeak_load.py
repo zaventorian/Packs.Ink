@@ -67,16 +67,30 @@ def printing_of(title: str):
 # separate market — keep the rows but flag `excluded` so they don't blend into a
 # card's graded price history (migration 76). Full words any-case OR standalone
 # UPPERCASE language codes (verified no English false positives).
-FOREIGN_WORD_RE = re.compile(r"\b(chinese|japanese|korean|china|japan|korea)\b", re.I)
+FOREIGN_WORD_RE = re.compile(
+    r"\b(chinese|japanese|korean|china|japan|korea|"
+    r"german|germany|deutsch|deutsche|"
+    r"french|francais|française|francaise|"
+    r"italian|italiano|italien|italienne)\b", re.I)
 # Uppercase language codes (case-sensitive so we don't catch English words like
-# "it"/"de"). JPN/JAP/KOR/CHN are the 3-letter forms eBay sellers use alongside
-# the 2-letter ones.
-FOREIGN_CODE_RE = re.compile(r"\b(ZH|JA|JP|JPN|JAP|KR|KOR|CN|CHN)\b")
+# "it"/"de"). JPN/JAP/KOR/CHN are the 3-letter Asian forms; GER/DEU/FR/FRA are the
+# European edition tags eBay sellers append (e.g. "GERMAN DE 1", "Lorcana FR 2").
+# Note: "IT"/"ITA" are intentionally excluded — uppercase "IT" is almost always an
+# English card name ("It Means No Worries", "Wreck-It Ralph", "Let It Go"), not Italy.
+FOREIGN_CODE_RE = re.compile(r"\b(ZH|JA|JP|JPN|JAP|KR|KOR|CN|CHN|GER|DEU|FR|FRA)\b")
+# Bare uppercase "DE" is the German-edition tag, but it collides with the character
+# name "Cruella de Vil" — only treat a standalone uppercase DE as German when the
+# title isn't "...de vil..." (genuinely-German Cruella sales are still caught by the
+# "german"/"deutsch" word above).
+DE_TAG_RE = re.compile(r"\bDE\b")
+DE_VIL_RE = re.compile(r"de\s+vil", re.I)
 
 
 def is_foreign_lang(title: str) -> bool:
     t = title or ""
-    return bool(FOREIGN_WORD_RE.search(t) or FOREIGN_CODE_RE.search(t))
+    if FOREIGN_WORD_RE.search(t) or FOREIGN_CODE_RE.search(t):
+        return True
+    return bool(DE_TAG_RE.search(t) and not DE_VIL_RE.search(t))
 
 
 # Troll / not-actually-graded listings: a RAW card the seller claims *would*
@@ -92,8 +106,21 @@ def is_troll_listing(title: str) -> bool:
     return bool(TROLL_RE.search(title or ""))
 
 
+# Autographed / artist-signed / sketch cards are a separate (much pricier) market —
+# an artist signature or 1/1 sketch isn't comparable to a plain graded copy, so they
+# blow out the price history. Flag excluded. NOTE: do NOT match bare "1/1" — it
+# collides with "Pop 1/1" (a normal card that's simply the only one PSA-graded).
+AUTOGRAPH_RE = re.compile(
+    r"\b(auto|autograph|signed|signature|jsa|sketch|witnessed|inscribed)\b"
+    r"|psa/?dna|hand.?drawn", re.I)
+
+
+def is_autograph(title: str) -> bool:
+    return bool(AUTOGRAPH_RE.search(title or ""))
+
+
 def is_excluded(title: str) -> bool:
-    return is_foreign_lang(title) or is_troll_listing(title)
+    return is_foreign_lang(title) or is_troll_listing(title) or is_autograph(title)
 
 
 def upsert(batch):

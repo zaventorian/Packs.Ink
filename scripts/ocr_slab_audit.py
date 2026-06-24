@@ -26,14 +26,30 @@ OCR engines (install ONE):
   • Anthropic vision (best):  pip install anthropic  +  ANTHROPIC_API_KEY in env
       or scripts/.env. Run: --engine anthropic
 
-    python scripts/ocr_slab_audit.py --selftest          # parser + reconcile self-test (no OCR)
-    python scripts/ocr_slab_audit.py --limit 20          # dry-run on 20 uncertain sales
-    python scripts/ocr_slab_audit.py --limit 200 --commit
+    python scripts/ocr_slab_audit.py --selftest                 # parser + reconcile self-test (no OCR)
+    python scripts/ocr_slab_audit.py --mode all --limit 20      # dry-run on the 20 priciest sales
+    python scripts/ocr_slab_audit.py --mode uncertain --commit  # just the uncertain set
+    python scripts/ocr_slab_audit.py --mode all --commit        # FULL one-time audit (resumable)
+
+Modes:
+  uncertain  cn-conflict / low-confidence / base-with-twin under $800 (Option B's blind spot)
+  siblings   every sale on a card that has same-(name,version,set) printing siblings — the
+             complete set reconcile() can act on; no-sibling sales are skipped (always no-ops)
+  all        every auditable sale; sibling cards get re-attributed. FLAGGED to
+             scripts/_ocr_mismatches.csv for manual review (never auto-changed):
+               • rarity    — no-sibling card whose slab shows a chase rarity it isn't filed as
+               • grade     — slab grader/grade disagrees with the filed sale (titled PSA 10
+                             but the slab reads PSA 9 / raw) → rollup pollution
+               • downgrade — an expensive sale OCR wants to move from chase DOWN to base
+                             (likely an OCR misread; base cards don't sell at chase prices)
+
+A --commit run writes scripts/_ocr_done.txt so a restart resumes where it left off.
 """
 from __future__ import annotations
 
 import argparse
 import base64
+import concurrent.futures
 import io
 import os
 import re
@@ -56,7 +72,15 @@ SB_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SB_KEY = os.environ["SUPABASE_SERVICE_KEY"]
 HEAD = {"apikey": SB_KEY, "Authorization": f"Bearer {SB_KEY}"}
 UA = {"User-Agent": "Mozilla/5.0 (compatible; PacksInkSlabAudit/1.0)"}
-DELAY = 1.2  # seconds between image fetches — be polite to the CDN
+DELAY = 0.2  # per-fetch politeness sleep (anonymous public-CDN GETs)
+WORKERS = 8  # parallel download+OCR threads. Each pytesseract call spawns its own
+             # tesseract.exe, so N workers ≈ N cores busy. Only the read-only compute
+             # is parallel; ALL writes happen on the main thread (no data races).
+CHUNK = 400  # sales per executor batch — bounds in-flight futures + lets the rollup
+             # refresh between batches.
+# An expensive sale that OCR wants to move from a CHASE rarity DOWN to base is almost
+# always an OCR misread (base cards don't sell at chase prices) — flag it, don't apply.
+DOWNGRADE_REVIEW_FLOOR = 150.0
 
 CHASE = {"Enchanted", "Iconic", "Epic"}
 RARITY_WORDS = [
@@ -113,6 +137,11 @@ def fetch_cards():
 def norm_cn(cn):
     m = re.match(r"^0*(\d+)$", str(cn or "").strip())
     return m.group(1) if m else str(cn or "").strip().upper()
+
+
+def norm_grade(g):
+    s = str(g or "").strip()
+    return s[:-2] if s.endswith(".0") else s
 
 
 def reconcile(cur_card, label, by_id, by_name):
@@ -219,7 +248,42 @@ def base_twin_ids(cards):
             and (c["name"], c.get("version") or "") in twins]
 
 
+def sibling_card_ids(cards):
+    """All card_ids that share (set_id, name, version) with >=1 other card — i.e.
+    the only cards reconcile() can ever re-attribute among (base<->Enchanted/Iconic/
+    Epic in one set, C1 foil/non-foil). Sales on any other card are guaranteed no-ops."""
+    groups = {}
+    for c in cards:
+        groups.setdefault((c["set_id"], c["name"], c.get("version") or ""), []).append(c["id"])
+    out = set()
+    for ids in groups.values():
+        if len(ids) >= 2:
+            out.update(ids)
+    return out
+
+
+def _slice(rows, offset, limit):
+    return rows[offset:(offset + limit) if limit else None]
+
+
 SEL = "item_id,card_id,title,image_url,sale_price,grader,grade,cn_conflict,match_confidence"
+
+
+def fetch_all_auditable(limit, offset, only_ids=None):
+    """Every auditable sale (non-excluded, has card_id + image), priciest first.
+    If only_ids is given, keep only sales on those cards (siblings mode)."""
+    rows, off = [], 0
+    while True:
+        r = requests.get(f"{SB_URL}/rest/v1/graded_sales", headers=HEAD, timeout=120, params={
+            "select": SEL, "excluded": "is.false", "card_id": "not.is.null", "image_url": "not.is.null",
+            "order": "sale_price.desc.nullslast,item_id.asc", "offset": off, "limit": 1000})
+        r.raise_for_status()
+        page = r.json()
+        rows.extend(page if only_ids is None else [x for x in page if x["card_id"] in only_ids])
+        if len(page) < 1000:
+            break
+        off += 1000
+    return _slice(rows, offset, limit)
 
 
 def fetch_uncertain(limit, offset, twin_ids):
@@ -244,7 +308,7 @@ def fetch_uncertain(limit, offset, twin_ids):
               "sale_price": "lt.800", "order": "sale_price.desc.nullslast", "limit": "1000"})
 
     rows.sort(key=lambda x: (x.get("sale_price") or 0), reverse=True)
-    return rows[offset:offset + limit]
+    return _slice(rows, offset, limit)
 
 
 def patch_one(item_id, cid):
@@ -305,8 +369,16 @@ def selftest():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--limit", type=int, default=20)
+    ap.add_argument("--limit", type=int, default=0, help="0 = no limit (all matching sales)")
     ap.add_argument("--offset", type=int, default=0)
+    ap.add_argument("--mode", choices=["uncertain", "siblings", "all"], default="uncertain",
+                    help="uncertain=cn-conflict/low-conf/twin<$800 (default); "
+                         "siblings=every sale on a card with same-set printing siblings; "
+                         "all=every auditable sale (no-sibling cards get a mismatch FLAG, not a re-attr)")
+    ap.add_argument("--no-resume", action="store_true",
+                    help="ignore the _ocr_done.txt checkpoint and re-OCR from scratch")
+    ap.add_argument("--workers", type=int, default=WORKERS,
+                    help=f"parallel download+OCR threads (default {WORKERS}; 1 = serial)")
     ap.add_argument("--engine", choices=["auto", "tesseract", "anthropic"], default="auto")
     ap.add_argument("--commit", action="store_true")
     ap.add_argument("--selftest", action="store_true")
@@ -330,37 +402,145 @@ def main():
     for c in cards:
         by_name.setdefault((c["name"], c.get("version") or ""), []).append(c)
 
-    sales = fetch_uncertain(args.limit, args.offset, base_twin_ids(cards))
-    print(f"uncertain sales to check: {len(sales)}", flush=True)
-    proposed, committed, skipped = 0, 0, 0
-    for i, s in enumerate(sales):
-        if i and i % 50 == 0:
-            print(f"  ... {i}/{len(sales)}  (re-attr {proposed}, committed {committed}, skipped {skipped})", flush=True)
+    sib_set = sibling_card_ids(cards)
+    if args.mode == "uncertain":
+        sales = fetch_uncertain(args.limit, args.offset, base_twin_ids(cards))
+    else:
+        sales = fetch_all_auditable(args.limit, args.offset,
+                                    sib_set if args.mode == "siblings" else None)
+    print(f"[{args.mode}] sales to check: {len(sales)}", flush=True)
+
+    # Resume checkpoint — skip sales already OCR'd in a prior COMMIT run (this is a
+    # multi-hour pass; a restart should not re-fetch what's done). Only active under
+    # --commit: a dry-run must never mark items done (the real run would then skip
+    # them and never commit their re-attrs). Errors are NOT marked done, so transient
+    # network failures retry next run.
+    done_path = HERE / "_ocr_done.txt"
+    done, done_fh = set(), None
+    if args.commit:
+        if done_path.exists() and not args.no_resume:
+            done = set(done_path.read_text(encoding="utf-8").split())
+            print(f"resume: {len(done)} sales already done (skipping)", flush=True)
+        done_fh = open(done_path, "a", encoding="utf-8")
+
+    # Mismatch review log — two issue types, both FLAGGED for MANUAL review (never
+    # auto-changed): "rarity" = slab shows a chase rarity the filed card isn't, with
+    # no same-set sibling to move to (likely a wrong-character/wrong-set title match);
+    # "grade" = the slab's grader/grade disagrees with what the sale is filed as
+    # (e.g. titled PSA 10 but the slab reads PSA 9, or raw) — pollutes the rollup.
+    mm_path = HERE / "_ocr_mismatches.csv"
+    mm_new = not mm_path.exists()
+    mm_fh = open(mm_path, "a", encoding="utf-8")
+    if mm_new:
+        mm_fh.write("issue,item_id,sale_price,cur_card_id,cur_card,stored_grader,stored_grade,"
+                    "slab_grader,slab_grade,slab_rarity,slab_cn,title,image_url\n")
+
+    def write_flag(issue, s, cur, label):
+        ttl = (s.get("title") or "").replace('"', "'")
+        mm_fh.write(",".join([
+            issue, s["item_id"], str(s.get("sale_price")), s["card_id"],
+            f'"{cur["name"]} - {cur.get("version") or ""} {cur["rarity"]} #{cur["collector_number"]}"',
+            str(s.get("grader") or ""), str(s.get("grade") or ""),
+            str(label.get("grader") or ""), str(label.get("grade") or ""),
+            str(label.get("rarity") or ""), str(label.get("cn") or ""),
+            f'"{ttl}"', s["image_url"],
+        ]) + "\n")
+        mm_fh.flush()
+
+    # Read-only per-sale compute (download + crop + OCR + reconcile). Runs in worker
+    # threads and touches NO shared mutable state — every write (DB patch, checkpoint,
+    # counters, mismatch log) happens back on the main thread, so there's nothing to
+    # race on. Returns a tuple the main thread acts on.
+    def work(s):
         cur = by_id.get(s["card_id"])
         if not cur:
-            continue
+            return (s, None, None, None, "nocard")
         try:
             img = requests.get(s["image_url"], headers=UA, timeout=30).content
-            raw = ocr(crop_label(img))
-            label = parse_label(raw)
-            if args.verbose:
-                print(f"  [{(s.get('title') or '')[:50]}]\n    OCR: {' '.join(raw.split())[:110]}\n    -> {label}")
+            label = parse_label(ocr(crop_label(img)))
+            newid = reconcile(cur, label, by_id, by_name)
         except Exception:
-            skipped += 1
-            time.sleep(DELAY)
-            continue
-        newid = reconcile(cur, label, by_id, by_name)
-        if newid and newid != s["card_id"]:
-            tgt = by_id[newid]
-            proposed += 1
-            print(f"  RE-ATTR ${s['sale_price']}  {cur['name']} - {cur.get('version')}  "
-                  f"{cur['rarity']} #{cur['collector_number']}  ->  {tgt['rarity']} #{tgt['collector_number']}", flush=True)
-            if args.commit and patch_one(s["item_id"], newid):
-                committed += 1
-        time.sleep(DELAY)
+            return (s, cur, None, None, "error")  # transient — not marked done, retried next run
+        finally:
+            if DELAY:
+                time.sleep(DELAY)
+        return (s, cur, label, newid, "ok")
 
-    print(f"\ndone. proposed {proposed}, committed {committed}, skipped {skipped}")
-    if args.commit and committed:
+    todo = [s for s in sales if s["item_id"] not in done]
+    resumed = len(sales) - len(todo)
+    if resumed:
+        print(f"resume: skipping {resumed} already-done sales", flush=True)
+    print(f"to process: {len(todo)} with {max(1, args.workers)} workers", flush=True)
+
+    proposed = committed = skipped = flag_rar = flag_grd = flag_dng = processed = last_refresh = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max(1, args.workers)) as ex:
+        for cstart in range(0, len(todo), CHUNK):
+            for (s, cur, label, newid, status) in ex.map(work, todo[cstart:cstart + CHUNK]):
+                processed += 1
+                if processed % 100 == 0:
+                    print(f"  ... {processed}/{len(todo)}  (re-attr {proposed}, committed {committed}, "
+                          f"flag-rar {flag_rar}, flag-grd {flag_grd}, flag-dng {flag_dng}, "
+                          f"skip {skipped})", flush=True)
+                if status == "nocard":
+                    continue
+                if status == "error":
+                    skipped += 1
+                    continue
+                if args.verbose:
+                    print(f"  [{(s.get('title') or '')[:50]}] -> {label}", flush=True)
+
+                lr = label.get("rarity")
+                if newid and newid != s["card_id"]:
+                    tgt = by_id[newid]
+                    downgrade = cur["rarity"] in CHASE and tgt["rarity"] not in CHASE
+                    if downgrade and (s.get("sale_price") or 0) >= DOWNGRADE_REVIEW_FLOOR:
+                        flag_dng += 1
+                        write_flag("downgrade", s, cur, label)
+                        print(f"  ⚑ DOWNGRADE? ${s.get('sale_price')}  {cur['name']} {cur['rarity']} "
+                              f"#{cur['collector_number']} -> {tgt['rarity']} #{tgt['collector_number']}  (review, not applied)", flush=True)
+                    else:
+                        proposed += 1
+                        print(f"  RE-ATTR ${s['sale_price']}  {cur['name']} - {cur.get('version')}  "
+                              f"{cur['rarity']} #{cur['collector_number']}  ->  {tgt['rarity']} #{tgt['collector_number']}", flush=True)
+                        if args.commit and patch_one(s["item_id"], newid):
+                            committed += 1
+                elif s["card_id"] not in sib_set and lr in CHASE and cur["rarity"] != lr:
+                    flag_rar += 1
+                    write_flag("rarity", s, cur, label)
+                    print(f"  ⚑ RARITY ${s.get('sale_price')}  {cur['name']} {cur['rarity']} "
+                          f"#{cur['collector_number']}  — slab says {lr} {label.get('cn') or ''}", flush=True)
+
+                # Grade mismatch — independent of card_id (check every sale). Gate on the
+                # slab grader+grade both being read (confidence); flag if either disagrees
+                # with the filed sale. Flag-only: OCR grade reads can be noisy.
+                og, ogr = norm_grade(label.get("grade")), label.get("grader")
+                sg = norm_grade(s.get("grade"))
+                sgr = str(s.get("grader") or "").upper() or None
+                if ogr and og and ((sg and og != sg) or (sgr and ogr != sgr)):
+                    flag_grd += 1
+                    write_flag("grade", s, cur, label)
+                    print(f"  ⚑ GRADE  ${s.get('sale_price')}  {cur['name']} - {cur.get('version')}"
+                          f"  — DB {sgr or '?'} {sg or '?'}  vs slab {ogr} {og}", flush=True)
+
+                if done_fh:
+                    done_fh.write(s["item_id"] + "\n")
+                    done_fh.flush()
+
+            # Between chunks: refresh the rollup if there are new commits to surface.
+            if args.commit and committed > last_refresh:
+                refresh_rollup()
+                last_refresh = committed
+                print(f"  (rollup refreshed @ {processed}, {committed} committed)", flush=True)
+
+    if done_fh:
+        done_fh.close()
+    mm_fh.close()
+    print(f"\ndone. re-attr {proposed}, committed {committed}, "
+          f"flag-rarity {flag_rar}, flag-grade {flag_grd}, flag-downgrade {flag_dng}, "
+          f"skipped {skipped}, resumed {resumed}")
+    if flag_rar or flag_grd or flag_dng:
+        print(f"mismatches logged to {mm_path}")
+    if args.commit and committed > last_refresh:
         refresh_rollup()
         print("rollup refreshed.")
     elif not args.commit and proposed:

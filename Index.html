@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=204">
+<link rel="stylesheet" href="styles.css?v=205">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=204"></script>
+<script src="logo.js?v=205"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -443,6 +443,13 @@ const CatalogContext = React.createContext([]);
 // the App root so CardDetailModal / PriceDatabase / GradedCollectionView can
 // read it without threading a prop through every call site.
 const GradedPremiumContext = React.createContext(false);
+
+// Premium graded data is licensed for personal use only. An allowlisted user must
+// accept the Terms of Use (no scrape / sell / redistribute / retain) before the
+// per-sale data unlocks. Bump this version string to re-prompt everyone after a
+// material ToS change (acceptance is recorded per-version in graded_tos_acceptances,
+// migration 79). Keep in sync with the matching section in privacy.html.
+const GRADED_TOS_VERSION = "2026-06-23";
 
 // Whether the signed-in account can curate the graded dataset (edit/delete a
 // sale, work the report queue). graded_admins allowlist (migration 74) via
@@ -4732,7 +4739,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
 
     ${combos.length > 0 && html`<div class="gs-summary-wrap">
       <table class="gs-summary">
-        <thead><tr><th>Grader</th><th>Grade</th><th class="num">Last Sold</th><th class="num">Avg 5</th><th class="num">Sales</th></tr></thead>
+        <thead><tr><th>Grader</th><th>Grade</th><th class="num">Last Sold</th><th class="num">Avg Last 5</th><th class="num">Sales</th></tr></thead>
         <tbody>
           ${combos.map(c => html`<tr key=${c.key}
             class=${"gs-summary-row"+(c.key===focusKey?" active":"")}
@@ -4894,7 +4901,7 @@ const GradedPriceChanges = ({focus}) => {
   return html`<div class="cd-graded-changes">
     <div class="cd-gc-id">
       <span class="cd-gc-name" style=${{color:focus.color}}>${(GRADER_LABEL[focus.grader]||focus.grader.toUpperCase())} ${focus.grade}</span>
-      <span class="cd-gc-px">Last <b>${m0(win.lastSold)}</b> · Avg5 <b>${m0(win.avg5)}</b></span>
+      <span class="cd-gc-px">Last <b>${m0(win.lastSold)}</b> · Avg Last 5 <b>${m0(win.avg5)}</b></span>
     </div>
     <div class="cd-gc-grid">
       ${GRADED_DEFAULT_WINS.map(([k,lbl])=> html`<div key=${k} class="cd-gc-cell">
@@ -5523,7 +5530,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
                 meta=${gradedTile ? gradedTile.meta : tileMeta}
                 low=${gradedTile ? gradedTile.low : tileRow.low}
                 market=${gradedTile ? gradedTile.market : tileRow.market}
-                aLabel=${gradedTile ? "LAST SOLD" : null} bLabel=${gradedTile ? "AVG 5" : null}
+                aLabel=${gradedTile ? "LAST SOLD" : null} bLabel=${gradedTile ? "AVG LAST 5" : null}
                 wins=${gradedTile ? gradedTile.wins : null} singleDelta=${!!gradedTile}/>`
             : img
               ? html`<img src=${img} alt=${group["Product Name"]}/>`
@@ -11312,6 +11319,45 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
   </div>`;
 }
 
+// Terms-of-Use gate for the premium graded dataset. Shown to an allowlisted user
+// before the per-sale graded data unlocks; "I Agree" records acceptance (DB +
+// localStorage) and switches the premium flag on. "Maybe later" leaves them on the
+// free view and re-prompts next session. Mirror any wording change in privacy.html.
+function GradedTosModal({onAccept, onDismiss}){
+  const [agree, setAgree] = useState(false);
+  return html`<div class="graded-tos-backdrop">
+    <div class="graded-tos-modal">
+      <h3 class="title-font" style=${{margin:"0 0 6px",fontSize:19}}>Graded data — Terms of Use</h3>
+      <p class="graded-tos-intro">
+        You have access to Packs.Ink's premium graded-card sales data (per-sale eBay
+        prices). It's provided for your <b>personal, non-commercial use only</b>. By
+        continuing you agree that you will <b>not</b>:
+      </p>
+      <ul class="graded-tos-list">
+        <li>Scrape, crawl, bulk-download, or systematically extract this data;</li>
+        <li>Sell, license, redistribute, or republish it, in whole or in part;</li>
+        <li>Retain, cache, or store copies beyond your own personal session use;</li>
+        <li>Use it to build or train any competing product, dataset, or model.</li>
+      </ul>
+      <p class="graded-tos-note">
+        The data is aggregated from public marketplace sales, provided “as is” for
+        informational purposes (it may be inaccurate or incomplete), and access may be
+        revoked at any time. Full terms are on our ${" "}
+        <a href="/privacy#graded-data" target="_blank" rel="noopener">privacy &amp; terms page</a>.
+      </p>
+      <label class="graded-tos-check">
+        <input type="checkbox" checked=${agree} onChange=${e=>setAgree(e.target.checked)}/>
+        <span>I have read and agree to these terms.</span>
+      </label>
+      <div class="graded-tos-actions">
+        <button class="gc-caps-btn" onClick=${onDismiss}>Maybe later</button>
+        <button class="active" disabled=${!agree} onClick=${onAccept}
+          style=${{padding:"8px 18px",fontSize:13}}>I Agree</button>
+      </div>
+    </div>
+  </div>`;
+}
+
 // One-time modal shown when a signed-in user has no display name yet.
 // Blocking by intent — closing isn't allowed without picking a name, so
 // new users don't accidentally publish a deck without an identity.
@@ -12604,7 +12650,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   const valBlock = (e)=> (gradedPremium && e.lastSold != null && !e.custom)
     ? html`<div class="gco-val-pair">
         <span class="gco-vp-item"><span class="gco-vp-num">${fmt(e.lastSold)}</span><span class="gco-vp-lbl">last sold</span></span>
-        <span class="gco-vp-item"><span class="gco-vp-num">${e.value!=null?fmt(e.value):"—"}</span><span class="gco-vp-lbl">avg 5</span></span>
+        <span class="gco-vp-item"><span class="gco-vp-num">${e.value!=null?fmt(e.value):"—"}</span><span class="gco-vp-lbl">avg last 5</span></span>
       </div>`
     : html`<div class=${"gco-val"+(e.custom?" custom":"")}>${valStr(e)}</div>`;
 
@@ -12923,7 +12969,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(!gradedPremium){ setRollup(null); return; }
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,sale_count,last_sold_date,last_sold_price,avg_last_5",
+      select: "card_id,grader,grade,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d",
       order: "card_id.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(()=>{ if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
@@ -12959,7 +13005,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // Fetch fires when either the tile Δ% toggle is on OR the Graded Movers
   // banner is expanded — both consume the same history map. A user who
   // wants neither pays no fetch cost.
-  const needsTileHistory = (showDeltas || !gradedMoversCollapsed) && tileSlots.length > 0;
+  const needsTileHistory = !gradedPremium && (showDeltas || !gradedMoversCollapsed) && tileSlots.length > 0;
   useEffect(() => {
     if(!needsTileHistory){ setTileHistory(null); return; }
     const since = new Date(Date.now() - 35*24*3600*1000).toISOString().slice(0,10);
@@ -12983,7 +13029,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         const grader = (r.grader||"").toLowerCase();
         const d = {tcgplayer_product_id: meta.tcgplayer_product_id, grader, grade: r.grade,
           low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
-          pct_1d: null, pct_7d: r.pct_7d, pct_30d: r.pct_30d};
+          pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d};
         for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${grader}|${r.grade}`, d);
       }
       return m;
@@ -18089,6 +18135,18 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return m;
   }, [raw]);
 
+  // Set-filter dropdown options: EVERY set present in the catalog (mainline AND
+  // promo sets), ordered by SET_ORDER. The `sets` prop is MAINLINE_SETS-only, so
+  // promo sets (Promo Set 1/2/3, LCP C1/C2, D23, EPCOT) were silently missing from
+  // the picker and could never be filtered. Derive from the catalog so every real
+  // set is selectable; SET_ORDER-unknown names (shouldn't happen) append at the end.
+  const setOptions = useMemo(() => {
+    const present = new Set(Object.values(setNameById));
+    const ordered = SET_ORDER.filter(s => present.has(s));
+    for(const s of present) if(!SET_ORDER.includes(s)) ordered.push(s);
+    return ordered;
+  }, [setNameById]);
+
   // Catalog row index keyed by card_id. Used by the Screener's search +
   // chip-filter pipeline to delegate matching to the canonical
   // matchesCardFilter (so smart-search behaviors — partial rarity, body
@@ -18726,7 +18784,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <span class=${"price-db-sig sig-"+sk}>${icon}</span><//>`)}</td>`};
     if(premiumGraded) return [setCol, rarityCol,
       money("low","Last Sold","low","low_today","Most recent recorded eBay sale price for this grader/grade"),
-      money("market","Avg 5","market","market_today","Average of the last 5 recorded eBay sales"),
+      money("market","Avg Last 5","market","market_today","Average of the last 5 recorded eBay sales"),
       salesCol,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
@@ -18839,7 +18897,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${filterSet.size === 0 ? "All sets" : `${filterSet.size} ${filterSet.size===1?"set":"sets"}`} ▾
         </button>
         ${setSelOpen && html`<div class="price-db-multimenu" style=${{maxHeight:300,overflowY:"auto"}}>
-          ${(sets || []).slice().reverse().map((s) => html`<label key=${s} class="price-db-multiitem">
+          ${setOptions.slice().reverse().map((s) => html`<label key=${s} class="price-db-multiitem">
             <input type="checkbox" checked=${filterSet.has(s)}
               onChange=${()=>setFilterSet(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; })}/>
             ${s}
@@ -27890,6 +27948,11 @@ function App(){
   // TCGPriceLookup data to the per-sale graded_sales scatter (Last Sold / Avg
   // of Last 5). Mirrors the can_view_store_report pattern.
   const [canViewGradedPremium, setCanViewGradedPremium] = useState(false);
+  // Premium graded ToS acceptance (migration 79). The effective premium flag below
+  // is `allowlisted && tosOk`, so the per-sale data stays locked until the user
+  // accepts. `tosDismissed` lets them defer for the session (re-prompts next load).
+  const [gradedTosOk, setGradedTosOk] = useState(false);
+  const [gradedTosDismissed, setGradedTosDismissed] = useState(false);
   // Graded-dataset curator (graded_admins, migration 74) — edit/delete sales +
   // report queue. Localhost preview: packsink:gradedAdminPreview=1.
   const [isGradedAdmin, setIsGradedAdmin] = useState(false);
@@ -27931,6 +27994,37 @@ function App(){
       .catch(() => { if(!cancelled) setCanViewGradedPremium(false); });
     return () => { cancelled = true; };
   }, [user]);
+
+  // Resolve graded ToS acceptance once the user is on the allowlist. localStorage is
+  // the fast path (and the only path on the localhost preview, which isn't signed in);
+  // the DB is the durable record. Only checked when allowlisted so non-premium users
+  // never see the gate.
+  useEffect(()=>{
+    if(!canViewGradedPremium){ setGradedTosOk(false); return; }
+    let local = false;
+    try { local = localStorage.getItem("packsink:gradedTos") === GRADED_TOS_VERSION; } catch {}
+    if(local){ setGradedTosOk(true); return; }
+    if(!user){ setGradedTosOk(false); return; }
+    let cancelled = false;
+    sbClient.rpc("graded_tos_status")
+      .then(({data}) => {
+        if(cancelled) return;
+        const ok = data === GRADED_TOS_VERSION;
+        setGradedTosOk(ok);
+        if(ok){ try { localStorage.setItem("packsink:gradedTos", GRADED_TOS_VERSION); } catch {} }
+      })
+      .catch(() => { if(!cancelled) setGradedTosOk(false); });
+    return () => { cancelled = true; };
+  }, [canViewGradedPremium, user]);
+
+  const acceptGradedTos = useCallback(() => {
+    try { localStorage.setItem("packsink:gradedTos", GRADED_TOS_VERSION); } catch {}
+    setGradedTosOk(true);
+    setGradedTosDismissed(true);
+    // Durable record (best-effort — localStorage already unlocked the UI). Requires a
+    // signed-in user; the localhost preview just relies on localStorage.
+    sbClient.rpc("accept_graded_tos", { p_version: GRADED_TOS_VERSION }).catch(()=>{});
+  }, []);
 
   // Graded-admin flag, same shape as the premium gate.
   useEffect(()=>{
@@ -28761,7 +28855,7 @@ function App(){
   // while data is in flight; cache hits make this instantaneous after the
   // first visit.
 
-  return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium}><${GradedAdminContext.Provider} value=${isGradedAdmin}><div>
+  return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
     <div class="top-nav">
@@ -28911,6 +29005,8 @@ function App(){
       onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false); }}
       onClose=${()=>setAvatarPickerOpen(false)}/>`}
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
+    ${canViewGradedPremium && !gradedTosOk && !gradedTosDismissed && html`<${GradedTosModal}
+      onAccept=${acceptGradedTos} onDismiss=${()=>setGradedTosDismissed(true)}/>`}
     ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
     ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}/>`}
     ${activeTour && COACH_TOURS[activeTour] && html`<${Coachmark}
