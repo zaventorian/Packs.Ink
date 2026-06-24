@@ -150,54 +150,12 @@ def main() -> None:
             "image_small": tcg_img(554628, 200), "image_normal": tcg_img(554628, 400), "image_large": tcg_img(554628, 400),
             "tcgplayer_product_id": 554628,
         },
-        {  # Illumineer's Quest: Palace Heist — Bolt - Superdog (223/204)
-            "id": "crd_custom_634262_bolt_superdog",
-            "set_id": "set_8f4cbf5aef324eb295c4add5673e684f",  # Ursula's Return host set
-            "name": "Bolt", "version": "Superdog",
-            "rarity": "Super Rare", "ink": "Amber", "inks": ["Amber","Steel"],
-            "collector_number": "223", "cost": 5, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Floodborn","Hero"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(634262, 200), "image_normal": tcg_img(634262, 400), "image_large": tcg_img(634262, 400),
-            "tcgplayer_product_id": 634262,
-        },
-        {  # Illumineer's Quest: Palace Heist — Goofy - Groundbreaking Chef (223/204)
-            "id": "crd_custom_634263_goofy_groundbreaking",
-            "set_id": "set_8f4cbf5aef324eb295c4add5673e684f",  # Ursula's Return host set
-            "name": "Goofy", "version": "Groundbreaking Chef",
-            "rarity": "Legendary", "ink": "Amber", "inks": ["Amber"],
-            "collector_number": "223", "cost": 4, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Storyborn","Hero"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(634263, 200), "image_normal": tcg_img(634263, 400), "image_large": tcg_img(634263, 400),
-            "tcgplayer_product_id": 634263,
-        },
-        {  # Illumineer's Quest: Palace Heist — Pinocchio - Strings Attached (224/204)
-            "id": "crd_custom_634264_pinocchio_strings",
-            "set_id": "set_8f4cbf5aef324eb295c4add5673e684f",  # Ursula's Return host set
-            "name": "Pinocchio", "version": "Strings Attached",
-            "rarity": "Legendary", "ink": "Amethyst", "inks": ["Amethyst"],
-            "collector_number": "224", "cost": 4, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Storyborn","Hero"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(634264, 200), "image_normal": tcg_img(634264, 400), "image_large": tcg_img(634264, 400),
-            "tcgplayer_product_id": 634264,
-        },
-        {  # Illumineer's Quest: Palace Heist — Elsa - Ice Maker (224/204)
-            "id": "crd_custom_634265_elsa_ice_maker",
-            "set_id": "set_8f4cbf5aef324eb295c4add5673e684f",  # Ursula's Return host set
-            "name": "Elsa", "version": "Ice Maker",
-            "rarity": "Super Rare", "ink": "Amethyst", "inks": ["Amethyst","Sapphire"],
-            "collector_number": "224", "cost": 7, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Floodborn","Hero","Queen","Sorcerer"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(634265, 200), "image_normal": tcg_img(634265, 400), "image_large": tcg_img(634265, 400),
-            "tcgplayer_product_id": 634265,
-        },
+        # Illumineer's Quest: Palace Heist (Bolt 634262 / Goofy 634263 / Pinocchio
+        # 634264 / Elsa 634265) — REMOVED. Lorcast now indexes all four (under
+        # Archazia's Island / Reign of Jafar), so the crd_custom_* rows here were
+        # duplicates sharing the same pid (double matview rows). Deleted in
+        # supabase/82_quest_card_piglet.sql follow-up; EXTRAS_MAP renders them via
+        # the real Lorcast card_id now.
         # --- Promo Set 3 #52-56: Wilds Unknown Store-Championship promos that
         # Lorcast does not index. Stats mirror each card's Wilds Unknown base.
         {  # Dash Parr - Lava Runner — P3 #52 (Cold Foil promo)
