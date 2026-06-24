@@ -12969,7 +12969,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     if(!gradedPremium){ setRollup(null); return; }
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d",
+      select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d",
       order: "card_id.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(()=>{ if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
@@ -13090,21 +13090,32 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       // grader is UPPERCASE, so lowercase it (matches the lowercase convention
       // in graded_prices_latest / graded_collection_items) and emit the same
       // value under every plausible printing key for the card's pid.
-      const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil"];
+      const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+      // Which owned-item printing keys a split-card rollup row should price. The
+      // rollup's printing is "" (non-split → price every printing the same),
+      // "Unknown" (split but unclassified → fallback for any), or a real variant.
+      const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+      const rowOf = (r, meta, v) => ({ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
+        last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
+        last_sold_date: r.last_sold_date, sale_count: r.sale_count,
+        grader: (r.grader||"").toLowerCase(), grade: r.grade, tcgplayer_product_id: meta.tcgplayer_product_id});
+      const val = (r) => r.avg_last_5 != null ? Number(r.avg_last_5)
+                       : r.last_sold_price != null ? Number(r.last_sold_price) : null;
+      // Pass 1: non-specific rows (non-split "" or split-but-Unknown) under ALL keys.
       for(const r of (rollup||[])){
-        const meta = cardById.get(r.card_id);
-        if(!meta || !meta.tcgplayer_product_id) continue;
-        const v = r.avg_last_5 != null ? Number(r.avg_last_5)
-                : r.last_sold_price != null ? Number(r.last_sold_price) : null;
-        if(v == null) continue;
+        if(r.printing && r.printing !== "Unknown") continue;
+        const meta = cardById.get(r.card_id); const v = val(r);
+        if(!meta || !meta.tcgplayer_product_id || v == null) continue;
         const grader = (r.grader||"").toLowerCase();
-        const row = {ebay_avg_1d: v, ebay_avg_30d: v, ebay_avg_7d: v,
-          last_sold_price: r.last_sold_price, avg_last_5: r.avg_last_5,
-          last_sold_date: r.last_sold_date, sale_count: r.sale_count,
-          grader, grade: r.grade, tcgplayer_product_id: meta.tcgplayer_product_id};
-        for(const pr of PRINTINGS){
-          m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, row);
-        }
+        for(const pr of PRINTINGS) m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
+      }
+      // Pass 2: specific-printing rows OVERRIDE their matching owned-item keys.
+      for(const r of (rollup||[])){
+        if(!r.printing || r.printing === "Unknown") continue;
+        const meta = cardById.get(r.card_id); const v = val(r);
+        if(!meta || !meta.tcgplayer_product_id || v == null) continue;
+        const grader = (r.grader||"").toLowerCase();
+        for(const pr of (SYN[r.printing] || [r.printing])) m.set(meta.tcgplayer_product_id + "|" + pr + "|" + grader + "|" + r.grade, rowOf(r, meta, v));
       }
       return m;
     }
@@ -17599,7 +17610,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     if(!showGraded || !gradedPremium || gradedRollup != null) return;
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
+      select: "card_id,grader,grade,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,pct_1095d,pct_rel",
       order: "card_id.asc",
     }).then(rows => { if(!cancelled) setGradedRollup(rows || []); })
       .catch(e => { if(!cancelled){ console.warn("graded rollup fetch:", e?.message || e); setGradedRollup([]); } });
@@ -18316,6 +18327,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           image_small: m.image_small, image_normal: m.image_normal,
           tcgplayer_product_id: m.tcgplayer_product_id,
           printing: ((g.grader||"").toUpperCase() + " " + g.grade),
+          // Split-printing variant (Foil/Non-Foil/...) for cards where distinct
+          // printings share a card_id (C1 Prize Wall vs Top Prize). "" for normal cards.
+          _variant: g.printing || "",
           grader, grade: g.grade,
           // Raw Low / Market for this card (from the price_movers join) so the
           // graded Screener can compare graded vs raw side by side.
@@ -19190,7 +19204,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <tbody>
           ${filtered.slice(0, 1000).map((r) => {
             const img = r.image_small || r.image_normal;
-            const key = r.card_id + ":" + r.printing;
+            const key = r.card_id + ":" + r.printing + ":" + (r._variant || "");
             const isSel = selected.has(key);
             const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
             const isSealedRow = !!r._sealedProduct;
@@ -19214,7 +19228,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                     title="Open on TCGplayer (affiliate link)">↗</a>`}
                 </div>
                 <div class="td-name-meta">
-                  ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : (r.printing + " #" + (r.collector_number || "?"))}
+                  ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : (r.printing + " #" + (r.collector_number || "?") + (r._variant ? " · " + r._variant : ""))}
                 </div>
               </td>
               ${orderedCols.map(c => c.td(r))}

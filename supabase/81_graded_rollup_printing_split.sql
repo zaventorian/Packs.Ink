@@ -1,0 +1,22 @@
+-- Printing-aware graded_sales_rollup for "split-printing" cards: cards where two
+-- economically-distinct printings share one card_id and the printing-blind rollup
+-- blended them. First member: Lorcana Challenge Promo C1 (Prize Wall non-foil vs
+-- Top Prize foil). Pooh Pirate Captain #16 (pack Foil vs Deep-Trouble Cold Foil) and
+-- other quest / CONNECTING_FOILS cards extend `cards.split_printing` later (classify
+-- their printing from the slab first).
+--
+-- SAFETY: non-split cards have pkey='' so grouping + the lateral windows are
+-- byte-identical to the old rollup (verified: non-split checksum unchanged, C1
+-- expanded 71->103 rows into Foil/Non-Foil/Unknown). The new `printing` column is ''
+-- for non-split rows (old clients that don't select it are unaffected); split-card
+-- rows carry the printing.
+--
+-- The full CREATE is applied via migration `graded_rollup_printing_split` (supabase
+-- MCP). Key points retained here for the record:
+--   * cards.split_printing boolean (true for set_e0eb34fc... = C1)
+--   * base CTE joins cards, pkey = split ? coalesce(printing,'Unknown') : ''
+--   * partition/group + every lateral window filtered by (pkey='' OR coalesce(x.printing,'Unknown')=pkey)
+--   * unique index (card_id,grader,grade,printing) for REFRESH CONCURRENTLY
+--   * grant select to anon, authenticated, service_role
+-- See git history / pg_get_viewdef for the exact body.
+notify pgrst, 'reload schema';
