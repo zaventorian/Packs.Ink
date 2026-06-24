@@ -261,6 +261,11 @@ const SPLIT_PRINTING_CARD_IDS = new Set([
 ]);
 // Friendly labels for printing/variant toggle buttons; fall back to the raw value.
 const PRINTING_VARIANT_LABEL = {"Foil": "Top Prize", "Non-Foil": "Prize Wall"};
+// Printings that are the "baseline" — never badged (only the distinguishing
+// variants like Two Swords / Text Error / Top Prize / Prize Wall get a badge).
+const VARIANT_BADGE_HIDE = new Set(["", "Normal", "Unknown"]);
+// The variant badge label for a printing value, or null if it shouldn't be badged.
+const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIANT_LABEL[p] || p) : null;
 const SECTION_SPLIT_SETS_GLOBAL = new Set([
   "Lorcana Challenge Promo (C1)",
   "Lorcana Challenge Promo (C2)",
@@ -5532,7 +5537,8 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       low: {now: win.lastSold, byWin: bw},
       market: {now: win.avg5, byWin: bw},
       wins: [{key:"1w",label:"1W"},{key:"1m",label:"1M"},{key:"3m",label:"3M"}],
-      meta: (group.Rarity ? group.Rarity + " · " : "") + (GRADER_LABEL[focus.grader]||focus.grader.toUpperCase()) + " " + focus.grade,
+      meta: (group.Rarity ? group.Rarity + " · " : "") + (GRADER_LABEL[focus.grader]||focus.grader.toUpperCase()) + " " + focus.grade
+            + (isSplitCard && variantBadge(gradedPrintingFilter) ? " · " + variantBadge(gradedPrintingFilter) : ""),
     };
   })();
 
@@ -5581,7 +5587,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
               color:     group.foil ? "#7e54c4"               : "#1d8d4a",
               border:    group.foil ? "1px solid #7e54c4"     : "1px solid #1d8d4a",
             }}>${group.foil ? "PRIZE FOIL" : "PRIZE WALL"}</span>`}
-          ${detailTab === "graded" && isSplitCard && gradedPrintingFilter !== "All" && html`<span class="variant-badge">${PRINTING_VARIANT_LABEL[gradedPrintingFilter] || gradedPrintingFilter}</span>`}
+          ${detailTab === "graded" && isSplitCard && gradedPrintingFilter !== "All" && variantBadge(gradedPrintingFilter) && html`<span class="variant-badge">${variantBadge(gradedPrintingFilter)}</span>`}
         </h2>
         ${classifications.length > 0 && html`<div class="card-detail-subtitle">${classifications.join(" • ")}</div>`}
         <div class="card-detail-meta">
@@ -12732,7 +12738,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
               ${showFoilBadge(e) && html`<span class="gco-foil">Foil</span>`}
               ${e.qty > 1 && html`<span class="gco-qty">×${e.qty}</span>`}
             </div>
-            <div class="gco-name">${e.name}</div>
+            <div class="gco-name">${e.name}${variantBadge(e.it && e.it.printing) ? html`<span class="variant-badge">${variantBadge(e.it.printing)}</span>` : ""}</div>
             ${e.sub && html`<div class="gco-sub">${e.sub}</div>`}
             ${valBlock(e)}
           </button>`)}</div>`
@@ -19260,7 +19266,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                     title="Open on TCGplayer (affiliate link)">↗</a>`}
                 </div>
                 <div class="td-name-meta">
-                  ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : html`${r.printing + " #" + (r.collector_number || "?")}${r._variant ? html`<span class="variant-badge">${PRINTING_VARIANT_LABEL[r._variant] || r._variant}</span>` : ""}`}
+                  ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : html`${r.printing + " #" + (r.collector_number || "?")}${variantBadge(r._variant) ? html`<span class="variant-badge">${variantBadge(r._variant)}</span>` : ""}`}
                 </div>
               </td>
               ${orderedCols.map(c => c.td(r))}
