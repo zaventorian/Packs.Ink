@@ -5241,9 +5241,18 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const [reportSale, setReportSale] = useState(null);
   const [editSale, setEditSale]     = useState(null);
   const [privateSaleOpen, setPrivateSaleOpen] = useState(false);
+  // Split-printing cards (C1: Prize Wall non-foil vs Top Prize foil share a card_id).
+  // A filter isolates one printing so the scatter + price tile aren't a blend.
+  const [gradedPrintingFilter, setGradedPrintingFilter] = useState("All");
   // Lifted graded combos + focus so the price tile, price-changes box, and the
   // scatter all share the same featured (grader, grade). Premium only.
-  const gradedCombos = useMemo(()=> buildGradedCombos(gradedSales.rows), [gradedSales.rows]);
+  const isSplitCard = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set);
+  const gradedRowsView = useMemo(()=> (
+    (!isSplitCard || gradedPrintingFilter === "All")
+      ? gradedSales.rows
+      : gradedSales.rows.filter(r => (r.printing || "Unknown") === gradedPrintingFilter)
+  ), [isSplitCard, gradedPrintingFilter, gradedSales.rows]);
+  const gradedCombos = useMemo(()=> buildGradedCombos(gradedRowsView), [gradedRowsView]);
   const gradedDefaultKey = useMemo(()=> {
     const has = (k)=> gradedCombos.some(c=>c.key===k);
     return has("psa|10") ? "psa|10" : (gradedCombos[0] && gradedCombos[0].key) || null;
@@ -5720,8 +5729,12 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             ? html`<div class="chart-empty large">No price history available for this card.</div>`
             : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
       </div>`}
+      ${detailTab === "graded" && gradedPremium && isSplitCard && html`<div class="graded-printing-toggle seg-toggle">
+        ${[["All","All"],["Non-Foil","Prize Wall"],["Foil","Top Prize"]].map(([v,lbl])=>html`<button key=${v}
+          class=${gradedPrintingFilter===v?"active":""} onClick=${()=>setGradedPrintingFilter(v)}>${lbl}</button>`)}
+      </div>`}
       ${detailTab === "graded" && (gradedPremium
-        ? html`<${GradedSalesTab} sales=${gradedSales.rows} loading=${gradedSales.loading}
+        ? html`<${GradedSalesTab} sales=${gradedRowsView} loading=${gradedSales.loading}
             focusKey=${gradedFocusKey} onFocusChange=${setGradedFocusKey} hideHeadline=${true}
             rawHistory=${(history && history.normal) || null}
             onReport=${user ? (s)=>setReportSale(s) : null}
