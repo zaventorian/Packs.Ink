@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=218">
+<link rel="stylesheet" href="styles.css?v=219">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=218"></script>
+<script src="logo.js?v=219"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -13095,14 +13095,23 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
 };
 
 // "Grade from your collection" — a filterable picker of the user's owned RAW
-// cards (chase/promo focus), each opening GradeFromRawModal to send-for-grading
-// or move a copy into graded. Opened from a button next to "+ Add graded card".
+// cards (chase/promo focus). Click a card for the single-card flow, or check
+// several and bulk-mark them graded / sent for grading. Opened from a button
+// next to "+ Add graded card".
 const GRADE_FROM_COLL_CHASE = ["Epic","Enchanted","Iconic","Promo"];
+const GRADE_FROM_COLL_GRADES = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
 const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwned, onSendToQueue, onClose}) => {
   useEscToClose(onClose);
   const [search, setSearch] = useState("");
+  const [setFilter, setSetFilter] = useState("");
   const [rarityFilter, setRarityFilter] = useState(() => new Set());
   const [gradeTarget, setGradeTarget] = useState(null);
+  const [selected, setSelected] = useState(() => new Set());
+  const [bulkMode, setBulkMode] = useState("graded");   // "graded" | "send"
+  const [bulkGrader, setBulkGrader] = useState("psa");
+  const [bulkGrade, setBulkGrade] = useState("10");
+  const [bulkStage, setBulkStage] = useState("to_submit"); // "to_submit" | "at_grader"
+  const [busy, setBusy] = useState(false);
 
   // Owned raw cards only — filter the catalog to owned card_ids FIRST (cheap),
   // then group. Sorted most-valuable-first since that's what people grade.
@@ -13117,25 +13126,64 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
     groups.sort((a,b) => pr(b) - pr(a));
     return groups;
   }, [raw, collection]);
+  const groupById = useMemo(() => { const m = new Map(); for(const g of ownedGroups) m.set(g.card_id, g); return m; }, [ownedGroups]);
+  const setOptions = useMemo(() => {
+    const s = new Set();
+    for(const g of ownedGroups) if(g.Set) s.add(g.Set);
+    return [...s].sort((a,b) => SET_ORDER.indexOf(b) - SET_ORDER.indexOf(a) || a.localeCompare(b));
+  }, [ownedGroups]);
 
   const visible = useMemo(() => {
     const parsed = parseSearchQuery(search);
     const f = {rarities: rarityFilter};
-    return ownedGroups.filter(g => matchesCardFilter(g, f, parsed));
-  }, [ownedGroups, search, rarityFilter]);
+    return ownedGroups.filter(g => (!setFilter || g.Set === setFilter) && matchesCardFilter(g, f, parsed));
+  }, [ownedGroups, search, rarityFilter, setFilter]);
 
   const chaseActive = GRADE_FROM_COLL_CHASE.every(r => rarityFilter.has(r)) && rarityFilter.size === GRADE_FROM_COLL_CHASE.length;
   const toggleRarity = (r) => setRarityFilter(s => { const n = new Set(s); n.has(r) ? n.delete(r) : n.add(r); return n; });
+  const toggleSel = (cid) => setSelected(s => { const n = new Set(s); n.has(cid) ? n.delete(cid) : n.add(cid); return n; });
+  const visIds = useMemo(() => visible.map(g => g.card_id), [visible]);
+  const allSel = visIds.length > 0 && visIds.every(id => selected.has(id));
+  const toggleAll = () => setSelected(s => { const n = new Set(s); if(allSel) visIds.forEach(id => n.delete(id)); else visIds.forEach(id => n.add(id)); return n; });
+  const pickPrinting = (g) => (g.foil && g.foil.tcg_printing) || (g.normal && g.normal.tcg_printing) || "Normal";
+
+  // Bulk apply: log each checked card as graded, or push it to the grading
+  // queue. Additive (raw left intact) — the single-card flow handles the move.
+  const applyBulk = useCallback(async () => {
+    if(!selected.size) return;
+    setBusy(true);
+    const ids = [...selected];
+    try {
+      for(const cid of ids){
+        const g = groupById.get(cid); if(!g) continue;
+        const slot = canonicalGradedSlot(g.card_id, pickPrinting(g));
+        if(bulkMode === "graded"){
+          await onGradeOwned({card_id: slot.card_id, printing: slot.printing, grader: bulkGrader, grade: bulkGrade, quantity: 1});
+        } else {
+          await onSendToQueue({card_id: slot.card_id, printing: slot.printing, intended_grader: bulkGrader || null, status: bulkStage, submitted_on: null});
+        }
+      }
+      flashToast(bulkMode === "graded"
+        ? `Logged ${ids.length} graded ${ids.length===1?"card":"cards"}.`
+        : `Sent ${ids.length} ${ids.length===1?"card":"cards"} to the grading queue.`);
+      setSelected(new Set());
+    } catch(e){ flashToast("Bulk action failed: " + (e?.message || e)); }
+    setBusy(false);
+  }, [selected, groupById, bulkMode, bulkGrader, bulkGrade, bulkStage, onGradeOwned, onSendToQueue]);
 
   return html`<div class="gfr-overlay" onClick=${onClose}>
     <div class="gfc-modal" onClick=${e=>e.stopPropagation()}>
     <button class="gfr-close" onClick=${onClose} aria-label="Close">×</button>
     <div class="gfc-panel">
     <h2 class="title-font gfc-h2">Grade from your collection</h2>
-    <div class="gfc-intro">Pick a card you own to <strong>move it into graded</strong> or <strong>send it for grading</strong>. Only graded copies count toward set completion — raw copies stay deck-legal.</div>
+    <div class="gfc-intro">Click a card to <strong>move it into graded</strong> or <strong>send it for grading</strong> — or check several and use the bulk bar below. Only graded copies count toward set completion; raw copies stay deck-legal.</div>
     <div class="gfc-toolbar">
       <input type="search" class="gfc-search" placeholder="Search your collection…"
         value=${search} onInput=${e=>setSearch(e.target.value)}/>
+      <select class="gfc-setsel" value=${setFilter} onChange=${e=>setSetFilter(e.target.value)} title="Filter by set">
+        <option value="">All sets</option>
+        ${setOptions.map(s => html`<option key=${s} value=${s}>${s}</option>`)}
+      </select>
       <button class=${"chip gfc-chase"+(chaseActive?" active":"")}
         onClick=${()=>setRarityFilter(chaseActive ? new Set() : new Set(GRADE_FROM_COLL_CHASE))}
         title="Filter to chase rarities + promos — what most people grade">★ Chase & Promo</button>
@@ -13146,6 +13194,10 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
         </button>`)}
       </div>
     </div>
+    ${visible.length > 0 && html`<div class="gfc-selrow">
+      <label class="gfc-selall"><input type="checkbox" checked=${allSel} onChange=${toggleAll}/> Select all (${visible.length})</label>
+      ${selected.size > 0 && html`<button class="gfc-clearsel" onClick=${()=>setSelected(new Set())}>Clear selection</button>`}
+    </div>`}
     ${ownedGroups.length === 0
       ? html`<div class="gfc-empty">You don't own any raw cards yet. Add cards in the Collection tab first, then grade them from here.</div>`
       : visible.length === 0
@@ -13156,20 +13208,50 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
             const owns = [];
             if(g.normal){ const q = collection[g.card_id+":"+g.normal.tcg_printing]||0; if(q>0) owns.push({label:"Non-Foil", q}); }
             if(g.foil){   const q = collection[g.card_id+":"+g.foil.tcg_printing]||0;   if(q>0) owns.push({label:"Foil", q}); }
-            return html`<button key=${g.card_id} class="gfc-tile" onClick=${()=>setGradeTarget(g)}
-              title="Grade this card">
-              ${img ? html`<img class="gfc-tile-img" src=${img} alt="" loading="lazy"/>` : html`<div class="gfc-tile-img gfc-noimg"></div>`}
-              <div class="gfc-tile-body">
-                <div class="gfc-tile-name">${g["Product Name"]}</div>
-                <div class="gfc-tile-meta">
-                  ${RARITY_ICONS[g.Rarity] && html`<img class="gfc-tile-rar" src=${RARITY_ICONS[g.Rarity]} alt=${g.Rarity}/>`}
-                  ${owns.map(o => html`<span key=${o.label} class="gfc-own-pill">${o.label}${o.q>1?" ×"+o.q:""}</span>`)}
+            const sel = selected.has(g.card_id);
+            return html`<div key=${g.card_id} class=${"gfc-tile"+(sel?" gfc-tile-sel":"")}>
+              <label class="gfc-tile-check" onClick=${e=>e.stopPropagation()}>
+                <input type="checkbox" checked=${sel} onChange=${()=>toggleSel(g.card_id)}/>
+              </label>
+              <button class="gfc-tile-btn" onClick=${()=>setGradeTarget(g)} title="Grade this card">
+                ${img ? html`<img class="gfc-tile-img" src=${img} alt="" loading="lazy"/>` : html`<div class="gfc-tile-img gfc-noimg"></div>`}
+                <div class="gfc-tile-body">
+                  <div class="gfc-tile-name">${g["Product Name"]}</div>
+                  <div class="gfc-tile-meta">
+                    ${RARITY_ICONS[g.Rarity] && html`<img class="gfc-tile-rar" src=${RARITY_ICONS[g.Rarity]} alt=${g.Rarity}/>`}
+                    ${owns.map(o => html`<span key=${o.label} class="gfc-own-pill">${o.label}${o.q>1?" ×"+o.q:""}</span>`)}
+                  </div>
                 </div>
-              </div>
-              <span class="gfc-tile-cta">◆ Grade</span>
-            </button>`;
+                <span class="gfc-tile-cta">◆ Grade</span>
+              </button>
+            </div>`;
           })}
         </div>`}
+    ${selected.size > 0 && html`<div class="gfc-bulkbar">
+      <span class="gfc-selcount">${selected.size} selected</span>
+      <div class="seg-toggle gfc-bulkmode">
+        <button class=${bulkMode==="graded"?"active":""} onClick=${()=>setBulkMode("graded")}>Mark graded</button>
+        <button class=${bulkMode==="send"?"active":""} onClick=${()=>setBulkMode("send")}>Send for grading</button>
+      </div>
+      ${bulkMode === "graded"
+        ? html`<select value=${bulkGrader} onChange=${e=>setBulkGrader(e.target.value)} title="Grader">
+              ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+            </select>
+            <select value=${bulkGrade} onChange=${e=>setBulkGrade(e.target.value)} title="Grade">
+              ${GRADE_FROM_COLL_GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
+            </select>`
+        : html`<select value=${bulkStage} onChange=${e=>setBulkStage(e.target.value)} title="Stage">
+              <option value="to_submit">To submit</option>
+              <option value="at_grader">At grader</option>
+            </select>
+            <select value=${bulkGrader} onChange=${e=>setBulkGrader(e.target.value)} title="Intended grader (optional)">
+              <option value="">Grader: —</option>
+              ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
+            </select>`}
+      <button class="active gfc-bulkapply" disabled=${busy} onClick=${applyBulk}>
+        ${busy ? "Working…" : (bulkMode==="graded" ? `Mark ${selected.size} graded` : `Send ${selected.size}`)}
+      </button>
+    </div>`}
     ${gradeTarget && html`<${GradeFromRawModal} group=${gradeTarget} user=${user}
       collection=${collection} updateQty=${updateQty}
       onGradeOwned=${onGradeOwned} onSendToQueue=${onSendToQueue}
@@ -13222,8 +13304,18 @@ const GraduateSubmissionModal = ({sub, meta, onClose, onGraduate}) => {
 // action (slab returned), and remove. Empty state still offers the entry point.
 const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGraduate}) => {
   const [collapsed, setCollapsed] = useState(false);
-  const [graduateSub, setGraduateSub] = useState(null);
+  // Per-row entered grade (grader + grade), so you can fill several and
+  // graduate them in one go. Defaults to the intended grader / PSA 10.
+  const [grades, setGrades] = useState({});
+  const [busy, setBusy] = useState(false);
   if(!submissions || submissions.length === 0) return null;
+  const getG = (s) => grades[s.id] || {grader: s.intended_grader || "psa", grade: "10"};
+  const setG = (id, patch) => setGrades(g => ({...g, [id]: {...(g[id] || {grader:"psa", grade:"10"}), ...patch}}));
+  const graduateAll = async () => {
+    setBusy(true);
+    for(const s of submissions){ const g = getG(s); await onGraduate(s, g.grader, g.grade); }
+    setBusy(false);
+  };
   return html`<div class="gq-section">
     <div class="gq-head">
       <button class="gq-head-toggle" onClick=${()=>setCollapsed(c=>!c)}>
@@ -13231,26 +13323,35 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
         <span class="gq-title">Sent for grading</span>
         <span class="gq-count">${submissions.length}</span>
       </button>
+      ${!collapsed && submissions.length > 1 && html`<button class="gq-gradall" disabled=${busy}
+        title="Graduate every card using the grade set on each row" onClick=${graduateAll}>${busy ? "…" : "Graduate all"}</button>`}
     </div>
     ${!collapsed && html`<div class="gq-list">
       ${submissions.map(s => {
         const meta = cardById.get(s.card_id);
+        const g = getG(s);
         return html`<div key=${s.id} class="gq-row">
-          ${meta?.img_small && html`<img class="gq-thumb" src=${meta.img_small} alt="" loading="lazy"/>`}
-          <div class="gq-rowmain">
-            <div class="gq-name">${meta?.["Product Name"] || s.card_id}</div>
-            <div class="gq-meta">${(s.printing && s.printing!=="Normal") ? s.printing+" · " : ""}${s.intended_grader ? s.intended_grader.toUpperCase() : "grader TBD"}${s.submitted_on ? " · sent "+s.submitted_on : ""}</div>
+          <div class="gq-rowtop">
+            ${meta?.img_small && html`<img class="gq-thumb" src=${meta.img_small} alt="" loading="lazy"/>`}
+            <div class="gq-rowmain">
+              <div class="gq-name">${meta?.["Product Name"] || s.card_id}</div>
+              <button class=${"gq-status "+s.status} title="Click to flip stage"
+                onClick=${()=>onUpdate(s.id, {status: s.status==="at_grader" ? "to_submit" : "at_grader"})}>${s.status==="at_grader" ? "At grader" : "To submit"}</button>
+            </div>
+            <button class="gq-remove" title="Remove from queue" onClick=${()=>onRemove(s.id)}>×</button>
           </div>
-          <button class=${"gq-status "+s.status} title="Click to flip stage"
-            onClick=${()=>onUpdate(s.id, {status: s.status==="at_grader" ? "to_submit" : "at_grader"})}>${s.status==="at_grader" ? "At grader" : "To submit"}</button>
-          <button class="gq-graduate" title="Slab came back — add the grade" onClick=${()=>setGraduateSub(s)}>Graduate ▸</button>
-          <button class="gq-remove" title="Remove from queue" onClick=${()=>onRemove(s.id)}>×</button>
+          <div class="gq-rowgrade">
+            <select value=${g.grader} onChange=${e=>setG(s.id, {grader:e.target.value})} title="Grader">
+              ${GRADER_ORDER.map(x => html`<option key=${x} value=${x}>${x.toUpperCase()}</option>`)}
+            </select>
+            <select value=${g.grade} onChange=${e=>setG(s.id, {grade:e.target.value})} title="Grade">
+              ${GRADING_QUEUE_GRADES.map(x => html`<option key=${x} value=${x}>${x}</option>`)}
+            </select>
+            <button class="gq-graduate" title="Slab came back at this grade — add to graded" onClick=${()=>onGraduate(s, g.grader, g.grade)}>✓</button>
+          </div>
         </div>`;
       })}
     </div>`}
-    ${graduateSub && html`<${GraduateSubmissionModal} sub=${graduateSub} meta=${cardById.get(graduateSub.card_id)}
-      onClose=${()=>setGraduateSub(null)}
-      onGraduate=${async (grader, grade) => { const ok = await onGraduate(graduateSub, grader, grade); if(ok) setGraduateSub(null); return ok; }}/>`}
   </div>`;
 };
 
@@ -13260,7 +13361,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [goals, setGoals] = useState(null);          // tracking goals
   const [submissions, setSubmissions] = useState([]); // grading_submissions (the "sent for grading" queue)
   const [collGradeOpen, setCollGradeOpen] = useState(false); // "Grade from collection" picker modal
-  const [graduateFor, setGraduateFor] = useState(null); // submission row being graduated
   const [latestPrices, setLatestPrices] = useState(null); // graded_prices_latest cache
   const [rollup, setRollup] = useState(null);        // graded_sales_rollup (premium)
   const [addOpen, setAddOpen] = useState(false);
@@ -14349,8 +14449,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
-        ${!readOnly && gradedPremium && submissions.length > 0 && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
-          onUpdate=${updateSubmission} onRemove=${removeSubmission} onGraduate=${graduateSubmission}/>`}
         ${gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
               raw=${raw} theme=${theme} onOpen=${openCardAt}/>`
@@ -14638,7 +14736,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               </div>`;
             })}
       </div>
-      ${!readOnly && gradedView==="tracking" && html`<aside class="graded-collection-side" id="graded-goals-panel">
+      ${!readOnly && (gradedView==="tracking" || (gradedPremium && submissions.length>0)) && html`<aside class="graded-collection-side" id="graded-goals-panel">
+        ${gradedPremium && submissions.length>0 && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
+          onUpdate=${updateSubmission} onRemove=${removeSubmission} onGraduate=${graduateSubmission}/>`}
+        ${gradedView==="tracking" && html`<${React.Fragment}>
         <div class="gc-side-head">
           <span>Set Tracking</span>
           <button class="active gc-caps-cta gc-caps-cta-sm" onClick=${()=>setGoalOpen(true)}>+ Add</button>
@@ -14751,6 +14852,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               })}
         </div>
         ${/* "Show hidden" footer removed alongside the Hidden feature. */ ""}
+        </${React.Fragment}>`}
       </aside>`}
     </div>
     ${!readOnly && html`<div class="gc-add-fab-wrap">
@@ -15487,6 +15589,22 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     return m;
   }, [raw]);
 
+  // Split-art cards (Genie Two Swords / Peter Pan Text Error) store their
+  // graded copies on the BASE card_id under the variant printing (canonical-
+  // GradedSlot), but the variant has its OWN catalog tile (base::variant::slug).
+  // Remap a graded item {base, "Two Swords"} → the variant tile's card_id so the
+  // ✦ count lands on the right tile instead of doubling on the base.
+  const remapGradedId = useMemo(() => {
+    const m = new Map(); // `${base}|${variantPrinting}` -> variant clone card_id
+    for(const base of SPLIT_PRINTING_CARD_IDS){
+      const vp = (SPLIT_CARD_PRINTING_OPTIONS[base]||[]).find(p => p !== "Normal");
+      if(!vp) continue;
+      const clone = (raw||[]).find(r => r.card_id && r.card_id.startsWith(base + "::variant::"));
+      if(clone) m.set(base + "|" + vp, clone.card_id);
+    }
+    return (cid, printing) => m.get(cid + "|" + (printing||"Normal")) || cid;
+  }, [raw]);
+
   // Graded + pending-grading ownership feeds the RAW completion meters: a
   // slabbed (or sent-to-grading) copy checks off the set slot WITHOUT adding
   // raw value or deck-legal copies. Lightweight fetch (card_id + printing +
@@ -15537,12 +15655,14 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     for(const r of gradedOwnRows){
       if(!r.card_id) continue;
       const q = Math.max(1, r.quantity||1);
-      add(gradedSlot, bucketKey(r.card_id, r.printing), q); add(gradedCard, r.card_id, q);
+      const eff = remapGradedId(r.card_id, r.printing);
+      add(gradedSlot, bucketKey(eff, r.printing), q); add(gradedCard, eff, q);
     }
     for(const r of pendingRows){
       if(!r.card_id) continue;
       const q = Math.max(1, r.quantity||1);
-      add(pendingSlot, bucketKey(r.card_id, r.printing), q); add(pendingCard, r.card_id, q);
+      const eff = remapGradedId(r.card_id, r.printing);
+      add(pendingSlot, bucketKey(eff, r.printing), q); add(pendingCard, eff, q);
     }
     const graded = (cid, tcgP) => dualCards.has(cid)
       ? (gradedSlot.get(cid+"|"+(tcgP==="Normal"?"Normal":"FOIL"))||0)
@@ -15553,7 +15673,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     const cover = (cid, tcgP) => graded(cid, tcgP) + pending(cid, tcgP);
     const mark  = (cid, tcgP) => graded(cid, tcgP) > 0 ? "graded" : (pending(cid, tcgP) > 0 ? "pending" : null);
     return {dualCards, graded, pending, cover, mark};
-  }, [gradedOwnRows, pendingRows, raw]);
+  }, [gradedOwnRows, pendingRows, raw, remapGradedId]);
   const coverFor = useCallback((cid, tcgPrinting) => gradedCompletion.cover(cid, tcgPrinting), [gradedCompletion]);
 
   // Index for CSV import: normalized Product Name → [raw rows]. Used to
@@ -15625,17 +15745,18 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     // only — no value, no deck copies). Bucket by the card's rarity (chase
     // cards) or by the graded item's own printing (non-foil vs foil).
     for(const r of [...gradedOwnRows, ...pendingRows]){
-      const card = cardById.get(r.card_id);
+      const eff = remapGradedId(r.card_id, r.printing);
+      const card = cardById.get(eff);
       if(!card || !SET_ORDER.includes(card.Set)) continue;
       const s = ensure(card.Set);
-      if(card.Rarity === "Enchanted")     s.enchanted.add(r.card_id);
-      else if(card.Rarity === "Iconic")   s.iconic.add(r.card_id);
-      else if(card.Rarity === "Epic")     s.epic.add(r.card_id);
-      else if((r.printing||"Normal") === "Normal") s.normal.add(r.card_id);
-      else s.foil.add(r.card_id);
+      if(card.Rarity === "Enchanted")     s.enchanted.add(eff);
+      else if(card.Rarity === "Iconic")   s.iconic.add(eff);
+      else if(card.Rarity === "Epic")     s.epic.add(eff);
+      else if((r.printing||"Normal") === "Normal") s.normal.add(eff);
+      else s.foil.add(eff);
     }
     return m;
-  }, [collection, cardByKey, cardById, gradedOwnRows, pendingRows]);
+  }, [collection, cardByKey, cardById, gradedOwnRows, pendingRows, remapGradedId]);
 
   // Compute missing $ and extras $ relative to the chosen copies target.
   // Iterate every main-set (card, printing) pair: needed=copies, owned=qty,
