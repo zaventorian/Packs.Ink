@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=217">
+<link rel="stylesheet" href="styles.css?v=218">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=217"></script>
+<script src="logo.js?v=218"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -5321,7 +5321,7 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
   </div>`;
 };
 
-const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst}) => {
+const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst, onGradeThis}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
   // raw qty) and per-row +/- on the graded tab is enabled via
@@ -5746,6 +5746,9 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
           <span>Sign in to track this card in your collection.</span>
           <button class="active" onClick=${onSignIn}>Sign in</button>
         </div>`}
+
+        ${typeof onGradeThis === "function" && user && html`<button class="card-detail-grade-this" onClick=${onGradeThis}
+          title="Log a graded copy you own, or send this card for grading">◆ Grade this card</button>`}
 
         ${isGradedFocus && typeof onGradedAdjust === "function" && html`<div class="card-detail-graded-owned">
           <div class="card-detail-graded-owned-head">
@@ -9290,14 +9293,15 @@ const InlineCounter = ({qty, onChange, disabled}) => {
   </div>`;
 };
 
-// ✦ badge shown when a slot is completed via a graded slab (or sent-to-grading
-// placeholder). Hover text spells out the completion-only / no-deck-copy rule.
-const GradedMarkBadge = ({mark}) => mark ? html`<span class=${"sd-graded-mark "+mark.type}
-  title=${mark.type==="graded"
-    ? `You own a graded ${mark.label} copy — it checks off set completion (but not deck-legal copies). Its value lives in your Graded totals.`
-    : `Sent for grading${mark.label?" ("+mark.label+")":""} — checks off completion (not deck copies) until the slab returns.`}>✦</span>` : null;
+// Read-only "✦N" count badge: how many graded slabs (or sent-for-grading
+// placeholders) you own of this card. Shows next to the raw counter so a
+// graded-only card no longer reads as "0". Hover spells out the rule.
+const GradedMarkBadge = ({graded}) => graded ? html`<span class=${"sd-graded-mark "+graded.type}
+  title=${graded.type==="graded"
+    ? `You own ${graded.count} graded ${graded.count===1?"copy":"copies"} of this card — they check off set completion (not deck-legal copies). Value is in your Graded totals.`
+    : `${graded.count} ${graded.count===1?"copy":"copies"} sent for grading — checks off completion (not deck copies) until the slab returns.`}>✦${graded.count}</span>` : null;
 
-const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, mark, onGrade}) => {
+const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, graded}) => {
   const num = (group.Number||"").split("/")[0] || "—";
   const nLow = group.normal && group.normal["Low Price"];
   const fLow = group.foil   && group.foil["Low Price"];
@@ -9346,11 +9350,9 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
         onError=${e=>{ e.target.style.display = "none"; }}/>`}
     </span>
     <div class="sd-row-name-wrap">
-      <span class="sd-row-name" title=${group["Product Name"]}>${group["Product Name"]}<${GradedMarkBadge} mark=${mark}/></span>
+      <span class="sd-row-name" title=${group["Product Name"]}><span class="sd-row-name-txt">${group["Product Name"]}</span><${GradedMarkBadge} graded=${graded}/></span>
       ${subtitle && html`<span class="sd-row-subtitle">${subtitle}</span>`}
     </div>
-    ${onGrade && html`<button class="sd-row-grade-btn" title="Add a graded copy or send this card for grading"
-      onClick=${e=>{ e.stopPropagation(); onGrade(); }}>◆</button>`}
     <div class="sd-row-prices">
       ${showN && html`<a class="sd-row-price normal" href=${tcgUrl(group.normal.tcgplayer_product_id,"Normal")} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
       ${showF && html`<a class="sd-row-price foil" href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
@@ -9368,7 +9370,7 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
   </div>`;
 };
 
-const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, mark, onGrade}) => {
+const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, theme, showNormalSide, showFoilSide, subtitle, graded}) => {
   const num = (group.Number||"").split("/")[0] || "—";
   const img = group.img_small || group.img_normal;
   const price = (group.normal && group.normal["Low Price"]) ?? (group.foil && group.foil["Low Price"]);
@@ -9378,12 +9380,10 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
     ${img
       ? html`<img class="sd-tile-img" src=${img} alt=${group["Product Name"]} loading="lazy" onClick=${onOpen}/>`
       : html`<div class="sd-tile-img-placeholder" onClick=${onOpen}>${group["Product Name"]}</div>`}
-    ${onGrade && html`<button class="sd-tile-grade-btn" title="Add a graded copy or send this card for grading"
-      onClick=${e=>{ e.stopPropagation(); onGrade(); }}>◆</button>`}
     <div class="sd-tile-info" onClick=${onOpen}>
       <span class="sd-tile-num">#${num}</span>
       <div class="sd-tile-name-wrap">
-        <span class="sd-tile-name" title=${group["Product Name"]}>${group["Product Name"]}<${GradedMarkBadge} mark=${mark}/></span>
+        <span class="sd-tile-name" title=${group["Product Name"]}>${group["Product Name"]}</span>
         ${subtitle && html`<span class="sd-tile-subtitle">${subtitle}</span>`}
       </div>
       ${price!=null && html`<span class="sd-tile-price">$${price.toFixed(2)}</span>`}
@@ -9395,6 +9395,7 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
           ? html`<${InlineCounter} qty=${normalQty} onChange=${onNormal}/>`
           : html`<${InlineCounter} qty=${normalQty} onChange=${onNormal}/>
                  <${InlineCounter} qty=${foilQty}   onChange=${onFoil}/>`}
+      <${GradedMarkBadge} graded=${graded}/>
     </div>
   </div>`;
 };
@@ -9422,7 +9423,7 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
 // Enchanted to browse every Enchanted in the game and see which you own.
 const ALL_CARDS_VIEW = "__all_cards__";
 
-const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedSlotQty, pendingSlotQty, onGradedChanged, gradedPremium}) => {
+const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedCover, gradedMark, onGradedChanged, gradedPremium}) => {
   const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
@@ -9522,22 +9523,12 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // so the set detail view still works in isolation.
   const TARGET = Math.max(1, copies || 1);
 
-  // Graded + pending-grading coverage for raw set completion (maps keyed
-  // `card_id|Normal` / `card_id|FOIL`, passed from CollectionView). A covered
-  // slot counts toward completion (drops out of "missing") but never adds raw
-  // value. slotMark() picks the ✦ badge: a real slab wins over an at-grader.
-  const G_SLOT = gradedSlotQty || new Map();
-  const P_SLOT = pendingSlotQty || new Map();
-  const slotCover = useCallback((cid, tcgPrinting) => {
-    const bk = cid + "|" + (tcgPrinting==="Normal" ? "Normal" : "FOIL");
-    return (G_SLOT.get(bk)||0) + (P_SLOT.get(bk)||0);
-  }, [gradedSlotQty, pendingSlotQty]);
-  const slotMark = useCallback((cid, tcgPrinting) => {
-    const bk = cid + "|" + (tcgPrinting==="Normal" ? "Normal" : "FOIL");
-    if((G_SLOT.get(bk)||0) > 0) return "graded";
-    if((P_SLOT.get(bk)||0) > 0) return "pending";
-    return null;
-  }, [gradedSlotQty, pendingSlotQty]);
+  // Graded + pending coverage for raw set completion, computed in CollectionView
+  // (card-level for single-printing cards, foil-exact for dual-printing ones).
+  // A covered slot counts toward completion (drops out of "missing") but never
+  // adds raw value. slotMark() picks the badge: a real slab beats an at-grader.
+  const slotCover = useCallback((cid, tcgPrinting) => gradedCover ? gradedCover(cid, tcgPrinting) : 0, [gradedCover]);
+  const slotMark  = useCallback((cid, tcgPrinting) => gradedMark ? gradedMark(cid, tcgPrinting) : null, [gradedMark]);
 
   const groups = useMemo(()=>{
     // allMode: every main-set card (owned-only filtering happens in
@@ -9609,7 +9600,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       return groups.filter(g => predicate(g, {...parsed, nameMatchMode:"any"}));
     }
     return groups.filter(g => predicate(g, parsed));
-  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, gradedSlotQty, pendingSlotQty]);
+  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
 
   // Filter-aware "missing" summary — for each visible printing, counts the
   // copies the user is SHORT of TARGET (Master Set = 1, Playset = 4). Value
@@ -9831,18 +9822,24 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           img_large:  sub.img_large  || g.img_large,
         };
       };
-      // Combine the per-slot graded/pending marks into one row badge — a real
-      // slab (graded) wins over an at-grader (pending); label names the
-      // printing(s) so the foil-vs-non-foil distinction stays honest.
-      const computeMark = (g) => {
-        const nMark = g.normal ? slotMark(g.card_id, g.normal.tcg_printing) : null;
-        const fMark = g.foil   ? slotMark(g.card_id, g.foil.tcg_printing)   : null;
-        if(!nMark && !fMark) return null;
-        const type = (nMark==="graded" || fMark==="graded") ? "graded" : "pending";
-        const sides = [];
-        if(nMark===type) sides.push("non-foil");
-        if(fMark===type) sides.push("foil");
-        return {type, label: sides.length===2 ? "both printings" : (sides[0]||"")};
+      // Read-only graded-ownership badge for the tile: total slabs (+ pending)
+      // you own of this card, shown as "✦N" next to the raw counter. Single-
+      // printing cards count once; dual cards sum both foil/non-foil buckets.
+      const tileGraded = (g) => {
+        const ps = [];
+        if(g.normal) ps.push(g.normal.tcg_printing);
+        if(g.foil)   ps.push(g.foil.tcg_printing);
+        if(!ps.length) return null;
+        let count, type;
+        if(ps.length === 1){
+          count = slotCover(g.card_id, ps[0]);
+          type  = slotMark(g.card_id, ps[0]);
+        } else {
+          count = slotCover(g.card_id, ps[0]) + slotCover(g.card_id, ps[1]);
+          const m0 = slotMark(g.card_id, ps[0]), m1 = slotMark(g.card_id, ps[1]);
+          type = (m0==="graded"||m1==="graded") ? "graded" : ((m0==="pending"||m1==="pending") ? "pending" : null);
+        }
+        return count > 0 ? {count, type: type||"graded"} : null;
       };
       const renderItems = (items, printingMode) => viewMode === "list"
         ? html`<div class=${"setdet-list-grid"+(isPromoSet?" setdet-list-grid--promo":"")+(allMode?" setdet-list-grid--rowflow":"")}>${items.map(gOrig => {
@@ -9860,8 +9857,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               onNormal=${!readOnly && showNormal && nKey ? (q)=>updateQty(g.card_id, g.normal.tcg_printing, q) : null}
               onFoil=${!readOnly && showFoil && fKey ? (q)=>updateQty(g.card_id, g.foil.tcg_printing, q) : null}
               showNormalSide=${showNormal} showFoilSide=${showFoil}
-              subtitle=${subtitle} mark=${computeMark(g)}
-              onGrade=${!readOnly && user && gradedPremium ? ()=>setGradeFromRaw(g) : null}
+              subtitle=${subtitle} graded=${tileGraded(g)}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`
         : html`<div class="setdet-card-grid">${items.map(gOrig => {
@@ -9877,8 +9873,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               onNormal=${!readOnly && showNormal && nKey ? (q)=>updateQty(g.card_id, g.normal.tcg_printing, q) : null}
               onFoil=${!readOnly && showFoil && fKey ? (q)=>updateQty(g.card_id, g.foil.tcg_printing, q) : null}
               showNormalSide=${showNormal} showFoilSide=${showFoil}
-              subtitle=${subtitle} mark=${computeMark(g)}
-              onGrade=${!readOnly && user && gradedPremium ? ()=>setGradeFromRaw(g) : null}
+              subtitle=${subtitle} graded=${tileGraded(g)}
               onOpen=${()=>setSelectedGroup(g)}/>`;
           })}</div>`;
       return groupsByOrigin.map(bucket => html`<div key=${bucket.key} class="setdet-origin-bucket">
@@ -9892,7 +9887,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       onClose=${()=>setDrawerOpen(false)} onReset=${()=>setDrawerFilter(emptyFilter())}/>`}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
-      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+      user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}
+      onGradeThis=${!readOnly && user && gradedPremium ? (()=>{ const g = selectedGroup; setSelectedGroup(null); setGradeFromRaw(g); }) : null}/>`}
     ${gradeFromRaw && html`<${GradeFromRawModal} group=${gradeFromRaw} user=${user}
       collection=${collection} updateQty=${updateQty}
       onClose=${()=>setGradeFromRaw(null)}
@@ -9940,7 +9936,6 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
   const [status, setStatus] = useState("to_submit"); // "to_submit" | "at_grader"
   const [intendedGrader, setIntendedGrader] = useState("");
   const [submittedOn, setSubmittedOn] = useState("");
-  const [dropRaw, setDropRaw] = useState(false);
   const [busy, setBusy] = useState(false);
   const sel = printingOpts.find(p => p.key === printingKey) || printingOpts[0] || {tcg:"Normal"};
   const tcg = sel.tcg || "Normal";
@@ -9973,11 +9968,16 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
           if(error){ flashToast("Save failed: " + error.message); setBusy(false); return; }
         }
       }
-      if(dropRaw && rawQty > 0) await updateQty(group.card_id, tcg, rawQty - 1);
-      flashToast(mode === "own" ? "Graded copy added — it now checks off this set." : "Added to your grading queue.");
+      // "Own it graded" is a MOVE: the raw card became a slab, so drop one
+      // raw copy (if you have one). "Send for grading" leaves raw alone — the
+      // card may not be shipped yet, and it counts toward completion as pending.
+      if(mode === "own" && rawQty > 0) await updateQty(group.card_id, tcg, rawQty - 1);
+      flashToast(mode === "own"
+        ? (rawQty > 0 ? "Moved a raw copy into your graded collection." : "Graded copy added — it checks off this set.")
+        : "Added to your grading queue.");
       onDone();
     } catch(e){ flashToast("Save failed: " + (e?.message || e)); setBusy(false); }
-  }, [user, group, tcg, mode, grader, grade, status, intendedGrader, submittedOn, dropRaw, rawQty, updateQty, onDone, onGradeOwned, onSendToQueue]);
+  }, [user, group, tcg, mode, grader, grade, status, intendedGrader, submittedOn, rawQty, updateQty, onDone, onGradeOwned, onSendToQueue]);
 
   return html`<div class="gfr-overlay" onClick=${onClose}>
     <div class="gfr-modal" onClick=${e=>e.stopPropagation()}>
@@ -10035,12 +10035,14 @@ const GradeFromRawModal = ({group, user, collection, updateQty, onClose, onDone,
             </div>
           </div>`}
 
-      ${rawQty > 0 && html`<label class="gfr-droprraw">
-        <input type="checkbox" checked=${dropRaw} onChange=${e=>setDropRaw(e.target.checked)}/>
-        <span>Also remove 1 from my raw ${sel.label||""} count (you own ${rawQty}) — for when you graded one of your loose copies.</span>
-      </label>`}
-
-      <p class="gfr-note">Graded copies check off your set completion but don't add raw value or count as deck-legal copies.</p>
+      <p class="gfr-note">
+        ${mode === "own"
+          ? (rawQty > 0
+              ? html`This <strong>moves</strong> 1 of your ${rawQty} raw ${sel.label||""} ${rawQty===1?"copy":"copies"} into your graded collection.`
+              : html`Logs a graded copy you own.`)
+          : html`Your raw ${sel.label||""} ${rawQty===1?"copy":"copies"} stay put — graduate this to graded when the slab returns.`}
+        ${" "}Graded copies check off set completion but don't add raw value or count as deck-legal copies.
+      </p>
 
       <div class="gfr-actions">
         <button onClick=${onClose} disabled=${busy}>Cancel</button>
@@ -13092,11 +13094,12 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
   </div>`;
 };
 
-// "Grade from your collection" — a filterable browser of the user's owned RAW
-// cards (chase/promo focus), each opening GradeFromRawModal to send-to-grading
-// or log a graded copy. Lives as a third Graded-tab view mode (premium only).
+// "Grade from your collection" — a filterable picker of the user's owned RAW
+// cards (chase/promo focus), each opening GradeFromRawModal to send-for-grading
+// or move a copy into graded. Opened from a button next to "+ Add graded card".
 const GRADE_FROM_COLL_CHASE = ["Epic","Enchanted","Iconic","Promo"];
-const GradeFromCollectionPanel = ({raw, collection, user, updateQty, onGradeOwned, onSendToQueue}) => {
+const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwned, onSendToQueue, onClose}) => {
+  useEscToClose(onClose);
   const [search, setSearch] = useState("");
   const [rarityFilter, setRarityFilter] = useState(() => new Set());
   const [gradeTarget, setGradeTarget] = useState(null);
@@ -13124,8 +13127,12 @@ const GradeFromCollectionPanel = ({raw, collection, user, updateQty, onGradeOwne
   const chaseActive = GRADE_FROM_COLL_CHASE.every(r => rarityFilter.has(r)) && rarityFilter.size === GRADE_FROM_COLL_CHASE.length;
   const toggleRarity = (r) => setRarityFilter(s => { const n = new Set(s); n.has(r) ? n.delete(r) : n.add(r); return n; });
 
-  return html`<div class="gfc-panel">
-    <div class="gfc-intro">Pick a card you own to send it for grading or log a slab you already have. Only graded copies count toward your set completion — raw copies stay deck-legal.</div>
+  return html`<div class="gfr-overlay" onClick=${onClose}>
+    <div class="gfc-modal" onClick=${e=>e.stopPropagation()}>
+    <button class="gfr-close" onClick=${onClose} aria-label="Close">×</button>
+    <div class="gfc-panel">
+    <h2 class="title-font gfc-h2">Grade from your collection</h2>
+    <div class="gfc-intro">Pick a card you own to <strong>move it into graded</strong> or <strong>send it for grading</strong>. Only graded copies count toward set completion — raw copies stay deck-legal.</div>
     <div class="gfc-toolbar">
       <input type="search" class="gfc-search" placeholder="Search your collection…"
         value=${search} onInput=${e=>setSearch(e.target.value)}/>
@@ -13167,6 +13174,8 @@ const GradeFromCollectionPanel = ({raw, collection, user, updateQty, onGradeOwne
       collection=${collection} updateQty=${updateQty}
       onGradeOwned=${onGradeOwned} onSendToQueue=${onSendToQueue}
       onClose=${()=>setGradeTarget(null)} onDone=${()=>setGradeTarget(null)}/>`}
+    </div>
+    </div>
   </div>`;
 };
 
@@ -13211,14 +13220,10 @@ const GraduateSubmissionModal = ({sub, meta, onClose, onGraduate}) => {
 // The "Sent for grading" queue panel inside the Graded tab. Lists pending
 // submissions with a clickable To-submit ⇄ At-grader stage chip, a Graduate
 // action (slab returned), and remove. Empty state still offers the entry point.
-const GradingQueueSection = ({submissions, cardById, onAdd, onUpdate, onRemove, onGraduate}) => {
+const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGraduate}) => {
   const [collapsed, setCollapsed] = useState(false);
   const [graduateSub, setGraduateSub] = useState(null);
-  if(!submissions || submissions.length === 0){
-    return html`<div class="gq-section gq-empty">
-      <button class="gq-add-btn" onClick=${onAdd} title="Track a card you've sent (or are about to send) for grading">＋ Send a card for grading</button>
-    </div>`;
-  }
+  if(!submissions || submissions.length === 0) return null;
   return html`<div class="gq-section">
     <div class="gq-head">
       <button class="gq-head-toggle" onClick=${()=>setCollapsed(c=>!c)}>
@@ -13226,7 +13231,6 @@ const GradingQueueSection = ({submissions, cardById, onAdd, onUpdate, onRemove, 
         <span class="gq-title">Sent for grading</span>
         <span class="gq-count">${submissions.length}</span>
       </button>
-      <button class="gq-add-btn" onClick=${onAdd}>＋ Send a card</button>
     </div>
     ${!collapsed && html`<div class="gq-list">
       ${submissions.map(s => {
@@ -13255,7 +13259,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [items, setItems] = useState(null);          // owned graded cards
   const [goals, setGoals] = useState(null);          // tracking goals
   const [submissions, setSubmissions] = useState([]); // grading_submissions (the "sent for grading" queue)
-  const [queueAddOpen, setQueueAddOpen] = useState(false);
+  const [collGradeOpen, setCollGradeOpen] = useState(false); // "Grade from collection" picker modal
   const [graduateFor, setGraduateFor] = useState(null); // submission row being graduated
   const [latestPrices, setLatestPrices] = useState(null); // graded_prices_latest cache
   const [rollup, setRollup] = useState(null);        // graded_sales_rollup (premium)
@@ -14272,10 +14276,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         ${totals.totalCopies !== totals.uniqueCards && html`<div class="gc-stat"><div class="gc-stat-val">${totals.totalCopies}</div><div class="gc-stat-lbl">Total copies owned</div></div>`}
       </div>
       <div class="graded-collection-header-actions gc-caps-row">
-        <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, track set / rarity goals, or grade cards from your collection">
+        <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, or track set / rarity goals">
           <button class=${gradedView==="tracking"?"active":""} onClick=${()=>setGradedView("tracking")}>Tracking</button>
           <button class=${gradedView==="owned"?"active":""} onClick=${()=>setGradedView("owned")}>My Cards</button>
-          ${!readOnly && gradedPremium && html`<button class=${gradedView==="collection"?"active":""} onClick=${()=>setGradedView("collection")}>Grade a Card</button>`}
         </div>
         ${gradedView==="tracking" && grouped.length > 0 && html`<button class="chip gc-caps-btn"
           onClick=${() => {
@@ -14330,6 +14333,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           title="Jump to set-tracking goals (mobile shortcut)">
           Goals${goals && goals.length ? ` (${goals.length})` : ""}
         </button>`}
+        ${!readOnly && gradedPremium && html`<button class="gc-caps-cta gc-add-cta-desktop"
+          onClick=${()=>setCollGradeOpen(true)}
+          title="Pick cards you own to assign a grade (move raw → graded) or send for grading"
+          style=${{background:"var(--bg-surface)",border:"1px solid var(--accent)",color:"var(--accent)"}}>＋ Grade from collection</button>`}
         ${!readOnly && html`<button class="gc-caps-cta gc-add-cta-desktop"
           onClick=${()=>setBulkAddOpen(true)}
           title="Add many graded cards at once — pick a set + rarities, default grader/grade, then check the cards to log"
@@ -14342,13 +14349,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
-        ${!readOnly && gradedPremium && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
-          onAdd=${()=>setQueueAddOpen(true)}
+        ${!readOnly && gradedPremium && submissions.length > 0 && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
           onUpdate=${updateSubmission} onRemove=${removeSubmission} onGraduate=${graduateSubmission}/>`}
-        ${gradedView === "collection" && gradedPremium
-          ? html`<${GradeFromCollectionPanel} raw=${raw} collection=${collection||{}} user=${user}
-              updateQty=${updateQty||(()=>{})} onGradeOwned=${addItem} onSendToQueue=${addSubmission}/>`
-          : gradedView === "owned"
+        ${gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
               raw=${raw} theme=${theme} onOpen=${openCardAt}/>`
           : grouped.length === 0
@@ -14753,6 +14756,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     ${!readOnly && html`<div class="gc-add-fab-wrap">
       ${fabMenuOpen && html`<div class="gc-fab-backdrop" onClick=${()=>setFabMenuOpen(false)}></div>`}
       ${fabMenuOpen && html`<div class="gc-fab-menu" role="menu">
+        ${gradedPremium && html`<button class="gc-fab-menu-item" role="menuitem" onClick=${()=>{ setFabMenuOpen(false); setCollGradeOpen(true); }}>
+          <span class="gc-fab-menu-icon">◆</span>Grade from collection
+        </button>`}
         <button class="gc-fab-menu-item" role="menuitem" onClick=${()=>{ setFabMenuOpen(false); setAddOpen(true); }}>
           <span class="gc-fab-menu-icon">＋</span>Add a graded card
         </button>
@@ -14774,11 +14780,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       preselectPrinting=${addPreselectPrinting}
       onClose=${()=>{ setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}
       onAdd=${async (p) => { await addItem(p); setAddOpen(false); setAddPreselectCardId(null); setAddPreselectPrinting(null); }}/>`}
-    ${queueAddOpen && html`<${GradedCollectionAddModal}
-      raw=${raw} cardById=${cardById} priceByKey=${priceByKey}
-      queueMode=${true}
-      onClose=${()=>setQueueAddOpen(false)}
-      onSendToQueue=${async (p) => { await addSubmission(p); setQueueAddOpen(false); }}/>`}
+    ${collGradeOpen && html`<${GradeFromCollectionModal} raw=${raw} collection=${collection||{}} user=${user}
+      updateQty=${updateQty||(()=>{})} onGradeOwned=${addItem} onSendToQueue=${addSubmission}
+      onClose=${()=>setCollGradeOpen(false)}/>`}
     ${bulkAddOpen && html`<${GradedBulkAddModal}
       raw=${raw}
       setIdsByName=${setIdsByName}
@@ -15508,32 +15512,49 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   }, [user, isViewerMode, gradedPremium]);
   useEffect(() => { reloadGradedOwnership(); }, [reloadGradedOwnership]);
 
-  // Map graded/pending ownership to raw set slots. Bucket = "Normal" for
-  // non-foil, "FOIL" for any foil printing (Holofoil / Cold Foil / Foil all
-  // collapse to the card's single foil slot — printing-exact in the
-  // non-foil/foil sense). slotQty merges both kinds for missing/needed math;
-  // the split maps drive the per-tile ✦ asterisk (graded vs at-grader).
+  // Map graded/pending ownership onto raw set slots for completion credit.
+  // Only cards that have BOTH a non-foil and a foil printing in the catalog
+  // need foil-exact matching (a graded foil checks the foil slot only).
+  // Single-printing cards — every chase rarity (Enchanted/Iconic/Epic/Promo)
+  // plus foil-only promos — match a graded copy regardless of its stored
+  // printing label, because TCGPriceLookup / our backfill record those slabs
+  // inconsistently as Normal / Holofoil / Cold Foil. Without this, a graded
+  // Enchanted recorded as "Normal" never matched its Cold-Foil catalog slot
+  // and silently failed to check off the set (the reported inconsistency).
   const gradedCompletion = useMemo(() => {
-    const gradedSlotQty = new Map();
-    const pendingSlotQty = new Map();
-    const slotQty = new Map();
-    const bucketKey = (cid, printing) => cid + "|" + ((printing||"Normal")==="Normal" ? "Normal" : "FOIL");
-    const add = (map, k, n) => map.set(k, (map.get(k)||0) + n);
+    const normIds = new Set(), foilIds = new Set();
+    for(const r of raw){
+      if(!r.card_id || !r.tcg_printing) continue;
+      (r.tcg_printing === "Normal" ? normIds : foilIds).add(r.card_id);
+    }
+    const dualCards = new Set();
+    for(const id of normIds) if(foilIds.has(id)) dualCards.add(id);
+
+    const gradedSlot = new Map(), pendingSlot = new Map();  // dual cards: card_id|bucket
+    const gradedCard = new Map(), pendingCard = new Map();  // any card: card_id total
+    const bucketKey = (cid, p) => cid + "|" + ((p||"Normal")==="Normal" ? "Normal" : "FOIL");
+    const add = (m, k, n) => m.set(k, (m.get(k)||0) + n);
     for(const r of gradedOwnRows){
       if(!r.card_id) continue;
-      const k = bucketKey(r.card_id, r.printing), q = Math.max(1, r.quantity||1);
-      add(gradedSlotQty, k, q); add(slotQty, k, q);
+      const q = Math.max(1, r.quantity||1);
+      add(gradedSlot, bucketKey(r.card_id, r.printing), q); add(gradedCard, r.card_id, q);
     }
     for(const r of pendingRows){
       if(!r.card_id) continue;
-      const k = bucketKey(r.card_id, r.printing), q = Math.max(1, r.quantity||1);
-      add(pendingSlotQty, k, q); add(slotQty, k, q);
+      const q = Math.max(1, r.quantity||1);
+      add(pendingSlot, bucketKey(r.card_id, r.printing), q); add(pendingCard, r.card_id, q);
     }
-    return {gradedSlotQty, pendingSlotQty, slotQty};
-  }, [gradedOwnRows, pendingRows]);
-  const coverFor = useCallback((cid, tcgPrinting) =>
-    gradedCompletion.slotQty.get(cid + "|" + (tcgPrinting==="Normal" ? "Normal" : "FOIL")) || 0,
-  [gradedCompletion]);
+    const graded = (cid, tcgP) => dualCards.has(cid)
+      ? (gradedSlot.get(cid+"|"+(tcgP==="Normal"?"Normal":"FOIL"))||0)
+      : (gradedCard.get(cid)||0);
+    const pending = (cid, tcgP) => dualCards.has(cid)
+      ? (pendingSlot.get(cid+"|"+(tcgP==="Normal"?"Normal":"FOIL"))||0)
+      : (pendingCard.get(cid)||0);
+    const cover = (cid, tcgP) => graded(cid, tcgP) + pending(cid, tcgP);
+    const mark  = (cid, tcgP) => graded(cid, tcgP) > 0 ? "graded" : (pending(cid, tcgP) > 0 ? "pending" : null);
+    return {dualCards, graded, pending, cover, mark};
+  }, [gradedOwnRows, pendingRows, raw]);
+  const coverFor = useCallback((cid, tcgPrinting) => gradedCompletion.cover(cid, tcgPrinting), [gradedCompletion]);
 
   // Index for CSV import: normalized Product Name → [raw rows]. Used to
   // resolve Dreamborn export rows (which key on Name + collector number)
@@ -15641,7 +15662,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       // graded value that already lives in the Graded totals). Credit once
       // per card_id+bucket so foil-label variants don't double-offset.
       const ck = r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL");
-      const cover = creditedCover.has(ck) ? 0 : (gradedCompletion.slotQty.get(ck)||0);
+      const cover = creditedCover.has(ck) ? 0 : gradedCompletion.cover(r.card_id, r.tcg_printing);
       if(cover) creditedCover.add(ck);
       const short = Math.max(0, need - (qty + cover));
       const over  = Math.max(0, qty - need);
@@ -15657,7 +15678,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         const dk = r.card_id+"|"+bk;
         if(!seenBucket.has(dk)){
           seenBucket.add(dk);
-          const bcover = gradedCompletion.slotQty.get(r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL")) || 0;
+          const bcover = gradedCompletion.cover(r.card_id, r.tcg_printing);
           ownedTowardNeed += Math.min(copies, qty + bcover);
         }
       }
@@ -15687,7 +15708,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       const qty = collection[key] || 0;
       const need = copies;
       const ck = r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL");
-      const cover = creditedCover.has(ck) ? 0 : (gradedCompletion.slotQty.get(ck)||0);
+      const cover = creditedCover.has(ck) ? 0 : gradedCompletion.cover(r.card_id, r.tcg_printing);
       if(cover) creditedCover.add(ck);
       const short = Math.max(0, need - (qty + cover));
       if(short === 0) continue;
@@ -15762,7 +15783,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     user=${user} onSignIn=${onSignIn} copies=${copies} setCopies=${isViewerMode ? null : setCopies}
     readOnly=${isViewerMode}
     compareMode=${canCompare ? compareMode : "all"}
-    gradedSlotQty=${gradedCompletion.gradedSlotQty} pendingSlotQty=${gradedCompletion.pendingSlotQty}
+    gradedCover=${gradedCompletion.cover} gradedMark=${gradedCompletion.mark}
     onGradedChanged=${reloadGradedOwnership} gradedPremium=${gradedPremium}
     viewerOwnCollection=${viewerOwnCollection || null}/>`;
 
