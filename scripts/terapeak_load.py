@@ -110,9 +110,11 @@ def is_troll_listing(title: str) -> bool:
 # an artist signature or 1/1 sketch isn't comparable to a plain graded copy, so they
 # blow out the price history. Flag excluded. NOTE: do NOT match bare "1/1" — it
 # collides with "Pop 1/1" (a normal card that's simply the only one PSA-graded).
+# `\bautograph` has NO trailing boundary so it also catches autographed/autographs
+# (the `\bautograph\b` form missed "Autographed", which slipped a $1k sale through).
 AUTOGRAPH_RE = re.compile(
-    r"\b(auto|autograph|signed|signature|jsa|sketch|witnessed|inscribed)\b"
-    r"|psa/?dna|hand.?drawn", re.I)
+    r"\b(auto|signed|signature|jsa|sketch|witnessed|inscribed)\b"
+    r"|\bautograph|psa/?dna|hand.?drawn", re.I)
 
 
 def is_autograph(title: str) -> bool:

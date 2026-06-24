@@ -7,7 +7,8 @@
 -- 20 such rows survive). Verified: 1,358 rows excluded, 0 Pop-1/1 false positives.
 update graded_sales set excluded = true
 where not excluded and (
-       title ~* '\y(auto|autograph|signed|signature|jsa|sketch|witnessed|inscribed)\y'
+       title ~* '\y(auto|signed|signature|jsa|sketch|witnessed|inscribed)\y'
+    or title ~* 'autograph'   -- substring: also catches autographed / autographs
     or title ~* 'psa/?dna'
     or title ~* 'hand.?drawn'
 );
