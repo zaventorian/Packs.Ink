@@ -251,6 +251,16 @@ const AUX_CACHE_VERSION = "2026-06-15-poster-tourney-filters";
 // split — but both surface as section headers in CollectionSetDetail and
 // the graded view.
 const SPLIT_BY_PRINTING_SETS_GLOBAL = new Set(["Lorcana Challenge Promo (C1)"]);
+// Individual cards (not whole sets) whose graded sales split by a printing/variant
+// dimension — error/variant prints that share a card_id with the base. The graded
+// card-detail shows a printing toggle for these (and for SPLIT_BY_PRINTING sets).
+// Matches cards.split_printing in the DB (Genie Two Swords #209, Peter Pan Text Error #215).
+const SPLIT_PRINTING_CARD_IDS = new Set([
+  "crd_ae7e91462bfc4861bbf97e99ed53a1c1",  // Genie - On the Job (Enchanted #209): Normal vs Two Swords
+  "crd_b5e74b533270492982dff9472aee8664",  // Peter Pan - Pirate's Bane (Enchanted #215): Normal vs Text Error
+]);
+// Friendly labels for printing/variant toggle buttons; fall back to the raw value.
+const PRINTING_VARIANT_LABEL = {"Foil": "Top Prize", "Non-Foil": "Prize Wall"};
 const SECTION_SPLIT_SETS_GLOBAL = new Set([
   "Lorcana Challenge Promo (C1)",
   "Lorcana Challenge Promo (C2)",
@@ -5246,7 +5256,15 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const [gradedPrintingFilter, setGradedPrintingFilter] = useState("All");
   // Lifted graded combos + focus so the price tile, price-changes box, and the
   // scatter all share the same featured (grader, grade). Premium only.
-  const isSplitCard = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set);
+  const isSplitCard = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set) || SPLIT_PRINTING_CARD_IDS.has(group.card_id);
+  // Distinct printing/variant values present in this card's sales (only meaningful
+  // for split cards), sorted for a stable toggle order.
+  const cardPrintings = useMemo(()=> {
+    if(!isSplitCard) return [];
+    const s = new Set();
+    for(const r of (gradedSales.rows||[])) if(r.printing) s.add(r.printing);
+    return [...s].sort();
+  }, [isSplitCard, gradedSales.rows]);
   const gradedRowsView = useMemo(()=> (
     (!isSplitCard || gradedPrintingFilter === "All")
       ? gradedSales.rows
@@ -5729,8 +5747,8 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             ? html`<div class="chart-empty large">No price history available for this card.</div>`
             : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
       </div>`}
-      ${detailTab === "graded" && gradedPremium && isSplitCard && html`<div class="graded-printing-toggle seg-toggle">
-        ${[["All","All"],["Non-Foil","Prize Wall"],["Foil","Top Prize"]].map(([v,lbl])=>html`<button key=${v}
+      ${detailTab === "graded" && gradedPremium && isSplitCard && cardPrintings.length >= 2 && html`<div class="graded-printing-toggle seg-toggle">
+        ${[["All","All"], ...cardPrintings.map(p=>[p, PRINTING_VARIANT_LABEL[p]||p])].map(([v,lbl])=>html`<button key=${v}
           class=${gradedPrintingFilter===v?"active":""} onClick=${()=>setGradedPrintingFilter(v)}>${lbl}</button>`)}
       </div>`}
       ${detailTab === "graded" && (gradedPremium
