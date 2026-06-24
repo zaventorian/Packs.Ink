@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import random
 import re
 import sys
@@ -197,6 +198,79 @@ def assert_authenticated(page: Page) -> None:
             f"Session looks expired or challenged (current URL: {page.url}). "
             "Re-run scripts/terapeak_login.py to refresh."
         )
+
+
+class ChallengeDetected(Exception):
+    """eBay served a bot/captcha challenge. We STOP the whole run immediately and
+    NEVER push through — repeatedly hitting a challenge page (retrying nav, or
+    paginating into an inline overlay) is exactly what escalates a soft check into
+    an account-level flag. This is the gap that broke the backfill."""
+
+
+# A challenge can show up three ways. The URL check alone (old behavior) misses
+# the INLINE overlay that keeps the same /sh/research URL — which is what let the
+# backfill keep paginating into a wall.
+_CHALLENGE_URL_BITS = ("signin", "login", "captcha", "splashui", "challenge", "verify")
+_CHALLENGE_SELECTORS = (
+    "iframe[src*='hcaptcha']", "iframe[src*='captcha']", "iframe[src*='funcaptcha']",
+    "iframe[src*='arkose']", "iframe[title*='captcha' i]", "#captcha",
+    "div[class*='captcha' i]",
+)
+_CHALLENGE_TEXT_BITS = (
+    "verify yourself", "verifying you are a human", "are you a human",
+    "unusual activity", "unusual traffic", "confirm you're not a robot",
+    "security challenge", "press and hold", "slide to complete", "to continue, please verify",
+)
+
+
+def _parse_proxy(url: str | None):
+    """Turn 'http://user:pass@host:port' into Playwright's proxy dict (server +
+    optional username/password). Returns None when no proxy is configured."""
+    if not url:
+        return None
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    server = f"{u.scheme or 'http'}://{u.hostname}" + (f":{u.port}" if u.port else "")
+    proxy = {"server": server}
+    if u.username:
+        proxy["username"] = u.username
+    if u.password:
+        proxy["password"] = u.password
+    return proxy
+
+
+# Light fingerprint patch injected into every page before site scripts run.
+# The launch flag already drops navigator.webdriver; this rounds off the other
+# cheap automation tells (empty plugins, missing window.chrome, headless UA hints).
+_STEALTH_JS = """
+Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+window.chrome = window.chrome || { runtime: {} };
+Object.defineProperty(navigator, 'plugins', {get: () => [1,2,3,4,5]});
+Object.defineProperty(navigator, 'languages', {get: () => ['en-US','en']});
+"""
+
+
+def detect_challenge(page: Page) -> bool:
+    """True if the page looks like a bot/captcha challenge — by URL, by a captcha
+    iframe/element, OR by visible body text. Content-based so it catches inline
+    overlays that don't change the URL."""
+    try:
+        url = (page.url or "").lower()
+    except Exception:
+        url = ""
+    if any(b in url for b in _CHALLENGE_URL_BITS):
+        return True
+    for sel in _CHALLENGE_SELECTORS:
+        try:
+            if page.locator(sel).count() > 0:
+                return True
+        except Exception:
+            pass
+    try:
+        body = (page.inner_text("body", timeout=2000) or "").lower()
+    except Exception:
+        body = ""
+    return any(t in body for t in _CHALLENGE_TEXT_BITS)
 
 
 def ensure_all_sites(page: Page) -> None:
@@ -489,6 +563,11 @@ def _load_page_rows(page: Page, url: str, save_snapshots: bool,
     else:
         sys.exit(f"navigation failed after 4 retries: {last_err}")
     assert_authenticated(page)
+    # STOP on a challenge before doing anything else — never wait/retry/paginate
+    # into it. The nav above succeeds even when eBay serves an inline overlay (the
+    # URL doesn't change), so this content check is what actually catches it.
+    if detect_challenge(page):
+        raise ChallengeDetected(f"challenge while loading {page.url}")
     try:
         page.wait_for_selector('.research-table-row [data-item-id]', timeout=20000)
     except Exception:
@@ -727,7 +806,16 @@ def main() -> None:
     )
     p.add_argument(
         "--headless", action="store_true",
-        help="Run without UI window. Use for VPS/cron. Default: headful for dev.",
+        help="Run without UI window. Use for VPS/cron. Default: headful for dev. "
+             "NOTE: on a VPS, prefer headful under xvfb (least detectable); plain "
+             "headless is more bot-detectable than a real display.",
+    )
+    p.add_argument(
+        "--proxy", metavar="URL", default=os.environ.get("TERAPEAK_PROXY"),
+        help="Route traffic through a proxy, e.g. http://user:pass@host:port. "
+             "REQUIRED on a cloud VPS — log into eBay through a RESIDENTIAL proxy "
+             "pinned to the account's home region, or the datacenter IP draws "
+             "account-security challenges. Falls back to $TERAPEAK_PROXY.",
     )
     p.add_argument(
         "--oldest-first", action="store_true",
@@ -803,11 +891,11 @@ def main() -> None:
             # navigator.webdriver so eBay is less likely to throw the splashui
             # CAPTCHA at us. Keep the user-agent identical to the one used at
             # login so the saved session's fingerprint stays consistent.
-            browser = p.chromium.launch(
-                headless=args.headless,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-            context = browser.new_context(
+            launch_args = ["--disable-blink-features=AutomationControlled"]
+            if args.headless:
+                launch_args.append("--headless=new")  # new headless = far less detectable than old
+            browser = p.chromium.launch(headless=args.headless, args=launch_args)
+            ctx_kwargs = dict(
                 storage_state=str(SESSION_STATE),
                 viewport={"width": 1400, "height": 900},
                 user_agent=(
@@ -817,6 +905,16 @@ def main() -> None:
                 ),
                 locale="en-US",
             )
+            proxy = _parse_proxy(args.proxy)
+            if proxy:
+                ctx_kwargs["proxy"] = proxy
+                print(f"  using proxy {proxy['server']}")
+            elif args.headless:
+                print("  [warn] --headless with no --proxy: on a cloud VPS this logs into "
+                      "eBay from a datacenter IP and WILL draw account challenges. "
+                      "Use a residential proxy.")
+            context = browser.new_context(**ctx_kwargs)
+            context.add_init_script(_STEALTH_JS)
             page = context.new_page()
             owns_browser = True
 
@@ -852,6 +950,13 @@ def main() -> None:
                 total_rows += count
             except SystemExit:
                 raise  # auth/captcha failure - bail completely
+            except ChallengeDetected as e:
+                # Bail the ENTIRE run — do not move to the next query. Progress is
+                # checkpointed, so a later run resumes where this stopped.
+                print(f"\n  ⚠ CHALLENGE on '{kw}': {e}")
+                print("  STOPPING (not pushing through). Progress saved — re-run later,")
+                print("  and if it persists re-seed the session: python scripts/terapeak_login.py")
+                sys.exit(3)
             except Exception as e:
                 print(f"  ERROR on '{kw}': {type(e).__name__}: {e}")
 
