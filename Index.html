@@ -266,6 +266,15 @@ const PRINTING_VARIANT_LABEL = {"Foil": "Top Prize", "Non-Foil": "Prize Wall"};
 const VARIANT_BADGE_HIDE = new Set(["", "Normal", "Unknown"]);
 // The variant badge label for a printing value, or null if it shouldn't be badged.
 const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIANT_LABEL[p] || p) : null;
+// Printing options the graded Add dialog should offer for split cards whose variant
+// isn't a separate raw catalog row (Genie Two Swords, Peter Pan Text Error). Keyed by
+// card_id; values are the printing strings stored on the owned slot (must match the
+// rollup's printing so valuation lines up). C1 cards aren't here — their Normal/Foil
+// rows already come from the raw catalog.
+const SPLIT_CARD_PRINTING_OPTIONS = {
+  "crd_ae7e91462bfc4861bbf97e99ed53a1c1": ["Normal", "Two Swords"],   // Genie - On the Job (Ench #209)
+  "crd_b5e74b533270492982dff9472aee8664": ["Normal", "Text Error"],   // Peter Pan - Pirate's Bane (Ench #215)
+};
 const SECTION_SPLIT_SETS_GLOBAL = new Set([
   "Lorcana Challenge Promo (C1)",
   "Lorcana Challenge Promo (C2)",
@@ -14240,8 +14249,13 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
       const p = r.tcg_printing || "Normal";
       if(!seen.has(p)){ seen.add(p); out.push(p); }
     }
+    // Split-printing variant cards (Genie Two Swords / Peter Pan Text Error): the
+    // variant isn't a separate raw row, so offer it explicitly so the user can log it.
+    for(const p of (SPLIT_CARD_PRINTING_OPTIONS[pickedId] || [])){
+      if(!seen.has(p)){ seen.add(p); out.push(p); }
+    }
     return out;
-  }, [pickedRows]);
+  }, [pickedRows, pickedId]);
   // Auto-pick when only one printing exists; honor preselect when multiple.
   useEffect(() => {
     if(!pickedId) return;
@@ -14343,9 +14357,9 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
               ${availablePrintings.map(p => html`<button key=${p} type="button"
                 class=${"chip" + (printing === p ? " active" : "")}
                 onClick=${()=>setPrinting(p)}
-                style=${{padding:"5px 14px",fontSize:12,flex:1}}>${p}</button>`)}
+                style=${{padding:"5px 14px",fontSize:12,flex:1}}>${PRINTING_VARIANT_LABEL[p] || p}</button>`)}
             </div>
-            <div class="muted" style=${{fontSize:10,marginTop:4}}>This card has separate Foil and Non-Foil prints — pick which one you own.</div>
+            <div class="muted" style=${{fontSize:10,marginTop:4}}>This card has distinct printings/variants — pick the one you own.</div>
           </label>`}
           <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr 80px",gap:10,marginBottom:12}}>
             <label>
