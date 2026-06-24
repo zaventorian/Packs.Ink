@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=205">
+<link rel="stylesheet" href="styles.css?v=206">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=205"></script>
+<script src="logo.js?v=206"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -274,6 +274,20 @@ const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIAN
 const SPLIT_CARD_PRINTING_OPTIONS = {
   "crd_ae7e91462bfc4861bbf97e99ed53a1c1": ["Normal", "Two Swords"],   // Genie - On the Job (Ench #209)
   "crd_b5e74b533270492982dff9472aee8664": ["Normal", "Text Error"],   // Peter Pan - Pirate's Bane (Ench #215)
+};
+// The ::variant:: clone (e.g. "Genie Two Swords Variant") is a raw-catalog-only
+// tile with NO graded market — the graded sales live on the BASE card under a
+// distinct printing. Map any graded slot keyed on a clone back to (base, variant
+// printing) so owned copies land where the price data is, not on a dead id.
+const canonicalGradedSlot = (cardId, printing) => {
+  if(cardId && cardId.includes("::variant::")){
+    const base = cardId.split("::variant::")[0];
+    if(SPLIT_PRINTING_CARD_IDS.has(base)){
+      const variant = (SPLIT_CARD_PRINTING_OPTIONS[base] || []).find(p => p !== "Normal");
+      return {card_id: base, printing: variant || printing || "Normal"};
+    }
+  }
+  return {card_id: cardId, printing: printing || "Normal"};
 };
 const SECTION_SPLIT_SETS_GLOBAL = new Set([
   "Lorcana Challenge Promo (C1)",
@@ -4690,11 +4704,15 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
   const combos      = useMemo(()=> buildGradedCombos(sales), [sales]);
   const comboByKey  = useMemo(()=> new Map(combos.map(c=>[c.key,c])), [combos]);
   const defaultKey  = useMemo(()=> comboByKey.has("psa|10") ? "psa|10" : (combos[0] && combos[0].key) || null, [combos, comboByKey]);
+  // Reset the chip selection ONLY when the card's combos change (new card or a
+  // new printing filter → defaultKey changes). focusKeyProp is deliberately NOT
+  // a dependency: a chip click changes focus, and re-running this on focus change
+  // would clobber the just-made single-click selection (the old double-click bug).
   useEffect(()=>{
     setSel(null); setShowTrend(false);
     setSelectedKeys(new Set(defaultKey ? [defaultKey] : []));
-    if(focusKeyProp === undefined) setFocusKeyInternal(defaultKey);
-  }, [defaultKey, focusKeyProp]);
+    setFocusKeyInternal(defaultKey);
+  }, [defaultKey]);
 
   if(loading) return html`<div class="chart-empty large">Loading graded sales…</div>`;
   if(!sales || !sales.length) return html`<div class="chart-empty large">No graded sales recorded for this card yet.</div>`;
@@ -4707,11 +4725,12 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
   if(!visKeys.length && focus) visKeys = [focus.key];
   const visibleCombos = visKeys.map(k=>comboByKey.get(k)).filter(Boolean);
 
-  // Chip click is a plain on/off toggle, resolved in a SINGLE click (the old
-  // 3-state add→refocus→drop cycle made turning a grade OFF take two clicks).
-  // Turning one on focuses it (so the headline tracks it); turning the focused
-  // one off hands focus to another selected combo.
-  const onChip = (key)=>{
+  // A plain chip click SWITCHES to that grade (replaces the selection) in a
+  // single click — clicking PSA 9 when PSA 10 is shown now shows ONLY PSA 9,
+  // no lingering series and no double-click. To overlay several grades, hold
+  // Ctrl/Cmd/Shift while clicking (then it toggles that grade in/out).
+  const onChip = (key, additive)=>{
+    if(!additive){ setSelectedKeys(new Set([key])); setFocus(key); return; }
     const n = new Set(selectedKeys);
     if(n.has(key)){ n.delete(key); setSelectedKeys(n); if(focusKey===key) setFocus([...n][0] || defaultKey); }
     else { n.add(key); setSelectedKeys(n); setFocus(key); }
@@ -4739,8 +4758,8 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
   return html`<div class="graded-sales-tab">
     <div class="graded-tab-explain">
       Every individual graded sale we've recorded from eBay — each dot is one sold slab
-      (<strong>color = grader</strong>, <strong>shape = grade</strong>). Click chips to overlay
-      grades/graders; hover a dot for a peek, click it for the listing + photo.
+      (<strong>color = grader</strong>, <strong>shape = grade</strong>). Click a chip to switch
+      grade; Ctrl/⌘-click to overlay several. Hover a dot for a peek, click it for the listing + photo.
     </div>
 
     ${!hideHeadline && focus && html`<div class="gs-headline">
@@ -4786,8 +4805,8 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
         return html`<button key=${c.key} type="button"
           class=${"gs-combo-chip"+(on?" active":"")+(isFocus?" focus":"")}
           style=${on ? {borderColor: c.color, color: c.color} : null}
-          title=${on ? (isFocus?"Focused — click to remove from chart":"Click to focus") : "Click to add to chart"}
-          onClick=${()=>onChip(c.key)}>
+          title="Click to show only this grade · Ctrl/⌘-click to overlay several"
+          onClick=${(e)=>onChip(c.key, e.metaKey||e.ctrlKey||e.shiftKey)}>
           <span class="gs-chip-mark">${legendMark(c)}</span>
           ${(GRADER_LABEL[c.grader]||c.grader.toUpperCase())} ${c.grade}
           <span class="gs-chip-count">${c.count}</span>
@@ -5246,7 +5265,7 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
   </div>`;
 };
 
-const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst}) => {
+const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
   // raw qty) and per-row +/- on the graded tab is enabled via
@@ -5265,9 +5284,12 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   const [reportSale, setReportSale] = useState(null);
   const [editSale, setEditSale]     = useState(null);
   const [privateSaleOpen, setPrivateSaleOpen] = useState(false);
-  // Split-printing cards (C1: Prize Wall non-foil vs Top Prize foil share a card_id).
-  // A filter isolates one printing so the scatter + price tile aren't a blend.
-  const [gradedPrintingFilter, setGradedPrintingFilter] = useState("All");
+  // Split-printing cards (C1: Prize Wall non-foil vs Top Prize foil share a
+  // card_id; Genie Two Swords / Peter Pan Text Error reuse the printing field).
+  // The version tabs isolate ONE printing — these are genuinely different cards
+  // with different sales, so they're NEVER blended into a combined "All" view.
+  // null until sales load → first non-loading render picks the default version.
+  const [gradedPrintingFilter, setGradedPrintingFilter] = useState(null);
   // Lifted graded combos + focus so the price tile, price-changes box, and the
   // scatter all share the same featured (grader, grade). Premium only.
   const isSplitCard = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set) || SPLIT_PRINTING_CARD_IDS.has(group.card_id);
@@ -5277,10 +5299,25 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
     if(!isSplitCard) return [];
     const s = new Set();
     for(const r of (gradedSales.rows||[])) if(r.printing) s.add(r.printing);
-    return [...s].sort();
+    // Stable order: base printing (Normal / Non-Foil) first, then variants.
+    return [...s].sort((a,b)=>{
+      const rank = (p)=> (p==="Normal"||p==="Non-Foil") ? 0 : 1;
+      return rank(a)-rank(b) || a.localeCompare(b);
+    });
   }, [isSplitCard, gradedSales.rows]);
+  // Once sales load, lock the version filter onto the version the card was
+  // opened to (initialPrinting from a screener/tile click), else the base
+  // printing. Never "All" — split cards are never combined.
+  useEffect(()=>{
+    if(!isSplitCard || !cardPrintings.length) return;
+    setGradedPrintingFilter(prev => {
+      if(prev && cardPrintings.includes(prev)) return prev;
+      if(initialPrinting && cardPrintings.includes(initialPrinting)) return initialPrinting;
+      return cardPrintings[0];
+    });
+  }, [isSplitCard, cardPrintings, initialPrinting]);
   const gradedRowsView = useMemo(()=> (
-    (!isSplitCard || gradedPrintingFilter === "All")
+    (!isSplitCard || !gradedPrintingFilter)
       ? gradedSales.rows
       : gradedSales.rows.filter(r => (r.printing || "Unknown") === gradedPrintingFilter)
   ), [isSplitCard, gradedPrintingFilter, gradedSales.rows]);
@@ -5596,7 +5633,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
               color:     group.foil ? "#7e54c4"               : "#1d8d4a",
               border:    group.foil ? "1px solid #7e54c4"     : "1px solid #1d8d4a",
             }}>${group.foil ? "PRIZE FOIL" : "PRIZE WALL"}</span>`}
-          ${detailTab === "graded" && isSplitCard && gradedPrintingFilter !== "All" && variantBadge(gradedPrintingFilter) && html`<span class="variant-badge">${variantBadge(gradedPrintingFilter)}</span>`}
+          ${detailTab === "graded" && isSplitCard && variantBadge(gradedPrintingFilter) && html`<span class="variant-badge">${variantBadge(gradedPrintingFilter)}</span>`}
         </h2>
         ${classifications.length > 0 && html`<div class="card-detail-subtitle">${classifications.join(" • ")}</div>`}
         <div class="card-detail-meta">
@@ -5764,8 +5801,8 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             : html`<${LineChart} series=${clipSeriesFrom(chartSeries, chartStartMs)} width=920 height=260/>`}
       </div>`}
       ${detailTab === "graded" && gradedPremium && isSplitCard && cardPrintings.length >= 2 && html`<div class="graded-printing-toggle seg-toggle">
-        ${[["All","All"], ...cardPrintings.map(p=>[p, PRINTING_VARIANT_LABEL[p]||p])].map(([v,lbl])=>html`<button key=${v}
-          class=${gradedPrintingFilter===v?"active":""} onClick=${()=>setGradedPrintingFilter(v)}>${lbl}</button>`)}
+        ${cardPrintings.map(p=>html`<button key=${p}
+          class=${gradedPrintingFilter===p?"active":""} onClick=${()=>setGradedPrintingFilter(p)}>${PRINTING_VARIANT_LABEL[p]||p}</button>`)}
       </div>`}
       ${detailTab === "graded" && (gradedPremium
         ? html`<${GradedSalesTab} sales=${gradedRowsView} loading=${gradedSales.loading}
@@ -12739,7 +12776,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
     ${buckets.map(b => html`<div class="gco-bucket" key=${b.key}>
       ${b.label && html`<div class="gco-bucket-head">${b.label}</div>`}
       ${viewMode === "grid"
-        ? html`<div class="gco-grid">${b.items.map((e,i) => html`<button key=${i} class="gco-tile" onClick=${()=>onOpen(e.it.card_id)}
+        ? html`<div class="gco-grid">${b.items.map((e,i) => html`<button key=${i} class="gco-tile" onClick=${()=>onOpen(e.it.card_id, e.it.printing)}
             style=${{background: e.inkList.length===2 ? `linear-gradient(135deg, ${inkTint(e.inkList[0],theme)}, ${inkTint(e.inkList[1],theme)})` : e.inkList.length===1 ? inkTint(e.inkList[0],theme) : undefined}}>
             <div class="gco-img-wrap">
               ${e.image ? html`<img src=${e.image} alt=${e.name} loading="lazy"/>` : html`<div class="gco-noimg"></div>`}
@@ -12751,7 +12788,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
             ${e.sub && html`<div class="gco-sub">${e.sub}</div>`}
             ${valBlock(e)}
           </button>`)}</div>`
-        : html`<div class="gco-list">${b.items.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id)}>
+        : html`<div class="gco-list">${b.items.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id, e.it.printing)}>
             <span class="gco-row-name">${e.name}</span>
             ${gradeBadge(e)}
             <span class=${"gco-row-val"+(e.custom?" custom":"")}>${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</span>
@@ -12783,6 +12820,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // Click-to-open: builds a CardDetailModal-shaped "group" from raw rows
   // and shows the modal anchored to the graded tab.
   const [selectedGroup, setSelectedGroup] = useState(null);
+  // Which split-card version (Two Swords / Top Prize / …) the clicked tile
+  // represents, so the detail modal opens straight to that version.
+  const [selectedInitialPrinting, setSelectedInitialPrinting] = useState(null);
+  const openCardAt = useCallback((cid, printing) => {
+    const matching = (raw||[]).filter(r=>r.card_id===cid);
+    const groups = matching.length ? groupCards(matching) : [];
+    if(groups[0]){ setSelectedInitialPrinting(printing || null); setSelectedGroup(groups[0]); }
+  }, [raw]);
   // Collapsed-state per set_id. Persisted to localStorage so collapsed
   // sections stay collapsed across tab switches.
   const [collapsedSets, setCollapsedSets] = useState(() => {
@@ -13247,7 +13292,10 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     for(const it of items){
       const meta = cardById.get(it.card_id);
       const setName = meta && meta.Set;
-      const isSplitCard = setName && SPLIT_BY_PRINTING_SETS_GLOBAL.has(setName);
+      // Split into per-printing tiles for C1 (whole set) AND for the
+      // per-card splits (Genie Two Swords / Peter Pan Text Error), so each
+      // version gets its own tile + price + badge instead of collapsing.
+      const isSplitCard = (setName && SPLIT_BY_PRINTING_SETS_GLOBAL.has(setName)) || SPLIT_PRINTING_CARD_IDS.has(it.card_id);
       const tilePrinting = isSplitCard ? (it.printing || "Normal") : "Normal";
       const entry = ensureKey(it.card_id, tilePrinting);
       entry.slots.set(it.grader + "|" + it.grade, {
@@ -13284,18 +13332,29 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       for(const r of cardsForGoal){
         if(!extrasBucket && rarFilter.size && !rarFilter.has((r.Rarity||"").toLowerCase())) continue;
         if(!r.card_id) continue;
-        const printing = r.tcg_printing || "Normal";
-        if(!isSplitSet){
-          // Dedupe by card_id; first row wins (canonical printing).
-          if(seenForGoal.has(r.card_id)) continue;
+        // The ::variant:: clone (Genie Two Swords / Peter Pan Text Error) has no
+        // graded market of its own — its base card carries both printings, so
+        // skip the clone here and let the base emit a per-printing placeholder.
+        if(r.card_id.includes("::variant::") && SPLIT_PRINTING_CARD_IDS.has(r.card_id.split("::variant::")[0])) continue;
+        // Which (printing) tiles this raw row contributes a tracked placeholder for.
+        let printingsForRow;
+        if(SPLIT_PRINTING_CARD_IDS.has(r.card_id)){
+          printingsForRow = SPLIT_CARD_PRINTING_OPTIONS[r.card_id] || ["Normal"];
+        } else if(isSplitSet){
+          printingsForRow = [r.tcg_printing || "Normal"];
+        } else {
+          if(seenForGoal.has(r.card_id)) continue;   // dedupe by card_id; first row wins
           seenForGoal.add(r.card_id);
+          printingsForRow = ["Normal"];
         }
-        const key = r.card_id + "|" + (isSplitSet ? printing : "Normal");
-        trackedKeys.add(key);
-        if(extrasBucket) extrasBucketByCardId.set(r.card_id, extrasBucket);
-        if(!slotsByKey.has(key)){
-          slotsByKey.set(key, {card_id: r.card_id, printing: isSplitSet ? printing : "Normal",
-            slots: new Map([["__placeholder", {owned: false, qty: 0, printing: isSplitSet ? printing : "Normal"}]])});
+        for(const printing of printingsForRow){
+          const key = r.card_id + "|" + printing;
+          trackedKeys.add(key);
+          if(extrasBucket) extrasBucketByCardId.set(r.card_id, extrasBucket);
+          if(!slotsByKey.has(key)){
+            slotsByKey.set(key, {card_id: r.card_id, printing,
+              slots: new Map([["__placeholder", {owned: false, qty: 0, printing}]])});
+          }
         }
       }
     }
@@ -13448,7 +13507,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // default to "Normal" (matches the migration backfill).
   const addItem = useCallback(async ({card_id, printing, grader, grade, quantity}) => {
     if(!user) return;
-    const pr = printing || "Normal";
+    const slot = canonicalGradedSlot(card_id, printing);
+    card_id = slot.card_id;
+    const pr = slot.printing || "Normal";
     const row = {user_id: user.id, card_id, printing: pr, grader, grade,
       quantity: Math.max(1, Math.min(99, quantity || 1)),
       updated_at: new Date().toISOString()};
@@ -13468,15 +13529,18 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const bulkAddItems = useCallback(async (rows) => {
     if(!user || !Array.isArray(rows) || rows.length === 0) return 0;
     const nowIso = new Date().toISOString();
-    const payload = rows.map(r => ({
-      user_id: user.id,
-      card_id: r.card_id,
-      printing: r.printing || "Normal",
-      grader: r.grader,
-      grade: r.grade,
-      quantity: Math.max(1, Math.min(99, r.quantity || 1)),
-      updated_at: nowIso,
-    }));
+    const payload = rows.map(r => {
+      const slot = canonicalGradedSlot(r.card_id, r.printing);
+      return {
+        user_id: user.id,
+        card_id: slot.card_id,
+        printing: slot.printing,
+        grader: r.grader,
+        grade: r.grade,
+        quantity: Math.max(1, Math.min(99, r.quantity || 1)),
+        updated_at: nowIso,
+      };
+    });
     const {error} = await sbClient.from("graded_collection_items")
       .upsert(payload, {onConflict: "user_id,card_id,printing,grader,grade"});
     if(error){ flashToast("Bulk save failed: " + error.message); return 0; }
@@ -13764,8 +13828,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       <div class="graded-collection-main">
         ${gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
-              raw=${raw} theme=${theme}
-              onOpen=${(cid)=>{ const matching=(raw||[]).filter(r=>r.card_id===cid); const groups=matching.length?groupCards(matching):[]; if(groups[0]) setSelectedGroup(groups[0]); }}/>`
+              raw=${raw} theme=${theme} onOpen=${openCardAt}/>`
           : grouped.length === 0
           ? html`<div class="gc-empty">
               <div class="gc-empty-title">Start tracking your graded Lorcana</div>
@@ -13792,6 +13855,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     const openDetail = () => {
                       const matching = (raw||[]).filter(r => r.card_id === card.card_id);
                       const groups = matching.length ? groupCards(matching) : [card];
+                      setSelectedInitialPrinting(tilePrinting || null);
                       setSelectedGroup(groups[0] || card);
                     };
                     // Ink tile background. Single ink: light tint. Two inks
@@ -13818,6 +13882,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                     const hasOwned = slots.some(s => s.owned);
                     const tilePrinting = printing || "Normal";
                     const showPrintingTag = isSplitSection || (card.Set && SPLIT_BY_PRINTING_SETS_GLOBAL.has(card.Set));
+                    // Version badge for split cards (Two Swords / Text Error /
+                    // Top Prize / Prize Wall) — null for the plain base printing.
+                    const printBadge = variantBadge(tilePrinting);
                     // Resolve a slot's current graded $ for the cost-basis
                     // return chip — mirrors the slot-pill lookup (custom value
                     // wins, else preferred printing → Normal/Holo/Cold fallback).
@@ -13864,7 +13931,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                           ${!readOnly && html`<button class="gc-card-add-btn" title=${hasOwned?"Add another graded copy":"Add to graded collection"}
                             onClick=${e=>{ e.stopPropagation(); setAddPreselectCardId(card.card_id); setAddPreselectPrinting(tilePrinting); setAddOpen(true); }}>+</button>`}
                         </div>
-                        <div class="gco-name">${card["Product Name"]||"Unknown"}</div>
+                        <div class="gco-name">${card["Product Name"]||"Unknown"}${printBadge && html`<span class="variant-badge">${printBadge}</span>`}</div>
                         <div class=${"gco-val"+(hasOwned?"":" gc-poster-refval")}>${posterVal!=null ? (hasOwned?"":"~")+fmt(posterVal) : (hasOwned?"—":"")}</div>
                       </div>`;
                     }
@@ -13886,6 +13953,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                       <div class="gc-card-body">
                         <div class="gc-card-name" title=${(card["Product Name"]||"") + variantSuffix}>
                           ${card["Product Name"]||"Unknown"}${variantSuffix}
+                          ${printBadge && html`<span class="variant-badge">${printBadge}</span>`}
                         </div>
                         <div class="gc-card-sub muted">#${(card.Number||"").split("/")[0] || "?"} · ${card.Rarity||""}${showPrintingTag ? " · " + tilePrinting : ""}</div>
                         ${(rawPx != null || (card.tcgplayer_product_id && !isCustomVariant)) && html`<div class="gc-card-raw">
@@ -14211,6 +14279,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       user=${readOnly ? null : user} collection=${{}} updateQty=${()=>{}}
       onSignIn=${onSignIn}
       initialTab="graded"
+      initialPrinting=${selectedInitialPrinting || undefined}
       gradedOwned=${(items||[]).filter(it => it.card_id === selectedGroup.card_id)}
       onGradedAdjust=${readOnly ? null : ((grader, grade, delta, printing) => adjustGradedQty({card_id: selectedGroup.card_id, grader, grade, delta, printing: printing || "Normal"}))}
       onGradedMetaUpdate=${readOnly ? null : ((grader, grade, printing, patch) => updateItemMeta({card_id: selectedGroup.card_id, grader, grade, printing: printing || "Normal"}, patch))}
@@ -14220,7 +14289,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
         setAddOpen(true);
         setSelectedGroup(null);
       })}
-      onClose=${()=>setSelectedGroup(null)}/>`}
+      onClose=${()=>{ setSelectedGroup(null); setSelectedInitialPrinting(null); }}/>`}
   </div>`;
 };
 
@@ -14402,7 +14471,10 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
               const n = parseInt(qty,10);
               const safeQty = Math.max(1, Math.min(99, isNaN(n)?1:n));
               setBusy(true);
-              await onAdd({card_id: picked.card_id, printing: printing || picked.tcg_printing || "Normal", grader, grade, quantity: safeQty});
+              // Remap a ::variant:: clone pick onto its base card + variant printing
+              // (where the graded sales live) so the slot is priceable.
+              const slot = canonicalGradedSlot(picked.card_id, printing || picked.tcg_printing || "Normal");
+              await onAdd({card_id: slot.card_id, printing: slot.printing, grader, grade, quantity: safeQty});
               setBusy(false);
             }} style=${{padding:"7px 16px",fontSize:13}}>
               ${busy ? "Saving…" : "Save to collection"}
@@ -17943,6 +18015,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   };
   // Card detail modal — clicking a row's image or name opens it.
   const [selectedGroup, setSelectedGroup] = useState(null);
+  // For split-printing cards (C1 Prize Wall/Top Prize, Genie Two Swords, …) the
+  // clicked graded row's variant, so the modal opens to that exact version.
+  const [selectedInitialPrinting, setSelectedInitialPrinting] = useState(null);
   // Hover-to-enlarge state for the row image. {src, x, y} when hovering;
   // null otherwise. Same pattern as the deck-list rows.
   const [hoverPreview, setHoverPreview] = useState(null);
@@ -17976,7 +18051,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // against the cached _sealedProduct instead, falling back to the raw
   // sealed product the row stashes during synth.
   const [selectedSealedProduct, setSelectedSealedProduct] = useState(null);
-  const openModal = (cardId, sealedProduct) => {
+  const openModal = (cardId, sealedProduct, variant) => {
     if(sealedProduct){ setSelectedSealedProduct(sealedProduct); return; }
     if(typeof cardId === "string" && cardId.startsWith("sealed::")){
       // No product reference passed — synthesize from sealedPrices.
@@ -17988,7 +18063,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     const rows = rawByCardId[cardId] || [];
     if(!rows.length) return;
     const groups = groupCards(rows);
-    if(groups[0]) setSelectedGroup(groups[0]);
+    if(groups[0]){ setSelectedInitialPrinting(variant || null); setSelectedGroup(groups[0]); }
   };
   // Advanced filters: numeric ranges on the active price + each Δ% window.
   // Empty string means "no bound". Keeps things flexible — e.g. find every
@@ -19260,7 +19335,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             const isSel = selected.has(key);
             const tcg = tcgUrl(r.tcgplayer_product_id, r.printing);
             const isSealedRow = !!r._sealedProduct;
-            const openThisRow = () => openModal(r.card_id, isSealedRow ? r._sealedProduct : null);
+            const openThisRow = () => openModal(r.card_id, isSealedRow ? r._sealedProduct : null, r._variant);
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
               <td class="td-check"><input type="checkbox" checked=${isSel}
                 onChange=${() => toggleSelect(key)}/></td>
@@ -19292,10 +19367,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     </div>
     ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
-      onClose=${() => setSelectedGroup(null)}
+      onClose=${() => { setSelectedGroup(null); setSelectedInitialPrinting(null); }}
       user=${user} collection=${collection}
       updateQty=${updateQty}
       initialTab=${showGraded ? "graded" : undefined}
+      initialPrinting=${selectedInitialPrinting || undefined}
       priceFirst=${true}
       onSignIn=${onSignIn || (() => {})}/>`}
     ${reviewOpen && html`<${GradedReviewModal} onClose=${()=>setReviewOpen(false)}
