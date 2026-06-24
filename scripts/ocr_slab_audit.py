@@ -120,8 +120,12 @@ def reconcile(cur_card, label, by_id, by_name):
     (or None if no confident change). Strategy: stay on the same character
     (name+version); the label's rarity/cn picks WHICH printing of that character."""
     name, version = cur_card["name"], cur_card.get("version") or ""
-    sibs = by_name.get((name, version), [])
-    if not sibs:
+    # SAME SET ONLY. A character can exist across promo sets with different
+    # numbers (e.g. Cinderella - Stouthearted: Challenge #42 vs D23 #2), and an
+    # OCR'd community-# can collide across sets. The matcher already got the SET
+    # right via set hints — only the rarity/printing within that set is in doubt.
+    sibs = [c for c in by_name.get((name, version), []) if c.get("set_id") == cur_card.get("set_id")]
+    if len(sibs) < 2:  # nothing to disambiguate within the set
         return None
     lr, lcn = label.get("rarity"), label.get("cn")
     # 1) rarity + cn both present → the sibling matching both wins (most certain).
