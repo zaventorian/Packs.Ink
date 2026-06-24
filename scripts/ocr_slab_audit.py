@@ -266,7 +266,17 @@ def _slice(rows, offset, limit):
     return rows[offset:(offset + limit) if limit else None]
 
 
-SEL = "item_id,card_id,title,image_url,sale_price,grader,grade,cn_conflict,match_confidence"
+SEL = "item_id,card_id,title,image_url,sale_price,grader,grade,cn_conflict,match_confidence,slab_ocr"
+
+
+def save_ocr(item_id, raw):
+    """Persist the raw slab-label OCR on the sale (migration 80) so we never re-OCR
+    the same image. Independent per-row write — safe to call from a worker thread."""
+    import datetime as _dt
+    requests.patch(f"{SB_URL}/rest/v1/graded_sales",
+                   headers={**HEAD, "Content-Type": "application/json", "Prefer": "return=minimal"},
+                   params={"item_id": "eq." + item_id}, timeout=30,
+                   json={"slab_ocr": raw, "slab_ocr_at": _dt.datetime.now(_dt.timezone.utc).isoformat()})
 
 
 def fetch_all_auditable(limit, offset, only_ids=None):
@@ -457,8 +467,13 @@ def main():
             return (s, None, None, None, "nocard")
         try:
             img = requests.get(s["image_url"], headers=UA, timeout=30).content
-            label = parse_label(ocr(crop_label(img)))
+            raw = ocr(crop_label(img))
+            label = parse_label(raw)
             newid = reconcile(cur, label, by_id, by_name)
+            # Persist the OCR text once (going-forward; skip if already saved). Per-row
+            # write, independent of the main thread's counters → no race.
+            if args.commit and not s.get("slab_ocr"):
+                save_ocr(s["item_id"], raw)
         except Exception:
             return (s, cur, None, None, "error")  # transient — not marked done, retried next run
         finally:
