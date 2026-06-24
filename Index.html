@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=210">
+<link rel="stylesheet" href="styles.css?v=211">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=210"></script>
+<script src="logo.js?v=211"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -5315,8 +5315,11 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   // FOIL-split = an ordinary x/204 card that has BOTH foil and non-foil graded
   // sales → gets Non-Foil / Foil tabs too (computed from the per-card sales, so
   // no rollup/matview change needed; the tile + scatter derive from these sales).
+  // ONLY mainline booster (x/204) cards have a real non-foil/cold-foil duality —
+  // Extras/quest/promo cards are single-printing (their untagged sales are just
+  // foils without the keyword, so don't split them into a phantom "Non-Foil" tab).
   const isFoilSplit = useMemo(()=>{
-    if(isVersionSplit) return false;
+    if(isVersionSplit || !MAINLINE_SETS.includes(group.Set)) return false;
     let f = false, n = false;
     for(const r of (gradedSales.rows||[])){
       if(gradedFoilBucket(r.printing) === "Foil") f = true; else n = true;
@@ -12781,8 +12784,11 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
 
   const totalValue = useMemo(()=> visible.reduce((s,e)=> s + (e.value||0)*(e.qty||1), 0), [visible]);
   // Foil badge: only the foil copy of a NON-chase card (it has Normal + Cold Foil).
-  const showFoilBadge = (e)=> !GRADED_CHASE_RARITIES.has(e.rarity) && e.printing !== "Normal";
-  const printCell = (e)=> GRADED_CHASE_RARITIES.has(e.rarity) ? "" : (e.printing === "Normal" ? "Non-foil" : "Foil");
+  // "Foil" tag only on mainline (x/204) booster cards, which have a real
+  // non-foil/cold-foil duality. Extras/quest/promo cards are single-printing —
+  // no foil qualifier (user rule: foil label is only for x/204 cards).
+  const showFoilBadge = (e)=> !GRADED_CHASE_RARITIES.has(e.rarity) && e.printing !== "Normal" && MAINLINE_SETS.includes(e.set);
+  const printCell = (e)=> (GRADED_CHASE_RARITIES.has(e.rarity) || !MAINLINE_SETS.includes(e.set)) ? "" : (e.printing === "Normal" ? "Non-foil" : "Foil");
   const gradeBadge = (e)=> html`<span class="gco-grade" style=${{background: GRADER_COLOR[(e.grader||"").toLowerCase()] || "#888"}}>${(e.grader||"").toUpperCase()} ${e.grade}</span>`;
   const valStr = (e)=> e.value != null ? (e.rawPlaceholder ? "~" : (e.custom ? "✎ " : "")) + fmt(e.value) : "—";
   // Premium: show Last Sold + Avg-5 side by side (like Low / Market for raw).
