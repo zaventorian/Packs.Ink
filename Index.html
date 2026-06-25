@@ -85,6 +85,12 @@
         ],
         beforeSend: function (event) {
           try {
+            // Drop dev/preview noise — only real production packs.ink errors matter.
+            // The local dev server (localhost:8766) and IDE webview were sending
+            // mid-edit transients (e.g. an unbalanced htm template) tagged as prod.
+            var host = (window.location && window.location.hostname) || "";
+            if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0"
+                || host === "" || /\.local$/i.test(host)) return null;
             if (event.request && event.request.url) event.request.url = scrub(event.request.url);
             if (event.request && event.request.headers && event.request.headers.Referer)
               event.request.headers.Referer = scrub(event.request.headers.Referer);
@@ -100,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=227">
+<link rel="stylesheet" href="styles.css?v=228">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +165,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=227"></script>
+<script src="logo.js?v=228"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
