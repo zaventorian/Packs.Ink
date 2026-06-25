@@ -57,6 +57,36 @@ psa cgc bgs sgc tag beckett gem mint mt graded grade foil nonfoil non holo holof
 cold enchanted fabled iconic epic legendary rare super uncommon common promo first
 edition ed new near english eng set chapter pristine card slab gemmt""".split())
 
+# A title is NOT a single graded card when it's a multi-card lot/set, a sealed
+# pack, or a demo/test print. These were the dominant source of bad attributions
+# (a "Promo Set … Mickey, Yzma, HeiHei" 3-pack scored onto a single card; "Wave 1
+# Pack" / "Demo" cards landed on the base common). The `pack` alternative excludes
+# real card NAMES that contain "pack" (Pack Tactics / Pack Leader / Pack Mentality).
+NONSINGLE_RX = re.compile(
+    r"\bpromo\s+set\b"
+    r"|\bcomplete\s+set\b"
+    r"|\bset\s+of\s+\d"
+    r"|\blot\b"
+    r"|\bbundle\b"
+    r"|\bsealed\b"
+    r"|\bbooster\s+pack\b"
+    r"|\bwave\s*\d*\s*pack\b"
+    r"|\b\d{1,2}\s+(?:promo\s+)?cards\b"          # "6 promo cards"
+    r"|\bdemo\b"
+    r"|\bomitted\b"
+    r"|\btest\s+print\b",
+    re.I,
+)
+# Multiple DISTINCT card characters named in one title is also a lot (e.g.
+# "Mickey/Maleficent/Elsa"). Cheap heuristic: 3+ "/"-separated name chunks or an
+# explicit "x2"/"x3" quantity.
+MULTI_QTY_RX = re.compile(r"\bx\s?[2-9]\b", re.I)
+
+
+def is_nonsingle(title: str) -> bool:
+    """True when the title is a lot / set / pack / demo — i.e. NOT one graded card."""
+    return bool(NONSINGLE_RX.search(title or "") or MULTI_QTY_RX.search(title or ""))
+
 
 def norm_cn(cn: str) -> str:
     cn = (cn or "").strip()
@@ -263,7 +293,12 @@ def best_match(title, by_cn, inv):
 
 
 def match_one(title, by_cn, inv):
-    """Resolve one title -> (card_or_None, confidence, cn_conflict)."""
+    """Resolve one title -> (card_or_None, confidence, cn_conflict). Returns no
+    match for lots/sets/packs/demos, and for strong collector#-conflicts (a title
+    whose explicit #NNN disagrees with the matched card's catalog number — e.g.
+    "Top Prize 4/C1" scoring onto mainline #18)."""
+    if is_nonsingle(title):
+        return None, 0.0, False
     best, sc, ov, cn_hit, set_hit = best_match(title, by_cn, inv)
     matched = best is not None and (
         (cn_hit and set_hit)
@@ -274,7 +309,9 @@ def match_one(title, by_cn, inv):
     if not matched:
         return None, round(sc, 3), False
     scn = strong_collectors(title)
-    return best, round(sc, 3), bool(scn and best["_cn"] not in scn)
+    if scn and best["_cn"] not in scn:
+        return None, round(sc, 3), True   # explicit-CN conflict → reject, don't guess
+    return best, round(sc, 3), False
 
 
 def main():
