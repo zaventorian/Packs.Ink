@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=220">
+<link rel="stylesheet" href="styles.css?v=221">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=220"></script>
+<script src="logo.js?v=221"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -5321,7 +5321,7 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
   </div>`;
 };
 
-const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst, onGradeThis, gradedSummary}) => {
+const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst, onGradeThis, gradedSummary, gradedCopies}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
   // raw qty) and per-row +/- on the graded tab is enabled via
@@ -5748,10 +5748,17 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
         </div>`}
 
         ${gradedSummary && gradedSummary.count > 0 && html`<div class=${"card-detail-graded-note "+gradedSummary.type}>
-          ✦ You own <strong>${gradedSummary.count}</strong> ${gradedSummary.type === "graded"
+          <div>✦ You own <strong>${gradedSummary.count}</strong> ${gradedSummary.type === "graded"
             ? `graded ${gradedSummary.count===1?"copy":"copies"}`
-            : `${gradedSummary.count===1?"copy":"copies"} sent for grading`} of this card.
-          <span class="muted"> Counts toward set completion — not raw value or deck copies.</span>
+            : `${gradedSummary.count===1?"copy":"copies"} sent for grading`} of this card.</div>
+          ${gradedCopies && gradedCopies.length > 0 && html`<div class="cd-graded-copies">
+            ${gradedCopies.map((c,i) => html`<span key=${i} class=${"cd-graded-chip "+c.kind}>
+              ${c.kind === "graded"
+                ? html`${(GRADER_LABEL[c.grader]||(c.grader||"").toUpperCase())} ${c.grade}${c.quantity>1?" ×"+c.quantity:""}`
+                : html`${c.grader ? (GRADER_LABEL[c.grader]||c.grader.toUpperCase())+" · " : ""}at grader${c.quantity>1?" ×"+c.quantity:""}`}
+            </span>`)}
+          </div>`}
+          <span class="muted">Counts toward set completion — not raw value or deck copies.</span>
         </div>`}
 
         ${typeof onGradeThis === "function" && user && html`<button class="card-detail-grade-this" onClick=${onGradeThis}
@@ -9430,7 +9437,7 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
 // Enchanted to browse every Enchanted in the game and see which you own.
 const ALL_CARDS_VIEW = "__all_cards__";
 
-const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedCover, gradedMark, onGradedChanged, gradedPremium}) => {
+const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedCover, gradedMark, gradedCopies, onGradedChanged, gradedPremium}) => {
   const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
@@ -9897,6 +9904,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}
       gradedSummary=${gradedPremium ? tileGraded(selectedGroup) : null}
+      gradedCopies=${gradedPremium && gradedCopies ? gradedCopies(selectedGroup.card_id) : null}
       onGradeThis=${!readOnly && user && gradedPremium ? (()=>{ const g = selectedGroup; setSelectedGroup(null); setGradeFromRaw(g); }) : null}/>`}
     ${gradeFromRaw && html`<${GradeFromRawModal} group=${gradeFromRaw} user=${user}
       collection=${collection} updateQty=${updateQty}
@@ -15638,10 +15646,10 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     if(!user || isViewerMode || !gradedPremium){ setGradedOwnRows([]); setPendingRows([]); return; }
     try {
       const [gi, ps] = await Promise.all([
-        sbClient.from("graded_collection_items").select("card_id,printing,quantity").eq("user_id", user.id)
+        sbClient.from("graded_collection_items").select("card_id,printing,quantity,grader,grade").eq("user_id", user.id)
           .then(r => r.error ? sbClient.from("graded_collection_items").select("card_id,quantity").eq("user_id", user.id) : r)
           .catch(()=>({data:[]})),
-        sbClient.from("grading_submissions").select("card_id,printing,quantity").eq("user_id", user.id)
+        sbClient.from("grading_submissions").select("card_id,printing,quantity,intended_grader,status").eq("user_id", user.id)
           .then(r => r.error ? {data:[]} : r)
           .catch(()=>({data:[]})),
       ]);
@@ -15696,6 +15704,24 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     return {dualCards, graded, pending, cover, mark};
   }, [gradedOwnRows, pendingRows, raw, remapGradedId]);
   const coverFor = useCallback((cid, tcgPrinting) => gradedCompletion.cover(cid, tcgPrinting), [gradedCompletion]);
+
+  // Per-card list of the actual graded slabs + pending submissions you own
+  // (with grader/grade), keyed by effective card_id (variant remap applied) —
+  // drives the "✦ You own PSA 10, …" note in the card-detail modal.
+  const gradedDetailByCard = useMemo(() => {
+    const m = new Map();
+    const push = (cid, item) => { if(!m.has(cid)) m.set(cid, []); m.get(cid).push(item); };
+    for(const r of gradedOwnRows){
+      if(!r.card_id) continue;
+      push(remapGradedId(r.card_id, r.printing), {grader: r.grader, grade: r.grade, quantity: Math.max(1, r.quantity||1), kind: "graded"});
+    }
+    for(const r of pendingRows){
+      if(!r.card_id) continue;
+      push(remapGradedId(r.card_id, r.printing), {grader: r.intended_grader, grade: null, quantity: Math.max(1, r.quantity||1), kind: "pending"});
+    }
+    return m;
+  }, [gradedOwnRows, pendingRows, remapGradedId]);
+  const gradedCopiesFor = useCallback((cid) => gradedDetailByCard.get(cid) || [], [gradedDetailByCard]);
 
   // Index for CSV import: normalized Product Name → [raw rows]. Used to
   // resolve Dreamborn export rows (which key on Name + collector number)
@@ -15925,7 +15951,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     user=${user} onSignIn=${onSignIn} copies=${copies} setCopies=${isViewerMode ? null : setCopies}
     readOnly=${isViewerMode}
     compareMode=${canCompare ? compareMode : "all"}
-    gradedCover=${gradedCompletion.cover} gradedMark=${gradedCompletion.mark}
+    gradedCover=${gradedCompletion.cover} gradedMark=${gradedCompletion.mark} gradedCopies=${gradedCopiesFor}
     onGradedChanged=${reloadGradedOwnership} gradedPremium=${gradedPremium}
     viewerOwnCollection=${viewerOwnCollection || null}/>`;
 
