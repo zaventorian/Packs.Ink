@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=222">
+<link rel="stylesheet" href="styles.css?v=223">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=222"></script>
+<script src="logo.js?v=223"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -14371,7 +14371,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
             onClick=${onJumpToScreenerGraded}
             title="Open the Screener filtered to your graded cards, sorted by 1W Δ%">View in Screener →</button>`}
         </div>
-        ${tileHistory == null
+        ${(gradedPremium ? tileDeltasByKey == null : tileHistory == null)
           ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>Loading graded history…</div>`
           : gradedBannerMovers.length === 0
             ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>
@@ -23380,7 +23380,126 @@ const UpcomingSCsBox = () => {
     : scBox;
 };
 
+// Home-page graded banner (premium only). Two tabs: biggest Δ% movers
+// (graded_sales_rollup) and biggest individual sales in the window
+// (graded_sales). Market-wide — not limited to the user's owned cards.
+const GRADED_HOME_WINS = [["1w","1W"],["1m","1M"]];
+const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
+  const [tab, setTab] = useState("movers");   // "movers" | "sales"
+  const [win, setWin] = useState("1m");
+  const [rollup, setRollup] = useState(null);
+  const [sales, setSales] = useState(null);
+  const cardById = useMemo(() => {
+    const m = new Map();
+    for(const r of (raw||[])) if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, r);
+    return m;
+  }, [raw]);
+
+  useEffect(() => {
+    let cancelled = false;
+    sbFetchAll("graded_sales_rollup", {
+      select: "card_id,grader,grade,last_sold_price,pct_1d,pct_7d,pct_30d", order: "card_id.asc",
+    }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(() => { if(!cancelled) setRollup([]); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const days = win === "1w" ? 7 : 30;
+  useEffect(() => {
+    if(tab !== "sales"){ return; }
+    let cancelled = false;
+    setSales(null);
+    const d = new Date(); d.setDate(d.getDate() - days);
+    const since = d.toISOString().slice(0, 10);
+    sbClient.from("graded_sales")
+      .select("item_id,card_id,grader,grade,printing,sale_price,sold_date")
+      .not("card_id", "is", null).not("grade", "is", null).not("sale_price", "is", null)
+      .eq("excluded", false).gte("sold_date", since)
+      .order("sale_price", {ascending: false}).limit(80)
+      .then(r => { if(!cancelled) setSales(r.error ? [] : (r.data || [])); })
+      .catch(() => { if(!cancelled) setSales([]); });
+    return () => { cancelled = true; };
+  }, [tab, days]);
+
+  const moverCards = useMemo(() => {
+    if(!rollup) return null;
+    const pctKey = win === "1w" ? "pct_7d" : "pct_30d";
+    const rows = [];
+    for(const r of rollup){
+      const meta = cardById.get(r.card_id);
+      if(!meta) continue;
+      const pct = r[pctKey];
+      if(pct == null || pct === 0) continue;
+      rows.push({card_id: r.card_id, _initialTab: "graded", grader: r.grader, grade: r.grade,
+        name: meta["Product Name"], img: meta.img_normal || meta.img_small,
+        price: r.last_sold_price, pct, pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
+    }
+    rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
+    return rows.slice(0, 20);
+  }, [rollup, win, cardById]);
+
+  const saleCards = useMemo(() => {
+    if(!sales) return null;
+    // Sales come pre-sorted by price desc; keep the top sale per distinct slab
+    // (card + grader + grade) so the strip shows variety, not the same card 5×.
+    const rows = [];
+    const seen = new Set();
+    for(const s of sales){
+      const key = `${s.card_id}|${s.grader}|${s.grade}`;
+      if(seen.has(key)) continue;
+      const meta = cardById.get(s.card_id);
+      if(!meta) continue;
+      seen.add(key);
+      rows.push({card_id: s.card_id, _initialTab: "graded", grader: s.grader, grade: s.grade,
+        name: meta["Product Name"], img: meta.img_normal || meta.img_small,
+        price: s.sale_price, sold_date: s.sold_date});
+      if(rows.length >= 20) break;
+    }
+    return rows;
+  }, [sales, cardById]);
+
+  const cards = tab === "movers" ? moverCards : saleCards;
+
+  return html`<section class="graded-home-banner" style=${{margin:"0 0 10px"}}>
+    <div class="graded-home-head">
+      ${onTitleClick
+        ? html`<button class="home-title-link graded-home-title" onClick=${onTitleClick}>Graded Market</button>`
+        : html`<h2 class="title-font graded-home-title">Graded Market</h2>`}
+      <div class="seg-toggle graded-home-seg">
+        <button class=${tab==="movers"?"active":""} onClick=${()=>setTab("movers")}>Top Movers</button>
+        <button class=${tab==="sales"?"active":""} onClick=${()=>setTab("sales")}>Top Sales</button>
+      </div>
+      <div class="seg-toggle graded-home-seg">
+        ${GRADED_HOME_WINS.map(([k,l]) => html`<button key=${k} class=${win===k?"active":""} onClick=${()=>setWin(k)}>${l}</button>`)}
+      </div>
+    </div>
+    ${cards == null
+      ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>Loading graded ${tab==="sales"?"sales":"movers"}…</div>`
+      : cards.length === 0
+        ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>No graded ${tab==="sales"?"sales":"movement"} in this window yet.</div>`
+        : html`<div class="graded-movers-strip-wrap"><div class="graded-movers-strip">
+            ${cards.map(c => html`<button key=${`${c.card_id}|${c.grader}|${c.grade}|${c.sold_date||c.pct}`}
+              class="gmover-tile" onClick=${()=>onCard(c)} title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+              ${c.img ? html`<img src=${c.img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
+              <div class="gmover-name">${c.name}</div>
+              <div class="gmover-meta">
+                <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
+                <span class="gmover-price">$${Math.round(c.price)}</span>
+              </div>
+              ${tab === "movers"
+                ? html`<div class="gmover-deltas">
+                    <span class="gmover-dh">1D</span><span class="gmover-dh">1W</span><span class="gmover-dh">1M</span>
+                    <span class="gmover-dv" style=${{color:pctColor(c.pct_1d)}}>${fmtPct(c.pct_1d)}</span>
+                    <span class="gmover-dv" style=${{color:pctColor(c.pct_7d)}}>${fmtPct(c.pct_7d)}</span>
+                    <span class="gmover-dv" style=${{color:pctColor(c.pct_30d)}}>${fmtPct(c.pct_30d)}</span>
+                  </div>`
+                : html`<div class="gmover-saledate">Sold ${c.sold_date}</div>`}
+            </button>`)}
+          </div></div>`}
+  </section>`;
+};
+
 const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter, onEventArtistClick}) => {
+  const gradedPremium = useContext(GradedPremiumContext);
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
   const goAnalytics  = openView ? (()=>openView("market"))     : null;
@@ -23824,6 +23943,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("promo")}
                       onTileClick=${openCard}/>
+                    ${gradedPremium && html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>`}
                     ${!newestSetIsHot && newestBanner}
                   </div>`;
                 })()}
