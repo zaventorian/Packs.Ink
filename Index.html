@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=224">
+<link rel="stylesheet" href="styles.css?v=225">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=224"></script>
+<script src="logo.js?v=225"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -13736,6 +13736,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       if((it.quantity||0) <= 0) continue;
       const meta = cardById.get(it.card_id);
       if(!meta || !meta.tcgplayer_product_id) continue;
+      // Graded movers are a chase-rarity surface — base-rarity graded sales are
+      // too sparse/noisy to read as movement (matches the home banner).
+      if(!GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
       const printing = it.printing || "Normal";
       const key = `${meta.tcgplayer_product_id}|${printing}|${(it.grader||"").toLowerCase()}|${it.grade}`;
       const d = tileDeltasByKey.get(key);
@@ -21283,6 +21286,75 @@ const copyMoverBannerImage = (cards, activeWindow, title, rangeLabel) => {
   }
 };
 
+// Graded banner camera export — compact canvas render of the graded movers/
+// sales strip (art · grader/grade · price · windowed Δ%). Mirrors the raw banner
+// export but for the graded tile shape (no LOW/MKT split).
+const copyGradedBannerImage = (cards, gridWins, title, rangeLabel) => {
+  flashToast("Copying banner…", 10000);
+  const blobPromise = buildGradedBannerBlob(cards, gridWins, title, rangeLabel);
+  blobPromise.catch(err => console.error("[graded-banner] capture failed:", err));
+  const dl = (blob) => { const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download="packsink-graded-movers.png"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),2000); };
+  if(navigator.clipboard && window.ClipboardItem){
+    navigator.clipboard.write([new ClipboardItem({"image/png": blobPromise})])
+      .then(()=>flashToast("Banner image copied to clipboard"))
+      .catch(()=>{ blobPromise.then(b=>{ dl(b); flashToast("Couldn't reach clipboard — downloaded instead"); }).catch(()=>flashToast("Couldn't copy banner — try again")); });
+  } else {
+    blobPromise.then(b=>{ dl(b); flashToast("Banner image saved"); }).catch(()=>flashToast("Couldn't copy banner — try again"));
+  }
+};
+function paintGradedTile(ctx, x, y, w, h, c, art, gridWins, P){
+  roundRectPath(ctx, x, y, w, h, 10); ctx.fillStyle = P.surface; ctx.fill();
+  const artW = w-24, artH = Math.round(artW*7/5), ax = x+12, ay = y+12;
+  roundRectPath(ctx, ax, ay, artW, artH, 6); ctx.save(); ctx.clip();
+  if(art) drawImageCover(ctx, art, ax, ay, artW, artH);
+  else { ctx.fillStyle = P.bg; ctx.fillRect(ax, ay, artW, artH); }
+  ctx.restore();
+  const trunc = (t, maxW) => { t = t || ""; if(ctx.measureText(t).width <= maxW) return t; while(t.length > 1 && ctx.measureText(t+"…").width > maxW) t = t.slice(0,-1); return t+"…"; };
+  let cy = ay + artH + 16;
+  ctx.textAlign = "left"; ctx.fillStyle = P.text; ctx.font = "700 12px 'Nunito Sans', sans-serif";
+  ctx.fillText(trunc(c.name, w-24), x+12, cy); cy += 16;
+  ctx.fillStyle = P.accent; ctx.font = "800 11px 'Nunito Sans', sans-serif";
+  ctx.fillText((c.grader||"").toUpperCase()+" "+c.grade + (isFoilPrinting(c.printing)?" · Foil":""), x+12, cy);
+  ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = "800 12px 'Nunito Sans', sans-serif";
+  ctx.fillText("$"+Math.round(c.price), x+w-12, cy); cy += 17;
+  const cellW = (w-24)/gridWins.length;
+  ctx.textAlign = "center";
+  gridWins.forEach(([l], i) => { ctx.fillStyle = P.muted; ctx.font = "700 8.5px 'Nunito Sans', sans-serif"; ctx.fillText(l, x+12+cellW*(i+0.5), cy); });
+  cy += 14;
+  gridWins.forEach(([l,k], i) => { const p = sanePct(c[k]); ctx.fillStyle = posterPctColor(p, P); ctx.font = "800 11px 'Nunito Sans', sans-serif"; ctx.fillText(fmtPct(p), x+12+cellW*(i+0.5), cy); });
+}
+async function buildGradedBannerBlob(cards, gridWins, title, rangeLabel){
+  const P = posterPalette();
+  const SCALE=2, PAD=22, COLS=5, TW=200, GAP=12;
+  const list = (cards||[]).slice(0,10);
+  if(!list.length) throw new Error("no cards");
+  const artW = TW-24, artH = Math.round(artW*7/5), tileH = 12 + artH + 76;
+  const rows = Math.ceil(list.length/COLS), HEAD_H=54;
+  const W = PAD + COLS*TW + (COLS-1)*GAP + PAD;
+  const H = PAD + HEAD_H + 14 + rows*tileH + (rows-1)*GAP + PAD;
+  const [logoImg, ...artImgs] = await Promise.all([
+    loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png?v=5"),
+    ...list.map(c => c.img ? loadPosterImage(proxyImg(c.img)) : Promise.resolve(null)),
+  ]);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(W*SCALE); canvas.height = Math.round(H*SCALE);
+  const ctx = canvas.getContext("2d"); ctx.scale(SCALE,SCALE); ctx.textBaseline = "alphabetic";
+  ctx.fillStyle = P.bg; ctx.fillRect(0,0,W,H);
+  const lH=40, lW = logoImg ? Math.round(logoImg.naturalWidth*(lH/logoImg.naturalHeight)) : 0;
+  if(logoImg) ctx.drawImage(logoImg, PAD, PAD+2, lW, lH);
+  const tx = PAD + lW + (lW?16:0);
+  ctx.textAlign="left"; ctx.fillStyle=P.text; ctx.font="800 22px 'Cinzel', Georgia, serif";
+  ctx.fillText(title||"Graded Market", tx, PAD+22);
+  const dateStr = new Date().toLocaleDateString(undefined,{year:"numeric",month:"short",day:"numeric"});
+  ctx.fillStyle=P.muted; ctx.font="700 12px 'Nunito Sans', sans-serif";
+  ctx.fillText("packs.ink · " + (rangeLabel?rangeLabel+" · ":"") + dateStr, tx, PAD+42);
+  const hy = PAD+HEAD_H;
+  ctx.strokeStyle=P.border; ctx.lineWidth=1; ctx.beginPath(); ctx.moveTo(PAD,hy); ctx.lineTo(W-PAD,hy); ctx.stroke();
+  const gridTop = hy+14;
+  list.forEach((c,i)=>{ const col=i%COLS, row=Math.floor(i/COLS); paintGradedTile(ctx, PAD+col*(TW+GAP), gridTop+row*(tileH+GAP), TW, tileH, c, artImgs[i], gridWins, P); });
+  return await new Promise((res,rej)=>canvas.toBlob(b=>b?res(b):rej(new Error("toBlob failed")),"image/png"));
+}
+
 const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   const tips = useContext(TipsContext);
   const url = tcgUrl(card.tcgplayer_product_id, card.printing);
@@ -23431,6 +23503,9 @@ const UpcomingSCsBox = () => {
 const GRADED_HOME_WINS = [["1d","1D","pct_1d",1],["1w","1W","pct_7d",7],["1m","1M","pct_30d",30],["3m","3M","pct_90d",90]];
 const GRADED_HOME_GRADERS = ["PSA","CGC","BGS","SGC","TAG"];
 const GRADED_HOME_GRADES = ["10","9.5","9","8.5","8","7"];
+// Graded movers are limited to the cards people actually grade + chase.
+const GRADED_HOME_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
+const isFoilPrinting = (p) => !!p && p !== "Non-Foil" && p !== "Normal";
 const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   const [tab, setTab] = useState("movers");   // "movers" | "sales"
   const [win, setWin] = useState("1m");
@@ -23454,7 +23529,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   useEffect(() => {
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,last_sold_price,pct_1d,pct_7d,pct_30d,pct_90d", order: "card_id.asc",
+      select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d,pct_90d", order: "card_id.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(() => { if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
   }, []);
@@ -23483,12 +23558,12 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
     for(const r of rollup){
       if(!passFilter(r.grader, r.grade)) continue;
       const meta = cardById.get(r.card_id);
-      if(!meta) continue;
+      if(!meta || !GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
       const pct = sanePct(r[pctKey]);
       if(pct == null || pct === 0) continue;
-      rows.push({card_id: r.card_id, _initialTab: "graded", grader: r.grader, grade: r.grade,
-        name: meta["Product Name"], img: meta.img_normal || meta.img_small,
-        price: r.last_sold_price, pct, pct_7d: r.pct_7d, pct_30d: r.pct_30d, pct_90d: r.pct_90d});
+      rows.push({card_id: r.card_id, _initialTab: "graded", _initialPrinting: r.printing, grader: r.grader, grade: r.grade,
+        printing: r.printing, name: meta["Product Name"], img: meta.img_normal || meta.img_small,
+        price: r.last_sold_price, pct, pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d, pct_90d: r.pct_90d});
     }
     rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
     return rows.slice(0, 20);
@@ -23504,10 +23579,10 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       const key = `${s.card_id}|${s.grader}|${s.grade}`;
       if(seen.has(key)) continue;
       const meta = cardById.get(s.card_id);
-      if(!meta) continue;
+      if(!meta || !GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
       seen.add(key);
-      rows.push({card_id: s.card_id, _initialTab: "graded", grader: s.grader, grade: s.grade,
-        name: meta["Product Name"], img: meta.img_normal || meta.img_small,
+      rows.push({card_id: s.card_id, _initialTab: "graded", _initialPrinting: s.printing, grader: s.grader, grade: s.grade,
+        printing: s.printing, name: meta["Product Name"], img: meta.img_normal || meta.img_small,
         price: s.sale_price, sold_date: s.sold_date});
       if(rows.length >= 20) break;
     }
@@ -23515,6 +23590,10 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   }, [sales, cardById]);
 
   const cards = tab === "movers" ? moverCards : saleCards;
+  // Tile Δ% grid: keep the selected window visible (so 1D shows the 1D %).
+  const gridWins = win === "1d"
+    ? [["1D","pct_1d"],["1W","pct_7d"],["1M","pct_30d"]]
+    : [["1W","pct_7d"],["1M","pct_30d"],["3M","pct_90d"]];
 
   return html`<section class="graded-home-banner" style=${{margin:"0 0 10px"}}>
     <div class="graded-home-head">
@@ -23528,6 +23607,16 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       <div class="seg-toggle graded-home-seg">
         ${GRADED_HOME_WINS.map(([k,l]) => html`<button key=${k} class=${win===k?"active":""} onClick=${()=>setWin(k)}>${l}</button>`)}
       </div>
+      ${cards && cards.length > 0 && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
+        ${[{lo:0,hi:10,lbl:"1–10"}, ...(cards.length>10 ? [{lo:10,hi:20,lbl:"11–20"}] : [])].map(seg => html`<button key=${seg.lbl}
+          class="movers-banner-cam" title=${`Copy cards ${seg.lbl} as an image`} aria-label=${`Copy cards ${seg.lbl} as an image`}
+          onClick=${()=>copyGradedBannerImage(cards.slice(seg.lo, seg.hi), gridWins, "Graded Market", (tab==="sales"?"Top Sales · ":"")+(GRADED_HOME_WINS.find(w=>w[0]===win)||[])[1], seg.lbl)}>
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="12" height="12" style=${{display:"block",stroke:"currentColor",fill:"none",strokeWidth:2,strokeLinecap:"round",strokeLinejoin:"round"}}>
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/>
+          </svg>
+          <span style=${{fontSize:10,fontWeight:700,letterSpacing:0.2}}>${seg.lbl}</span>
+        </button>`)}
+      </span>`}
     </div>
     <div class="graded-home-filters">
       <span class="graded-home-flbl">Graders</span>
@@ -23543,19 +23632,18 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
         : html`<${AutoScrollStrip} items=${cards}
             keyFor=${(c,i)=>`${c.card_id}|${c.grader}|${c.grade}|${c.sold_date||c.pct}|${i}`}
             renderItem=${(c, key) => html`<button key=${key} class="gmover-tile" onClick=${()=>onCard(c)}
-              title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+              title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}${isFoilPrinting(c.printing)?" · "+c.printing:""}`}>
               ${c.img ? html`<img src=${c.img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
               <div class="gmover-name">${c.name}</div>
               <div class="gmover-meta">
                 <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
+                ${isFoilPrinting(c.printing) && html`<span class="gmover-foil">Foil</span>`}
                 <span class="gmover-price">$${Math.round(c.price)}</span>
               </div>
               ${tab === "movers"
                 ? html`<div class="gmover-deltas">
-                    <span class="gmover-dh">1W</span><span class="gmover-dh">1M</span><span class="gmover-dh">3M</span>
-                    <span class="gmover-dv" style=${{color:pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
-                    <span class="gmover-dv" style=${{color:pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
-                    <span class="gmover-dv" style=${{color:pctColor(sanePct(c.pct_90d))}}>${fmtPct(sanePct(c.pct_90d))}</span>
+                    ${gridWins.map(([l]) => html`<span key=${"h"+l} class="gmover-dh">${l}</span>`)}
+                    ${gridWins.map(([l,k]) => html`<span key=${"v"+l} class="gmover-dv" style=${{color:pctColor(sanePct(c[k]))}}>${fmtPct(sanePct(c[k]))}</span>`)}
                   </div>`
                 : html`<div class="gmover-saledate">Sold ${c.sold_date}</div>`}
             </button>`}/>`}
@@ -23622,6 +23710,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // Graded tab instead of the default Price History. null = let the modal
   // pick its own default.
   const [selectedInitialTab, setSelectedInitialTab] = useState(null);
+  // Foil hint threaded from graded mover tiles so the modal's graded view opens
+  // on the foil printing the mover represents (Pete foil etc.).
+  const [selectedInitialPrinting, setSelectedInitialPrinting] = useState(null);
   const [windowKey, setWindowKey] = useState("1d");
   const [showUp, setShowUp] = useState(true);
   const [showDown, setShowDown] = useState(true);
@@ -23669,6 +23760,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       // Graded movers carry _initialTab="graded" so the modal lands on the
       // Graded tab. Raw movers leave it null → modal uses its own default.
       setSelectedInitialTab(mover._initialTab || null);
+      setSelectedInitialPrinting(mover._initialPrinting || null);
     }
   }, [rowsByCardId, rowsByPid]);
 
@@ -24024,8 +24116,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     </div>
 
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
-      onClose=${()=>{ setSelectedGroup(null); setSelectedInitialTab(null); }}
+      onClose=${()=>{ setSelectedGroup(null); setSelectedInitialTab(null); setSelectedInitialPrinting(null); }}
       initialTab=${selectedInitialTab || undefined}
+      initialPrinting=${selectedInitialPrinting || undefined}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
   </div>`;
 };
