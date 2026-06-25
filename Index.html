@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=221">
+<link rel="stylesheet" href="styles.css?v=222">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=221"></script>
+<script src="logo.js?v=222"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -14287,6 +14287,22 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     await reloadSubmissions();
   }, [user, reloadSubmissions]);
 
+  // Bulk path for the Bulk-add modal's "Send to grader" mode — one insert of
+  // N submissions. Returns the number added (drives the modal's success view).
+  const bulkAddSubmissions = useCallback(async (rows) => {
+    if(!user || !Array.isArray(rows) || rows.length === 0) return 0;
+    const payload = rows.map(r => {
+      const slot = canonicalGradedSlot(r.card_id, r.printing);
+      return {user_id: user.id, card_id: slot.card_id, printing: slot.printing,
+        intended_grader: r.intended_grader || null, status: r.status || "to_submit",
+        quantity: 1, submitted_on: r.submitted_on || null};
+    });
+    const {error} = await sbClient.from("grading_submissions").insert(payload);
+    if(error){ flashToast("Bulk send failed: " + error.message); return 0; }
+    await reloadSubmissions();
+    return payload.length;
+  }, [user, reloadSubmissions]);
+
   const updateSubmission = useCallback(async (id, patch) => {
     if(!user) return;
     setSubmissions(prev => prev.map(s => s.id===id ? {...s, ...patch} : s));
@@ -14920,7 +14936,8 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       setNameById=${setNameById}
       cardsBySetId=${cardsBySetId}
       onClose=${()=>setBulkAddOpen(false)}
-      onBulkAdd=${async (rows) => { const n = await bulkAddItems(rows); setBulkAddOpen(false); return n; }}/>`}
+      onBulkAdd=${async (rows) => { const n = await bulkAddItems(rows); setBulkAddOpen(false); return n; }}
+      onBulkSendToQueue=${async (rows) => { const n = await bulkAddSubmissions(rows); setBulkAddOpen(false); if(n) flashToast(`Sent ${n} card${n===1?"":"s"} to your grading queue.`); return n; }}/>`}
     ${goalOpen && html`<${GradedCollectionGoalModal}
       setNameById=${setNameById} setIdsByName=${setIdsByName}
       extrasBucketOptions=${extrasBucketOptions}
@@ -15184,8 +15201,10 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
 // Bulk-add modal. Pick a set + rarities + printings, set default grader/grade,
 // then check the cards you want to log. Each row optionally overrides the
 // default grader/grade. One PostgREST upsert call commits everything.
-const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClose, onBulkAdd}) => {
+const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClose, onBulkAdd, onBulkSendToQueue}) => {
   useEscToClose(onClose);
+  const [mode, setMode] = useState("graded");   // "graded" = log slabs · "send" = grading queue
+  const [stage, setStage] = useState("to_submit"); // send mode: "to_submit" | "at_grader"
   const [setName, setSetName] = useState("");
   const [rarities, setRarities] = useState(new Set());
   const [printings, setPrintings] = useState(new Set(["Non-Foil","Foil"]));
@@ -15195,6 +15214,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
   const [rowState, setRowState] = useState({});
   const [busy, setBusy] = useState(false);
   const [addedCount, setAddedCount] = useState(null);
+  const sendMode = mode === "send" && typeof onBulkSendToQueue === "function";
 
   const GRADERS = ["psa","cgc","bgs","sgc","tag"];
   const GRADES  = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
@@ -15285,14 +15305,26 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
   const onSubmit = async () => {
     if(!canSave) return;
     setBusy(true);
-    const rows = selectedRows.map(c => ({
-      card_id: c.card_id,
-      printing: c.printing,
-      grader: rowState[c.rowKey]?.grader || defGrader,
-      grade:  rowState[c.rowKey]?.grade  || defGrade,
-      quantity: 1,
-    }));
-    const n = await onBulkAdd(rows);
+    let n;
+    if(sendMode){
+      const rows = selectedRows.map(c => ({
+        card_id: c.card_id,
+        printing: c.printing,
+        intended_grader: (rowState[c.rowKey]?.grader || defGrader) || null,
+        status: stage,
+        submitted_on: null,
+      }));
+      n = await onBulkSendToQueue(rows);
+    } else {
+      const rows = selectedRows.map(c => ({
+        card_id: c.card_id,
+        printing: c.printing,
+        grader: rowState[c.rowKey]?.grader || defGrader,
+        grade:  rowState[c.rowKey]?.grade  || defGrade,
+        quantity: 1,
+      }));
+      n = await onBulkAdd(rows);
+    }
     setBusy(false);
     setAddedCount(n);
   };
@@ -15300,19 +15332,30 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:780}}>
       <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Bulk add graded cards</h2>
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${sendMode ? "Bulk send for grading" : "Bulk add graded cards"}</h2>
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
       <div class="modal-body" style=${{padding:18,maxHeight:"75vh",overflowY:"auto"}}>
         ${addedCount != null
           ? html`<div style=${{padding:"30px 10px",textAlign:"center"}}>
               <div style=${{fontSize:48,marginBottom:8}}>✓</div>
-              <div style=${{fontSize:16,fontWeight:700,marginBottom:6}}>Added ${addedCount} card${addedCount===1?"":"s"} to your graded collection.</div>
-              <div class="muted" style=${{fontSize:12,marginBottom:14}}>Existing slots with the same (card, printing, grader, grade) had their quantity refreshed.</div>
+              <div style=${{fontSize:16,fontWeight:700,marginBottom:6}}>${sendMode
+                ? html`Sent ${addedCount} card${addedCount===1?"":"s"} to your grading queue.`
+                : html`Added ${addedCount} card${addedCount===1?"":"s"} to your graded collection.`}</div>
+              <div class="muted" style=${{fontSize:12,marginBottom:14}}>${sendMode
+                ? "Graduate them from the grading queue when the slabs come back."
+                : "Existing slots with the same (card, printing, grader, grade) had their quantity refreshed."}</div>
               <button class="active" onClick=${onClose} style=${{padding:"7px 16px",fontSize:13}}>Done</button>
             </div>`
-          : html`<p class="muted" style=${{fontSize:12,margin:"0 0 14px",lineHeight:1.5}}>
-              Pick a set and rarities, set a default grader/grade, then check the cards you want to log. Each row's grader/grade can be overridden individually. Quantity is 1 per card (existing slots get their qty bumped to 1).
+          : html`<${React.Fragment}>
+            ${typeof onBulkSendToQueue === "function" && html`<div class="seg-toggle" style=${{marginBottom:12}}>
+              <button class=${mode==="graded"?"active":""} onClick=${()=>setMode("graded")}>Mark as graded</button>
+              <button class=${mode==="send"?"active":""} onClick=${()=>setMode("send")}>Send to grader</button>
+            </div>`}
+            <p class="muted" style=${{fontSize:12,margin:"0 0 14px",lineHeight:1.5}}>
+              ${sendMode
+                ? "Pick a set and rarities, then check the cards you're sending. They go into your grading queue (no grade yet) — graduate them when the slabs return."
+                : "Pick a set and rarities, set a default grader/grade, then check the cards you want to log. Each row's grader/grade can be overridden individually. Quantity is 1 per card (existing slots get their qty bumped to 1)."}
             </p>
             <label style=${{display:"block",marginBottom:12}}>
               <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Set</div>
@@ -15347,19 +15390,29 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
             </div>`}
             <div style=${{display:"flex",gap:10,marginBottom:14,alignItems:"flex-end",flexWrap:"wrap"}}>
               <label style=${{flex:"1 1 140px"}}>
-                <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Default grader</div>
+                <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>${sendMode ? "Default grader (optional)" : "Default grader"}</div>
                 <select value=${defGrader} onChange=${e=>setDefGrader(e.target.value)}
                   style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
+                  ${sendMode && html`<option value="">—</option>`}
                   ${GRADERS.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
                 </select>
               </label>
-              <label style=${{flex:"1 1 140px"}}>
-                <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Default grade</div>
-                <select value=${defGrade} onChange=${e=>setDefGrade(e.target.value)}
-                  style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
-                  ${GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
-                </select>
-              </label>
+              ${sendMode
+                ? html`<label style=${{flex:"1 1 140px"}}>
+                    <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Stage</div>
+                    <select value=${stage} onChange=${e=>setStage(e.target.value)}
+                      style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
+                      <option value="to_submit">To submit</option>
+                      <option value="at_grader">At grader</option>
+                    </select>
+                  </label>`
+                : html`<label style=${{flex:"1 1 140px"}}>
+                    <div class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginBottom:4}}>Default grade</div>
+                    <select value=${defGrade} onChange=${e=>setDefGrade(e.target.value)}
+                      style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
+                      ${GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
+                    </select>
+                  </label>`}
             </div>
             ${cards.length === 0
               ? html`<div class="muted" style=${{padding:"20px 0",textAlign:"center",fontSize:13}}>
@@ -15377,7 +15430,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
                     const st = rowState[c.rowKey] || {};
                     const checked = !!st.checked;
                     return html`<div key=${c.rowKey} class="gc-bulk-row"
-                      style=${{display:"grid",gridTemplateColumns:"22px 32px minmax(0,1fr) 76px 60px",gap:6,alignItems:"center",padding:"5px 8px",borderBottom:"1px solid var(--border)",background:checked?"var(--accent-glow)":"transparent",cursor:"pointer"}}
+                      style=${{display:"grid",gridTemplateColumns:sendMode?"22px 32px minmax(0,1fr) 76px":"22px 32px minmax(0,1fr) 76px 60px",gap:6,alignItems:"center",padding:"5px 8px",borderBottom:"1px solid var(--border)",background:checked?"var(--accent-glow)":"transparent",cursor:"pointer"}}
                       onClick=${()=>toggleCheck(c.rowKey)}>
                       <input type="checkbox" checked=${checked} onChange=${()=>toggleCheck(c.rowKey)} onClick=${e=>e.stopPropagation()}/>
                       ${c.img
@@ -15389,21 +15442,23 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
                       </div>
                       <select value=${st.grader || defGrader} onChange=${e=>setRowGrader(c.rowKey, e.target.value)} onClick=${e=>e.stopPropagation()}
                         style=${{width:"100%",boxSizing:"border-box",padding:"3px 4px",fontSize:11,border:"1px solid var(--btn-border)",borderRadius:4,background:"var(--bg-solid)",color:"var(--text)",minWidth:0}}>
+                        ${sendMode && html`<option value="">—</option>`}
                         ${GRADERS.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
                       </select>
-                      <select value=${st.grade || defGrade} onChange=${e=>setRowGrade(c.rowKey, e.target.value)} onClick=${e=>e.stopPropagation()}
+                      ${!sendMode && html`<select value=${st.grade || defGrade} onChange=${e=>setRowGrade(c.rowKey, e.target.value)} onClick=${e=>e.stopPropagation()}
                         style=${{width:"100%",boxSizing:"border-box",padding:"3px 4px",fontSize:11,border:"1px solid var(--btn-border)",borderRadius:4,background:"var(--bg-solid)",color:"var(--text)",minWidth:0}}>
                         ${GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
-                      </select>
+                      </select>`}
                     </div>`;
                   })}
                 </div>`}
             <div style=${{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
               <button onClick=${onClose}>Cancel</button>
               <button class="active" disabled=${!canSave} onClick=${onSubmit} style=${{padding:"7px 16px",fontSize:13}}>
-                ${busy ? "Saving…" : `Add ${selectedRows.length} card${selectedRows.length===1?"":"s"}`}
+                ${busy ? "Saving…" : (sendMode ? `Send ${selectedRows.length} for grading` : `Add ${selectedRows.length} card${selectedRows.length===1?"":"s"}`)}
               </button>
-            </div>`}
+            </div>
+          </${React.Fragment}>`}
       </div>
     </div>
   </div>`;
