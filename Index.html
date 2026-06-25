@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=226">
+<link rel="stylesheet" href="styles.css?v=227">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=226"></script>
+<script src="logo.js?v=227"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -5076,7 +5076,7 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
   // rebuild with 8 windowed lateral subqueries) and refetch just this card's sales
   // immediately — so the modal closes the instant the write lands instead of
   // hanging on "Saving…" for the duration of the rollup refresh.
-  const afterWrite = () => { sbClient.rpc("admin_refresh_graded_rollup").catch(()=>{}); onChanged && onChanged(); };
+  const afterWrite = () => { sbClient.rpc("admin_refresh_graded_rollup").then(()=>{}, ()=>{}); onChanged && onChanged(); };
   const save = async () => {
     setBusy(true);
     const p = price.trim()==="" ? null : Number(price);
@@ -5146,7 +5146,7 @@ const GradedReviewModal = ({onClose, onEditSale}) => {
     .then(({data})=>setReports(data||[])).catch(()=>setReports([])).finally(()=>setBusy(false)); };
   useEffect(()=>{ load(); }, [status]);
   const resolve = async (id, st) => { await sbClient.rpc("admin_resolve_report",{p_report_id:id,p_status:st}); load(); };
-  const delSale = async (item_id) => { await sbClient.rpc("admin_delete_graded_sale",{p_item_id:item_id}); await sbClient.rpc("admin_refresh_graded_rollup").catch(()=>{}); load(); };
+  const delSale = async (item_id) => { await sbClient.rpc("admin_delete_graded_sale",{p_item_id:item_id}); await sbClient.rpc("admin_refresh_graded_rollup").then(()=>{}, ()=>{}); load(); };
   const dstr = (d)=> d ? fmtTooltipDate(Date.parse(d+"T00:00:00Z")) : "—";
   return html`<div class="card-detail-overlay" onClick=${onClose}>
     <div class="gs-modal gs-review-modal" onClick=${e=>e.stopPropagation()}>
@@ -5199,7 +5199,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
     const {error} = await sbClient.rpc("admin_add_private_sale", {
       p_card_id: cardId, p_grader: grader, p_grade: grade, p_sale_price: p, p_sold_date: date,
       p_note: note });
-    if(!error) await sbClient.rpc("admin_refresh_graded_rollup").catch(()=>{});
+    if(!error) await sbClient.rpc("admin_refresh_graded_rollup").then(()=>{}, ()=>{});
     setBusy(false);
     if(error){ flashToast("Add failed: " + (error.message||error)); return; }
     flashToast("Private sale added"); onAdded && onAdded(); onClose();
@@ -29664,7 +29664,7 @@ function App(){
     setGradedTosDismissed(true);
     // Durable record (best-effort — localStorage already unlocked the UI). Requires a
     // signed-in user; the localhost preview just relies on localStorage.
-    sbClient.rpc("accept_graded_tos", { p_version: GRADED_TOS_VERSION }).catch(()=>{});
+    sbClient.rpc("accept_graded_tos", { p_version: GRADED_TOS_VERSION }).then(()=>{}, ()=>{});
   }, []);
 
   // Graded-admin flag, same shape as the premium gate.
