@@ -100,7 +100,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=223">
+<link rel="stylesheet" href="styles.css?v=224">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -159,7 +159,7 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=223"></script>
+<script src="logo.js?v=224"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -13740,7 +13740,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       const key = `${meta.tcgplayer_product_id}|${printing}|${(it.grader||"").toLowerCase()}|${it.grade}`;
       const d = tileDeltasByKey.get(key);
       if(!d) continue;
-      const pct = d[bannerPctKey];
+      const pct = sanePct(d[bannerPctKey]);
       if(pct == null || pct === 0) continue;
       rows.push({
         card_id: it.card_id, tcgplayer_product_id: meta.tcgplayer_product_id,
@@ -14376,43 +14376,35 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           : gradedBannerMovers.length === 0
             ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>
                 No ${gradedBannerWindow.toUpperCase()} movement in your graded slots. Try a different window.</div>`
-            : html`<div class="graded-movers-strip-wrap">
-              <div class="graded-movers-strip">
-              ${gradedBannerMovers.map(c => {
-                const img = c.img_normal || c.img_small;
-                const onClick = () => {
-                  const matching = (raw||[]).filter(r => r.card_id === c.card_id);
-                  const groups = matching.length ? groupCards(matching) : [];
-                  if(groups[0]) setSelectedGroup(groups[0]);
-                };
-                // 3-window Δ% grid (1D / 1W / 1M) under the price line.
-                // Mirrors the home page MoverTile's bottom row so a user
-                // scanning their owned graded movers gets the same at-a-
-                // glance shape (label row + value row, color-coded). The
-                // banner-window picker (1D/1W/1M above) is what RE-SORTS
-                // the strip; the per-tile grid always shows all three so
-                // you can see which slot's hot in which window.
-                return html`<button key=${`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
-                  class="gmover-tile" onClick=${onClick}
-                  title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
-                  ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
-                  <div class="gmover-name">${c.name}</div>
-                  <div class="gmover-meta">
-                    <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
-                    <span class="gmover-price">$${Math.round(c.price)}</span>
-                  </div>
-                  <div class="gmover-deltas">
-                    <span class="gmover-dh">1D</span>
-                    <span class="gmover-dh">1W</span>
-                    <span class="gmover-dh">1M</span>
-                    <span class="gmover-dv" style=${{color: pctColor(c.pct_1d)}}>${fmtPct(c.pct_1d)}</span>
-                    <span class="gmover-dv" style=${{color: pctColor(c.pct_7d)}}>${fmtPct(c.pct_7d)}</span>
-                    <span class="gmover-dv" style=${{color: pctColor(c.pct_30d)}}>${fmtPct(c.pct_30d)}</span>
-                  </div>
-                </button>`;
-              })}
-              </div>
-            </div>`}
+            : html`<${AutoScrollStrip} items=${gradedBannerMovers}
+                keyFor=${(c)=>`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
+                renderItem=${(c, key) => {
+                  const img = c.img_normal || c.img_small;
+                  const onClick = () => {
+                    const matching = (raw||[]).filter(r => r.card_id === c.card_id);
+                    const groups = matching.length ? groupCards(matching) : [];
+                    if(groups[0]) setSelectedGroup(groups[0]);
+                  };
+                  // 3-window Δ% grid; sanePct nulls out poisoned windows so a
+                  // contaminated 1D shows "—" while the sane 1M still renders.
+                  return html`<button key=${key} class="gmover-tile" onClick=${onClick}
+                    title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+                    ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
+                    <div class="gmover-name">${c.name}</div>
+                    <div class="gmover-meta">
+                      <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
+                      <span class="gmover-price">$${Math.round(c.price)}</span>
+                    </div>
+                    <div class="gmover-deltas">
+                      <span class="gmover-dh">1D</span>
+                      <span class="gmover-dh">1W</span>
+                      <span class="gmover-dh">1M</span>
+                      <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_1d))}}>${fmtPct(sanePct(c.pct_1d))}</span>
+                      <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
+                      <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
+                    </div>
+                  </button>`;
+                }}/>`}
       </div>`}
     </div>`}
     <div class="graded-collection-header">
@@ -20436,6 +20428,13 @@ const pctColor = (p) => {
   if(p < 0) return "var(--red)";
   return "var(--text-muted)";
 };
+// Graded Δ% windows compare the last sale to a SINGLE reference sale W days
+// back, so one bad cheap sale (a $1 mislisting / OCR slip) shows as +10000%
+// (rendered "+100x"). Treat anything past this magnitude as noise → null so it
+// drops out of the movers sort and renders "—" in the tile grid. Real graded
+// hype rarely exceeds a few hundred percent between sales.
+const GRADED_PCT_SANE_CAP = 900;
+const sanePct = (p) => (p == null || Math.abs(p) >= GRADED_PCT_SANE_CAP) ? null : p;
 
 // Transient bottom-center toast for actions fired deep in the tree (the
 // mover-tile image export) where a component-level showToast isn't in scope.
@@ -21359,6 +21358,52 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
 
 // Scroll speed in CSS pixels per second. Lower = slower drift.
 const MOVERS_SCROLL_PX_PER_SEC = 28;
+
+// Reusable auto-scrolling horizontal strip (the marquee drift the raw movers
+// banners use). Renders `items` twice for a seamless loop, drifts left, pauses
+// on hover and yields 1.5s after manual scroll. Used by the graded banners.
+const AutoScrollStrip = ({items, renderItem, keyFor, wrapClass}) => {
+  const wrapRef = useRef(null);
+  const lastUserScrollRef = useRef(0);
+  const hoverRef = useRef(false);
+  const reducedMotion = useMemo(() =>
+    typeof window !== "undefined" && window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches, []);
+  useEffect(() => {
+    const el = wrapRef.current;
+    if(!el || !items.length || reducedMotion) return;
+    el.scrollLeft = 0;
+    let pos = 0, raf = 0, last = performance.now();
+    const onUser = () => { lastUserScrollRef.current = performance.now(); };
+    el.addEventListener("wheel", onUser, {passive:true});
+    el.addEventListener("touchmove", onUser, {passive:true});
+    el.addEventListener("pointerdown", onUser);
+    const tick = (now) => {
+      const dt = Math.min(64, now - last); last = now;
+      if(!hoverRef.current && (now - lastUserScrollRef.current) > 1500){
+        pos += (MOVERS_SCROLL_PX_PER_SEC * dt) / 1000;
+        const half = el.scrollWidth / 2;
+        if(half > 0 && pos >= half) pos -= half;
+        el.scrollLeft = pos;
+      } else { pos = el.scrollLeft; }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => {
+      cancelAnimationFrame(raf);
+      el.removeEventListener("wheel", onUser);
+      el.removeEventListener("touchmove", onUser);
+      el.removeEventListener("pointerdown", onUser);
+    };
+  }, [items, reducedMotion]);
+  return html`<div ref=${wrapRef} class=${wrapClass || "graded-movers-strip-wrap"}
+      onMouseEnter=${()=>{ hoverRef.current = true; }}
+      onMouseLeave=${()=>{ hoverRef.current = false; }}>
+    <div class="graded-movers-strip">
+      ${items.map((it,i) => renderItem(it, keyFor(it,i)))}
+      ${items.map((it,i) => renderItem(it, "dup:" + keyFor(it,i)))}
+    </div>
+  </div>`;
+};
 
 const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick}) => {
   const wrapRef = useRef(null);
@@ -23383,10 +23428,14 @@ const UpcomingSCsBox = () => {
 // Home-page graded banner (premium only). Two tabs: biggest Δ% movers
 // (graded_sales_rollup) and biggest individual sales in the window
 // (graded_sales). Market-wide — not limited to the user's owned cards.
-const GRADED_HOME_WINS = [["1w","1W"],["1m","1M"]];
+const GRADED_HOME_WINS = [["1d","1D","pct_1d",1],["1w","1W","pct_7d",7],["1m","1M","pct_30d",30],["3m","3M","pct_90d",90]];
+const GRADED_HOME_GRADERS = ["PSA","CGC","BGS","SGC","TAG"];
+const GRADED_HOME_GRADES = ["10","9.5","9","8.5","8","7"];
 const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   const [tab, setTab] = useState("movers");   // "movers" | "sales"
   const [win, setWin] = useState("1m");
+  const [graderF, setGraderF] = useState(() => new Set());  // empty = all
+  const [gradeF, setGradeF] = useState(() => new Set());
   const [rollup, setRollup] = useState(null);
   const [sales, setSales] = useState(null);
   const cardById = useMemo(() => {
@@ -23394,53 +23443,61 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
     for(const r of (raw||[])) if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, r);
     return m;
   }, [raw]);
+  const winDef = GRADED_HOME_WINS.find(w => w[0] === win) || GRADED_HOME_WINS[2];
+  const pctKey = winDef[2], days = winDef[3];
+  const graderArr = [...graderF], gradeArr = [...gradeF];
+  const graderKey = graderArr.join(","), gradeKey = gradeArr.join(",");
+  const passFilter = (grader, grade) =>
+    (!graderF.size || graderF.has((grader||"").toUpperCase())) && (!gradeF.size || gradeF.has(grade));
+  const toggle = (setter) => (v) => setter(s => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
 
   useEffect(() => {
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
-      select: "card_id,grader,grade,last_sold_price,pct_1d,pct_7d,pct_30d", order: "card_id.asc",
+      select: "card_id,grader,grade,last_sold_price,pct_1d,pct_7d,pct_30d,pct_90d", order: "card_id.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(() => { if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
   }, []);
 
-  const days = win === "1w" ? 7 : 30;
   useEffect(() => {
     if(tab !== "sales"){ return; }
     let cancelled = false;
     setSales(null);
     const d = new Date(); d.setDate(d.getDate() - days);
     const since = d.toISOString().slice(0, 10);
-    sbClient.from("graded_sales")
+    let q = sbClient.from("graded_sales")
       .select("item_id,card_id,grader,grade,printing,sale_price,sold_date")
       .not("card_id", "is", null).not("grade", "is", null).not("sale_price", "is", null)
-      .eq("excluded", false).gte("sold_date", since)
-      .order("sale_price", {ascending: false}).limit(80)
+      .eq("excluded", false).gte("sold_date", since);
+    if(graderArr.length) q = q.in("grader", graderArr);
+    if(gradeArr.length)  q = q.in("grade", gradeArr);
+    q.order("sale_price", {ascending: false}).limit(80)
       .then(r => { if(!cancelled) setSales(r.error ? [] : (r.data || [])); })
       .catch(() => { if(!cancelled) setSales([]); });
     return () => { cancelled = true; };
-  }, [tab, days]);
+  }, [tab, days, graderKey, gradeKey]);
 
   const moverCards = useMemo(() => {
     if(!rollup) return null;
-    const pctKey = win === "1w" ? "pct_7d" : "pct_30d";
     const rows = [];
     for(const r of rollup){
+      if(!passFilter(r.grader, r.grade)) continue;
       const meta = cardById.get(r.card_id);
       if(!meta) continue;
-      const pct = r[pctKey];
+      const pct = sanePct(r[pctKey]);
       if(pct == null || pct === 0) continue;
       rows.push({card_id: r.card_id, _initialTab: "graded", grader: r.grader, grade: r.grade,
         name: meta["Product Name"], img: meta.img_normal || meta.img_small,
-        price: r.last_sold_price, pct, pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
+        price: r.last_sold_price, pct, pct_7d: r.pct_7d, pct_30d: r.pct_30d, pct_90d: r.pct_90d});
     }
     rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
     return rows.slice(0, 20);
-  }, [rollup, win, cardById]);
+  }, [rollup, pctKey, cardById, graderKey, gradeKey]);
 
   const saleCards = useMemo(() => {
     if(!sales) return null;
-    // Sales come pre-sorted by price desc; keep the top sale per distinct slab
-    // (card + grader + grade) so the strip shows variety, not the same card 5×.
+    // Pre-sorted by price desc; keep the top sale per distinct slab so the
+    // strip shows variety, not the same card 5×.
     const rows = [];
     const seen = new Set();
     for(const s of sales){
@@ -23472,13 +23529,21 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
         ${GRADED_HOME_WINS.map(([k,l]) => html`<button key=${k} class=${win===k?"active":""} onClick=${()=>setWin(k)}>${l}</button>`)}
       </div>
     </div>
+    <div class="graded-home-filters">
+      <span class="graded-home-flbl">Graders</span>
+      ${GRADED_HOME_GRADERS.map(g => html`<button key=${g} class=${"gh-chip"+(graderF.has(g)?" active":"")} onClick=${()=>toggle(setGraderF)(g)}>${g}</button>`)}
+      <span class="graded-home-flbl">Grades</span>
+      ${GRADED_HOME_GRADES.map(g => html`<button key=${g} class=${"gh-chip"+(gradeF.has(g)?" active":"")} onClick=${()=>toggle(setGradeF)(g)}>${g}</button>`)}
+      ${(graderF.size>0 || gradeF.size>0) && html`<button class="gh-chip gh-clear" onClick=${()=>{ setGraderF(new Set()); setGradeF(new Set()); }}>Clear</button>`}
+    </div>
     ${cards == null
       ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>Loading graded ${tab==="sales"?"sales":"movers"}…</div>`
       : cards.length === 0
-        ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>No graded ${tab==="sales"?"sales":"movement"} in this window yet.</div>`
-        : html`<div class="graded-movers-strip-wrap"><div class="graded-movers-strip">
-            ${cards.map(c => html`<button key=${`${c.card_id}|${c.grader}|${c.grade}|${c.sold_date||c.pct}`}
-              class="gmover-tile" onClick=${()=>onCard(c)} title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+        ? html`<div class="muted" style=${{fontSize:11,padding:"14px 4px"}}>No graded ${tab==="sales"?"sales":"movement"} match this filter / window yet.</div>`
+        : html`<${AutoScrollStrip} items=${cards}
+            keyFor=${(c,i)=>`${c.card_id}|${c.grader}|${c.grade}|${c.sold_date||c.pct}|${i}`}
+            renderItem=${(c, key) => html`<button key=${key} class="gmover-tile" onClick=${()=>onCard(c)}
+              title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
               ${c.img ? html`<img src=${c.img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
               <div class="gmover-name">${c.name}</div>
               <div class="gmover-meta">
@@ -23487,14 +23552,13 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
               </div>
               ${tab === "movers"
                 ? html`<div class="gmover-deltas">
-                    <span class="gmover-dh">1D</span><span class="gmover-dh">1W</span><span class="gmover-dh">1M</span>
-                    <span class="gmover-dv" style=${{color:pctColor(c.pct_1d)}}>${fmtPct(c.pct_1d)}</span>
-                    <span class="gmover-dv" style=${{color:pctColor(c.pct_7d)}}>${fmtPct(c.pct_7d)}</span>
-                    <span class="gmover-dv" style=${{color:pctColor(c.pct_30d)}}>${fmtPct(c.pct_30d)}</span>
+                    <span class="gmover-dh">1W</span><span class="gmover-dh">1M</span><span class="gmover-dh">3M</span>
+                    <span class="gmover-dv" style=${{color:pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
+                    <span class="gmover-dv" style=${{color:pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
+                    <span class="gmover-dv" style=${{color:pctColor(sanePct(c.pct_90d))}}>${fmtPct(sanePct(c.pct_90d))}</span>
                   </div>`
                 : html`<div class="gmover-saledate">Sold ${c.sold_date}</div>`}
-            </button>`)}
-          </div></div>`}
+            </button>`}/>`}
   </section>`;
 };
 
