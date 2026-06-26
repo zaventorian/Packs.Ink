@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=236">
+<link rel="stylesheet" href="styles.css?v=237">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=236"></script>
-<script src="scanner.js?v=236"></script>
-<script src="scanner-cv.js?v=236"></script>
+<script src="logo.js?v=237"></script>
+<script src="scanner.js?v=237"></script>
+<script src="scanner-cv.js?v=237"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=236";
+const SCAN_WORKER_URL = "scanner-worker.js?v=237";
 
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail }){
   const videoRef = useRef(null);
@@ -9133,12 +9133,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const captureBusyRef = useRef(false);
   const loopTimerRef = useRef(0);
   const captureRef = useRef(null);
+  const steadyRef = useRef({ count: 0, last: null });
 
   const [phase, setPhase] = useState("starting");
   const [err, setErr] = useState("");
   const [status, setStatus] = useState("Starting camera…");
   const [busy, setBusy] = useState(false);
   const [detected, setDetected] = useState(false);
+  const [ready, setReady] = useState(false);   // card detected AND held steady
   const [workerReady, setWorkerReady] = useState(false);
   const [result, setResult] = useState(null);
   const [addedMsg, setAddedMsg] = useState("");
@@ -9199,18 +9201,29 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     };
   }, []);
 
-  const drawOutline = (quad, bw, bh) => {
+  const drawOutline = (quad, bw, bh, isReady) => {
     const ov = overlayRef.current; if(!ov) return;
     if(ov.width !== bw || ov.height !== bh){ ov.width = bw; ov.height = bh; }
     const ctx = ov.getContext("2d"); ctx.clearRect(0, 0, bw, bh);
     if(!quad) return;
-    ctx.strokeStyle = "rgba(110,235,150,0.95)"; ctx.lineWidth = Math.max(3, bw * 0.009);
+    // dim while still adjusting, bright + filled once locked & steady
+    ctx.strokeStyle = isReady ? "rgba(90,240,130,1)" : "rgba(150,210,170,0.7)";
+    ctx.lineWidth = Math.max(3, bw * (isReady ? 0.012 : 0.008));
     ctx.lineJoin = "round"; ctx.beginPath();
     quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-    ctx.closePath(); ctx.stroke();
+    ctx.closePath();
+    if(isReady){ ctx.fillStyle = "rgba(90,240,130,0.12)"; ctx.fill(); }
+    ctx.stroke();
+  };
+  const quadMoved = (a, b) => {
+    if(!a || !b) return 1e9;
+    let s = 0; for(let i = 0; i < 4; i++) s += Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y);
+    return s / 4;
   };
 
-  // live detection loop — lightweight on main; OpenCV runs in the worker
+  // live detection loop — lightweight on main; OpenCV runs in the worker.
+  // Tracks steadiness so the outline can tell the user the optimal moment to
+  // tap (no auto-capture — that fought the user; this just signals "ready").
   useEffect(() => {
     if(phase !== "scanning" || !workerReady) return;
     let running = true;
@@ -9223,11 +9236,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           const bw = 800, bh = Math.round(800 * v.videoHeight / v.videoWidth);
           const bmp = await createImageBitmap(v, { resizeWidth: bw, resizeHeight: bh, resizeQuality: "low" });
           const r = await post("detect", { bitmap: bmp }, [bmp]);
-          if(running && r){ drawOutline(r.quad, bw, bh); setDetected(!!r.quad); }
+          if(running && r){
+            const st = steadyRef.current;
+            if(r.quad && quadMoved(r.quad, st.last) < bw * 0.02) st.count++; else st.count = 0;
+            st.last = r.quad;
+            const isReady = !!r.quad && st.count >= 3;
+            drawOutline(r.quad, bw, bh, isReady);
+            setDetected(!!r.quad); setReady(isReady);
+          }
         } catch(e){}
         detectBusyRef.current = false;
       }
-      if(running) loopTimerRef.current = setTimeout(tick, 150);
+      if(running) loopTimerRef.current = setTimeout(tick, 130);
     };
     tick();
     return () => { running = false; clearTimeout(loopTimerRef.current); };
@@ -9285,20 +9305,23 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         if(ranked.length >= 4) break;
       }
       if(!ranked.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
+      // confidence = how far the top guess is ahead of the runner-up
+      const s0 = ranked[0].score, s1 = ranked[1] ? ranked[1].score : 0;
+      const confident = s0 > 0 && (s0 - s1) / s0 > 0.045;
       const cands = ranked.map(r => {
         const disp = toDisp(r.card);
         const row = raw && raw.find(x => x.card_id === disp.id && x.tcgplayer_product_id);
         const g = row ? groupFromSimCard(row, raw) : null;
         return { disp, group: g };
       });
-      setResult({ cands, sel: 0 });
+      setResult({ cands, sel: 0, confident });
     } catch(e){
       setStatus("Couldn't read it — try again");
     } finally { captureBusyRef.current = false; setBusy(false); }
   }, [raw]);
   captureRef.current = capture;
 
-  const resume = () => { setResult(null); setStatus(detected ? "Card detected — tap to scan" : "Place ONE card on a plain surface"); };
+  const resume = () => { setResult(null); setReady(false); steadyRef.current = { count: 0, last: null }; setStatus("Place ONE card on a plain surface"); };
 
   const addCopy = (foil) => {
     if(!user){ onSignIn && onSignIn(); return; }
@@ -9341,7 +9364,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <img class="scanner-result-img" src=${disp.thumb} alt=${lbl(disp)}/>
         <div class="scanner-result-info">
           <div class="scanner-result-name">${lbl(disp)}</div>
-          <div class="scanner-result-meta">${disp.rarity || ""}</div>
+          <div class="scanner-result-meta">${disp.rarity || ""}${result.confident ? "" : html` · <span class="scanner-lowconf">double-check below</span>`}</div>
           ${user ? html`<div class="scanner-add-row">
             <button class="scanner-btn primary" onClick=${() => addCopy(false)}>+ Add${nQty ? html` <span class="scanner-owned">(${nQty})</span>` : null}</button>
             ${g && g.foil ? html`<button class="scanner-btn" onClick=${() => addCopy(true)}>+ Foil${fQty ? html` <span class="scanner-owned">(${fQty})</span>` : null}</button>` : null}
@@ -9365,8 +9388,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>`;
   } else {
     below = html`<div class="scanner-scanbar">
-      <div class="scanner-hint">${busy ? "Reading card…" : (detected ? "✓ Card detected — tap to scan" : status)}</div>
-      <button class="scanner-shutter" onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Scan card"></button>
+      <div class=${"scanner-hint" + (ready ? " ready" : "")}>${busy ? "Reading card…" : (ready ? "✓ Locked on — tap to scan" : (detected ? "Hold steady…" : status))}</div>
+      <button class=${"scanner-shutter" + (ready ? " ready" : "")} onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Scan card"></button>
       <div class="scanner-subhint">${workerReady ? "Best results: ONE card, flat, plain background, good light" : "Loading card detector…"}</div>
     </div>`;
   }
