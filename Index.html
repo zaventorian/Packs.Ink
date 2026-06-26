@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=230">
+<link rel="stylesheet" href="styles.css?v=231">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=230"></script>
-<script src="scanner.js?v=230"></script>
-<script src="scanner-cv.js?v=230"></script>
+<script src="logo.js?v=231"></script>
+<script src="scanner.js?v=231"></script>
+<script src="scanner-cv.js?v=231"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9111,33 +9111,27 @@ const groupFromSimCard = (simCard, rawData) => {
   return groups[0] || null;
 };
 
-// --- Card scanner v2: detect → rectify → match, capture-when-steady --------
-// Finds the card quad in the live camera frame (scanner-cv.js / opencv.js),
-// draws a live outline, and when the card is held steady captures + rectifies
-// the clean card and matches it against the shipped index (scanner.js). One
-// confident result (with alternates to tap) — not a per-frame flicker. The
-// rectification removes perspective/background/scale variance, which is what
-// makes real phone photos match; the old fixed-crop live-match plateaued at
-// ~50% because it never saw a clean card. No backend, no per-scan cost.
+// --- Card scanner v2.1: tap-to-scan, detect + rectify on capture -----------
+// Point at a card and tap. On tap we grab a couple of frames, find the card
+// quad (opencv.js / scanner-cv.js), warp it flat, and match the clean card
+// against the shipped index (scanner.js). One confident result with tap-able
+// alternates. Every opencv call is guarded and falls back to a centre crop —
+// it can NEVER crash the app. No live detection loop (that re-rendered every
+// frame, fought the shutter, and could abort opencv's WASM and white-screen
+// the page) and no rigid alignment — detection finds the card wherever it is.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_CAPTURE_FRAMES = 3;     // frames voted together per capture
-const SCAN_STEADY_FRAMES = 4;      // detected+still frames before auto-capture
+const SCAN_CAPTURE_FRAMES = 2;     // frames voted together per tap
 
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail }){
   const videoRef = useRef(null);
-  const overlayRef = useRef(null);
   const stageRef = useRef(null);
   const streamRef = useRef(null);
-  const loopRef = useRef(0);
-  const steadyRef = useRef({ count: 0, last: null });
   const capturingRef = useRef(false);
-  const cvOkRef = useRef(false);
   const captureRef = useRef(null);
 
   const [phase, setPhase] = useState("starting"); // starting|scanning|denied|nocam|noindex|error
   const [err, setErr] = useState("");
   const [status, setStatus] = useState("Starting camera…");
-  const [detected, setDetected] = useState(false);
   const [cvReady, setCvReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);      // {cands:[{disp,group}], sel}
@@ -9164,20 +9158,19 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         streamRef.current = stream;
         const v = videoRef.current;
         if(v){ v.srcObject = stream; try { await v.play(); } catch(_e){} }
-        setPhase("scanning"); setStatus("Point your camera at a card");
+        setPhase("scanning"); setStatus("Center a card in the frame and tap");
       } catch(e){
         setPhase(e && e.name === "NotAllowedError" ? "denied"
                : (e && e.name === "NotFoundError" ? "nocam" : "error"));
         setErr((e && e.message) || "");
       }
+      // opencv is an enhancement — the shutter works (centre-crop) before it loads.
       if(window.CardCV){
-        window.CardCV.load().then(() => { if(!cancelled){ cvOkRef.current = true; setCvReady(true); } })
-          .catch(() => { cvOkRef.current = false; });
+        window.CardCV.load().then(() => { if(!cancelled) setCvReady(true); }).catch(() => {});
       }
     })();
     return () => {
       cancelled = true;
-      if(loopRef.current) cancelAnimationFrame(loopRef.current);
       const s = streamRef.current; if(s) s.getTracks().forEach(t => t.stop());
     };
   }, []);
@@ -9187,36 +9180,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
     c.getContext("2d").drawImage(v, 0, 0); return c;
   };
-  // intrinsic-coord crop matching the on-screen 5:7 guide (object-fit:cover math).
-  // Used by the fallback (no-opencv) capture so the crop == what the user framed.
+  // intrinsic-coord crop matching the on-screen frame (object-fit:cover math).
+  // The fallback when opencv didn't find a card — crops what the user framed.
   const guideCrop = () => {
     const v = videoRef.current, st = stageRef.current;
     if(!v || !st || !v.videoWidth) return null;
     const vw = v.videoWidth, vh = v.videoHeight, cw = st.clientWidth, ch = st.clientHeight;
     const scale = Math.max(cw / vw, ch / vh);
     const offX = (cw - vw * scale) / 2, offY = (ch - vh * scale) / 2;
-    let gH = ch * 0.80, gW = gH * 5 / 7;
-    if(gW > cw * 0.92){ gW = cw * 0.92; gH = gW * 7 / 5; }
+    let gH = ch * 0.82, gW = gH * 5 / 7;
+    if(gW > cw * 0.94){ gW = cw * 0.94; gH = gW * 7 / 5; }
     const gX = (cw - gW) / 2, gY = (ch - gH) / 2;
     return { sx: (gX - offX) / scale, sy: (gY - offY) / scale, sw: gW / scale, sh: gH / scale };
   };
-  const drawOverlay = (quad) => {
-    const v = videoRef.current, cv = overlayRef.current; if(!v || !cv) return;
-    if(cv.width !== v.videoWidth){ cv.width = v.videoWidth; cv.height = v.videoHeight; }
-    const ctx = cv.getContext("2d"); ctx.clearRect(0, 0, cv.width, cv.height);
-    if(!quad) return;
-    ctx.strokeStyle = "rgba(120,230,150,0.95)"; ctx.lineWidth = Math.max(4, cv.width * 0.006);
-    ctx.lineJoin = "round"; ctx.beginPath();
-    quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
-    ctx.closePath(); ctx.stroke();
-  };
-  const quadMoved = (a, b) => {
-    if(!a || !b) return 1e9;
-    let s = 0; for(let i = 0; i < 4; i++) s += Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y);
-    return s / 4;
-  };
 
-  // capture: grab a few frames, detect+rectify+match each, vote → candidates
+  // capture (on tap): grab a couple of frames, detect+rectify (guarded) or crop,
+  // match, vote → candidates. Wrapped so it can never throw to the React tree.
   const capture = useCallback(async () => {
     if(capturingRef.current) return;
     capturingRef.current = true; setBusy(true); setStatus("Reading card…");
@@ -9224,10 +9203,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const scoreByArt = new Map();
       for(let f = 0; f < SCAN_CAPTURE_FRAMES; f++){
         const snap = snapFrame();
-        if(!snap){ await new Promise(r => setTimeout(r, 40)); continue; }
+        if(!snap){ await new Promise(r => setTimeout(r, 50)); continue; }
         let query = null;
-        if(cvOkRef.current && window.CardCV && window.CardCV.ready()){
-          try { const det = window.CardCV.detect(snap); if(det){ query = window.CardCV.rectify(snap, det.quad, 360, 504); } } catch(_e){}
+        if(window.CardCV && window.CardCV.ready()){
+          const det = window.CardCV.detect(snap);            // guarded inside — won't throw
+          if(det) query = window.CardCV.rectify(snap, det.quad, 360, 504);
         }
         if(!query){
           const gc = guideCrop();
@@ -9236,27 +9216,25 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             cc.width = Math.round(gc.sw); cc.height = Math.round(gc.sh);
             cc.getContext("2d").drawImage(snap, gc.sx, gc.sy, gc.sw, gc.sh, 0, 0, cc.width, cc.height);
           } else {
-            const W = snap.width, H = snap.height, cw = W * 0.62, ch = cw * 7 / 5;
+            const W = snap.width, H = snap.height, cw = W * 0.7, ch = cw * 7 / 5;
             cc.width = Math.round(cw); cc.height = Math.round(ch);
             cc.getContext("2d").drawImage(snap, (W - cw) / 2, (H - ch) / 2, cw, ch, 0, 0, cc.width, cc.height);
           }
           query = cc;
         }
-        let res; try { res = window.CardScanner.searchCrop(query, 0, 0, query.width, query.height, 8, 0.12); } catch(_e){ res = null; }
+        let res = null;
+        try { res = window.CardScanner.searchCrop(query, 0, 0, query.width, query.height, 8, 0.12); } catch(_e){}
         if(res){ for(const r of res){ const k = r.card.art_key; const cur = scoreByArt.get(k);
           if(cur) cur.score += r.color; else scoreByArt.set(k, { score: r.color, card: r.card }); } }
-        await new Promise(r => requestAnimationFrame(() => r()));
+        if(f < SCAN_CAPTURE_FRAMES - 1) await new Promise(r => requestAnimationFrame(() => r()));
       }
-      // sort by summed score, then dedup by display label so the alternates
-      // don't show the same card twice (distinct index rows, same name+version).
       const seenLbl = new Set(), ranked = [];
       for(const r of Array.from(scoreByArt.values()).sort((a, b) => b.score - a.score)){
         const k = (r.card.name || "") + "|" + (r.card.version || "");
         if(seenLbl.has(k)) continue; seenLbl.add(k); ranked.push(r);
         if(ranked.length >= 4) break;
       }
-      drawOverlay(null);
-      if(!ranked.length){ setStatus("No match — line the card up and try again"); steadyRef.current.count = 0; return; }
+      if(!ranked.length){ setStatus("Couldn't read it — center the card and tap again"); return; }
       const cands = ranked.map(r => {
         const disp = toDisp(r.card);
         const row = raw && raw.find(x => x.card_id === disp.id && x.tcgplayer_product_id);
@@ -9264,39 +9242,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         return { disp, group: g };
       });
       setResult({ cands, sel: 0 });
+    } catch(e){
+      setStatus("Couldn't read it — try again");
     } finally { capturingRef.current = false; setBusy(false); }
   }, [raw]);
   captureRef.current = capture;
 
-  // live detection loop
-  useEffect(() => {
-    if(phase !== "scanning") return;
-    let running = true, last = 0;
-    const tick = (t) => {
-      if(!running) return;
-      loopRef.current = requestAnimationFrame(tick);
-      if(result || capturingRef.current) return;
-      if(t - last < 140) return; last = t;
-      const v = videoRef.current; if(!v || !v.videoWidth) return;
-      if(cvOkRef.current && window.CardCV && window.CardCV.ready()){
-        let det = null; try { det = window.CardCV.detect(v); } catch(_e){}
-        const quad = det && det.quad;
-        drawOverlay(quad); setDetected(!!quad);
-        const st = steadyRef.current, thresh = v.videoWidth * 0.012;
-        if(quad && quadMoved(quad, st.last) < thresh) st.count++; else st.count = 0;
-        st.last = quad;
-        setStatus(!quad ? "Point your camera at a card"
-          : (st.count >= SCAN_STEADY_FRAMES ? "Hold steady…" : "Card detected — hold still"));
-        if(quad && st.count >= SCAN_STEADY_FRAMES) captureRef.current && captureRef.current();
-      } else {
-        setStatus(window.CardCV ? "Loading detector… line the card up and tap" : "Line the card up and tap to scan");
-      }
-    };
-    loopRef.current = requestAnimationFrame(tick);
-    return () => { running = false; if(loopRef.current) cancelAnimationFrame(loopRef.current); };
-  }, [phase, result]);
-
-  const resume = () => { setResult(null); steadyRef.current.count = 0; setStatus("Point your camera at a card"); };
+  const resume = () => { setResult(null); setStatus(cvReady ? "Point at a card and tap" : "Center a card in the frame and tap"); };
 
   const addCopy = (foil) => {
     if(!user){ onSignIn && onSignIn(); return; }
@@ -9364,8 +9316,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   } else {
     below = html`<div class="scanner-scanbar">
       <div class="scanner-hint">${status}</div>
-      <button class="scanner-shutter" onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Capture card"></button>
-      <div class="scanner-subhint">${cvReady ? "Auto-captures when the card is held steady" : "Tap the button to capture"}</div>
+      <button class="scanner-shutter" onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Scan card"></button>
+      <div class="scanner-subhint">${cvReady ? "Tap to scan — it finds & crops the card for you" : "Tap to scan"}</div>
     </div>`;
   }
 
@@ -9376,9 +9328,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>
     <div class="scanner-stage" ref=${stageRef}>
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
-      <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
-      ${!result && !detected ? html`<div class="scanner-guide" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? "card detected" : (cvReady ? "point at a card" : "line the card up in the frame")}</div>` : null}
+      ${!result ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
     </div>
