@@ -81,26 +81,36 @@ function detectQuad(mat) {
     const imgArea = procW * procH;
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i), area = cv.contourArea(c);
-      if (area < imgArea * 0.07) { c.delete(); continue; }
-      const approx = new cv.Mat();
-      cv.approxPolyDP(c, approx, 0.02 * cv.arcLength(c, true), true);
-      if (approx.rows === 4 && cv.isContourConvex(approx)) {
+      if (area < imgArea * 0.05) { c.delete(); continue; }
+      const peri = cv.arcLength(c, true);
+      // try progressively coarser polygon approximations so a slightly wavy /
+      // imperfect card edge still collapses to a clean 4-corner quad.
+      let approx = null;
+      for (const ep of [0.02, 0.035, 0.05, 0.07]) {
+        const a = new cv.Mat();
+        cv.approxPolyDP(c, a, ep * peri, true);
+        if (a.rows === 4 && cv.isContourConvex(a)) { approx = a; break; }
+        a.delete();
+      }
+      if (approx) {
         const pts = [];
         for (let p = 0; p < 4; p++) pts.push({ x: approx.data32S[p * 2], y: approx.data32S[p * 2 + 1] });
         const q = orderQuad(pts);
-        if (quadOk(q, 22)) {
+        if (quadOk(q, 20)) {
           const w = (dist(q[0], q[1]) + dist(q[3], q[2])) / 2;
           const h = (dist(q[0], q[3]) + dist(q[1], q[2])) / 2;
           const ar = Math.min(w, h) / Math.max(w, h);
-          const arScore = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.25);
+          // wide aspect tolerance — perspective tilt skews a 5:7 card a lot
+          const arScore = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.32);
           const score = arScore * 0.6 + Math.min(1, area / imgArea) * 0.4;
           if (arScore > 0 && score > bestScore) {
             bestScore = score;
             best = q.map((p) => ({ x: p.x / scale, y: p.y / scale }));
           }
         }
+        approx.delete();
       }
-      approx.delete(); c.delete();
+      c.delete();
     }
   } finally {
     small.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hier.delete();
