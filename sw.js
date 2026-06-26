@@ -1,11 +1,12 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v228';
+const CACHE_VERSION = 'packsink-v229';
 const CORE_ASSETS = [
   '/',
   '/Index.html',
-  '/styles.css?v=228',
-  '/logo.js?v=228',
+  '/styles.css?v=229',
+  '/logo.js?v=229',
+  '/scanner.js?v=229',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',
@@ -77,7 +78,7 @@ self.addEventListener('fetch', (event) => {
   // a STALE cache-first stylesheet. That skew is what rendered the home page's
   // mover tiles at giant natural-image size after a deploy until the visitor
   // hard-refreshed. Falls back to cache only when the network is unreachable.
-  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js)$/.test(url.pathname)) {
+  if (url.origin === self.location.origin && /\/(styles\.css|logo\.js|scanner\.js)$/.test(url.pathname)) {
     event.respondWith(
       fetch(req)
         .then((res) => {
