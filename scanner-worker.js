@@ -79,37 +79,48 @@ function detectQuad(mat) {
     cv.dilate(edges, edges, k); k.delete();
     cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
     const imgArea = procW * procH;
+    // score a candidate quad; keep the best. Rejects non-card shapes:
+    // rectangularity (opposite sides similar), ~5:7 aspect, and "fill" (the
+    // contour must mostly fill the quad — rejects a minAreaRect bounding a
+    // sprawling stack contour).
+    const consider = (q, contourArea) => {
+      const w1 = dist(q[0], q[1]), w2 = dist(q[3], q[2]);
+      const h1 = dist(q[0], q[3]), h2 = dist(q[1], q[2]);
+      const wq = (w1 + w2) / 2, hq = (h1 + h2) / 2;
+      if (Math.min(wq, hq) < 20) return;
+      const rect = (Math.min(w1, w2) / Math.max(w1, w2)) * (Math.min(h1, h2) / Math.max(h1, h2));
+      if (rect < 0.6) return;
+      const ar = Math.min(wq, hq) / Math.max(wq, hq);
+      const arScore = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.26);
+      if (arScore <= 0) return;
+      const quadArea = wq * hq, fill = Math.min(1, contourArea / (quadArea + 1e-6));
+      if (fill < 0.7) return;
+      const score = arScore * 0.35 + rect * 0.3 + fill * 0.2 + Math.min(1, quadArea / imgArea) * 0.15;
+      if (score > bestScore) { bestScore = score; best = q.map((p) => ({ x: p.x / scale, y: p.y / scale })); }
+    };
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i), area = cv.contourArea(c);
       if (area < imgArea * 0.05) { c.delete(); continue; }
       const peri = cv.arcLength(c, true);
-      // try progressively coarser polygon approximations so a slightly wavy /
-      // imperfect card edge still collapses to a clean 4-corner quad.
-      let approx = null;
+      // (1) clean 4-point quad — best for perspective
       for (const ep of [0.02, 0.035, 0.05, 0.07]) {
         const a = new cv.Mat();
         cv.approxPolyDP(c, a, ep * peri, true);
-        if (a.rows === 4 && cv.isContourConvex(a)) { approx = a; break; }
+        if (a.rows === 4 && cv.isContourConvex(a)) {
+          const pts = [];
+          for (let p = 0; p < 4; p++) pts.push({ x: a.data32S[p * 2], y: a.data32S[p * 2 + 1] });
+          consider(orderQuad(pts), area); a.delete(); break;
+        }
         a.delete();
       }
-      if (approx) {
-        const pts = [];
-        for (let p = 0; p < 4; p++) pts.push({ x: approx.data32S[p * 2], y: approx.data32S[p * 2 + 1] });
-        const q = orderQuad(pts);
-        if (quadOk(q, 20)) {
-          const w = (dist(q[0], q[1]) + dist(q[3], q[2])) / 2;
-          const h = (dist(q[0], q[3]) + dist(q[1], q[2])) / 2;
-          const ar = Math.min(w, h) / Math.max(w, h);
-          // wide aspect tolerance — perspective tilt skews a 5:7 card a lot
-          const arScore = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.32);
-          const score = arScore * 0.6 + Math.min(1, area / imgArea) * 0.4;
-          if (arScore > 0 && score > bestScore) {
-            bestScore = score;
-            best = q.map((p) => ({ x: p.x / scale, y: p.y / scale }));
-          }
-        }
-        approx.delete();
-      }
+      // (2) fallback: best-fit rotated rectangle — robust to imperfect / merged
+      // contours (a card sitting on a stack rarely gives a clean 4-pt edge)
+      try {
+        const rr = cv.minAreaRect(c);
+        const box = cv.RotatedRect.points(rr);
+        consider(orderQuad([{ x: box[0].x, y: box[0].y }, { x: box[1].x, y: box[1].y },
+          { x: box[2].x, y: box[2].y }, { x: box[3].x, y: box[3].y }]), area);
+      } catch (e) { /* skip */ }
       c.delete();
     }
   } finally {
@@ -148,7 +159,11 @@ function rectify(mat, quad, outW, outH) {
     dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, outW, 0, outW, outH, 0, outH]);
     M = cv.getPerspectiveTransform(srcTri, dstTri);
     cv.warpPerspective(mat, dst, M, new cv.Size(outW, outH), cv.INTER_LINEAR, cv.BORDER_CONSTANT, new cv.Scalar());
-    try { normalize(dst); } catch (e) { /* keep un-normalised on failure */ }
+    // NOTE: deliberately NOT normalising the rectified card — the reference
+    // colour index is built from raw Lorcast art, so CLAHE/WB here would put the
+    // query in a different colour space and HURT matching (verified on real
+    // photos). CLAHE stays in detectQuad (edges only). colour_sig already
+    // mean-centres + L2-normalises, which handles global brightness.
     const out = new ImageData(new Uint8ClampedArray(dst.data), outW, outH);
     return out;
   } finally {
