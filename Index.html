@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=231">
+<link rel="stylesheet" href="styles.css?v=232">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=231"></script>
-<script src="scanner.js?v=231"></script>
-<script src="scanner-cv.js?v=231"></script>
+<script src="logo.js?v=232"></script>
+<script src="scanner.js?v=232"></script>
+<script src="scanner-cv.js?v=232"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9132,7 +9132,6 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [phase, setPhase] = useState("starting"); // starting|scanning|denied|nocam|noindex|error
   const [err, setErr] = useState("");
   const [status, setStatus] = useState("Starting camera…");
-  const [cvReady, setCvReady] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState(null);      // {cands:[{disp,group}], sel}
   const [addedMsg, setAddedMsg] = useState("");
@@ -9158,16 +9157,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         streamRef.current = stream;
         const v = videoRef.current;
         if(v){ v.srcObject = stream; try { await v.play(); } catch(_e){} }
-        setPhase("scanning"); setStatus("Center a card in the frame and tap");
+        setPhase("scanning"); setStatus("Fit the card inside the box, then tap");
       } catch(e){
         setPhase(e && e.name === "NotAllowedError" ? "denied"
                : (e && e.name === "NotFoundError" ? "nocam" : "error"));
         setErr((e && e.message) || "");
       }
-      // opencv is an enhancement — the shutter works (centre-crop) before it loads.
-      if(window.CardCV){
-        window.CardCV.load().then(() => { if(!cancelled) setCvReady(true); }).catch(() => {});
-      }
+      // NOTE: opencv.js card-detection is intentionally NOT loaded — its WASM
+      // blocks the main thread (froze the page on real devices). The frame +
+      // crop path below is reliable and never hangs. A Worker-based detector is
+      // the eventual upgrade. (scanner-cv.js stays loaded but unused.)
     })();
     return () => {
       cancelled = true;
@@ -9204,29 +9203,24 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       for(let f = 0; f < SCAN_CAPTURE_FRAMES; f++){
         const snap = snapFrame();
         if(!snap){ await new Promise(r => setTimeout(r, 50)); continue; }
-        let query = null;
-        if(window.CardCV && window.CardCV.ready()){
-          const det = window.CardCV.detect(snap);            // guarded inside — won't throw
-          if(det) query = window.CardCV.rectify(snap, det.quad, 360, 504);
-        }
-        if(!query){
-          const gc = guideCrop();
-          const cc = document.createElement("canvas");
-          if(gc){
-            cc.width = Math.round(gc.sw); cc.height = Math.round(gc.sh);
-            cc.getContext("2d").drawImage(snap, gc.sx, gc.sy, gc.sw, gc.sh, 0, 0, cc.width, cc.height);
-          } else {
-            const W = snap.width, H = snap.height, cw = W * 0.7, ch = cw * 7 / 5;
-            cc.width = Math.round(cw); cc.height = Math.round(ch);
-            cc.getContext("2d").drawImage(snap, (W - cw) / 2, (H - ch) / 2, cw, ch, 0, 0, cc.width, cc.height);
-          }
-          query = cc;
+        // crop the framed region (what the user fit into the box) and match it.
+        const gc = guideCrop();
+        const query = document.createElement("canvas");
+        if(gc){
+          query.width = Math.round(gc.sw); query.height = Math.round(gc.sh);
+          query.getContext("2d").drawImage(snap, gc.sx, gc.sy, gc.sw, gc.sh, 0, 0, query.width, query.height);
+        } else {
+          const W = snap.width, H = snap.height, cw = W * 0.7, ch = cw * 7 / 5;
+          query.width = Math.round(cw); query.height = Math.round(ch);
+          query.getContext("2d").drawImage(snap, (W - cw) / 2, (H - ch) / 2, cw, ch, 0, 0, query.width, query.height);
         }
         let res = null;
         try { res = window.CardScanner.searchCrop(query, 0, 0, query.width, query.height, 8, 0.12); } catch(_e){}
         if(res){ for(const r of res){ const k = r.card.art_key; const cur = scoreByArt.get(k);
           if(cur) cur.score += r.color; else scoreByArt.set(k, { score: r.color, card: r.card }); } }
-        if(f < SCAN_CAPTURE_FRAMES - 1) await new Promise(r => requestAnimationFrame(() => r()));
+        // setTimeout, not requestAnimationFrame: rAF is fully paused in a
+        // backgrounded/hidden tab and would hang the capture there.
+        if(f < SCAN_CAPTURE_FRAMES - 1) await new Promise(r => setTimeout(r, 70));
       }
       const seenLbl = new Set(), ranked = [];
       for(const r of Array.from(scoreByArt.values()).sort((a, b) => b.score - a.score)){
@@ -9248,7 +9242,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   }, [raw]);
   captureRef.current = capture;
 
-  const resume = () => { setResult(null); setStatus(cvReady ? "Point at a card and tap" : "Center a card in the frame and tap"); };
+  const resume = () => { setResult(null); setStatus("Fit the card inside the box, then tap"); };
 
   const addCopy = (foil) => {
     if(!user){ onSignIn && onSignIn(); return; }
@@ -9317,7 +9311,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     below = html`<div class="scanner-scanbar">
       <div class="scanner-hint">${status}</div>
       <button class="scanner-shutter" onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Scan card"></button>
-      <div class="scanner-subhint">${cvReady ? "Tap to scan — it finds & crops the card for you" : "Tap to scan"}</div>
+      <div class="scanner-subhint">Hold the card flat • fill the box • good light</div>
     </div>`;
   }
 
