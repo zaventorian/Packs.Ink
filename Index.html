@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=229">
+<link rel="stylesheet" href="styles.css?v=230">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,8 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=229"></script>
-<script src="scanner.js?v=229"></script>
+<script src="logo.js?v=230"></script>
+<script src="scanner.js?v=230"></script>
+<script src="scanner-cv.js?v=230"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9110,36 +9111,43 @@ const groupFromSimCard = (simCard, rawData) => {
   return groups[0] || null;
 };
 
-// --- Card scanner (PWA camera → on-device visual match) -------------------
-// Live-matches a camera frame against the shipped descriptor index (scanner.js
-// + scanner/color.bin) entirely on-device. Shows the top-3 candidates; a tap
-// confirms (which also resolves foil/non-foil, since those share art). No
-// backend, no per-scan cost.
-const SCAN_CARD_W = 5, SCAN_CARD_H = 7;
-const SCAN_MATCH_MIN = 300;   // colour-dot floor (~cosine 0.6 * quant scale) for "stable"
-const SCAN_STABLE_MARGIN = 22; // top-1 must beat top-2 by this colour-dot margin to lock
+// --- Card scanner v2: detect → rectify → match, capture-when-steady --------
+// Finds the card quad in the live camera frame (scanner-cv.js / opencv.js),
+// draws a live outline, and when the card is held steady captures + rectifies
+// the clean card and matches it against the shipped index (scanner.js). One
+// confident result (with alternates to tap) — not a per-frame flicker. The
+// rectification removes perspective/background/scale variance, which is what
+// makes real phone photos match; the old fixed-crop live-match plateaued at
+// ~50% because it never saw a clean card. No backend, no per-scan cost.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
+const SCAN_CAPTURE_FRAMES = 3;     // frames voted together per capture
+const SCAN_STEADY_FRAMES = 4;      // detected+still frames before auto-capture
 
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail }){
   const videoRef = useRef(null);
-  const wrapRef = useRef(null);
+  const overlayRef = useRef(null);
+  const stageRef = useRef(null);
   const streamRef = useRef(null);
   const loopRef = useRef(0);
-  const votesRef = useRef([]);
+  const steadyRef = useRef({ count: 0, last: null });
+  const capturingRef = useRef(false);
+  const cvOkRef = useRef(false);
+  const captureRef = useRef(null);
+
   const [phase, setPhase] = useState("starting"); // starting|scanning|denied|nocam|noindex|error
   const [err, setErr] = useState("");
-  const [cands, setCands] = useState([]);
-  const [stable, setStable] = useState(false);
-  const [picked, setPicked] = useState(null);      // {disp, group}
+  const [status, setStatus] = useState("Starting camera…");
+  const [detected, setDetected] = useState(false);
+  const [cvReady, setCvReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);      // {cands:[{disp,group}], sel}
   const [addedMsg, setAddedMsg] = useState("");
 
-  const toDisplay = useCallback((r) => ({
-    id: r.card.id, name: r.card.name, version: r.card.version,
-    rarity: r.card.rarity, art_key: r.card.art_key, score: r.color,
-    thumb: SCAN_THUMB(r.card.id),
-  }), []);
+  const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
+  const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
+    rarity: card.rarity, art_key: card.art_key, thumb: SCAN_THUMB(card.id) });
 
-  // start camera + load index on mount
+  // mount: load index + start camera; lazy-load opencv in the background
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -9149,18 +9157,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ setPhase("nocam"); return; }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } },
+          video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
         if(cancelled){ stream.getTracks().forEach(t => t.stop()); return; }
         streamRef.current = stream;
         const v = videoRef.current;
         if(v){ v.srcObject = stream; try { await v.play(); } catch(_e){} }
-        setPhase("scanning");
+        setPhase("scanning"); setStatus("Point your camera at a card");
       } catch(e){
         setPhase(e && e.name === "NotAllowedError" ? "denied"
                : (e && e.name === "NotFoundError" ? "nocam" : "error"));
         setErr((e && e.message) || "");
+      }
+      if(window.CardCV){
+        window.CardCV.load().then(() => { if(!cancelled){ cvOkRef.current = true; setCvReady(true); } })
+          .catch(() => { cvOkRef.current = false; });
       }
     })();
     return () => {
@@ -9170,76 +9182,133 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     };
   }, []);
 
-  // crop rect (source px) for the centered 5:7 guide, accounting for object-fit:cover
-  const computeCrop = () => {
-    const v = videoRef.current, wrap = wrapRef.current;
-    if(!v || !wrap || !v.videoWidth) return null;
-    const vw = v.videoWidth, vh = v.videoHeight, cw = wrap.clientWidth, ch = wrap.clientHeight;
+  const snapFrame = () => {
+    const v = videoRef.current; if(!v || !v.videoWidth) return null;
+    const c = document.createElement("canvas"); c.width = v.videoWidth; c.height = v.videoHeight;
+    c.getContext("2d").drawImage(v, 0, 0); return c;
+  };
+  // intrinsic-coord crop matching the on-screen 5:7 guide (object-fit:cover math).
+  // Used by the fallback (no-opencv) capture so the crop == what the user framed.
+  const guideCrop = () => {
+    const v = videoRef.current, st = stageRef.current;
+    if(!v || !st || !v.videoWidth) return null;
+    const vw = v.videoWidth, vh = v.videoHeight, cw = st.clientWidth, ch = st.clientHeight;
     const scale = Math.max(cw / vw, ch / vh);
-    const dispW = vw * scale, dispH = vh * scale, offX = (cw - dispW) / 2, offY = (ch - dispH) / 2;
-    let gH = ch * 0.78, gW = gH * SCAN_CARD_W / SCAN_CARD_H;
-    if(gW > cw * 0.92){ gW = cw * 0.92; gH = gW * SCAN_CARD_H / SCAN_CARD_W; }
+    const offX = (cw - vw * scale) / 2, offY = (ch - vh * scale) / 2;
+    let gH = ch * 0.80, gW = gH * 5 / 7;
+    if(gW > cw * 0.92){ gW = cw * 0.92; gH = gW * 7 / 5; }
     const gX = (cw - gW) / 2, gY = (ch - gH) / 2;
     return { sx: (gX - offX) / scale, sy: (gY - offY) / scale, sw: gW / scale, sh: gH / scale };
   };
+  const drawOverlay = (quad) => {
+    const v = videoRef.current, cv = overlayRef.current; if(!v || !cv) return;
+    if(cv.width !== v.videoWidth){ cv.width = v.videoWidth; cv.height = v.videoHeight; }
+    const ctx = cv.getContext("2d"); ctx.clearRect(0, 0, cv.width, cv.height);
+    if(!quad) return;
+    ctx.strokeStyle = "rgba(120,230,150,0.95)"; ctx.lineWidth = Math.max(4, cv.width * 0.006);
+    ctx.lineJoin = "round"; ctx.beginPath();
+    quad.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+    ctx.closePath(); ctx.stroke();
+  };
+  const quadMoved = (a, b) => {
+    if(!a || !b) return 1e9;
+    let s = 0; for(let i = 0; i < 4; i++) s += Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y);
+    return s / 4;
+  };
 
-  // matching loop (~6fps), paused while a candidate is picked
+  // capture: grab a few frames, detect+rectify+match each, vote → candidates
+  const capture = useCallback(async () => {
+    if(capturingRef.current) return;
+    capturingRef.current = true; setBusy(true); setStatus("Reading card…");
+    try {
+      const scoreByArt = new Map();
+      for(let f = 0; f < SCAN_CAPTURE_FRAMES; f++){
+        const snap = snapFrame();
+        if(!snap){ await new Promise(r => setTimeout(r, 40)); continue; }
+        let query = null;
+        if(cvOkRef.current && window.CardCV && window.CardCV.ready()){
+          try { const det = window.CardCV.detect(snap); if(det){ query = window.CardCV.rectify(snap, det.quad, 360, 504); } } catch(_e){}
+        }
+        if(!query){
+          const gc = guideCrop();
+          const cc = document.createElement("canvas");
+          if(gc){
+            cc.width = Math.round(gc.sw); cc.height = Math.round(gc.sh);
+            cc.getContext("2d").drawImage(snap, gc.sx, gc.sy, gc.sw, gc.sh, 0, 0, cc.width, cc.height);
+          } else {
+            const W = snap.width, H = snap.height, cw = W * 0.62, ch = cw * 7 / 5;
+            cc.width = Math.round(cw); cc.height = Math.round(ch);
+            cc.getContext("2d").drawImage(snap, (W - cw) / 2, (H - ch) / 2, cw, ch, 0, 0, cc.width, cc.height);
+          }
+          query = cc;
+        }
+        let res; try { res = window.CardScanner.searchCrop(query, 0, 0, query.width, query.height, 8, 0.12); } catch(_e){ res = null; }
+        if(res){ for(const r of res){ const k = r.card.art_key; const cur = scoreByArt.get(k);
+          if(cur) cur.score += r.color; else scoreByArt.set(k, { score: r.color, card: r.card }); } }
+        await new Promise(r => requestAnimationFrame(() => r()));
+      }
+      // sort by summed score, then dedup by display label so the alternates
+      // don't show the same card twice (distinct index rows, same name+version).
+      const seenLbl = new Set(), ranked = [];
+      for(const r of Array.from(scoreByArt.values()).sort((a, b) => b.score - a.score)){
+        const k = (r.card.name || "") + "|" + (r.card.version || "");
+        if(seenLbl.has(k)) continue; seenLbl.add(k); ranked.push(r);
+        if(ranked.length >= 4) break;
+      }
+      drawOverlay(null);
+      if(!ranked.length){ setStatus("No match — line the card up and try again"); steadyRef.current.count = 0; return; }
+      const cands = ranked.map(r => {
+        const disp = toDisp(r.card);
+        const row = raw && raw.find(x => x.card_id === disp.id && x.tcgplayer_product_id);
+        const g = row ? groupFromSimCard(row, raw) : null;
+        return { disp, group: g };
+      });
+      setResult({ cands, sel: 0 });
+    } finally { capturingRef.current = false; setBusy(false); }
+  }, [raw]);
+  captureRef.current = capture;
+
+  // live detection loop
   useEffect(() => {
     if(phase !== "scanning") return;
     let running = true, last = 0;
     const tick = (t) => {
       if(!running) return;
       loopRef.current = requestAnimationFrame(tick);
-      if(picked) return;
-      if(t - last < 160) return;
-      last = t;
-      const crop = computeCrop();
-      if(!crop) return;
-      let res;
-      try { res = window.CardScanner.searchCrop(videoRef.current, crop.sx, crop.sy, crop.sw, crop.sh, 6, 0.12); }
-      catch(_e){ return; }
-      if(!res || !res.length) return;
-      const seen = new Set(), distinct = [];
-      for(const r of res){ if(seen.has(r.card.art_key)) continue; seen.add(r.card.art_key); distinct.push(r); if(distinct.length >= 3) break; }
-      setCands(distinct.map(toDisplay));
-      const top = distinct[0], votes = votesRef.current;
-      votes.push(top.card.art_key);
-      if(votes.length > 5) votes.shift();
-      // "stable" = a confident lock: same art_key on top for 4 straight frames,
-      // above the colour-match floor, AND clearly ahead of the runner-up so a
-      // toss-up between two similar cards doesn't flash a false ✓.
-      const margin = distinct.length > 1 ? (top.color - distinct[1].color) : 99;
-      setStable(votes.length >= 4 && votes.slice(-4).every(k => k === top.card.art_key)
-                && top.color > SCAN_MATCH_MIN && margin > SCAN_STABLE_MARGIN);
+      if(result || capturingRef.current) return;
+      if(t - last < 140) return; last = t;
+      const v = videoRef.current; if(!v || !v.videoWidth) return;
+      if(cvOkRef.current && window.CardCV && window.CardCV.ready()){
+        let det = null; try { det = window.CardCV.detect(v); } catch(_e){}
+        const quad = det && det.quad;
+        drawOverlay(quad); setDetected(!!quad);
+        const st = steadyRef.current, thresh = v.videoWidth * 0.012;
+        if(quad && quadMoved(quad, st.last) < thresh) st.count++; else st.count = 0;
+        st.last = quad;
+        setStatus(!quad ? "Point your camera at a card"
+          : (st.count >= SCAN_STEADY_FRAMES ? "Hold steady…" : "Card detected — hold still"));
+        if(quad && st.count >= SCAN_STEADY_FRAMES) captureRef.current && captureRef.current();
+      } else {
+        setStatus(window.CardCV ? "Loading detector… line the card up and tap" : "Line the card up and tap to scan");
+      }
     };
     loopRef.current = requestAnimationFrame(tick);
     return () => { running = false; if(loopRef.current) cancelAnimationFrame(loopRef.current); };
-  }, [phase, picked, toDisplay]);
+  }, [phase, result]);
 
-  const pick = useCallback((disp) => {
-    const row = raw && raw.find(r => r.card_id === disp.id && r.tcgplayer_product_id);
-    const g = row ? groupFromSimCard(row, raw) : null;
-    setPicked({ disp, group: g });
-    votesRef.current = []; setStable(false);
-  }, [raw]);
-
-  const resume = () => { setPicked(null); setCands([]); };
+  const resume = () => { setResult(null); steadyRef.current.count = 0; setStatus("Point your camera at a card"); };
 
   const addCopy = (foil) => {
     if(!user){ onSignIn && onSignIn(); return; }
-    const g = picked && picked.group, disp = picked && picked.disp;
-    const pr = g ? (foil ? (g.foil && g.foil.tcg_printing) : (g.normal && g.normal.tcg_printing))
-                 : (foil ? null : "Normal");
-    const cardId = g ? g.card_id : (disp && disp.id);
+    const c = result.cands[result.sel], g = c.group, disp = c.disp;
+    const pr = g ? (foil ? (g.foil && g.foil.tcg_printing) : (g.normal && g.normal.tcg_printing)) : (foil ? null : "Normal");
+    const cardId = g ? g.card_id : disp.id;
     if(!cardId || !pr) return;
     const key = cardId + ":" + pr;
     updateQty(cardId, pr, ((collection && collection[key]) || 0) + 1);
-    const nm = (g && g["Product Name"]) || (disp && (disp.name + (disp.version ? " - " + disp.version : ""))) || "Card";
-    setAddedMsg((foil ? "Foil " : "") + nm + " added ✓");
-    setTimeout(() => setAddedMsg(""), 1800);
+    setAddedMsg((foil ? "Foil " : "") + ((g && g["Product Name"]) || lbl(disp)) + " added ✓");
+    setTimeout(() => setAddedMsg(""), 1600);
   };
-
-  const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
 
   const errBody = (title, body) => html`<div class="scanner-msg">
     <div class="scanner-msg-title">${title}</div>
@@ -9247,49 +9316,56 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     <button class="scanner-btn primary" onClick=${onClose}>Close</button>
   </div>`;
 
-  let below = null;
-  if(phase === "denied") below = errBody("Camera blocked",
-    "Allow camera access for packs.ink in your browser settings, then reopen the scanner.");
-  else if(phase === "nocam") below = errBody("No camera found",
-    "This device doesn't expose a camera to the browser. Try on your phone.");
-  else if(phase === "noindex") below = errBody("Scanner unavailable", err || "Couldn't load the scanner.");
-  else if(phase === "error") below = errBody("Camera error", err || "Something went wrong starting the camera.");
-  else if(picked){
-    const g = picked.group, disp = picked.disp;
-    const nKey = g && g.normal ? g.card_id + ":" + g.normal.tcg_printing : (disp.id + ":Normal");
+  if(phase === "denied" || phase === "nocam" || phase === "noindex" || phase === "error"){
+    const m = { denied: ["Camera blocked", "Allow camera access for packs.ink in your browser settings, then reopen the scanner."],
+      nocam: ["No camera found", "This device doesn't expose a camera to the browser. Try on your phone."],
+      noindex: ["Scanner unavailable", err || "Couldn't load the scanner."],
+      error: ["Camera error", err || "Something went wrong starting the camera."] }[phase];
+    return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
+      <div class="scanner-head"><span class="scanner-title">Scan a card</span>
+        <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button></div>
+      ${errBody(m[0], m[1])}
+    </div>`;
+  }
+
+  let below;
+  if(result){
+    const c = result.cands[result.sel], disp = c.disp, g = c.group;
+    const nKey = g && g.normal ? g.card_id + ":" + g.normal.tcg_printing : disp.id + ":Normal";
     const fKey = g && g.foil ? g.card_id + ":" + g.foil.tcg_printing : null;
-    const nQty = (collection && collection[nKey]) || 0;
-    const fQty = (collection && fKey && collection[fKey]) || 0;
-    below = html`<div class="scanner-confirm">
-      <img class="scanner-confirm-img" src=${disp.thumb} alt=${lbl(disp)}/>
-      <div class="scanner-confirm-info">
-        <div class="scanner-confirm-name">${lbl(disp)}</div>
-        <div class="scanner-confirm-meta">${disp.rarity || ""}</div>
-        ${user ? html`<div class="scanner-add-row">
-          <button class="scanner-btn primary" onClick=${() => addCopy(false)}>
-            + Non-Foil${nQty ? html` <span class="scanner-owned">(${nQty})</span>` : null}
-          </button>
-          ${g && g.foil ? html`<button class="scanner-btn" onClick=${() => addCopy(true)}>
-            + Foil${fQty ? html` <span class="scanner-owned">(${fQty})</span>` : null}
-          </button>` : null}
-        </div>` : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to add</button>`}
-        ${addedMsg ? html`<div class="scanner-added">${addedMsg}</div>` : null}
-        <div class="scanner-confirm-actions">
-          ${g && onOpenDetail ? html`<button class="scanner-link" onClick=${() => onOpenDetail(g)}>Details</button>` : null}
-          <button class="scanner-link" onClick=${resume}>Scan another</button>
+    const nQty = (collection && collection[nKey]) || 0, fQty = (collection && fKey && collection[fKey]) || 0;
+    below = html`<div class="scanner-result-wrap">
+      <div class="scanner-result">
+        <img class="scanner-result-img" src=${disp.thumb} alt=${lbl(disp)}/>
+        <div class="scanner-result-info">
+          <div class="scanner-result-name">${lbl(disp)}</div>
+          <div class="scanner-result-meta">${disp.rarity || ""}</div>
+          ${user ? html`<div class="scanner-add-row">
+            <button class="scanner-btn primary" onClick=${() => addCopy(false)}>+ Add${nQty ? html` <span class="scanner-owned">(${nQty})</span>` : null}</button>
+            ${g && g.foil ? html`<button class="scanner-btn" onClick=${() => addCopy(true)}>+ Foil${fQty ? html` <span class="scanner-owned">(${fQty})</span>` : null}</button>` : null}
+          </div>` : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to add</button>`}
+          ${addedMsg ? html`<div class="scanner-added">${addedMsg}</div>` : null}
+          <div class="scanner-confirm-actions">
+            ${g && onOpenDetail ? html`<button class="scanner-link" onClick=${() => onOpenDetail(g)}>Details</button>` : null}
+            <button class="scanner-link" onClick=${resume}>Scan another</button>
+          </div>
         </div>
       </div>
+      ${result.cands.length > 1 ? html`<div class="scanner-alts">
+        <div class="scanner-alts-label">Not the right card? Tap the correct one:</div>
+        <div class="scanner-cand-row">
+          ${result.cands.map((cc, i) => html`<button key=${cc.disp.art_key} class=${"scanner-cand" + (i === result.sel ? " top" : "")}
+            onClick=${() => setResult(r => ({ ...r, sel: i }))}>
+            <img src=${cc.disp.thumb} alt=${lbl(cc.disp)} loading="lazy"/>
+            <span class="scanner-cand-name">${lbl(cc.disp)}</span>
+          </button>`)}
+        </div></div>` : null}
     </div>`;
   } else {
-    below = html`<div class="scanner-cands">
-      <div class="scanner-hint">${cands.length ? "Tap the match — or hold steady" : "Line a card up inside the frame"}</div>
-      <div class="scanner-cand-row">
-        ${cands.map((c, i) => html`<button key=${c.art_key} class=${"scanner-cand" + (i === 0 ? " top" : "")} onClick=${() => pick(c)}>
-          <img src=${c.thumb} alt=${lbl(c)} loading="lazy"/>
-          <span class="scanner-cand-name">${lbl(c)}</span>
-        </button>`)}
-        ${!cands.length ? html`<div class="scanner-cand-empty">Searching…</div>` : null}
-      </div>
+    below = html`<div class="scanner-scanbar">
+      <div class="scanner-hint">${status}</div>
+      <button class="scanner-shutter" onClick=${() => captureRef.current && captureRef.current()} disabled=${busy} aria-label="Capture card"></button>
+      <div class="scanner-subhint">${cvReady ? "Auto-captures when the card is held steady" : "Tap the button to capture"}</div>
     </div>`;
   }
 
@@ -9298,13 +9374,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <span class="scanner-title">Scan a card</span>
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
-    <div class="scanner-stage" ref=${wrapRef}>
+    <div class="scanner-stage" ref=${stageRef}>
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
-      <div class=${"scanner-guide" + (stable ? " stable" : "")}>
-        <span class="scanner-corner tl"></span><span class="scanner-corner tr"></span>
-        <span class="scanner-corner bl"></span><span class="scanner-corner br"></span>
-      </div>
-      ${stable && !picked ? html`<div class="scanner-stable-badge">✓ match</div>` : null}
+      <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
+      ${!result && !detected ? html`<div class="scanner-guide" aria-hidden="true"></div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? "card detected" : (cvReady ? "point at a card" : "line the card up in the frame")}</div>` : null}
+      ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
     </div>
     ${below}
