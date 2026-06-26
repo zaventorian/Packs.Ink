@@ -178,11 +178,67 @@
     return idx.slice(0, k);
   }
 
+  // ---- text matcher (OCR'd card text → fuzzy match vs the card DB) ----------
+  // Validated to fix the cases colour confuses (Helga, Joshua Sweet): even
+  // garbled OCR matches because distinctive name/ability tokens carry weight
+  // (IDF — rare tokens score high, generic "during your turn" tokens don't).
+  var text = { loaded: false, loading: null, cards: null, toks: null, idf: null };
+
+  function tnorm(s) { return (s || "").toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim(); }
+  function ttoks(s) { return tnorm(s).split(" ").filter(function (w) { return w.length >= 3; }); }
+
+  function loadText() {
+    if (text.loaded) return Promise.resolve(text);
+    if (text.loading) return text.loading;
+    text.loading = fetch(BASE + "text.json").then(function (r) { return r.json(); }).then(function (cards) {
+      text.cards = cards;
+      var N = cards.length, df = Object.create(null);
+      text.toks = new Array(N);
+      for (var i = 0; i < N; i++) {
+        var set = Object.create(null), ts = ttoks(cards[i].b);
+        for (var j = 0; j < ts.length; j++) set[ts[j]] = 1;
+        text.toks[i] = set;
+        for (var t in set) df[t] = (df[t] || 0) + 1;
+      }
+      var idf = Object.create(null);
+      for (var k in df) idf[k] = Math.log(N / (df[k] + 1));
+      text.idf = idf; text.loaded = true;
+      return text;
+    });
+    return text.loading;
+  }
+
+  // ocrText = raw OCR string; returns top-k [{id,name,version,score}]
+  function textMatch(ocrText, k) {
+    if (!text.loaded) return [];
+    k = k || 8;
+    var qset = Object.create(null), qt = ttoks(ocrText), i;
+    for (i = 0; i < qt.length; i++) qset[qt[i]] = 1;
+    // collector-number hint: any 1-3 digit group followed by /  (e.g. 175/204)
+    var cnHints = (ocrText.match(/\b(\d{1,3})\s*\/\s*\d{2,3}\b/g) || [])
+      .map(function (m) { return m.replace(/\s*\/.*$/, ""); });
+    var cards = text.cards, toks = text.toks, idf = text.idf, N = cards.length;
+    var scores = new Float32Array(N);
+    for (i = 0; i < N; i++) {
+      var s = 0, set = toks[i];
+      for (var w in qset) if (set[w]) s += idf[w];
+      if (cnHints.length && cards[i].cn && cnHints.indexOf(String(cards[i].cn)) >= 0) s += 6; // boost
+      scores[i] = s;
+    }
+    var order = topK(scores, Math.max(k, 12));
+    return order.slice(0, k).map(function (ri) {
+      return { id: cards[ri].id, name: cards[ri].n, version: cards[ri].v, score: scores[ri] };
+    });
+  }
+
   window.CardScanner = {
     load: load,
     searchCrop: searchCrop,
     colorSig: colorSig,
     dhash64: dhash64,
+    loadText: loadText,
+    textMatch: textMatch,
     get state() { return state; },
+    get textState() { return text; },
   };
 })();

@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=237">
+<link rel="stylesheet" href="styles.css?v=239">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=237"></script>
-<script src="scanner.js?v=237"></script>
-<script src="scanner-cv.js?v=237"></script>
+<script src="logo.js?v=239"></script>
+<script src="scanner.js?v=239"></script>
+<script src="scanner-cv.js?v=239"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,29 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=237";
+const SCAN_WORKER_URL = "scanner-worker.js?v=239";
+// Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
+// lib, most users never see the scanner.
+function loadTesseract(){
+  if(window.Tesseract) return Promise.resolve(window.Tesseract);
+  if(loadTesseract._p) return loadTesseract._p;
+  loadTesseract._p = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+    s.onload = () => res(window.Tesseract); s.onerror = () => rej(new Error("tesseract load"));
+    document.head.appendChild(s);
+  });
+  return loadTesseract._p;
+}
+// Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
+// reconcile a colour distance against a text score. Weighted per signal.
+function scanRRF(lists, weights, k){
+  k = k || 60; const score = new Map();
+  lists.forEach((list, i) => list.forEach((id, idx) => {
+    score.set(id, (score.get(id) || 0) + (weights[i] || 1) / (k + idx + 1));
+  }));
+  return Array.from(score.entries()).sort((a, b) => b[1] - a[1]).map(e => ({ id: e[0], score: e[1] }));
+}
 
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail }){
   const videoRef = useRef(null);
@@ -9134,6 +9156,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const loopTimerRef = useRef(0);
   const captureRef = useRef(null);
   const steadyRef = useRef({ count: 0, last: null });
+  const tessRef = useRef(null);
+  const tessReadyRef = useRef(false);
+  const rectRef = useRef(null);   // last rectified card (for the data flywheel)
 
   const [phase, setPhase] = useState("starting");
   const [err, setErr] = useState("");
@@ -9176,6 +9201,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }
       try { await window.CardScanner.load(); }
       catch(e){ setPhase("noindex"); setErr("couldn't load the card index"); return; }
+      // text matcher + OCR engine load in the background — capture works on
+      // colour-only until they're ready, then fuses text in.
+      window.CardScanner.loadText().catch(() => {});
+      loadTesseract().then(async (T) => {
+        if(cancelled || !T) return;
+        try {
+          const w = await T.createWorker("eng");
+          await w.setParameters({ tessedit_pageseg_mode: "6" });
+          if(cancelled){ try { w.terminate(); } catch(_e){} return; }
+          tessRef.current = w; tessReadyRef.current = true;
+        } catch(_e){}
+      }).catch(() => {});
       if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ setPhase("nocam"); return; }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -9197,9 +9234,28 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       cancelled = true;
       clearTimeout(loopTimerRef.current);
       const w = workerRef.current; if(w){ try { w.terminate(); } catch(_e){} }
+      const tw = tessRef.current; if(tw){ try { tw.terminate(); } catch(_e){} }
       const s = streamRef.current; if(s) s.getTracks().forEach(t => t.stop());
     };
   }, []);
+
+  // OCR the lower ~60% of the rectified card (name banner + type + rules +
+  // flavor + collector line; the top is art). Grayscale + contrast-stretch.
+  const ocrCard = async (canvas) => {
+    const tw = tessRef.current; if(!tw || !canvas) return "";
+    try {
+      const W = canvas.width, H = canvas.height, y0 = Math.round(H * 0.40), rh = H - y0;
+      const c = document.createElement("canvas"); c.width = W; c.height = rh;
+      const ctx = c.getContext("2d"); ctx.drawImage(canvas, 0, y0, W, rh, 0, 0, W, rh);
+      const d = ctx.getImageData(0, 0, W, rh), a = d.data;
+      let mn = 255, mx = 0;
+      for(let i = 0; i < a.length; i += 4){ const g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; if(g < mn) mn = g; if(g > mx) mx = g; }
+      for(let i = 0; i < a.length; i += 4){ let g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; g = (g - mn) / (mx - mn + 1e-3) * 255; a[i] = a[i+1] = a[i+2] = g; }
+      ctx.putImageData(d, 0, 0);
+      const r = await tw.recognize(c);
+      return (r && r.data && r.data.text) || "";
+    } catch(_e){ return ""; }
+  };
 
   const drawOutline = (quad, bw, bh, isReady) => {
     const ov = overlayRef.current; if(!ov) return;
@@ -9269,52 +9325,90 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     return c;
   };
 
-  // capture (on tap): worker detect+rectify the card → match the clean image;
-  // fall back to a guide-crop. Wrapped so it can never throw to the React tree.
+  // capture (on tap): rectify the card → COLOUR match + read the TEXT (OCR) →
+  // fuse the two ranked lists (RRF). Text fixes the colour confusions (Helga,
+  // Joshua Sweet); colour carries it when OCR fails. Never throws to React.
   const capture = useCallback(async () => {
     if(captureBusyRef.current) return;
     captureBusyRef.current = true; setBusy(true); setStatus("Reading card…");
     try {
-      const scoreByArt = new Map();
+      // 1. rectify the card once (big enough for OCR), fall back to guide-crop
+      let rect = null;
       const v = videoRef.current;
-      for(let f = 0; f < 2; f++){
-        let query = null;
-        if(workerRef.current && v && v.videoWidth){
-          try {
-            const bmp = await createImageBitmap(v, { resizeWidth: 1000 });
-            const r = await post("capture", { bitmap: bmp, outW: 360, outH: 504 }, [bmp]);
-            if(r && r.buffer){
-              const idata = new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height);
-              const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
-              c.getContext("2d").putImageData(idata, 0, 0); query = c;
-            }
-          } catch(e){}
+      if(workerRef.current && v && v.videoWidth){
+        try {
+          const bmp = await createImageBitmap(v, { resizeWidth: 1600 });
+          const r = await post("capture", { bitmap: bmp, outW: 1000, outH: 1400 }, [bmp]);
+          if(r && r.buffer){
+            const idata = new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height);
+            const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
+            c.getContext("2d").putImageData(idata, 0, 0); rect = c;
+          }
+        } catch(e){}
+      }
+      if(!rect) rect = guideCropCanvas();
+      if(!rect){ setStatus("Couldn't read it — frame the card and tap again"); return; }
+      rectRef.current = rect;   // for the data-flywheel log on confirm
+
+      // 2. colour match → ranked card_ids
+      let colorRanked = [];
+      try {
+        const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
+        const seen = new Set();
+        for(const r of res){ if(!seen.has(r.card.id)){ seen.add(r.card.id); colorRanked.push(r.card.id); } }
+      } catch(_e){}
+
+      // 3. read the text → ranked card_ids
+      let textRanked = [], tmTop = null, textConfident = false;
+      if(tessReadyRef.current && window.CardScanner.textState && window.CardScanner.textState.loaded){
+        setStatus("Reading text…");
+        const ocr = await ocrCard(rect);
+        if(ocr && ocr.trim().length >= 3){
+          const tm = window.CardScanner.textMatch(ocr, 20);
+          textRanked = tm.map(x => x.id);
+          tmTop = tm[0] || null;
+          const t1 = tm[1] ? tm[1].score : 0;
+          // a distinctive read (high IDF score, clearly ahead of #2) = trust it
+          textConfident = !!tmTop && tmTop.score > 22 && tmTop.score > 1.6 * t1;
         }
-        if(!query) query = guideCropCanvas();
-        if(!query){ await new Promise(r => setTimeout(r, 40)); continue; }
-        let res = null;
-        try { res = window.CardScanner.searchCrop(query, 0, 0, query.width, query.height, 8, 0.12); } catch(_e){}
-        if(res){ for(const r of res){ const k = r.card.art_key; const cur = scoreByArt.get(k);
-          if(cur) cur.score += r.color; else scoreByArt.set(k, { score: r.color, card: r.card }); } }
-        if(f < 1) await new Promise(r => setTimeout(r, 60));
       }
-      const seenLbl = new Set(), ranked = [];
-      for(const r of Array.from(scoreByArt.values()).sort((a, b) => b.score - a.score)){
-        const k = (r.card.name || "") + "|" + (r.card.version || "");
-        if(seenLbl.has(k)) continue; seenLbl.add(k); ranked.push(r);
-        if(ranked.length >= 4) break;
+
+      // 4. fuse (text weighted higher — far more discriminating when it reads).
+      // Only let text in if the OCR actually matched something above the noise
+      // floor — garbage OCR must not demote a card colour got right.
+      const useText = !!tmTop && tmTop.score > 10;
+      const fused = useText
+        ? scanRRF([colorRanked, textRanked], [1, 2.4])
+        : colorRanked.map((id, i) => ({ id, score: 1 / (60 + i) }));
+      // a clearly-confident text match (unique name/ability) wins outright
+      if(textConfident && tmTop){
+        let e = fused.find(x => x.id === tmTop.id);
+        if(e) e.score += 1; else fused.unshift({ id: tmTop.id, score: 1 });
+        fused.sort((a, b) => b.score - a.score);
       }
-      if(!ranked.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
-      // confidence = how far the top guess is ahead of the runner-up
-      const s0 = ranked[0].score, s1 = ranked[1] ? ranked[1].score : 0;
-      const confident = s0 > 0 && (s0 - s1) / s0 > 0.045;
-      const cands = ranked.map(r => {
-        const disp = toDisp(r.card);
-        const row = raw && raw.find(x => x.card_id === disp.id && x.tcgplayer_product_id);
+      if(!fused.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
+
+      // 5. build candidates from the colour-index meta, dedup by name+version
+      const META = window.CardScanner.state.cards;
+      const byId = capture._byId || (capture._byId = (() => {
+        const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m;
+      })());
+      const seenLbl = new Set(), cands = [];
+      for(const fr of fused){
+        const m = byId.get(fr.id); if(!m) continue;
+        const k = (m.name || "") + "|" + (m.version || "");
+        if(seenLbl.has(k)) continue; seenLbl.add(k);
+        const disp = toDisp(m);
+        const row = raw && raw.find(x => x.card_id === fr.id && x.tcgplayer_product_id);
         const g = row ? groupFromSimCard(row, raw) : null;
-        return { disp, group: g };
-      });
-      setResult({ cands, sel: 0, confident });
+        cands.push({ disp, group: g });
+        if(cands.length >= 4) break;
+      }
+      if(!cands.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
+      // confidence: a confident text read, or a clear fused margin
+      const f0 = fused[0].score, f1 = fused[1] ? fused[1].score : 0;
+      const confident = textConfident || (f0 > 0 && (f0 - f1) / f0 > 0.12);
+      setResult({ cands, sel: 0, confident, usedText: textRanked.length > 0 });
     } catch(e){
       setStatus("Couldn't read it — try again");
     } finally { captureBusyRef.current = false; setBusy(false); }
