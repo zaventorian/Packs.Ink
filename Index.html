@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=247">
+<link rel="stylesheet" href="styles.css?v=249">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=247"></script>
-<script src="scanner.js?v=247"></script>
-<script src="scanner-cv.js?v=247"></script>
+<script src="logo.js?v=249"></script>
+<script src="scanner.js?v=249"></script>
+<script src="scanner-cv.js?v=249"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=247";
+const SCAN_WORKER_URL = "scanner-worker.js?v=249";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9299,8 +9299,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // (printed text reads the same in a photo as in the DB — no colour domain gap).
   // Returns { lines: [name candidates tallest-first], cnNum }.
   const ocrCardRegions = async (canvas) => {
-    const tw = tessRef.current; if(!tw || !canvas) return { lines: [], cnNum: null };
-    let lines = [], cnNum = null;
+    const tw = tessRef.current; if(!tw || !canvas) return { lines: [], cnNum: null, cnSet: null };
+    let lines = [], cnNum = null, cnSize = null, cnSet = null;
     try {
       const c = prepCrop(canvas, 0, 0, 1, 0.74, 1.4);   // whole card above the rules box
       const r = await tw.recognize(c);
@@ -9315,12 +9315,17 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       lines = cand.slice(0, 3).map(x => x.t);
     } catch(_e){}
     try {
-      const c = prepCrop(canvas, 0.02, 0.90, 0.42, 0.985, 4);   // collector number (bottom-left)
+      // the collector line "147/204 · EN · 12" sits bottom-left: number / set-size,
+      // then the set code. number + set → a near-unique card (the backbone).
+      const c = prepCrop(canvas, 0.0, 0.90, 0.55, 0.99, 4);
       const r = await tw.recognize(c);
-      const m = ((r && r.data && r.data.text) || "").match(/(\d{1,3})\s*[\/iIl|]\s*(\d{2,3})/);
-      if(m) cnNum = m[1];
+      const txt = ((r && r.data && r.data.text) || "").replace(/\s+/g, " ");
+      const m = txt.match(/(\d{1,3})\s*[\/iIl|]\s*(\d{2,3})/);
+      if(m){ cnNum = m[1]; cnSize = m[2]; }
+      const sm = txt.match(/EN[^\d]{0,4}(\d{1,2})/i);   // set code after "EN"
+      if(sm) cnSet = sm[1];
     } catch(_e){}
-    return { lines, cnNum };
+    return { lines, cnNum, cnSize, cnSet };
   };
 
   const roundRectPath = (ctx, x, y, w, h, r) => {
@@ -9655,7 +9660,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       rect.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
       const o = await ocrCardRegions(rect);
       if((!o.lines || !o.lines.length) && o.cnNum == null) return;
-      const idr = window.CardScanner.identify({ lines: o.lines, cnNum: o.cnNum, colourRanked: colorIds || [] });
+      const idr = window.CardScanner.identify({ lines: o.lines, cnNum: o.cnNum, cnSet: o.cnSet, colourRanked: colorIds || [] });
       // only a CONFIDENT name read is authoritative enough to override colour
       if(!idr || idr.conf !== "high" || !idr.top3 || !idr.top3.length) return;
       const META = window.CardScanner.state.cards;
@@ -9754,14 +9759,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // 3. read the NAME (+ collector #) — the PRIMARY identity signal. Printed
       // text reads the same in a photo as in the DB (no colour domain gap), so
       // the name decides the card; colour only orders the printing/variant.
-      let ocrLines = [], cnNum = null;
+      let ocrLines = [], cnNum = null, cnSet = null;
       if(tessReadyRef.current && window.CardScanner.identify){
         setStatus("Reading name…");
         const o = await ocrCardRegions(rect);
-        ocrLines = o.lines; cnNum = o.cnNum;
+        ocrLines = o.lines; cnNum = o.cnNum; cnSet = o.cnSet;
       }
-      // 4. identify (name-primary; colour = variant tie-breaker; cn# = soft boost)
-      const idr = window.CardScanner.identify({ lines: ocrLines, cnNum, colourRanked: colorRanked });
+      // 4. identify (collector-number backbone; name + colour vote within it)
+      const idr = window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colorRanked });
       const orderedIds = (idr && idr.top3 && idr.top3.length) ? idr.top3.concat(colorRanked) : colorRanked;
       if(!orderedIds.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
 
@@ -14101,7 +14106,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
             ${valBlock(e)}
           </button>`)}</div>`
         : html`<div class="gco-list">${b.items.map((e,i) => html`<button key=${i} class="gco-row" onClick=${()=>onOpen(e.it.card_id, e.it.printing)}>
-            <span class="gco-row-name">${e.name}</span>
+            <span class="gco-row-name">${e.name}${e.sub ? html`<span class="gco-row-sub"> - ${e.sub}</span>` : ""}${showFoilBadge(e) ? html`<span class="gco-row-foil">Foil</span>` : ""}</span>
             ${gradeBadge(e)}
             <span class="gco-row-val">${valStr(e)}${e.qty>1 ? html`<span class="gco-row-qty">×${e.qty}</span>` : ""}</span>
           </button>`)}</div>`}

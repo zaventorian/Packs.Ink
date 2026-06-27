@@ -275,14 +275,33 @@
   function buildNameDB(){
     if(nameDB || !text.cards) return;
     var cards = text.cards, N = cards.length, i;
-    nameDB = { meta: new Array(N), cnLoose: Object.create(null) };
+    // cnLoose: collector-number → [ids] (across all sets). cnBySet: "set|number"
+    // → [ids] (near-unique: 1-2 cards, the printings). byId: id → meta.
+    nameDB = { meta: new Array(N), cnLoose: Object.create(null), cnBySet: Object.create(null), byId: Object.create(null) };
     for(i=0;i<N;i++){
       var c = cards[i], nm = c.n || "", ver = c.v || "", full = (nm + " " + ver).replace(/\s+/g," ").trim();
       var tok = nmTok(nm), tv = nmTok(ver), kk; for(kk in tv) tok[kk]=1;
       var cn = nmCanon(nm), cf = nmCanon(full);
-      nameDB.meta[i] = { id: c.id, name: nm, version: ver, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
-      if(c.cn != null){ var num = String(c.cn); (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id); }
+      var m = { id: c.id, name: nm, version: ver, set: c.s, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
+      nameDB.meta[i] = m; nameDB.byId[c.id] = m;
+      if(c.cn != null){ var num = String(c.cn).replace(/\D/g,""); if(num){
+        (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id);
+        if(c.s != null){ var k = c.s + "|" + num; (nameDB.cnBySet[k] = nameDB.cnBySet[k] || []).push(c.id); }
+      }}
     }
+  }
+  // order a small candidate set by name-OCR agreement, then colour rank (the
+  // parallel vote: the number narrowed the field, name + colour pick within it).
+  function rankCnCandidates(cands, nameTop, colour){
+    var namePos = Object.create(null), colPos = Object.create(null), i;
+    for(i=0;i<nameTop.length;i++) if(namePos[nameTop[i].id] == null) namePos[nameTop[i].id] = i;
+    for(i=0;i<colour.length;i++) if(colPos[colour[i]] == null) colPos[colour[i]] = i;
+    return cands.slice().sort(function(a, b){
+      var na = namePos[a]==null?99:namePos[a], nb = namePos[b]==null?99:namePos[b];
+      if(na !== nb) return na - nb;
+      var ca = colPos[a]==null?9999:colPos[a], cb = colPos[b]==null?9999:colPos[b];
+      return ca - cb;
+    });
   }
   function textScore(qn, qnSq, qtok, qtri, m){
     // compare both spaced and space-stripped forms — OCR often merges or splits
@@ -312,26 +331,52 @@
   }
   function lookupCN(num){ buildNameDB(); if(!nameDB || num == null) return []; return nameDB.cnLoose[String(num)] || []; }
 
-  // IDENTITY: name-OCR primary, colour as tie-breaker, collector# as a soft boost.
-  // opts = { lines:[ocr strings], cnNum:"116"|null, colourRanked:[ids] }.
-  // Returns { top3:[ids], conf:"high"|"medium"|"low", source, nameConf }.
+  // IDENTITY — PARALLEL fusion (vote, don't gate). The collector NUMBER is the
+  // backbone: set+number → ~1 card (near-unique primary key). Name-OCR + colour
+  // are independent voters that order the narrowed field. Falls back to
+  // name-primary, then colour, when the number doesn't read.
+  // opts = { lines:[ocr strings], cnNum:"116"|null, cnSet:"12"|null, colourRanked:[ids] }.
   function identify(opts){
+    buildNameDB();
     var nm = rankNames(opts.lines || [], 6);
     var colour = opts.colourRanked || [];
     var nameIds = nm.top.map(function(x){ return x.id; });
-    // a confident name read wins outright (this is what beats a wrong colour guess).
-    // Among the matched character's printings, let COLOUR order them so the right
-    // version/foil floats to the top (colour's actual reliable job).
-    if(nm.conf === "high" && nameIds.length){
-      var cpos = Object.create(null), ci;
-      for(ci=0; ci<colour.length; ci++) if(cpos[colour[ci]] == null) cpos[colour[ci]] = ci;
-      var ord = nameIds.slice().sort(function(a, b){ return (cpos[a]==null?1e9:cpos[a]) - (cpos[b]==null?1e9:cpos[b]); });
-      return { top3: dedupeIds(ord.concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, names: nm.top };
+
+    // collector-number candidates (a SET-MEMBERSHIP signal — the number narrows
+    // 2950 → ~the cards numbered N, but it must NEVER exclude a confident name).
+    var numIds = [];
+    if(opts.cnNum != null && nameDB){
+      var num = String(opts.cnNum).replace(/\D/g, "");
+      if(num){
+        if(opts.cnSet != null && nameDB.cnBySet[opts.cnSet + "|" + num]) numIds = nameDB.cnBySet[opts.cnSet + "|" + num];
+        else numIds = nameDB.cnLoose[num] || [];
+      }
     }
-    var cnIds = (opts.cnNum != null) ? lookupCN(opts.cnNum) : [];
-    var fused = rrf([nameIds, colour, cnIds], [3, 1, 2]);
-    var conf = nm.conf === "medium" ? "medium" : "low";
-    return { top3: dedupeIds(fused).slice(0, 3), conf: conf, source: "fusion", nameConf: nm.conf, names: nm.top };
+    var numSet = Object.create(null), i; for(i=0;i<numIds.length;i++) numSet[numIds[i]] = 1;
+    var orderByColour = function(ids){
+      var cp = Object.create(null), j; for(j=0;j<colour.length;j++) if(cp[colour[j]]==null) cp[colour[j]]=j;
+      return ids.slice().sort(function(a, b){ return (cp[a]==null?1e9:cp[a]) - (cp[b]==null?1e9:cp[b]); });
+    };
+
+    // 1. NUMBER + NAME AGREE → lock. The name's best card that is ALSO numbered N
+    //    is the strongest, domain-gap-immune identification we can make.
+    if(numIds.length){
+      for(i=0;i<nameIds.length;i++) if(numSet[nameIds[i]]){
+        return { top3: dedupeIds([nameIds[i]].concat(orderByColour(numIds), nameIds, colour)).slice(0, 3), conf: "high", source: "cn+name", nameConf: nm.conf, names: nm.top };
+      }
+    }
+    // 2. confident NAME alone → name wins (number absent or misread; colour orders the printing)
+    if(nm.conf === "high" && nameIds.length){
+      return { top3: dedupeIds(orderByColour(nameIds).concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, names: nm.top };
+    }
+    // 3. number read but name weak → the numbered cards, ordered by name then colour (needs a tap)
+    if(numIds.length){
+      var ranked = rankCnCandidates(numIds, nm.top, colour);
+      return { top3: dedupeIds(ranked.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", nameConf: nm.conf, names: nm.top };
+    }
+    // 4. fallback: name + colour vote
+    var fused = rrf([nameIds, colour], [3, 1]);
+    return { top3: dedupeIds(fused).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", nameConf: nm.conf, names: nm.top };
   }
 
   window.CardScanner = {
