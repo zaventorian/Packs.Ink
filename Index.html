@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=250">
+<link rel="stylesheet" href="styles.css?v=251">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=250"></script>
-<script src="scanner.js?v=250"></script>
-<script src="scanner-cv.js?v=250"></script>
+<script src="logo.js?v=251"></script>
+<script src="scanner.js?v=251"></script>
+<script src="scanner-cv.js?v=251"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,20 +9119,12 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=250";
-// Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
-// lib, most users never see the scanner.
-function loadTesseract(){
-  if(window.Tesseract) return Promise.resolve(window.Tesseract);
-  if(loadTesseract._p) return loadTesseract._p;
-  loadTesseract._p = new Promise((res, rej) => {
-    const s = document.createElement("script");
-    s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
-    s.onload = () => res(window.Tesseract); s.onerror = () => rej(new Error("tesseract load"));
-    document.head.appendChild(s);
-  });
-  return loadTesseract._p;
-}
+const SCAN_WORKER_URL = "scanner-worker.js?v=251";
+// PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
+// + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
+// stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
+// in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=251";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -9159,8 +9151,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // steadyRef: lastRaw = last raw quad (lock/steady test), smooth = EMA'd quad
   // (drawn only), count = consecutive-steady frames, misses = consecutive misses.
   const steadyRef = useRef({ lastRaw: null, smooth: null, count: 0, misses: 0 });
-  const tessRef = useRef(null);
-  const tessReadyRef = useRef(false);
+  const ocrWorkerRef = useRef(null);          // PP-OCR text reader (onnxruntime-web)
+  const ocrPendingRef = useRef(new Map());    // OCR request promises by id
+  const ocrMsgIdRef = useRef(0);
+  const ocrReadyRef = useRef(false);          // OCR models loaded
   const rectRef = useRef(null);   // last rectified card (for the data flywheel)
   const ambCanvasRef = useRef(null);      // reused small rectified canvas (ambient)
   const modeRef = useRef("ambient");      // mirror of `mode` for the loop closure
@@ -9233,6 +9227,21 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       w.onerror = () => {};
       workerRef.current = w;
     } catch(e){ /* no worker → guide-crop fallback still works */ }
+    // OCR worker (PP-OCR via onnxruntime-web) — its own worker so a ~1s read never
+    // stalls the live hover loop. Loads in the background; capture works colour-only
+    // until ready, then fuses the name/number in.
+    try {
+      const ow = new Worker(OCR_WORKER_URL);
+      ow.onmessage = (e) => {
+        const m = e.data;
+        if(m.type === "ready"){ ocrReadyRef.current = true; return; }
+        if(m.type === "failed"){ return; }   // OCR unavailable → identify falls back to colour
+        const cb = ocrPendingRef.current.get(m.id);
+        if(cb){ ocrPendingRef.current.delete(m.id); cb(m); }
+      };
+      ow.onerror = () => {};
+      ocrWorkerRef.current = ow;
+    } catch(e){ /* no OCR worker → colour-only still works */ }
     (async () => {
       if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }
       try { await window.CardScanner.load(); }
@@ -9240,17 +9249,6 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // text matcher + OCR engine load in the background — capture works on
       // colour-only until they're ready, then fuses text in.
       window.CardScanner.loadText().catch(() => {});
-      loadTesseract().then(async (T) => {
-        if(cancelled || !T) return;
-        try {
-          const w = await T.createWorker("eng");
-          // dictionary OFF — card names are proper nouns ("Heihei", "Te Kā",
-          // "Maui") that an English dictionary would "correct" into garbage.
-          await w.setParameters({ tessedit_pageseg_mode: "6", load_system_dawg: "0", load_freq_dawg: "0" });
-          if(cancelled){ try { w.terminate(); } catch(_e){} return; }
-          tessRef.current = w; tessReadyRef.current = true;
-        } catch(_e){}
-      }).catch(() => {});
       if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ setPhase("nocam"); return; }
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
@@ -9272,67 +9270,34 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       cancelled = true;
       clearTimeout(loopTimerRef.current);
       const w = workerRef.current; if(w){ try { w.terminate(); } catch(_e){} }
-      const tw = tessRef.current; if(tw){ try { tw.terminate(); } catch(_e){} }
+      const ow = ocrWorkerRef.current; if(ow){ try { ow.terminate(); } catch(_e){} }
       const s = streamRef.current; if(s) s.getTracks().forEach(t => t.stop());
     };
   }, []);
 
-  // OCR the lower ~60% of the rectified card (name banner + type + rules +
-  // flavor + collector line; the top is art). Grayscale + contrast-stretch.
-  // grayscale + contrast-stretch a sub-rect of the rectified card into a fresh
-  // canvas (sharpens OCR on stylised card text). x0..y1 are 0..1 fractions.
-  const prepCrop = (canvas, x0, y0, x1, y1, up) => {
-    const W = canvas.width, H = canvas.height, sw = (x1 - x0) * W, sh = (y1 - y0) * H, k = up || 1;
-    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
-    const ctx = c.getContext("2d"); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(canvas, x0 * W, y0 * H, sw, sh, 0, 0, c.width, c.height);
-    const d = ctx.getImageData(0, 0, c.width, c.height), a = d.data;
-    let mn = 255, mx = 0;
-    for(let i = 0; i < a.length; i += 4){ const g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; if(g < mn) mn = g; if(g > mx) mx = g; }
-    const rng = (mx - mn) || 1;
-    for(let i = 0; i < a.length; i += 4){ let g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; g = (g - mn) / rng * 255; a[i] = a[i+1] = a[i+2] = g; }
-    ctx.putImageData(d, 0, 0); return c;
-  };
-  // OCR the rectified card → the NAME (the largest-font text on a Lorcana card,
-  // so we take the tallest text lines — layout-agnostic across character/song/
-  // action/item) + the collector number. Name-OCR is the PRIMARY identity signal
-  // (printed text reads the same in a photo as in the DB — no colour domain gap).
-  // Returns { lines: [name candidates tallest-first], cnNum }.
+  // post the rectified card to the OCR worker (promise-by-id). Transfers the pixel
+  // buffer so there's no copy; resolves null if the worker isn't up.
+  const ocrPost = (buffer, w, h) => new Promise((resolve) => {
+    const wk = ocrWorkerRef.current; if(!wk){ resolve(null); return; }
+    const id = ++ocrMsgIdRef.current; ocrPendingRef.current.set(id, resolve);
+    try { wk.postMessage({ type: "ocr", id, buffer, w, h }, [buffer]); }
+    catch(e){ ocrPendingRef.current.delete(id); resolve(null); }
+  });
+  // OCR the rectified card via the PP-OCR worker → the NAME (the tallest text on a
+  // Lorcana card, so the worker takes the tallest text boxes — layout-agnostic
+  // across character/song/action/item) + the collector number. Name-OCR is the
+  // PRIMARY identity signal (printed text reads the same in a photo as in the DB —
+  // no colour domain gap); the number is the version backbone. Returns
+  // { lines: [name candidates tallest-first], cnNum, cnSet }.
   const ocrCardRegions = async (canvas) => {
-    const tw = tessRef.current; if(!tw || !canvas) return { lines: [], cnNum: null, cnSet: null };
-    let lines = [], cnNum = null, cnSize = null, cnSet = null;
+    if(!canvas || !ocrReadyRef.current || !ocrWorkerRef.current) return { lines: [], cnNum: null, cnSet: null };
     try {
-      const c = prepCrop(canvas, 0, 0, 1, 0.74, 1.4);   // whole card above the rules box
-      const r = await tw.recognize(c);
-      const ls = (r && r.data && r.data.lines) || [];
-      const cand = [];
-      for(const L of ls){
-        const t = (L.text || "").replace(/\s+/g, " ").trim();
-        const h = L.bbox ? (L.bbox.y1 - L.bbox.y0) : 0;
-        if(t.length >= 2 && /[a-z]/i.test(t)) cand.push({ h, t });
-      }
-      cand.sort((a, b) => b.h - a.h);
-      lines = cand.slice(0, 3).map(x => x.t);
-    } catch(_e){}
-    try {
-      // the collector line "147/204 · EN · 12" sits in the BOTTOM ~4% strip,
-      // bottom-left: number / set-size, then the set code. number + set → a
-      // near-unique card (the backbone). Tuned ROI (y .955-1.0 × 5) on real close
-      // photos took the read-rate 29% → ~64%; a wider fallback crop catches more.
-      for(const box of [[0.0, 0.955, 0.50, 1.0, 5], [0.0, 0.93, 0.60, 1.0, 5]]){
-        const c = prepCrop(canvas, box[0], box[1], box[2], box[3], box[4]);
-        const r = await tw.recognize(c);
-        const txt = ((r && r.data && r.data.text) || "").replace(/\s+/g, " ");
-        const m = txt.match(/(\d{1,3})\s*[\/iIl|]\s*(\d{2,3})/);
-        if(m){
-          cnNum = m[1]; cnSize = m[2];
-          const sm = txt.match(/EN[^\d]{0,4}(\d{1,2})/i);   // set code after "EN"
-          if(sm) cnSet = sm[1];
-          break;
-        }
-      }
-    } catch(_e){}
-    return { lines, cnNum, cnSize, cnSet };
+      const W = canvas.width, H = canvas.height;
+      const buf = canvas.getContext("2d").getImageData(0, 0, W, H).data.buffer;
+      const r = await ocrPost(buf, W, H);
+      if(!r) return { lines: [], cnNum: null, cnSet: null };
+      return { lines: r.lines || [], cnNum: r.cnNum || null, cnSet: r.cnSet || null };
+    } catch(_e){ return { lines: [], cnNum: null, cnSet: null }; }
   };
 
   const roundRectPath = (ctx, x, y, w, h, r) => {
@@ -9489,7 +9454,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           // background OCR upgrade: once steady on a card not yet read, fire OCR
           // UN-AWAITED (never blocks the loop). On a confident text read it
           // upgrades the live preview + fixes the row if already added.
-          if(o.locked && enough && A.ocrDoneKey !== topKey && !A.ocrBusy && tessReadyRef.current && triggerOcrRef.current){
+          if(o.locked && enough && A.ocrDoneKey !== topKey && !A.ocrBusy && ocrReadyRef.current && triggerOcrRef.current){
             A.ocrBusy = true; A.ocrDoneKey = topKey;
             const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
             triggerOcrRef.current(topKey, colorIds).finally(() => { ambientRef.current.ocrBusy = false; });
@@ -9767,7 +9732,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // text reads the same in a photo as in the DB (no colour domain gap), so
       // the name decides the card; colour only orders the printing/variant.
       let ocrLines = [], cnNum = null, cnSet = null;
-      if(tessReadyRef.current && window.CardScanner.identify){
+      if(ocrReadyRef.current && window.CardScanner.identify){
         setStatus("Reading name…");
         const o = await ocrCardRegions(rect);
         ocrLines = o.lines; cnNum = o.cnNum; cnSet = o.cnSet;
