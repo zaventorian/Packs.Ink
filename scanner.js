@@ -240,11 +240,108 @@
     });
   }
 
+  // ---- NAME matcher (OCR'd name → card): the PRIMARY identity signal ---------
+  // Printed text reads the same in a real photo as in the DB — no digital-art
+  // domain gap — so a card's NAME is far more reliable than its colours. Colour
+  // is demoted to a printing/variant tie-breaker. Mirrors
+  // scripts/scanner/ocr_match_validate.py. Built lazily from text.cards.
+  var nameDB = null;
+  function nmNorm(s){
+    s = (s || "").toLowerCase();
+    try { s = s.normalize("NFKD").replace(/[̀-ͯ]/g, ""); } catch(e){}
+    return s.replace(/['’`._]/g, "").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+  }
+  function nmCanon(s){ return nmNorm(s).replace(/rn/g, "m").replace(/vv/g, "w"); }
+  function nmTok(s){ var a = nmNorm(s).split(" "), o = Object.create(null), i; for(i=0;i<a.length;i++) if(a[i].length>=2) o[a[i]]=1; return o; }
+  function nmTri(s){ s = "  " + s.replace(/ /g, "") + "  "; var o = Object.create(null), i; for(i=0;i<=s.length-3;i++) o[s.substr(i,3)]=1; return o; }
+  function setSize(o){ var n=0,k; for(k in o) n++; return n; }
+  function levDist(a, b){
+    if(a===b) return 0; if(!a) return b.length; if(!b) return a.length;
+    var prev = [], i, j; for(j=0;j<=b.length;j++) prev[j]=j;
+    for(i=0;i<a.length;i++){ var cur=[i+1]; for(j=0;j<b.length;j++){ cur[j+1]=Math.min(prev[j+1]+1, cur[j]+1, prev[j]+(a.charAt(i)===b.charAt(j)?0:1)); } prev=cur; }
+    return prev[b.length];
+  }
+  function levSim(a, b){ if(!a.length || !b.length) return 0; if(Math.abs(a.length-b.length) > a.length*0.6) return 0; var L=Math.max(a.length,b.length); return 1 - levDist(a,b)/L; }
+  function diceSet(A, B){ var i=0,k,na=setSize(A),nb=setSize(B); if(!na||!nb) return 0; for(k in A) if(B[k]) i++; return 2*i/(na+nb); }
+  function tokOverlap(A, B){ var inter=0,k,na=setSize(A),nb=setSize(B); for(k in A) if(B[k]) inter++; var uni=na+nb-inter||1; return 0.5*(inter/uni) + 0.5*(inter/(Math.min(na,nb)||1)); }
+  function dedupeIds(arr){ var seen=Object.create(null), out=[], i; for(i=0;i<arr.length;i++){ if(arr[i] && !seen[arr[i]]){ seen[arr[i]]=1; out.push(arr[i]); } } return out; }
+  function rrf(lists, weights, k){
+    k = k || 60; var score = Object.create(null), i, j;
+    for(i=0;i<lists.length;i++){ var w = weights[i]||1, L=lists[i]||[]; for(j=0;j<L.length;j++){ score[L[j]] = (score[L[j]]||0) + w/(k+j+1); } }
+    var ids = Object.keys(score); ids.sort(function(a,b){ return score[b]-score[a]; });
+    return ids;
+  }
+
+  function buildNameDB(){
+    if(nameDB || !text.cards) return;
+    var cards = text.cards, N = cards.length, i;
+    nameDB = { meta: new Array(N), cnLoose: Object.create(null) };
+    for(i=0;i<N;i++){
+      var c = cards[i], nm = c.n || "", ver = c.v || "", full = (nm + " " + ver).replace(/\s+/g," ").trim();
+      var tok = nmTok(nm), tv = nmTok(ver), kk; for(kk in tv) tok[kk]=1;
+      var cn = nmCanon(nm), cf = nmCanon(full);
+      nameDB.meta[i] = { id: c.id, name: nm, version: ver, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
+      if(c.cn != null){ var num = String(c.cn); (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id); }
+    }
+  }
+  function textScore(qn, qnSq, qtok, qtri, m){
+    // compare both spaced and space-stripped forms — OCR often merges or splits
+    // words ("LIKEA BIRDIN THESKY"), which the squashed compare is immune to.
+    var L = Math.max(levSim(qn, m.nName), levSim(qn, m.nFull), levSim(qnSq, m.nSq), levSim(qnSq, m.nFullSq));
+    return 0.42*L + 0.33*tokOverlap(qtok, m.tok) + 0.25*diceSet(qtri, m.tri);
+  }
+  // rank cards by (possibly garbled) OCR name candidates. `lines` = array of OCR
+  // text strings (e.g. the tallest text lines from the name band). Scores each
+  // card against the best line. Returns {top:[{id,name,version,score}], conf, margin}.
+  function rankNames(lines, k){
+    buildNameDB(); if(!nameDB) return { top: [], conf: "low", score: 0, margin: 0 };
+    k = k || 5;
+    var queries = [], li;
+    for(li=0; li<lines.length; li++){ var qn = nmCanon(lines[li]); if(qn.length < 3) continue; queries.push({ qn: qn, qnSq: qn.replace(/ /g,""), qtok: nmTok(lines[li]), qtri: nmTri(qn) }); }
+    if(!queries.length) return { top: [], conf: "low", score: 0, margin: 0 };
+    var meta = nameDB.meta, best = new Float32Array(meta.length), i, qi;
+    for(i=0;i<meta.length;i++){ var s=0; for(qi=0;qi<queries.length;qi++){ var q=queries[qi]; var sc=textScore(q.qn, q.qnSq, q.qtok, q.qtri, meta[i]); if(sc>s) s=sc; } best[i]=s; }
+    var order = topK(best, Math.max(k, 6));
+    var top = order.map(function(ri){ return { id: meta[ri].id, name: meta[ri].name, version: meta[ri].version, score: best[ri] }; });
+    var s0 = top[0] ? top[0].score : 0, s1 = top[1] ? top[1].score : 0, margin = s0 - s1;
+    // conf is CHARACTER-confidence and keys on the score: a high score = the right
+    // character even when several of its printings tie (low margin) — colour /
+    // collector# / the top-3 tap pick the exact version.
+    var conf = (s0 >= 0.80) ? "high" : (s0 >= 0.58) ? "medium" : "low";
+    return { top: top.slice(0, k), conf: conf, score: s0, margin: margin };
+  }
+  function lookupCN(num){ buildNameDB(); if(!nameDB || num == null) return []; return nameDB.cnLoose[String(num)] || []; }
+
+  // IDENTITY: name-OCR primary, colour as tie-breaker, collector# as a soft boost.
+  // opts = { lines:[ocr strings], cnNum:"116"|null, colourRanked:[ids] }.
+  // Returns { top3:[ids], conf:"high"|"medium"|"low", source, nameConf }.
+  function identify(opts){
+    var nm = rankNames(opts.lines || [], 6);
+    var colour = opts.colourRanked || [];
+    var nameIds = nm.top.map(function(x){ return x.id; });
+    // a confident name read wins outright (this is what beats a wrong colour guess).
+    // Among the matched character's printings, let COLOUR order them so the right
+    // version/foil floats to the top (colour's actual reliable job).
+    if(nm.conf === "high" && nameIds.length){
+      var cpos = Object.create(null), ci;
+      for(ci=0; ci<colour.length; ci++) if(cpos[colour[ci]] == null) cpos[colour[ci]] = ci;
+      var ord = nameIds.slice().sort(function(a, b){ return (cpos[a]==null?1e9:cpos[a]) - (cpos[b]==null?1e9:cpos[b]); });
+      return { top3: dedupeIds(ord.concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, names: nm.top };
+    }
+    var cnIds = (opts.cnNum != null) ? lookupCN(opts.cnNum) : [];
+    var fused = rrf([nameIds, colour, cnIds], [3, 1, 2]);
+    var conf = nm.conf === "medium" ? "medium" : "low";
+    return { top3: dedupeIds(fused).slice(0, 3), conf: conf, source: "fusion", nameConf: nm.conf, names: nm.top };
+  }
+
   window.CardScanner = {
     load: load,
     searchCrop: searchCrop,
     colorSig: colorSig,
     dhash64: dhash64,
+    rankNames: rankNames,
+    lookupCN: lookupCN,
+    identify: identify,
     loadText: loadText,
     textMatch: textMatch,
     get state() { return state; },

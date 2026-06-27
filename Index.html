@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=245">
+<link rel="stylesheet" href="styles.css?v=246">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=245"></script>
-<script src="scanner.js?v=245"></script>
-<script src="scanner-cv.js?v=245"></script>
+<script src="logo.js?v=246"></script>
+<script src="scanner.js?v=246"></script>
+<script src="scanner-cv.js?v=246"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=245";
+const SCAN_WORKER_URL = "scanner-worker.js?v=246";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9243,7 +9243,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         if(cancelled || !T) return;
         try {
           const w = await T.createWorker("eng");
-          await w.setParameters({ tessedit_pageseg_mode: "6" });
+          // dictionary OFF — card names are proper nouns ("Heihei", "Te Kā",
+          // "Maui") that an English dictionary would "correct" into garbage.
+          await w.setParameters({ tessedit_pageseg_mode: "6", load_system_dawg: "0", load_freq_dawg: "0" });
           if(cancelled){ try { w.terminate(); } catch(_e){} return; }
           tessRef.current = w; tessReadyRef.current = true;
         } catch(_e){}
@@ -9276,20 +9278,48 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
 
   // OCR the lower ~60% of the rectified card (name banner + type + rules +
   // flavor + collector line; the top is art). Grayscale + contrast-stretch.
-  const ocrCard = async (canvas) => {
-    const tw = tessRef.current; if(!tw || !canvas) return "";
+  // grayscale + contrast-stretch a sub-rect of the rectified card into a fresh
+  // canvas (sharpens OCR on stylised card text). x0..y1 are 0..1 fractions.
+  const prepCrop = (canvas, x0, y0, x1, y1, up) => {
+    const W = canvas.width, H = canvas.height, sw = (x1 - x0) * W, sh = (y1 - y0) * H, k = up || 1;
+    const c = document.createElement("canvas"); c.width = Math.max(1, Math.round(sw * k)); c.height = Math.max(1, Math.round(sh * k));
+    const ctx = c.getContext("2d"); ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(canvas, x0 * W, y0 * H, sw, sh, 0, 0, c.width, c.height);
+    const d = ctx.getImageData(0, 0, c.width, c.height), a = d.data;
+    let mn = 255, mx = 0;
+    for(let i = 0; i < a.length; i += 4){ const g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; if(g < mn) mn = g; if(g > mx) mx = g; }
+    const rng = (mx - mn) || 1;
+    for(let i = 0; i < a.length; i += 4){ let g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; g = (g - mn) / rng * 255; a[i] = a[i+1] = a[i+2] = g; }
+    ctx.putImageData(d, 0, 0); return c;
+  };
+  // OCR the rectified card → the NAME (the largest-font text on a Lorcana card,
+  // so we take the tallest text lines — layout-agnostic across character/song/
+  // action/item) + the collector number. Name-OCR is the PRIMARY identity signal
+  // (printed text reads the same in a photo as in the DB — no colour domain gap).
+  // Returns { lines: [name candidates tallest-first], cnNum }.
+  const ocrCardRegions = async (canvas) => {
+    const tw = tessRef.current; if(!tw || !canvas) return { lines: [], cnNum: null };
+    let lines = [], cnNum = null;
     try {
-      const W = canvas.width, H = canvas.height, y0 = Math.round(H * 0.40), rh = H - y0;
-      const c = document.createElement("canvas"); c.width = W; c.height = rh;
-      const ctx = c.getContext("2d"); ctx.drawImage(canvas, 0, y0, W, rh, 0, 0, W, rh);
-      const d = ctx.getImageData(0, 0, W, rh), a = d.data;
-      let mn = 255, mx = 0;
-      for(let i = 0; i < a.length; i += 4){ const g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; if(g < mn) mn = g; if(g > mx) mx = g; }
-      for(let i = 0; i < a.length; i += 4){ let g = 0.299*a[i] + 0.587*a[i+1] + 0.114*a[i+2]; g = (g - mn) / (mx - mn + 1e-3) * 255; a[i] = a[i+1] = a[i+2] = g; }
-      ctx.putImageData(d, 0, 0);
+      const c = prepCrop(canvas, 0, 0, 1, 0.74, 1.4);   // whole card above the rules box
       const r = await tw.recognize(c);
-      return (r && r.data && r.data.text) || "";
-    } catch(_e){ return ""; }
+      const ls = (r && r.data && r.data.lines) || [];
+      const cand = [];
+      for(const L of ls){
+        const t = (L.text || "").replace(/\s+/g, " ").trim();
+        const h = L.bbox ? (L.bbox.y1 - L.bbox.y0) : 0;
+        if(t.length >= 2 && /[a-z]/i.test(t)) cand.push({ h, t });
+      }
+      cand.sort((a, b) => b.h - a.h);
+      lines = cand.slice(0, 3).map(x => x.t);
+    } catch(_e){}
+    try {
+      const c = prepCrop(canvas, 0.02, 0.90, 0.42, 0.985, 4);   // collector number (bottom-left)
+      const r = await tw.recognize(c);
+      const m = ((r && r.data && r.data.text) || "").match(/(\d{1,3})\s*[\/iIl|]\s*(\d{2,3})/);
+      if(m) cnNum = m[1];
+    } catch(_e){}
+    return { lines, cnNum };
   };
 
   const roundRectPath = (ctx, x, y, w, h, r) => {
@@ -9608,10 +9638,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // OCR landed after an add and disagrees → fix the newest row for that art.
   const correctByArtKey = (artKey, newCard) => setSession(prev => { const i = prev.findIndex(x => x.art_key === artKey); return i < 0 ? prev : swapRow(prev, i, newCard); });
 
-  // Background OCR upgrade (fired un-awaited from the ambient loop once steady):
-  // read the card's text at high res, fuse with the colour ranking, and only act
-  // on a CONFIDENT text read — upgrade the live preview, and fix the row if the
-  // colour guess was already added. Fully guarded; never throws into the loop.
+  // Background NAME-read (fired un-awaited from the ambient loop once steady):
+  // rectify at high res, OCR the NAME (primary identity), identify name-first with
+  // colour as the variant tie-breaker. On a confident read, upgrade the live
+  // preview (✓ name) and fix the row if the colour guess was already added. Fully
+  // guarded; never throws into the loop.
   const triggerOcr = async (voteKey, colorIds) => {
     try {
       const v = videoRef.current; if(!v || !v.videoWidth) return;
@@ -9620,29 +9651,26 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(!r || !r.buffer) return;
       const rect = document.createElement("canvas"); rect.width = r.width; rect.height = r.height;
       rect.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
-      const ocr = await ocrCard(rect);
-      if(!ocr || ocr.trim().length < 3) return;
-      const tm = window.CardScanner.textMatch(ocr, 20);
-      if(!tm.length) return;
-      const tmTop = tm[0], t1 = tm[1] ? tm[1].score : 0;
-      if(!(tmTop.score > 22 && tmTop.score > 1.6 * t1)) return;   // require a distinctive read
-      const fused = scanRRF([colorIds || [], tm.map(x => x.id)], [1, 2.4]);
-      const e = fused.find(x => x.id === tmTop.id); if(e) e.score += 1; else fused.unshift({ id: tmTop.id, score: 1 });
-      fused.sort((a, b) => b.score - a.score);
+      const o = await ocrCardRegions(rect);
+      if((!o.lines || !o.lines.length) && o.cnNum == null) return;
+      const idr = window.CardScanner.identify({ lines: o.lines, cnNum: o.cnNum, colourRanked: colorIds || [] });
+      // only a CONFIDENT name read is authoritative enough to override colour
+      if(!idr || idr.conf !== "high" || !idr.top3 || !idr.top3.length) return;
       const META = window.CardScanner.state.cards;
       const byId = ambByIdRef.current || (ambByIdRef.current = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
-      const chosen = byId.get(fused[0].id); if(!chosen) return;
+      const chosen = byId.get(idr.top3[0]); if(!chosen) return;
+      const cands = idr.top3.map(id => byId.get(id)).filter(Boolean);
       const A = ambientRef.current;
       // upgrade the live preview if the user is still on this card
       if(A.voteKey === voteKey && previewRef.current){
         const g = resolveGroup(chosen), p = priceOf(g);
         const pv = { card: chosen, disp: toDisp(chosen), group: g, low: p.low, mkt: p.mkt,
-          cands: previewRef.current.cands, confident: true, textOk: true, shiny: previewRef.current.shiny };
+          cands: cands.length ? cands : previewRef.current.cands, confident: true, textOk: true, shiny: previewRef.current.shiny };
         previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":text"; setPreview(pv);
       }
       // if the colour guess for this card was already added, fix that row
       if(A.committedKey === voteKey && chosen.art_key !== voteKey) correctByArtKey(voteKey, chosen);
-    } catch(_e){ /* OCR upgrade is best-effort */ }
+    } catch(_e){ /* best-effort */ }
   };
   triggerOcrRef.current = triggerOcr;
   const undoLast = () => {
@@ -9704,57 +9732,39 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         for(const r of res){ if(!seen.has(r.card.id)){ seen.add(r.card.id); colorRanked.push(r.card.id); } }
       } catch(_e){}
 
-      // 3. read the text → ranked card_ids
-      let textRanked = [], tmTop = null, textConfident = false;
-      if(tessReadyRef.current && window.CardScanner.textState && window.CardScanner.textState.loaded){
-        setStatus("Reading text…");
-        const ocr = await ocrCard(rect);
-        if(ocr && ocr.trim().length >= 3){
-          const tm = window.CardScanner.textMatch(ocr, 20);
-          textRanked = tm.map(x => x.id);
-          tmTop = tm[0] || null;
-          const t1 = tm[1] ? tm[1].score : 0;
-          // a distinctive read (high IDF score, clearly ahead of #2) = trust it
-          textConfident = !!tmTop && tmTop.score > 22 && tmTop.score > 1.6 * t1;
-        }
+      // 3. read the NAME (+ collector #) — the PRIMARY identity signal. Printed
+      // text reads the same in a photo as in the DB (no colour domain gap), so
+      // the name decides the card; colour only orders the printing/variant.
+      let ocrLines = [], cnNum = null;
+      if(tessReadyRef.current && window.CardScanner.identify){
+        setStatus("Reading name…");
+        const o = await ocrCardRegions(rect);
+        ocrLines = o.lines; cnNum = o.cnNum;
       }
+      // 4. identify (name-primary; colour = variant tie-breaker; cn# = soft boost)
+      const idr = window.CardScanner.identify({ lines: ocrLines, cnNum, colourRanked: colorRanked });
+      const orderedIds = (idr && idr.top3 && idr.top3.length) ? idr.top3.concat(colorRanked) : colorRanked;
+      if(!orderedIds.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
 
-      // 4. fuse (text weighted higher — far more discriminating when it reads).
-      // Only let text in if the OCR actually matched something above the noise
-      // floor — garbage OCR must not demote a card colour got right.
-      const useText = !!tmTop && tmTop.score > 10;
-      const fused = useText
-        ? scanRRF([colorRanked, textRanked], [1, 2.4])
-        : colorRanked.map((id, i) => ({ id, score: 1 / (60 + i) }));
-      // a clearly-confident text match (unique name/ability) wins outright
-      if(textConfident && tmTop){
-        let e = fused.find(x => x.id === tmTop.id);
-        if(e) e.score += 1; else fused.unshift({ id: tmTop.id, score: 1 });
-        fused.sort((a, b) => b.score - a.score);
-      }
-      if(!fused.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
-
-      // 5. build candidates from the colour-index meta, dedup by name+version
+      // 5. build candidates, dedup by name+version
       const META = window.CardScanner.state.cards;
       const byId = capture._byId || (capture._byId = (() => {
         const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m;
       })());
       const seenLbl = new Set(), cands = [];
-      for(const fr of fused){
-        const m = byId.get(fr.id); if(!m) continue;
+      for(const id of orderedIds){
+        const m = byId.get(id); if(!m) continue;
         const k = (m.name || "") + "|" + (m.version || "");
         if(seenLbl.has(k)) continue; seenLbl.add(k);
         const disp = toDisp(m);
-        const row = raw && raw.find(x => x.card_id === fr.id && x.tcgplayer_product_id);
+        const row = raw && raw.find(x => x.card_id === id && x.tcgplayer_product_id);
         const g = row ? groupFromSimCard(row, raw) : null;
         cands.push({ disp, group: g });
         if(cands.length >= 4) break;
       }
       if(!cands.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
-      // confidence: a confident text read, or a clear fused margin
-      const f0 = fused[0].score, f1 = fused[1] ? fused[1].score : 0;
-      const confident = textConfident || (f0 > 0 && (f0 - f1) / f0 > 0.12);
-      setResult({ cands, sel: 0, confident, usedText: textRanked.length > 0 });
+      const confident = !!(idr && idr.conf === "high");
+      setResult({ cands, sel: 0, confident, usedText: ocrLines.length > 0 });
     } catch(e){
       setStatus("Couldn't read it — try again");
     } finally { captureBusyRef.current = false; setBusy(false); }
