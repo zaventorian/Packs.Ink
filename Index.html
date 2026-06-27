@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=252">
+<link rel="stylesheet" href="styles.css?v=253">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=252"></script>
-<script src="scanner.js?v=252"></script>
-<script src="scanner-cv.js?v=252"></script>
+<script src="logo.js?v=253"></script>
+<script src="scanner.js?v=253"></script>
+<script src="scanner-cv.js?v=253"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9172,12 +9172,12 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=252";
+const SCAN_WORKER_URL = "scanner-worker.js?v=253";
 // PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
 // in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
-const OCR_WORKER_URL = "scanner-ocr-worker.js?v=252";
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=253";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -18444,6 +18444,157 @@ function EloEventRoster({eventId, eventMeta, excludeOrg, setExcludeOrg, onClose,
   </div>`;
 }
 
+// Admin "Roster Scout" — one fetch (get_roster_scout) powers two scouting
+// views over every upcoming SC that has a scraped roster:
+//   • By day  — the regional slate grouped by date; each event shows signed-up
+//               count + field strength (avg / top Elo), expandable to the list.
+//   • Player  — type a name → every upcoming event that player is signed up for,
+//               with their Elo. Answers "who's playing where this weekend?".
+function EloRosterScout({excludeOrg, setExcludeOrg, onPlayerClick}){
+  const [data, setData] = useState(null);
+  const [err, setErr] = useState(null);
+  const [mode, setMode] = useState("day");     // "day" | "player"
+  const [query, setQuery] = useState("");
+  const [openEvents, setOpenEvents] = useState(()=>new Set());
+
+  useEffect(()=>{
+    let cancelled=false;
+    setData(null); setErr(null);
+    sbClient.rpc("get_roster_scout", {p_exclude_org: !!excludeOrg})
+      .then(({data:d, error})=>{ if(cancelled) return;
+        if(error){ setErr(error.message||String(error)); return; }
+        setData(Array.isArray(d) ? d : []); })
+      .catch(e=>{ if(!cancelled) setErr(e && e.message || String(e)); });
+    return ()=>{ cancelled=true; };
+  }, [excludeOrg]);
+
+  // Format an event timestamp in the event's OWN timezone (the local day/time
+  // a player actually shows up), falling back to the viewer's tz.
+  const evFmt = (ev, opts) => {
+    try { return new Intl.DateTimeFormat("en-US", {timeZone: ev.timezone||undefined, ...opts}).format(new Date(ev.start_datetime)); }
+    catch { return new Intl.DateTimeFormat("en-US", opts).format(new Date(ev.start_datetime)); }
+  };
+  const dayKey   = (ev)=> evFmt(ev, {year:"numeric",month:"2-digit",day:"2-digit"});
+  const dayLabel = (ev)=> evFmt(ev, {weekday:"long",month:"short",day:"numeric"});
+  const timeLbl  = (ev)=> evFmt(ev, {hour:"numeric",minute:"2-digit"});
+  const where    = (ev)=> [ev.city, ev.state].filter(Boolean).join(", ");
+
+  const days = useMemo(()=>{
+    if(!data) return [];
+    const m = new Map();
+    for(const ev of data){ const k=dayKey(ev); if(!m.has(k)) m.set(k,{key:k,label:dayLabel(ev),events:[]}); m.get(k).events.push(ev); }
+    for(const d of m.values()) d.events.sort((a,b)=>(b.field?.n_signed_up||0)-(a.field?.n_signed_up||0));
+    return Array.from(m.values());   // data is start_datetime asc → days already ordered
+  }, [data]);
+
+  const playerHits = useMemo(()=>{
+    const q = query.trim().toLowerCase();
+    if(!data || q.length < 2) return [];
+    const by = new Map();
+    for(const ev of data){
+      for(const p of (ev.players||[])){
+        const nm=(p.best_identifier||""), ac=(p.account_name||"");
+        if(!(nm.toLowerCase().includes(q) || ac.toLowerCase().includes(q))) continue;
+        const key=(nm||ac).toLowerCase();
+        if(!by.has(key)) by.set(key,{...p, name:nm, events:[]});
+        by.get(key).events.push(ev);
+      }
+    }
+    return Array.from(by.values()).sort((a,b)=>(b.current_rating||0)-(a.current_rating||0) || (b.events.length-a.events.length));
+  }, [data, query]);
+
+  const totals = useMemo(()=>{
+    if(!data) return null;
+    let signups=0; const players=new Set();
+    for(const ev of data){ signups+=ev.field?.n_signed_up||0; for(const p of (ev.players||[])) players.add((p.best_identifier||"").toLowerCase()); }
+    return {events:data.length, signups, players:players.size};
+  }, [data]);
+
+  const toggleEvent = (id)=> setOpenEvents(s=>{ const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; });
+  const eloChip = (p)=> p.matched
+    ? html`<span class="elo-scout-elo">${Math.round(p.current_rating)}${p.rank?html`<span class="muted"> #${p.rank}</span>`:""}</span>`
+    : html`<span class="elo-scout-elo elo-scout-unrated">unrated</span>`;
+  const nameCell = (p)=> p.player_id != null
+    ? html`<button class="elo-scout-namebtn" onClick=${()=>onPlayerClick && onPlayerClick(p.player_id)} title="Open Elo profile">${p.best_identifier||p.name}</button>`
+    : html`<span>${p.best_identifier||p.name}</span>`;
+
+  return html`<div class="elo-scout">
+    <div class="elo-scout-head">
+      <div class="elo-scout-titlewrap">
+        <h2 class="elo-scout-title">Roster Scout</h2>
+        ${totals && html`<span class="elo-scout-summary muted">${totals.events} events · ${totals.signups} sign-ups · ${totals.players} players</span>`}
+      </div>
+      <label class="elo-scout-orgtoggle" title="Hide Ink & Lore org accounts from rosters + field stats">
+        <input type="checkbox" checked=${!!excludeOrg} onChange=${e=>setExcludeOrg && setExcludeOrg(e.target.checked)}/>
+        <span>Exclude org</span>
+      </label>
+    </div>
+    <div class="seg-toggle elo-scout-modes">
+      <button class=${mode==="day"?"active":""} onClick=${()=>setMode("day")}>By day</button>
+      <button class=${mode==="player"?"active":""} onClick=${()=>setMode("player")}>Search player</button>
+    </div>
+
+    ${err ? html`<div class="elo-empty">${/not authorized/i.test(err) ? "Admin only." : /PGRST202|could not find/i.test(err) ? "Roster scout isn't set up yet — apply migration 89." : "Couldn't load: "+err}</div>`
+      : data === null ? html`<div class="elo-loading">Loading rosters…</div>`
+      : data.length === 0 ? html`<div class="elo-empty">No scraped rosters for upcoming events yet — run the roster scraper.</div>`
+
+      : mode === "player" ? html`<div class="elo-scout-player">
+          <input type="search" class="elo-scout-search" placeholder="Search a player name…" autoFocus
+            value=${query} onInput=${e=>setQuery(e.target.value)}/>
+          ${query.trim().length < 2 ? html`<div class="elo-empty">Type at least 2 characters.</div>`
+            : playerHits.length === 0 ? html`<div class="elo-empty">No signed-up player matches “${query}”.</div>`
+            : html`<div class="elo-scout-hits">
+              ${playerHits.map((p,i)=> html`<div key=${i} class="elo-scout-hit">
+                <div class="elo-scout-hit-head">
+                  <span class="elo-scout-hit-name">${nameCell(p)}</span>
+                  ${eloChip(p)}
+                  ${p.matched && (p.wins!=null||p.losses!=null) ? html`<span class="muted elo-scout-wl">${p.wins||0}–${p.losses||0}</span>` : ""}
+                  <span class="elo-scout-hit-count">${p.events.length} event${p.events.length===1?"":"s"}</span>
+                </div>
+                <ul class="elo-scout-hit-events">
+                  ${p.events.map(ev=> html`<li key=${ev.event_id}>
+                    <span class="elo-scout-ev-date">${dayLabel(ev)}</span>
+                    <span class="elo-scout-ev-store">${ev.store_name}</span>
+                    <span class="muted elo-scout-ev-where">${where(ev)}</span>
+                  </li>`)}
+                </ul>
+              </div>`)}
+            </div>`}
+        </div>`
+
+      : html`<div class="elo-scout-days">
+          ${days.map(d=> html`<div key=${d.key} class="elo-scout-day">
+            <div class="elo-scout-day-hdr">${d.label} <span class="muted">· ${d.events.length} event${d.events.length===1?"":"s"}</span></div>
+            <div class="elo-scout-evlist">
+              ${d.events.map(ev=>{ const f=ev.field||{}; const open=openEvents.has(ev.event_id); return html`<div key=${ev.event_id} class=${"elo-scout-ev"+(open?" open":"")}>
+                <button class="elo-scout-ev-row" onClick=${()=>toggleEvent(ev.event_id)}>
+                  <span class="elo-scout-ev-main">
+                    <span class="elo-scout-ev-store">${ev.store_name}</span>
+                    <span class="muted elo-scout-ev-meta">${where(ev)} · ${timeLbl(ev)}</span>
+                  </span>
+                  <span class="elo-scout-ev-stats">
+                    <span class="elo-scout-stat" title="Signed up (rated)"><b>${f.n_signed_up||0}</b>${f.n_rated!=null?html` <span class="muted">(${f.n_rated} rated)</span>`:""}</span>
+                    ${f.avg_elo!=null ? html`<span class="elo-scout-stat" title="Average Elo of rated players">avg <b>${f.avg_elo}</b></span>` : ""}
+                    ${f.top_elo!=null ? html`<span class="elo-scout-stat" title="Top Elo in the field">top <b>${f.top_elo}</b></span>` : ""}
+                    <span class="elo-scout-caret">${open?"▾":"▸"}</span>
+                  </span>
+                </button>
+                ${open && html`<div class="elo-scout-ev-roster">
+                  ${(ev.players||[]).length===0 ? html`<div class="muted elo-scout-noros">No one signed up yet.</div>`
+                    : html`<ol class="elo-scout-rosterlist">
+                      ${ev.players.map((p,i)=> html`<li key=${i}>
+                        <span class="elo-scout-rname">${nameCell(p)}${p.account_name?html`<span class="elo-roster-acct"> ${p.account_name}</span>`:""}</span>
+                        ${eloChip(p)}
+                      </li>`)}
+                    </ol>`}
+                </div>`}
+              </div>`; })}
+            </div>
+          </div>`)}
+        </div>`}
+  </div>`;
+}
+
 function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, setExcludeOrg}){
   const [rows, setRows] = useState(null);
   const [rosterEventId, setRosterEventId] = useState(null);
@@ -18672,6 +18823,7 @@ function EloView({eloPinned, setEloPinned, user}){
     if(Number.isFinite(eid)){ setEventId(eid); setPlayerId(null); setTab("event"); return; }
     if(sub === "tournaments"){ setTab("tournaments"); setPlayerId(null); setEventId(null); return; }
     if(sub === "upcoming"){ setTab("upcoming"); setPlayerId(null); setEventId(null); return; }
+    if(sub === "scout"){ setTab("scout"); setPlayerId(null); setEventId(null); return; }
     setTab("leaderboard"); setPlayerId(null); setEventId(null);
   };
 
@@ -18702,6 +18854,7 @@ function EloView({eloPinned, setEloPinned, user}){
       else if(tab === "event" && eventId != null) url.searchParams.set("e", String(eventId));
       else if(tab === "tournaments") url.searchParams.set("sub", "tournaments");
       else if(tab === "upcoming") url.searchParams.set("sub", "upcoming");
+      else if(tab === "scout") url.searchParams.set("sub", "scout");
       if(url.toString() !== window.location.href){
         window.history.pushState(window.history.state, "", url.toString());
       }
@@ -18728,12 +18881,14 @@ function EloView({eloPinned, setEloPinned, user}){
         <button class=${tab==="leaderboard"||tab==="player"?"active":""} onClick=${backToLeaderboard}>Leaderboard</button>
         <button class=${tab==="tournaments"||tab==="event"?"active":""} onClick=${()=>{setTab("tournaments"); setEventId(null); setPlayerId(null);}}>Tournaments</button>
         <button class=${tab==="upcoming"?"active":""} onClick=${()=>{setTab("upcoming"); setEventId(null); setPlayerId(null);}}>Upcoming SCs</button>
+        ${canViewStore && html`<button class=${tab==="scout"?"active":""} onClick=${()=>{setTab("scout"); setEventId(null); setPlayerId(null);}}>Scout</button>`}
       </nav>
     </header>
 
     ${tab==="leaderboard" && html`<${EloLeaderboard} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="tournaments" && html`<${EloTournaments} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick}/>`}
     ${tab==="upcoming" && html`<${EloUpcomingSCs} canViewStore=${canViewStore} onStoreClick=${onStoreClick} onPlayerClick=${onPlayerClick} excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg}/>`}
+    ${tab==="scout" && canViewStore && html`<${EloRosterScout} excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg} onPlayerClick=${onPlayerClick}/>`}
     ${tab==="player" && html`<${EloPlayerProfile} playerId=${playerId} onBack=${backToLeaderboard} onEventClick=${onEventClick} onPlayerClick=${onPlayerClick} aliasMap=${aliasMap}/>`}
     ${tab==="event" && html`<${EloEventDetail} eventId=${eventId} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} canViewStore=${canViewStore} onStoreClick=${onStoreClick}/>`}
     ${tab==="store" && html`<${EloStoreReport} storeKey=${storeKey} onBack=${backToTournaments} onPlayerClick=${onPlayerClick} onEventClick=${onEventClick} excludeOrg=${excludeOrg} setExcludeOrg=${setExcludeOrg}/>`}
