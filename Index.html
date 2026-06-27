@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=241">
+<link rel="stylesheet" href="styles.css?v=242">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=241"></script>
-<script src="scanner.js?v=241"></script>
-<script src="scanner-cv.js?v=241"></script>
+<script src="logo.js?v=242"></script>
+<script src="scanner.js?v=242"></script>
+<script src="scanner-cv.js?v=242"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=241";
+const SCAN_WORKER_URL = "scanner-worker.js?v=242";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9166,8 +9166,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const modeRef = useRef("ambient");      // mirror of `mode` for the loop closure
   const autoAddRef = useRef(false);       // mirror of `autoAdd`
   const previewRef = useRef(null);        // current ambient preview (for tap-commit)
-  const ambientRef = useRef({ voteKey: null, voteWin: 0, margin: 0, armed: true, committedKey: null, emptyFrames: 0, rearmTimer: 0 });
+  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0 });
+  const ambByIdRef = useRef(null);        // memoized id->meta map for OCR fusion
   const commitAmbientRef = useRef(null);  // set after commitAmbient is defined
+  const triggerOcrRef = useRef(null);     // set after triggerOcr is defined
+  const fhRef = useRef("");               // last frame-hint pushed to React
   const audioCtxRef = useRef(null);
   const detFlagRef = useRef(false);       // last setDetected value (gate re-renders)
   const rdyFlagRef = useRef(false);       // last setReady value
@@ -9187,6 +9190,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [preview, setPreview] = useState(null);  // current ambient identification (for the bottom hint)
   const [autoAdd, setAutoAdd] = useState(false); // opt-in: auto-add on a confident, steady lock
   const [flash, setFlash] = useState(false);     // green flash on a confident ping
+  const [frameHint, setFrameHint] = useState(""); // coaching ("move closer", "shiny — tilt")
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
@@ -9370,11 +9374,25 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   };
   const setDet = (b) => { if(detFlagRef.current !== b){ detFlagRef.current = b; setDetected(b); } };
   const setRdy = (b) => { if(rdyFlagRef.current !== b){ rdyFlagRef.current = b; setReady(b); } };
+  const setFH = (s) => { if(fhRef.current !== s){ fhRef.current = s; setFrameHint(s); } };
+  // glare in the ART region only (top ~50%) — avoids the bright white frame/text
+  // box that would false-positive a whole-card glare metric. High = shiny/foil.
+  const artGlare = (canvas) => {
+    try {
+      const W = canvas.width, H = Math.round(canvas.height * 0.5);
+      const d = canvas.getContext("2d").getImageData(0, 0, W, H).data;
+      let hot = 0; const tot = W * H || 1;
+      for(let i = 0; i < d.length; i += 4){ const mx = Math.max(d[i], d[i+1], d[i+2]), mn = Math.min(d[i], d[i+1], d[i+2]); if(mx > 238 && (mx - mn) < 24) hot++; }
+      return hot / tot;
+    } catch(_e){ return 0; }
+  };
 
   // AMBIENT per-frame: detect + rectify the card in ONE worker round-trip, then
   // colour-match the rectified crop on the main thread (fast, no OCR) → draw the
-  // green outline + a live name/value badge above the card. A short art_key vote
-  // stabilises the label so it doesn't flicker between siblings.
+  // green outline + a live name/value badge above the card. A MULTI-FRAME vote
+  // (summed cosine per art_key over the last ~6 frames) stabilises the guess and
+  // lifts accuracy for free; framing/foil hints coach the user; and once steady
+  // a background OCR pass (un-awaited) upgrades the guess.
   const ambientTick = async (v) => {
     if(ambBusyRef.current) return;
     ambBusyRef.current = true;
@@ -9386,40 +9404,68 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const A = ambientRef.current;
       const o = computeOutline(r.quad || null, r.conf || 0, bw);
       setDet(!!o.smooth); setRdy(o.locked);
-      let label = null;
+      // a big quad jump = a new card → drop the vote history
+      const jumped = !!(r.quad && A.lastQuad && quadMoved(r.quad, A.lastQuad) > bw * 0.06);
+      A.lastQuad = r.quad || A.lastQuad;
+      // how much of the frame the card fills (for "move closer" coaching)
+      let areaFrac = 0;
+      if(r.quad){ const xs = r.quad.map(p => p.x), ys = r.quad.map(p => p.y);
+        areaFrac = ((Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys))) / (bw * bh); }
+
+      let label = null, shiny = false;
       if(r.buffer && window.CardScanner && window.CardScanner.state.loaded){
         const c = ambCanvasRef.current || (ambCanvasRef.current = document.createElement("canvas"));
         c.width = r.width; c.height = r.height;
         c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
+        shiny = artGlare(c) > 0.06;
         let res = [];
         try { res = window.CardScanner.searchCrop(c, 0, 0, c.width, c.height, 8, 0.12); } catch(_e){}
         if(res.length){
+          if(jumped) A.frames = [];
+          const frame = new Map(), cardOf = new Map();
+          for(const x of res){ const k = x.card.art_key; if(!frame.has(k) || x.color > frame.get(k)){ frame.set(k, x.color); cardOf.set(k, x.card); } }
+          A.frames.push({ frame, cardOf });
+          if(A.frames.length > 6) A.frames.shift();
+          const agg = new Map(), latestCard = new Map();
+          for(const f of A.frames){ for(const [k, s] of f.frame) agg.set(k, (agg.get(k) || 0) + s); for(const [k, cd] of f.cardOf) latestCard.set(k, cd); }
+          const ranked = Array.from(agg.entries()).sort((a, b) => b[1] - a[1]);
+          const topKey = ranked[0][0];
+          A.margin = ranked[1] ? (ranked[0][1] - ranked[1][1]) / (ranked[0][1] || 1) : 1;
+          A.voteKey = topKey; A.emptyFrames = 0; A.noDet = 0;
           const seen = new Set(), cands = [];
-          for(const x of res){ const k = (x.card.name || "") + "|" + (x.card.version || ""); if(seen.has(k)) continue; seen.add(k); cands.push(x.card); if(cands.length >= 4) break; }
-          const top1 = cands[0];
-          const key = top1.art_key;
-          A.voteWin = (key === A.voteKey) ? A.voteWin + 1 : 1; A.voteKey = key;
-          A.margin = res[1] ? (res[0].color - res[1].color) / (res[0].color || 1) : 1;
+          for(const [k] of ranked){ const cd = latestCard.get(k); if(!cd) continue; const lk = (cd.name || "") + "|" + (cd.version || ""); if(seen.has(lk)) continue; seen.add(lk); cands.push(cd); if(cands.length >= 4) break; }
+          const top1 = latestCard.get(topKey) || cands[0];
           const g = resolveGroup(top1), p = priceOf(g);
-          const confident = A.voteWin >= 3 && A.margin > 0.1;
-          const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident };
+          const enough = A.frames.length >= 3;
+          const confident = enough && A.margin > 0.1;
+          const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident, textOk: false, shiny };
           previewRef.current = pv;
           label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident };
-          A.emptyFrames = 0;
-          // push to React only when the stable card changes (avoid per-frame churn)
-          const pk = key + ":" + (confident ? 1 : 0);
+          const pk = topKey + ":" + (confident ? 1 : 0);
           if(pvKeyRef.current !== pk){ pvKeyRef.current = pk; setPreview(pv); }
-          // opt-in auto-add: confident + steady + not already committed this card
-          if(autoAddRef.current && A.armed && A.voteWin >= 4 && A.margin > 0.16 && A.committedKey !== key && o.locked){
+          // background OCR upgrade: once steady on a card not yet read, fire OCR
+          // UN-AWAITED (never blocks the loop). On a confident text read it
+          // upgrades the live preview + fixes the row if already added.
+          if(o.locked && enough && A.ocrDoneKey !== topKey && !A.ocrBusy && tessReadyRef.current && triggerOcrRef.current){
+            A.ocrBusy = true; A.ocrDoneKey = topKey;
+            const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
+            triggerOcrRef.current(topKey, colorIds).finally(() => { ambientRef.current.ocrBusy = false; });
+          }
+          // opt-in auto-add
+          if(autoAddRef.current && A.armed && enough && A.margin > 0.16 && A.committedKey !== topKey && o.locked){
             commitAmbientRef.current && commitAmbientRef.current(pv);
           }
         }
-      } else {
-        A.emptyFrames++;
       }
+      // coaching hint (priority: shiny > too-far > one-card)
+      if(label && shiny) setFH("✨ Shiny card — tilt slightly to kill the glare");
+      else if(label && areaFrac > 0 && areaFrac < 0.14) setFH("Move closer so the card fills the frame");
+      else if(!r.quad && A.noDet >= 12) setFH("Hold over ONE card on a plain surface, good light");
+      else setFH("");
+
       if(!r.quad){
-        A.emptyFrames++;
-        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.voteWin = 0; }
+        A.noDet++; A.emptyFrames++;
+        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.ocrDoneKey = null; }
       }
       drawOutline(o.smooth, bw, bh, o.locked, label);
     } catch(_e){} finally { ambBusyRef.current = false; }
@@ -9522,27 +9568,65 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(!user){ onSignIn && onSignIn(); return; }
     if(previewRef.current) commitAmbient(previewRef.current);
   };
-  // user taps an alternate in a session row → fix the collection (move this row's
-  // qty from the wrong card to the right one) and update the row.
-  const correctEntry = (eid, newCard) => {
-    setSession(prev => {
-      const i = prev.findIndex(x => x.eid === eid); if(i < 0) return prev;
-      const old = prev[i];
-      const g = resolveGroup(newCard);
-      const pr = g ? (g.normal && g.normal.tcg_printing) || (g.foil && g.foil.tcg_printing) : "Normal";
-      const cardId = g ? g.card_id : newCard.id;
-      if(!cardId || !pr) return prev;
-      const newKey = cardId + ":" + pr;
-      if(newKey === old.key){ const cp = prev.slice(); cp[i] = { ...old, expanded: false }; return cp; }
-      updateQty(old.cardId, old.printing, Math.max(0, ((collection && collection[old.key]) || 0) - old.qty));
-      updateQty(cardId, pr, ((collection && collection[newKey]) || 0) + old.qty);
-      const p = priceOf(g);
-      const cp = prev.slice();
-      cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
-        rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB(newCard.id), expanded: false };
-      return cp;
-    });
+  // move a session row from the wrong card to the right one (collection + row).
+  const swapRow = (prev, i, newCard) => {
+    const old = prev[i];
+    const g = resolveGroup(newCard);
+    const pr = g ? (g.normal && g.normal.tcg_printing) || (g.foil && g.foil.tcg_printing) : "Normal";
+    const cardId = g ? g.card_id : newCard.id;
+    if(!cardId || !pr) return prev;
+    const newKey = cardId + ":" + pr;
+    const cp = prev.slice();
+    if(newKey === old.key){ cp[i] = { ...old, expanded: false }; return cp; }
+    updateQty(old.cardId, old.printing, Math.max(0, ((collection && collection[old.key]) || 0) - old.qty));
+    updateQty(cardId, pr, ((collection && collection[newKey]) || 0) + old.qty);
+    const p = priceOf(g);
+    cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
+      rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB(newCard.id), expanded: false };
+    return cp;
   };
+  // user taps an alternate in a session row → correct it.
+  const correctEntry = (eid, newCard) => setSession(prev => { const i = prev.findIndex(x => x.eid === eid); return i < 0 ? prev : swapRow(prev, i, newCard); });
+  // OCR landed after an add and disagrees → fix the newest row for that art.
+  const correctByArtKey = (artKey, newCard) => setSession(prev => { const i = prev.findIndex(x => x.art_key === artKey); return i < 0 ? prev : swapRow(prev, i, newCard); });
+
+  // Background OCR upgrade (fired un-awaited from the ambient loop once steady):
+  // read the card's text at high res, fuse with the colour ranking, and only act
+  // on a CONFIDENT text read — upgrade the live preview, and fix the row if the
+  // colour guess was already added. Fully guarded; never throws into the loop.
+  const triggerOcr = async (voteKey, colorIds) => {
+    try {
+      const v = videoRef.current; if(!v || !v.videoWidth) return;
+      const bmp = await createImageBitmap(v, { resizeWidth: 1600 });
+      const r = await post("capture", { bitmap: bmp, outW: 1000, outH: 1400 }, [bmp]);
+      if(!r || !r.buffer) return;
+      const rect = document.createElement("canvas"); rect.width = r.width; rect.height = r.height;
+      rect.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
+      const ocr = await ocrCard(rect);
+      if(!ocr || ocr.trim().length < 3) return;
+      const tm = window.CardScanner.textMatch(ocr, 20);
+      if(!tm.length) return;
+      const tmTop = tm[0], t1 = tm[1] ? tm[1].score : 0;
+      if(!(tmTop.score > 22 && tmTop.score > 1.6 * t1)) return;   // require a distinctive read
+      const fused = scanRRF([colorIds || [], tm.map(x => x.id)], [1, 2.4]);
+      const e = fused.find(x => x.id === tmTop.id); if(e) e.score += 1; else fused.unshift({ id: tmTop.id, score: 1 });
+      fused.sort((a, b) => b.score - a.score);
+      const META = window.CardScanner.state.cards;
+      const byId = ambByIdRef.current || (ambByIdRef.current = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
+      const chosen = byId.get(fused[0].id); if(!chosen) return;
+      const A = ambientRef.current;
+      // upgrade the live preview if the user is still on this card
+      if(A.voteKey === voteKey && previewRef.current){
+        const g = resolveGroup(chosen), p = priceOf(g);
+        const pv = { card: chosen, disp: toDisp(chosen), group: g, low: p.low, mkt: p.mkt,
+          cands: previewRef.current.cands, confident: true, textOk: true, shiny: previewRef.current.shiny };
+        previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":text"; setPreview(pv);
+      }
+      // if the colour guess for this card was already added, fix that row
+      if(A.committedKey === voteKey && chosen.art_key !== voteKey) correctByArtKey(voteKey, chosen);
+    } catch(_e){ /* OCR upgrade is best-effort */ }
+  };
+  triggerOcrRef.current = triggerOcr;
   const undoLast = () => {
     setSession(prev => {
       if(!prev.length) return prev;
@@ -9664,9 +9748,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // loop restarts cleanly into the chosen mode.
   const switchMode = (m) => {
     if(m === mode) return;
-    setResult(null); setPreview(null); previewRef.current = null; pvKeyRef.current = "";
+    setResult(null); setPreview(null); previewRef.current = null; pvKeyRef.current = ""; setFH("");
     steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 };
-    ambientRef.current = { voteKey: null, voteWin: 0, margin: 0, armed: true, committedKey: null, emptyFrames: 0, rearmTimer: 0 };
+    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0 };
     if(m === "ambient") ensureAudio();
     setMode(m);
     setStatus(m === "ambient" ? "Hover over a card" : "Place ONE card on a plain surface");
@@ -9770,7 +9854,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     below = html`<div class="scanner-ambient">
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
-          ${pv ? html`<span class="scanner-amb-now-name">${lbl(pv.disp)}</span><span class="scanner-amb-now-price">${money(pv.mkt ?? pv.low)}</span>`
+          ${pv ? html`<span class="scanner-amb-now-name">${lbl(pv.disp)}${pv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${money(pv.mkt ?? pv.low)}</span>`
                : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : "Loading detector…")}</span>`}
         </div>
         ${user ? html`<button class=${"scanner-shutter scanner-amb-add" + (ready && pv ? " ready" : "")} onClick=${tapCommit} disabled=${!pv} aria-label="Add this card">＋</button>`
@@ -9827,6 +9911,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
       ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (mode === "ambient" ? "tap to add" : "card detected") : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
