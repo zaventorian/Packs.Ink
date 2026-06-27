@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=251">
+<link rel="stylesheet" href="styles.css?v=252">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=251"></script>
-<script src="scanner.js?v=251"></script>
-<script src="scanner-cv.js?v=251"></script>
+<script src="logo.js?v=252"></script>
+<script src="scanner.js?v=252"></script>
+<script src="scanner-cv.js?v=252"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -2075,6 +2075,49 @@ function computeSalesValueHistory(sales, ownedSlots){
   }
   return dates.map(d => ({date: d, value: valueByDate[d]}));
 }
+
+// Avg-of-last-5 variant of computeSalesValueHistory: at each date a slot is
+// valued at the mean of its most recent ≤5 sales (rolling window) instead of the
+// single last sale. Same forward/backward-fill + acquired-date gating.
+function computeSalesValueHistoryAvg5(sales, ownedSlots){
+  const bySlot = {};
+  for(const r of (sales||[])){
+    if(r.grade == null || r.sale_price == null) continue;
+    const k = `${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`;
+    (bySlot[k] = bySlot[k] || []).push({date: r.sold_date, price: Number(r.sale_price)});
+  }
+  for(const k in bySlot) bySlot[k].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  const seriesFor = (s) => bySlot[`${s.card_id}|${(s.grader||"").toLowerCase()}|${s.grade}`] || null;
+  const dateSet = new Set();
+  for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
+  const dates = Array.from(dateSet).sort();
+  if(!dates.length) return [];
+  const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
+  for(const s of ownedSlots){
+    const series = seriesFor(s);
+    if(!series || !series.length) continue;
+    const acqDate = s.acquired_date || null;
+    let si = 0; const win = []; let avg = series[0].price;
+    for(const date of dates){
+      while(si < series.length && series[si].date <= date){ win.push(series[si].price); if(win.length > 5) win.shift(); si++; }
+      if(win.length) avg = win.reduce((a,b)=>a+b,0) / win.length;
+      if(acqDate && date < acqDate) continue;
+      valueByDate[date] += (s.qty||0) * avg;
+    }
+  }
+  return dates.map(d => ({date: d, value: valueByDate[d]}));
+}
+
+// Single source of truth for a graded slot's dollar value. basis "last" (default)
+// prefers the most recent sale (graded_sales_rollup.last_sold_price); "avg5"
+// prefers the avg-of-5 (ebay_avg_1d on the rollup). Non-premium TCGPriceLookup
+// rows have no last_sold_price, so both basis values fall back to the avg chain.
+const gradedRowValue = (p, basis) => {
+  if(!p) return null;
+  const avg = p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? null;
+  const last = p.last_sold_price != null ? Number(p.last_sold_price) : null;
+  return basis === "avg5" ? (avg ?? last) : (last ?? avg);
+};
 
 // Synthesize per-slot Δ% rows from raw graded_prices_daily history. Mirrors
 // the Screener's original inline gradedSynth memo — hoisted to module scope
@@ -5405,7 +5448,17 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
     if(!isSplitCard || !cardPrintings.length) return;
     setGradedPrintingFilter(prev => {
       if(prev && cardPrintings.includes(prev)) return prev;
-      const want = isFoilSplit ? (initialPrinting ? gradedFoilBucket(initialPrinting) : null) : initialPrinting;
+      // Resolve the clicked printing to one of this card's version buckets.
+      // Foil-split: always bucket by foil. Version-split (incl. C1 Top Prize /
+      // Prize Wall, whose sales use "Foil"/"Non-Foil"): try an exact match first
+      // (Two Swords / Text Error), then fall back to the foil bucket so a click
+      // carrying "Cold Foil"/"Holofoil"/"Normal" still lands on Foil/Non-Foil.
+      let want = null;
+      if(initialPrinting){
+        if(isFoilSplit) want = gradedFoilBucket(initialPrinting);
+        else if(cardPrintings.includes(initialPrinting)) want = initialPrinting;
+        else if(cardPrintings.includes(gradedFoilBucket(initialPrinting))) want = gradedFoilBucket(initialPrinting);
+      }
       if(want && cardPrintings.includes(want)) return want;
       return cardPrintings[0];
     });
@@ -6969,7 +7022,7 @@ const COACH_TOURS = {
   ]},
   decks: { title: "Decks", steps: [
     {sel:".deck-section-tab, .deck-sections button", title:"Sections", body:"Discover public decks, browse Tournaments, or sign in for Your Decks / Favorites / Following."},
-    {sel:".archetype-panel, .deck-list, .deck-card", title:"Tournaments & archetypes", body:"On Tournaments, the archetype breakdown shows which ink pairs are winning. Open any deck for its curve, legality, prices and a \"shop missing cards\" cart."},
+    {sel:".deck-list, .deck-card", title:"Tournaments", body:"Browse recent tournament results. Open any deck for its curve, legality, prices and a \"shop missing cards\" cart."},
   ]},
 };
 // Interactive coachmark: spotlights the step's target element and points a
@@ -9119,12 +9172,12 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=251";
+const SCAN_WORKER_URL = "scanner-worker.js?v=252";
 // PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
 // in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
-const OCR_WORKER_URL = "scanner-ocr-worker.js?v=251";
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=252";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -13164,6 +13217,10 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
                             updateSealedMeta, onClose, readOnly, setName}) => {
   const [history, setHistory] = useState(null);
   const [historyState, setHistoryState] = useState({loading: true, error: null});
+  // Chart line toggles. Default to Low only (Low and NM Market track so closely
+  // the overlaid lines just read as noise); the NM checkbox opts back in.
+  const [showLowLine, setShowLowLine] = useState(true);
+  const [showMktLine, setShowMktLine] = useState(false);
   // Close on Escape — mirrors CardDetailModal's keyboard behavior.
   useEffect(() => {
     const onKey = (e) => { if(e.key === "Escape") onClose(); };
@@ -13326,16 +13383,22 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
         </div>
       </div>
       <div class="sealed-detail-chart">
-        <div class="sealed-detail-chart-title">Price history</div>
-        ${historyState.loading
-          ? html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>Loading history…</div>`
-          : historyState.error
-            ? html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:12}}>${historyState.error}</div>`
-            : chartSeries.length === 0
-              ? html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>
-                  No price history yet for this product.</div>`
-              : html`<${LineChart} series=${chartSeries} width=720 height=240
-                  padding=${{top:8,right:12,bottom:24,left:60}}/>`}
+        <div class="sealed-detail-chart-titlerow">
+          <div class="sealed-detail-chart-title">Price history</div>
+          <div class="sealed-detail-chart-toggles">
+            <label><input type="checkbox" checked=${showLowLine} onChange=${e=>setShowLowLine(e.target.checked)}/> Low</label>
+            <label><input type="checkbox" checked=${showMktLine} onChange=${e=>setShowMktLine(e.target.checked)}/> NM Market</label>
+          </div>
+        </div>
+        ${(() => {
+          const visible = chartSeries.filter(s => s.label === "Low" ? showLowLine : showMktLine);
+          if(historyState.loading) return html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>Loading history…</div>`;
+          if(historyState.error) return html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:12}}>${historyState.error}</div>`;
+          if(chartSeries.length === 0) return html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>No price history yet for this product.</div>`;
+          if(visible.length === 0) return html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>Pick a line to show (Low or NM Market).</div>`;
+          return html`<${LineChart} series=${visible} width=720 height=240
+            padding=${{top:8,right:12,bottom:24,left:60}}/>`;
+        })()}
       </div>
     </div>
   </div>`;
@@ -13756,9 +13819,13 @@ const GRADED_RARITY_OPTIONS = ["Common","Uncommon","Rare","Super Rare","Legendar
 // Portfolio-value chart for the Graded tab. Mirrors the raw-collection
 // chart on the Home panel but pulls from graded_prices_daily and keys
 // per (tcgplayer_product_id, grader, grade) slot instead of (pid, printing).
-const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, premium}) => {
+const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, premium, basis}) => {
   const [historyRows, setHistoryRows] = useState(null);
   const [state, setState] = useState({loading: false, error: null});
+  // Which lines to draw. Premium has both Last-sold and Avg-of-5 histories; show
+  // both by default so they're comparable, each independently toggleable.
+  const [showLast, setShowLast] = useState(true);
+  const [showAvg, setShowAvg]   = useState(true);
 
   // Build the slot list. Skip rows whose card meta is missing from raw
   // (catalog hasn't loaded yet, or graded entry references a card we don't
@@ -13805,21 +13872,29 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, p
     return () => { cancelled = true; };
   }, [slotsKey, rangeKey, premium]);
 
-  const valueSeries = useMemo(() => historyRows
+  // Last-sold history (premium) or the avg-based daily history (non-premium).
+  const lastSeries = useMemo(() => historyRows
     ? (premium ? computeSalesValueHistory(historyRows, slots) : computeGradedValueHistory(historyRows, slots))
     : null, [historyRows, slots, premium]);
+  // Avg-of-5 history only exists for premium (needs per-sale rows).
+  const avgSeries = useMemo(() => (premium && historyRows)
+    ? computeSalesValueHistoryAvg5(historyRows, slots) : null, [historyRows, slots, premium]);
+  const toXY = (s) => s.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value}));
   const chartSeries = useMemo(() => {
-    if(!valueSeries || !valueSeries.length) return [];
-    return [{
-      label: "Graded value",
-      color: "var(--accent)",
-      dashed: false,
-      data: valueSeries.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value})),
-    }];
-  }, [valueSeries]);
+    const out = [];
+    if(premium){
+      if(showLast && lastSeries && lastSeries.length) out.push({label:"Last sold",  color:"var(--accent)", dashed:false, data:toXY(lastSeries)});
+      if(showAvg  && avgSeries  && avgSeries.length)  out.push({label:"Avg last 5",  color:"#7e54c4",      dashed:true,  data:toXY(avgSeries)});
+    } else if(lastSeries && lastSeries.length){
+      out.push({label:"Graded value", color:"var(--accent)", dashed:false, data:toXY(lastSeries)});
+    }
+    return out;
+  }, [premium, showLast, showAvg, lastSeries, avgSeries]);
 
-  const currentValue = valueSeries && valueSeries.length ? valueSeries[valueSeries.length-1].value : 0;
-  const startValue   = valueSeries && valueSeries.length ? valueSeries[0].value : null;
+  // The headline number + range delta track the chosen basis (last vs avg5).
+  const headSeries = (premium && basis === "avg5" && avgSeries) ? avgSeries : lastSeries;
+  const currentValue = headSeries && headSeries.length ? headSeries[headSeries.length-1].value : 0;
+  const startValue   = headSeries && headSeries.length ? headSeries[0].value : null;
   const rangeDelta   = (startValue != null && startValue > 0) ? (currentValue - startValue) : null;
   const rangeDeltaPct= (startValue != null && startValue > 0) ? ((currentValue - startValue) / startValue * 100) : null;
   const deltaColor   = rangeDelta == null ? "var(--text-muted)" : rangeDelta >= 0 ? "var(--green)" : "var(--red)";
@@ -13842,6 +13917,10 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, p
           class=${rangeKey===r.key?"active":""}
           onClick=${()=>setRangeKey(r.key)}>${r.label}</button>`)}
       </div>
+      ${premium && avgSeries && html`<div class="gvc-line-toggles">
+        <label><input type="checkbox" checked=${showLast} onChange=${e=>setShowLast(e.target.checked)}/> Last sold</label>
+        <label><input type="checkbox" checked=${showAvg} onChange=${e=>setShowAvg(e.target.checked)}/> Avg last 5</label>
+      </div>`}
     </div>
     <div class="gvc-chart">
       ${(chartSeries.length && chartSeries[0].data.length >= 2)
@@ -13894,7 +13973,7 @@ const GRADED_OWNED_SORTS = {
 // foil badge is never shown for them — it's reserved for the foil copy of a
 // normal card that exists in both Normal and Cold Foil.
 const GRADED_CHASE_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
-const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
+const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen, basis}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   // All sort + filter selections persist to localStorage so the view is the
   // same next time you open it.
@@ -13916,16 +13995,13 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
     if(!meta || !meta.tcgplayer_product_id) return null;
     for(const pr of [it.printing || meta.tcg_printing || "Normal", "Normal", "Holofoil", "Cold Foil"]){
       const p = priceByKey.get(meta.tcgplayer_product_id + "|" + pr + "|" + it.grader + "|" + it.grade);
-      if(p && (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d) != null) return p;
+      if(p && gradedRowValue(p, basis) != null) return p;
     }
     return null;
   };
   // The graded value (eBay average), or null when this card has no graded-sales
   // data — callers fall back to rawPlaceholderPx.
-  const valueOf = (it, meta) => {
-    const p = pxRowOf(it, meta);
-    return p ? (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d) : null;
-  };
+  const valueOf = (it, meta) => gradedRowValue(pxRowOf(it, meta), basis);
   // Premium rollup rows also carry the most-recent sale price (graded_sales_rollup).
   const lastSoldOf = (it, meta) => {
     const p = pxRowOf(it, meta);
@@ -13954,13 +14030,14 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
         grader: it.grader, grade: it.grade, qty: it.quantity,
         value: gradedVal != null ? gradedVal : rawPh,
         lastSold: lastSoldOf(it, meta),
+        avg5: gradedRowValue(pxRowOf(it, meta), "avg5"),
         // No graded sales → we're showing the raw market price as a placeholder.
         rawPlaceholder: gradedVal == null && rawPh != null,
         inkList,
       });
     }
     return out;
-  }, [items, cardById, priceByKey]);
+  }, [items, cardById, priceByKey, basis]);
 
   const graders  = useMemo(()=> Array.from(new Set(entries.map(e=>e.grader).filter(Boolean))).sort(), [entries]);
   const setsByGroup = useMemo(()=> groupSetsForFilter(raw), [raw]);
@@ -14023,7 +14100,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen}) => {
     : (gradedPremium && e.lastSold != null)
     ? html`<div class="gco-val-pair">
         <span class="gco-vp-item"><span class="gco-vp-num">${fmt(e.lastSold)}</span><span class="gco-vp-lbl">last sold</span></span>
-        <span class="gco-vp-item"><span class="gco-vp-num">${e.value!=null?fmt(e.value):"—"}</span><span class="gco-vp-lbl">avg last 5</span></span>
+        <span class="gco-vp-item"><span class="gco-vp-num">${e.avg5!=null?fmt(e.avg5):"—"}</span><span class="gco-vp-lbl">avg last 5</span></span>
       </div>`
     : html`<div class="gco-val">${valStr(e)}</div>`;
 
@@ -14430,6 +14507,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     catch { return "grid"; }
   });
   useEffect(() => { try { localStorage.setItem("packsink:graded:display", displayMode); } catch {} }, [displayMode]);
+  // Value basis used for collection totals/tiles/chart headline: "last" (most
+  // recent sale, default) | "avg5" (avg of last 5 sales). Persisted per device.
+  const [valueBasis, setValueBasis] = useState(() => {
+    try { return localStorage.getItem("packsink:graded:valueBasis") || "last"; }
+    catch { return "last"; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:graded:valueBasis", valueBasis); } catch {} }, [valueBasis]);
   // "tracking" = goal/set-completion sections (default) · "owned" = flat My Cards grid.
   const [gradedView, setGradedView] = useState(() => {
     try { return localStorage.getItem("packsink:graded:view") || "tracking"; }
@@ -14964,7 +15048,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     const bestPx = (pid, pref, grader, grade) => {
       for(const pr of [pref || "Normal", ...tryPrintings]){
         const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
-        if(p) return p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? 0;
+        if(p) return gradedRowValue(p, valueBasis) ?? 0;
       }
       return 0;
     };
@@ -15039,9 +15123,9 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       for(const pr of tryPrintings){
         const p = priceByKey.get(pid + "|" + pr + "|" + grader + "|" + grade);
         if(p){
-          // A matched row with all averages null must NOT shadow a later
-          // printing (e.g. Holofoil) that does carry a price — keep trying.
-          const v = p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d;
+          // A matched row with no price must NOT shadow a later printing
+          // (e.g. Holofoil) that does carry one — keep trying.
+          const v = gradedRowValue(p, valueBasis);
           if(v != null) return v;
         }
       }
@@ -15425,6 +15509,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           <button class=${displayMode==="poster"?"active":""} onClick=${()=>setDisplayMode("poster")}>Posters</button>
         </div>
         </span>`}
+        ${!readOnly && gradedPremium && html`<div class="seg-toggle gc-caps-seg"
+          title="Which price drives collection value: the most recent sale (Last) or the average of the last 5 sales (Avg 5)">
+          <button class=${valueBasis==="last"?"active":""} onClick=${()=>setValueBasis("last")}>Value: Last</button>
+          <button class=${valueBasis==="avg5"?"active":""} onClick=${()=>setValueBasis("avg5")}>Avg 5</button>
+        </div>`}
         ${!readOnly && html`<label class="sealed-coll-flag gc-caps-flag"
           title="Show 1D / 1W / 1M price change on each owned slot">
           <input type="checkbox" checked=${showDeltas} onChange=${e=>setShowDeltas(e.target.checked)}/>
@@ -15462,13 +15551,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       </div>
     </div>
     ${!readOnly && html`<${GradedValueChart} items=${items} cardById=${cardById}
-      priceByKey=${priceByKey} premium=${gradedPremium}
+      priceByKey=${priceByKey} premium=${gradedPremium} basis=${valueBasis}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
         ${gradedView === "owned"
           ? html`<${GradedOwnedGrid} items=${items} cardById=${cardById} priceByKey=${priceByKey}
-              raw=${raw} theme=${theme} onOpen=${openCardAt}/>`
+              raw=${raw} theme=${theme} onOpen=${openCardAt} basis=${valueBasis}/>`
           : grouped.length === 0
           ? html`<div class="gc-empty">
               <div class="gc-empty-title">Start tracking your graded Lorcana</div>
@@ -15539,7 +15628,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                           if(p) break;
                         }
                       }
-                      return p ? (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? null) : null;
+                      return gradedRowValue(p, valueBasis);
                     };
                     // POSTER mode: full card image like the My Cards tiles, with
                     // grade badge(s) + value overlaid. Cards you don't own render
@@ -15552,7 +15641,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                       } else if(!isCustomVariant){
                         let refP = priceByKey.get(card.tcgplayer_product_id + "|" + tilePrinting + "|psa|10");
                         if(!refP) for(const pr of ["Normal","Holofoil","Cold Foil"]){ if(pr===tilePrinting) continue; refP = priceByKey.get(card.tcgplayer_product_id+"|"+pr+"|psa|10"); if(refP) break; }
-                        posterVal = refP ? (refP.ebay_avg_1d ?? refP.ebay_avg_30d ?? refP.ebay_avg_7d ?? null) : null;
+                        posterVal = gradedRowValue(refP, valueBasis);
                       }
                       const pImg = card.img_normal || card.img_small;
                       const totalQty = ownedSlots.reduce((n,s)=>n+(s.qty||0),0);
@@ -15623,7 +15712,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                                   if(refP) break;
                                 }
                               }
-                              const refPx = refP && (refP.ebay_avg_1d ?? refP.ebay_avg_30d ?? refP.ebay_avg_7d);
+                              const refPx = gradedRowValue(refP, valueBasis);
                               return html`<button key=${si} class="gc-slot gc-slot-tracked gc-slot-quickadd"
                                 type="button"
                                 title=${readOnly ? "Tracked — not yet owned" : "Click to log a PSA 10 of this card (uses the printing of this tile). Shift-click for the full Add dialog."}
@@ -15655,7 +15744,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                                 }
                               }
                             }
-                            const px = p && (p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d);
+                            const px = gradedRowValue(p, valueBasis);
                             const slotTipParts = [(s.grader||"").toUpperCase() + " " + s.grade];
                             if(s.acquired_date) slotTipParts.push("Acquired " + s.acquired_date);
                             if(s.amount_paid != null) slotTipParts.push("Paid $" + Number(s.amount_paid).toLocaleString(undefined,{maximumFractionDigits:2}));
@@ -27978,7 +28067,6 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
         <button class="active" onClick=${()=>setBulkUploadOpen(true)}
           style=${{padding:"7px 14px",fontSize:13}}>+ Bulk Upload Tournament</button>
       </div>`}
-      ${!selectedTournamentId && tournaments.length > 0 && html`<${ArchetypeBreakdown} results=${tournamentResults}/>`}
       ${selectedTournamentId
         ? html`<${TournamentDetailView}
             tournament=${tournaments.find(t => t.id === selectedTournamentId)}
