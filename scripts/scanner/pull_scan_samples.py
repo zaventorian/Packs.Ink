@@ -24,7 +24,25 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "data" / "flywheel"
 REPO = HERE.parent.parent
 
-URL = os.environ.get("SUPABASE_URL")
+
+def _load_env():
+    """Read a gitignored .env (repo root / scripts/) so the secret never has to be
+    pasted into a chat or exported into a shell profile."""
+    for p in (REPO / ".env", REPO / "scripts" / ".env", HERE / ".env"):
+        if not p.exists():
+            continue
+        for line in p.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+_load_env()
+# URL is public (it's the same endpoint the website uses); the service key is the
+# only secret you need to supply, in .env.
+URL = os.environ.get("SUPABASE_URL") or "https://umwqowkiatjjltologrd.supabase.co"
 KEY = os.environ.get("SUPABASE_SERVICE_KEY")
 
 
