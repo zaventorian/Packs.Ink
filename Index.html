@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=242">
+<link rel="stylesheet" href="styles.css?v=243">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=242"></script>
-<script src="scanner.js?v=242"></script>
-<script src="scanner-cv.js?v=242"></script>
+<script src="logo.js?v=243"></script>
+<script src="scanner.js?v=243"></script>
+<script src="scanner-cv.js?v=243"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=242";
+const SCAN_WORKER_URL = "scanner-worker.js?v=243";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9525,14 +9525,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){}
     setFlash(true); setTimeout(() => setFlash(false), 230);
   };
-  // add (or +1) a card to the running session list + the collection. De-dupes by
-  // (card_id:printing) so a playset of duplicates increments one row to ×N.
-  const addToSession = (card, cands) => {
+  const entryKeyOf = (card) => {
     const g = resolveGroup(card);
     const pr = g ? (g.normal && g.normal.tcg_printing) || (g.foil && g.foil.tcg_printing) : "Normal";
     const cardId = g ? g.card_id : card.id;
-    if(!cardId || !pr) return;
-    const key = cardId + ":" + pr;
+    return { g, pr, cardId, key: (cardId && pr) ? cardId + ":" + pr : null };
+  };
+  // add (or +1) a card to the running session list + the collection. De-dupes by
+  // (card_id:printing) so a playset of duplicates increments one row to ×N.
+  // `predicted` = the scanner's colour top-1 id (for the flywheel correction label).
+  const addToSession = (card, cands) => {
+    const { g, pr, cardId, key } = entryKeyOf(card);
+    if(!key) return;
     updateQty(cardId, pr, ((collection && collection[key]) || 0) + 1);
     const p = priceOf(g);
     const eid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random());
@@ -9541,9 +9545,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(i >= 0){ const cp = prev.slice(); const row = { ...cp[i], qty: cp[i].qty + 1 }; cp.splice(i, 1); return [row, ...cp]; }
       return [{ eid, key, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(card)),
         rarity: card.rarity, low: p.low, mkt: p.mkt, qty: 1, art_key: card.art_key,
-        thumb: SCAN_THUMB(card.id), cands: (cands || []).slice(0, 4), expanded: false }, ...prev];
+        thumb: SCAN_THUMB(card.id), cands: (cands || []).slice(0, 4), expanded: false,
+        predicted: card.id, _blob: null }, ...prev];
     });
   };
+  // stash the scanned photo (blob) on the row so a later correction can log it as
+  // a hard-negative training example.
+  const attachBlob = (key, blob) => setSession(prev => { const i = prev.findIndex(x => x.key === key); if(i < 0) return prev; const cp = prev.slice(); cp[i] = { ...cp[i], _blob: blob }; return cp; });
   // commit the current ambient preview (tap on shutter/stage, or a confident
   // auto-add). Fires the ping + flash, logs the flywheel sample, re-arms shortly
   // so a held playset can keep incrementing.
@@ -9557,11 +9565,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     clearTimeout(A.rearmTimer);
     A.rearmTimer = setTimeout(() => { ambientRef.current.armed = true; }, 850);
     if(!user){ onSignIn && onSignIn(); return; }
-    ensureAudio();
-    rectRef.current = ambCanvasRef.current || rectRef.current;
+    ensureAudio(); pingFeedback();
     addToSession(pv.card, pv.cands);
-    pingFeedback();
-    if(rectRef.current) logScanSample(pv.card.id, pv.card.id, false, null);
+    // snapshot the rectified crop NOW (the next frame overwrites ambCanvasRef) so
+    // the flywheel sample + any later correction carry THIS card's photo. Async
+    // blob + upload off the gesture so the add stays instant.
+    const src = ambCanvasRef.current;
+    if(src){
+      let snap = null;
+      try { snap = document.createElement("canvas"); snap.width = src.width; snap.height = src.height; snap.getContext("2d").drawImage(src, 0, 0); } catch(_e){ snap = null; }
+      if(snap){ const key = entryKeyOf(pv.card).key;
+        canvasToBlob(snap).then(blob => { if(!blob) return; uploadSample(pv.card.id, pv.card.id, false, null, blob); if(key) attachBlob(key, blob); }); }
+    }
   };
   commitAmbientRef.current = commitAmbient;
   const tapCommit = () => {
@@ -9580,6 +9595,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(newKey === old.key){ cp[i] = { ...old, expanded: false }; return cp; }
     updateQty(old.cardId, old.printing, Math.max(0, ((collection && collection[old.key]) || 0) - old.qty));
     updateQty(cardId, pr, ((collection && collection[newKey]) || 0) + old.qty);
+    // flywheel hard-negative: the scanner guessed `old.predicted`, the truth is
+    // `newCard` — log it with the photo we stashed on this row at scan time.
+    if(old._blob) uploadSample(newCard.id, old.predicted || old.cardId, true, pr, old._blob);
     const p = priceOf(g);
     cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
       rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB(newCard.id), expanded: false };
@@ -9756,16 +9774,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     setStatus(m === "ambient" ? "Hover over a card" : "Place ONE card on a plain surface");
   };
 
-  // data flywheel: log the confirmed (rectified photo -> card) example so we can
-  // train a real-photo matcher later. Best-effort; never blocks the add.
-  const logScanSample = async (cardId, predictedId, corrected, printing) => {
+  // data flywheel: log a (rectified photo -> confirmed card) example so we can
+  // train a real-photo matcher later. corrected=true rows (the scanner's top guess
+  // was wrong and the user fixed it) are the gold hard-negatives. Best-effort.
+  const uploadSample = async (cardId, predictedId, corrected, printing, blob) => {
     try {
-      if(!user || !rectRef.current || !sbClient) return;
-      const src = rectRef.current, w = 400, h = Math.round(400 * src.height / src.width);
-      const c = document.createElement("canvas"); c.width = w; c.height = h;
-      c.getContext("2d").drawImage(src, 0, 0, w, h);
-      const blob = await new Promise(res => c.toBlob(res, "image/jpeg", 0.82));
-      if(!blob) return;
+      if(!user || !blob || !sbClient) return;
       const uid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
       const path = user.id + "/" + uid + ".jpg";
       const up = await sbClient.storage.from("scan-samples").upload(path, blob, { contentType: "image/jpeg", upsert: false });
@@ -9774,7 +9788,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         corrected: !!corrected, printing: printing || null,
         image_path: (up && !up.error) ? path : null,
       });
-    } catch(_e){ /* flywheel is best-effort */ }
+    } catch(_e){ /* best-effort */ }
+  };
+  // downscale a rectified-card canvas to a ~400px JPEG blob for the flywheel.
+  const canvasToBlob = (src) => {
+    try {
+      const w = 400, h = Math.round(400 * src.height / src.width);
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(src, 0, 0, w, h);
+      return new Promise(res => c.toBlob(res, "image/jpeg", 0.82));
+    } catch(_e){ return Promise.resolve(null); }
+  };
+  // single-mode flywheel (image = the last full-res rectified capture).
+  const logScanSample = async (cardId, predictedId, corrected, printing) => {
+    if(!rectRef.current) return;
+    const blob = await canvasToBlob(rectRef.current);
+    if(blob) uploadSample(cardId, predictedId, corrected, printing, blob);
   };
 
   const addCopy = (foil) => {
