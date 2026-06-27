@@ -64,7 +64,7 @@ function detectQuad(mat) {
   const procW = 480, scale = procW / W, procH = Math.round(H * scale);
   let small = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
   let contours = new cv.MatVector(), hier = new cv.Mat();
-  let best = null, bestScore = 0;
+  let best = null, bestScore = 0, bestLandscape = false;
   try {
     cv.resize(mat, small, new cv.Size(procW, procH));
     cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
@@ -79,11 +79,15 @@ function detectQuad(mat) {
     cv.dilate(edges, edges, k); k.delete();
     cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
     const imgArea = procW * procH;
+    const cx = procW / 2, cy = procH / 2, halfDiag = Math.hypot(cx, cy);
     // score a candidate quad; keep the best. Rejects non-card shapes:
-    // rectangularity (opposite sides similar), ~5:7 aspect, and "fill" (the
-    // contour must mostly fill the quad — rejects a minAreaRect bounding a
-    // sprawling stack contour).
-    const consider = (q, contourArea) => {
+    // rectangularity (opposite sides similar), ~5:7 aspect (orientation-agnostic
+    // via min/max so landscape Locations also pass), and "fill" (the contour must
+    // mostly fill the quad — rejects a minAreaRect bounding a sprawling stack
+    // contour). A SOFT centre-bias prefers the card the user is pointing at over a
+    // larger background rectangle, and a clean 4-pt quad is preferred over a
+    // minAreaRect fallback (but the fallback still wins when it's the only read).
+    const consider = (q, contourArea, fromClean) => {
       const w1 = dist(q[0], q[1]), w2 = dist(q[3], q[2]);
       const h1 = dist(q[0], q[3]), h2 = dist(q[1], q[2]);
       const wq = (w1 + w2) / 2, hq = (h1 + h2) / 2;
@@ -95,8 +99,16 @@ function detectQuad(mat) {
       if (arScore <= 0) return;
       const quadArea = wq * hq, fill = Math.min(1, contourArea / (quadArea + 1e-6));
       if (fill < 0.7) return;
-      const score = arScore * 0.35 + rect * 0.3 + fill * 0.2 + Math.min(1, quadArea / imgArea) * 0.15;
-      if (score > bestScore) { bestScore = score; best = q.map((p) => ({ x: p.x / scale, y: p.y / scale })); }
+      const qx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4;
+      const qy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+      const centreScore = 1 - Math.min(1, Math.hypot(qx - cx, qy - cy) / halfDiag);
+      let score = arScore * 0.3 + rect * 0.22 + fill * 0.16 + Math.min(1, quadArea / imgArea) * 0.1 + centreScore * 0.22;
+      if (!fromClean) score *= 0.92;
+      if (score > bestScore) {
+        bestScore = score;
+        best = q.map((p) => ({ x: p.x / scale, y: p.y / scale }));
+        bestLandscape = wq > hq;
+      }
     };
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i), area = cv.contourArea(c);
@@ -109,7 +121,7 @@ function detectQuad(mat) {
         if (a.rows === 4 && cv.isContourConvex(a)) {
           const pts = [];
           for (let p = 0; p < 4; p++) pts.push({ x: a.data32S[p * 2], y: a.data32S[p * 2 + 1] });
-          consider(orderQuad(pts), area); a.delete(); break;
+          consider(orderQuad(pts), area, true); a.delete(); break;
         }
         a.delete();
       }
@@ -119,14 +131,18 @@ function detectQuad(mat) {
         const rr = cv.minAreaRect(c);
         const box = cv.RotatedRect.points(rr);
         consider(orderQuad([{ x: box[0].x, y: box[0].y }, { x: box[1].x, y: box[1].y },
-          { x: box[2].x, y: box[2].y }, { x: box[3].x, y: box[3].y }]), area);
+          { x: box[2].x, y: box[2].y }, { x: box[3].x, y: box[3].y }]), area, false);
       } catch (e) { /* skip */ }
       c.delete();
     }
   } finally {
     small.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hier.delete();
   }
-  return (best && quadOk(best, 28)) ? best : null;
+  // conf is the winning score (0..1-ish); the main thread gates the green
+  // "locked" state on it but always draws a (dim) box when a quad exists.
+  return (best && quadOk(best, 28))
+    ? { quad: best, conf: bestScore, landscape: bestLandscape }
+    : { quad: null, conf: 0, landscape: false };
 }
 
 // gray-world white balance + CLAHE on L — normalises the dim/directional light.
@@ -174,22 +190,29 @@ function rectify(mat, quad, outW, outH) {
 onmessage = (e) => {
   const msg = e.data;
   if (msg.type === "detect") {
-    if (!ready) { postMessage({ type: "detect", id: msg.id, quad: null }); if (msg.bitmap.close) msg.bitmap.close(); return; }
-    let mat = null, quad = null;
-    try { mat = bitmapToMat(msg.bitmap); quad = detectQuad(mat); } catch (e) { quad = null; }
+    if (!ready) { postMessage({ type: "detect", id: msg.id, quad: null, conf: 0, landscape: false }); if (msg.bitmap.close) msg.bitmap.close(); return; }
+    let mat = null, det = { quad: null, conf: 0, landscape: false };
+    try { mat = bitmapToMat(msg.bitmap); det = detectQuad(mat); } catch (e) { det = { quad: null, conf: 0, landscape: false }; }
     finally { if (mat) mat.delete(); if (msg.bitmap.close) msg.bitmap.close(); }
-    postMessage({ type: "detect", id: msg.id, quad: quad, w: msg.bitmap ? undefined : 0 });
+    postMessage({ type: "detect", id: msg.id, quad: det.quad, conf: det.conf, landscape: det.landscape });
   } else if (msg.type === "capture") {
     // detect + rectify the SAME frame so the warp uses the frame it detected on.
-    if (!ready) { postMessage({ type: "capture", id: msg.id, buffer: null }); if (msg.bitmap.close) msg.bitmap.close(); return; }
-    let mat = null, out = null, quad = null;
+    if (!ready) { postMessage({ type: "capture", id: msg.id, buffer: null, detected: false, quad: null }); if (msg.bitmap.close) msg.bitmap.close(); return; }
+    let mat = null, out = null, det = { quad: null, conf: 0, landscape: false };
     try {
       mat = bitmapToMat(msg.bitmap);
-      quad = detectQuad(mat);
-      if (quad) out = rectify(mat, quad, msg.outW || 360, msg.outH || 504);
+      det = detectQuad(mat);
+      if (det.quad) {
+        // landscape cards (Locations, ~7:5) MUST warp to a landscape canvas — a
+        // fixed portrait outW×outH squashes their art + text and breaks both the
+        // colour sig and the OCR region. Swap the output dims when landscape.
+        const ow = det.landscape ? (msg.outH || 504) : (msg.outW || 360);
+        const oh = det.landscape ? (msg.outW || 360) : (msg.outH || 504);
+        out = rectify(mat, det.quad, ow, oh);
+      }
     } catch (e) { out = null; }
     finally { if (mat) mat.delete(); if (msg.bitmap.close) msg.bitmap.close(); }
-    if (out) postMessage({ type: "capture", id: msg.id, width: out.width, height: out.height, detected: true, buffer: out.data.buffer }, [out.data.buffer]);
-    else postMessage({ type: "capture", id: msg.id, detected: false, buffer: null });
+    if (out) postMessage({ type: "capture", id: msg.id, width: out.width, height: out.height, detected: true, landscape: det.landscape, conf: det.conf, quad: det.quad, buffer: out.data.buffer }, [out.data.buffer]);
+    else postMessage({ type: "capture", id: msg.id, detected: false, conf: det.conf, quad: det.quad, buffer: null });
   }
 };

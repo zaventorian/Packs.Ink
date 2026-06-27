@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=240">
+<link rel="stylesheet" href="styles.css?v=241">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=240"></script>
-<script src="scanner.js?v=240"></script>
-<script src="scanner-cv.js?v=240"></script>
+<script src="logo.js?v=241"></script>
+<script src="scanner.js?v=241"></script>
+<script src="scanner-cv.js?v=241"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=240";
+const SCAN_WORKER_URL = "scanner-worker.js?v=241";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9153,12 +9153,25 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const msgIdRef = useRef(0);
   const detectBusyRef = useRef(false);
   const captureBusyRef = useRef(false);
+  const ambBusyRef = useRef(false);       // ambient per-frame capture guard
   const loopTimerRef = useRef(0);
   const captureRef = useRef(null);
-  const steadyRef = useRef({ count: 0, last: null });
+  // steadyRef: lastRaw = last raw quad (lock/steady test), smooth = EMA'd quad
+  // (drawn only), count = consecutive-steady frames, misses = consecutive misses.
+  const steadyRef = useRef({ lastRaw: null, smooth: null, count: 0, misses: 0 });
   const tessRef = useRef(null);
   const tessReadyRef = useRef(false);
   const rectRef = useRef(null);   // last rectified card (for the data flywheel)
+  const ambCanvasRef = useRef(null);      // reused small rectified canvas (ambient)
+  const modeRef = useRef("ambient");      // mirror of `mode` for the loop closure
+  const autoAddRef = useRef(false);       // mirror of `autoAdd`
+  const previewRef = useRef(null);        // current ambient preview (for tap-commit)
+  const ambientRef = useRef({ voteKey: null, voteWin: 0, margin: 0, armed: true, committedKey: null, emptyFrames: 0, rearmTimer: 0 });
+  const commitAmbientRef = useRef(null);  // set after commitAmbient is defined
+  const audioCtxRef = useRef(null);
+  const detFlagRef = useRef(false);       // last setDetected value (gate re-renders)
+  const rdyFlagRef = useRef(false);       // last setReady value
+  const pvKeyRef = useRef("");            // last preview art_key pushed to React
 
   const [phase, setPhase] = useState("starting");
   const [err, setErr] = useState("");
@@ -9169,10 +9182,28 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [workerReady, setWorkerReady] = useState(false);
   const [result, setResult] = useState(null);
   const [addedMsg, setAddedMsg] = useState("");
+  const [mode, setMode] = useState("ambient");   // "ambient" (hover & tap) | "single" (deliberate OCR)
+  const [session, setSession] = useState([]);    // running list of scanned-and-added cards
+  const [preview, setPreview] = useState(null);  // current ambient identification (for the bottom hint)
+  const [autoAdd, setAutoAdd] = useState(false); // opt-in: auto-add on a confident, steady lock
+  const [flash, setFlash] = useState(false);     // green flash on a confident ping
+
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
 
   const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
   const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
     rarity: card.rarity, art_key: card.art_key, thumb: SCAN_THUMB(card.id) });
+  // price lookup for a catalog group — canonical pick chain (Low / NM Market).
+  const resolveGroup = (card) => {
+    const row = raw && raw.find(x => x.card_id === card.id && x.tcgplayer_product_id);
+    return row ? groupFromSimCard(row, raw) : null;
+  };
+  const priceOf = (g) => {
+    if(!g) return { low: null, mkt: null };
+    const n = g.normal || g.foil || {};
+    return { low: n["Low Price"] ?? null, mkt: n["TCGPlayer Market"] ?? n["Market Price"] ?? null };
+  };
 
   // worker request/response by id
   const post = (type, payload, transfer) => new Promise((resolve) => {
@@ -9257,7 +9288,49 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){ return ""; }
   };
 
-  const drawOutline = (quad, bw, bh, isReady) => {
+  const roundRectPath = (ctx, x, y, w, h, r) => {
+    r = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+  };
+  // draw the live name + value badge above the card (ambient mode). Drawn on the
+  // overlay canvas — same object-fit:cover as the video — so it tracks the card.
+  const drawValueLabel = (ctx, quad, bw, label) => {
+    const xs = quad.map(p => p.x), ys = quad.map(p => p.y);
+    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys);
+    const mid = (minX + maxX) / 2;
+    const name = label.name || "";
+    const price = label.mkt != null ? "$" + Number(label.mkt).toFixed(2)
+                : (label.low != null ? "$" + Number(label.low).toFixed(2) : "—");
+    const fs = Math.max(15, Math.round(bw * 0.028));
+    const pfs = Math.max(18, Math.round(bw * 0.036));
+    ctx.font = "700 " + fs + "px system-ui, sans-serif";
+    const nameW = ctx.measureText(name).width;
+    ctx.font = "800 " + pfs + "px system-ui, sans-serif";
+    const priceW = ctx.measureText(price).width;
+    const padX = fs * 0.7;
+    const boxW = Math.min(bw * 0.86, Math.max(nameW, priceW) + padX * 2);
+    const boxH = fs * 1.25 + pfs * 1.2 + fs * 0.5;
+    let bx = mid - boxW / 2;
+    let by = minY - boxH - bw * 0.015;
+    if(by < 4) by = Math.min(maxY - boxH - 6, minY + 8);   // no room above → inside top
+    bx = Math.max(4, Math.min(bw - boxW - 4, bx));
+    ctx.fillStyle = label.confident ? "rgba(10,26,16,0.93)" : "rgba(14,12,22,0.9)";
+    roundRectPath(ctx, bx, by, boxW, boxH, 10); ctx.fill();
+    ctx.strokeStyle = label.confident ? "rgba(90,240,130,0.85)" : "rgba(255,255,255,0.18)";
+    ctx.lineWidth = 2; ctx.stroke();
+    ctx.textAlign = "center"; ctx.textBaseline = "top";
+    let nm = name; ctx.font = "700 " + fs + "px system-ui, sans-serif";
+    while(ctx.measureText(nm).width > boxW - padX * 2 && nm.length > 4){ nm = nm.slice(0, -2); }
+    if(nm !== name) nm = nm.replace(/…?$/, "…");
+    ctx.fillStyle = "#fff"; ctx.fillText(nm, bx + boxW / 2, by + fs * 0.5);
+    ctx.fillStyle = "#e8c850"; ctx.font = "800 " + pfs + "px system-ui, sans-serif";
+    ctx.fillText(price, bx + boxW / 2, by + fs * 0.5 + fs * 1.2);
+    ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
+  };
+  const drawOutline = (quad, bw, bh, isReady, label) => {
     const ov = overlayRef.current; if(!ov) return;
     if(ov.width !== bw || ov.height !== bh){ ov.width = bw; ov.height = bh; }
     const ctx = ov.getContext("2d"); ctx.clearRect(0, 0, bw, bh);
@@ -9270,44 +9343,215 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     ctx.closePath();
     if(isReady){ ctx.fillStyle = "rgba(90,240,130,0.12)"; ctx.fill(); }
     ctx.stroke();
+    if(label) drawValueLabel(ctx, quad, bw, label);
   };
   const quadMoved = (a, b) => {
     if(!a || !b) return 1e9;
     let s = 0; for(let i = 0; i < 4; i++) s += Math.hypot(a[i].x - b[i].x, a[i].y - b[i].y);
     return s / 4;
   };
+  const lerpQuad = (prev, next, a) => prev.map((p, i) => ({ x: p.x + (next[i].x - p.x) * a, y: p.y + (next[i].y - p.y) * a }));
+  // update lock/steady state on the RAW quad (instantaneous, honest), and keep a
+  // separate EMA-smoothed quad for DRAWING only (kills jitter without faking the
+  // "locked" signal). Returns {smooth, locked} — caller draws.
+  const computeOutline = (rawQuad, conf, bw) => {
+    const st = steadyRef.current;
+    if(rawQuad && st.lastRaw && quadMoved(rawQuad, st.lastRaw) < bw * 0.02) st.count++;
+    else st.count = rawQuad ? 1 : 0;
+    st.lastRaw = rawQuad;
+    if(rawQuad){
+      st.smooth = (st.smooth && quadMoved(rawQuad, st.smooth) < bw * 0.08) ? lerpQuad(st.smooth, rawQuad, 0.4) : rawQuad;
+      st.misses = 0;
+    } else {
+      st.misses++;
+      if(st.misses >= 3) st.smooth = null;   // hold the box through brief misses
+    }
+    return { smooth: st.smooth, locked: !!st.smooth && st.count >= 4 && conf >= 0.42 };
+  };
+  const setDet = (b) => { if(detFlagRef.current !== b){ detFlagRef.current = b; setDetected(b); } };
+  const setRdy = (b) => { if(rdyFlagRef.current !== b){ rdyFlagRef.current = b; setReady(b); } };
 
-  // live detection loop — lightweight on main; OpenCV runs in the worker.
-  // Tracks steadiness so the outline can tell the user the optimal moment to
-  // tap (no auto-capture — that fought the user; this just signals "ready").
+  // AMBIENT per-frame: detect + rectify the card in ONE worker round-trip, then
+  // colour-match the rectified crop on the main thread (fast, no OCR) → draw the
+  // green outline + a live name/value badge above the card. A short art_key vote
+  // stabilises the label so it doesn't flicker between siblings.
+  const ambientTick = async (v) => {
+    if(ambBusyRef.current) return;
+    ambBusyRef.current = true;
+    const bw = 720, bh = Math.round(720 * v.videoHeight / v.videoWidth);
+    try {
+      const bmp = await createImageBitmap(v, { resizeWidth: bw, resizeHeight: bh, resizeQuality: "low" });
+      const r = await post("capture", { bitmap: bmp, outW: 360, outH: 504 }, [bmp]);
+      if(!r){ try { bmp.close && bmp.close(); } catch(_e){} return; }
+      const A = ambientRef.current;
+      const o = computeOutline(r.quad || null, r.conf || 0, bw);
+      setDet(!!o.smooth); setRdy(o.locked);
+      let label = null;
+      if(r.buffer && window.CardScanner && window.CardScanner.state.loaded){
+        const c = ambCanvasRef.current || (ambCanvasRef.current = document.createElement("canvas"));
+        c.width = r.width; c.height = r.height;
+        c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
+        let res = [];
+        try { res = window.CardScanner.searchCrop(c, 0, 0, c.width, c.height, 8, 0.12); } catch(_e){}
+        if(res.length){
+          const seen = new Set(), cands = [];
+          for(const x of res){ const k = (x.card.name || "") + "|" + (x.card.version || ""); if(seen.has(k)) continue; seen.add(k); cands.push(x.card); if(cands.length >= 4) break; }
+          const top1 = cands[0];
+          const key = top1.art_key;
+          A.voteWin = (key === A.voteKey) ? A.voteWin + 1 : 1; A.voteKey = key;
+          A.margin = res[1] ? (res[0].color - res[1].color) / (res[0].color || 1) : 1;
+          const g = resolveGroup(top1), p = priceOf(g);
+          const confident = A.voteWin >= 3 && A.margin > 0.1;
+          const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident };
+          previewRef.current = pv;
+          label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident };
+          A.emptyFrames = 0;
+          // push to React only when the stable card changes (avoid per-frame churn)
+          const pk = key + ":" + (confident ? 1 : 0);
+          if(pvKeyRef.current !== pk){ pvKeyRef.current = pk; setPreview(pv); }
+          // opt-in auto-add: confident + steady + not already committed this card
+          if(autoAddRef.current && A.armed && A.voteWin >= 4 && A.margin > 0.16 && A.committedKey !== key && o.locked){
+            commitAmbientRef.current && commitAmbientRef.current(pv);
+          }
+        }
+      } else {
+        A.emptyFrames++;
+      }
+      if(!r.quad){
+        A.emptyFrames++;
+        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.voteWin = 0; }
+      }
+      drawOutline(o.smooth, bw, bh, o.locked, label);
+    } catch(_e){} finally { ambBusyRef.current = false; }
+  };
+
+  // live loop — OpenCV runs in the worker (lesson: never on the main thread; loop
+  // uses setTimeout, never rAF). Ambient = capture+match per frame; Single =
+  // lightweight detect-only outline + tap-to-capture.
   useEffect(() => {
     if(phase !== "scanning" || !workerReady) return;
     let running = true;
     const tick = async () => {
       if(!running) return;
       const v = videoRef.current;
-      if(v && v.videoWidth && !detectBusyRef.current && !captureBusyRef.current && !result){
-        detectBusyRef.current = true;
-        try {
-          const bw = 800, bh = Math.round(800 * v.videoHeight / v.videoWidth);
-          const bmp = await createImageBitmap(v, { resizeWidth: bw, resizeHeight: bh, resizeQuality: "low" });
-          const r = await post("detect", { bitmap: bmp }, [bmp]);
-          if(running && r){
-            const st = steadyRef.current;
-            if(r.quad && quadMoved(r.quad, st.last) < bw * 0.02) st.count++; else st.count = 0;
-            st.last = r.quad;
-            const isReady = !!r.quad && st.count >= 3;
-            drawOutline(r.quad, bw, bh, isReady);
-            setDetected(!!r.quad); setReady(isReady);
-          }
-        } catch(e){}
-        detectBusyRef.current = false;
+      if(v && v.videoWidth && !result){
+        if(modeRef.current === "ambient"){
+          await ambientTick(v);
+        } else if(!detectBusyRef.current && !captureBusyRef.current){
+          detectBusyRef.current = true;
+          try {
+            const bw = 800, bh = Math.round(800 * v.videoHeight / v.videoWidth);
+            const bmp = await createImageBitmap(v, { resizeWidth: bw, resizeHeight: bh, resizeQuality: "low" });
+            const r = await post("detect", { bitmap: bmp }, [bmp]);
+            if(running && r){
+              const o = computeOutline(r.quad || null, r.conf || 0, bw);
+              drawOutline(o.smooth, bw, bh, o.locked);
+              setDet(!!o.smooth); setRdy(o.locked);
+            }
+          } catch(e){}
+          detectBusyRef.current = false;
+        }
       }
-      if(running) loopTimerRef.current = setTimeout(tick, 130);
+      if(running) loopTimerRef.current = setTimeout(tick, modeRef.current === "ambient" ? 150 : 130);
     };
     tick();
     return () => { running = false; clearTimeout(loopTimerRef.current); };
   }, [phase, workerReady, result]);
+
+  // --- ambient feedback + commit + session list ---
+  const ensureAudio = () => {
+    try {
+      if(!audioCtxRef.current){ const AC = window.AudioContext || window.webkitAudioContext; if(AC) audioCtxRef.current = new AC(); }
+      if(audioCtxRef.current && audioCtxRef.current.state === "suspended") audioCtxRef.current.resume();
+    } catch(_e){}
+  };
+  const pingFeedback = () => {
+    try { navigator.vibrate && navigator.vibrate(30); } catch(_e){}
+    try {
+      const ctx = audioCtxRef.current; if(ctx){
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "sine"; o.frequency.value = 880;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.11, ctx.currentTime + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.16);
+        o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.17);
+      }
+    } catch(_e){}
+    setFlash(true); setTimeout(() => setFlash(false), 230);
+  };
+  // add (or +1) a card to the running session list + the collection. De-dupes by
+  // (card_id:printing) so a playset of duplicates increments one row to ×N.
+  const addToSession = (card, cands) => {
+    const g = resolveGroup(card);
+    const pr = g ? (g.normal && g.normal.tcg_printing) || (g.foil && g.foil.tcg_printing) : "Normal";
+    const cardId = g ? g.card_id : card.id;
+    if(!cardId || !pr) return;
+    const key = cardId + ":" + pr;
+    updateQty(cardId, pr, ((collection && collection[key]) || 0) + 1);
+    const p = priceOf(g);
+    const eid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random());
+    setSession(prev => {
+      const i = prev.findIndex(x => x.key === key);
+      if(i >= 0){ const cp = prev.slice(); const row = { ...cp[i], qty: cp[i].qty + 1 }; cp.splice(i, 1); return [row, ...cp]; }
+      return [{ eid, key, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(card)),
+        rarity: card.rarity, low: p.low, mkt: p.mkt, qty: 1, art_key: card.art_key,
+        thumb: SCAN_THUMB(card.id), cands: (cands || []).slice(0, 4), expanded: false }, ...prev];
+    });
+  };
+  // commit the current ambient preview (tap on shutter/stage, or a confident
+  // auto-add). Fires the ping + flash, logs the flywheel sample, re-arms shortly
+  // so a held playset can keep incrementing.
+  const commitAmbient = (pv) => {
+    if(!pv || !pv.card) return;
+    // arm the refractory FIRST (even when signed out) so an auto-add streak can't
+    // spam onSignIn / re-add the same card every frame; re-arm shortly after so a
+    // held playset of duplicates keeps incrementing.
+    const A = ambientRef.current;
+    A.armed = false; A.committedKey = pv.card.art_key;
+    clearTimeout(A.rearmTimer);
+    A.rearmTimer = setTimeout(() => { ambientRef.current.armed = true; }, 850);
+    if(!user){ onSignIn && onSignIn(); return; }
+    ensureAudio();
+    rectRef.current = ambCanvasRef.current || rectRef.current;
+    addToSession(pv.card, pv.cands);
+    pingFeedback();
+    if(rectRef.current) logScanSample(pv.card.id, pv.card.id, false, null);
+  };
+  commitAmbientRef.current = commitAmbient;
+  const tapCommit = () => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    if(previewRef.current) commitAmbient(previewRef.current);
+  };
+  // user taps an alternate in a session row → fix the collection (move this row's
+  // qty from the wrong card to the right one) and update the row.
+  const correctEntry = (eid, newCard) => {
+    setSession(prev => {
+      const i = prev.findIndex(x => x.eid === eid); if(i < 0) return prev;
+      const old = prev[i];
+      const g = resolveGroup(newCard);
+      const pr = g ? (g.normal && g.normal.tcg_printing) || (g.foil && g.foil.tcg_printing) : "Normal";
+      const cardId = g ? g.card_id : newCard.id;
+      if(!cardId || !pr) return prev;
+      const newKey = cardId + ":" + pr;
+      if(newKey === old.key){ const cp = prev.slice(); cp[i] = { ...old, expanded: false }; return cp; }
+      updateQty(old.cardId, old.printing, Math.max(0, ((collection && collection[old.key]) || 0) - old.qty));
+      updateQty(cardId, pr, ((collection && collection[newKey]) || 0) + old.qty);
+      const p = priceOf(g);
+      const cp = prev.slice();
+      cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
+        rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB(newCard.id), expanded: false };
+      return cp;
+    });
+  };
+  const undoLast = () => {
+    setSession(prev => {
+      if(!prev.length) return prev;
+      const [last, ...rest] = prev;
+      updateQty(last.cardId, last.printing, Math.max(0, ((collection && collection[last.key]) || 0) - 1));
+      ambientRef.current.armed = true; ambientRef.current.committedKey = null;
+      return last.qty > 1 ? [{ ...last, qty: last.qty - 1 }, ...rest] : rest;
+    });
+  };
 
   // guide-crop fallback canvas (main thread, no opencv) — what the user framed
   const guideCropCanvas = () => {
@@ -9415,7 +9659,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   }, [raw]);
   captureRef.current = capture;
 
-  const resume = () => { setResult(null); setReady(false); steadyRef.current = { count: 0, last: null }; setStatus("Place ONE card on a plain surface"); };
+  const resume = () => { setResult(null); setRdy(false); steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 }; setStatus("Place ONE card on a plain surface"); };
+  // switch scan modes — clear any single-mode result + ambient preview/vote so the
+  // loop restarts cleanly into the chosen mode.
+  const switchMode = (m) => {
+    if(m === mode) return;
+    setResult(null); setPreview(null); previewRef.current = null; pvKeyRef.current = "";
+    steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 };
+    ambientRef.current = { voteKey: null, voteWin: 0, margin: 0, armed: true, committedKey: null, emptyFrames: 0, rearmTimer: 0 };
+    if(m === "ambient") ensureAudio();
+    setMode(m);
+    setStatus(m === "ambient" ? "Hover over a card" : "Place ONE card on a plain surface");
+  };
 
   // data flywheel: log the confirmed (rectified photo -> card) example so we can
   // train a real-photo matcher later. Best-effort; never blocks the add.
@@ -9506,6 +9761,49 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           </button>`)}
         </div></div>` : null}
     </div>`;
+  } else if(mode === "ambient"){
+    const money = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
+    const sessTotal = session.reduce((s, x) => s + (Number(x.mkt ?? x.low ?? 0) * x.qty), 0);
+    const sessCount = session.reduce((s, x) => s + x.qty, 0);
+    const pv = preview;
+    const toggleRow = (eid) => setSession(prev => prev.map(y => y.eid === eid ? { ...y, expanded: !y.expanded } : y));
+    below = html`<div class="scanner-ambient">
+      <div class="scanner-amb-bar">
+        <div class="scanner-amb-now">
+          ${pv ? html`<span class="scanner-amb-now-name">${lbl(pv.disp)}</span><span class="scanner-amb-now-price">${money(pv.mkt ?? pv.low)}</span>`
+               : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : "Loading detector…")}</span>`}
+        </div>
+        ${user ? html`<button class=${"scanner-shutter scanner-amb-add" + (ready && pv ? " ready" : "")} onClick=${tapCommit} disabled=${!pv} aria-label="Add this card">＋</button>`
+               : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to scan</button>`}
+        <label class="scanner-amb-auto"><input type="checkbox" checked=${autoAdd} onChange=${e => setAutoAdd(e.target.checked)}/> Auto</label>
+      </div>
+      <div class="scanner-session">
+        <div class="scanner-session-head">
+          <span class="scanner-session-count">${sessCount} card${sessCount === 1 ? "" : "s"}</span>
+          <span class="scanner-session-total">$${sessTotal.toFixed(2)}</span>
+          ${session.length ? html`<button class="scanner-link" onClick=${undoLast}>Undo</button>` : null}
+        </div>
+        <div class="scanner-session-list">
+          ${session.length === 0
+            ? html`<div class="scanner-session-empty">Point at a card and tap <b>＋</b> (or tap the card in view). Tap a row to fix a wrong match.</div>`
+            : session.map(x => html`<div class=${"scanner-session-row" + (Number(x.mkt ?? x.low ?? 0) >= 20 ? " valuable" : "")} key=${x.eid}>
+                <img class="scanner-session-thumb" src=${x.thumb} loading="lazy" onClick=${() => toggleRow(x.eid)}/>
+                <span class="scanner-session-name" onClick=${() => toggleRow(x.eid)}>${x.name}</span>
+                <span class="scanner-session-qty">×${x.qty}</span>
+                <span class="scanner-session-price">${money(x.mkt ?? x.low)}</span>
+                ${x.expanded && x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts">
+                  <div class="scanner-session-alts-lbl">Wrong card? Tap the right one:</div>
+                  <div class="scanner-cand-row">
+                    ${x.cands.map(cc => html`<button key=${cc.art_key} class=${"scanner-cand" + (cc.art_key === x.art_key ? " top" : "")} onClick=${() => correctEntry(x.eid, cc)}>
+                      <img src=${SCAN_THUMB(cc.id)} alt=${lbl(toDisp(cc))} loading="lazy"/>
+                      <span class="scanner-cand-name">${lbl(toDisp(cc))}</span>
+                    </button>`)}
+                  </div>
+                </div>` : null}
+              </div>`)}
+        </div>
+      </div>
+    </div>`;
   } else {
     below = html`<div class="scanner-scanbar">
       <div class=${"scanner-hint" + (ready ? " ready" : "")}>${busy ? "Reading card…" : (ready ? "✓ Locked on — tap to scan" : (detected ? "Hold steady…" : status))}</div>
@@ -9514,16 +9812,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>`;
   }
 
+  const stageTap = (mode === "ambient" && !result && user) ? tapCommit : null;
   return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
     <div class="scanner-head">
       <span class="scanner-title">Scan a card</span>
+      ${phase === "scanning" ? html`<div class="scanner-mode-seg" role="tablist">
+        <button class=${"scanner-mode-btn" + (mode === "ambient" ? " active" : "")} onClick=${() => switchMode("ambient")}>Stack scan</button>
+        <button class=${"scanner-mode-btn" + (mode === "single" ? " active" : "")} onClick=${() => switchMode("single")}>Single</button>
+      </div>` : null}
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
-    <div class="scanner-stage" ref=${stageRef}>
+    <div class="scanner-stage" ref=${stageRef} onClick=${stageTap}>
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? "card detected" : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (mode === "ambient" ? "tap to add" : "card detected") : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
     </div>
