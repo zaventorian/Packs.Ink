@@ -57,7 +57,15 @@ def color_sig(img: Image.Image) -> np.ndarray:
     a = np.asarray(
         img.convert("RGB").resize((COLOR_GRID, COLOR_GRID), Image.BILINEAR),
         dtype=np.float32,
-    ).reshape(-1)                          # 432
+    )                                      # 12x12x3
+    # gray-world white balance: cancel a global colour cast (warm indoor light /
+    # phone auto-WB) by scaling each channel to a common mean. Applied to BOTH the
+    # reference art and the camera query, so they live in the same cast-invariant
+    # space. Without this, a warm-tinted phone photo matches yellow/amber art
+    # regardless of the real card (verified: real scans were 2% -> 30% top-1).
+    m = a.reshape(-1, 3).mean(0)
+    a = a * (m.mean() / np.clip(m, 1e-3, None))
+    a = a.reshape(-1)                      # 432
     a -= a.mean()
     n = np.linalg.norm(a)
     return a / n if n > 1e-6 else a

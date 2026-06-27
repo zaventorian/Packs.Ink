@@ -31,7 +31,7 @@ OUT = REPO / "scanner"
 sys.path.insert(0, str(HERE))
 import descriptors as D  # noqa: E402
 
-INDEX_VERSION = 1
+INDEX_VERSION = 2   # v2 = gray-world white-balanced colour sig (cast-invariant)
 SCALE = 127.0 / 0.25   # quantization: |components| rarely exceed ~0.25
 
 

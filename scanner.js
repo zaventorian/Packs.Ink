@@ -19,6 +19,7 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
+  var IDXV = "?v=2"; // bump when color.bin/index.json content changes (e.g. WB rebuild)
 
   var state = {
     loaded: false,
@@ -62,16 +63,24 @@
     smallCtx.drawImage(tmp, 0, 0, mid, mid, 0, 0, GRID, GRID);
     var data = smallCtx.getImageData(0, 0, GRID, GRID).data; // RGBA, row-major
     var v = new Float32Array(DIMS);
-    var mean = 0, p, c, val;
-    for (p = 0; p < GRID * GRID; p++) {
-      for (c = 0; c < 3; c++) {
-        val = data[p * 4 + c];
-        v[p * 3 + c] = val;
-        mean += val;
-      }
+    var npx = GRID * GRID, p, i;
+    // gray-world white balance: scale each channel to a common mean so a warm/cool
+    // colour cast (indoor light / phone auto-WB) doesn't make every card match the
+    // yellow/amber reference art. MUST match descriptors.py color_sig — the
+    // reference index is built the same way. (Real scans: 2% -> 30% top-1.)
+    var mR = 0, mG = 0, mB = 0;
+    for (p = 0; p < npx; p++) { mR += data[p * 4]; mG += data[p * 4 + 1]; mB += data[p * 4 + 2]; }
+    mR /= npx; mG /= npx; mB /= npx;
+    var gray = (mR + mG + mB) / 3;
+    var sR = gray / (mR || 1e-3), sG = gray / (mG || 1e-3), sB = gray / (mB || 1e-3);
+    var mean = 0, r, g, b;
+    for (p = 0; p < npx; p++) {
+      r = data[p * 4] * sR; g = data[p * 4 + 1] * sG; b = data[p * 4 + 2] * sB;
+      v[p * 3] = r; v[p * 3 + 1] = g; v[p * 3 + 2] = b;
+      mean += r + g + b;
     }
     mean /= DIMS;
-    var norm = 0, i;
+    var norm = 0;
     for (i = 0; i < DIMS; i++) { v[i] -= mean; norm += v[i] * v[i]; }
     norm = Math.sqrt(norm) || 1;
     for (i = 0; i < DIMS; i++) v[i] /= norm;
@@ -105,9 +114,9 @@
     if (state.loaded) return Promise.resolve(state);
     if (state.loading) return state.loading;
     state.loading = Promise.all([
-      fetch(BASE + "index.json").then(function (r) { return r.json(); }),
-      fetch(BASE + "color.bin").then(function (r) { return r.arrayBuffer(); }),
-      fetch(BASE + "dhash.bin").then(function (r) { return r.arrayBuffer(); }),
+      fetch(BASE + "index.json" + IDXV).then(function (r) { return r.json(); }),
+      fetch(BASE + "color.bin" + IDXV).then(function (r) { return r.arrayBuffer(); }),
+      fetch(BASE + "dhash.bin" + IDXV).then(function (r) { return r.arrayBuffer(); }),
     ]).then(function (res) {
       var man = res[0];
       state.count = man.count;
