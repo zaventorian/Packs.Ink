@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=246">
+<link rel="stylesheet" href="styles.css?v=247">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=246"></script>
-<script src="scanner.js?v=246"></script>
-<script src="scanner-cv.js?v=246"></script>
+<script src="logo.js?v=247"></script>
+<script src="scanner.js?v=247"></script>
+<script src="scanner-cv.js?v=247"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=246";
+const SCAN_WORKER_URL = "scanner-worker.js?v=247";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9191,6 +9191,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [autoAdd, setAutoAdd] = useState(false); // opt-in: auto-add on a confident, steady lock
   const [flash, setFlash] = useState(false);     // green flash on a confident ping
   const [frameHint, setFrameHint] = useState(""); // coaching ("move closer", "shiny — tilt")
+  const [savedMsg, setSavedMsg] = useState("");   // "N cards saved to your collection ✓"
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
@@ -9567,7 +9568,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const addToSession = (card, cands) => {
     const { g, pr, cardId, key } = entryKeyOf(card);
     if(!key) return;
-    updateQty(cardId, pr, ((collection && collection[key]) || 0) + 1);
+    // NOTE: scanning only STAGES into the session list — it does NOT write to the
+    // collection. Nothing touches the real collection until the user reviews the
+    // list and taps "Save to collection" (saveSessionToCollection).
     const p = priceOf(g);
     const eid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random());
     setSession(prev => {
@@ -9623,10 +9626,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const newKey = cardId + ":" + pr;
     const cp = prev.slice();
     if(newKey === old.key){ cp[i] = { ...old, expanded: false }; return cp; }
-    updateQty(old.cardId, old.printing, Math.max(0, ((collection && collection[old.key]) || 0) - old.qty));
-    updateQty(cardId, pr, ((collection && collection[newKey]) || 0) + old.qty);
-    // flywheel hard-negative: the scanner guessed `old.predicted`, the truth is
-    // `newCard` — log it with the photo we stashed on this row at scan time.
+    // correcting only re-labels the STAGED row (no collection write — that happens
+    // on Save). flywheel hard-negative: the scanner guessed `old.predicted`, the
+    // truth is `newCard` — log it with the photo we stashed on this row.
     if(old._blob) uploadSample(newCard.id, old.predicted || old.cardId, true, pr, old._blob);
     const p = priceOf(g);
     cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
@@ -9677,10 +9679,27 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     setSession(prev => {
       if(!prev.length) return prev;
       const [last, ...rest] = prev;
-      updateQty(last.cardId, last.printing, Math.max(0, ((collection && collection[last.key]) || 0) - 1));
+      // staging-only: just drop from the list (nothing was written to the collection)
       ambientRef.current.armed = true; ambientRef.current.committedKey = null;
       return last.qty > 1 ? [{ ...last, qty: last.qty - 1 }, ...rest] : rest;
     });
+  };
+  // commit the whole STAGED session list to the real collection — the only place
+  // scanning writes to the collection, and only on an explicit tap.
+  const removeRow = (eid) => setSession(prev => prev.filter(x => x.eid !== eid));
+  const saveSessionToCollection = () => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    if(!session.length) return;
+    let n = 0;
+    for(const x of session){
+      const cur = (collection && collection[x.key]) || 0;
+      updateQty(x.cardId, x.printing, cur + x.qty);
+      n += x.qty;
+    }
+    setSavedMsg(n + " card" + (n === 1 ? "" : "s") + " saved to your collection ✓");
+    setSession([]);
+    ambientRef.current.committedKey = null; ambientRef.current.armed = true;
+    setTimeout(() => setSavedMsg(""), 2800);
   };
 
   // guide-crop fallback canvas (main thread, no opencv) — what the user framed
@@ -9902,18 +9921,21 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       </div>
       <div class="scanner-session">
         <div class="scanner-session-head">
-          <span class="scanner-session-count">${sessCount} card${sessCount === 1 ? "" : "s"}</span>
+          <span class="scanner-session-count">${sessCount} staged</span>
           <span class="scanner-session-total">$${sessTotal.toFixed(2)}</span>
           ${session.length ? html`<button class="scanner-link" onClick=${undoLast}>Undo</button>` : null}
+          ${session.length && user ? html`<button class="scanner-save-btn" onClick=${saveSessionToCollection}>Save ${sessCount} →</button>` : null}
         </div>
+        ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
         <div class="scanner-session-list">
           ${session.length === 0
-            ? html`<div class="scanner-session-empty">Point at a card and tap <b>＋</b> (or tap the card in view). Tap a row to fix a wrong match.</div>`
+            ? html`<div class="scanner-session-empty">${savedMsg ? "Saved. Keep scanning to stage more." : html`Point at a card and tap <b>＋</b> to stage it. Fix any wrong matches, then <b>Save</b> — <u>nothing is added to your collection until you tap Save</u>.`}</div>`
             : session.map(x => html`<div class=${"scanner-session-row" + (Number(x.mkt ?? x.low ?? 0) >= 20 ? " valuable" : "")} key=${x.eid}>
                 <img class="scanner-session-thumb" src=${x.thumb} loading="lazy" onClick=${() => toggleRow(x.eid)}/>
                 <span class="scanner-session-name" onClick=${() => toggleRow(x.eid)}>${x.name}</span>
                 <span class="scanner-session-qty">×${x.qty}</span>
                 <span class="scanner-session-price">${money(x.mkt ?? x.low)}</span>
+                <button class="scanner-session-rm" onClick=${() => removeRow(x.eid)} aria-label="Remove from list">×</button>
                 ${x.expanded && x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts">
                   <div class="scanner-session-alts-lbl">Wrong card? Tap the right one:</div>
                   <div class="scanner-cand-row">
@@ -9950,7 +9972,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (mode === "ambient" ? "tap to add" : "card detected") : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (mode === "ambient" ? "tap to stage" : "card detected") : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
       ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
