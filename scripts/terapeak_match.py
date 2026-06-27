@@ -136,13 +136,18 @@ def set_hint(title: str):
         if "collection" in t or re.search(r"\b202[45]\b", t):
             return "D23 Collection"
         return "Promo Set 1"
-    if re.search(r"\bp1\b|p1[-\s]promo|gencon|gamescom|disney\s?100|\bd100\b", t):
+    if re.search(r"\bp1\b|p1[-\s]promo|gencon|gamescom|disney\s?100|\bd100\b|tokyo\s*toy\s*show", t):
         return "Promo Set 1"
     if re.search(r"\bp2\b|p2[-\s]promo", t):
         return "Promo Set 2"
     if re.search(r"\bp3\b|p3[-\s]promo", t):
         return "Promo Set 3"
-    if "challenge" in t:
+    # Lorcana Challenge promos. C2 (Year 3) is a separate set from C1; detect it
+    # first. Titles use the community number ("N/C1") not the card's Lorcast #, and
+    # "Top Prize" (foil) / "Prize Wall" (non-foil) are Challenge-exclusive terms.
+    if re.search(r"\bc2\b|/\s*c2|year\s*3", t):
+        return "Lorcana Challenge Year 3"
+    if re.search(r"\bc1\b|/\s*c1|top\s*prize|prize\s*wall", t) or "challenge" in t:
         return "Challenge Promo"
     # EN <n> -> nth mainline set
     m = re.search(r"\ben[\s-]?(\d{1,2})\b", t)
@@ -254,6 +259,18 @@ def best_match(title, by_cn, inv):
         set_miss = bool(hint) and c["_set"] != hint
         d23_pref = d23_2022 and c["_set"] == "Promo Set 1" and c["_cn"] in D23_2022_CNS
         crar = c.get("_rarity") or ""
+        # Regional-edition tiebreak: siblings numbered "25ja"/"25zh" share name +
+        # version, so only the title's language word distinguishes them.
+        reg_pref = 0.0
+        rm = re.match(r"^\d+([A-Za-z]{2})$", c.get("_cn") or "")
+        if rm:
+            lang = rm.group(1).lower()
+            tlang = ("ja" if re.search(r"japan|jpn|tokyo\s*toy|\bja\b|/\s*ja|p1[-\s]?ja", tl)
+                     else "zh" if re.search(r"chinese|\bzh\b|simplified|/\s*zh", tl) else None)
+            if tlang == lang:
+                reg_pref = 0.5
+            elif tlang and tlang != lang:
+                reg_pref = -0.6
         # Rarity gate: title names a chase rarity → prefer that exact rarity, push
         # away the base + other chases. Plain title → push away chase cards.
         # EXCEPTION: a collector# hit is a STRONGER rarity signal than the keyword.
@@ -274,7 +291,7 @@ def best_match(title, by_cn, inv):
             rarity_ok = (crar not in CHASE_RARITIES)
             rarity_pref = 0.0 if rarity_ok else -0.5
         sc = ov + (0.4 if cn_hit else 0.0) + (0.4 if set_hit else 0.0) \
-            + (0.6 if d23_pref else 0.0) + rarity_pref
+            + (0.6 if d23_pref else 0.0) + rarity_pref + reg_pref
         if set_miss and ov < 0.9:
             sc -= 0.3
         scored.append((c, ov, cn_hit, set_hit, sc, nmatch, d23_pref, rarity_ok))
@@ -310,7 +327,16 @@ def match_one(title, by_cn, inv):
         return None, round(sc, 3), False
     scn = strong_collectors(title)
     if scn and best["_cn"] not in scn:
-        return None, round(sc, 3), True   # explicit-CN conflict → reject, don't guess
+        # The title's explicit collector# disagrees with the matched card's catalog #.
+        # Forgive it ONLY when the title's set also resolves to the card's set — then
+        # the mismatch is a numbering-scheme artifact, not a wrong card: Challenge
+        # promos store the LORCAST # (25/41/42/43) while titles use the community
+        # "N/C1" #, and regional promos store "25ja"/"25zh" vs a title's plain "#25".
+        # A cross-SET disagreement (e.g. "Top Prize 4/C1" landing on mainline #18,
+        # whose set is The First Chapter) is a real conflict and still rejected.
+        hint = set_hint(title)
+        if not (hint and best["_set"] == hint):
+            return None, round(sc, 3), True
     return best, round(sc, 3), False
 
 
