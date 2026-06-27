@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=243">
+<link rel="stylesheet" href="styles.css?v=244">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -165,9 +165,9 @@
 <script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
   integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
   crossorigin="anonymous"></script>
-<script src="logo.js?v=243"></script>
-<script src="scanner.js?v=243"></script>
-<script src="scanner-cv.js?v=243"></script>
+<script src="logo.js?v=244"></script>
+<script src="scanner.js?v=244"></script>
+<script src="scanner-cv.js?v=244"></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -9119,7 +9119,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=243";
+const SCAN_WORKER_URL = "scanner-worker.js?v=244";
 // Tesseract.js is lazy-loaded only when the (admin-gated) scanner opens — big
 // lib, most users never see the scanner.
 function loadTesseract(){
@@ -9143,7 +9143,7 @@ function scanRRF(lists, weights, k){
   return Array.from(score.entries()).sort((a, b) => b[1] - a[1]).map(e => ({ id: e[0], score: e[1] }));
 }
 
-function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail }){
+function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
   const overlayRef = useRef(null);
@@ -9933,6 +9933,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <button class=${"scanner-mode-btn" + (mode === "ambient" ? " active" : "")} onClick=${() => switchMode("ambient")}>Stack scan</button>
         <button class=${"scanner-mode-btn" + (mode === "single" ? " active" : "")} onClick=${() => switchMode("single")}>Single</button>
       </div>` : null}
+      ${onOpenReview ? html`<button class="scanner-reviewlink" onClick=${onOpenReview} title="Review past scans">Review</button>` : null}
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
     <div class="scanner-stage" ref=${stageRef} onClick=${stageTap}>
@@ -9946,6 +9947,123 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
     </div>
     ${below}
+  </div>`;
+}
+
+// --- Scan Review: page through the flywheel's saved scan photos and label each
+// Right/Wrong (admin testing tool). Decoupled from scanning so you rip through a
+// stack fast, then judge them here with arrow keys → honest accuracy + clean
+// labels (corrected=true rows become hard-negatives for a future matcher). ------
+function ScanReviewModal({ raw, onClose }){
+  const [items, setItems] = useState(null);   // scan_samples rows (newest first)
+  const [idx, setIdx] = useState(0);
+  const [imgUrl, setImgUrl] = useState(null);
+  const [picking, setPicking] = useState(false);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [onlyUnreviewed, setOnlyUnreviewed] = useState(true);
+
+  const nameOf = useMemo(() => { const m = new Map();
+    for(const r of (raw || [])){ if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, (r["Product Name"] || r.name || r.card_id)); }
+    return m; }, [raw]);
+
+  useEffect(() => { (async () => {
+    if(!sbClient){ setItems([]); return; }
+    try {
+      const { data, error } = await sbClient.from("scan_samples")
+        .select("id,card_id,predicted_card_id,corrected,reviewed,image_path,created_at,printing")
+        .order("created_at", { ascending: false }).limit(400);
+      setItems(error ? [] : (data || []));
+    } catch(_e){ setItems([]); }
+  })(); }, []);
+
+  const view = useMemo(() => (onlyUnreviewed && items) ? items.filter(x => !x.reviewed) : (items || []), [items, onlyUnreviewed]);
+  const cur = view[idx] || null;
+
+  useEffect(() => {
+    let cancel = false; setImgUrl(null);
+    (async () => {
+      if(!cur || !cur.image_path || !sbClient) return;
+      try { const { data } = await sbClient.storage.from("scan-samples").createSignedUrl(cur.image_path, 600); if(!cancel && data) setImgUrl(data.signedUrl); } catch(_e){}
+    })();
+    return () => { cancel = true; };
+  }, [cur && cur.id]);
+
+  const mark = async (corrected, truthId) => {
+    if(!cur || busy) return; setBusy(true);
+    const patch = { reviewed: true, corrected: !!corrected, reviewed_at: new Date().toISOString() };
+    if(truthId) patch.card_id = truthId; else if(!corrected && cur.predicted_card_id) patch.card_id = cur.predicted_card_id;
+    try { if(sbClient) await sbClient.from("scan_samples").update(patch).eq("id", cur.id); } catch(_e){}
+    setItems(prev => prev.map(x => x.id === cur.id ? { ...x, ...patch } : x));
+    setBusy(false); setPicking(false); setQ("");
+    // unreviewed-only: the row leaves the list so idx already points to the next;
+    // all-mode: step forward manually.
+    if(!onlyUnreviewed) setIdx(i => i + 1);
+  };
+
+  useEffect(() => {
+    const h = (e) => {
+      if(e.key === "Escape"){ if(picking){ setPicking(false); setQ(""); } else onClose(); return; }
+      if(picking || !cur) return;
+      if(e.key === "ArrowRight"){ e.preventDefault(); mark(false); }
+      else if(e.key === "ArrowLeft"){ e.preventDefault(); setPicking(true); }
+    };
+    window.addEventListener("keydown", h); return () => window.removeEventListener("keydown", h);
+  });
+
+  const truthResults = useMemo(() => {
+    const s = q.trim().toLowerCase(); if(s.length < 2) return [];
+    const seen = new Set(), out = [];
+    for(const r of (raw || [])){ const nm = (r["Product Name"] || "").toLowerCase(); if(r.card_id && nm.includes(s) && !seen.has(r.card_id)){ seen.add(r.card_id); out.push(r); if(out.length >= 10) break; } }
+    return out;
+  }, [q, raw]);
+
+  const reviewedRows = (items || []).filter(x => x.reviewed);
+  const rightN = reviewedRows.filter(x => !x.corrected).length;
+  const accPct = reviewedRows.length ? Math.round(100 * rightN / reviewedRows.length) : null;
+
+  let body;
+  if(items === null) body = html`<div class="scanrev-empty">Loading scans…</div>`;
+  else if(!items.length) body = html`<div class="scanrev-empty">No scans yet.<br/>Scan some cards (signed in), then come back to review them here.</div>`;
+  else if(!cur) body = html`<div class="scanrev-empty">${onlyUnreviewed ? "✓ All scans reviewed." : "End of list."}</div>`;
+  else {
+    const guess = nameOf.get(cur.predicted_card_id) || cur.predicted_card_id || "—";
+    body = html`<div class="scanrev-card">
+      <div class="scanrev-img-wrap">${imgUrl ? html`<img class="scanrev-img" src=${imgUrl} alt="scanned card"/>` : html`<div class="scanrev-img-ph">${cur.image_path ? "loading…" : "no photo saved"}</div>`}</div>
+      <div class="scanrev-guess">Scanner guessed<br/><b>${guess}</b>${cur.reviewed ? html` <span class=${"scanrev-tag " + (cur.corrected ? "w" : "r")}>${cur.corrected ? "marked wrong" : "marked right"}</span>` : null}</div>
+      ${picking ? html`<div class="scanrev-pick">
+        <input class="scanrev-search" placeholder="What was it really? Type the card name…" value=${q}
+          onInput=${e => setQ(e.target.value)} onKeyDown=${e => { if(e.key === "Enter" && truthResults[0]) mark(true, truthResults[0].card_id); }} autoFocus/>
+        <div class="scanrev-results">
+          ${truthResults.map(r => html`<button class="scanrev-result" key=${r.card_id} onClick=${() => mark(true, r.card_id)}>
+            ${(r.img_small || r.img_normal) ? html`<img src=${r.img_small || r.img_normal} loading="lazy"/>` : html`<div class="scanrev-result-ph"></div>`}
+            <span>${r["Product Name"]}</span>
+          </button>`)}
+          ${q.trim().length >= 2 && !truthResults.length ? html`<div class="scanrev-noresult">No match — keep typing</div>` : null}
+        </div>
+        <button class="scanrev-link scanrev-cancel" onClick=${() => { setPicking(false); setQ(""); }}>Cancel</button>
+      </div>` : html`<div class="scanrev-actions">
+        <button class="scanrev-btn wrong" onClick=${() => setPicking(true)}>✗ Wrong</button>
+        <button class="scanrev-btn right" onClick=${() => mark(false)} disabled=${busy}>✓ Right</button>
+      </div>`}
+    </div>`;
+  }
+
+  return html`<div class="scanrev-overlay" role="dialog" aria-label="Review scans">
+    <div class="scanner-head">
+      <span class="scanner-title">Review scans</span>
+      <div class="scanrev-meta">
+        ${accPct != null ? html`<span class="scanrev-acc">${rightN}/${reviewedRows.length} · ${accPct}% right</span>` : null}
+        <label class="scanrev-toggle"><input type="checkbox" checked=${onlyUnreviewed} onChange=${e => { setOnlyUnreviewed(e.target.checked); setIdx(0); }}/> unreviewed only</label>
+      </div>
+      <button class="scanner-close" onClick=${onClose} aria-label="Close">×</button>
+    </div>
+    <div class="scanrev-body">${body}</div>
+    ${cur ? html`<div class="scanrev-foot">
+      <button class="scanrev-link" onClick=${() => setIdx(i => Math.max(0, i - 1))} disabled=${idx <= 0}>‹ Prev</button>
+      <span class="scanrev-pos">${idx + 1} / ${view.length}${picking ? "" : "  ·  ← wrong   → right"}</span>
+      <button class="scanrev-link" onClick=${() => setIdx(i => Math.min(view.length - 1, i + 1))} disabled=${idx >= view.length - 1}>Skip ›</button>
+    </div>` : null}
   </div>`;
 }
 
@@ -29839,6 +29957,7 @@ function App(){
   const [incomingCardsSearch, setIncomingCardsSearch] = useState(null);
   const [incomingCardsOpenId, setIncomingCardsOpenId] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
+  const [scanReviewOpen, setScanReviewOpen] = useState(false);
   const openCardsWithSearch = useCallback((query, openCardId) => {
     setIncomingCardsSearch(query || "");
     setIncomingCardsOpenId(openCardId || null);
@@ -31497,7 +31616,10 @@ function App(){
       raw=${raw} collection=${collection} updateQty=${updateQty}
       user=${user} onSignIn=${signIn}
       onClose=${()=>setScanOpen(false)}
+      onOpenReview=${()=>{ setScanOpen(false); setScanReviewOpen(true); }}
       onOpenDetail=${(g)=>{ setScanOpen(false); openCardsWithSearch("", g.card_id); }}/>`}
+    ${scanReviewOpen && isGradedAdmin && html`<${ScanReviewModal}
+      raw=${raw} onClose=${()=>setScanReviewOpen(false)}/>`}
     ${loading && html`<div class="loading-status">
       ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
     </div>`}
