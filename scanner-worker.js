@@ -57,64 +57,56 @@ function quadOk(q, minSide) {
   return true;
 }
 
-// Detect best card quad. mat is RGBA at the bitmap resolution; we downscale a
-// grayscale copy to ~480px for contour finding, then scale the quad back up.
-function detectQuad(mat) {
-  const W = mat.cols, H = mat.rows;
-  const procW = 480, scale = procW / W, procH = Math.round(H * scale);
-  let small = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
-  let contours = new cv.MatVector(), hier = new cv.Mat();
+// median grey level of a single-channel CV_8U Mat (for adaptive Canny).
+function medianOfMat(m) {
+  const hist = new Uint32Array(256), d = m.data, n = d.length;
+  for (let i = 0; i < n; i++) hist[d[i]]++;
+  let acc = 0; const half = n / 2;
+  for (let v = 0; v < 256; v++) { acc += hist[v]; if (acc >= half) return v; }
+  return 128;
+}
+
+// Score every contour on an edge map and return the best card-shaped quad.
+// `gates` = {rectMin, fillMin, arTol, areaMin}. Rejects non-card shapes:
+// rectangularity, ~5:7 aspect (orientation-agnostic via min/max so landscape
+// Locations also pass), and "fill" (the contour must mostly fill the quad — drops
+// a minAreaRect bounding a sprawling stack). A SOFT centre-bias prefers the card
+// the user is pointing at; a clean 4-pt quad beats a minAreaRect fallback (but the
+// fallback still wins when it's the only read).
+function scanForQuad(edges, scale, procW, procH, gates) {
+  const contours = new cv.MatVector(), hier = new cv.Mat();
+  const imgArea = procW * procH;
+  const cx = procW / 2, cy = procH / 2, halfDiag = Math.hypot(cx, cy);
   let best = null, bestScore = 0, bestLandscape = false;
+  const consider = (q, contourArea, fromClean) => {
+    const w1 = dist(q[0], q[1]), w2 = dist(q[3], q[2]);
+    const h1 = dist(q[0], q[3]), h2 = dist(q[1], q[2]);
+    const wq = (w1 + w2) / 2, hq = (h1 + h2) / 2;
+    if (Math.min(wq, hq) < 20) return;
+    const rect = (Math.min(w1, w2) / Math.max(w1, w2)) * (Math.min(h1, h2) / Math.max(h1, h2));
+    if (rect < gates.rectMin) return;
+    const ar = Math.min(wq, hq) / Math.max(wq, hq);
+    const arScore = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / gates.arTol);
+    if (arScore <= 0) return;
+    const quadArea = wq * hq, fill = Math.min(1, contourArea / (quadArea + 1e-6));
+    if (fill < gates.fillMin) return;
+    const qx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4;
+    const qy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
+    const centreScore = 1 - Math.min(1, Math.hypot(qx - cx, qy - cy) / halfDiag);
+    let score = arScore * 0.3 + rect * 0.22 + fill * 0.16 + Math.min(1, quadArea / imgArea) * 0.1 + centreScore * 0.22;
+    if (!fromClean) score *= 0.92;
+    if (score > bestScore) {
+      bestScore = score;
+      best = q.map((p) => ({ x: p.x / scale, y: p.y / scale }));
+      bestLandscape = wq > hq;
+    }
+  };
   try {
-    cv.resize(mat, small, new cv.Size(procW, procH));
-    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
-    // boost local contrast so the card's edges survive dim / uneven lighting —
-    // edge detection is the bottleneck in low light, and CLAHE makes the card
-    // border detectable when raw Canny would miss it entirely.
-    const cl = new cv.CLAHE(3.0, new cv.Size(8, 8));
-    cl.apply(gray, gray); cl.delete();
-    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-    cv.Canny(blur, edges, 40, 120);
-    const k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
-    cv.dilate(edges, edges, k); k.delete();
     cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
-    const imgArea = procW * procH;
-    const cx = procW / 2, cy = procH / 2, halfDiag = Math.hypot(cx, cy);
-    // score a candidate quad; keep the best. Rejects non-card shapes:
-    // rectangularity (opposite sides similar), ~5:7 aspect (orientation-agnostic
-    // via min/max so landscape Locations also pass), and "fill" (the contour must
-    // mostly fill the quad — rejects a minAreaRect bounding a sprawling stack
-    // contour). A SOFT centre-bias prefers the card the user is pointing at over a
-    // larger background rectangle, and a clean 4-pt quad is preferred over a
-    // minAreaRect fallback (but the fallback still wins when it's the only read).
-    const consider = (q, contourArea, fromClean) => {
-      const w1 = dist(q[0], q[1]), w2 = dist(q[3], q[2]);
-      const h1 = dist(q[0], q[3]), h2 = dist(q[1], q[2]);
-      const wq = (w1 + w2) / 2, hq = (h1 + h2) / 2;
-      if (Math.min(wq, hq) < 20) return;
-      const rect = (Math.min(w1, w2) / Math.max(w1, w2)) * (Math.min(h1, h2) / Math.max(h1, h2));
-      if (rect < 0.6) return;
-      const ar = Math.min(wq, hq) / Math.max(wq, hq);
-      const arScore = 1 - Math.min(1, Math.abs(ar - CARD_ASPECT) / 0.26);
-      if (arScore <= 0) return;
-      const quadArea = wq * hq, fill = Math.min(1, contourArea / (quadArea + 1e-6));
-      if (fill < 0.7) return;
-      const qx = (q[0].x + q[1].x + q[2].x + q[3].x) / 4;
-      const qy = (q[0].y + q[1].y + q[2].y + q[3].y) / 4;
-      const centreScore = 1 - Math.min(1, Math.hypot(qx - cx, qy - cy) / halfDiag);
-      let score = arScore * 0.3 + rect * 0.22 + fill * 0.16 + Math.min(1, quadArea / imgArea) * 0.1 + centreScore * 0.22;
-      if (!fromClean) score *= 0.92;
-      if (score > bestScore) {
-        bestScore = score;
-        best = q.map((p) => ({ x: p.x / scale, y: p.y / scale }));
-        bestLandscape = wq > hq;
-      }
-    };
     for (let i = 0; i < contours.size(); i++) {
       const c = contours.get(i), area = cv.contourArea(c);
-      if (area < imgArea * 0.05) { c.delete(); continue; }
+      if (area < imgArea * gates.areaMin) { c.delete(); continue; }
       const peri = cv.arcLength(c, true);
-      // (1) clean 4-point quad — best for perspective
       for (const ep of [0.02, 0.035, 0.05, 0.07]) {
         const a = new cv.Mat();
         cv.approxPolyDP(c, a, ep * peri, true);
@@ -125,8 +117,6 @@ function detectQuad(mat) {
         }
         a.delete();
       }
-      // (2) fallback: best-fit rotated rectangle — robust to imperfect / merged
-      // contours (a card sitting on a stack rarely gives a clean 4-pt edge)
       try {
         const rr = cv.minAreaRect(c);
         const box = cv.RotatedRect.points(rr);
@@ -135,13 +125,54 @@ function detectQuad(mat) {
       } catch (e) { /* skip */ }
       c.delete();
     }
+  } finally { contours.delete(); hier.delete(); }
+  return { best, bestScore, bestLandscape };
+}
+
+// Detect best card quad. mat is RGBA at the bitmap resolution; we downscale a
+// grayscale copy to ~480px for contour finding, then scale the quad back up.
+// TWO PASSES: pass 1 = fixed Canny + standard gates (the path that already works
+// for a single flat card / glary foils). Pass 2 runs ONLY when pass 1 finds
+// nothing — adaptive low Canny from the image median + a heavier dilate to bridge
+// the faint card-on-card edges of a STACK or a dim card, with relaxed gates. Pass
+// 2 can't regress a working detection (it only fires on a miss); on the real-photo
+// set it lifted detection 73% → 100% (the stacks that were total no-detects now at
+// least produce a card to OCR / colour-match / tap-correct).
+function detectQuad(mat) {
+  const W = mat.cols, H = mat.rows;
+  const procW = 480, scale = procW / W, procH = Math.round(H * scale);
+  let small = new cv.Mat(), gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+  let res = { best: null, bestScore: 0, bestLandscape: false };
+  try {
+    cv.resize(mat, small, new cv.Size(procW, procH));
+    cv.cvtColor(small, gray, cv.COLOR_RGBA2GRAY);
+    // CLAHE so the card's edges survive dim / uneven lighting (edge detection is
+    // the bottleneck in low light; CLAHE stays in DETECTION only, never on the
+    // rectified card — that would put the query in a different colour space).
+    const cl = new cv.CLAHE(3.0, new cv.Size(8, 8));
+    cl.apply(gray, gray); cl.delete();
+    cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+    // pass 1
+    cv.Canny(blur, edges, 40, 120);
+    let k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(7, 7));
+    cv.dilate(edges, edges, k); k.delete();
+    res = scanForQuad(edges, scale, procW, procH, { rectMin: 0.6, fillMin: 0.7, arTol: 0.26, areaMin: 0.05 });
+    // pass 2 (only on a miss)
+    if (!res.best) {
+      const med = medianOfMat(blur);
+      const lo = Math.max(0, Math.round(0.55 * med)), hi = Math.max(lo + 20, Math.round(1.1 * med));
+      cv.Canny(blur, edges, lo, hi);
+      k = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(9, 9));
+      cv.dilate(edges, edges, k); cv.dilate(edges, edges, k); k.delete();
+      res = scanForQuad(edges, scale, procW, procH, { rectMin: 0.5, fillMin: 0.55, arTol: 0.30, areaMin: 0.04 });
+    }
   } finally {
-    small.delete(); gray.delete(); blur.delete(); edges.delete(); contours.delete(); hier.delete();
+    small.delete(); gray.delete(); blur.delete(); edges.delete();
   }
   // conf is the winning score (0..1-ish); the main thread gates the green
   // "locked" state on it but always draws a (dim) box when a quad exists.
-  return (best && quadOk(best, 28))
-    ? { quad: best, conf: bestScore, landscape: bestLandscape }
+  return (res.best && quadOk(res.best, 28))
+    ? { quad: res.best, conf: res.bestScore, landscape: res.bestLandscape }
     : { quad: null, conf: 0, landscape: false };
 }
 
