@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=253">
+<link rel="stylesheet" href="styles.css?v=254">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -130,19 +130,18 @@
 </noscript>
 <a href="/privacy" rel="noopener" style="position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden">Privacy policy</a>
 <div id="root"></div>
-<!-- Exact-version pins + SRI integrity hashes: a malicious republish under a
-     floating tag (react@18, supabase-js@2) or an unpkg compromise can no longer
-     execute in our origin — the browser refuses any script whose bytes don't
-     match the hash. Recompute the hash if you bump a version. -->
-<script src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"
-  integrity="sha384-DGyLxAyjq0f9SPpVevD6IgztCFlnMF6oW/XQGmfe+IsZ8TqEiDrcHkMLKI6fiB/Z"
-  crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"
-  integrity="sha384-gTGxhz21lVGYNMcdJOyq01Edg0jhn/c22nsx0kyqP0TxaV5WVdsSH1fSDUf5YJj1"
-  crossorigin="anonymous"></script>
-<script src="https://unpkg.com/htm@3.1.1/dist/htm.js"
-  integrity="sha384-iPOMe3E8jVgp/PepuDy7lJvw7L/QP97X5POfi+X1EVyDVQi8Kuv/MooNVB5OFXVN"
-  crossorigin="anonymous"></script>
+<!-- Core libs are VENDORED (served same-origin from /vendor/) rather than fetched
+     from unpkg at runtime. unpkg being a hard dependency used to crash the whole
+     app to a blank page ("ReactDOM is not defined" / "window.supabase.createClient
+     is undefined") whenever unpkg was slow/down, a script got blocked by an
+     ad-blocker / corporate proxy, or an SRI hash drifted after a version bump.
+     Same-origin files committed to this repo ARE the trusted source — no third
+     party can republish them — so SRI is unnecessary; the ?v= key busts the cache
+     on a re-vendor. To bump a version: re-download the pinned UMD build into
+     /vendor/ and bump the ?v=. Load order matters: react → react-dom → htm. -->
+<script src="/vendor/react.production.min.js?v=254"></script>
+<script src="/vendor/react-dom.production.min.js?v=254"></script>
+<script src="/vendor/htm.js?v=254"></script>
 <!-- html2canvas: lazy-used by the Export Deck Image feature to snapshot the
      live preview into a real image for Copy/Save. Pulled from a CDN so it
      doesn't bloat the initial load — only fetched once on the first click. -->
@@ -152,9 +151,7 @@
     if(window.__html2canvasLoading) return window.__html2canvasLoading;
     window.__html2canvasLoading = new Promise((resolve, reject) => {
       const s = document.createElement("script");
-      s.src = "https://unpkg.com/html2canvas@1.4.1/dist/html2canvas.min.js";
-      s.integrity = "sha384-ZZ1pncU3bQe8y31yfZdMFdSpttDoPmOZg2wguVK9almUodir1PghgT0eY7Mrty8H";
-      s.crossOrigin = "anonymous";
+      s.src = "/vendor/html2canvas.min.js?v=254";
       s.onload = () => resolve(window.html2canvas);
       s.onerror = () => reject(new Error("html2canvas failed to load"));
       document.head.appendChild(s);
@@ -162,9 +159,7 @@
     return window.__html2canvasLoading;
   };
 </script>
-<script src="https://unpkg.com/@supabase/supabase-js@2.108.1/dist/umd/supabase.js"
-  integrity="sha384-EjUdIVmzWliPzdzhxZ9ZoO0etXLKWuUPUftAGxP6qH6Lm4oLwoLaJR0Ba4pIDiDL"
-  crossorigin="anonymous"></script>
+<script src="/vendor/supabase.js?v=254"></script>
 <script src="logo.js?v=253"></script>
 <script src="scanner.js?v=253"></script>
 <script src="scanner-cv.js?v=253"></script>
@@ -1698,7 +1693,7 @@ const buildPools = (data, set) => {
   for(const row of data){
     if((row["Set"]||"").trim()!==set) continue;
     const name=(row["Product Name"]||"").trim(),rar=(row["Rarity"]||"").trim(),pr=(row["Printing"]||"").trim(),price=parseP(row["Market Price"]);
-    const num=parseInt((row["Number"]||"").split("/")[0]),ink=row["ink"]||null;
+    const num=parseInt((row["Number"]||"").split("/")[0], 10),ink=row["ink"]||null;
     const c={name,rarity:rar,printing:pr,price,num,img_small:row["img_small"],img_normal:row["img_normal"],img_large:row["img_large"],ink:ink,
       tcgplayer_product_id:row["tcgplayer_product_id"]||null,
       tcg_printing:row["tcg_printing"]||null};
@@ -4947,8 +4942,8 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
 
     ${sel && html`<div class="gs-sale-pop-backdrop" onClick=${()=>setSel(null)}>
       <div class="gs-sale-detail gs-sale-detail--pop" onClick=${e=>e.stopPropagation()}>
-      ${sel.image_url && html`<a href=${sel.image_url} target="_blank" rel="noopener nofollow" class="gs-sale-detail-imgwrap">
-        <img src=${sel.image_url} alt="" class="gs-sale-detail-img"/></a>`}
+      ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow" class="gs-sale-detail-imgwrap">
+        <img src=${safeHttpUrl(sel.image_url)} alt="" class="gs-sale-detail-img"/></a>`}
       <div class="gs-sale-detail-body">
         <div class="gs-sale-detail-title">${sel.title || "eBay graded sale"}</div>
         <div class="gs-sale-detail-line">
@@ -4961,8 +4956,8 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
           ${sel.printing ? html`<span class="muted">${sel.printing}</span>` : null}
         </div>
         <div class="gs-sale-detail-links">
-          ${sel.listing_url && html`<a href=${sel.listing_url} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>`}
-          ${sel.image_url && html`<a href=${sel.image_url} target="_blank" rel="noopener nofollow">Open image ↗</a>`}
+          ${safeHttpUrl(sel.listing_url) && html`<a href=${safeHttpUrl(sel.listing_url)} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>`}
+          ${safeHttpUrl(sel.image_url) && html`<a href=${safeHttpUrl(sel.image_url)} target="_blank" rel="noopener nofollow">Open image ↗</a>`}
           ${onReport && html`<button class="gs-report-btn" type="button"
             onClick=${()=>onReport(sel)} title="Report this sale as mislabeled or not a valid graded single">⚑ Report</button>`}
           ${canEditGraded && onEditGraded && html`<button class="gs-admin-btn" type="button"
@@ -4980,7 +4975,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
           ${tableSales.slice(0, 200).map(s => { const priv = s.source_query==="private_sale"; return html`<tr key=${s.item_id}
             class=${"gs-table-row"+(sel?.item_id===s.item_id?" sel":"")+(priv?" gs-private":"")}
             onClick=${()=>setSel({...s})}
-            onMouseEnter=${e=> s.image_url && setHoverImg({src:s.image_url, x:e.clientX, y:e.clientY})}
+            onMouseEnter=${e=> safeHttpUrl(s.image_url) && setHoverImg({src:safeHttpUrl(s.image_url), x:e.clientX, y:e.clientY})}
             onMouseMove=${e=> setHoverImg(p=> p ? {...p, x:e.clientX, y:e.clientY} : p)}
             onMouseLeave=${()=> setHoverImg(null)}>
             <td>${dstr(s.sold_date)}</td>
@@ -4989,8 +4984,8 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
             <td>${s.grade||"—"}</td>
             <td class="num">${money(s.sale_price)}</td>
             <td class="muted">${priv?"private":s.listing_type==="auction"?"auction":s.listing_type==="fixed_price"?"fixed":"—"}</td>
-            <td>${s.listing_url
-              ? html`<a href=${s.listing_url} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title="View on eBay">↗</a>`
+            <td>${safeHttpUrl(s.listing_url)
+              ? html`<a href=${safeHttpUrl(s.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title="View on eBay">↗</a>`
               : priv ? html`<span class="gs-private-tag" title="Private / manually entered sale">✎</span>` : ""}</td>
           </tr>`; })}
         </tbody>
@@ -5004,67 +4999,6 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
   </div>`;
 };
 
-// Card-detail graded price tile (premium): Last Sold + Avg of Last 5 for the
-// focused (grader, grade), a selector to switch combos, and the raw price as a
-// secondary line. The "above the toggle" half of the Raw/Graded layout.
-const GradedPriceTile = ({combos, focusKey, onFocusChange, defaultKey, rawNormal, rawFoil}) => {
-  const comboByKey = new Map((combos||[]).map(c=>[c.key,c]));
-  const fk = (focusKey && comboByKey.has(focusKey)) ? focusKey : defaultKey;
-  const focus = comboByKey.get(fk);
-  const win = focus ? computeGradedSaleWindows(focus.sales) : null;
-  const money = (v)=> v==null?"—":"$"+Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
-  const dstr  = (d)=> d ? fmtTooltipDate(Date.parse(d+"T00:00:00Z")) : "—";
-  const hasRaw = (row)=> row && (row["Low Price"]!=null || row["TCGPlayer Market"]!=null);
-  return html`<div class="cd-graded-tile">
-    <div class="cd-graded-tile-head">
-      <span class="cd-graded-tile-tag">Graded · eBay sales</span>
-      ${(combos||[]).length > 0 && html`<select class="cd-graded-tile-select gc-caps-select" value=${fk||""}
-        onChange=${e=>onFocusChange && onFocusChange(e.target.value)}
-        title="Pick the grader / grade to feature">
-        ${combos.map(c=> html`<option key=${c.key} value=${c.key}>${(GRADER_LABEL[c.grader]||c.grader.toUpperCase())} ${c.grade} · ${c.count}</option>`)}
-      </select>`}
-    </div>
-    ${win ? html`<div class="cd-graded-tile-stats">
-      <div class="cd-gt-stat">
-        <div class="cd-gt-lbl">Last Sold</div>
-        <div class="cd-gt-val" style=${{color:focus.color}}>${money(win.lastSold)}</div>
-        <div class="cd-gt-sub">${dstr(win.lastSoldDate)}${win.lastSoldType==="auction"?" · auction":""}</div>
-      </div>
-      <div class="cd-gt-stat">
-        <div class="cd-gt-lbl">Avg of Last ${win.avg5n}</div>
-        <div class="cd-gt-val">${money(win.avg5)}</div>
-        <div class="cd-gt-sub">${win.count} sale${win.count===1?"":"s"} recorded</div>
-      </div>
-    </div>` : html`<div class="cd-graded-tile-empty muted">No graded sales recorded for this card yet.</div>`}
-    ${win && html`<div class="cd-gt-deltas">
-      ${[["1w","1W"],["1m","1M"],["6m","6M"]].map(([k,lbl])=> html`<div key=${k} class="cd-gt-delta">
-        <span class="cd-gt-delta-win">${lbl}</span>
-        <span class="cd-gt-delta-pct" style=${{color: pctColor(win["pct_"+k])}}>${fmtPct(win["pct_"+k])}</span>
-      </div>`)}
-    </div>`}
-  </div>`;
-};
-
-// Graded "price changes" box (premium): % change over 1W / 1M / 3M for the
-// focused combo, from per-sale data (anchored on the latest sale).
-const GRADED_DEFAULT_WINS = [["1w","1W"],["1m","1M"],["3m","3M"]];
-const GradedPriceChanges = ({focus}) => {
-  const win = focus ? computeGradedSaleWindows(focus.sales) : null;
-  if(!win) return null;
-  const m0 = (v)=> "$"+Number(v).toLocaleString(undefined,{maximumFractionDigits:0});
-  return html`<div class="cd-graded-changes">
-    <div class="cd-gc-id">
-      <span class="cd-gc-name" style=${{color:focus.color}}>${(GRADER_LABEL[focus.grader]||focus.grader.toUpperCase())} ${focus.grade}</span>
-      <span class="cd-gc-px">Last <b>${m0(win.lastSold)}</b> · Avg Last 5 <b>${m0(win.avg5)}</b></span>
-    </div>
-    <div class="cd-gc-grid">
-      ${GRADED_DEFAULT_WINS.map(([k,lbl])=> html`<div key=${k} class="cd-gc-cell">
-        <span class="cd-gc-win">${lbl}</span>
-        <span class="cd-gc-pct" style=${{color: pctColor(win["pct_"+k])}}>${fmtPct(win["pct_"+k])}</span>
-      </div>`)}
-    </div>
-  </div>`;
-};
 
 // User-facing "report this sale" modal — flags a graded_sales row for admin
 // review with an optional comment (report_graded_sale RPC, migration 74).
@@ -5157,7 +5091,7 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <h3 class="gs-modal-title">Edit graded sale <span class="gs-modal-admin-tag">admin</span></h3>
       <div class="gs-modal-sale muted">${(sale.title||"").slice(0,90)}</div>
-      <a class="gs-modal-link" href=${sale.listing_url||"#"} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>
+      <a class="gs-modal-link" href=${safeHttpUrl(sale.listing_url)||"#"} target="_blank" rel="noopener nofollow">View eBay listing ↗</a>
       <div class="gs-modal-fields">
         <label>Grader<select value=${grader} onChange=${e=>setGrader(e.target.value)}>
           ${GRADED_GRADER_OPTS.map(g=>html`<option key=${g} value=${g}>${g}</option>`)}
@@ -5215,13 +5149,13 @@ const GradedReviewModal = ({onClose, onEditSale}) => {
         : reports.length === 0 ? html`<div class="muted" style=${{padding:20}}>No ${status} reports.</div>`
         : html`<div class="gs-review-list">
           ${reports.map(r => html`<div key=${r.report_id} class="gs-review-row">
-            ${r.image_url && html`<img class="gs-review-img" src=${r.image_url} alt="" loading="lazy"/>`}
+            ${safeHttpUrl(r.image_url) && html`<img class="gs-review-img" src=${safeHttpUrl(r.image_url)} alt="" loading="lazy"/>`}
             <div class="gs-review-body">
               <div class="gs-review-line">
                 <b style=${{color: GRADER_COLOR[(r.grader||'').toLowerCase()]||'inherit'}}>${(r.grader||"").toUpperCase()} ${r.grade||"—"}</b>
                 <span>$${Number(r.sale_price||0).toLocaleString()}</span>
                 <span class="muted">${dstr(r.sold_date)}</span>
-                ${r.listing_url && html`<a href=${r.listing_url} target="_blank" rel="noopener nofollow">↗</a>`}
+                ${safeHttpUrl(r.listing_url) && html`<a href=${safeHttpUrl(r.listing_url)} target="_blank" rel="noopener nofollow">↗</a>`}
               </div>
               <div class="gs-review-title muted">${(r.title||"").slice(0,90)}</div>
               ${r.comment && html`<div class="gs-review-comment">“${r.comment}”</div>`}
@@ -18297,13 +18231,15 @@ function EloStoreReport({storeKey, onBack, onPlayerClick, onEventClick, excludeO
   useEffect(() => {
     if(!storeKey) return;
     setReport(null); setErr(null);
+    let cancelled = false;
     (async () => {
       try {
         const {data, error} = await sbClient.rpc("get_store_report", {p_store: storeKey, p_exclude_org: !!excludeOrg});
         if(error) throw error;
-        setReport(data || {store: storeKey, summary:{}, events:[], players:[]});
-      } catch(e){ setErr(String(e && e.message || e)); }
+        if(!cancelled) setReport(data || {store: storeKey, summary:{}, events:[], players:[]});
+      } catch(e){ if(!cancelled) setErr(String(e && e.message || e)); }
     })();
+    return () => { cancelled = true; };
   }, [storeKey, excludeOrg]);
 
   const fmtD = (d) => d ? new Date(d+"T00:00:00").toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}) : "—";
@@ -18389,13 +18325,15 @@ function EloEventRoster({eventId, eventMeta, excludeOrg, setExcludeOrg, onClose,
   useEffect(() => {
     if(!eventId) return;
     setData(null); setErr(null);
+    let cancelled = false;
     (async () => {
       try {
         const {data:d, error} = await sbClient.rpc("get_event_roster", {p_event_id: eventId, p_exclude_org: !!excludeOrg});
         if(error) throw error;
-        setData(d || {event:{}, field:{}, players:[]});
-      } catch(e){ setErr(String(e && e.message || e)); }
+        if(!cancelled) setData(d || {event:{}, field:{}, players:[]});
+      } catch(e){ if(!cancelled) setErr(String(e && e.message || e)); }
     })();
+    return () => { cancelled = true; };
   }, [eventId, excludeOrg]);
   const ev = (data && data.event) || eventMeta || {};
   const field = (data && data.field) || {};
@@ -19710,12 +19648,6 @@ const GRADED_PRESETS = [
   ["droppers",  "Droppers",     "Biggest price decreases over the selected window."],
   ["movers",    "Movers",       "Biggest absolute movement (gainers + droppers) over the selected window. Useful for spotting any activity."],
   ["recent",    "Recent Sales", "Cards where the price moved at all in the last 30 days — active trading, not sitting stale."],
-];
-// Premium graded view (per-sale rollup) has no time series, so the Δ%-window
-// presets (Climbers / Droppers / Movers / Recent) don't apply — only these two.
-const PREMIUM_GRADED_PRESETS = [
-  ["all", "All",       "Every graded tier (card · grader · grade) with recorded eBay sales, newest set first."],
-  ["top", "Top Value", "Only tiers whose last sale was ≥ $100 — the real chase tier."],
 ];
 const MOVER_WINS = [["pct_1d","1D"],["pct_7d","1W"],["pct_30d","1M"],["pct_90d","3M"],["pct_180d","6M"],["pct_365d","1Y"]];
 
@@ -24463,7 +24395,6 @@ const SC_GEO_COUNTRIES = [
   ["PT","Portugal"],["PL","Poland"],["SE","Sweden"],["DK","Denmark"],["FI","Finland"],
   ["IE","Ireland"],["MX","Mexico"],["BR","Brazil"],
 ];
-const SC_POSTAL_RE = { US:/^\d{5}$/, CA:/^[A-Za-z]\d[A-Za-z]\s?\d[A-Za-z]\d$/ };
 // Geocode a postal code via zippopotam.us. Returns {lat,lng,city,state} or throws.
 const geocodeZip = async (zip, country = "US") => {
   const c = (country || "US").toUpperCase();
@@ -25610,82 +25541,6 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
   </div>`;
 };
 
-// Admin: edit a tournament's headline fields (name / date / format / # players).
-// Decks themselves stay intact — to rewrite results, delete + re-upload.
-const TournamentEditModal = ({tournament, onClose, onSaved}) => {
-  useEscToClose(onClose);
-  const [name, setName] = useState(tournament?.name || "");
-  const [eventDate, setEventDate] = useState(tournament?.event_date || "");
-  const [format, setFormat] = useState(tournament?.format || "");
-  const [players, setPlayers] = useState(tournament?.num_players != null ? String(tournament.num_players) : "");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState(null);
-  const save = async () => {
-    setError(null);
-    if(!name.trim()){ setError("Name is required."); return; }
-    setBusy(true);
-    try {
-      const {error: e} = await sbClient.rpc("admin_update_tournament_meta", {
-        p_tid: tournament.id,
-        p_name: name.trim(),
-        p_event_date: eventDate || null,
-        p_format: format || null,
-        p_num_players: players.trim() ? Math.max(0, parseInt(players, 10) || 0) : null,
-      });
-      if(e) throw e;
-      setBusy(false);
-      onSaved && onSaved();
-    } catch(e) { setBusy(false); setError("Save failed: " + (e?.message || e)); }
-  };
-  if(!tournament) return null;
-  return html`<div class="modal-backdrop" onClick=${onClose}>
-    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:520}}>
-      <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Edit tournament</h2>
-        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
-      </div>
-      <div class="modal-body" style=${{padding:18}}>
-        <label style=${{display:"block",marginBottom:10}}>
-          <div class="muted" style=${{fontSize:11,fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Tournament name *</div>
-          <input type="text" value=${name} onInput=${e=>setName(e.target.value)}
-            style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}/>
-        </label>
-        <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:10}}>
-          <label>
-            <div class="muted" style=${{fontSize:11,fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Event date</div>
-            <input type="date" value=${eventDate} onInput=${e=>setEventDate(e.target.value)}
-              style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}/>
-          </label>
-          <label>
-            <div class="muted" style=${{fontSize:11,fontWeight:600,textTransform:"uppercase",marginBottom:4}}># Players</div>
-            <input type="number" min="0" value=${players} onInput=${e=>setPlayers(e.target.value)}
-              style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}/>
-          </label>
-          <label>
-            <div class="muted" style=${{fontSize:11,fontWeight:600,textTransform:"uppercase",marginBottom:4}}>Format</div>
-            <select value=${format} onInput=${e=>setFormat(e.target.value)}
-              style=${{width:"100%",padding:"7px 10px",border:"1px solid var(--btn-border)",borderRadius:6,background:"var(--bg-solid)",color:"var(--text)",fontSize:13}}>
-              <option value="">—</option>
-              <option value="core">Core Constructed</option>
-              <option value="infinity">Infinity</option>
-            </select>
-          </label>
-        </div>
-        ${error && html`<div style=${{color:"var(--red)",fontSize:12,marginBottom:8}}>${error}</div>`}
-        <div style=${{display:"flex",gap:8,justifyContent:"flex-end"}}>
-          <button onClick=${onClose} disabled=${busy}>Cancel</button>
-          <button class="active" onClick=${save} disabled=${busy} style=${{padding:"7px 16px",fontSize:13}}>
-            ${busy ? "Saving…" : "Save changes"}
-          </button>
-        </div>
-        <div class="muted" style=${{fontSize:10,marginTop:10,lineHeight:1.5}}>
-          To add, remove, or edit a deck, close this dialog and use the per-row
-          controls (or <em>+ Add deck</em>) on the tournament page.
-        </div>
-      </div>
-    </div>
-  </div>`;
-};
 
 // Tournament bulk-upload modal. Admin-only (rendered behind isTournamentAdmin).
 // One tournament + N player rows in a single submission. Each row with
@@ -26702,6 +26557,9 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
           const {data, error: e2} = await sbClient.from("deck_cards")
             .select("deck_id,card_id,printing,quantity")
             .in("deck_id", ids)
+            .order("deck_id", {ascending:true})
+            .order("card_id", {ascending:true})
+            .order("printing", {ascending:true})
             .range(from, from + 999);
           if(e2) throw e2;
           cardRows.push(...(data||[]));

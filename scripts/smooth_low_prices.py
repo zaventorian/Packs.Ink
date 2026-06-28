@@ -123,6 +123,7 @@ def fetch_prices_window(sb: Supabase, since: date, pid: int | None = None) -> li
         columns="tcgplayer_product_id,printing,date,low_price,low_price_smoothed",
         filters=filters,
         page_size=1000,
+        order="tcgplayer_product_id.asc,printing.asc,date.asc",
     )
 
 

@@ -190,6 +190,26 @@ class Supabase:
         except Exception:
             return r.text
 
+    @staticmethod
+    def _default_order(columns: str) -> str:
+        """Derive a stable fallback `order` from the select column list: the
+        first bare column name, ascending. Strips PostgREST `alias:col` and
+        embedded-resource `rel(...)` syntax so we order by a real column.
+
+        Returns "" when no plain column can be derived (a `*` wildcard select or
+        a leading embedded resource) — guessing a column name like `id` could
+        reference a column the table doesn't have. Callers that page over a `*`
+        select should pass an explicit `order`; in practice every paginating
+        call site lists explicit columns."""
+        first = (columns or "").split(",")[0].strip()
+        # `*` or embedded resource like `rel(a,b)` — no plain column to order on.
+        if not first or first == "*" or "(" in first:
+            return ""
+        # `alias:realcol` → order on the real column.
+        if ":" in first:
+            first = first.split(":", 1)[1].strip()
+        return f"{first}.asc" if first else ""
+
     def select(
         self,
         table: str,
@@ -197,13 +217,27 @@ class Supabase:
         limit: int | None = None,
         filters: dict[str, str] | None = None,
         page_size: int = 1000,
+        order: str | None = None,
     ) -> list[dict]:
         """Select rows with automatic pagination via Range headers.
-        PostgREST caps responses at ~1000 rows by default; we page through them."""
+        PostgREST caps responses at ~1000 rows by default; we page through them.
+
+        A stable `order=` is REQUIRED for correct multi-page reads — PostgREST
+        does not guarantee a stable cross-request row order without ORDER BY, so
+        Range-paginated calls could silently skip or duplicate rows. If the
+        caller passes `order` we use it; otherwise we default to the first bare
+        column in `columns` so pagination is always deterministic. Callers can
+        still pass `order` via the `filters` dict for back-compat (we won't
+        clobber it)."""
         endpoint = f"{self.url}/rest/v1/{table}"
         params: dict[str, str] = {"select": columns}
         if filters:
             params.update(filters)
+        if order:
+            params["order"] = order
+        derived_order = self._default_order(columns)
+        if derived_order:
+            params.setdefault("order", derived_order)
         out: list[dict] = []
         start = 0
         while True:

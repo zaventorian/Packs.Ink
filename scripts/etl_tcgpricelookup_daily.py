@@ -285,17 +285,24 @@ def main() -> int:
             except Exception as e:
                 print(f"  WARN: delete failed for {d}: {e}")
 
-    # Refresh the latest matview so site queries pick up today's data.
+    # Refresh the latest matview so site queries pick up today's data. A failed
+    # refresh = silently stale matview, so treat it like etl_tcgcsv_daily does:
+    # record the failure and exit non-zero so CI / cron-job.org alerts on it.
+    refresh_failed = False
     try:
         sb.rpc("refresh_graded_prices_latest")
         print("graded_prices_latest refreshed")
     except Exception as e:
-        print(f"WARN: matview refresh failed (run migration 32_graded_prices.sql?): {e}")
+        refresh_failed = True
+        print(f"FAIL: matview refresh failed (run migration 32_graded_prices.sql?): {e}")
 
-    # Partial snapshot was written + matview refreshed, but a page failed
-    # mid-run — exit non-zero so CI / cron-job.org still alerts on the gap.
+    # Partial snapshot was written, but a page failed mid-run — exit non-zero
+    # so CI / cron-job.org still alerts on the gap.
     if page_failed:
         print("FAIL: partial graded snapshot written, but at least one page failed to fetch.")
+        return 1
+    if refresh_failed:
+        print("FAIL: graded snapshot written, but graded_prices_latest refresh failed (stale matview).")
         return 1
     return 0
 

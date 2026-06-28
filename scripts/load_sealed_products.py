@@ -50,17 +50,20 @@ USER_AGENT = "PacksInk/1.0 (+https://packs.ink) python-requests sealed-loader"
 
 
 def get_json(url: str) -> Any:
+    last_err: Exception | None = None
     for attempt in range(3):
         try:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
+            last_err = e
             if attempt == 2:
-                raise
+                break
             wait = 2 ** attempt
             print(f"  retry in {wait}s ({e})")
             time.sleep(wait)
+    raise last_err  # type: ignore[misc]
 
 
 def fetch_groups(category_id: int) -> list[dict]:
@@ -149,7 +152,7 @@ def build_group_to_setid(sb: Supabase, groups: list[dict]) -> dict[int, str]:
 def existing_card_pids(sb: Supabase) -> set[int]:
     """All tcgplayer_product_id values currently in `cards`. Anything in
     this set is a single we already track via Lorcast — skip it."""
-    rows = sb.select("cards", columns="tcgplayer_product_id")
+    rows = sb.select("cards", columns="tcgplayer_product_id", order="tcgplayer_product_id.asc")
     return {r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id") is not None}
 
 

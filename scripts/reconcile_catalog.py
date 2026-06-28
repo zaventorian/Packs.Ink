@@ -130,12 +130,13 @@ def recent_priced_pids(sb: Supabase, days: int) -> set[int]:
         "prices_daily",
         columns="tcgplayer_product_id",
         filters={"source": "eq.tcgcsv", "date": f"gte.{cutoff}"},
+        order="tcgplayer_product_id.asc,date.asc",
     )
     return {r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id") is not None}
 
 
 def column_pids(sb: Supabase, table: str) -> set[int]:
-    rows = sb.select(table, columns="tcgplayer_product_id")
+    rows = sb.select(table, columns="tcgplayer_product_id", order="tcgplayer_product_id.asc")
     return {r["tcgplayer_product_id"] for r in rows if r.get("tcgplayer_product_id") is not None}
 
 
@@ -152,7 +153,8 @@ def resolved_sealed_pids(sb: Supabase, audit_promo_singles: bool = False) -> set
     Epic/promo chases, Cold-Foil companions) with deliberate exclusions
     (Illumineer's Quest cards, oversized jumbos, errata reprints). Re-surfacing
     them is a periodic cleanup, not a daily alert."""
-    rows = sb.select("sealed_products", columns="tcgplayer_product_id,product_type")
+    rows = sb.select("sealed_products", columns="tcgplayer_product_id,product_type",
+                     order="tcgplayer_product_id.asc")
     out: set[int] = set()
     for r in rows:
         pid = r.get("tcgplayer_product_id")
@@ -181,6 +183,7 @@ def latest_prices(sb: Supabase, pids: set[int], days: int) -> dict[int, dict]:
                 "tcgplayer_product_id": f"in.({','.join(str(p) for p in chunk)})",
                 "date": f"gte.{cutoff}",
             },
+            order="tcgplayer_product_id.asc,date.asc",
         )
         for r in rows:
             pid = r["tcgplayer_product_id"]

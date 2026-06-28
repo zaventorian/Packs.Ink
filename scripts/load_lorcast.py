@@ -52,17 +52,20 @@ def _normalize_rarity(r: str | None) -> str | None:
 
 
 def get_json(url: str) -> Any:
+    last_err: Exception | None = None
     for attempt in range(3):
         try:
             r = requests.get(url, timeout=30)
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
+            last_err = e
             if attempt == 2:
-                raise
+                break
             wait = 2 ** attempt
             print(f"  retry in {wait}s ({e})")
             time.sleep(wait)
+    raise last_err  # type: ignore[misc]
 
 
 def transform_set(s: dict) -> dict:

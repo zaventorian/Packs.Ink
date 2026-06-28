@@ -1,10 +1,16 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v253';
+const CACHE_VERSION = 'packsink-v254';
 const CORE_ASSETS = [
   '/',
   '/Index.html',
-  '/styles.css?v=253',
+  // Vendored core libs (formerly unpkg). Precached so the app boots offline and
+  // can never be left half-loaded by a CDN outage. ?v= busts on a re-vendor.
+  '/vendor/react.production.min.js?v=254',
+  '/vendor/react-dom.production.min.js?v=254',
+  '/vendor/htm.js?v=254',
+  '/vendor/supabase.js?v=254',
+  '/styles.css?v=254',
   '/logo.js?v=253',
   '/scanner.js?v=253',
   '/scanner-cv.js?v=253',

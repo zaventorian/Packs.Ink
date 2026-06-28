@@ -33,17 +33,20 @@ USER_AGENT = "PacksInk/1.0 (+https://packs.ink) python-requests"
 
 
 def get_json(url: str) -> Any:
+    last_err: Exception | None = None
     for attempt in range(3):
         try:
             r = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=60)
             r.raise_for_status()
             return r.json()
         except requests.RequestException as e:
+            last_err = e
             if attempt == 2:
-                raise
+                break
             wait = 2 ** attempt
             print(f"  retry in {wait}s ({e})")
             time.sleep(wait)
+    raise last_err  # type: ignore[misc]
 
 
 def fetch_groups(category_id: int) -> list[dict]:
@@ -138,6 +141,7 @@ def detect_duplicate_snapshot(
             "grade": "eq.raw",
             "date": f"eq.{compare_date}",
         },
+        order="tcgplayer_product_id.asc,printing.asc",
     )
     if not prior:
         fallback = _latest_snapshot_before(sb, snapshot)
@@ -153,6 +157,7 @@ def detect_duplicate_snapshot(
                 "grade": "eq.raw",
                 "date": f"eq.{compare_date}",
             },
+            order="tcgplayer_product_id.asc,printing.asc",
         )
     prior_by_key: dict[tuple, tuple] = {}
     for r in prior:

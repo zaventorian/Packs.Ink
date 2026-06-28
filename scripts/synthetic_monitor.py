@@ -123,18 +123,25 @@ def check_freshness() -> list[str]:
             failures.append("card_prices_latest returned no rows (empty catalog matview).")
         else:
             latest_date = dt.date.fromisoformat(latest)
-            today = dt.datetime.now(dt.timezone.utc).date()
-            age_hours = (today - latest_date).days * 24
+            now = dt.datetime.now(dt.timezone.utc)
+            today = now.date()
+            # Measure against a real UTC timestamp (midnight of latest_date) so
+            # staleness isn't undercounted by up to ~24h the way a date-granular
+            # `.days * 24` is.
+            latest_midnight = dt.datetime.combine(
+                latest_date, dt.time.min, tzinfo=dt.timezone.utc
+            )
+            age_hours = (now - latest_midnight).total_seconds() / 3600
             if age_hours > STALE_HOURS:
                 failures.append(
                     f"card_prices_latest is stale: newest price_date {latest} "
-                    f"is ~{age_hours}h behind today (UTC {today}); "
+                    f"is ~{age_hours:.1f}h behind now (UTC {today}); "
                     f"threshold is {STALE_HOURS}h."
                 )
             else:
                 print(
                     f"  [A1 PASS] card_prices_latest newest price_date {latest} "
-                    f"(~{age_hours}h old, <= {STALE_HOURS}h)."
+                    f"(~{age_hours:.1f}h old, <= {STALE_HOURS}h)."
                 )
     except Exception as e:
         failures.append(f"card_prices_latest freshness query failed: {e}")
