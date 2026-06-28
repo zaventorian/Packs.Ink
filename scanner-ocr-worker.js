@@ -247,13 +247,15 @@ function handleOcr(d) {
   s.ctx.putImageData(new ImageData(new Uint8ClampedArray(d.buffer), W, H), 0, 0);
   var card = s.c;
 
-  // NAME: det the upper 0.74, keep the 3 tallest boxes that contain a letter
-  // (excludes the tall cost/lore digits).
+  // NAME: det the upper 0.74, keep the 4 tallest boxes that contain a letter
+  // (excludes the tall cost/lore digits). 4 not 3 so the smaller VERSION subtitle
+  // (e.g. "Practical Traveler") rides along — it's the only thing that separates
+  // the 31 same-named "Minnie Mouse" cards when the collector number misreads.
   ocrRegion(card, 0, 0, W, Math.round(H * 0.74), "min", DET_SIDE).then(function (lines) {
     var cand = lines.filter(function (l) {
       return l.text.trim().length >= 2 && /[A-Za-z]/.test(l.text);
     }).sort(function (a, b) { return b.h - a.h; });
-    var namelines = cand.slice(0, 3).map(function (l) { return l.text; });
+    var namelines = cand.slice(0, 4).map(function (l) { return l.text; });
     return readNumber(card, W, H).then(function (num) {
       self.postMessage({ type: "result", id: d.id, lines: namelines, cnNum: num.cnNum, cnSet: num.cnSet });
     });
@@ -262,10 +264,25 @@ function handleOcr(d) {
   });
 }
 
-// NUMBER: crop the bottom-left ROI, upscale 5x (so rec sees the tiny digits), det
-// + rec, read "147/204" -> "147". The validated winner ('low .96-1.0 x5' = 64%).
+// NUMBER: crop the bottom-left ROI, upscale (so rec sees the tiny digits), det +
+// rec, read "159/204" -> "159". Two things were losing this in production (cn read
+// 0/10 on real snaps even when the number was plainly legible):
+//   1. the ROI was a 4.5%-tall sliver pinned to the very bottom — any rectification
+//      that left a hair of border/jitter pushed the number out of frame. Now the
+//      ROI is taller (bottom ~10-15%) so the line is always inside it.
+//   2. the slash regex was strict. rec on a 5x-upscaled tiny strip routinely reads
+//      "/" as 1/l/I or drops it, and "0" as "O". parseCN normalises those and
+//      accepts slash | 1/l/I | bare-space between the number and the set total.
+function parseCN(txt) {
+  var t = txt.replace(/[Oo]/g, "0").replace(/[•·∙°]/g, " ");
+  var m = t.match(/(\d{1,3})\s*\/\s*(\d{2,3})/)        // a real slash (clean read)
+       || t.match(/(\d{1,3})\s*[1lI|]\s*(\d{2,3})/)     // slash misread as 1/l/I/|
+       || t.match(/(\d{1,3})\s+(\d{2,3})(?!\d)/);        // slash dropped -> a space
+  if (m) return { cnNum: m[1].replace(/^0+(?=\d)/, ""), cnTot: m[2] };
+  return null;
+}
 function readNumber(card, W, H) {
-  var ROIS = [[0.0, 0.955, 0.50, 1.0, 5], [0.0, 0.93, 0.60, 1.0, 5]];
+  var ROIS = [[0.0, 0.90, 0.60, 1.0, 5], [0.0, 0.85, 0.66, 1.0, 6]];
   var idx = 0;
   function tryNext() {
     if (idx >= ROIS.length) return Promise.resolve({ cnNum: null, cnSet: null });
@@ -273,16 +290,13 @@ function readNumber(card, W, H) {
     var rx = Math.round(W * r[0]), ry = Math.round(H * r[1]);
     var rw = Math.round(W * r[2]) - rx, rh = Math.round(H * r[3]) - ry, up = r[4];
     if (rw < 4 || rh < 2) return tryNext();
-    var up5 = scratch(rw * up, rh * up);
-    up5.ctx.drawImage(card, rx, ry, rw, rh, 0, 0, rw * up, rh * up);
-    return ocrRegion(up5.c, 0, 0, rw * up, rh * up, "min", DET_SIDE).then(function (lines) {
+    var us = scratch(rw * up, rh * up);
+    us.ctx.drawImage(card, rx, ry, rw, rh, 0, 0, rw * up, rh * up);
+    return ocrRegion(us.c, 0, 0, rw * up, rh * up, "min", DET_SIDE).then(function (lines) {
       lines.sort(function (a, b) { return a.x0 - b.x0; }); // left-to-right
       var txt = lines.map(function (l) { return l.text; }).join(" ");
-      var m = txt.match(/(\d{1,3})\s*[\/Il|1]\s*(\d{2,3})/);
-      if (m) {
-        var sm = txt.match(/EN[^\d]{0,4}(\d{1,2})/i);
-        return { cnNum: m[1], cnSet: sm ? sm[1] : null };
-      }
+      var cn = parseCN(txt);
+      if (cn) return { cnNum: cn.cnNum, cnSet: null };
       return tryNext();
     });
   }
