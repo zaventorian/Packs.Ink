@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=254">
+<link rel="stylesheet" href="styles.css?v=255">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2394,7 +2394,7 @@ const fmtTickDate = (ts, rangeMs) => {
 const fmtTooltipDate = (ts) =>
   new Date(ts).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"});
 
-const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null}) => {
+const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null, maskValues=false}) => {
   const wrapRef = useRef(null);
   const [hover, setHover] = useState(null); // {x: viewBoxX, clientX, clientY}
   // Measure the wrapper's actual rendered width so the SVG viewBox matches
@@ -2485,7 +2485,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         stroke="var(--border)" stroke-dasharray="2,3" stroke-width="0.6"/>`)}
       ${yTicks.map(t => html`<text key=${"l"+t}
         x=${padding.left - 4} y=${yScale(t)+3.5}
-        text-anchor="end" font-size="9" fill="var(--text-muted)">${fmtTickPrice(t)}</text>`)}
+        text-anchor="end" font-size="9" fill="var(--text-muted)">${maskValues ? "•••" : fmtTickPrice(t)}</text>`)}
       ${xTicks.map((t,i) => html`<text key=${"xl"+i}
         x=${xScale(t)} y=${height-6}
         text-anchor=${i===0?"start":i===xTicks.length-1?"end":"middle"}
@@ -2531,7 +2531,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         return html`<div key=${h.series.label} class="chart-tooltip-row">
           <span class="legend-swatch" style=${{background:h.series.color}}/>
           <span class="chart-tooltip-label">${h.series.label}</span>
-          <span class="chart-tooltip-value">$${h.point.y.toFixed(2)}</span>
+          <span class="chart-tooltip-value">${maskValues ? "$•••" : "$"+h.point.y.toFixed(2)}</span>
           ${pct != null && html`<span class=${"chart-tooltip-pct "+(pct>=0?"up":"down")}>${pct>=0?"+":""}${pct.toFixed(1)}%</span>`}
         </div>`;
       })}
@@ -9122,6 +9122,12 @@ function scanRRF(lists, weights, k){
   return Array.from(score.entries()).sort((a, b) => b[1] - a[1]).map(e => ({ id: e[0], score: e[1] }));
 }
 
+// While the scanner is still in testing, lock it to QA-ONLY: every tap just
+// captures a photo + the scanner's guess/reasoning and uploads it for later
+// review — NO collection writes, no staging, no add buttons (data-safety after
+// the auto-add incident, and so extra testers can't touch their collections).
+// Flip to false to bring back the Stack-scan / Single collection workflow.
+const SCANNER_QA_ONLY = true;
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -9147,7 +9153,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const modeRef = useRef("ambient");      // mirror of `mode` for the loop closure
   const autoAddRef = useRef(false);       // mirror of `autoAdd`
   const previewRef = useRef(null);        // current ambient preview (for tap-commit)
-  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0 });
+  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0 });
   const ambByIdRef = useRef(null);        // memoized id->meta map for OCR fusion
   const commitAmbientRef = useRef(null);  // set after commitAmbient is defined
   const triggerOcrRef = useRef(null);     // set after triggerOcr is defined
@@ -9173,6 +9179,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [flash, setFlash] = useState(false);     // green flash on a confident ping
   const [frameHint, setFrameHint] = useState(""); // coaching ("move closer", "shiny — tilt")
   const [savedMsg, setSavedMsg] = useState("");   // "N cards saved to your collection ✓"
+  const [qaCount, setQaCount] = useState(0);      // QA snaps saved this session (admin testing tool)
+  const [qaResults, setQaResults] = useState([]); // in-session QA snaps: {id,ts,thumb,guess,alts}
+  const qaBusyRef = useRef(false);
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
@@ -9416,7 +9425,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         let res = [];
         try { res = window.CardScanner.searchCrop(c, 0, 0, c.width, c.height, 8, 0.12); } catch(_e){}
         if(res.length){
-          if(jumped) A.frames = [];
+          // a big quad jump = a new physical card → drop the vote + any lock
+          if(jumped){ A.frames = []; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.ocrDoneKey = null; }
           const frame = new Map(), cardOf = new Map();
           for(const x of res){ const k = x.card.art_key; if(!frame.has(k) || x.color > frame.get(k)){ frame.set(k, x.color); cardOf.set(k, x.card); } }
           A.frames.push({ frame, cardOf });
@@ -9426,29 +9436,61 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           const ranked = Array.from(agg.entries()).sort((a, b) => b[1] - a[1]);
           const topKey = ranked[0][0];
           A.margin = ranked[1] ? (ranked[0][1] - ranked[1][1]) / (ranked[0][1] || 1) : 1;
-          A.voteKey = topKey; A.emptyFrames = 0; A.noDet = 0;
-          const seen = new Set(), cands = [];
-          for(const [k] of ranked){ const cd = latestCard.get(k); if(!cd) continue; const lk = (cd.name || "") + "|" + (cd.version || ""); if(seen.has(lk)) continue; seen.add(lk); cands.push(cd); if(cands.length >= 4) break; }
-          const top1 = latestCard.get(topKey) || cands[0];
-          const g = resolveGroup(top1), p = priceOf(g);
+          A.emptyFrames = 0; A.noDet = 0;
           const enough = A.frames.length >= 3;
-          const confident = enough && A.margin > 0.1;
-          const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident, textOk: false, shiny };
-          previewRef.current = pv;
-          label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident };
-          const pk = topKey + ":" + (confident ? 1 : 0);
-          if(pvKeyRef.current !== pk){ pvKeyRef.current = pk; setPreview(pv); }
-          // background OCR upgrade: once steady on a card not yet read, fire OCR
-          // UN-AWAITED (never blocks the loop). On a confident text read it
-          // upgrades the live preview + fixes the row if already added.
-          if(o.locked && enough && A.ocrDoneKey !== topKey && !A.ocrBusy && ocrReadyRef.current && triggerOcrRef.current){
-            A.ocrBusy = true; A.ocrDoneKey = topKey;
-            const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
-            triggerOcrRef.current(topKey, colorIds).finally(() => { ambientRef.current.ocrBusy = false; });
+          // ── Sticky lock with hysteresis (kills the badge cycling) ─────────
+          // The per-frame colour vote is noisy: look-alikes trade rank 1↔2, so
+          // the live guess used to flip between cards every frame and never
+          // "settle". Once the window has ≥3 frames we LOCK onto the leader and
+          // HOLD it. We only switch the colour lock when a challenger BOTH leads
+          // the locked card by ≥18% AND wins 4 frames in a row. A confident OCR
+          // read sets a TEXT lock that colour can't override. A genuine physical
+          // card change still flips instantly via the jumped / no-detect resets.
+          const aggOf = (k) => agg.get(k) || 0;
+          if(A.lockKey){
+            if(!A.lockText && agg.has(A.lockKey)){
+              if(topKey === A.lockKey){ A.challengerKey = null; A.challengerCount = 0; }
+              else if(aggOf(topKey) / (aggOf(A.lockKey) || 1) >= 1.18){
+                if(A.challengerKey === topKey) A.challengerCount++; else { A.challengerKey = topKey; A.challengerCount = 1; }
+                if(A.challengerCount >= 4){ A.lockKey = topKey; A.lockCard = latestCard.get(topKey) || A.lockCard; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.ocrDoneKey = null; }
+              } else { A.challengerKey = null; A.challengerCount = 0; }
+            }
+            // (colour-lock key out of window, or a text lock) → just keep holding
+          } else if(enough){
+            A.lockKey = topKey; A.lockCard = latestCard.get(topKey); A.lockText = false; A.challengerKey = null; A.challengerCount = 0;
           }
-          // opt-in auto-add
-          if(autoAddRef.current && A.armed && enough && A.margin > 0.16 && A.committedKey !== topKey && o.locked){
-            commitAmbientRef.current && commitAmbientRef.current(pv);
+          const dispKey = A.lockKey || topKey;
+          const dispCard = (A.lockKey && A.lockCard) ? A.lockCard : latestCard.get(dispKey);
+          A.voteKey = dispKey;
+          // candidate list: the displayed (locked) card leads, then the rest by vote
+          const seen = new Set(), cands = [];
+          for(const k of [dispKey].concat(ranked.map(([kk]) => kk))){
+            const cd = (k === dispKey && dispCard) ? dispCard : latestCard.get(k);
+            if(!cd) continue;
+            const lk = (cd.name || "") + "|" + (cd.version || ""); if(seen.has(lk)) continue; seen.add(lk);
+            cands.push(cd); if(cands.length >= 4) break;
+          }
+          const top1 = dispCard || cands[0];
+          if(top1){
+            const g = resolveGroup(top1), p = priceOf(g);
+            const confident = (A.lockKey === dispKey) || (enough && A.margin > 0.1);
+            const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident, textOk: A.lockText, shiny };
+            previewRef.current = pv;
+            label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident };
+            const pk = dispKey + ":" + (confident ? 1 : 0) + (A.lockText ? ":t" : "");
+            if(pvKeyRef.current !== pk){ pvKeyRef.current = pk; setPreview(pv); }
+            // background OCR upgrade: once steady on the LOCKED card (not yet read),
+            // fire OCR UN-AWAITED (never blocks the loop). A confident text read
+            // promotes to a TEXT lock that colour noise can no longer flip.
+            if(o.locked && enough && A.ocrDoneKey !== dispKey && !A.ocrBusy && !A.lockText && ocrReadyRef.current && triggerOcrRef.current){
+              A.ocrBusy = true; A.ocrDoneKey = dispKey;
+              const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
+              triggerOcrRef.current(dispKey, colorIds).finally(() => { ambientRef.current.ocrBusy = false; });
+            }
+            // opt-in auto-add (uses the stable locked guess)
+            if(!SCANNER_QA_ONLY && autoAddRef.current && A.armed && enough && A.margin > 0.16 && A.committedKey !== dispKey && o.locked){
+              commitAmbientRef.current && commitAmbientRef.current(pv);
+            }
           }
         }
       }
@@ -9460,7 +9502,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
 
       if(!r.quad){
         A.noDet++; A.emptyFrames++;
-        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.ocrDoneKey = null; }
+        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.ocrDoneKey = null; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; }
       }
       drawOutline(o.smooth, bw, bh, o.locked, label);
     } catch(_e){} finally { ambBusyRef.current = false; }
@@ -9627,12 +9669,15 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const chosen = byId.get(idr.top3[0]); if(!chosen) return;
       const cands = idr.top3.map(id => byId.get(id)).filter(Boolean);
       const A = ambientRef.current;
-      // upgrade the live preview if the user is still on this card
+      // upgrade the live preview if the user is still on this card. Promote to a
+      // TEXT lock so the per-frame colour vote can't flip the badge back off the
+      // OCR-confirmed name on the next tick.
       if(A.voteKey === voteKey && previewRef.current){
         const g = resolveGroup(chosen), p = priceOf(g);
         const pv = { card: chosen, disp: toDisp(chosen), group: g, low: p.low, mkt: p.mkt,
           cands: cands.length ? cands : previewRef.current.cands, confident: true, textOk: true, shiny: previewRef.current.shiny };
         previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":text"; setPreview(pv);
+        A.lockKey = chosen.art_key; A.lockCard = chosen; A.lockText = true; A.challengerKey = null; A.challengerCount = 0;
       }
       // if the colour guess for this card was already added, fix that row
       if(A.committedKey === voteKey && chosen.art_key !== voteKey) correctByArtKey(voteKey, chosen);
@@ -9754,6 +9799,89 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   }, [raw]);
   captureRef.current = capture;
 
+  // QA "Snap": a one-tap capture that saves the photo + the scanner's full
+  // reasoning (top guess, ranked candidates with colour scores, OCR lines,
+  // collector-number read, conf/source, and the live ambient guess at that
+  // moment) to the flywheel — WITHOUT staging or labeling. Lets us scan a stack
+  // fast and review later (photo + guess + thought process) instead of clicking
+  // right/wrong per card. Best-effort; never throws into React.
+  const snapForQA = useCallback(async () => {
+    if(qaBusyRef.current) return;
+    if(!user){ onSignIn && onSignIn(); return; }
+    qaBusyRef.current = true; setSavedMsg("Snapping…");
+    try {
+      // 1. high-res rectify (fall back to the guide crop)
+      let rect = null;
+      const v = videoRef.current;
+      if(workerRef.current && v && v.videoWidth){
+        try {
+          const bmp = await createImageBitmap(v, { resizeWidth: 1600 });
+          const r = await post("capture", { bitmap: bmp, outW: 1000, outH: 1400 }, [bmp]);
+          if(r && r.buffer){
+            const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
+            c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0); rect = c;
+          }
+        } catch(_e){}
+      }
+      if(!rect) rect = guideCropCanvas();
+      if(!rect){ setSavedMsg("Couldn't read it — frame the card and snap again"); setTimeout(()=>setSavedMsg(""), 2200); return; }
+
+      // 2. colour match (keep scores) + 3. OCR + 4. identify — same pipeline as capture()
+      let colour = [];
+      try {
+        const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
+        const seenc = new Set();
+        for(const x of res){ if(seenc.has(x.card.id)) continue; seenc.add(x.card.id);
+          colour.push({ id: x.card.id, name: x.card.name, version: x.card.version, score: Math.round((x.color || 0) * 1000) / 1000 });
+          if(colour.length >= 10) break; }
+      } catch(_e){}
+      let ocrLines = [], cnNum = null, cnSet = null;
+      if(ocrReadyRef.current && window.CardScanner.identify){
+        try { const o = await ocrCardRegions(rect); ocrLines = o.lines || []; cnNum = o.cnNum; cnSet = o.cnSet; } catch(_e){}
+      }
+      const idr = window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colour.map(c => c.id) }) || {};
+
+      // 5. resolve the top guess + a readable candidate list
+      const META = window.CardScanner.state.cards;
+      const byId = capture._byId || (capture._byId = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
+      const orderedIds = (idr.top3 && idr.top3.length) ? idr.top3.concat(colour.map(c => c.id)) : colour.map(c => c.id);
+      const seenL = new Set(), cands = [];
+      for(const id of orderedIds){ const m = byId.get(id); if(!m) continue; const k = (m.name||"")+"|"+(m.version||""); if(seenL.has(k)) continue; seenL.add(k);
+        cands.push({ id, name: m.name, version: m.version, rarity: m.rarity, colourScore: (colour.find(c => c.id === id) || {}).score ?? null });
+        if(cands.length >= 6) break; }
+      const top = cands[0] || null;
+      const live = previewRef.current && previewRef.current.disp ? { id: previewRef.current.disp.id, name: lbl(previewRef.current.disp), textOk: !!previewRef.current.textOk } : null;
+
+      // 6. assemble the QA reasoning payload + save (image + debug; no collection write)
+      const debug = {
+        v: 1, kind: "qa-snap", ts: Date.now(),
+        conf: idr.conf || null, source: idr.source || null, nameConf: idr.nameConf || null,
+        topGuess: top, candidates: cands,
+        names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
+        cn: { num: cnNum ?? null, set: cnSet ?? null },
+        ocrLines: (ocrLines || []).slice(0, 10),
+        liveAmbientGuess: live,
+      };
+      const blob = await canvasToBlob(rect);
+      if(blob && top) await uploadSample(top.id, top.id, false, null, blob, debug);
+      else if(blob) await uploadSample(null, null, false, null, blob, debug);
+      // in-session feedback row (thumbnail + guess + alternates) so testers see
+      // what it read without leaving the scanner; full data is in the flywheel.
+      let thumb = "";
+      try { const tc = document.createElement("canvas"); tc.width = 96; tc.height = Math.round(96 * rect.height / rect.width);
+        tc.getContext("2d").drawImage(rect, 0, 0, tc.width, tc.height); thumb = tc.toDataURL("image/jpeg", 0.7); } catch(_e){}
+      const guessLabel = top ? ((top.name || "?") + (top.version ? " - " + top.version : "")) : null;
+      const alts = cands.slice(1, 3).map(c => (c.name || "") + (c.version ? " - " + c.version : "")).filter(Boolean).join(", ");
+      const rid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
+      setQaResults(prev => [{ id: rid, ts: Date.now(), thumb, guess: guessLabel, alts }].concat(prev).slice(0, 40));
+      ensureAudio(); pingFeedback();
+      setQaCount(n => n + 1);
+      setSavedMsg(top ? ("Saved — guessed " + guessLabel + " ✓") : "Saved (no match) ✓");
+      setTimeout(() => setSavedMsg(""), 2200);
+    } catch(_e){ setSavedMsg("Snap failed — try again"); setTimeout(()=>setSavedMsg(""), 2000); }
+    finally { qaBusyRef.current = false; }
+  }, [user, onSignIn]);
+
   const resume = () => { setResult(null); setRdy(false); steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 }; setStatus("Place ONE card on a plain surface"); };
   // switch scan modes — clear any single-mode result + ambient preview/vote so the
   // loop restarts cleanly into the chosen mode.
@@ -9761,7 +9889,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(m === mode) return;
     setResult(null); setPreview(null); previewRef.current = null; pvKeyRef.current = ""; setFH("");
     steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 };
-    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0 };
+    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0 };
     if(m === "ambient") ensureAudio();
     setMode(m);
     setStatus(m === "ambient" ? "Hover over a card" : "Place ONE card on a plain surface");
@@ -9770,17 +9898,21 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // data flywheel: log a (rectified photo -> confirmed card) example so we can
   // train a real-photo matcher later. corrected=true rows (the scanner's top guess
   // was wrong and the user fixed it) are the gold hard-negatives. Best-effort.
-  const uploadSample = async (cardId, predictedId, corrected, printing, blob) => {
+  const uploadSample = async (cardId, predictedId, corrected, printing, blob, debug) => {
     try {
       if(!user || !blob || !sbClient) return;
       const uid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
       const path = user.id + "/" + uid + ".jpg";
       const up = await sbClient.storage.from("scan-samples").upload(path, blob, { contentType: "image/jpeg", upsert: false });
-      await sbClient.from("scan_samples").insert({
+      const row = {
         user_id: user.id, card_id: cardId, predicted_card_id: predictedId || null,
         corrected: !!corrected, printing: printing || null,
         image_path: (up && !up.error) ? path : null,
-      });
+      };
+      const { error } = await sbClient.from("scan_samples").insert(debug ? { ...row, debug } : row);
+      // schema-tolerant: a pre-migration-95 DB has no `debug` column (PGRST204 /
+      // 42703) — retry the plain row so the photo + prediction still log.
+      if(error && debug) await sbClient.from("scan_samples").insert(row);
     } catch(_e){ /* best-effort */ }
   };
   // downscale a rectified-card canvas to a ~400px JPEG blob for the flywheel.
@@ -9867,6 +9999,36 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           </button>`)}
         </div></div>` : null}
     </div>`;
+  } else if(mode === "ambient" && SCANNER_QA_ONLY){
+    // QA-only testing layout: tap → snap a photo + the scanner's guess/reasoning
+    // → upload for later review. No staging, no add, no collection writes.
+    const pv = preview;
+    below = html`<div class="scanner-ambient scanner-qa">
+      <div class="scanner-amb-bar">
+        <div class="scanner-amb-now">
+          ${pv ? html`<span class="scanner-amb-now-name">${lbl(pv.disp)}${pv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">live guess</span>`
+               : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Point at a card & tap" : "Loading detector…")}</span>`}
+        </div>
+        ${user ? html`<button class="scanner-shutter scanner-amb-add ready" onClick=${snapForQA} aria-label="Snap this card for QA">📸</button>`
+               : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
+        <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
+      </div>
+      ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
+      <div class="scanner-qa-note">QA testing — each tap saves the photo + the scanner's guess so we can review accuracy later. <b>Nothing is added to any collection.</b></div>
+      <div class="scanner-session">
+        <div class="scanner-session-list">
+          ${qaResults.length === 0
+            ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b> (or tap anywhere on the camera). Hold close — one card, good light.</div>`
+            : qaResults.map(x => html`<div class="scanner-session-row" key=${x.id}>
+                <img class="scanner-session-thumb" src=${x.thumb} loading="lazy"/>
+                <div class="scanner-qa-rowinfo">
+                  <span class="scanner-session-name">${x.guess || "(no match)"}</span>
+                  ${x.alts ? html`<span class="scanner-qa-alts">also: ${x.alts}</span>` : null}
+                </div>
+              </div>`)}
+        </div>
+      </div>
+    </div>`;
   } else if(mode === "ambient"){
     const money = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
     const sessTotal = session.reduce((s, x) => s + (Number(x.mkt ?? x.low ?? 0) * x.qty), 0);
@@ -9879,7 +10041,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           ${pv ? html`<span class="scanner-amb-now-name">${lbl(pv.disp)}${pv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${money(pv.mkt ?? pv.low)}</span>`
                : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : "Loading detector…")}</span>`}
         </div>
-        ${user ? html`<button class=${"scanner-shutter scanner-amb-add" + (ready && pv ? " ready" : "")} onClick=${tapCommit} disabled=${!pv} aria-label="Add this card">＋</button>`
+        ${user ? html`<div class="scanner-amb-mid">
+                 <button class="scanner-amb-snap" onClick=${snapForQA}
+                   title="QA snap — saves this photo + the scanner's full guess & reasoning for review later. Does NOT stage or add the card."
+                   aria-label="QA snap">📸${qaCount ? html` <span class="scanner-amb-snap-n">${qaCount}</span>` : null}</button>
+                 <button class=${"scanner-shutter scanner-amb-add" + (ready && pv ? " ready" : "")} onClick=${tapCommit} disabled=${!pv} aria-label="Add this card">＋</button>
+               </div>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to scan</button>`}
         <label class="scanner-amb-auto"><input type="checkbox" checked=${autoAdd} onChange=${e => setAutoAdd(e.target.checked)}/> Auto</label>
       </div>
@@ -9921,11 +10088,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>`;
   }
 
-  const stageTap = (mode === "ambient" && !result && user) ? tapCommit : null;
+  // QA mode: tapping anywhere on the camera snaps (fast rapid testing). Otherwise
+  // the ambient stage-tap stages a card.
+  const stageTap = SCANNER_QA_ONLY ? (user ? snapForQA : (onSignIn || null))
+    : ((mode === "ambient" && !result && user) ? tapCommit : null);
   return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
     <div class="scanner-head">
-      <span class="scanner-title">Scan a card</span>
-      ${phase === "scanning" ? html`<div class="scanner-mode-seg" role="tablist">
+      <span class="scanner-title">${SCANNER_QA_ONLY ? "Scan a card · QA test" : "Scan a card"}</span>
+      ${phase === "scanning" && !SCANNER_QA_ONLY ? html`<div class="scanner-mode-seg" role="tablist">
         <button class=${"scanner-mode-btn" + (mode === "ambient" ? " active" : "")} onClick=${() => switchMode("ambient")}>Stack scan</button>
         <button class=${"scanner-mode-btn" + (mode === "single" ? " active" : "")} onClick=${() => switchMode("single")}>Single</button>
       </div>` : null}
@@ -9936,7 +10106,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (mode === "ambient" ? "tap to stage" : "card detected") : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "tap to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
       ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
@@ -9966,9 +10136,13 @@ function ScanReviewModal({ raw, onClose }){
   useEffect(() => { (async () => {
     if(!sbClient){ setItems([]); return; }
     try {
-      const { data, error } = await sbClient.from("scan_samples")
-        .select("id,card_id,predicted_card_id,corrected,reviewed,image_path,created_at,printing")
+      let { data, error } = await sbClient.from("scan_samples")
+        .select("id,card_id,predicted_card_id,corrected,reviewed,image_path,created_at,printing,debug")
         .order("created_at", { ascending: false }).limit(400);
+      // schema-tolerant: pre-migration-95 DBs have no `debug` column
+      if(error){ const r = await sbClient.from("scan_samples")
+        .select("id,card_id,predicted_card_id,corrected,reviewed,image_path,created_at,printing")
+        .order("created_at", { ascending: false }).limit(400); data = r.data; error = r.error; }
       setItems(error ? [] : (data || []));
     } catch(_e){ setItems([]); }
   })(); }, []);
@@ -10027,6 +10201,18 @@ function ScanReviewModal({ raw, onClose }){
     body = html`<div class="scanrev-card">
       <div class="scanrev-img-wrap">${imgUrl ? html`<img class="scanrev-img" src=${imgUrl} alt="scanned card"/>` : html`<div class="scanrev-img-ph">${cur.image_path ? "loading…" : "no photo saved"}</div>`}</div>
       <div class="scanrev-guess">Scanner guessed<br/><b>${guess}</b>${cur.reviewed ? html` <span class=${"scanrev-tag " + (cur.corrected ? "w" : "r")}>${cur.corrected ? "marked wrong" : "marked right"}</span>` : null}</div>
+      ${cur.debug ? html`<details class="scanrev-debug">
+        <summary>Thought process ${cur.debug.conf ? html`<span class="scanrev-debug-conf">${cur.debug.conf}</span>` : null}</summary>
+        <div class="scanrev-debug-body">
+          <div class="scanrev-debug-row"><b>source</b> ${cur.debug.source || "—"}${cur.debug.cn && cur.debug.cn.num != null ? html` · <b>#</b> ${cur.debug.cn.num}${cur.debug.cn.set ? "/" + cur.debug.cn.set : ""}` : ""}</div>
+          ${cur.debug.liveAmbientGuess && cur.debug.liveAmbientGuess.name && cur.debug.liveAmbientGuess.id !== cur.predicted_card_id ? html`<div class="scanrev-debug-row">live guess was <i>${cur.debug.liveAmbientGuess.name}</i>${cur.debug.liveAmbientGuess.textOk ? " (✓ name)" : ""}</div>` : null}
+          ${cur.debug.ocrLines && cur.debug.ocrLines.length ? html`<div class="scanrev-debug-row">OCR: <i>${cur.debug.ocrLines.join("  ·  ")}</i></div>` : null}
+          ${cur.debug.candidates && cur.debug.candidates.length ? html`<ol class="scanrev-debug-cands">
+            ${cur.debug.candidates.map((c, i) => html`<li key=${i} class=${i === 0 ? "top" : ""}>${c.name || c.id}${c.version ? " - " + c.version : ""}${c.colourScore != null ? html` <em>col ${c.colourScore}</em>` : ""}</li>`)}
+          </ol>` : null}
+          ${cur.debug.names && cur.debug.names.length ? html`<div class="scanrev-debug-row">name reads: ${cur.debug.names.map(n => (n.name || "") + (n.version ? " - " + n.version : "") + " (" + n.score + ")").join(",  ")}</div>` : null}
+        </div>
+      </details>` : null}
       ${picking ? html`<div class="scanrev-pick">
         <input class="scanrev-search" placeholder="What was it really? Type the card name…" value=${q}
           onInput=${e => setQ(e.target.value)} onKeyDown=${e => { if(e.key === "Enter" && truthResults[0]) mark(true, truthResults[0].card_id); }} autoFocus/>
@@ -22803,6 +22989,21 @@ const COLLECTION_RANGES = [
   {key:"all", label:"All", days:365},
 ];
 
+// Eye / eye-off glyphs (Lucide-style line icons) used by the collection
+// panel's "hide my value" privacy toggle.
+const EYE_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const EYE_OFF_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.77 9.77 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>`;
+
+// Home-page sections the user can hide from the settings popover. `key` is
+// the localStorage-persisted visibility flag; each defaults to visible.
+const HOME_PANELS = [
+  {key:"following",   label:"Following feed"},
+  {key:"tournaments", label:"Tournament results"},
+  {key:"setChamps",   label:"Set Championships"},
+  {key:"setEv",       label:"Set EV"},
+  {key:"collection",  label:"Your Collection value"},
+];
+
 // Right-side panel on Home: current collection value, line chart over a
 // user-selected range, and a tiny "top movers in your collection" list.
 const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, setsMeta}) => {
@@ -22840,6 +23041,23 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     title=${minimized ? "Expand collection panel" : "Minimize collection panel"}
     aria-label=${minimized ? "Expand" : "Minimize"}>
     ${minimized ? "▸" : "▾"}
+  </button>`;
+  // Privacy: mask the portfolio dollar figures (headline, delta, per-section
+  // sub-values, chart axis + tooltip) behind "-----" so the value isn't
+  // exposed when screen-sharing or in public. The chart shape still renders.
+  // Persisted so the choice sticks across sessions.
+  const [hideValue, setHideValue] = useState(() => {
+    try { return localStorage.getItem("packsink:home:colValueHidden") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:colValueHidden", hideValue ? "1" : "0"); } catch {}
+  }, [hideValue]);
+  const eyeBtn = html`<button class="panel-min-btn panel-eye-btn"
+    onClick=${()=>setHideValue(v => !v)}
+    title=${hideValue ? "Show collection value" : "Hide collection value"}
+    aria-label=${hideValue ? "Show collection value" : "Hide collection value"}>
+    ${hideValue ? EYE_OFF_ICON : EYE_ICON}
   </button>`;
   // Controls for the in-panel "Your Top Movers" list. Independent from the
   // main movers banners so the user can ask "what moved most in MY cards
@@ -23357,11 +23575,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             title="Open Collection tab"
             style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Collection</button>`
         : html`<h2 class="panel-title">Your Collection</h2>`}
-      ${minBtn}
+      <div class="panel-header-actions">${eyeBtn}${minBtn}</div>
     </div>
     <div class="panel-value">
-      <div class="panel-value-now">$${combinedCurrentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-      ${rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
+      <div class="panel-value-now">${hideValue ? "-----" : "$"+combinedCurrentValue.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
+      ${!hideValue && rangeDelta != null && html`<div class="panel-value-delta" style=${{color:deltaColor}}>
         ${rangeDelta >= 0 ? "+" : ""}$${Math.abs(rangeDelta).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
         <span style=${{opacity:0.8}}>(${rangeDeltaPct >= 0 ? "+" : ""}${rangeDeltaPct.toFixed(2)}%)</span>
         <span class="muted" style=${{fontWeight:400,fontSize:10,marginLeft:4}}>past ${rangeLabel}</span>
@@ -23377,17 +23595,17 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       <label title="Show Card collection value on the chart">
         <input type="checkbox" checked=${showCards} onChange=${e=>setShowCards(e.target.checked)}/>
         <span class="panel-toggle-swatch" style=${{background:"var(--accent)"}}/>
-        <span>Cards <em>${fmt(cardLatestValue)}</em></span>
+        <span>Cards <em>${hideValue ? "-----" : fmt(cardLatestValue)}</em></span>
       </label>
       <label title="Show Sealed-product value on the chart">
         <input type="checkbox" checked=${showSealed} onChange=${e=>setShowSealed(e.target.checked)}/>
         <span class="panel-toggle-swatch" style=${{background:"#7e54c4"}}/>
-        <span>Sealed <em>${fmt(sealedLatestValue)}</em></span>
+        <span>Sealed <em>${hideValue ? "-----" : fmt(sealedLatestValue)}</em></span>
       </label>
       <label title="Show Graded card value on the chart">
         <input type="checkbox" checked=${showGraded} onChange=${e=>setShowGraded(e.target.checked)}/>
         <span class="panel-toggle-swatch" style=${{background:"#c8a846"}}/>
-        <span>Graded <em>${fmt(gradedLatestValue)}</em></span>
+        <span>Graded <em>${hideValue ? "-----" : fmt(gradedLatestValue)}</em></span>
       </label>
       <label title="Sum every enabled section into a single line (default). Uncheck to see Cards / Sealed / Graded as their own colored lines."
         style=${{marginLeft:"auto"}}>
@@ -23398,6 +23616,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     <div class="panel-chart">
       ${(chartSeries.length && chartSeries.some(s => s.data && s.data.length))
         ? html`<${LineChart} series=${chartSeries} width=340 height=160
+            maskValues=${hideValue}
             padding=${{top:6,right:8,bottom:20,left:48}}/>
             ${historyState.loading ? html`<div class="muted" style=${{fontSize:10,textAlign:"center",marginTop:-4}}>Refreshing…</div>` : null}`
         : historyState.loading
@@ -23992,7 +24211,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
 // instead of CSS media queries so cache-stale styles.css can't break the
 // layout — the inline gridTemplateColumns is computed in React.
 const ChaseRowWithTourney = ({raw, chase, rareLeg, winLabel, directionLabel, windowKey,
-                              visibleWindows, paused, openBannerInScreener, openCard,
+                              visibleWindows, paused, showTournaments=true, openBannerInScreener, openCard,
                               openDeckById, openTournamentById, openTournamentsList}) => {
   const [isNarrow, setIsNarrow] = useState(() =>
     typeof window !== "undefined" && window.matchMedia
@@ -24032,8 +24251,10 @@ const ChaseRowWithTourney = ({raw, chase, rareLeg, winLabel, directionLabel, win
     onTileClick=${openCard}/>`;
 
   // Desktop: tournament lives in the left column (rendered by HomeView); we
-  // just stack chase + rare-leg full-width here, same as before.
-  if(!isNarrow){
+  // just stack chase + rare-leg full-width here, same as before. Also the
+  // fallback when the user has hidden tournament results from the home page —
+  // no tournament column means no reason for the side-by-side grid.
+  if(!isNarrow || !showTournaments){
     return html`<div>${chaseBanner}${rareLegBanner}</div>`;
   }
 
@@ -24802,7 +25023,15 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   </section>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter, onEventArtistClick}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter, onEventArtistClick, sections}) => {
+  // Home-page section visibility (set in App from the settings popover).
+  // Absent prop or absent key = visible.
+  const sec = sections || {};
+  const showFollowing   = sec.following   !== false;
+  const showTournaments = sec.tournaments !== false;
+  const showSetChamps   = sec.setChamps   !== false;
+  const showSetEv       = sec.setEv       !== false;
+  const showCollection  = sec.collection  !== false;
   const gradedPremium = useContext(GradedPremiumContext);
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
@@ -25154,11 +25383,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
 
     <div class="home-grid">
       <div class="home-left-col">
-        <${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>
-        <div class="home-tourney-col home-tourney-col--desktop">
+        ${showFollowing && html`<${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`}
+        ${showTournaments && html`<div class="home-tourney-col home-tourney-col--desktop">
           <${TournamentResultsBanner} raw=${raw} openDeckById=${openDeckById} openTournamentById=${openTournamentById}
             openTournamentsList=${openTournamentsList}/>
-        </div>
+        </div>`}
         ${activeEvents.map(ev => html`<div key=${ev.id} class="home-news-tile">
           <div class="home-news-title">${ev.title}</div>
           ${(ev.dateLabel || ev.eventUrl) && html`<a class="home-news-event-link"
@@ -25237,6 +25466,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       windowKey=${windowKey}
                       visibleWindows=${visibleWindows}
                       paused=${paused}
+                      showTournaments=${showTournaments}
                       openBannerInScreener=${openBannerInScreener}
                       openCard=${openCard}
                       openDeckById=${openDeckById}
@@ -25257,13 +25487,13 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                 })()}
       </div>
       <div class="home-grid-right">
-        <${UpcomingSCsBox}/>
-        <${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>
-        <${CollectionPanel} raw=${raw} user=${user} collection=${collection}
+        ${showSetChamps && html`<${UpcomingSCsBox}/>`}
+        ${showSetEv && html`<${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`}
+        ${showCollection && html`<${CollectionPanel} raw=${raw} user=${user} collection=${collection}
           sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}} sealedPrices=${sealedPrices}
           collectionLoading=${collectionLoading} setsMeta=${setsMeta}
           moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
-          onTitleClick=${goCollection}/>
+          onTitleClick=${goCollection}/>`}
       </div>
     </div>
 
@@ -25437,18 +25667,20 @@ function cheapestCardPrice(rowsForCardId){
 
 // Tournament results detail view — lists every deck in a tournament,
 // ordered by placement. Clicking a row opens the deck via openDeckById.
-const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
-                               theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink}) => {
-  if(!tournament) return html`<div class="muted">Tournament not found. <button onClick=${onBack}>Back</button></div>`;
-  const sorted = (results || []).slice().sort((a,b) => {
-    const ar = a.place_rank == null ? 9999 : a.place_rank;
-    const br = b.place_rank == null ? 9999 : b.place_rank;
-    return ar - br;
-  });
-  // Mirrors DecksView.deckGradient() so tournament tiles match the Discover /
-  // Favorites / Following tournament tiles visually. INK_TINT_* + DARK_THEMES
-  // live at module scope.
+// One tournament-deck tile — shared by the per-tournament detail view and the
+// cross-tournament "View all decks" grid. INK_TINT_* + DARK_THEMES_GLOBAL live
+// at module scope; the gradient mirrors DecksView.deckGradient() so these tiles
+// match the Discover / Favorites / Following tournament tiles visually.
+// - `onInkClick(ink)` (optional): when provided, the ink shields become buttons
+//   that drive the all-decks ink filter instead of plain decoration.
+// - `showEvent` + `event`: render the originating tournament name/date (used by
+//   the all-decks grid where tiles span multiple events).
+const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin,
+                             onOpenDeck, onCopyDeckLink, onCopyDecklist, onCopyDeckImage,
+                             onEditDeck, onDeleteDeck, onInkClick}) => {
   const tints = DARK_THEMES_GLOBAL.has(theme) ? INK_TINT_DARK : INK_TINT_LIGHT;
+  // Capitalize "amber" → "Amber" to match the INK_ICONS keys.
+  const normInk = (s) => s ? (String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase()) : null;
   const buildBg = (inks) => {
     if(!inks.length) return null;
     const c1 = tints[inks[0]];
@@ -25458,8 +25690,77 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
     if(!c2) return `linear-gradient(135deg, ${c1} 0%, ${c1} 60%, var(--bg-surface) 100%)`;
     return `linear-gradient(135deg, ${c1} 0%, ${c1} 45%, ${c2} 55%, ${c2} 100%)`;
   };
-  // Capitalize "amber" → "Amber" to match the INK_ICONS keys.
-  const normInk = (s) => s ? (String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase()) : null;
+  const inks = (r.deck_inks || []).map(normInk).filter(Boolean);
+  // When the uploader left the deck name blank, the bulk-upload flow backfills
+  // with the ink combo ("Amber/Emerald"). Showing that verbatim next to the ink
+  // shields is noisy — promote the player name to the title instead.
+  const rawName = (r.deck_name || "").trim();
+  const inkTokens = inks.map(s => s.toLowerCase());
+  const nameTokens = rawName.toLowerCase().split(/[\s/,-]+/).filter(Boolean);
+  const isInkOnlyName = rawName && nameTokens.length > 0
+    && nameTokens.every(t => inkTokens.includes(t))
+    && nameTokens.length === inkTokens.length;
+  const playerName = r.player_name || "Unknown player";
+  const titleText = (isInkOnlyName || !rawName) ? playerName : rawName;
+  const showByline = !(isInkOnlyName || !rawName);
+  const bg = buildBg(inks);
+  const hasDeck = !!r.deck_id;
+  const tileHref = hasDeck
+    ? "/decks?deck=" + r.deck_id + (r.deck_share_token ? "&token=" + encodeURIComponent(r.deck_share_token) : "")
+    : null;
+  return html`<a class="deck-card external tournament"
+      href=${tileHref || "#"}
+      style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
+      onClickCapture=${navCapture}
+      onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
+    <div class="deck-card-name">${titleText}</div>
+    ${showEvent && event && html`<div class="deck-card-event" title=${event.name}>
+      ${event.name}${event.event_date ? " · " + new Date(event.event_date+"T00:00:00Z").toLocaleDateString() : ""}
+    </div>`}
+    <div class="deck-card-tourney" title=${"Placed " + (r.place || "—")}>
+      <span class="dct-trophy">🏆</span>
+      <span class="dct-place">${r.place || "—"}</span>
+      ${showByline && html`<span class="dct-name">by ${playerName}</span>`}
+    </div>
+    ${inks.length > 0 && html`<div class="deck-card-chips">
+      <div class="deck-card-inks">
+        ${inks.map(ink => INK_ICONS[ink]
+          ? (onInkClick
+              ? html`<button key=${ink} type="button" class="deck-card-ink-btn"
+                  title=${"Show all tournament decks in " + ink}
+                  onClick=${e=>{e.stopPropagation(); e.preventDefault(); onInkClick(ink);}}>
+                  <img src=${INK_ICONS[ink]} alt=${ink}/>
+                </button>`
+              : html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>`)
+          : null)}
+      </div>
+    </div>`}
+    <div class="deck-card-actions">
+      <button disabled=${!hasDeck}
+        onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
+        title="Copy share link">🔗 Copy link</button>
+      <button disabled=${!hasDeck}
+        onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
+        title="Copy decklist as text">📋 Copy list</button>
+      <button disabled=${!hasDeck}
+        onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
+        title="Copy deck poster image">🖼 Copy image</button>
+      ${isAdmin && html`<button title="Edit this deck"
+        onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>✎ Edit</button>`}
+      ${isAdmin && html`<button class="danger" title="Remove this deck from the tournament"
+        onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>🗑 Remove</button>`}
+    </div>
+  </a>`;
+};
+
+const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
+                               theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onInkClick}) => {
+  if(!tournament) return html`<div class="muted">Tournament not found. <button onClick=${onBack}>Back</button></div>`;
+  const sorted = (results || []).slice().sort((a,b) => {
+    const ar = a.place_rank == null ? 9999 : a.place_rank;
+    const br = b.place_rank == null ? 9999 : b.place_rank;
+    return ar - br;
+  });
   return html`<div>
     <div style=${{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
       <button onClick=${onBack} style=${{fontSize:12,padding:"5px 10px"}}>← Back to Tournaments</button>
@@ -25478,65 +25779,18 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
         ${tournament.num_players ? ` · ${tournament.num_players} players` : ""}
         ${tournament.format ? " · " + (tournament.format === "core" ? "Core Constructed" : "Infinity") : ""}
       </div>
+      ${onInkClick && html`<div class="muted" style=${{fontSize:11,marginTop:6}}>
+        Tip: click an ink shield on any deck to browse every tournament deck in that ink.</div>`}
     </div>
     ${sorted.length === 0
       ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>No decks linked to this tournament.${isAdmin ? html` Click <em>+ Add deck</em> above.` : ""}</div>`
       : html`<div class="deck-list">
-          ${sorted.map(r => {
-            const inks = (r.deck_inks || []).map(normInk).filter(Boolean);
-            // When the uploader left the deck name blank, the bulk-upload flow
-            // backfills with the ink combo ("Amber/Emerald"). Showing that
-            // verbatim next to the ink shields is noisy — promote the player
-            // name to the title instead so each tile reads "PLAYER · place".
-            const rawName = (r.deck_name || "").trim();
-            const inkTokens = inks.map(s => s.toLowerCase());
-            const nameTokens = rawName.toLowerCase().split(/[\s/,-]+/).filter(Boolean);
-            const isInkOnlyName = rawName && nameTokens.length > 0
-              && nameTokens.every(t => inkTokens.includes(t))
-              && nameTokens.length === inkTokens.length;
-            const playerName = r.player_name || "Unknown player";
-            const titleText = (isInkOnlyName || !rawName) ? playerName : rawName;
-            const showByline = !(isInkOnlyName || !rawName);
-            const bg = buildBg(inks);
-            const hasDeck = !!r.deck_id;
-            const tileHref = hasDeck
-              ? "/decks?deck=" + r.deck_id + (r.deck_share_token ? "&token=" + encodeURIComponent(r.deck_share_token) : "")
-              : null;
-            return html`<a key=${r.result_id} class="deck-card external tournament"
-                href=${tileHref || "#"}
-                style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
-                onClickCapture=${navCapture}
-                onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
-              <div class="deck-card-name">${titleText}</div>
-              <div class="deck-card-tourney" title=${"Placed " + (r.place || "—")}>
-                <span class="dct-trophy">🏆</span>
-                <span class="dct-place">${r.place || "—"}</span>
-                ${showByline && html`<span class="dct-name">by ${playerName}</span>`}
-              </div>
-              ${inks.length > 0 && html`<div class="deck-card-chips">
-                <div class="deck-card-inks">
-                  ${inks.map(ink => INK_ICONS[ink]
-                    ? html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>`
-                    : null)}
-                </div>
-              </div>`}
-              <div class="deck-card-actions">
-                <button disabled=${!hasDeck}
-                  onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
-                  title="Copy share link">🔗 Copy link</button>
-                <button disabled=${!hasDeck}
-                  onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
-                  title="Copy decklist as text">📋 Copy list</button>
-                <button disabled=${!hasDeck}
-                  onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
-                  title="Copy deck poster image">🖼 Copy image</button>
-                ${isAdmin && html`<button title="Edit this deck"
-                  onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>✎ Edit</button>`}
-                ${isAdmin && html`<button class="danger" title="Remove this deck from the tournament"
-                  onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>🗑 Remove</button>`}
-              </div>
-            </a>`;
-          })}
+          ${sorted.map(r => html`<${TournamentDeckTile} key=${r.result_id}
+            r=${r} theme=${theme} isAdmin=${isAdmin}
+            onOpenDeck=${onOpenDeck}
+            onCopyDeckLink=${onCopyDeckLink} onCopyDecklist=${onCopyDecklist} onCopyDeckImage=${onCopyDeckImage}
+            onEditDeck=${onEditDeck} onDeleteDeck=${onDeleteDeck}
+            onInkClick=${onInkClick}/>`)}
         </div>`}
   </div>`;
 };
@@ -26277,6 +26531,11 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   const [tournaments, setTournaments] = useState([]);
   const [tournamentResults, setTournamentResults] = useState({});  // {tournament_id: [results...]}
   const [selectedTournamentId, setSelectedTournamentId] = useState(null);
+  // Tournaments sub-view: "events" (the per-event grid, default) vs "alldecks"
+  // (one flat grid of every tournament deck, filterable by ink / format / event).
+  const [tourneyDeckView, setTourneyDeckView] = useState("events");
+  const [tourneyFormat, setTourneyFormat] = useState("all"); // all | core | infinity
+  const [tourneyEvent, setTourneyEvent] = useState("all");   // "all" | tournament id
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editTournamentId, setEditTournamentId] = useState(null);
   // Per-deck admin edit/add modal. `tournamentDeckEdit` is null when closed,
@@ -27448,6 +27707,52 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
   }, [decks, favoriteCounts, viewCounts, yourDeckSearch, yourDeckSort, inkFilter, collection, cardById]);
   const filterExternal = (entries) => entries.filter(e => matchesInks(summarizeDeck(e.deck).inks));
 
+  // ── Tournaments "View all decks" ────────────────────────────────────────
+  // Capitalize "amber" → "Amber" so deck_inks (lowercase) compare against the
+  // INKS-cased values held in inkFilter.
+  const normInkName = (s) => s ? (String(s).charAt(0).toUpperCase() + String(s).slice(1).toLowerCase()) : null;
+  const eventById = useMemo(() => {
+    const m = {};
+    for(const t of (tournaments || [])) m[t.id] = t;
+    return m;
+  }, [tournaments]);
+  // Flatten every tournament's results into one list, newest event first then
+  // by finishing place. Each row keeps its originating tournament for filtering
+  // + the per-tile event label.
+  const allTournamentDecks = useMemo(() => {
+    const out = [];
+    for(const t of (tournaments || [])){
+      for(const r of (tournamentResults[t.id] || [])) out.push({...r, _event: t});
+    }
+    out.sort((a, b) => {
+      const ad = a._event?.event_date || "", bd = b._event?.event_date || "";
+      if(ad !== bd) return bd.localeCompare(ad); // newer events first
+      const ar = a.place_rank == null ? 9999 : a.place_rank;
+      const br = b.place_rank == null ? 9999 : b.place_rank;
+      return ar - br;
+    });
+    return out;
+  }, [tournaments, tournamentResults]);
+  const visibleAllDecks = useMemo(() => {
+    return allTournamentDecks.filter(r => {
+      if(tourneyFormat !== "all" && (r._event?.format || "") !== tourneyFormat) return false;
+      if(tourneyEvent !== "all" && r._event?.id !== tourneyEvent) return false;
+      const inks = (r.deck_inks || []).map(normInkName).filter(Boolean);
+      return matchesInks(inks);
+    });
+  }, [allTournamentDecks, tourneyFormat, tourneyEvent, inkFilter]);
+  // Jump into the all-decks grid filtered by an ink — used by the ink shields
+  // inside a tournament detail and by the top ink chips while on Tournaments.
+  const goAllDecksWithInk = useCallback((ink) => {
+    setSelectedTournamentId(null);
+    setTourneyDeckView("alldecks");
+    if(ink) setInkFilter(prev => {
+      const next = new Set(prev);
+      if(next.has(ink)) next.delete(ink); else next.add(ink);
+      return next;
+    });
+  }, []);
+
   const createDeck = useCallback(async () => {
     if(!user) return;
     const {data, error} = await sbClient.from("decks")
@@ -27945,7 +28250,9 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
           class=${"chip ink ink-icon-chip "+(inkFilter.has(ink)?"active":"")}
           style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}}
           title=${ink} aria-label=${ink}
-          onClick=${()=>toggleInkFilter(ink)}>
+          onClick=${()=> deckSection === "tournaments"
+            ? goAllDecksWithInk(ink)   // on Tournaments, ink → all-decks grid filtered
+            : toggleInkFilter(ink)}>
           <img src=${INK_ICONS[ink]} alt=${ink}/>
         </button>`)}
         ${inkFilter.size > 0 && html`<button class="deck-filter-clear"
@@ -28111,12 +28418,54 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
             theme=${theme}
             onCopyDecklist=${copyDeckListFromResult}
             onCopyDeckImage=${copyDeckImageFromResult}
-            onCopyDeckLink=${copyDeckLinkFromResult}/>`
+            onCopyDeckLink=${copyDeckLinkFromResult}
+            onInkClick=${goAllDecksWithInk}/>`
+        : tourneyDeckView === "alldecks"
+          ? html`<div>
+              <div class="tournament-alldecks-bar">
+                <button onClick=${()=>setTourneyDeckView("events")}
+                  style=${{fontSize:12,padding:"5px 10px"}}>← Back to events</button>
+                <div class="tournament-alldecks-filters">
+                  <div class="seg-toggle tourney-format-seg" role="group" aria-label="Format">
+                    ${[["all","All"],["core","Core"],["infinity","Infinity"]].map(([k,l]) => html`<button key=${k}
+                      class=${tourneyFormat===k?"active":""}
+                      onClick=${()=>setTourneyFormat(k)}>${l}</button>`)}
+                  </div>
+                  <select class="deck-sort-select" value=${tourneyEvent}
+                    onChange=${e=>setTourneyEvent(e.target.value)} aria-label="Filter by event">
+                    <option value="all">All events</option>
+                    ${tournaments.map(t => html`<option key=${t.id} value=${t.id}>${t.name}</option>`)}
+                  </select>
+                  ${(inkFilter.size > 0 || tourneyFormat !== "all" || tourneyEvent !== "all") && html`<button class="deck-filter-clear"
+                    onClick=${()=>{ setInkFilter(new Set()); setTourneyFormat("all"); setTourneyEvent("all"); }}>✕ Clear filters</button>`}
+                </div>
+              </div>
+              <div class="muted" style=${{fontSize:12,margin:"2px 0 10px"}}>
+                ${visibleAllDecks.length} deck${visibleAllDecks.length===1?"":"s"}${allTournamentDecks.length !== visibleAllDecks.length ? ` of ${allTournamentDecks.length}` : ""}
+              </div>
+              ${visibleAllDecks.length === 0
+                ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
+                    No tournament decks match the current filters.
+                  </div>`
+                : html`<div class="deck-list">
+                    ${visibleAllDecks.map(r => html`<${TournamentDeckTile} key=${r.result_id}
+                      r=${r} theme=${theme} event=${r._event} showEvent=${true}
+                      onOpenDeck=${(deckId, token)=>openDeckById && openDeckById(deckId, token)}
+                      onCopyDeckLink=${copyDeckLinkFromResult} onCopyDecklist=${copyDeckListFromResult} onCopyDeckImage=${copyDeckImageFromResult}
+                      onInkClick=${toggleInkFilter}/>`)}
+                  </div>`}
+            </div>`
         : tournaments.length === 0
           ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
               No tournaments uploaded yet.${isTournamentAdmin ? "" : " Check back as results come in."}
             </div>`
-          : html`<div class="tournament-grid">
+          : html`<div>
+            <div class="tournament-alldecks-bar">
+              <button class="active" onClick=${()=>setTourneyDeckView("alldecks")}
+                style=${{fontSize:13,padding:"7px 14px"}}>▦ View all decks</button>
+              <span class="muted" style=${{fontSize:12}}>Browse every tournament deck in one grid — filter by ink, format, or event.</span>
+            </div>
+            <div class="tournament-grid">
               ${tournaments.map(t => {
                 const rs = tournamentResults[t.id] || [];
                 // Sort by place_rank (1, 2, 3...) and take top 8. Nulls
@@ -28169,7 +28518,8 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
                   </div>`}
                 </a>`;
               })}
-            </div>`}
+            </div>
+          </div>`}
     </div>`}
 
     ${bulkUploadOpen && html`<${TournamentBulkUploadModal}
@@ -30644,6 +30994,22 @@ function App(){
   useEffect(() => {
     try { localStorage.setItem("packsink:showTopBarTheme", showTopBarTheme ? "1" : "0"); } catch {}
   }, [showTopBarTheme]);
+  // Preference: which Home-page sections are visible. Stored as a map of
+  // {panelKey: false} for the ones the user has hidden (absent/true = shown).
+  // localStorage-only (like showTopBarTheme) — not synced to user_metadata.
+  const [homePanelVis, setHomePanelVis] = useState(() => {
+    try { const v = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}"); return (v && typeof v === "object") ? v : {}; }
+    catch { return {}; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:homePanels", JSON.stringify(homePanelVis)); } catch {}
+  }, [homePanelVis]);
+  const homeSections = useMemo(() => {
+    const out = {};
+    for(const p of HOME_PANELS) out[p.key] = homePanelVis[p.key] !== false;
+    return out;
+  }, [homePanelVis]);
+  const toggleHomePanel = (key) => setHomePanelVis(m => ({...m, [key]: m[key] === false ? true : false}));
   const [user,setUser]=useState(null);
   // Map of `${card_id}:${tcg_printing}` -> quantity owned. Stored locally for
   // fast lookup; mirrors the user's rows in collection_items (NM only for v1).
@@ -30761,6 +31127,20 @@ function App(){
       .catch(() => { if(!cancelled) setIsGradedAdmin(false); });
     return () => { cancelled = true; };
   }, [user]);
+
+  // QA camera-scanner allowlist (migration 96) — SEPARATE from graded-admin.
+  // These testers get the camera (QA-only mode) but no graded-curation powers.
+  const [isScannerTester, setIsScannerTester] = useState(false);
+  useEffect(()=>{
+    if(!user){ setIsScannerTester(false); return; }
+    let cancelled = false;
+    sbClient.rpc("is_scanner_tester")
+      .then(({data}) => { if(!cancelled) setIsScannerTester(!!data); })
+      .catch(() => { if(!cancelled) setIsScannerTester(false); });
+    return () => { cancelled = true; };
+  }, [user]);
+  // Anyone who may open the camera scanner: graded admins OR QA testers.
+  const canScan = isGradedAdmin || isScannerTester;
 
   // Public profile state — display name + avatar URL the rest of the world
   // sees on your shared decks. Distinct from auth.users metadata (which is
@@ -31695,6 +32075,17 @@ function App(){
                 onChange=${e=>setShowTopBarTheme(e.target.checked)}/>
               <span>Theme button in top bar</span>
             </label>
+            <div class="settings-row settings-row--block">
+              <span class="settings-row-label">Home page sections</span>
+              <div class="settings-home-panels">
+                ${HOME_PANELS.map(p => html`<label key=${p.key} class="settings-row"
+                  title=${"Show the “"+p.label+"” section on the home page"}>
+                  <input type="checkbox" checked=${homeSections[p.key]}
+                    onChange=${()=>toggleHomePanel(p.key)}/>
+                  <span>${p.label}</span>
+                </label>`)}
+              </div>
+            </div>
             <div class="settings-divider"></div>
             ${user
               ? html`<button class="settings-action danger"
@@ -31704,9 +32095,9 @@ function App(){
           </div>`}
         </div>
         <div class="top-nav-right-row top-nav-right-row--bubbles">
-          ${isGradedAdmin && html`<button class="theme-toggle theme-toggle--scan"
+          ${canScan && html`<button class="theme-toggle theme-toggle--scan"
             onClick=${()=>setScanOpen(true)}
-            title="Scan a card with your camera (admin preview)" aria-label="Scan a card">${NAV_ICONS.scan}</button>`}
+            title="Scan a card with your camera (QA testing)" aria-label="Scan a card">${NAV_ICONS.scan}</button>`}
           <button class=${"theme-toggle theme-toggle--help"+(view==="faq"?" active":"")}
             onClick=${()=>onTabClick("faq")}
             title="How it works" aria-label="How it works">${NAV_ICONS.faq}</button>
@@ -31722,13 +32113,13 @@ function App(){
       isIOS=${isIOS} isAndroid=${isAndroid}
       onClose=${()=>setInstallHelpOpen(false)}
       onDismissForever=${autoInstallVisits >= 3 ? dismissInstallForever : null}/>`}
-    ${scanOpen && isGradedAdmin && html`<${CardScannerModal}
+    ${scanOpen && canScan && html`<${CardScannerModal}
       raw=${raw} collection=${collection} updateQty=${updateQty}
       user=${user} onSignIn=${signIn}
       onClose=${()=>setScanOpen(false)}
       onOpenReview=${()=>{ setScanOpen(false); setScanReviewOpen(true); }}
       onOpenDetail=${(g)=>{ setScanOpen(false); openCardsWithSearch("", g.card_id); }}/>`}
-    ${scanReviewOpen && isGradedAdmin && html`<${ScanReviewModal}
+    ${scanReviewOpen && canScan && html`<${ScanReviewModal}
       raw=${raw} onClose=${()=>setScanReviewOpen(false)}/>`}
     ${loading && html`<div class="loading-status">
       ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
@@ -31764,6 +32155,7 @@ function App(){
       openView=${openView} openDecksSection=${openDecksSection}
       openCardsWithSearch=${openCardsWithSearch}
       openScreenerWithFilter=${openScreenerWithFilter}
+      sections=${homeSections}
       onEventArtistClick=${setIndyArtistPick}/>`}
     ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
