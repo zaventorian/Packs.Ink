@@ -359,6 +359,67 @@ def delete_orphans(conn, sb: Supabase, dry: bool, sweep_ratings: bool = True) ->
             total += len(batch)
         print(f"  elo_ratings: swept ratings for {total} matches in ignored events")
 
+    # Catch-all parity sweep: delete any remote rating whose (player_id, match_id)
+    # has no counterpart in the local recompute. The two targeted sweeps above
+    # only catch known orphan classes (merged-source ids, ignored events); a
+    # rating can also go stale when the local ELO recompute simply stops emitting
+    # a row for a (player, match) it used to (e.g. a match's player set changed,
+    # or a merge turned a pairing into a self-match). elo.py wipes+rewrites the
+    # ratings table every run, so local IS the full source of truth — anything
+    # remote-only is stale. This subsumes the two sweeps above; they're kept for
+    # their cheaper targeted dry-run reporting.
+    local_pairs = {(r["player_id"], r["match_id"])
+                   for r in fetch_all(conn, "SELECT player_id, match_id FROM ratings")}
+    # Page through remote (rating_id, player_id, match_id) and flag non-local pairs.
+    orphan_rating_ids = []
+    remote_count = 0
+    PAGE, start = 1000, 0
+    while True:
+        rr = requests.get(
+            f"{sb.url}/rest/v1/elo_ratings?select=rating_id,player_id,match_id&order=rating_id.asc",
+            headers={**sb._headers(), "Range-Unit": "items",
+                     "Range": f"{start}-{start+PAGE-1}"},
+            timeout=60,
+        )
+        if not rr.ok and rr.status_code != 206:
+            raise RuntimeError(f"fetch elo_ratings pairs failed: {rr.status_code} {rr.text[:200]}")
+        data = rr.json()
+        if not data:
+            break
+        remote_count += len(data)
+        for row in data:
+            if (row["player_id"], row["match_id"]) not in local_pairs:
+                orphan_rating_ids.append(row["rating_id"])
+        if len(data) < PAGE:
+            break
+        start += PAGE
+
+    # Safety guard mirroring the player/event/match sweep: a wildly large orphan
+    # fraction means the local SQLite is empty/partial/corrupt, not that the user
+    # genuinely deleted nearly every rating. Refuse rather than wipe the table.
+    suspicious = (not local_pairs) or (remote_count and len(orphan_rating_ids) > 0.5 * remote_count)
+    if dry:
+        flag = "  ⚠ SUSPICIOUS — real run would REFUSE" if suspicious else ""
+        print(f"  elo_ratings (no local (player_id,match_id) counterpart): "
+              f"{len(orphan_rating_ids)} orphans (would delete){flag}")
+    elif suspicious:
+        raise RuntimeError(
+            f"refusing parity sweep: {len(orphan_rating_ids)}/{remote_count} remote ratings "
+            f"flagged as orphans (local has {len(local_pairs)} pairs). Local SQLite looks "
+            f"empty/partial — aborting before it deletes real data."
+        )
+    elif orphan_rating_ids:
+        for i in range(0, len(orphan_rating_ids), 200):
+            batch = orphan_rating_ids[i:i+200]
+            r = requests.delete(
+                f"{sb.url}/rest/v1/elo_ratings?rating_id=in.({','.join(str(x) for x in batch)})",
+                headers={**sb._headers(), "Prefer": "return=minimal"},
+                timeout=60,
+            )
+            if not r.ok:
+                raise RuntimeError(f"delete stale-pair ratings failed: {r.status_code} {r.text[:200]}")
+        print(f"  elo_ratings: deleted {len(orphan_rating_ids)} stale rows with no local (player_id,match_id)")
+
 
 def main() -> None:
     ap = argparse.ArgumentParser()
