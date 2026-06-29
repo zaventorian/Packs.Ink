@@ -17596,6 +17596,19 @@ const ELO_NAME_FLAIR = {
 };
 const eloFlairFor = (name) => ELO_NAME_FLAIR[(name||"").toLowerCase().replace(/[^a-z0-9]/g,"")] || null;
 
+// ── Time-boxed Elo display gag — DISPLAY ONLY. The real data is untouched and
+// ranking is unchanged (sort/rank still use the real rating); only the SHOWN
+// number, record, and per-match result labels change for player 120
+// (I&L⟡jacobayy). Auto-reverts at 2026-06-30 00:00 America/Chicago (CDT, UTC-5)
+// — every helper below no-ops once the clock passes ELO_PRANK_UNTIL, so this
+// block + its call sites can be deleted anytime after that with no behavior
+// change. (call sites: eloPrankElo / eloPrankRecord / eloPrankOn.)
+const ELO_PRANK_PID = 120;
+const ELO_PRANK_UNTIL = Date.parse("2026-06-30T00:00:00-05:00");
+const eloPrankOn = (pid) => pid === ELO_PRANK_PID && Date.now() < ELO_PRANK_UNTIL;
+const eloPrankElo = (pid, real) => eloPrankOn(pid) ? -666 : Math.round(real);
+const eloPrankRecord = (pid, w, l, d) => eloPrankOn(pid) ? `0-${(w||0)+(l||0)+(d||0)}-0` : `${w}-${l}-${d}`;
+
 function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, aliasMap}){
   if(rows === null) return html`<div class="elo-loading">Loading leaderboard…</div>`;
   if(rows.length === 0) return html`<div class="elo-empty">No players match.</div>`;
@@ -17618,7 +17631,7 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
           const aliases = eloVisibleAliases(r.display_name, aliasesFor(r.player_id));
           return html`<tr class="elo-row" key=${r.player_id}>
             <td class="elo-td-rank"><${EloRankBadge} rank=${r.rank}/></td>
-            <td class="elo-td-elo">${Math.round(r.current_rating)}</td>
+            <td class="elo-td-elo">${eloPrankElo(r.player_id, r.current_rating)}</td>
             <td class="elo-td-player">
               <${EloLink} to=${{tab:"player", playerId:r.player_id}} className="elo-name-btn"
                 onClick=${()=>onPlayerClick && onPlayerClick(r.player_id)}>
@@ -17629,7 +17642,7 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
                 </span>
               </${EloLink}>
             </td>
-            <td class="elo-td-record">${r.wins}-${r.losses}-${r.draws}</td>
+            <td class="elo-td-record">${eloPrankRecord(r.player_id, r.wins, r.losses, r.draws)}</td>
             <td class="elo-td-mw">${r.mw_pct==null ? "—" : r.mw_pct.toFixed(1)+"%"}</td>
             <td class="elo-td-gw">${r.gw_pct==null ? "—" : r.gw_pct.toFixed(1)+"%"}</td>
             <td class="elo-td-peak">${Math.round(r.peak_rating)}</td>
@@ -17974,6 +17987,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   const aliases = eloVisibleAliases(profile.display_name,
     (aliasMap && canonicalId != null) ? (aliasMap.get(canonicalId) || []) : []);
   const totalEvents = events ? events.length : null;
+  const prankMe = eloPrankOn(profile.player_id) || eloPrankOn(canonicalId);  // time-boxed display gag (see ELO_PRANK_* helpers)
 
   return html`<div class="elo-profile">
     <button class="elo-back" onClick=${onBack}>← Leaderboard</button>
@@ -17992,9 +18006,9 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       </div>`}
       <div class="elo-stat-grid">
         <div class="elo-stat"><div class="elo-stat-lbl">Rank</div><div class="elo-stat-val">${profile.rank ? "#" + profile.rank : "—"}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">Elo</div><div class="elo-stat-val">${Math.round(profile.current_rating)}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Elo</div><div class="elo-stat-val">${eloPrankElo(profile.player_id, profile.current_rating)}</div></div>
         <div class="elo-stat"><div class="elo-stat-lbl">Peak</div><div class="elo-stat-val">${Math.round(profile.peak_rating)}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${profile.wins}-${profile.losses}-${profile.draws}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${eloPrankRecord(profile.player_id, profile.wins, profile.losses, profile.draws)}</div></div>
         <div class="elo-stat"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${profile.mw_pct==null ? "—" : profile.mw_pct.toFixed(1)+"%"}</div></div>
         <div class="elo-stat"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${profile.gw_pct==null ? "—" : profile.gw_pct.toFixed(1)+"%"}</div></div>
         <div class="elo-stat"><div class="elo-stat-lbl">Events</div><div class="elo-stat-val">${totalEvents ?? "—"}</div></div>
@@ -18061,8 +18075,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
             ${h2hMatches.map(r => {
               const isWin  = r.score === 1.0;
               const isLoss = r.score === 0.0;
-              const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
-              const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
+              const resultText = prankMe ? "Loss" : (isWin ? "Win" : (isLoss ? "Loss" : "Draw"));
+              const resultClass = prankMe ? "loss" : (isWin ? "win" : (isLoss ? "loss" : "draw"));
               const score = (r.my_games_won != null && r.opp_games_won != null) ? `${r.my_games_won}-${r.opp_games_won}` : "";
               return html`<tr key=${r.rating_id}>
                 <td class="elo-h2h-date">${r.event_date || "—"}</td>
@@ -18105,7 +18119,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
           <div class="elo-tourney-stats">
             <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${place != null ? html`<span class="elo-place">#${place}${fieldSize ? html`<span class="elo-place-field"> / ${fieldSize}</span>` : ""}</span>` : "—"}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">Elo end</div><div class="elo-stat-val">${ev.end_rating != null ? Math.round(ev.end_rating) : "—"}${eloDelta != null ? html`<span class=${"elo-delta " + (eloDelta>=0?"up":"down")}>${eloDelta>=0?"+":""}${eloDelta}</span>` : ""}</div></div>
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${ev.wins}-${ev.losses}-${ev.draws}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${eloPrankRecord(profile.player_id, ev.wins, ev.losses, ev.draws)}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${ev.mw_pct==null ? "—" : ev.mw_pct.toFixed(1)+"%"}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${gwPct==null ? "—" : gwPct.toFixed(1)+"%"}</div></div>
             <div class="elo-stat-mini"><div class="elo-stat-lbl">Opp avg</div><div class="elo-stat-val">${oppAvg ?? "—"}</div></div>
@@ -18131,8 +18145,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                 }
                 const isWin  = r.score === 1.0;
                 const isLoss = r.score === 0.0;
-                const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
-                const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
+                const resultText = prankMe ? "Loss" : (isWin ? "Win" : (isLoss ? "Loss" : "Draw"));
+                const resultClass = prankMe ? "loss" : (isWin ? "win" : (isLoss ? "loss" : "draw"));
                 const score = (r.my_games_won != null && r.opp_games_won != null) ?
                   `${r.my_games_won}-${r.opp_games_won}` : "";
                 return html`<tr key=${r.rating_id}>
