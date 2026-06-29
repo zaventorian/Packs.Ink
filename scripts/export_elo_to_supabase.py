@@ -39,6 +39,39 @@ def to_bool(x) -> bool:
     return bool(x) if x is not None else False
 
 
+def _is_unique_violation(err: Exception) -> bool:
+    s = str(err).lower()
+    return "23505" in s or "duplicate key" in s or "unique constraint" in s
+
+
+def upsert_players_resilient(sb: Supabase, rows: list[dict]) -> None:
+    """Upsert player rows, recovering from a (platform, display_name) UNIQUE
+    violation (23505) instead of aborting the whole export.
+
+    The normal path is a single bulk upsert. If a stale remote row is still
+    squatting a name one of these rows wants — a canonical-direction swap where
+    two players trade names, or a previous run that half-applied — the upsert
+    23505s. `sb.upsert` raises that fatally, which used to leave the players
+    table half-written (stale merge cycles) and the rest of the export skipped.
+
+    We recover by parking EVERY row in this set onto a per-id sentinel
+    (__migrate__{pid} — unique by id, so it can never collide), which frees
+    every contested name, then re-applying the real names. Idempotent and safe
+    to re-run."""
+    if not rows:
+        return
+    try:
+        sb.upsert("elo_players", rows, on_conflict="player_id")
+        return
+    except RuntimeError as e:
+        if not _is_unique_violation(e):
+            raise
+        print(f"  players upsert hit a unique-violation — parking on sentinels and retrying")
+    park = [{**r, "display_name": f"__migrate__{r['player_id']}"} for r in rows]
+    sb.upsert("elo_players", park, on_conflict="player_id")
+    sb.upsert("elo_players", rows, on_conflict="player_id")
+
+
 def export_events(conn, sb: Supabase, dry: bool) -> int:
     rows = fetch_all(
         conn,
@@ -92,7 +125,11 @@ def export_players(conn, sb: Supabase, dry: bool) -> int:
         print(f"  parking {len(park)} moved name(s) on sentinels first")
         sb.upsert("elo_players", park, on_conflict="player_id")
 
-    sb.upsert("elo_players", rows, on_conflict="player_id")
+    # Resilient upserts: the explicit park above handles the common swap case,
+    # but if any contested name still collides (stale half-applied state, an
+    # incomplete prior run), recover by re-parking + retrying rather than
+    # aborting the whole export with the players table half-written.
+    upsert_players_resilient(sb, rows)
 
     merge_rows = fetch_all(
         conn,
@@ -103,7 +140,7 @@ def export_players(conn, sb: Supabase, dry: bool) -> int:
         """,
     )
     if merge_rows:
-        sb.upsert("elo_players", merge_rows, on_conflict="player_id")
+        upsert_players_resilient(sb, merge_rows)
     return len(rows)
 
 
@@ -162,7 +199,7 @@ def export_ratings(conn, sb: Supabase, dry: bool) -> int:
     return len(rows)
 
 
-def delete_orphans(conn, sb: Supabase, dry: bool) -> None:
+def delete_orphans(conn, sb: Supabase, dry: bool, sweep_ratings: bool = True) -> None:
     """Remove rows from Supabase that no longer exist in local SQLite.
 
     Without this, every previous re-export accumulates stale rows. Matches we
@@ -257,6 +294,16 @@ def delete_orphans(conn, sb: Supabase, dry: bool) -> None:
             n = delete_in(table, col, orphans)
             print(f"  {table}: deleted {n} orphan rows")
 
+    # The elo_ratings sweeps below are DESTRUCTIVE and only correct once the new
+    # canonical-side ratings are safely in place. Gate them on a fully-successful
+    # players + ratings export — otherwise a half-applied run (players upsert
+    # aborted, ratings not re-inserted) would delete the old rows under the
+    # merged-source ids with nothing having replaced them, dropping the player
+    # off the board. This is exactly the failure that orphaned METALLICFLARE.
+    if not sweep_ratings:
+        print("  elo_ratings sweep SKIPPED (players/ratings export did not both complete)")
+        return
+
     # elo_ratings has its own orphan class: after an alias merge, local recompute
     # writes ratings under the CANONICAL player_id only — but Supabase still
     # holds the rows under the merged-source player_id from prior exports.
@@ -340,15 +387,22 @@ def main() -> None:
     }
 
     print(f"{'DRY-RUN ' if args.dry_run else ''}exporting {', '.join(plan)} from {SQLITE_PATH.name}")
+    exported: list[str] = []
     for t in plan:
         n = funcs[t](conn, sb, args.dry_run)
+        exported.append(t)
         if not args.dry_run:
             print(f"  {t}: upserted {n} rows")
 
     # Always sweep orphans after a full export (or in dry-run, report the count).
     if args.table is None:
+        # Only sweep elo_ratings once BOTH players and ratings have exported
+        # successfully — reaching here already implies that (any failure raises
+        # and aborts before this point), but gate explicitly so the destructive
+        # ratings delete can never run on a partial export.
+        sweep_ratings = "players" in exported and "ratings" in exported
         print("\norphan cleanup:")
-        delete_orphans(conn, sb, args.dry_run)
+        delete_orphans(conn, sb, args.dry_run, sweep_ratings=sweep_ratings)
 
     conn.close()
     print("done.")
