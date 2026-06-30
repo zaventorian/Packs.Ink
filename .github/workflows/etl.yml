@@ -27,9 +27,11 @@ on:
     - cron: "0 1 * * *"
     # Safety-net matview selfheal fallback. 06:00 UTC = 1 AM CDT.
     - cron: "0 6 * * *"
-    # Weekly Lorcast metadata refresh — stays on GH cron (once-a-week tolerates
-    # the GH cron delay just fine, no need to wire it into cron-job.org).
-    - cron: "0 22 * * 0"
+    # Daily Lorcast metadata refresh (was weekly Sun 22:00). 21:00 UTC is just
+    # after TCGCSV's ~20:00 daily publish, so a set in its pre-order window fills
+    # in within a day of each spoiler instead of waiting for Sunday. Idempotent —
+    # a no-op once a set is fully revealed + linked.
+    - cron: "0 21 * * *"
   workflow_dispatch:
     inputs:
       job:
@@ -144,6 +146,40 @@ jobs:
           RECONCILE_ALERT_WEBHOOK: ${{ secrets.RECONCILE_ALERT_WEBHOOK }}
         run: python scripts/reconcile_catalog.py
 
+  link:
+    name: Link pre-order pids
+    runs-on: ubuntu-latest
+    needs: prices
+    # Fills tcgplayer_product_id on cards Lorcast has indexed but not yet linked
+    # to a TCGPlayer SKU (every new set: Lorcast publishes card metadata weeks
+    # before it links the SKU, while TCGCSV already has pre-order products +
+    # prices). Matches unlinked cards to TCGCSV products by collector number
+    # (validated by name), fills NULL pids only, refreshes card_prices_latest.
+    #
+    # Cheap — TCGCSV /products + Supabase, no Lorcast API — so it runs on EVERY
+    # prices trigger (several times a day via cron-job.org), not just the daily
+    # metadata job. That means a pre-order single gets priced the same day TCGCSV
+    # lists it, and the daily load_lorcast null-revert is healed within hours.
+    # Idempotent: a no-op once every revealed card is linked.
+    if: |
+      always() && needs.prices.result == 'success' && (
+        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+        (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
+      )
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      - name: Link pre-order pids
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/link_preorder_pids.py --commit
+
   graded:
     name: TCGPriceLookup graded prices
     runs-on: ubuntu-latest
@@ -171,12 +207,16 @@ jobs:
   metadata:
     name: Lorcast metadata refresh
     runs-on: ubuntu-latest
-    # Weekly only (Sun 22:00 UTC) or an explicit metadata dispatch. Deliberately
-    # NOT triggered by job=='both' — 'both' is the thrice-daily prices+graded
-    # ping from cron-job.org, and the Lorcast catalog only needs a weekly refresh
-    # (running it 3x/day burned Actions minutes + hammered Lorcast's API).
+    # Daily (21:00 UTC) or an explicit metadata dispatch. Bumped weekly→daily so
+    # a set in its pre-order window fills in within a day of each Lorcast spoiler
+    # instead of waiting for Sunday. Deliberately NOT triggered by job=='both' —
+    # 'both' is the thrice-daily ping from cron-job.org, and running load_lorcast
+    # on every one of those (3x/day) hammered Lorcast's API. Once daily is the
+    # compromise: only the Lorcast catalog pull is rate-limited here. The cheap
+    # pid-linking (TCGCSV + Supabase, no Lorcast) runs more often via the 'link'
+    # job, so pre-order prices appear the same day TCGCSV lists a single.
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '0 22 * * 0') ||
+      (github.event_name == 'schedule' && github.event.schedule == '0 21 * * *') ||
       (github.event_name == 'workflow_dispatch' && inputs.job == 'metadata')
     steps:
       - uses: actions/checkout@v5
