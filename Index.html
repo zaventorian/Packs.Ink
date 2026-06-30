@@ -18264,8 +18264,12 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
       events.length === 0 ? html`<div class="elo-empty">No tournaments played yet.</div>` :
       events.map(ev => {
         const rounds = roundsByEvent.get(ev.event_id) || [];
-        const oppAvg = rounds.length ?
-          Math.round(rounds.reduce((s, r) => s + (r.opponent_rating || 0), 0) / rounds.length) : null;
+        // Average opponent Elo must exclude rounds with no real opponent — byes
+        // (is_bye) AND forfeits both carry opponent_rating=null. Counting them in
+        // the denominator dragged the average down (a bye round 1 made it /6 not /5).
+        const oppRated = rounds.filter(r => r.opponent_rating != null);
+        const oppAvg = oppRated.length ?
+          Math.round(oppRated.reduce((s, r) => s + r.opponent_rating, 0) / oppRated.length) : null;
         const gwPct = ev.total_games > 0 ? ((ev.games_won / ev.total_games) * 100) : null;
         const eloDelta = (ev.end_rating != null && ev.start_rating != null) ?
           Math.round(ev.end_rating - ev.start_rating) : null;
