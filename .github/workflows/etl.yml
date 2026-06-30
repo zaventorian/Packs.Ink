@@ -201,6 +201,18 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/patch_pid_overrides.py
+      # Link pre-order singles whose tcgplayer_id Lorcast hasn't populated yet
+      # (every new set: Lorcast publishes card metadata weeks before it links the
+      # TCGPlayer SKU, but TCGCSV already has pre-order products + prices). Matches
+      # unlinked cards to TCGCSV products by collector number, validated by name,
+      # and fills ONLY null pids. Runs after load_lorcast (which nulls them) so
+      # the links survive the weekly refresh and newly-revealed cards link as soon
+      # as TCGCSV lists them.
+      - name: Link pre-order pids
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/link_preorder_pids.py --commit
 
   selfheal:
     name: Matview self-heal
