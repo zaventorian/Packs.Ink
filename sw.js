@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v258';
+const CACHE_VERSION = 'packsink-v259';
 const CORE_ASSETS = [
   '/',
   '/Index.html',
@@ -15,7 +15,7 @@ const CORE_ASSETS = [
   '/scanner.js?v=253',
   '/scanner-cv.js?v=253',
   '/scanner-worker.js?v=253',
-  '/scanner-ocr-worker.js?v=256',
+  '/scanner-ocr-worker.js?v=259',
   '/manifest.json',
   '/icon-192.png',
   '/icon-512.png',

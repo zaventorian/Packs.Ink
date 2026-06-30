@@ -246,17 +246,32 @@ function handleOcr(d) {
   var s = scratch(W, H);
   s.ctx.putImageData(new ImageData(new Uint8ClampedArray(d.buffer), W, H), 0, 0);
   var card = s.c;
+  // The number read is the slowest op, so the caller can GATE it: a name-only first
+  // pass, then a number-only pass ONLY when the name wasn't decisive. doName/doNumber
+  // default true (a single combined call, the old behaviour) when the flags are absent.
+  var doName = d.doName !== false, doNumber = d.doNumber !== false;
 
-  // NAME: det the upper 0.74, keep the 4 tallest boxes that contain a letter
-  // (excludes the tall cost/lore digits). 4 not 3 so the smaller VERSION subtitle
-  // (e.g. "Practical Traveler") rides along — it's the only thing that separates
-  // the 31 same-named "Minnie Mouse" cards when the collector number misreads.
-  ocrRegion(card, 0, 0, W, Math.round(H * 0.74), "min", DET_SIDE).then(function (lines) {
-    var cand = lines.filter(function (l) {
-      return l.text.trim().length >= 2 && /[A-Za-z]/.test(l.text);
-    }).sort(function (a, b) { return b.h - a.h; });
-    var namelines = cand.slice(0, 4).map(function (l) { return l.text; });
-    return readNumber(card, W, H).then(function (num) {
+  // NAME: det the upper 0.74, keep the 6 tallest boxes that contain a letter
+  // (excludes the tall cost/lore digits). identify()'s rankNames scores each card
+  // against its BEST-matching line (max over lines), so extra lines are harmless —
+  // they only ever HELP by giving the real title another chance to be present. 6
+  // not 4 because on text-heavy cards (e.g. Incrediboy — bold "NERDING OUT" /
+  // "SPOILER ALERT" keyword labels) the rules-text boxes can out-rank the title by
+  // pixel height and crowd it out of the top-4, leaving identify() with only rules
+  // text (it then mis-fused to a wrong card). 6 keeps the title in the candidate set
+  // while still carrying the smaller VERSION subtitle for same-named disambiguation.
+  var namePromise = doName
+    ? ocrRegion(card, 0, 0, W, Math.round(H * 0.74), "min", DET_SIDE).then(function (lines) {
+        var cand = lines.filter(function (l) {
+          return l.text.trim().length >= 2 && /[A-Za-z]/.test(l.text);
+        }).sort(function (a, b) { return b.h - a.h; });
+        return cand.slice(0, 6).map(function (l) { return l.text; });
+      })
+    : Promise.resolve([]);
+
+  namePromise.then(function (namelines) {
+    var numPromise = doNumber ? readNumber(card, W, H) : Promise.resolve({ cnNum: null, cnSet: null });
+    return numPromise.then(function (num) {
       self.postMessage({ type: "result", id: d.id, lines: namelines, cnNum: num.cnNum, cnSet: num.cnSet });
     });
   }).catch(function (err) {
@@ -281,6 +296,15 @@ function parseCN(txt) {
   if (m) return { cnNum: m[1].replace(/^0+(?=\d)/, ""), cnTot: m[2] };
   return null;
 }
+// Two bottom-left ROIs, upscaled so rec sees the tiny digits, det+rec, parseCN.
+// NOTE: this is the heaviest single op in the pipeline (a big upscaled-strip det +
+// a rec per box), and the NO-read case runs BOTH ROIs fully — so the caller GATES
+// it: the collector number is only read when the NAME wasn't already a confident
+// match (cn just confirms a confident name, never overrides it). On the close/far
+// validation sets a wider band-sweep lifted the read-RATE but provided no net
+// identify() gain and could even manufacture a false cn that hijacked a correct
+// answer (the (set,number) disambiguation index is the real cn lever, not more
+// ROIs) — so we keep the two simple ROIs and spend the latency budget on gating.
 function readNumber(card, W, H) {
   var ROIS = [[0.0, 0.90, 0.60, 1.0, 5], [0.0, 0.85, 0.66, 1.0, 6]];
   var idx = 0;

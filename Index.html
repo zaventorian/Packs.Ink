@@ -9189,7 +9189,7 @@ const SCAN_WORKER_URL = "scanner-worker.js?v=253";
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
 // in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
-const OCR_WORKER_URL = "scanner-ocr-worker.js?v=256";
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=259";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -9364,27 +9364,48 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
 
   // post the rectified card to the OCR worker (promise-by-id). Transfers the pixel
   // buffer so there's no copy; resolves null if the worker isn't up.
-  const ocrPost = (buffer, w, h) => new Promise((resolve) => {
+  const ocrPost = (buffer, w, h, opts) => new Promise((resolve) => {
     const wk = ocrWorkerRef.current; if(!wk){ resolve(null); return; }
     const id = ++ocrMsgIdRef.current; ocrPendingRef.current.set(id, resolve);
-    try { wk.postMessage({ type: "ocr", id, buffer, w, h }, [buffer]); }
+    const doName = !opts || opts.doName !== false, doNumber = !opts || opts.doNumber !== false;
+    try { wk.postMessage({ type: "ocr", id, buffer, w, h, doName, doNumber }, [buffer]); }
     catch(e){ ocrPendingRef.current.delete(id); resolve(null); }
   });
   // OCR the rectified card via the PP-OCR worker → the NAME (the tallest text on a
   // Lorcana card, so the worker takes the tallest text boxes — layout-agnostic
   // across character/song/action/item) + the collector number. Name-OCR is the
   // PRIMARY identity signal (printed text reads the same in a photo as in the DB —
-  // no colour domain gap); the number is the version backbone. Returns
-  // { lines: [name candidates tallest-first], cnNum, cnSet }.
-  const ocrCardRegions = async (canvas) => {
+  // no colour domain gap); the number is the version backbone. `opts` =
+  // {doName, doNumber} lets the caller GATE the slow number read (see identifyGated).
+  // Returns { lines: [name candidates tallest-first], cnNum, cnSet }.
+  const ocrCardRegions = async (canvas, opts) => {
     if(!canvas || !ocrReadyRef.current || !ocrWorkerRef.current) return { lines: [], cnNum: null, cnSet: null };
     try {
       const W = canvas.width, H = canvas.height;
       const buf = canvas.getContext("2d").getImageData(0, 0, W, H).data.buffer;
-      const r = await ocrPost(buf, W, H);
+      const r = await ocrPost(buf, W, H, opts);
       if(!r) return { lines: [], cnNum: null, cnSet: null };
       return { lines: r.lines || [], cnNum: r.cnNum || null, cnSet: r.cnSet || null };
     } catch(_e){ return { lines: [], cnNum: null, cnSet: null }; }
+  };
+  // Identify a rectified card with the number read GATED behind the name. The
+  // collector-number det is the slowest op in the pipeline (a big upscaled-strip
+  // det+rec, both ROIs on a no-read), and it only matters when the NAME isn't
+  // already a confident match — identify() returns source:"name" exactly when the
+  // name decides it, in which case cn would only confirm, never change the answer.
+  // So: name-only OCR → identify; if that's a confident name, we're done (skip the
+  // number entirely, ~halving snap latency); otherwise read the number and re-identify.
+  const identifyGated = async (rect, colourIds) => {
+    const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+    const lines = o.lines || [];
+    let cnNum = null, cnSet = null;
+    let idr = (window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colourIds }) || {});
+    if(idr.source !== "name"){
+      const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
+      cnNum = num.cnNum; cnSet = num.cnSet;
+      idr = (window.CardScanner.identify({ lines, cnNum, cnSet, colourRanked: colourIds }) || {});
+    }
+    return { idr, lines, cnNum, cnSet };
   };
 
   const roundRectPath = (ctx, x, y, w, h, r) => {
@@ -9926,11 +9947,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           colour.push({ id: x.card.id, name: x.card.name, version: x.card.version, score: Math.round((x.color || 0) * 1000) / 1000 });
           if(colour.length >= 10) break; }
       } catch(_e){}
-      let ocrLines = [], cnNum = null, cnSet = null;
+      const colIds = colour.map(c => c.id);
+      let ocrLines = [], cnNum = null, cnSet = null, idr = {};
       if(ocrReadyRef.current && window.CardScanner.identify){
-        try { const o = await ocrCardRegions(rect); ocrLines = o.lines || []; cnNum = o.cnNum; cnSet = o.cnSet; } catch(_e){}
+        // number read is GATED behind a confident name — skips the slow cn det on
+        // clean cards (~halves snap latency); only reads it when the name is unsure.
+        try { const g = await identifyGated(rect, colIds); ocrLines = g.lines; cnNum = g.cnNum; cnSet = g.cnSet; idr = g.idr || {}; } catch(_e){}
       }
-      const idr = window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colour.map(c => c.id) }) || {};
+      if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
 
       // 5. resolve the top guess + a readable candidate list
       const META = window.CardScanner.state.cards;
@@ -9953,9 +9977,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         ocrLines: (ocrLines || []).slice(0, 10),
         liveAmbientGuess: live,
       };
-      const blob = await canvasToBlob(rect);
-      if(blob && top) await uploadSample(top.id, top.id, false, null, blob, debug);
-      else if(blob) await uploadSample(null, null, false, null, blob, debug);
+      const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
+      // fire-and-forget: the flywheel upload is a network round-trip (and bigger now
+      // at 1000px) — it must NOT block the snap feedback or the next tap. Best-effort.
+      if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug);
       // in-session feedback row (thumbnail + guess + alternates) so testers see
       // what it read without leaving the scanner; full data is in the flywheel.
       let thumb = "";
@@ -10006,13 +10031,17 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(error && debug) await sbClient.from("scan_samples").insert(row);
     } catch(_e){ /* best-effort */ }
   };
-  // downscale a rectified-card canvas to a ~400px JPEG blob for the flywheel.
-  const canvasToBlob = (src) => {
+  // downscale a rectified-card canvas to a JPEG blob for the flywheel. Default
+  // ~400px (the training flywheel only colour-matches, doesn't need more), but QA
+  // snaps pass maxW=1000 so the collector number + name are legible enough to
+  // re-run OCR on offline — at 400px the cn text is unreadable, which blocked the
+  // whole "pull scan_samples + diagnose why cn missed" loop.
+  const canvasToBlob = (src, maxW) => {
     try {
-      const w = 400, h = Math.round(400 * src.height / src.width);
+      const w = Math.min(maxW || 400, src.width), h = Math.round(w * src.height / src.width);
       const c = document.createElement("canvas"); c.width = w; c.height = h;
       c.getContext("2d").drawImage(src, 0, 0, w, h);
-      return new Promise(res => c.toBlob(res, "image/jpeg", 0.82));
+      return new Promise(res => c.toBlob(res, "image/jpeg", 0.85));
     } catch(_e){ return Promise.resolve(null); }
   };
   // single-mode flywheel (image = the last full-res rectified capture).
