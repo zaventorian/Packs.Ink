@@ -575,7 +575,7 @@ const MAINLINE_SETS = [
   "The First Chapter","Rise of the Floodborn","Into the Inklands",
   "Ursula's Return","Shimmering Skies","Azurite Sea","Archazia's Island",
   "Reign of Jafar","Fabled","Whispers in the Well","Winterspell",
-  "Wilds Unknown","Attack of the Vines"
+  "Wilds Unknown","Attack of the Vine!"
 ];
 // Full set ordering for catalog / Cards view / Collection grid. Includes
 // promo sets and the Extras & Oddities bucket so they're browsable and
@@ -593,6 +593,18 @@ const SET_ORDER = [
   "EPCOT Festival of the Arts", // 2026-01-16
   ...MAINLINE_SETS,
 ];
+
+// Variant/promo sets that should fold into a PARENT set for browsing + deck
+// legality — players looking at the parent set see these printings too, and
+// either copy counts as the parent set's card when deckbuilding. The child set
+// keeps its own tiles/labels; it just isn't a separate filter chip and is
+// matched + ranked + made legal as its parent. Set 13's prerelease promos
+// (set_aotv_promos) are Set 13 cards, so they live under "Attack of the Vine!".
+const SET_PARENT = {
+  "Attack of the Vine! Promos": "Attack of the Vine!",
+};
+const setMatchesFilter = (rowSet, wantSet) =>
+  rowSet === wantSet || SET_PARENT[rowSet] === wantSet;
 
 // Sets whose Collection tile collapses Normal/Foil/Enchanted into a single
 // "Promos X/Y" row. Each card in these sets exists as one printing only,
@@ -2875,7 +2887,7 @@ const SET_NICKNAMES = {
   "whispers":"Whispers in the Well", "whispers in the well":"Whispers in the Well", "whispers well":"Whispers in the Well", "witw":"Whispers in the Well",
   "winterspell":"Winterspell", "winter spell":"Winterspell",
   "wilds":"Wilds Unknown", "wilds unknown":"Wilds Unknown", "wu":"Wilds Unknown",
-  "vines":"Attack of the Vines", "attack of the vines":"Attack of the Vines", "aov":"Attack of the Vines",
+  "vine":"Attack of the Vine!", "vines":"Attack of the Vine!", "attack of the vine":"Attack of the Vine!", "attack of the vines":"Attack of the Vine!", "aotv":"Attack of the Vine!", "aov":"Attack of the Vine!",
   // Promo & special sets
   "promo set 1":"Promo Set 1", "promo 1":"Promo Set 1", "ps1":"Promo Set 1",
   "promo set 2":"Promo Set 2", "promo 2":"Promo Set 2", "ps2":"Promo Set 2",
@@ -3531,6 +3543,7 @@ const groupSetsForFilter = (rawRows) => {
   for(const r of rawRows) if(r.Set) seen.add(r.Set);
   const normal = [], promo = [];
   for(const s of seen){
+    if(SET_PARENT[s]) continue;  // folded into parent's chip — not a separate filter
     if(SET_ORDER.includes(s)) normal.push(s);
     else promo.push(s);
   }
@@ -3568,7 +3581,7 @@ const matchesCardFilter = (row, f, parsed) => {
     if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink)) return false;
     if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity) return false;
     if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
-    if(parsed.filters.set && row.Set !== parsed.filters.set) return false;
+    if(parsed.filters.set && !setMatchesFilter(row.Set, parsed.filters.set)) return false;
     const _cmpStat = (rowVal, want, op) => {
       if(want == null) return true;
       if(rowVal == null) return false;
@@ -3738,7 +3751,7 @@ const matchesCardFilter = (row, f, parsed) => {
   }
   if(f.rarities && f.rarities.size && !f.rarities.has(row.Rarity)) return false;
   if(f.cardTypes && f.cardTypes.size && !cardTypeParts.some(t => f.cardTypes.has(t))) return false;
-  if(f.sets && f.sets.size && !f.sets.has(row.Set)) return false;
+  if(f.sets && f.sets.size && !(f.sets.has(row.Set) || (SET_PARENT[row.Set] && f.sets.has(SET_PARENT[row.Set])))) return false;
   if(f.inkable===true && row.inkable!==true) return false;
   if(f.inkable===false && row.inkable!==false) return false;
   if(f.classifications && f.classifications.size){
@@ -4089,7 +4102,10 @@ const SORT_OPTIONS = [
 // Unknown sets sort to the very end in both newest-first and oldest-first modes.
 const UNKNOWN_SET_RANK = 9999;
 const setRank = (g) => {
-  const idx = SET_ORDER.indexOf(g.Set);
+  let idx = SET_ORDER.indexOf(g.Set);
+  // Fold variant/promo child sets onto their parent's rank so their tiles sort
+  // within the parent set's block (e.g. AotV promos next to Attack of the Vine!).
+  if(idx === -1 && SET_PARENT[g.Set]) idx = SET_ORDER.indexOf(SET_PARENT[g.Set]);
   return idx === -1 ? UNKNOWN_SET_RANK : idx;
 };
 const collectorNum = (g) => {
@@ -6148,6 +6164,46 @@ const emptyFilter = () => ({
   })(),
 });
 
+// Cards-tab URL <-> filter sync. Serializes the common, shareable filter
+// dimensions to readable query params so the Cards page survives a refresh and
+// can be shared/bookmarked. Advanced text-multi filters (classifications /
+// keywords / illustrators / stats) aren't URL-backed yet — they reset on reload.
+const CARD_URL_SETFIELDS = [["set","sets"],["ink","inks"],["rarity","rarities"],["cost","costs"],["type","cardTypes"]];
+const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned"];
+const cardFilterToParams = (f) => {
+  const p = new URLSearchParams();
+  if(f.search && f.search.trim()) p.set("q", f.search.trim());
+  for(const [key, field] of CARD_URL_SETFIELDS){
+    if(f[field] && f[field].size) p.set(key, Array.from(f[field]).join(","));
+  }
+  if(f.inkable === true) p.set("inkable","1");
+  else if(f.inkable === false) p.set("inkable","0");
+  if(f.legality) p.set("legal", f.legality);
+  if(f.onlyOwned) p.set("owned","1");
+  return p;
+};
+const cardParamsPresent = (search) => {
+  const p = new URLSearchParams(search || "");
+  return CARD_URL_KEYS.some(k => p.has(k));
+};
+const cardParamsToFilter = (search) => {
+  const p = new URLSearchParams(search || "");
+  const f = emptyFilter();
+  const q = p.get("q"); if(q) f.search = q;
+  for(const [key, field] of CARD_URL_SETFIELDS){
+    const v = p.get(key);
+    if(!v) continue;
+    let vals = v.split(",").map(s => s.trim()).filter(Boolean);
+    if(field === "costs") vals = vals.map(x => { const n = parseInt(x,10); return Number.isNaN(n) ? x : n; });
+    f[field] = new Set(vals);
+  }
+  const inkable = p.get("inkable");
+  if(inkable === "1") f.inkable = true; else if(inkable === "0") f.inkable = false;
+  const legal = p.get("legal"); if(legal) f.legality = legal;
+  if(p.get("owned") === "1") f.onlyOwned = true;
+  return f;
+};
+
 // Persist/restore a full filter object (Sets → arrays). Used by the All Cards
 // view so its Filters-drawer selections survive across visits.
 const FILTER_SET_KEYS = ["inks","costs","rarities","cardTypes","sets","classifications","keywords","illustrators","strengths","willpowers","lores"];
@@ -7611,18 +7667,39 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       selectable, isAuthed, onSignIn,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
-                      defaultInks}) => {
+                      defaultInks, urlSync=false}) => {
   // When opened inside the deck editor, prefill the ink chips with the
   // deck's current inks (1-2 colors) so the user keeps seeing in-ink cards
   // without re-toggling chips every time they come back. Computed once on
   // mount; user-edits to chips win after that.
   const [filter,setFilter] = useState(() => {
+    // Cards tab: seed from shareable URL params (?q=, ?set=, ...) so a refresh
+    // or shared link restores the search + filters.
+    if(urlSync){
+      try { if(cardParamsPresent(window.location.search)) return cardParamsToFilter(window.location.search); }
+      catch {/* no-op */}
+    }
     const f = emptyFilter();
     if(Array.isArray(defaultInks) && defaultInks.length && defaultInks.length <= 2){
       f.inks = new Set(defaultInks);
     }
     return f;
   });
+  // Mirror the live filter into the URL (debounced) so the Cards page is
+  // refreshable + shareable. Only the cards-tab instance opts in (urlSync);
+  // the deck-builder card picker leaves the URL alone.
+  useEffect(() => {
+    if(!urlSync) return;
+    const h = setTimeout(() => {
+      try {
+        const url = new URL(window.location.href);
+        for(const k of CARD_URL_KEYS) url.searchParams.delete(k);
+        for(const [k,v] of cardFilterToParams(filter)) url.searchParams.set(k, v);
+        window.history.replaceState(window.history.state, "", url.toString());
+      } catch {/* no-op */}
+    }, 350);
+    return () => clearTimeout(h);
+  }, [urlSync, filter]);
   // Apply a search string handed in from outside (the home page quick-search
   // bar uses this so opening Cards via the search bar lands with the query
   // already in the smart-search box).
@@ -8306,7 +8383,8 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       onBulkAddToDeck=${onBulkAddToDeck}
       fetchUserDecks=${fetchUserDecks}
       pendingSearch=${pendingSearch}
-      onConsumedPendingSearch=${() => setPendingSearch(null)}/>
+      onConsumedPendingSearch=${() => setPendingSearch(null)}
+      urlSync=${true}/>
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -25106,7 +25184,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   </section>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openScreenerWithFilter, onEventArtistClick, sections}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, onEventArtistClick, sections}) => {
   // Home-page section visibility (set in App from the settings popover).
   // Absent prop or absent key = visible.
   const sec = sections || {};
@@ -25459,6 +25537,18 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <button class=${valuableMode==="chase"?"active":""} onClick=${()=>setValuableMode("chase")} style=${{fontSize:11,padding:"3px 8px"}}>Chase</button>
   </div>`;
 
+  // "News" tile: the newest set while it's still pre-release (reveal season).
+  // Counts distinct cards we have live for that set, updating as more arrive,
+  // and deep-links to the Cards tab filtered to the set.
+  const newsSet = NEWEST_SET;
+  const newsCount = useMemo(() => {
+    if(!newsSet) return 0;
+    const ids = new Set();
+    for(const r of raw){ if(r.Set === newsSet && r.card_id) ids.add(r.card_id); }
+    return ids.size;
+  }, [raw, newsSet]);
+  const showNews = newsCount > 0 && typeof PRERELEASE_SETS !== "undefined" && PRERELEASE_SETS.has(newsSet);
+
   return html`<div class="scr scr-home">
     <div class="home-page-title">
       <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
@@ -25466,6 +25556,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
 
     <div class="home-grid">
       <div class="home-left-col">
+        ${showNews && html`<a class="home-news-tile home-news-clickable"
+          href=${"/cards?set=" + encodeURIComponent(newsSet)}
+          onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(newsSet))}
+          style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
+          <div style=${{fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--accent)", fontWeight:700, marginBottom:4}}>📣 News</div>
+          <div class="home-news-title">${newsSet} — ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
+          <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>Browse the set →</div>
+        </a>`}
         ${showFollowing && html`<${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`}
         ${showTournaments && html`<div class="home-tourney-col home-tourney-col--desktop">
           <${TournamentResultsBanner} raw=${raw} openDeckById=${openDeckById} openTournamentById=${openTournamentById}
@@ -25643,22 +25741,30 @@ const MAINLINE_RELEASE_ORDER = [
   "Whispers in the Well",    // 10
   "Winterspell",             // 11
   "Wilds Unknown",           // 12
-  // "Attack of the Vines",  // 13 — uncomment when released
+  "Attack of the Vine!",     // 13 — listed pre-release so it sorts as the newest
 ];
+// Sets that appear in release-order for DISPLAY (newest-first sorting + Infinity
+// legality) but have NOT physically released yet, so they're excluded from Core
+// rotation math — the format must not rotate weeks before the set drops. Remove
+// the entry on release day (2026-07-17 for Set 13) so Core rotates then.
+const PRERELEASE_SETS = new Set(["Attack of the Vine!"]);
 
 // Compute the Core-Constructed legal window from the latest released set
 // number. Rotation drops the oldest 4-set group, keeping the two most
 // recent complete groups + the in-progress group. Result is the 5-8 most
 // recent sets depending on where we sit in the cycle.
 function computeCoreSets(){
-  const latest = MAINLINE_RELEASE_ORDER.length; // 1-indexed set number
+  // Core rotation counts only RELEASED sets — a pre-release set listed for
+  // display ordering must not rotate the format early.
+  const released = MAINLINE_RELEASE_ORDER.filter(s => !PRERELEASE_SETS.has(s));
+  const latest = released.length; // 1-indexed set number
   if(latest <= 0) return [];
   const groupOfLatest = Math.ceil(latest / 4);          // 12 → group 3
   // The two most recent complete groups + in-progress contribute.
   // Effectively: latest set's group, plus the one before it.
   const firstLegalGroup = Math.max(1, groupOfLatest - 1);
   const firstLegalSetNum = (firstLegalGroup - 1) * 4 + 1;
-  return MAINLINE_RELEASE_ORDER.slice(firstLegalSetNum - 1, latest);
+  return released.slice(firstLegalSetNum - 1, latest);
 }
 
 const DECK_FORMATS = [
@@ -28698,7 +28804,9 @@ function checkDeckLegality(deck, cardById, setsByProductName){
       if(!meta) return false;
       const sets = (setsByProductName && setsByProductName[meta["Product Name"]])
         || new Set([meta.Set]);
-      for(const s of sets) if(coreLegal.has(s)) return true;
+      // A variant/promo printing (e.g. an AotV promo) is legal wherever its
+      // parent set is — either copy counts as the mainline set's card.
+      for(const s of sets) if(coreLegal.has(s) || coreLegal.has(SET_PARENT[s] || s)) return true;
       return false;
     });
     format = allInCore ? "core" : "infinity";
@@ -30507,6 +30615,23 @@ function App(){
     setView("cards");
     setTabClickNonce(n => n + 1);
   }, []);
+  // Open the Cards tab pre-filtered to one set (home "News" tile → Set 13).
+  // Push /cards?set=<name> first so the cards view's URL-sync seeds the chip;
+  // cards "owns" ?set= in VIEW_OWNED so the view-sync effect won't strip it.
+  const openCardsFilteredBySet = useCallback((setName) => {
+    try {
+      const url = new URL(window.location.href);
+      url.pathname = VIEW_PATHS.cards || "/cards";
+      for(const p of ["deck","token","user","collection","tourney","trade","t","a",
+                      "q","ink","rarity","cost","type","inkable","legal","owned"]){
+        url.searchParams.delete(p);
+      }
+      url.searchParams.set("set", setName);
+      window.history.pushState({view:"cards"}, "", url.toString());
+    } catch {/* no-op */}
+    setView("cards");
+    setTabClickNonce(n => n + 1);
+  }, []);
   const openView = useCallback((v) => {
     setView(v);
     setTabClickNonce(n => n + 1);
@@ -30660,7 +30785,8 @@ function App(){
       const current = window.location.pathname.replace(/\/$/, "") || "/";
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
-      const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a"];
+      const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
+                           "q","ink","rarity","cost","type","inkable","legal","owned"];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
       // click new-tab opens hold their query even though the view didn't
@@ -30670,6 +30796,7 @@ function App(){
         decks:      new Set(["deck","token","user","tourney"]),
         collection: new Set(["collection","token","set"]),
         market:     new Set(["a","trade","t"]),
+        cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));
@@ -32234,6 +32361,7 @@ function App(){
       openTournamentsList=${openTournamentsList}
       openView=${openView} openDecksSection=${openDecksSection}
       openCardsWithSearch=${openCardsWithSearch}
+      openCardsFilteredBySet=${openCardsFilteredBySet}
       openScreenerWithFilter=${openScreenerWithFilter}
       sections=${homeSections}
       onEventArtistClick=${setIndyArtistPick}/>`}
