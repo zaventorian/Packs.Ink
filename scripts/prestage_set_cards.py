@@ -162,14 +162,14 @@ def card_row_from_tcgcsv(set_id, cn, tp, image_url):
     }
 
 
-def card_row_image_only(set_id, cn, slug, image_url):
+def card_row_image_only(set_id, cn, slug, image_url, rarity=None):
     return {
         "id": f"crd_prestage_{set_id_tag}_{cn}",
         "set_id": set_id,
         "name": deslug(slug),
         "version": None,
         "collector_number": str(cn),
-        "rarity": None, "ink": None, "inks": None, "cost": None,
+        "rarity": norm_rarity(rarity), "ink": None, "inks": None, "cost": None,
         "inkable": None, "card_type": None,
         "strength": None, "willpower": None, "lore": None, "move_cost": None,
         "classifications": None, "text": None, "flavor_text": None,
@@ -211,8 +211,11 @@ def main():
     ap.add_argument("--folder", required=True)
     ap.add_argument("--set-id", required=True)
     ap.add_argument("--setcode", required=True, help="filename set code, e.g. 207 or PD1")
-    ap.add_argument("--group", type=int, required=True, help="TCGCSV group id")
+    ap.add_argument("--group", type=int, default=None,
+                    help="TCGCSV group id (omit to skip TCGCSV — image+name only)")
     ap.add_argument("--tag", default="set13", help="id/storage tag (default set13)")
+    ap.add_argument("--default-rarity", default=None,
+                    help="rarity for image-only rows (e.g. Promo) when no TCGCSV data")
     ap.add_argument("--commit", action="store_true")
     args = ap.parse_args()
     set_id_tag = args.tag
@@ -240,7 +243,7 @@ def main():
         except SystemExit:
             print("  (no DB creds — dry run will treat all folder cards as holes)")
 
-    tcg = build_tcgcsv_by_cn(args.group)
+    tcg = build_tcgcsv_by_cn(args.group) if args.group else {}
     print(f"TCGCSV cards in group {args.group}: {len(tcg)}\n")
 
     rows, full, imageonly, skipped = [], 0, 0, 0
@@ -255,7 +258,7 @@ def main():
             src = "TCGCSV"
             full += 1
         else:
-            row = card_row_image_only(args.set_id, cn, slug, img_url)
+            row = card_row_image_only(args.set_id, cn, slug, img_url, args.default_rarity)
             src = "image "
             imageonly += 1
         rows.append((cn, files[cn]["file"], row))
