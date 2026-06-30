@@ -36,6 +36,16 @@ def run(cmd: list[str], cwd: Path | None = None) -> None:
         sys.exit(f"step failed (rc={r.returncode}); aborting refresh to keep state clean")
 
 
+def run_soft(cmd: list[str], cwd: Path | None = None) -> None:
+    """Best-effort step: log a non-zero exit but DON'T abort the refresh. Use for
+    supplementary work (e.g. live-API discovery) that must never block the core
+    recompute when an upstream service is flaky."""
+    print(f"\n$ {' '.join(str(c) for c in cmd)}", flush=True)
+    r = subprocess.run(cmd, cwd=cwd, check=False)
+    if r.returncode != 0:
+        print(f"  ! soft step failed (rc={r.returncode}); continuing refresh", flush=True)
+
+
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser()
@@ -53,6 +63,16 @@ def main() -> None:
 
     run([sys.executable, "ingest.py", "--xlsx", str(args.xlsx),
          "--season", args.season, "--workers", "8"], cwd=ELO_DIR)
+
+    # Store-driven SC backfill: the spreadsheet above is hand-curated and has
+    # silently dropped stores that ran an SC (coverage regressed from 82 stores
+    # in Whispers to 57 in Wilds Unknown before this). This step finds SCs at
+    # stores we ALREADY count (matched by their durable RPH store_id) that the
+    # sheet missed, for the current set, and ingests them — so a store with a
+    # track record can't fall off the board. Best-effort (soft): hitting the
+    # live RPH API must never block the weekly recompute; it's idempotent and
+    # also re-queues not-yet-played SCs so they fill in once results post.
+    run_soft([sys.executable, "discover_store_scs.py", "--ingest"], cwd=ELO_DIR)
 
     # Detect + apply RPH account renames. RPH has no stable user_id, so a renamed
     # account denormalizes its NEW display name onto historical matches — we re-scan
