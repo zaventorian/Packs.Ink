@@ -45,14 +45,31 @@ STORE_ID_CACHE = HERE / "_store_id_cache.json"
 META = "https://api.ravensburgerplay.com/api/v2/events/{eid}/"
 API = d.API
 
+# RPH store_ids that are OUT OF SCOPE for this (Chicagoland) board and must never
+# be ingested — past, present, or future — even though they ran Lorcana SCs.
+# These are central-Indiana stores, not Chicagoland. Their existing events are
+# flagged is_ignored=1 (so the leaderboard/standings/summary already exclude
+# them); this set stops the store-driven discovery from re-adding NEW events for
+# them on a future set. (tracked_store_ids also derives only from non-ignored
+# events, so a fully-dropped store falls out of scope on its own — this is the
+# explicit belt-and-suspenders guard + the documented record of the decision.)
+EXCLUDED_STORE_IDS = {
+    2237,   # Good Games - Indianapolis (Indianapolis, IN)
+    28480,  # Storming Good Games (Greencastle, IN)
+}
+
 
 def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
     """Map every rph event we've ingested -> its RPH store.id. Returns the set of
     store_ids we count + a store_id -> {our store names} map for labeling.
     Cached to disk (event_id -> store_id) so re-runs don't re-fetch ~600 events."""
     conn = sqlite3.connect(DB); conn.row_factory = sqlite3.Row
+    # Only NON-ignored events define "stores we count". A store whose every event
+    # is is_ignored=1 (dropped from scope) falls out of the tracked set, so we
+    # never re-discover SCs for it. is_ignored is the single source of truth for
+    # scope; this keeps discovery honoring it automatically.
     rows = conn.execute(
-        "SELECT event_id, store FROM events WHERE platform='rph'").fetchall()
+        "SELECT event_id, store FROM events WHERE platform='rph' AND is_ignored=0").fetchall()
     conn.close()
     cache: dict[str, int | None] = {}
     if STORE_ID_CACHE.exists() and not refresh:
@@ -198,6 +215,8 @@ def main() -> None:
         cands = []
         for ev in scs.values():
             sid = (ev.get("store") or {}).get("id")
+            if sid in EXCLUDED_STORE_IDS:
+                continue  # out-of-scope store — never ingest (see EXCLUDED_STORE_IDS)
             if sid not in tracked:
                 continue
             if ev["id"] in have:
