@@ -41,7 +41,6 @@ on:
         type: choice
         options:
           - prices
-          - graded
           - metadata
           - selfheal
           - both
@@ -180,29 +179,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/link_preorder_pids.py --commit
 
-  graded:
-    name: TCGPriceLookup graded prices
-    runs-on: ubuntu-latest
-    needs: prices
-    if: |
-      always() && (
-        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
-        (github.event_name == 'workflow_dispatch' && (inputs.job == 'graded' || inputs.job == 'both'))
-      )
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: scripts/requirements.txt
-      - run: pip install -r scripts/requirements.txt
-      - name: Run TCGPriceLookup daily ETL
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          TCGPRICELOOKUP_API_KEY: ${{ secrets.TCGPRICELOOKUP_API_KEY }}
-        run: python scripts/etl_tcgpricelookup_daily.py
+  # graded job (TCGPriceLookup -> graded_prices_daily, refresh graded_prices_latest)
+  # RETIRED 2026-06-30: the TCGPriceLookup feed was discontinued. The legacy
+  # graded_prices_daily / graded_prices_latest data is intentionally LEFT FROZEN
+  # in place (still read by the legacy graded UI) and slated for eventual deletion.
+  # Graded *value* now comes from the in-house graded_sales scrape. The
+  # etl_tcgpricelookup_daily.py script + graded_overrides.json are kept on disk
+  # but no longer invoked anywhere. (TCGPRICELOOKUP_API_KEY secret is now unused.)
 
   metadata:
     name: Lorcast metadata refresh
