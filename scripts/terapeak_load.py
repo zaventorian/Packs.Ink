@@ -165,7 +165,16 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="cap rows (testing)")
     ap.add_argument("--batch", type=int, default=500)
+    ap.add_argument("--new-only", action="store_true",
+                    help="INSERT only new item_ids (ON CONFLICT DO NOTHING); never "
+                         "UPDATE existing rows, so manual excluded/card_id edits and "
+                         "slab-OCR grade fills are preserved. Use for incremental "
+                         "top-up loads after a re-scrape.")
     args = ap.parse_args()
+
+    if args.new_only:
+        HEAD["Prefer"] = "resolution=ignore-duplicates,return=minimal"
+        print("--new-only: existing rows will NOT be updated (ON CONFLICT DO NOTHING)")
 
     print("Loading + classifying sales ...")
     rows, _, _ = load_all_dedup()
