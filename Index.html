@@ -3824,11 +3824,36 @@ const openEnlargedCard = (group, options = {}) => {
     }, 0);
   }
 };
+// Ordered list of cards currently shown in the Cards browse grid, kept in sync
+// by CardBrowser. Lets the detail modal + enlarged view step to the prev/next
+// card via arrow keys / swipe. browseSibling returns null when the card isn't in
+// the list (e.g. opened from another view), which self-scopes the feature to the
+// browse context.
+let _browseList = [];
+const setBrowseList = (list) => { _browseList = Array.isArray(list) ? list : []; };
+const cardNavKey = (g) => g && (g.card_id != null
+  ? String(g.card_id) + "|" + (g.isSplitPrinting ? (g.Printing || g.tcg_printing || "") : "")
+  : (g["Product Name"] || ""));
+const browseSibling = (group, dir) => {
+  if(!group || !_browseList.length) return null;
+  const k = cardNavKey(group);
+  const idx = _browseList.findIndex(g => cardNavKey(g) === k);
+  if(idx < 0) return null;
+  const j = idx + dir;
+  return (j >= 0 && j < _browseList.length) ? _browseList[j] : null;
+};
+
 const EnlargedCardOverlay = () => {
   const [group, setGroup] = useState(null);
+  const touch = useRef(null);
   useEffect(() => {
     const onOpen = (e) => setGroup(e.detail || null);
-    const onKey = (e) => { if(e.key === "Escape") setGroup(null); };
+    const onKey = (e) => {
+      if(e.key === "Escape"){ setGroup(null); return; }
+      if(e.key === "ArrowRight" || e.key === "ArrowLeft"){
+        setGroup(g => browseSibling(g, e.key === "ArrowRight" ? 1 : -1) || g);
+      }
+    };
     window.addEventListener("packsink:enlarge-card", onOpen);
     window.addEventListener("keydown", onKey);
     return () => {
@@ -3845,7 +3870,9 @@ const EnlargedCardOverlay = () => {
   if(!src) return null;
   return html`<div class="enlarged-card-overlay" onClick=${()=>setGroup(null)}>
     <img class="enlarged-card-img" src=${src} alt=${group["Product Name"] || ""}
-      onClick=${e=>e.stopPropagation()}/>
+      onClick=${e=>e.stopPropagation()}
+      onTouchStart=${e=>{ const t=e.touches[0]; touch.current={x:t.clientX,y:t.clientY}; }}
+      onTouchEnd=${e=>{ if(!touch.current) return; const t=e.changedTouches[0]; const dx=t.clientX-touch.current.x, dy=t.clientY-touch.current.y; touch.current=null; if(Math.abs(dx)>50 && Math.abs(dx)>Math.abs(dy)){ setGroup(g => browseSibling(g, dx<0?1:-1) || g); } }}/>
     <button class="enlarged-card-close" onClick=${()=>setGroup(null)} aria-label="Close enlarged card">×</button>
   </div>`;
 };
@@ -5326,7 +5353,7 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
   </div>`;
 };
 
-const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst, onGradeThis, gradedSummary, gradedCopies}) => {
+const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, updateQty, onSignIn, initialTab, initialPrinting, gradedOwned, onGradedAdjust, onGradedMetaUpdate, onAddGraded, priceFirst, onGradeThis, gradedSummary, gradedCopies}) => {
   // When the modal is launched from the Graded collection view, the raw
   // +/- block is hidden (the user came here to manage graded slots, not
   // raw qty) and per-row +/- on the graded tab is enabled via
@@ -5459,9 +5486,32 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   // first expand; fetchCardHistory caches them.
   const [variants, setVariants] = useState({open:false, loading:false, data:{}});
   useEffect(()=>{ setVariants({open:false, loading:false, data:{}}); }, [group?.card_id]);
+  // Swipe-to-navigate (touch): record start, act on end. swipedRef suppresses the
+  // click-to-enlarge that would otherwise fire right after a horizontal swipe.
+  const navTouch = useRef(null), swipedRef = useRef(false);
+  const onNavTouchStart = (e) => { const t=e.touches[0]; navTouch.current={x:t.clientX,y:t.clientY}; swipedRef.current=false; };
+  const onNavTouchEnd = (e) => {
+    if(!onNavigate || !navTouch.current) return;
+    const t=e.changedTouches[0]; const dx=t.clientX-navTouch.current.x, dy=t.clientY-navTouch.current.y; navTouch.current=null;
+    if(Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.5){
+      const sib=browseSibling(group, dx<0?1:-1);
+      if(sib){ swipedRef.current=true; setTimeout(()=>{ swipedRef.current=false; }, 350); onNavigate(sib); }
+    }
+  };
 
   useEffect(()=>{
-    const onKey = (e)=>{ if(e.key === "Escape") onClose(); };
+    const onKey = (e)=>{
+      if(e.key === "Escape"){ onClose(); return; }
+      // Left/right → previous/next card in the browse list. Skip when the
+      // enlarged overlay is on top (it handles arrows) or a text field is focused.
+      if(onNavigate && (e.key === "ArrowLeft" || e.key === "ArrowRight")){
+        if(document.querySelector(".enlarged-card-overlay")) return;
+        const el = e.target;
+        if(el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+        const sib = browseSibling(group, e.key === "ArrowRight" ? 1 : -1);
+        if(sib){ e.preventDefault(); onNavigate(sib); }
+      }
+    };
     // A tile dblclick dispatches packsink:close-card-detail so the detail
     // modal that opened from the preceding two single-clicks gets dismissed
     // before the enlarged overlay paints on top of it. Without this, dblclick
@@ -5475,7 +5525,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
       window.removeEventListener("packsink:close-card-detail", onCloseEv);
       document.body.style.overflow = "";
     };
-  }, [onClose]);
+  }, [onClose, group, onNavigate]);
 
   // Warm the browser cache for the copy-image export's two assets (the proxied
   // card art + the logo) when the modal opens, so the canvas draw resolves
@@ -5693,7 +5743,8 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
   })();
 
   return html`<${React.Fragment}><div class="card-detail-overlay" onClick=${onClose}>
-    <div class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}>
+    <div class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}
+      onTouchStart=${onNavigate ? onNavTouchStart : null} onTouchEnd=${onNavigate ? onNavTouchEnd : null}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="card-detail-top">
         <div class="card-detail-image"
@@ -5704,6 +5755,7 @@ const CardDetailModal = ({group, onClose, theme, user, collection, updateQty, on
             // The camera/copy button + price-row links inside CardTilePreview
             // already call stopPropagation on their own, so they keep working.
             e.stopPropagation();
+            if(swipedRef.current) return;  // ignore the click a nav-swipe leaves behind
             openEnlargedCard(group);
           }}
           title="Click for enlarged view"
@@ -7864,6 +7916,9 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
     return groups.slice().sort(cmp);
   },[allGroups, deferredFilter, parsed, sortKey, collection]);
+  // Keep the module-level browse list in sync with the displayed order so the
+  // detail modal + enlarged view can arrow/swipe to the prev/next card.
+  useEffect(() => { setBrowseList(grouped); }, [grouped]);
   // Unique-per-tile key (card_id, + printing for split-printing sets).
   const isFiltering = filter !== deferredFilter;
   const parsedSummary = useMemo(() => {
@@ -8385,8 +8440,9 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       pendingSearch=${pendingSearch}
       onConsumedPendingSearch=${() => setPendingSearch(null)}
       urlSync=${true}/>
-    ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
+    ${selectedGroup && html`<${CardDetailModal} key=${cardNavKey(selectedGroup)} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
+      onNavigate=${(g)=>setSelectedGroup(g)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
     ${toast && html`<div class="cards-toast">${toast}</div>`}
   </div>`;
