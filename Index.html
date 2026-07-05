@@ -606,6 +606,30 @@ const SET_PARENT = {
 const setMatchesFilter = (rowSet, wantSet) =>
   rowSet === wantSet || SET_PARENT[rowSet] === wantSet;
 
+// Promos live in their own sets (Promo Set 1/2/3, D23, EPCOT, LCP …) but are
+// reprints of cards from a mainline set. `_promoBaseSet` maps a promo's Product
+// Name -> the set its base (non-promo) card lives in, so filtering that set in
+// Cards also surfaces the promos of its cards (rendered at the bottom, below the
+// set's own cards). Populated once per catalog by CardBrowser via setPromoBaseSet.
+let _promoBaseSet = new Map();
+const setPromoBaseSet = (rows) => {
+  const m = new Map();
+  for(const r of rows || []){
+    const set = r.Set, name = r["Product Name"];
+    if(!name || !set || r.Rarity === "Promo" || SET_PARENT[set]) continue; // index bases only
+    if(!m.has(name)) m.set(name, set);
+  }
+  _promoBaseSet = m;
+};
+// The extra set a card should ALSO be filterable under, if any: an explicit
+// child->parent (SET_PARENT, e.g. AotV Promos) OR a promo folded under its base
+// card's mainline set (by Product Name). null for ordinary cards.
+const cardParentSetForFilter = (row) => {
+  if(SET_PARENT[row.Set]) return SET_PARENT[row.Set];
+  if(row.Rarity === "Promo") return _promoBaseSet.get(row["Product Name"]) || null;
+  return null;
+};
+
 // Sets whose Collection tile collapses Normal/Foil/Enchanted into a single
 // "Promos X/Y" row. Each card in these sets exists as one printing only,
 // so splitting buckets surfaces a lot of 0/0 noise.
@@ -3581,7 +3605,7 @@ const matchesCardFilter = (row, f, parsed) => {
     if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink)) return false;
     if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity) return false;
     if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
-    if(parsed.filters.set && !setMatchesFilter(row.Set, parsed.filters.set)) return false;
+    if(parsed.filters.set){ const pp = cardParentSetForFilter(row); if(!(row.Set === parsed.filters.set || pp === parsed.filters.set)) return false; }
     const _cmpStat = (rowVal, want, op) => {
       if(want == null) return true;
       if(rowVal == null) return false;
@@ -3751,7 +3775,7 @@ const matchesCardFilter = (row, f, parsed) => {
   }
   if(f.rarities && f.rarities.size && !f.rarities.has(row.Rarity)) return false;
   if(f.cardTypes && f.cardTypes.size && !cardTypeParts.some(t => f.cardTypes.has(t))) return false;
-  if(f.sets && f.sets.size && !(f.sets.has(row.Set) || (SET_PARENT[row.Set] && f.sets.has(SET_PARENT[row.Set])))) return false;
+  if(f.sets && f.sets.size){ const pp = cardParentSetForFilter(row); if(!(f.sets.has(row.Set) || (pp && f.sets.has(pp)))) return false; }
   if(f.inkable===true && row.inkable!==true) return false;
   if(f.inkable===false && row.inkable!==false) return false;
   if(f.classifications && f.classifications.size){
@@ -3845,7 +3869,7 @@ const browseSibling = (group, dir) => {
 
 const EnlargedCardOverlay = () => {
   const [group, setGroup] = useState(null);
-  const touch = useRef(null);
+  const imgRef = useRef(null);
   useEffect(() => {
     const onOpen = (e) => setGroup(e.detail || null);
     const onKey = (e) => {
@@ -3861,6 +3885,36 @@ const EnlargedCardOverlay = () => {
       window.removeEventListener("keydown", onKey);
     };
   }, []);
+  // Non-passive swipe (see CardDetailModal for the why): preventDefault on a
+  // clear horizontal move so iOS doesn't hand the gesture to native image
+  // drag/zoom and drop touchend. Re-wires when the mounted <img> appears.
+  useEffect(() => {
+    const el = imgRef.current;
+    if(!el) return;
+    let sx=0, sy=0, active=false, horiz=false;
+    const onStart = (e) => { const t=e.touches[0]; if(!t) return; sx=t.clientX; sy=t.clientY; active=true; horiz=false; };
+    const onMove = (e) => {
+      if(!active) return;
+      const t=e.touches[0]; if(!t) return;
+      const dx=t.clientX-sx, dy=t.clientY-sy;
+      if(!horiz && Math.abs(dx)>10 && Math.abs(dx)>Math.abs(dy)) horiz=true;
+      if(horiz && e.cancelable) e.preventDefault();
+    };
+    const onEnd = (e) => {
+      if(!active) return; active=false;
+      const t=e.changedTouches[0]; if(!t) return;
+      const dx=t.clientX-sx, dy=t.clientY-sy;
+      if(Math.abs(dx)>45 && Math.abs(dx)>Math.abs(dy)) setGroup(g => browseSibling(g, dx<0?1:-1) || g);
+    };
+    el.addEventListener("touchstart", onStart, {passive:true});
+    el.addEventListener("touchmove", onMove, {passive:false});
+    el.addEventListener("touchend", onEnd, {passive:true});
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+    };
+  }, [group]);
   if(!group) return null;
   // Pick the largest art available. img_large is stripped from the catalog
   // cache (CLAUDE.md: writeCache slim drop) so on cache-only sessions we fall
@@ -3869,10 +3923,9 @@ const EnlargedCardOverlay = () => {
   const src = group.img_large || group.img_normal || group.img_small;
   if(!src) return null;
   return html`<div class="enlarged-card-overlay" onClick=${()=>setGroup(null)}>
-    <img class="enlarged-card-img" src=${src} alt=${group["Product Name"] || ""}
-      onClick=${e=>e.stopPropagation()}
-      onTouchStart=${e=>{ const t=e.touches[0]; touch.current={x:t.clientX,y:t.clientY}; }}
-      onTouchEnd=${e=>{ if(!touch.current) return; const t=e.changedTouches[0]; const dx=t.clientX-touch.current.x, dy=t.clientY-touch.current.y; touch.current=null; if(Math.abs(dx)>50 && Math.abs(dx)>Math.abs(dy)){ setGroup(g => browseSibling(g, dx<0?1:-1) || g); } }}/>
+    <img ref=${imgRef} class="enlarged-card-img" src=${src} alt=${group["Product Name"] || ""}
+      onClick=${e=>e.stopPropagation()} draggable=${false}
+      style=${{touchAction:"none", WebkitUserSelect:"none", userSelect:"none", WebkitTouchCallout:"none"}}/>
     <button class="enlarged-card-close" onClick=${()=>setGroup(null)} aria-label="Close enlarged card">×</button>
   </div>`;
 };
@@ -5486,18 +5539,44 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // first expand; fetchCardHistory caches them.
   const [variants, setVariants] = useState({open:false, loading:false, data:{}});
   useEffect(()=>{ setVariants({open:false, loading:false, data:{}}); }, [group?.card_id]);
-  // Swipe-to-navigate (touch): record start, act on end. swipedRef suppresses the
-  // click-to-enlarge that would otherwise fire right after a horizontal swipe.
-  const navTouch = useRef(null), swipedRef = useRef(false);
-  const onNavTouchStart = (e) => { const t=e.touches[0]; navTouch.current={x:t.clientX,y:t.clientY}; swipedRef.current=false; };
-  const onNavTouchEnd = (e) => {
-    if(!onNavigate || !navTouch.current) return;
-    const t=e.changedTouches[0]; const dx=t.clientX-navTouch.current.x, dy=t.clientY-navTouch.current.y; navTouch.current=null;
-    if(Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)*1.5){
-      const sib=browseSibling(group, dx<0?1:-1);
-      if(sib){ swipedRef.current=true; setTimeout(()=>{ swipedRef.current=false; }, 350); onNavigate(sib); }
-    }
-  };
+  // Swipe-to-navigate (touch). swipedRef suppresses the click-to-enlarge that
+  // would otherwise fire right after a horizontal swipe.
+  const cardDetailRef = useRef(null), swipedRef = useRef(false);
+  // Wire the touch listeners NON-PASSIVELY so we can preventDefault the moment a
+  // horizontal intent is detected. Without that, on a scrollable modal iOS
+  // hands the gesture to the scroller and fires touchcancel (never touchend),
+  // so the swipe was silently lost on mobile. preventDefault only fires once the
+  // move is clearly horizontal, so vertical scrolling in the modal still works.
+  useEffect(() => {
+    const el = cardDetailRef.current;
+    if(!el || !onNavigate) return;
+    let sx=0, sy=0, active=false, horiz=false;
+    const onStart = (e) => { const t=e.touches[0]; if(!t) return; sx=t.clientX; sy=t.clientY; active=true; horiz=false; swipedRef.current=false; };
+    const onMove = (e) => {
+      if(!active) return;
+      const t=e.touches[0]; if(!t) return;
+      const dx=t.clientX-sx, dy=t.clientY-sy;
+      if(!horiz && Math.abs(dx)>10 && Math.abs(dx)>Math.abs(dy)) horiz=true;
+      if(horiz && e.cancelable) e.preventDefault();
+    };
+    const onEnd = (e) => {
+      if(!active) return; active=false;
+      const t=e.changedTouches[0]; if(!t) return;
+      const dx=t.clientX-sx, dy=t.clientY-sy;
+      if(Math.abs(dx)>45 && Math.abs(dx)>Math.abs(dy)){
+        const sib=browseSibling(group, dx<0?1:-1);
+        if(sib){ swipedRef.current=true; setTimeout(()=>{ swipedRef.current=false; }, 350); onNavigate(sib); }
+      }
+    };
+    el.addEventListener("touchstart", onStart, {passive:true});
+    el.addEventListener("touchmove", onMove, {passive:false});
+    el.addEventListener("touchend", onEnd, {passive:true});
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+    };
+  }, [onNavigate, group]);
 
   useEffect(()=>{
     const onKey = (e)=>{
@@ -5743,8 +5822,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   })();
 
   return html`<${React.Fragment}><div class="card-detail-overlay" onClick=${onClose}>
-    <div class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}
-      onTouchStart=${onNavigate ? onNavTouchStart : null} onTouchEnd=${onNavigate ? onNavTouchEnd : null}>
+    <div ref=${cardDetailRef} class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
       <div class="card-detail-top">
         <div class="card-detail-image"
@@ -7890,7 +7968,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // printings, so we can filter the *groups* downstream and keep their
   // object references stable across filter changes — letting React.memo on
   // CardTile actually short-circuit unchanged tiles.
-  const allGroups = useMemo(() => groupCards(raw), [raw]);
+  const allGroups = useMemo(() => { setPromoBaseSet(raw); return groupCards(raw); }, [raw]);
   const grouped = useMemo(()=>{
     let groups = smartCardFilter(allGroups, deferredFilter, parsed);
     // "Only show cards in my collection" toggle. A group qualifies if the
@@ -7903,18 +7981,33 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         return (nKey && collection[nKey] > 0) || (fKey && collection[fKey] > 0);
       });
     }
+    let result;
     if(sortKey === "relevance"){
       // Best match: score by name relevance when there's a query, else fall back
       // to set-new (so plain browsing keeps the newest-first order).
       if(parsed.name && parsed.name.trim()){
         const sc = new Map();
         for(const g of groups) sc.set(g, _relevanceScore(g, parsed.name));
-        return groups.slice().sort((a,b)=> (sc.get(b)-sc.get(a)) || SORT_COMPARATORS["set-new"](a,b));
+        result = groups.slice().sort((a,b)=> (sc.get(b)-sc.get(a)) || SORT_COMPARATORS["set-new"](a,b));
+      } else {
+        result = groups.slice().sort(SORT_COMPARATORS["set-new"]);
       }
-      return groups.slice().sort(SORT_COMPARATORS["set-new"]);
+    } else {
+      const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
+      result = groups.slice().sort(cmp);
     }
-    const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
-    return groups.slice().sort(cmp);
+    // When filtered to a set, its promos (child-set promos + name-matched promos
+    // from Promo Set N etc.) sink below the set's own cards. A stable partition,
+    // so each half keeps the active sort order.
+    const activeSets = new Set();
+    if(parsed.filters && parsed.filters.set) activeSets.add(parsed.filters.set);
+    if(deferredFilter.sets) for(const s of deferredFilter.sets) activeSets.add(s);
+    if(activeSets.size){
+      const own = [], promo = [];
+      for(const g of result){ (activeSets.has(g.Set) ? own : promo).push(g); }
+      if(promo.length && own.length) result = own.concat(promo);
+    }
+    return result;
   },[allGroups, deferredFilter, parsed, sortKey, collection]);
   // Keep the module-level browse list in sync with the displayed order so the
   // detail modal + enlarged view can arrow/swipe to the prev/next card.
