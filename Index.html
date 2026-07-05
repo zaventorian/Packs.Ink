@@ -4182,10 +4182,12 @@ const SORT_OPTIONS = [
 // Unknown sets sort to the very end in both newest-first and oldest-first modes.
 const UNKNOWN_SET_RANK = 9999;
 const setRank = (g) => {
-  let idx = SET_ORDER.indexOf(g.Set);
-  // Fold variant/promo child sets onto their parent's rank so their tiles sort
-  // within the parent set's block (e.g. AotV promos next to Attack of the Vine!).
-  if(idx === -1 && SET_PARENT[g.Set]) idx = SET_ORDER.indexOf(SET_PARENT[g.Set]);
+  const idx = SET_ORDER.indexOf(g.Set);
+  // Child/promo sets (SET_PARENT, e.g. "Attack of the Vine! Promos") are
+  // deliberately NOT folded onto the parent's rank — that made their promo tiles
+  // interleave with the parent set's base cards by collector number in the
+  // unfiltered browse. Leaving them UNKNOWN_SET_RANK sinks them to the bottom,
+  // below the parent's own cards (and the filtered-view partition agrees).
   return idx === -1 ? UNKNOWN_SET_RANK : idx;
 };
 const collectorNum = (g) => {
