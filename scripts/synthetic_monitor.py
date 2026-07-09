@@ -15,7 +15,7 @@ the HTML never contains prices; matview freshness is the data-staleness
 signal and the HTML check only proves the app shell deployed):
 
   CHECK A — data freshness (Supabase REST, anon key):
-    * card_prices_latest.max(price_date) must be within STALE_HOURS of today
+    * card_prices_latest.max(price_date) must be within the grace window
       (UTC). This is the same signal the in-app stale-data footer pill uses.
     * price_movers must have a plausible row count (>= MIN_MOVERS_ROWS). A
       refresh that emptied the matview, or a never-refreshed view, fails here.
@@ -48,11 +48,14 @@ import requests
 
 # --- Tunable thresholds (module-level constants) ---------------------------
 
-# Max age of card_prices_latest before we consider the catalog stale. The
-# TCGCSV snapshot lands ~20:00 UTC daily and the matview refresh chains off
-# it, so a healthy site is always < 24h behind. 36h gives one full missed
-# ETL cycle of slack before alerting (matches the in-app footer pill's 36h).
-STALE_HOURS = 36
+# Staleness is measured from 21:00 UTC of the newest price_date — the hour the
+# TCGCSV snapshot actually lands and the cron loads it — plus this grace window,
+# mirroring the in-app footer pill (Index.html Footer). Anchoring to midnight
+# instead (the 2026-06-27 version) made every healthy afternoon read as 36-44h
+# old, so the 12:00-20:00 UTC runs false-alarmed daily. With the 21:00 anchor a
+# healthy site peaks at ~23.5h right before the next snapshot; a fully missed
+# ETL cycle crosses 30h a few hours after the last retry cron and alerts.
+STALE_GRACE_HOURS = 30
 
 # Minimum plausible row count for the price_movers matview. price_movers is NOT
 # one-row-per-catalog-card: its WHERE clause keeps only cards with a >= $5 window
@@ -113,7 +116,7 @@ def check_freshness() -> list[str]:
     """Returns a list of failure messages (empty == pass)."""
     failures: list[str] = []
 
-    # A1: newest price_date in card_prices_latest within STALE_HOURS.
+    # A1: newest price_date in card_prices_latest fresh (21:00 UTC anchor + grace).
     try:
         rows = _sb_get(
             "card_prices_latest?select=price_date&order=price_date.desc&limit=1"
@@ -125,23 +128,21 @@ def check_freshness() -> list[str]:
             latest_date = dt.date.fromisoformat(latest)
             now = dt.datetime.now(dt.timezone.utc)
             today = now.date()
-            # Measure against a real UTC timestamp (midnight of latest_date) so
-            # staleness isn't undercounted by up to ~24h the way a date-granular
-            # `.days * 24` is.
-            latest_midnight = dt.datetime.combine(
-                latest_date, dt.time.min, tzinfo=dt.timezone.utc
+            snapshot_landed = dt.datetime.combine(
+                latest_date, dt.time(21, 0), tzinfo=dt.timezone.utc
             )
-            age_hours = (now - latest_midnight).total_seconds() / 3600
-            if age_hours > STALE_HOURS:
+            age_hours = (now - snapshot_landed).total_seconds() / 3600
+            if age_hours > STALE_GRACE_HOURS:
                 failures.append(
                     f"card_prices_latest is stale: newest price_date {latest} "
-                    f"is ~{age_hours:.1f}h behind now (UTC {today}); "
-                    f"threshold is {STALE_HOURS}h."
+                    f"landed ~{age_hours:.1f}h ago (UTC now {today}); "
+                    f"threshold is {STALE_GRACE_HOURS}h past its 21:00 UTC snapshot."
                 )
             else:
                 print(
                     f"  [A1 PASS] card_prices_latest newest price_date {latest} "
-                    f"(~{age_hours:.1f}h old, <= {STALE_HOURS}h)."
+                    f"(~{age_hours:.1f}h past its 21:00 UTC snapshot, "
+                    f"<= {STALE_GRACE_HOURS}h)."
                 )
     except Exception as e:
         failures.append(f"card_prices_latest freshness query failed: {e}")

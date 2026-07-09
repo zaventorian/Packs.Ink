@@ -5959,11 +5959,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ${isGradedMode && html`<div class="card-detail-prices-tag">Raw prices</div>`}
           ${group.normal && html`<${PrintingBlock} row=${group.normal} title="Normal"
             qty=${collection[group.card_id+":"+group.normal.tcg_printing]||0}
-            onQtyChange=${user ? (q)=>updateQty(group.card_id, group.normal.tcg_printing, q) : null}/>`}
+            onQtyChange=${user && updateQty ? (q)=>updateQty(group.card_id, group.normal.tcg_printing, q) : null}/>`}
           ${group.foil && html`<${PrintingBlock} row=${group.foil}
             title=${group.isChase ? group.Rarity : (group.normal ? "Foil" : (group.Rarity || ""))}
             qty=${collection[group.card_id+":"+group.foil.tcg_printing]||0}
-            onQtyChange=${user ? (q)=>updateQty(group.card_id, group.foil.tcg_printing, q) : null}/>`}
+            onQtyChange=${user && updateQty ? (q)=>updateQty(group.card_id, group.foil.tcg_printing, q) : null}/>`}
         </div>`}
       </div>
     </div>
@@ -26835,7 +26835,7 @@ const ArchetypeBreakdown = ({results}) => {
   </div>`;
 };
 
-const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onConsumedIncomingDeckId, incomingShareToken, onConsumedIncomingShareToken, incomingUserId, onConsumedIncomingUserId, incomingTournamentId, onConsumedIncomingTournamentId, ownerDisplayName, openCollectionById, openDeckById, incomingDeckSection, onConsumedIncomingDeckSection, onSignIn, theme}) => {
+const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDeckId, onConsumedIncomingDeckId, incomingShareToken, onConsumedIncomingShareToken, incomingUserId, onConsumedIncomingUserId, incomingTournamentId, onConsumedIncomingTournamentId, ownerDisplayName, openCollectionById, openDeckById, incomingDeckSection, onConsumedIncomingDeckSection, onSignIn, theme}) => {
   // All hooks run unconditionally.
   const [decks, setDecks] = useState(null); // null = loading, [] = empty, [...] = loaded
   const [selectedDeckId, setSelectedDeckId] = useState(null);
@@ -28531,7 +28531,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     const isFollowingCreator = creatorId ? userFollows.has(creatorId) : false;
     return html`<${React.Fragment}>
       <${DeckEditor} deck=${d} cardById=${cardById} setsByProductName=${setsByProductName}
-        collection=${collection} raw=${raw} theme=${theme}
+        collection=${collection} updateQty=${updateQty} raw=${raw} theme=${theme}
         user=${user} onSignIn=${onSignIn}
         pending=${0}
         favoriteCount=${favoriteCounts[d.id] || 0}
@@ -28573,7 +28573,7 @@ const DecksView = ({raw, user, collection, tabClickNonce, incomingDeckId, onCons
     if(!deck) return html`<div class="muted">Deck not found. <button onClick=${()=>setSelectedDeckId(null)}>Back</button></div>`;
     return html`<${React.Fragment}>
       <${DeckEditor} deck=${deck} cardById=${cardById} setsByProductName=${setsByProductName}
-        collection=${collection} raw=${raw} theme=${theme}
+        collection=${collection} updateQty=${updateQty} raw=${raw} theme=${theme}
         user=${user} onSignIn=${onSignIn}
         pending=${pending}
         favoriteCount=${favoriteCounts[deck.id] || 0}
@@ -29404,7 +29404,7 @@ const swatchStyle = (inkKey, gradientPrefix) => {
 // Deck editor: card browser on the left, deck summary on the right. The
 // browser is a slimmer version of CardsView's filter UI; +/- buttons on
 // each card row update the current deck's quantity (max 4 per card).
-const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, pending,
+const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
                      onUpdateCard, onSwapVariant, onUpdateMeta, onToggleEditMode,
@@ -30459,7 +30459,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, raw, theme, 
     })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}
-      user=${user} collection=${collection} updateQty=${null} onSignIn=${onSignIn || (()=>{})}/>`}
+      user=${user} collection=${collection} updateQty=${updateQty || null} onSignIn=${onSignIn || (()=>{})}/>`}
     ${deckTextModal && html`<div class="modal-backdrop" onClick=${()=>setDeckTextModal(null)}>
       <div class="modal deck-text-modal" onClick=${e=>e.stopPropagation()}>
         <div class="modal-header">
@@ -32585,7 +32585,7 @@ function App(){
         onClose: closeViewedCollection,
       } : null}/>`}
     ${view==="decks"&&html`<${DecksView} raw=${raw} user=${user}
-      collection=${collection} tabClickNonce=${tabClickNonce}
+      collection=${collection} updateQty=${updateQty} tabClickNonce=${tabClickNonce}
       incomingDeckId=${incomingDeckId}
       onConsumedIncomingDeckId=${() => setIncomingDeckId(null)}
       incomingShareToken=${incomingShareToken}
