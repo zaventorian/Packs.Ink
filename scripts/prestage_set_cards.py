@@ -233,15 +233,14 @@ def main():
 
     # Which collector numbers are already real (non-prestage) cards in this set?
     existing = set()
-    if args.commit or True:
-        try:
-            rows = Supabase().select("cards", columns="id,collector_number",
-                                     filters={"set_id": f"eq.{args.set_id}"})
-            for r in rows:
-                if not str(r.get("id", "")).startswith("crd_prestage_"):
-                    existing.add(to_int(r.get("collector_number")))
-        except SystemExit:
-            print("  (no DB creds — dry run will treat all folder cards as holes)")
+    try:
+        rows = Supabase().select("cards", columns="id,collector_number",
+                                 filters={"set_id": f"eq.{args.set_id}"})
+        for r in rows:
+            if not str(r.get("id", "")).startswith("crd_prestage_"):
+                existing.add(to_int(r.get("collector_number")))
+    except SystemExit:
+        print("  (no DB creds — dry run will treat all folder cards as holes)")
 
     tcg = build_tcgcsv_by_cn(args.group) if args.group else {}
     print(f"TCGCSV cards in group {args.group}: {len(tcg)}\n")

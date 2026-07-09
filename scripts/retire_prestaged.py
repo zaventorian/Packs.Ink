@@ -36,9 +36,19 @@ from supabase_client import Supabase
 # Tables that reference cards.id via card_id, with the OTHER columns that (with
 # card_id) identify a unique row — used to merge quantities on re-point.
 REF_TABLES = [
-    ("deck_cards", ["deck_id"]),
+    ("deck_cards", ["deck_id", "printing"]),
     ("collection_items", ["user_id", "printing"]),
     ("graded_collection_items", ["user_id", "printing", "grader", "grade"]),
+]
+
+# Tables that reference cards.id without a quantity to merge (surrogate PKs) —
+# a plain UPDATE re-point is enough. graded_sales matters most: its FK to
+# cards would otherwise block the stand-in delete and fail the daily job.
+PLAIN_REF_COLS = [
+    ("grading_submissions", "card_id"),
+    ("scan_samples", "card_id"),
+    ("scan_samples", "predicted_card_id"),
+    ("graded_sales", "card_id"),
 ]
 
 
@@ -51,13 +61,11 @@ def _norm_cn(cn):
 
 def repoint(sb, table, keycols, old_id, new_id, commit):
     """Move rows in `table` from card_id=old_id to card_id=new_id, merging
-    quantity when a row for (keycols..., new_id) already exists. Returns count."""
-    try:
-        olds = sb.select(table, columns=",".join(keycols + ["card_id", "quantity"]),
-                         filters={"card_id": f"eq.{old_id}"})
-    except Exception as e:
-        print(f"    {table}: skipped ({repr(e)[:60]})")
-        return 0
+    quantity when a row for (keycols..., new_id) already exists. Returns count.
+    Raises on any Supabase error — the caller must NOT delete the stand-in when
+    a re-point fails, or the referencing rows are silently orphaned."""
+    olds = sb.select(table, columns=",".join(keycols + ["card_id", "quantity"]),
+                     filters={"card_id": f"eq.{old_id}"})
     n = 0
     for o in olds:
         n += 1
@@ -65,10 +73,7 @@ def repoint(sb, table, keycols, old_id, new_id, commit):
             continue
         tgt_filter = {k: f"eq.{o[k]}" for k in keycols}
         tgt_filter["card_id"] = f"eq.{new_id}"
-        try:
-            ex = sb.select(table, columns="card_id,quantity", filters=tgt_filter)
-        except Exception:
-            ex = []
+        ex = sb.select(table, columns="card_id,quantity", filters=tgt_filter)
         if ex:  # target already there → sum quantities, drop the old row
             newq = (ex[0].get("quantity") or 0) + (o.get("quantity") or 0)
             m = {k: o[k] for k in keycols}; m["card_id"] = new_id
@@ -79,6 +84,14 @@ def repoint(sb, table, keycols, old_id, new_id, commit):
             m = {k: o[k] for k in keycols}; m["card_id"] = old_id
             sb.update(table, match=m, patch={"card_id": new_id})
     return n
+
+
+def plain_repoint(sb, table, col, old_id, new_id, commit):
+    """Re-point a no-quantity reference column. Returns affected count."""
+    rows = sb.select(table, columns=col, filters={col: f"eq.{old_id}"})
+    if rows and commit:
+        sb.update(table, match={col: old_id}, patch={col: new_id})
+    return len(rows)
 
 
 def main():
@@ -106,10 +119,20 @@ def main():
         return
 
     # Re-point every reference off the stand-in and onto the real card first.
+    # A stand-in whose re-point failed is excluded from the delete pass — better
+    # a duplicate tile for one more day than orphaned deck/collection rows.
+    failed = set()
     for pid, real_id in superseded:
         moved = 0
-        for table, keycols in REF_TABLES:
-            moved += repoint(sb, table, keycols, pid, real_id, args.commit)
+        try:
+            for table, keycols in REF_TABLES:
+                moved += repoint(sb, table, keycols, pid, real_id, args.commit)
+            for table, col in PLAIN_REF_COLS:
+                moved += plain_repoint(sb, table, col, pid, real_id, args.commit)
+        except Exception as e:
+            failed.add(pid)
+            print(f"  retire {pid} -> {real_id}: re-point FAILED ({repr(e)[:100]}) — keeping stand-in")
+            continue
         print(f"  retire {pid} -> {real_id}" + (f"  ({moved} refs re-pointed)" if moved else ""))
 
     if not args.commit:
@@ -117,7 +140,7 @@ def main():
         return
 
     # Delete the stand-ins in chunks (keep the in.() filter a sane length).
-    ids = [pid for pid, _ in superseded]
+    ids = [pid for pid, _ in superseded if pid not in failed]
     for i in range(0, len(ids), 100):
         chunk = ids[i:i + 100]
         sb.delete("cards", {"id": f"in.({','.join(chunk)})"})
@@ -127,6 +150,9 @@ def main():
         print("Refreshed card_prices_latest.")
     except Exception as e:
         print(f"matview refresh failed: {e}")
+    if failed:
+        print(f"Done with errors: {len(failed)} stand-in(s) kept after re-point failures.")
+        sys.exit(1)
     print("Done.")
 
 

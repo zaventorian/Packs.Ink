@@ -131,19 +131,21 @@ def is_excluded(title: str) -> bool:
 
 
 def upsert(batch):
+    last = None
     for attempt in range(4):
         try:
             r = requests.post(f"{SB_URL}/rest/v1/graded_sales", headers=HEAD,
                               json=batch, timeout=60)
             if r.status_code < 300:
                 return
-            if r.status_code >= 500:
+            if r.status_code >= 500 or r.status_code == 429:
+                last = f"HTTP {r.status_code}: {r.text[:200]}"
                 time.sleep(3 * (attempt + 1))
                 continue
             raise SystemExit(f"upsert HTTP {r.status_code}: {r.text[:300]}")
         except requests.RequestException as e:
-            time.sleep(3 * (attempt + 1))
             last = e
+            time.sleep(3 * (attempt + 1))
     raise SystemExit(f"upsert failed after retries: {last}")
 
 

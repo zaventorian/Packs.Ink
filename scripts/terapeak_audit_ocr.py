@@ -92,24 +92,11 @@ def fetch_image(item_id: str, image_url: str) -> Path | None:
         return None
 
 
-def run_sql_query(sql: str) -> list[dict]:
-    load_dotenv(Path(__file__).parent / ".env")
-    sb = os.environ["SUPABASE_URL"].rstrip("/")
-    key = os.environ["SUPABASE_SERVICE_KEY"]
-    h = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    r = requests.post(f"{sb}/rest/v1/rpc/execute_sql", headers=h, json={"query": sql}, timeout=30)
-    if not r.ok:
-        sys.exit(f"SQL error: {r.status_code} {r.text[:300]}")
-    return r.json()
-
-
 def main():
     ap = argparse.ArgumentParser(description="OCR slab labels for graded_sales audit")
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--items", nargs="+", metavar="ITEM_ID",
                    help="eBay item IDs to audit (fetches image_url from graded_sales)")
-    g.add_argument("--sql", metavar="SQL",
-                   help="SQL returning (item_id, image_url) rows from Supabase")
     g.add_argument("--image-urls", nargs="+", metavar="ITEM_ID=URL",
                    help="item_id=url pairs (no DB query needed)")
     ap.add_argument("--verbose", action="store_true", help="Print full OCR text")
@@ -127,8 +114,6 @@ def main():
                          params={"select": "item_id,image_url", "item_id": f"in.({ids})"},
                          timeout=30)
         rows = r.json()
-    elif args.sql:
-        rows = run_sql_query(args.sql)
     elif args.image_urls:
         for pair in args.image_urls:
             iid, url = pair.split("=", 1)

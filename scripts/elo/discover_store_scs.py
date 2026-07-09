@@ -80,16 +80,19 @@ def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
         print(f"  resolving store_id for {len(todo)} rph events (cached {len(cache)})...")
 
         def fetch(eid):
+            # ok=False means a transient fetch error — do NOT cache it, or the
+            # event is never retried and its store silently drops off the board.
             try:
                 m = d.http_json(META.format(eid=eid))
-                return eid, (m.get("store") or {}).get("id")
+                return eid, (m.get("store") or {}).get("id"), True
             except Exception:
-                return eid, None
+                return eid, None, False
 
         with ThreadPoolExecutor(max_workers=8) as ex:
-            for i, (eid, sid) in enumerate(
+            for i, (eid, sid, ok) in enumerate(
                     (f.result() for f in as_completed([ex.submit(fetch, e) for e in todo])), 1):
-                cache[str(eid)] = sid
+                if ok:
+                    cache[str(eid)] = sid
                 if i % 100 == 0:
                     print(f"    {i}/{len(todo)}")
         STORE_ID_CACHE.write_text(json.dumps(cache))

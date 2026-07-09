@@ -69,7 +69,27 @@ def upsert_players_resilient(sb: Supabase, rows: list[dict]) -> None:
         print(f"  players upsert hit a unique-violation — parking on sentinels and retrying")
     park = [{**r, "display_name": f"__migrate__{r['player_id']}"} for r in rows]
     sb.upsert("elo_players", park, on_conflict="player_id")
-    sb.upsert("elo_players", rows, on_conflict="player_id")
+    try:
+        sb.upsert("elo_players", rows, on_conflict="player_id")
+    except RuntimeError as e:
+        if not _is_unique_violation(e):
+            raise
+        # A name is still contested after parking — a remote-only squatter (row
+        # deleted locally but not yet swept by delete_orphans, which runs after
+        # export). Re-apply per-row so every uncontested player gets their real
+        # name back instead of the whole board staying on sentinels.
+        stuck = []
+        for r in rows:
+            try:
+                sb.upsert("elo_players", [r], on_conflict="player_id")
+            except RuntimeError as e2:
+                if not _is_unique_violation(e2):
+                    raise
+                stuck.append(r["player_id"])
+        raise RuntimeError(
+            f"players upsert: {len(stuck)} row(s) still name-blocked after parking "
+            f"(remote-only squatter?): {stuck[:10]} — those stay on __migrate__ sentinels"
+        ) from e
 
 
 def export_events(conn, sb: Supabase, dry: bool) -> int:

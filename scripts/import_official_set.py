@@ -159,7 +159,10 @@ def main():
                           "inks": m["inks"], "cost": m["cost"], "inkable": m["inkable"], "card_type": m["card_type"],
                           "classifications": m["classifications"], "strength": m["strength"], "willpower": m["willpower"],
                           "lore": m["lore"], "move_cost": m["move_cost"], "text": m["text"], "flavor_text": m["flavor_text"],
-                          "illustrators": m["illustrators"], "tcgplayer_product_id": None,
+                          "illustrators": m["illustrators"],
+                          # tcgplayer_product_id deliberately omitted: link_preorder_pids
+                          # fills it on prestage rows, and a refresh re-run sending null
+                          # would clobber the link and drop the card to $— for hours.
                           "image_small": url, "image_normal": url, "image_large": url})
             print(f"  {label} -> {len(jpg)//1024}KB")
         except Exception as e:

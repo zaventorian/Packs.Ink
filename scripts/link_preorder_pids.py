@@ -78,8 +78,12 @@ def _results(data: Any) -> list[dict]:
 
 def _norm_name(s: str | None) -> str:
     """Lowercase, drop apostrophes, collapse whitespace. TCGCSV and Lorcast
-    agree on the "Name - Version" shape but differ on stray punctuation/casing."""
-    s = (s or "").lower().replace("’", "'").replace("'", "")
+    agree on the "Name - Version" shape but differ on stray punctuation/casing.
+    TCGCSV also suffixes chase printings with " (Epic)"/"(Iconic)"/"(Enchanted)"
+    which Lorcast never carries — strip it or no chase card ever passes the
+    name check."""
+    s = re.sub(r"\s*\((?:Iconic|Enchanted|Epic)\)\s*$", "", s or "", flags=re.I)
+    s = s.lower().replace("’", "'").replace("'", "")
     return re.sub(r"\s+", " ", s).strip()
 
 
