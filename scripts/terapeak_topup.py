@@ -94,13 +94,21 @@ def wait_swap(page, prev_id, secs=18):
 
 
 def is_newest_first(rows):
-    if not rows:
+    """Strict newest-first check: the visible page must be genuinely date-desc.
+
+    The first several dates must be non-increasing AND the top row must be
+    recent (within ~150 days across all sites). The old check only compared
+    row[0] vs row[-1], which gave a FALSE POSITIVE on best-match ordering when
+    row[0] happened to be a recent sale — so the sort was never applied and the
+    run silently missed the newest days. (Empirically the keyword-Enter search
+    resets the table to best-match, so this must catch that.)"""
+    ds = [pdate(r.get("date_last_sold_text")) for r in (rows or [])]
+    ds = [d for d in ds if d]
+    if len(ds) < 3:
         return False
-    d0 = pdate(rows[0].get("date_last_sold_text"))
-    dN = pdate(rows[-1].get("date_last_sold_text"))
-    if not d0:
-        return False
-    return d0 >= (TODAY - timedelta(days=21)) and (dN is None or d0 >= dN)
+    seq = ds[:12]
+    monotonic_desc = all(seq[i] >= seq[i + 1] for i in range(len(seq) - 1))
+    return monotonic_desc and ds[0] >= (TODAY - timedelta(days=150))
 
 
 def main():
