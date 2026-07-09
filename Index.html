@@ -106,7 +106,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=255">
+<link rel="stylesheet" href="styles.css?v=257">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -25482,9 +25482,21 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       if(pct === 0) return false; // a 0% move isn't a "mover"
       return true;
     };
+    // price_movers carries cards.rarity (the PRINTED rarity), NOT the catalog's
+    // PROMO_RARITY_SETS override that buildRow applies. So a promo-only set card
+    // printed at Rare/SR/Leg/chase (e.g. EPCOT Festival of the Arts Stitch -
+    // Rock Star, printed "Rare") would leak into the chase / rare-leg banners.
+    // Rebuild the promo set_ids from the catalog (raw carries the display Set
+    // name) and reclassify any promo-set mover into the promo bucket — matching
+    // buildRow and the Screener joinback (which reads the overridden rarity).
+    const promoSetIds = new Set();
+    if(raw) for(const r of raw){
+      if(r.set_id && r.Set && PROMO_RARITY_SETS.has(r.Set)) promoSetIds.add(r.set_id);
+    }
     const chase=[], rareLeg=[], promo=[];
     for(const r of state.rows){
       if(!qualifies(r)) continue;
+      if(r.set_id && promoSetIds.has(r.set_id)){ promo.push(r); continue; }
       if(CHASE_RARS.has(r.rarity)) chase.push(r);
       else if(RARELEG_RARS.has(r.rarity)) rareLeg.push(r);
       else if(r.rarity === "Promo") promo.push(r);
@@ -25740,7 +25752,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
                     title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
-                    subtitle=${`Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price${newestSetIsHot?" · 🆕 release week":""}`}
+                    subtitle=${html`${PRERELEASE_SETS.has(NEWEST_SET) ? html`<span style=${{display:"inline-block",background:"var(--accent)",color:"#17110a",fontWeight:800,fontSize:9,letterSpacing:0.5,padding:"1px 6px",borderRadius:4,marginRight:6,verticalAlign:"middle"}}>PRE SALE</span>` : null}Top 20 ${valuableMode==="chase"?"chase":"non-chase"} by Low price${(!PRERELEASE_SETS.has(NEWEST_SET) && newestSetIsHot)?" · 🆕 release week":""}`}
                     controls=${valuableControls}
                     cards=${valuableCards}
                     activeWindow=${""}
@@ -32502,6 +32514,159 @@ function App(){
   </div><//><//><//><//>`;
 }
 
+// ── Standalone, link-only season review: packs.ink/?season=<slug> ──
+// Curated: only seasons listed here render a shareable recap page. Add an
+// entry (slug → {season, set, tag}) to publish a new one. `season` must match
+// elo_events.season exactly (the get_season_review RPC arg).
+const SEASON_REVIEWS = {
+  "wilds-unknown": { season: "Wilds Unknown Summer 2026", set: "Wilds Unknown", tag: "Summer 2026" },
+};
+
+// Display-only: names omitted from the public season review (table + superlatives).
+// Results/standings are NOT changed — this only controls who is featured/listed on
+// the shared recap page. Lowercased display_name match.
+const SR_HIDE_PLAYERS = new Set(["metallicflare"]);
+
+const SR_MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const srFmtDay = (iso) => { if(!iso) return ""; const p = String(iso).split("-"); return `${SR_MON[(+p[1])-1]||"?"} ${+p[2]}`; };
+const srNum = (n) => (n==null ? "—" : Number(n).toLocaleString());
+
+function SeasonReviewView({ meta }){
+  const [data, setData] = useState(null);
+  const [err, setErr]   = useState(null);
+  const [q, setQ]       = useState("");
+  const [sort, setSort] = useState({ key: "results", dir: -1 });
+
+  useEffect(() => {
+    let alive = true;
+    document.title = `${meta.set} ${meta.tag} — Season Review · Packs.Ink`;
+    sbClient.rpc("get_season_review", { p_season: meta.season })
+      .then(({ data, error }) => {
+        if(!alive) return;
+        if(error){ setErr(error.message || "Failed to load season data"); return; }
+        setData(data || {});
+      })
+      .catch((e) => { if(alive) setErr(String(e && e.message || e)); });
+    return () => { alive = false; };
+  }, [meta.season]);
+
+  const summary = (data && data.summary) || {};
+  const players = useMemo(
+    () => ((data && data.players) || []).filter(p => !SR_HIDE_PLAYERS.has((p.name||"").trim().toLowerCase())),
+    [data]
+  );
+
+  // Default ranking ("results"): most 1st-place finishes, then 2nd, then top 4,
+  // then top 8, with match win rate breaking ties inside each grouping. Any
+  // column header re-sorts by that single field; the # header restores this order.
+  const rows = useMemo(() => {
+    const { key, dir } = sort;
+    const cmp = (a, b) => {
+      if(key === "results"){
+        return (b.titles - a.titles) || (b.finals - a.finals) || (b.top4 - a.top4)
+            || (b.top8 - a.top8) || ((b.mw_pct||0) - (a.mw_pct||0));
+      }
+      if(key === "name") return dir * (a.name||"").localeCompare(b.name||"");
+      if(key === "record") return dir * ((a.w||0) - (b.w||0));
+      const av = a[key], bv = b[key];
+      return dir * ((av==null?-Infinity:av) - (bv==null?-Infinity:bv));
+    };
+    const ranked = players.slice().sort(cmp);
+    const s = q.trim().toLowerCase();
+    return s ? ranked.filter(p => (p.name||"").toLowerCase().includes(s)) : ranked;
+  }, [players, q, sort]);
+
+  const clickSort = (key) => setSort(s => s.key===key ? { key, dir: -s.dir } : { key, dir: key==="name" ? 1 : -1 });
+  const resetResults = () => setSort({ key: "results", dir: -1 });
+  const arrow = (key) => sort.key===key ? html`<span class="arw">${sort.dir<0?"▾":"▴"}</span>` : null;
+  const th = (key, label, cls) => html`<th class=${cls||""} onClick=${()=>clickSort(key)}>${label}${arrow(key)}</th>`;
+
+  if(err) return html`<div class="season-review"><div class="sr-loading">
+      <div style=${{fontFamily:"var(--sr-serif)",fontSize:18,color:"var(--sr-parch)"}}>Couldn't load this season review.</div>
+      <div style=${{fontSize:12,maxWidth:420,textAlign:"center"}}>${err}</div>
+      <a class="sr-fbrand" style=${{color:"var(--sr-gold)",textDecoration:"none"}} href="/">← Back to Packs.Ink</a>
+    </div></div>`;
+  if(!data) return html`<div class="season-review"><div class="sr-loading">
+      <div class="sr-spin"></div><div>Loading ${meta.set} ${meta.tag}…</div></div></div>`;
+
+  const dateRange = (summary.date_from && summary.date_to) ? `${srFmtDay(summary.date_from)} – ${srFmtDay(summary.date_to)}, ${String(summary.date_to).slice(0,4)}` : "";
+
+  return html`<div class="season-review">
+    <header class="sr-header">
+      <a class="sr-brand" href="/"><img src="Logos/packs-ink-logo.png" alt="Packs.Ink"/><span class="sr-brand-txt">Packs.Ink</span></a>
+      <span class="sr-badge">Chicagoland Elo · Season Review</span>
+    </header>
+
+    <div class="sr-inner">
+      <section class="sr-hero" style=${{marginTop:0}}>
+        <div class="sr-eyebrow"><span class="sr-dia"></span> Set Championship Season <span class="sr-rule"></span></div>
+        <h1>${meta.set}</h1>
+        <div class="sr-sub">Chicagoland Set Championship Circuit · ${meta.tag}</div>
+        <div class="sr-metaline">
+          <span><b>${dateRange}</b></span>
+          <span><b>${srNum(summary.events)}</b> Set Championships</span>
+          <span><b>${srNum(players.length)}</b> players</span>
+        </div>
+      </section>
+
+      <section>
+        <div class="sr-eyebrow"><span class="sr-dia"></span> The season by the numbers <span class="sr-rule"></span></div>
+        <div class="sr-stats">
+          <div class="sr-stat"><div class="num">${srNum(summary.events)}</div><div class="lab">Events</div><div class="sub">Set Championships</div></div>
+          <div class="sr-stat"><div class="num">${srNum(players.length)}</div><div class="lab">Players</div><div class="sub">unique competitors</div></div>
+          <div class="sr-stat"><div class="num">${srNum(summary.matches)}</div><div class="lab">Matches</div><div class="sub">played</div></div>
+          <div class="sr-stat"><div class="num">${srNum(summary.total_games)}</div><div class="lab">Games</div><div class="sub">across all rounds</div></div>
+          <div class="sr-stat"><div class="num">${summary.avg_field==null?"—":summary.avg_field}</div><div class="lab">Avg field</div><div class="sub">players / event</div></div>
+        </div>
+      </section>
+
+      <section>
+        <div class="sr-eyebrow"><span class="sr-dia"></span> Every player, every result <span class="sr-rule"></span></div>
+        <h2 class="sr-h2">The season ledger</h2>
+        <p class="sr-h2-sub">Everyone who played at least one Wilds Unknown Set Championship in the Chicagoland circuit, ranked by results — most 1st-place finishes first, then 2nd, then top 4 and top 8, with match win rate breaking ties. Search your name, or tap any column to re-sort (the # header restores the results ranking).</p>
+        <div class="sr-tabletop">
+          <div class="sr-search"><span class="ic">⌕</span><input placeholder="Find your name…" value=${q} onInput=${(e)=>setQ(e.target.value)} aria-label="Search players"/></div>
+          <span class="sr-count">${sort.key!=="results"?html`<button class="sr-resetbtn" onClick=${resetResults}>↺ Results order</button> · `:null}${rows.length} of ${players.length} players</span>
+        </div>
+        <div class="sr-tablewrap">
+          <table class="sr-table">
+            <thead><tr>
+              ${th("name","Player","l")}
+              ${th("events","Events")}
+              ${th("titles","1st")}
+              ${th("finals","2nd")}
+              ${th("top4","Top 4")}
+              ${th("top8","Top 8")}
+              <th class="nosort">Record</th>
+              ${th("mw_pct","Win %")}
+              ${th("elo_change","Elo Δ")}
+            </tr></thead>
+            <tbody>
+              ${rows.length===0 && html`<tr><td class="sr-empty" colspan="9">No players match “${q}”.</td></tr>`}
+              ${rows.map((p) => html`<tr key=${p.player_id}>
+                <td class="l"><span class="sr-pname">${p.name}</span>${p.platform==="melee"?html`<span class="sr-plat">melee</span>`:null}</td>
+                <td>${p.events}</td>
+                <td>${p.titles>0?html`<span class="sr-titles">🏆 ${p.titles}</span>`:html`<span class="sr-z">0</span>`}</td>
+                <td>${p.finals>0?p.finals:html`<span class="sr-z">0</span>`}</td>
+                <td>${p.top4>0?p.top4:html`<span class="sr-z">0</span>`}</td>
+                <td>${p.top8>0?p.top8:html`<span class="sr-z">0</span>`}</td>
+                <td>${p.w}<span class="sr-z">–</span>${p.l}<span class="sr-z">–</span>${p.d}</td>
+                <td>${p.mw_pct==null?"—":p.mw_pct+"%"}</td>
+                <td class=${p.elo_change>0?"sr-pos":(p.elo_change<0?"sr-neg":"")}>${p.elo_change>0?"+":""}${p.elo_change==null?"—":p.elo_change}</td>
+              </tr>`)}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <footer class="sr-foot">
+        <div class="sr-fbrand"><b>Packs.Ink</b> · ${meta.set} ${meta.tag}</div>
+        <div>Data: Chicagoland Elo · official Set Championship standings · <a href="/elo">see the full board →</a></div>
+      </footer>
+    </div>
+  </div>`;
+}
+
 class ErrorBoundary extends React.Component {
   constructor(p){super(p);this.state={error:null};}
   static getDerivedStateFromError(e){return {error:e};}
@@ -32513,7 +32678,21 @@ class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
-ReactDOM.createRoot(document.getElementById("root")).render(html`<${ErrorBoundary}><${App}/><//>`);
+(function(){
+  const root = ReactDOM.createRoot(document.getElementById("root"));
+  let seasonMeta = null;
+  try {
+    const slug = new URLSearchParams(window.location.search).get("season");
+    if(slug && SEASON_REVIEWS[slug]) seasonMeta = SEASON_REVIEWS[slug];
+  } catch {}
+  if(seasonMeta){
+    // Link-only standalone recap — bypasses the full app shell entirely.
+    document.documentElement.classList.add("season-standalone");
+    root.render(html`<${ErrorBoundary}><${SeasonReviewView} meta=${seasonMeta}/><//>`);
+  } else {
+    root.render(html`<${ErrorBoundary}><${App}/><//>`);
+  }
+})();
 </script>
 </body>
 </html>
