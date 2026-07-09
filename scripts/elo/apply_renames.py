@@ -20,6 +20,12 @@ Usage:
 import argparse, csv, sqlite3, sys
 from pathlib import Path
 
+# Windows consoles default to cp1252 and choke on emoji in player names.
+try:
+    sys.stdout.reconfigure(encoding="utf-8")
+except Exception:
+    pass
+
 DB_PATH = Path(__file__).parent / "lorcana_elo.db"
 
 
@@ -78,8 +84,13 @@ def main():
                     conn.execute("UPDATE players SET display_name=? WHERE player_id=?", (stash_name, other))
                     # Set its merged_into_id to the keeper.
                     conn.execute("UPDATE players SET merged_into_id=? WHERE player_id=?", (pid, other))
-                # Apply the rename to the keeper.
-                conn.execute("UPDATE players SET display_name=? WHERE player_id=?", (new_name, pid))
+                # Apply the rename to the keeper. The keeper is canonical by
+                # definition, so its own merged_into_id MUST be null — otherwise
+                # if it still points at `other` (e.g. from a prior week's merge
+                # in the opposite direction) we create a 2-cycle (other->keeper,
+                # keeper->other) that elo.py's resolver can't break, leaving both
+                # records rated separately. Clearing it here keeps the chain acyclic.
+                conn.execute("UPDATE players SET display_name=?, merged_into_id=NULL WHERE player_id=?", (new_name, pid))
             print(f"  RENAME  pid={pid}  '{old_name}' -> '{new_name}'" +
                   (f"  (merged pid={conflict['player_id']} in)" if conflict else ""))
             applied += 1
