@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v263';
+const CACHE_VERSION = 'packsink-v264';
 const CORE_ASSETS = [
   '/',
   '/Index.html',
@@ -17,11 +17,10 @@ const CORE_ASSETS = [
   '/scanner-worker.js?v=253',
   '/scanner-ocr-worker.js?v=259',
   '/manifest.json',
-  '/icon-192.png',
-  '/icon-512.png',
-  '/apple-touch-icon.png',
-  '/Logos/packs-ink-logo.png?v=5',
-  '/Logos/logo transparent.png'
+  '/icon-192.png?v=5',
+  '/icon-512.png?v=5',
+  '/apple-touch-icon.png?v=5',
+  '/Logos/packs-ink-logo.png?v=5'
 ];
 
 self.addEventListener('install', (event) => {

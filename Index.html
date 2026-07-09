@@ -365,8 +365,9 @@ const AUX_EVICTABLE_PREFIXES = [
   "packsink:hist:",
   "packsink:colvalue:",
   "packsink:home:tourneys:",   // NOT bare "packsink:home:" — that also matches
-                               // home-panel PREFERENCE keys (colShow*, moversMode,
-                               // followingExpanded, valuableMode, …) which are user state.
+                               // home-panel PREFERENCE keys (colShow*, colValueHidden,
+                               // moversMode, followingExpanded, valuableMode, …) which are
+                               // user state, as is packsink:homePanels (section visibility).
   "packsink:following:",
 ];
 const isPriceDerivedAuxKey = (k) =>
@@ -603,14 +604,14 @@ const SET_ORDER = [
 const SET_PARENT = {
   "Attack of the Vine! Promos": "Attack of the Vine!",
 };
-const setMatchesFilter = (rowSet, wantSet) =>
-  rowSet === wantSet || SET_PARENT[rowSet] === wantSet;
-
 // Promos live in their own sets (Promo Set 1/2/3, D23, EPCOT, LCP …) but are
 // reprints of cards from a mainline set. `_promoBaseSet` maps a promo's Product
 // Name -> the set its base (non-promo) card lives in, so filtering that set in
 // Cards also surfaces the promos of its cards (rendered at the bottom, below the
-// set's own cards). Populated once per catalog by CardBrowser via setPromoBaseSet.
+// set's own cards). Populated via setPromoBaseSet as soon as the catalog rows
+// exist (transformSupabaseData on cold fetch, cache replay in loadFromSupabase)
+// so non-Cards consumers of matchesCardFilter (Screener, Price Graphing) see the
+// same fold; CardBrowser re-calls it idempotently.
 let _promoBaseSet = new Map();
 const setPromoBaseSet = (rows) => {
   const m = new Map();
@@ -1721,6 +1722,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     });
   }
 
+  setPromoBaseSet(rows);
   return rows;
 };
 
@@ -3855,6 +3857,9 @@ const openEnlargedCard = (group, options = {}) => {
 // browse context.
 let _browseList = [];
 const setBrowseList = (list) => { _browseList = Array.isArray(list) ? list : []; };
+// Set by CardDetailModal's swipe-nav; module scope because onNavigate remounts
+// the modal (key=cardNavKey) so an instance ref would lose the flag.
+let _swipeSuppressUntil = 0;
 const cardNavKey = (g) => g && (g.card_id != null
   ? String(g.card_id) + "|" + (g.isSplitPrinting ? (g.Printing || g.tcg_printing || "") : "")
   : (g["Product Name"] || ""));
@@ -5541,9 +5546,11 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // first expand; fetchCardHistory caches them.
   const [variants, setVariants] = useState({open:false, loading:false, data:{}});
   useEffect(()=>{ setVariants({open:false, loading:false, data:{}}); }, [group?.card_id]);
-  // Swipe-to-navigate (touch). swipedRef suppresses the click-to-enlarge that
-  // would otherwise fire right after a horizontal swipe.
-  const cardDetailRef = useRef(null), swipedRef = useRef(false);
+  // Swipe-to-navigate (touch). _swipeSuppressUntil (module scope — onNavigate
+  // remounts this component via key=cardNavKey, so an instance ref would reset
+  // before the leftover click lands) suppresses the click-to-enlarge that would
+  // otherwise fire right after a horizontal swipe.
+  const cardDetailRef = useRef(null);
   // Wire the touch listeners NON-PASSIVELY so we can preventDefault the moment a
   // horizontal intent is detected. Without that, on a scrollable modal iOS
   // hands the gesture to the scroller and fires touchcancel (never touchend),
@@ -5553,7 +5560,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     const el = cardDetailRef.current;
     if(!el || !onNavigate) return;
     let sx=0, sy=0, active=false, horiz=false;
-    const onStart = (e) => { const t=e.touches[0]; if(!t) return; sx=t.clientX; sy=t.clientY; active=true; horiz=false; swipedRef.current=false; };
+    const onStart = (e) => { const t=e.touches[0]; if(!t) return; sx=t.clientX; sy=t.clientY; active=true; horiz=false; };
     const onMove = (e) => {
       if(!active) return;
       const t=e.touches[0]; if(!t) return;
@@ -5567,7 +5574,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       const dx=t.clientX-sx, dy=t.clientY-sy;
       if(Math.abs(dx)>45 && Math.abs(dx)>Math.abs(dy)){
         const sib=browseSibling(group, dx<0?1:-1);
-        if(sib){ swipedRef.current=true; setTimeout(()=>{ swipedRef.current=false; }, 350); onNavigate(sib); }
+        if(sib){ _swipeSuppressUntil = Date.now() + 400; onNavigate(sib); }
       }
     };
     el.addEventListener("touchstart", onStart, {passive:true});
@@ -5835,7 +5842,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
             // The camera/copy button + price-row links inside CardTilePreview
             // already call stopPropagation on their own, so they keep working.
             e.stopPropagation();
-            if(swipedRef.current) return;  // ignore the click a nav-swipe leaves behind
+            if(Date.now() < _swipeSuppressUntil) return;  // ignore the click a nav-swipe leaves behind
             openEnlargedCard(group);
           }}
           title="Click for enlarged view"
@@ -8013,7 +8020,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   },[allGroups, deferredFilter, parsed, sortKey, collection]);
   // Keep the module-level browse list in sync with the displayed order so the
   // detail modal + enlarged view can arrow/swipe to the prev/next card.
-  useEffect(() => { setBrowseList(grouped); }, [grouped]);
+  useEffect(() => { setBrowseList(grouped); return () => setBrowseList([]); }, [grouped]);
   // Unique-per-tile key (card_id, + printing for split-printing sets).
   const isFiltering = filter !== deferredFilter;
   const parsedSummary = useMemo(() => {
@@ -10368,6 +10375,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <button class=${"scanner-mode-btn" + (mode === "ambient" ? " active" : "")} onClick=${() => switchMode("ambient")}>Stack scan</button>
         <button class=${"scanner-mode-btn" + (mode === "single" ? " active" : "")} onClick=${() => switchMode("single")}>Single</button>
       </div>` : null}
+      ${onOpenReview ? html`<button class="scanner-reviewlink" onClick=${onOpenReview} title="Review past scans">Review</button>` : null}
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
     <div class="scanner-stage" ref=${stageRef} onClick=${stageTap}>
@@ -14732,43 +14740,7 @@ const GradeFromCollectionModal = ({raw, collection, user, updateQty, onGradeOwne
   </div>`;
 };
 
-// Slab came back from the grader → pick the grade and graduate the queue row
-// into a real graded_collection_items copy.
 const GRADING_QUEUE_GRADES = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
-const GraduateSubmissionModal = ({sub, meta, onClose, onGraduate}) => {
-  useEscToClose(onClose);
-  const [grader, setGrader] = useState(sub.intended_grader || "psa");
-  const [grade, setGrade] = useState("10");
-  const [busy, setBusy] = useState(false);
-  return html`<div class="gfr-overlay" onClick=${onClose}>
-    <div class="gfr-modal" onClick=${e=>e.stopPropagation()}>
-      <button class="gfr-close" onClick=${onClose} aria-label="Close">×</button>
-      <div class="gfr-head">
-        ${meta?.img_small && html`<img class="gfr-thumb" src=${meta.img_small} alt=""/>`}
-        <div>
-          <div class="gfr-title">${meta?.["Product Name"] || sub.card_id}</div>
-          <div class="gfr-sub">Graduate to your graded collection</div>
-        </div>
-      </div>
-      <div class="gfr-row">
-        <label class="gfr-field"><span>Grader</span>
-          <select value=${grader} onChange=${e=>setGrader(e.target.value)}>
-            ${GRADER_ORDER.map(g => html`<option key=${g} value=${g}>${g.toUpperCase()}</option>`)}
-          </select>
-        </label>
-        <label class="gfr-field"><span>Grade</span>
-          <select value=${grade} onChange=${e=>setGrade(e.target.value)}>
-            ${GRADING_QUEUE_GRADES.map(g => html`<option key=${g} value=${g}>${g}</option>`)}
-          </select>
-        </label>
-      </div>
-      <div class="gfr-actions">
-        <button onClick=${onClose} disabled=${busy}>Cancel</button>
-        <button class="active" disabled=${busy} onClick=${async ()=>{ setBusy(true); const ok = await onGraduate(grader, grade); if(!ok) setBusy(false); }}>${busy?"Saving…":"Add the slab"}</button>
-      </div>
-    </div>
-  </div>`;
-};
 
 // The "Sent for grading" queue panel inside the Graded tab. Lists pending
 // submissions with a clickable To-submit ⇄ At-grader stage chip, a Graduate
@@ -15254,6 +15226,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     }
     return m;
   }, [gradedPremium, rollup, latestPrices, cardById]);
+  // TCGPriceLookup feed retired 2026-06-30 — graded_prices_latest is frozen.
+  // Show non-premium users the last snapshot date next to the header totals.
+  const gradedAsOf = useMemo(() => {
+    if(gradedPremium) return null;
+    let max = null;
+    for(const p of (latestPrices||[])) if(p.price_date && (!max || p.price_date > max)) max = p.price_date;
+    return max;
+  }, [gradedPremium, latestPrices]);
   // Group cards in raw by set so the goal flow + main render can lay them out.
   const cardsBySetId = useMemo(() => {
     const m = new Map();
@@ -15863,6 +15843,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       <div class="graded-collection-totals">
         <div class="gc-stat"><div class="gc-stat-val">${totals.uniqueCards}</div><div class="gc-stat-lbl">Unique cards owned</div></div>
         ${totals.totalCopies !== totals.uniqueCards && html`<div class="gc-stat"><div class="gc-stat-val">${totals.totalCopies}</div><div class="gc-stat-lbl">Total copies owned</div></div>`}
+        ${gradedAsOf && html`<span class="muted" style=${{fontSize:11,alignSelf:"center"}}>prices as of ${gradedAsOf}</span>`}
       </div>
       <div class="graded-collection-header-actions gc-caps-row">
         <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, or track set / rarity goals">
@@ -17854,20 +17835,6 @@ const ELO_NAME_FLAIR = {
 };
 const eloFlairFor = (name) => ELO_NAME_FLAIR[(name||"").toLowerCase().replace(/[^a-z0-9]/g,"")] || null;
 
-// ── Time-boxed Elo display gag — DISPLAY ONLY. The real data is untouched and
-// ranking is unchanged (sort/rank still use the real rating); only the SHOWN
-// number, record, and per-match result labels change for player 120
-// (I&L⟡jacobayy). Auto-reverts at 2026-06-30 00:00 America/Chicago (CDT, UTC-5)
-// — every helper below no-ops once the clock passes ELO_PRANK_UNTIL, so this
-// block + its call sites can be deleted anytime after that with no behavior
-// change. (call sites: eloPrankElo / eloPrankRecord / eloPrankOn.)
-const ELO_PRANK_PID = 120;
-const ELO_PRANK_UNTIL = Date.parse("2026-06-30T00:00:00-05:00");
-const eloPrankOn = (pid) => pid === ELO_PRANK_PID && Date.now() < ELO_PRANK_UNTIL;
-const eloPrankElo = (pid, real) => eloPrankOn(pid) ? -666 : Math.round(real);          // current & peak rating
-const eloPrankRecord = (pid, w, l, d) => eloPrankOn(pid) ? "-666" : `${w}-${l}-${d}`;
-const eloPrankPct = (pid, p) => eloPrankOn(pid) ? "-666%" : (p==null ? "—" : p.toFixed(1)+"%");
-
 function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, aliasMap}){
   if(rows === null) return html`<div class="elo-loading">Loading leaderboard…</div>`;
   if(rows.length === 0) return html`<div class="elo-empty">No players match.</div>`;
@@ -17888,9 +17855,9 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
       <tbody>
         ${rows.map(r => {
           const aliases = eloVisibleAliases(r.display_name, aliasesFor(r.player_id));
-          return html`<tr class="elo-row" key=${r.player_id} id=${eloPrankOn(r.player_id) ? "elo-prank-row" : undefined}>
-            <td class="elo-td-rank">${eloPrankOn(r.player_id) ? html`<span class="elo-rank">-666</span>` : html`<${EloRankBadge} rank=${r.rank}/>`}</td>
-            <td class="elo-td-elo">${eloPrankElo(r.player_id, r.current_rating)}</td>
+          return html`<tr class="elo-row" key=${r.player_id}>
+            <td class="elo-td-rank"><${EloRankBadge} rank=${r.rank}/></td>
+            <td class="elo-td-elo">${Math.round(r.current_rating)}</td>
             <td class="elo-td-player">
               <${EloLink} to=${{tab:"player", playerId:r.player_id}} className="elo-name-btn"
                 onClick=${()=>onPlayerClick && onPlayerClick(r.player_id)}>
@@ -17901,10 +17868,10 @@ function EloLeaderboardTable({rows, onPlayerClick, sortCol, sortDir, setSort, al
                 </span>
               </${EloLink}>
             </td>
-            <td class="elo-td-record">${eloPrankRecord(r.player_id, r.wins, r.losses, r.draws)}</td>
-            <td class="elo-td-mw">${eloPrankPct(r.player_id, r.mw_pct)}</td>
-            <td class="elo-td-gw">${eloPrankPct(r.player_id, r.gw_pct)}</td>
-            <td class="elo-td-peak">${eloPrankElo(r.player_id, r.peak_rating)}</td>
+            <td class="elo-td-record">${r.wins}-${r.losses}-${r.draws}</td>
+            <td class="elo-td-mw">${r.mw_pct==null ? "—" : r.mw_pct.toFixed(1)+"%"}</td>
+            <td class="elo-td-gw">${r.gw_pct==null ? "—" : r.gw_pct.toFixed(1)+"%"}</td>
+            <td class="elo-td-peak">${Math.round(r.peak_rating)}</td>
           </tr>`;
         })}
       </tbody>
@@ -17920,10 +17887,6 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
   const [sortCol, setSortCol] = useState("rank");
   const [sortDir, setSortDir] = useState("asc");
   const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
-  // Time-boxed gag: on open, scroll to player 120 then animate his row plummeting
-  // to the bottom while the page follows. dropDone re-pins him last once it lands.
-  const dropRan = useRef(false);
-  const [dropDone, setDropDone] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -17972,60 +17935,6 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
     });
   }, [allRows, platform, search, minMatches, sortCol, sortDir, aliasMap]);
 
-  // ── Time-boxed drop gag (auto-inert once the clock passes ELO_PRANK_UNTIL).
-  // Runs once per mount: scroll to player 120, then translate his <tr> down to
-  // the bottom over ~2.2s (ease-in = gravity) while the window scrolls to follow,
-  // then flip dropDone so he's re-pinned as the last row (transform cleared).
-  useEffect(() => {
-    if(dropRan.current) return;
-    if(!filtered || !filtered.length) return;
-    if(!eloPrankOn(ELO_PRANK_PID)) return;
-    if(!filtered.some(r => r.player_id === ELO_PRANK_PID)) return;
-    dropRan.current = true;
-    const timers = [];
-    let raf = 0;
-    timers.push(setTimeout(() => {
-      const row = document.getElementById("elo-prank-row");
-      const tbody = document.querySelector(".elo-lb .elo-table tbody");
-      if(!row || !tbody) return;
-      try { row.scrollIntoView({behavior:"smooth", block:"center"}); } catch(_){}
-      timers.push(setTimeout(() => {
-        const trs = [...tbody.querySelectorAll("tr")];
-        const lastRow = trs[trs.length - 1];
-        if(!lastRow || lastRow === row){ setDropDone(true); return; }
-        const r0 = row.getBoundingClientRect();
-        const endY = Math.max(0, lastRow.getBoundingClientRect().bottom - r0.bottom);
-        const rowAbsTop = r0.top + window.scrollY, rowH = r0.height;
-        Object.assign(row.style, {position:"relative", zIndex:"6", background:"var(--bg-card)", boxShadow:"0 8px 22px rgba(0,0,0,0.4)"});
-        const dur = 2200; let t0 = null;
-        const step = (ts) => {
-          if(t0 == null) t0 = ts;
-          const t = Math.min(1, (ts - t0) / dur), y = (t*t) * endY;  // ease-in
-          row.style.transform = `translateY(${y}px)`;
-          window.scrollTo(0, rowAbsTop + y - window.innerHeight/2 + rowH/2);
-          if(t < 1){ raf = requestAnimationFrame(step); }
-          else {
-            Object.assign(row.style, {transform:"", position:"", zIndex:"", background:"", boxShadow:""});
-            setDropDone(true);
-            raf = requestAnimationFrame(() => window.scrollTo({top: document.documentElement.scrollHeight, behavior:"smooth"}));
-          }
-        };
-        raf = requestAnimationFrame(step);
-      }, 750));
-    }, 350));
-    return () => { timers.forEach(clearTimeout); if(raf) cancelAnimationFrame(raf); };
-  }, [filtered]);
-
-  // Once he's landed, keep player 120 pinned as the last displayed row.
-  const displayRows = useMemo(() => {
-    if(!filtered || !dropDone || !eloPrankOn(ELO_PRANK_PID)) return filtered;
-    const i = filtered.findIndex(r => r.player_id === ELO_PRANK_PID);
-    if(i < 0) return filtered;
-    const copy = filtered.slice();
-    copy.push(copy.splice(i, 1)[0]);
-    return copy;
-  }, [filtered, dropDone]);
-
   return html`<div class="elo-lb">
     <div class="elo-toolbar">
       <div class="elo-chips">
@@ -18048,7 +17957,7 @@ function EloLeaderboard({onPlayerClick, aliasMap}){
       </div>
     </div>
     ${filtered && html`<div class="elo-count">${filtered.length} of ${allRows.length} players</div>`}
-    <${EloLeaderboardTable} rows=${displayRows} onPlayerClick=${onPlayerClick}
+    <${EloLeaderboardTable} rows=${filtered} onPlayerClick=${onPlayerClick}
       sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} aliasMap=${aliasMap}/>
   </div>`;
 }
@@ -18304,7 +18213,6 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
   const aliases = eloVisibleAliases(profile.display_name,
     (aliasMap && canonicalId != null) ? (aliasMap.get(canonicalId) || []) : []);
   const totalEvents = events ? events.length : null;
-  const prankMe = eloPrankOn(profile.player_id) || eloPrankOn(canonicalId);  // time-boxed display gag (see ELO_PRANK_* helpers)
 
   return html`<div class="elo-profile">
     <button class="elo-back" onClick=${onBack}>← Leaderboard</button>
@@ -18322,13 +18230,13 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         </span>`)}
       </div>`}
       <div class="elo-stat-grid">
-        <div class="elo-stat"><div class="elo-stat-lbl">Rank</div><div class="elo-stat-val">${prankMe ? "-666" : (profile.rank ? "#" + profile.rank : "—")}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">Elo</div><div class="elo-stat-val">${prankMe ? -666 : Math.round(profile.current_rating)}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">Peak</div><div class="elo-stat-val">${prankMe ? -666 : Math.round(profile.peak_rating)}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${prankMe ? "-666" : `${profile.wins}-${profile.losses}-${profile.draws}`}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${prankMe ? "-666%" : (profile.mw_pct==null ? "—" : profile.mw_pct.toFixed(1)+"%")}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${prankMe ? "-666%" : (profile.gw_pct==null ? "—" : profile.gw_pct.toFixed(1)+"%")}</div></div>
-        <div class="elo-stat"><div class="elo-stat-lbl">Events</div><div class="elo-stat-val">${prankMe ? -666 : (totalEvents ?? "—")}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Rank</div><div class="elo-stat-val">${profile.rank ? "#" + profile.rank : "—"}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Elo</div><div class="elo-stat-val">${Math.round(profile.current_rating)}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Peak</div><div class="elo-stat-val">${Math.round(profile.peak_rating)}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${profile.wins}-${profile.losses}-${profile.draws}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${profile.mw_pct==null ? "—" : profile.mw_pct.toFixed(1)+"%"}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${profile.gw_pct==null ? "—" : profile.gw_pct.toFixed(1)+"%"}</div></div>
+        <div class="elo-stat"><div class="elo-stat-lbl">Events</div><div class="elo-stat-val">${totalEvents ?? "—"}</div></div>
       </div>
     </div>
 
@@ -18392,8 +18300,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
             ${h2hMatches.map(r => {
               const isWin  = r.score === 1.0;
               const isLoss = r.score === 0.0;
-              const resultText = prankMe ? "Loss" : (isWin ? "Win" : (isLoss ? "Loss" : "Draw"));
-              const resultClass = prankMe ? "loss" : (isWin ? "win" : (isLoss ? "loss" : "draw"));
+              const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
+              const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
               const score = (r.my_games_won != null && r.opp_games_won != null) ? `${r.my_games_won}-${r.opp_games_won}` : "";
               return html`<tr key=${r.rating_id}>
                 <td class="elo-h2h-date">${r.event_date || "—"}</td>
@@ -18438,12 +18346,12 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
             <span class="elo-tourney-meta">${ev.event_date || ""}${scSet ? html` · <span class="elo-event-set">${scSet}</span>` : ""}</span>
           </header>
           <div class="elo-tourney-stats">
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${prankMe ? "-666" : (place != null ? html`<span class="elo-place">#${place}${fieldSize ? html`<span class="elo-place-field"> / ${fieldSize}</span>` : ""}</span>` : "—")}</div></div>
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">Elo end</div><div class="elo-stat-val">${prankMe ? -666 : html`${ev.end_rating != null ? Math.round(ev.end_rating) : "—"}${eloDelta != null ? html`<span class=${"elo-delta " + (eloDelta>=0?"up":"down")}>${eloDelta>=0?"+":""}${eloDelta}</span>` : ""}`}</div></div>
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${eloPrankRecord(profile.player_id, ev.wins, ev.losses, ev.draws)}</div></div>
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${prankMe ? "-666%" : (ev.mw_pct==null ? "—" : ev.mw_pct.toFixed(1)+"%")}</div></div>
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${prankMe ? "-666%" : (gwPct==null ? "—" : gwPct.toFixed(1)+"%")}</div></div>
-            <div class="elo-stat-mini"><div class="elo-stat-lbl">Opp avg</div><div class="elo-stat-val">${prankMe ? -666 : (oppAvg ?? "—")}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Place</div><div class="elo-stat-val">${place != null ? html`<span class="elo-place">#${place}${fieldSize ? html`<span class="elo-place-field"> / ${fieldSize}</span>` : ""}</span>` : "—"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Elo end</div><div class="elo-stat-val">${ev.end_rating != null ? Math.round(ev.end_rating) : "—"}${eloDelta != null ? html`<span class=${"elo-delta " + (eloDelta>=0?"up":"down")}>${eloDelta>=0?"+":""}${eloDelta}</span>` : ""}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Record</div><div class="elo-stat-val">${ev.wins}-${ev.losses}-${ev.draws}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">MW %</div><div class="elo-stat-val">${ev.mw_pct==null ? "—" : ev.mw_pct.toFixed(1)+"%"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">GW %</div><div class="elo-stat-val">${gwPct==null ? "—" : gwPct.toFixed(1)+"%"}</div></div>
+            <div class="elo-stat-mini"><div class="elo-stat-lbl">Opp avg</div><div class="elo-stat-val">${oppAvg ?? "—"}</div></div>
           </div>
           ${rounds.length > 0 && html`<table class="elo-rounds-table">
             <thead><tr>
@@ -18466,8 +18374,8 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                 }
                 const isWin  = r.score === 1.0;
                 const isLoss = r.score === 0.0;
-                const resultText = prankMe ? "Loss" : (isWin ? "Win" : (isLoss ? "Loss" : "Draw"));
-                const resultClass = prankMe ? "loss" : (isWin ? "win" : (isLoss ? "loss" : "draw"));
+                const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
+                const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
                 const score = (r.my_games_won != null && r.opp_games_won != null) ?
                   `${r.my_games_won}-${r.opp_games_won}` : "";
                 return html`<tr key=${r.rating_id}>
@@ -20749,6 +20657,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // GradedCollectionView Δ% display + movers banner reuse the exact shape.
   const gradedSynth = useMemo(() => computeGradedDeltas(gradedHistory), [gradedHistory]);
 
+  // The TCGPriceLookup feed was retired 2026-06-30, so graded_prices_daily is
+  // frozen — surface the last snapshot date so non-premium users know the
+  // numbers aren't current.
+  const gradedAsOf = useMemo(() => {
+    let max = null;
+    for(const r of (gradedHistory || [])) if(r.date && (!max || r.date > max)) max = r.date;
+    return max;
+  }, [gradedHistory]);
+
   // Index: tcgplayer_product_id -> array of synthesized graded rows.
   // Lets us O(1) look up "does this card have any graded entries?" + walk
   // them all from a raw row's pid.
@@ -21569,6 +21486,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         title="Sealed products — booster boxes, packs, bundles, troves. Each row is one SKU sortable by Low / Market / Δ%.">
         Sealed
       </button>
+      ${showGraded && !premiumGraded && gradedAsOf && html`<span class="muted" style=${{fontSize:11,alignSelf:"center",marginLeft:6}}>as of ${gradedAsOf}</span>`}
     </div>
     <div class="price-db-presets">
       ${activePresets.map(([k, l, tip]) => html`<button key=${k}
@@ -24979,6 +24897,16 @@ const geocodeZip = async (zip, country = "US") => {
 const scZipReady = (zip, country) => (country||"US")==="US"
   ? /^\d{5}$/.test(String(zip||"")) : String(zip||"").trim().length >= 2;
 
+// Captured at module load (before any App URL-cleanup effect): did this visit
+// arrive on an SC deep link? Forces the Set Championships box to render even
+// when the user has hidden the home panel — otherwise shared links dead-end.
+const SC_DEEP_LINKED = (() => {
+  try {
+    const p = new URLSearchParams(window.location.search);
+    return ["sczip","scc","scdist","scdate"].some(k => p.has(k));
+  } catch { return false; }
+})();
+
 const UpcomingSCsBox = () => {
   // Deep-link seed: ?sczip / scc / scdist / scdate let a shared link reproduce
   // a specific view. Read once in the state initializers (which run before any
@@ -25374,7 +25302,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const sec = sections || {};
   const showFollowing   = sec.following   !== false;
   const showTournaments = sec.tournaments !== false;
-  const showSetChamps   = sec.setChamps   !== false;
+  const showSetChamps   = sec.setChamps   !== false || SC_DEEP_LINKED;
   const showSetEv       = sec.setEv       !== false;
   const showCollection  = sec.collection  !== false;
   const gradedPremium = useContext(GradedPremiumContext);
@@ -25629,7 +25557,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // "Most Valuable" banner — top 20 cards of the latest RELEASED set, by Low
   // price (fallback to Market). Walk MAINLINE_SETS from the end and pick
   // the first one that actually has priced cards in `raw`. Handles
-  // unreleased sets at the tail (e.g., "Attack of the Vines" pre-release)
+  // unreleased sets at the tail (e.g., "Attack of the Vine!" pre-release)
   // and never selects a promo / Extras bucket as "newest".
   // "Release week" promotion: when the newest set is within its hype window
   // (LGS release minus 2 days through the Friday after LGS release), the
@@ -25731,7 +25659,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     for(const r of raw){ if(r.Set === newsSet && r.card_id) ids.add(r.card_id); }
     return ids.size;
   }, [raw, newsSet]);
-  const showNews = newsCount > 0 && typeof PRERELEASE_SETS !== "undefined" && PRERELEASE_SETS.has(newsSet);
+  const showNews = newsCount > 0 && PRERELEASE_SETS.has(newsSet);
 
   return html`<div class="scr scr-home">
     <div class="home-page-title">
@@ -25906,7 +25834,7 @@ const DECK_SECTIONS = [
 //   - Core Constructed: rotating. Sets release in groups of 4; when a new
 //     group starts, the oldest group rotates out. So Core's legal window
 //     is the two most recent complete groups + whatever's currently in
-//     progress. As of Set 12 (Wilds Unknown released, Attack of the Vines
+//     progress. As of Set 12 (Wilds Unknown released, Attack of the Vine!
 //     not yet): legal = sets 5-12 (Shimmering Skies through Wilds Unknown).
 //     When Set 13 releases, sets 5-8 rotate out, leaving 9-13.
 //
@@ -25967,7 +25895,7 @@ const getFormat = (key) => DECK_FORMATS.find(f => f.key === key) || DECK_FORMATS
 // only PARTIALLY released — only the specific cards listed below are legal
 // from those two sets (e.g. Grandmother Willow, in Winterspell but not on
 // the list, is NOT Japan-legal). Promos are excluded entirely.
-//   When set 13 (Attack of the Vines) reaches Japan, the rest of 10/11 will
+//   When set 13 (Attack of the Vine!) reaches Japan, the rest of 10/11 will
 //   have released too — at that point move Whispers/Winterspell into
 //   JAPAN_CORE_FULL_SETS (or clear the partial gating) and add set 13.
 const JAPAN_CORE_FULL_SETS = new Set([
@@ -26773,65 +26701,6 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
           `}
       </div>
     </div>
-  </div>`;
-};
-
-// F13 — cluster tournament decks into archetypes by ink pair (Lorcana's
-// primary archetype axis) and surface popularity + win / top-cut rate across
-// every uploaded tournament. Reads the already-loaded tournamentResults map,
-// so it needs no extra fetch. Card-level "most-played per archetype" is a
-// future add (needs a deck_cards rollup).
-const ArchetypeBreakdown = ({results}) => {
-  const [open, setOpen] = useState(true);
-  const stats = useMemo(() => {
-    const by = new Map();
-    let total = 0;
-    for(const rows of Object.values(results || {})){
-      for(const r of (rows || [])){
-        const rawInks = r.deck_inks;
-        const inks = Array.isArray(rawInks)
-          ? rawInks.filter(Boolean)
-          : (typeof rawInks === "string"
-              ? rawInks.replace(/[{}"]/g, "").split(/[,\/]/).map(s => s.trim()).filter(Boolean)
-              : []);
-        const sorted = inks.slice().sort();
-        const key = sorted.length ? sorted.join("/") : "Unknown";
-        let a = by.get(key);
-        if(!a){ a = {key, inks: sorted, count: 0, wins: 0, top8: 0}; by.set(key, a); }
-        a.count++; total++;
-        if(r.place_rank === 1) a.wins++;
-        if(r.place_rank != null && r.place_rank <= 8) a.top8++;
-      }
-    }
-    return {list: Array.from(by.values()).sort((x, y) => y.count - x.count), total};
-  }, [results]);
-  if(!stats.total) return null;
-  const top = stats.list.slice(0, 12);
-  const max = top[0] ? top[0].count : 1;
-  const iconFor = (ink) => INK_ICONS[ink] || INK_ICONS[ink.charAt(0).toUpperCase() + ink.slice(1).toLowerCase()];
-  return html`<div class="archetype-panel">
-    <button class="archetype-head" onClick=${()=>setOpen(o=>!o)} aria-expanded=${open}>
-      <span class="archetype-head-title">Archetypes by ink pair</span>
-      <span class="archetype-head-sub muted">${stats.list.length} archetypes · ${stats.total} decks tracked</span>
-      <span class="archetype-head-caret">${open ? "▾" : "▸"}</span>
-    </button>
-    ${open && html`<div class="archetype-list">
-      ${top.map(a => html`<div key=${a.key} class="archetype-row">
-        <div class="archetype-inks">
-          ${a.inks.length
-            ? a.inks.map(ink => iconFor(ink)
-                ? html`<img key=${ink} class="archetype-ink-icon" src=${iconFor(ink)} alt=${ink} title=${ink}/>`
-                : html`<span key=${ink} class="archetype-ink-dot"/>`)
-            : html`<span class="archetype-ink-dot"/>`}
-          <span class="archetype-name">${a.key}</span>
-        </div>
-        <div class="archetype-bar-wrap"><div class="archetype-bar" style=${{width:(a.count/max*100).toFixed(1)+"%"}}/></div>
-        <div class="archetype-stat archetype-count">${a.count} <span class="muted">${(a.count/stats.total*100).toFixed(0)}%</span></div>
-        <div class="archetype-stat muted" title="1st-place finishes">🏆 ${a.wins}</div>
-        <div class="archetype-stat muted" title="Top-8 finishes">T8 ${a.top8}</div>
-      </div>`)}
-    </div>`}
-    <div class="archetype-foot muted">Archetype = ink pair across all tracked tournament decks. Most-played cards per archetype coming soon.</div>
   </div>`;
 };
 
@@ -28120,8 +27989,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     setSelectedTournamentId(null);
     setTourneyDeckView("alldecks");
     if(ink) setInkFilter(prev => {
+      if(prev.has(ink)) return prev;
       const next = new Set(prev);
-      if(next.has(ink)) next.delete(ink); else next.add(ink);
+      next.add(ink);
       return next;
     });
   }, []);
@@ -30806,8 +30676,7 @@ function App(){
     try {
       const url = new URL(window.location.href);
       url.pathname = VIEW_PATHS.cards || "/cards";
-      for(const p of ["deck","token","user","collection","tourney","trade","t","a",
-                      "q","ink","rarity","cost","type","inkable","legal","owned"]){
+      for(const p of ["deck","token","user","collection","tourney","trade","t","a", ...CARD_URL_KEYS]){
         url.searchParams.delete(p);
       }
       url.searchParams.set("set", setName);
@@ -31059,17 +30928,18 @@ function App(){
   const onTabClick = useCallback((v) => {
     setView(v);
     setTabClickNonce(n => n + 1);
-    // Strip deck/token/user params when leaving Decks so a hard refresh
-    // doesn't deep-link the user back into a deck they navigated away from.
-    if(v !== "decks"){
-      try {
-        const url = new URL(window.location.href);
-        url.searchParams.delete("deck");
-        url.searchParams.delete("token");
-        url.searchParams.delete("user");
-        window.history.replaceState({}, "", url);
-      } catch {}
-    }
+    // Strip view-specific deep-link params so a hard refresh doesn't drop the
+    // user back into a sub-page they navigated away from: deck/token/user when
+    // leaving Decks, plus ?set= + every Cards filter param (CARD_URL_KEYS) so a
+    // Collection set-detail or filtered Cards URL doesn't leak between tabs.
+    try {
+      const url = new URL(window.location.href);
+      if(v !== "decks"){
+        for(const k of ["deck","token","user"]) url.searchParams.delete(k);
+      }
+      for(const k of CARD_URL_KEYS) url.searchParams.delete(k);
+      window.history.replaceState({}, "", url);
+    } catch {}
   }, []);
   // User settings — persisted to localStorage and (when signed in) synced
   // to Supabase user_metadata so they follow the user across devices.
@@ -32156,6 +32026,7 @@ function App(){
     // 1. Show cached data instantly if available (and not forced refresh).
     const cached = force ? null : readCache();
     if(cached && cached.rows.length){
+      setPromoBaseSet(cached.rows);
       setRaw(cached.rows);setLoaded(true);setLoading(false);
       // `text` is stripped from cache (writeCache slim) to keep the 5MB quota
       // free for aux caches. On a cache replay, body-text smart search ("get",
@@ -32511,7 +32382,10 @@ function App(){
       raw=${raw} collection=${collection} updateQty=${updateQty}
       user=${user} onSignIn=${signIn}
       onClose=${()=>setScanOpen(false)}
+      onOpenReview=${isGradedAdmin ? ()=>{ setScanOpen(false); setScanReviewOpen(true); } : null}
       onOpenDetail=${(g)=>{ setScanOpen(false); openCardsWithSearch("", g.card_id); }}/>`}
+    ${scanReviewOpen && isGradedAdmin && html`<${ScanReviewModal}
+      raw=${raw} onClose=${()=>setScanReviewOpen(false)}/>`}
     ${loading && html`<div class="loading-status">
       ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
     </div>`}
