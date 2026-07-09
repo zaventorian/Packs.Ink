@@ -36,24 +36,9 @@ as $$
 $$;
 grant execute on function public.is_scanner_tester() to anon, authenticated;
 
-insert into public.scanner_testers (email) values
-  ('amp3878@gmail.com'),
-  ('ayyadpauljacobiii@gmail.com'),
-  ('cjdummer18@gmail.com'),
-  ('cody.braun1@gmail.com'),
-  ('coocoolorcana@gmail.com'),
-  ('daniel.vicens77@gmail.com'),
-  ('drayton.hammond@gmail.com'),
-  ('evan.knobloch@gmail.com'),
-  ('paulaxelpaxel@gmail.com'),
-  ('rabbid.ygo@gmail.com'),
-  ('rhauge01@gmail.com'),
-  ('saysay.konishi@gmail.com'),
-  ('sayumikonishi@gmail.com'),
-  ('shawn.tang.7@gmail.com'),
-  ('zaven1718@gmail.com'),
-  ('zavenganbatte@gmail.com'),
-  ('zavensbackup@gmail.com')
-on conflict (email) do nothing;
+-- Allowlist ROWS are personal emails (PII) and are deliberately NOT tracked in
+-- this public repo. Manage them via the SQL editor / MCP:
+--   insert into public.scanner_testers (email) values ('...') on conflict (email) do nothing;
+-- (The original seed rows were applied 2026-07-05 and live only in the DB.)
 
 notify pgrst, 'reload schema';
