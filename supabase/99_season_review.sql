@@ -32,7 +32,6 @@ pe as (  -- per player-event within the season, canonical players only
 ),
 agg as (
   select player_id,
-         count(*)                              as events,
          sum(wins)                             as w,
          sum(losses)                           as l,
          sum(draws)                            as d,
@@ -43,13 +42,28 @@ agg as (
   from pe
   group by player_id
 ),
+evt as (  -- events entered = distinct events with a rated match OR an official
+          -- standing (a few players have standings in events whose matches are
+          -- attributed to a duplicate id, so rated-match count alone undercounts).
+          -- Keeps 1st+2nd+top4+top8 <= events for every player.
+  select player_id, count(distinct event_id) as events
+  from (
+    select player_id, event_id from pe
+    union
+    select s.player_id, s.event_id
+    from elo_event_standings_official s
+    join elo_players p on p.player_id = s.player_id and p.merged_into_id is null
+    where s.event_id in (select event_id from ev)
+  ) u
+  group by player_id
+),
 place as (  -- placements from official standings, canonical players only
   select s.player_id,
          min(s.place)                          as best_place,
          sum((s.place = 1)::int)               as titles,
          sum((s.place = 2)::int)               as finals,
-         sum((s.place <= 4)::int)              as top4,
-         sum((s.place <= 8)::int)              as top8
+         sum((s.place between 3 and 4)::int)   as top4,   -- exclusive: 3rd-4th only
+         sum((s.place between 5 and 8)::int)   as top8    -- exclusive: 5th-8th only
   from elo_event_standings_official s
   join elo_players p on p.player_id = s.player_id and p.merged_into_id is null
   where s.event_id in (select event_id from ev)
@@ -60,7 +74,7 @@ players as (
     a.player_id,
     p.display_name                             as name,
     p.platform,
-    a.events,
+    coalesce(e.events, 0)                      as events,
     a.w, a.l, a.d,
     case when (a.w + a.l + a.d) > 0
       then round((a.w + 0.5 * a.d) / (a.w + a.l + a.d) * 100, 1) end   as mw_pct,
@@ -77,6 +91,7 @@ players as (
     pc.best_place
   from agg a
   join elo_players p on p.player_id = a.player_id
+  left join evt e on e.player_id = a.player_id
   left join elo_leaderboard_v lb on lb.player_id = a.player_id
   left join place pc on pc.player_id = a.player_id
 )
