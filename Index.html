@@ -161,7 +161,7 @@
 </script>
 <script src="/vendor/supabase.js?v=254"></script>
 <script src="logo.js?v=253"></script>
-<script src="scanner.js?v=253"></script>
+<script src="scanner.js?v=270"></script>
 <script src="scanner-cv.js?v=253"></script>
 <script>
 
@@ -9342,7 +9342,7 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=253";
+const SCAN_WORKER_URL = "scanner-worker.js?v=270";
 // PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
@@ -9384,12 +9384,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const ocrPendingRef = useRef(new Map());    // OCR request promises by id
   const ocrMsgIdRef = useRef(0);
   const ocrReadyRef = useRef(false);          // OCR models loaded
+  const ocrLoadingRef = useRef(false);        // models still downloading/compiling
   const rectRef = useRef(null);   // last rectified card (for the data flywheel)
   const ambCanvasRef = useRef(null);      // reused small rectified canvas (ambient)
   const modeRef = useRef("ambient");      // mirror of `mode` for the loop closure
   const autoAddRef = useRef(false);       // mirror of `autoAdd`
   const previewRef = useRef(null);        // current ambient preview (for tap-commit)
-  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0 });
+  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false });
   const ambByIdRef = useRef(null);        // memoized id->meta map for OCR fusion
   const commitAmbientRef = useRef(null);  // set after commitAmbient is defined
   const triggerOcrRef = useRef(null);     // set after triggerOcr is defined
@@ -9464,10 +9465,24 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // until ready, then fuses the name/number in.
     try {
       const ow = new Worker(OCR_WORKER_URL);
+      ocrLoadingRef.current = true;
       ow.onmessage = (e) => {
         const m = e.data;
-        if(m.type === "ready"){ ocrReadyRef.current = true; return; }
-        if(m.type === "failed"){ return; }   // OCR unavailable → identify falls back to colour
+        if(m.type === "ready"){
+          ocrReadyRef.current = true;
+          ocrLoadingRef.current = false;
+          // warm-up: one dummy det pass in the background so the first REAL read
+          // doesn't pay the WASM JIT + memory-growth cost inside the user's
+          // first snap (~1-2s on a phone). Best-effort.
+          try {
+            const wc = document.createElement("canvas"); wc.width = 96; wc.height = 96;
+            const wctx = wc.getContext("2d"); wctx.fillStyle = "#fff"; wctx.fillRect(0, 0, 96, 96);
+            wctx.fillStyle = "#000"; wctx.font = "24px sans-serif"; wctx.fillText("WARM", 8, 48);
+            ocrPost(wctx.getImageData(0, 0, 96, 96).data.buffer, 96, 96, { doNumber: false });
+          } catch(_e){}
+          return;
+        }
+        if(m.type === "failed"){ ocrLoadingRef.current = false; return; }   // OCR unavailable → identify falls back to colour
         const cb = ocrPendingRef.current.get(m.id);
         if(cb){ ocrPendingRef.current.delete(m.id); cb(m); }
       };
@@ -9504,6 +9519,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         } catch(_e){}
         const v = videoRef.current;
         if(v){ v.srcObject = stream; try { await v.play(); } catch(_e){} }
+        // create the AudioContext while the open-scanner tap's user activation is
+        // still fresh — the text-confirm ping (beep) fires from the loop, not a
+        // gesture, and iOS has no vibrate; without this the first pings are silent.
+        ensureAudio();
         setPhase("scanning"); setStatus("Place ONE card on a plain surface");
       } catch(e){
         setPhase(e && e.name === "NotAllowedError" ? "denied"
@@ -9552,16 +9571,35 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // already a confident match — identify() returns source:"name" exactly when the
   // name decides it, in which case cn would only confirm, never change the answer.
   // So: name-only OCR → identify; if that's a confident name, we're done (skip the
-  // number entirely, ~halving snap latency); otherwise read the number and re-identify.
-  const identifyGated = async (rect, colourIds) => {
+  // number entirely, ~halving snap latency); otherwise read the number and
+  // re-identify. `tight` = the rect came from a real detect+rectify: on a
+  // guide-crop fallback the cn ROI reads background (0% field read rate), so the
+  // number read is skipped entirely there — pure latency, no signal.
+  const identifyGated = async (rect, colourIds, tight) => {
     const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
     const lines = o.lines || [];
     let cnNum = null, cnSet = null;
     let idr = (window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colourIds }) || {});
-    if(idr.source !== "name"){
+    // a decisive name still reads the number when the CHARACTER has several
+    // near-tied versions (the subtitle didn't read) — on a tight rectify the
+    // collector number is exactly the version disambiguator. Single-version
+    // names (most items/actions/songs) keep the full skip.
+    const ns = idr.names || [];
+    const versionTied = ns.length >= 2 && (ns[0].name || "") === (ns[1].name || "") && (ns[0].score - ns[1].score) < 0.06;
+    if((idr.source !== "name" || versionTied) && tight !== false){
       const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
       cnNum = num.cnNum; cnSet = num.cnSet;
-      idr = (window.CardScanner.identify({ lines, cnNum, cnSet, colourRanked: colourIds }) || {});
+      const idr2 = (window.CardScanner.identify({ lines, cnNum, cnSet, colourRanked: colourIds }) || {});
+      // guard: when the name was already decisive, a misread cn must not hijack
+      // the answer to a DIFFERENT character — accept the re-identify only if it
+      // stays on the same character name.
+      if(idr.source !== "name"){ idr = idr2; }
+      else {
+        const meta0 = ns[0], m2 = (idr2.top3 || [])[0];
+        const c2 = m2 && (idr2.names || []).concat(ns).find(n => n.id === m2);
+        if(idr2.top3 && idr2.top3.length && c2 && (c2.name || "") === (meta0.name || "")) idr = idr2;
+        else { cnNum = null; cnSet = null; }
+      }
     }
     return { idr, lines, cnNum, cnSet };
   };
@@ -9676,10 +9714,19 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const r = await post("capture", { bitmap: bmp, outW: 360, outH: 504 }, [bmp]);
       if(!r){ try { bmp.close && bmp.close(); } catch(_e){} return; }
       const A = ambientRef.current;
+      A.tick++;
       const o = computeOutline(r.quad || null, r.conf || 0, bw);
       setDet(!!o.smooth); setRdy(o.locked);
-      // a big quad jump = a new card → drop the vote history
-      const jumped = !!(r.quad && A.lastQuad && quadMoved(r.quad, A.lastQuad) > bw * 0.06);
+      // a big quad jump = a new card → drop the vote history. Only the FIRST
+      // jump of a burst counts: when detection NOISE alternates between two
+      // quad candidates, every frame "jumps" — resetting each time wiped the
+      // OCR votes/tries forever and starved both the text confirm and the
+      // colour fallback (endless "Identifying…"). A real card swap jumps once
+      // and then stabilises on the new quad.
+      const jumpedNow = !!(r.quad && A.lastQuad && quadMoved(r.quad, A.lastQuad) > bw * 0.06);
+      const jumped = jumpedNow && !A.wasJumped;
+      A.jumpStreak = jumpedNow ? (A.jumpStreak || 0) + 1 : 0;
+      A.wasJumped = jumpedNow;
       A.lastQuad = r.quad || A.lastQuad;
       // how much of the frame the card fills (for "move closer" coaching)
       let areaFrac = 0;
@@ -9695,8 +9742,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         let res = [];
         try { res = window.CardScanner.searchCrop(c, 0, 0, c.width, c.height, 8, 0.12); } catch(_e){}
         if(res.length){
-          // a big quad jump = a new physical card → drop the vote + any lock
-          if(jumped){ A.frames = []; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.ocrDoneKey = null; }
+          // a big quad jump = a new physical card → drop the vote, the OCR name
+          // votes, and the commit key (commits belong to the old card). epoch++
+          // invalidates any OCR read still in flight for the old card. A TEXT
+          // lock is stickier: it survives an ISOLATED jump (detection noise
+          // flipping between quad candidates for one frame) and only releases
+          // when the jump SUSTAINS 2+ consecutive frames — a real card swap
+          // moves the quad and keeps it moved.
+          if(jumped){ A.frames = []; A.challengerKey = null; A.challengerCount = 0; A.nameVotes = []; A.ocrTries = 0; A.epoch++; A.armed = true; A.committedKey = null;
+            if(!A.lockText){ A.lockKey = null; A.lockCard = null; A.pinged = false; } }
+          if(A.lockText && A.jumpStreak >= 3){ A.lockKey = null; A.lockCard = null; A.lockText = false; A.pinged = false; }
           const frame = new Map(), cardOf = new Map();
           for(const x of res){ const k = x.card.art_key; if(!frame.has(k) || x.color > frame.get(k)){ frame.set(k, x.color); cardOf.set(k, x.card); } }
           A.frames.push({ frame, cardOf });
@@ -9741,26 +9796,53 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             cands.push(cd); if(cands.length >= 4) break;
           }
           const top1 = dispCard || cands[0];
-          if(top1){
+          // ── OCR-FIRST display policy ──────────────────────────────────────
+          // The colour guess is the WEAK signal (~30% top-1 on real photos) —
+          // presenting it as the answer is what made the badge "jump between
+          // cards" and "go back to a wrong card". While the OCR worker is up
+          // and still reading this card, show "Identifying…" instead; the badge
+          // only commits to a name once TEXT confirms it (triggerOcr sets the
+          // text lock + pings). After a few OCR misses (unreadable card / OCR
+          // unavailable) we fall back to the colour lock, visually tentative.
+          const ocrLive = ocrReadyRef.current && !!triggerOcrRef.current;
+          // while the models are still downloading, keep "Identifying…" too — a
+          // raw colour guess flashed in that window reads as a wrong answer.
+          const showGuess = A.lockText || (!ocrLive && !ocrLoadingRef.current) || A.ocrTries >= 2;
+          if(top1 && showGuess){
             const g = resolveGroup(top1), p = priceOf(g);
-            const confident = (A.lockKey === dispKey) || (enough && A.margin > 0.1);
+            const confident = A.lockText || (enough && A.margin > 0.16 && o.locked);
             const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident, textOk: A.lockText, shiny };
             previewRef.current = pv;
             label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident };
             const pk = dispKey + ":" + (confident ? 1 : 0) + (A.lockText ? ":t" : "");
             if(pvKeyRef.current !== pk){ pvKeyRef.current = pk; setPreview(pv); }
-            // background OCR upgrade: once steady on the LOCKED card (not yet read),
-            // fire OCR UN-AWAITED (never blocks the loop). A confident text read
-            // promotes to a TEXT lock that colour noise can no longer flip.
-            if(o.locked && enough && A.ocrDoneKey !== dispKey && !A.ocrBusy && !A.lockText && ocrReadyRef.current && triggerOcrRef.current){
-              A.ocrBusy = true; A.ocrDoneKey = dispKey;
-              const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
-              triggerOcrRef.current(dispKey, colorIds).finally(() => { ambientRef.current.ocrBusy = false; });
-            }
-            // opt-in auto-add (uses the stable locked guess)
-            if(!SCANNER_QA_ONLY && autoAddRef.current && A.armed && enough && A.margin > 0.16 && A.committedKey !== dispKey && o.locked){
-              commitAmbientRef.current && commitAmbientRef.current(pv);
-            }
+          } else if(top1){
+            previewRef.current = null;
+            if(pvKeyRef.current !== "@reading"){ pvKeyRef.current = "@reading"; setPreview(null); }
+            label = { name: "Identifying…", low: null, mkt: null, confident: false };
+          }
+          // Fire the name-OCR as soon as a quad exists — NOT gated on the
+          // 4-frame steady lock (that gate added ~1s before the good signal
+          // even started). One read in flight at a time; after 3 misses drop
+          // to a slow retry so an unreadable card doesn't burn the battery.
+          // While TEXT-LOCKED, a slow re-verify read (~every 2.4s) still runs:
+          // when the next card of a stack lands in the SAME spot (no quad jump,
+          // no detect gap), it's the only signal that the card changed — a
+          // newly confirmed different name replaces the lock (confirmed may
+          // only be replaced by confirmed, never by a colour guess).
+          if(ocrLive && !A.ocrBusy && o.smooth &&
+             (A.lockText ? (A.tick % 16 === 0) : (A.ocrTries < 3 || A.tick % 8 === 0))){
+            A.ocrBusy = true; A.ocrTries++;
+            const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
+            // alternate the OCR source: odd tries read the detect+rectify, even
+            // tries read the raw centre crop — so a WRONG quad (art-box lock,
+            // whose rectify contains no text) can't starve the name read forever.
+            triggerOcrRef.current(A.epoch, colorIds, (A.ocrTries % 2 === 0) ? "only" : false).finally(() => { ambientRef.current.ocrBusy = false; });
+          }
+          // opt-in auto-add — prefers a text-CONFIRMED identity; the colour
+          // margin path only applies once OCR has had its shots (showGuess).
+          if(!SCANNER_QA_ONLY && autoAddRef.current && A.armed && A.committedKey !== dispKey && previewRef.current && (A.lockText || (enough && A.margin > 0.16 && o.locked))){
+            commitAmbientRef.current && commitAmbientRef.current(previewRef.current);
           }
         }
       }
@@ -9772,7 +9854,23 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
 
       if(!r.quad){
         A.noDet++; A.emptyFrames++;
-        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.ocrDoneKey = null; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; }
+        // re-arm quickly (lifting the card away should allow the next commit)…
+        if(A.emptyFrames >= 3){ A.armed = true; A.committedKey = null; }
+        // …but hold the identified card through ~2s of detection flicker. The
+        // old 3-frame (~450ms) wipe meant ordinary hand wobble reset a correct
+        // text lock back to colour guessing — the "had it right, then went back
+        // to a wrong card" complaint.
+        if(A.emptyFrames >= 13){ A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.nameVotes = []; A.ocrTries = 0; A.epoch++; A.pinged = false; }
+        // Detection-free identity: the quad detector misses cards that are
+        // plainly in view (validated on QA snaps — the guide-crop fallback read
+        // names fine). If detection has been dry for ~0.6s, OCR a raw center
+        // crop so a sloppy hover still resolves instead of demanding perfect
+        // framing. Slow cadence (~1/s) — it's the same OCR worker.
+        const ocrLive2 = ocrReadyRef.current && !!triggerOcrRef.current;
+        if(ocrLive2 && !A.lockText && !A.ocrBusy && A.noDet >= 4 && A.noDet % 7 === 0){
+          A.ocrBusy = true; A.ocrTries++;
+          triggerOcrRef.current(A.epoch, [], true).finally(() => { ambientRef.current.ocrBusy = false; });
+        }
       }
       drawOutline(o.smooth, bw, bh, o.locked, label);
     } catch(_e){} finally { ambBusyRef.current = false; }
@@ -9788,7 +9886,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(!running) return;
       const v = videoRef.current;
       if(v && v.videoWidth && !result){
-        if(modeRef.current === "ambient" && !SCANNER_QA_ONLY){
+        if(modeRef.current === "ambient"){
+          // QA mode runs the full live-identify loop too (badge + text lock) so
+          // the field-test exercises the real product behaviour — commits stay
+          // impossible (no ＋ button, auto-add hard-gated on !SCANNER_QA_ONLY).
           await ambientTick(v);
         } else if(!detectBusyRef.current && !captureBusyRef.current){
           detectBusyRef.current = true;
@@ -9916,41 +10017,70 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // OCR landed after an add and disagrees → fix the newest row for that art.
   const correctByArtKey = (artKey, newCard) => setSession(prev => { const i = prev.findIndex(x => x.art_key === artKey); return i < 0 ? prev : swapRow(prev, i, newCard); });
 
-  // Background NAME-read (fired un-awaited from the ambient loop once steady):
-  // rectify at high res, OCR the NAME (primary identity), identify name-first with
-  // colour as the variant tie-breaker. On a confident read, upgrade the live
-  // preview (✓ name) and fix the row if the colour guess was already added. Fully
-  // guarded; never throws into the loop.
-  const triggerOcr = async (voteKey, colorIds) => {
+  // Live-identify NAME read (fired un-awaited from the ambient loop as soon as a
+  // quad exists). Reads the NAME ONLY — the collector number is dead weight on
+  // the live path (0/21 field read rate at ~1.2-1.5s per read; scripts/scanner/
+  // conf_calibration.py). Identifies name-first and VOTES across reads:
+  //   · one HIGH-confidence read (margin-calibrated) → confirm instantly
+  //   · two consecutive reads agreeing on the same card at MEDIUM+ → confirm
+  // On confirm → TEXT lock (colour noise can no longer move the badge) + one
+  // ping per card. `epoch` guards against a physical card swap while the read
+  // was in flight — a stale result for the previous card is dropped, never
+  // applied. `allowGuideCrop` lets the no-detect path OCR a raw center crop
+  // (detection-free identity). Fully guarded; never throws into the loop.
+  const triggerOcr = async (epoch, colorIds, allowGuideCrop) => {
     try {
       const v = videoRef.current; if(!v || !v.videoWidth) return;
-      const bmp = await createImageBitmap(v, { resizeWidth: 1600 });
-      const r = await post("capture", { bitmap: bmp, outW: 1000, outH: 1400 }, [bmp]);
-      if(!r || !r.buffer) return;
-      const rect = document.createElement("canvas"); rect.width = r.width; rect.height = r.height;
-      rect.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
-      const o = await ocrCardRegions(rect);
-      if((!o.lines || !o.lines.length) && o.cnNum == null) return;
-      const idr = window.CardScanner.identify({ lines: o.lines, cnNum: o.cnNum, cnSet: o.cnSet, colourRanked: colorIds || [] });
-      // only a CONFIDENT name read is authoritative enough to override colour
-      if(!idr || idr.conf !== "high" || !idr.top3 || !idr.top3.length) return;
+      let rect = null;
+      if(allowGuideCrop !== "only"){
+        const bmp = await createImageBitmap(v, { resizeWidth: 1600 });
+        const r = await post("capture", { bitmap: bmp, outW: 1000, outH: 1400 }, [bmp]);
+        if(r && r.buffer){
+          rect = document.createElement("canvas"); rect.width = r.width; rect.height = r.height;
+          rect.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
+        }
+      }
+      // "only" (or a failed capture with fallback allowed) → OCR the raw centre
+      // crop. This is the escape hatch for a WRONG quad: when detection locks the
+      // card's inner art frame, the rectify contains no text at all — alternating
+      // to the raw scene gives the name a chance to read anyway.
+      if(!rect && allowGuideCrop) rect = guideCropCanvas();
+      if(!rect) return;
+      const o = await ocrCardRegions(rect, { doNumber: false });
+      if(!o.lines || !o.lines.length) return;
+      const A = ambientRef.current;
+      if(A.epoch !== epoch) return;   // card changed while we were reading
+      const idr = window.CardScanner.identify({ lines: o.lines, cnNum: null, cnSet: null, colourRanked: colorIds || [] });
+      if(!idr || !idr.top3 || !idr.top3.length) return;
+      const topId = idr.top3[0];
+      A.nameVotes.push({ id: topId, conf: idr.nameConf || "low" });
+      if(A.nameVotes.length > 4) A.nameVotes.shift();
+      const L = A.nameVotes.length;
+      const okConf = (c) => c === "high" || c === "medium";
+      const twoAgree = L >= 2 && A.nameVotes[L-1].id === A.nameVotes[L-2].id
+        && okConf(A.nameVotes[L-1].conf) && okConf(A.nameVotes[L-2].conf);
+      if(idr.conf !== "high" && !twoAgree) return;   // not sure yet — keep reading
       const META = window.CardScanner.state.cards;
       const byId = ambByIdRef.current || (ambByIdRef.current = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
-      const chosen = byId.get(idr.top3[0]); if(!chosen) return;
+      const chosen = byId.get(topId); if(!chosen) return;
+      if(A.lockText && A.lockKey === chosen.art_key) return;   // re-verify agreed — nothing to update
       const cands = idr.top3.map(id => byId.get(id)).filter(Boolean);
-      const A = ambientRef.current;
-      // upgrade the live preview if the user is still on this card. Promote to a
-      // TEXT lock so the per-frame colour vote can't flip the badge back off the
-      // OCR-confirmed name on the next tick.
-      if(A.voteKey === voteKey && previewRef.current){
-        const g = resolveGroup(chosen), p = priceOf(g);
-        const pv = { card: chosen, disp: toDisp(chosen), group: g, low: p.low, mkt: p.mkt,
-          cands: cands.length ? cands : previewRef.current.cands, confident: true, textOk: true, shiny: previewRef.current.shiny };
-        previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":text"; setPreview(pv);
-        A.lockKey = chosen.art_key; A.lockCard = chosen; A.lockText = true; A.challengerKey = null; A.challengerCount = 0;
-      }
-      // if the colour guess for this card was already added, fix that row
-      if(A.committedKey === voteKey && chosen.art_key !== voteKey) correctByArtKey(voteKey, chosen);
+      if(ambientRef.current.epoch !== epoch) return;
+      // CONFIRMED: text lock + preview + one ping per physical card
+      const g = resolveGroup(chosen), p = priceOf(g);
+      const pv = { card: chosen, disp: toDisp(chosen), group: g, low: p.low, mkt: p.mkt,
+        cands: cands.length ? cands : ((previewRef.current && previewRef.current.cands) || []),
+        confident: true, textOk: true, shiny: previewRef.current ? previewRef.current.shiny : false };
+      previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":1:t"; setPreview(pv);
+      if(A.lockKey !== chosen.art_key) A.pinged = false;   // a NEW card pings again
+      A.lockKey = chosen.art_key; A.lockCard = chosen; A.lockText = true; A.challengerKey = null; A.challengerCount = 0;
+      // one ping per identification — and a re-confirm of the SAME card within a
+      // few seconds (spurious lock release on a noisy scene) stays silent.
+      if(!A.pinged && !(A.lastPingKey === chosen.art_key && Date.now() - (A.lastPingAt || 0) < 6000)){
+        A.pinged = true; A.lastPingKey = chosen.art_key; A.lastPingAt = Date.now(); pingFeedback();
+      } else { A.pinged = true; }
+      // a colour-fallback guess for THIS card was already staged → fix that row
+      if(A.committedKey && A.committedKey !== chosen.art_key) correctByArtKey(A.committedKey, chosen);
     } catch(_e){ /* best-effort */ }
   };
   triggerOcrRef.current = triggerOcr;
@@ -10005,7 +10135,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     captureBusyRef.current = true; setBusy(true); setStatus("Reading card…");
     try {
       // 1. rectify the card once (big enough for OCR), fall back to guide-crop
-      let rect = null;
+      let rect = null, tight = false;
       const v = videoRef.current;
       if(workerRef.current && v && v.videoWidth){
         try {
@@ -10014,7 +10144,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           if(r && r.buffer){
             const idata = new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height);
             const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
-            c.getContext("2d").putImageData(idata, 0, 0); rect = c;
+            c.getContext("2d").putImageData(idata, 0, 0); rect = c; tight = true;
           }
         } catch(e){}
       }
@@ -10030,17 +10160,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         for(const r of res){ if(!seen.has(r.card.id)){ seen.add(r.card.id); colorRanked.push(r.card.id); } }
       } catch(_e){}
 
-      // 3. read the NAME (+ collector #) — the PRIMARY identity signal. Printed
-      // text reads the same in a photo as in the DB (no colour domain gap), so
-      // the name decides the card; colour only orders the printing/variant.
-      let ocrLines = [], cnNum = null, cnSet = null;
+      // 3+4. read the NAME (+ collector # only when the name isn't decisive AND
+      // the rect came from a real detect — the guide-crop cn ROI reads background)
+      // and identify. Printed text reads the same in a photo as in the DB (no
+      // colour domain gap), so the name decides the card; colour only orders the
+      // printing/variant.
+      let ocrLines = [], idr = null;
       if(ocrReadyRef.current && window.CardScanner.identify){
         setStatus("Reading name…");
-        const o = await ocrCardRegions(rect);
-        ocrLines = o.lines; cnNum = o.cnNum; cnSet = o.cnSet;
+        const g = await identifyGated(rect, colorRanked, tight);
+        ocrLines = g.lines; idr = g.idr;
       }
-      // 4. identify (collector-number backbone; name + colour vote within it)
-      const idr = window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colorRanked });
+      if(!idr) idr = window.CardScanner.identify({ lines: ocrLines, cnNum: null, cnSet: null, colourRanked: colorRanked });
       const orderedIds = (idr && idr.top3 && idr.top3.length) ? idr.top3.concat(colorRanked) : colorRanked;
       if(!orderedIds.length){ setStatus("Couldn't read it — frame the card and tap again"); return; }
 
@@ -10080,16 +10211,30 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(!user){ onSignIn && onSignIn(); return; }
     qaBusyRef.current = true; setSavedMsg("Snapping…");
     try {
-      // 1. high-res rectify (fall back to the guide crop)
-      let rect = null;
+      // 0. grab the RAW camera frame first (before any await moves the scene) —
+      // uploaded alongside the rectify so detection failures can be tuned
+      // offline. The rectified output alone can't tell us WHY detection missed.
+      let rawCanvas = null;
       const v = videoRef.current;
+      try {
+        if(v && v.videoWidth){
+          const rw = Math.min(900, v.videoWidth);
+          rawCanvas = document.createElement("canvas");
+          rawCanvas.width = rw; rawCanvas.height = Math.round(rw * v.videoHeight / v.videoWidth);
+          rawCanvas.getContext("2d").drawImage(v, 0, 0, rawCanvas.width, rawCanvas.height);
+        }
+      } catch(_e){ rawCanvas = null; }
+      // 1. high-res rectify (fall back to the guide crop)
+      let rect = null, detected = false, detConf = 0, detLandscape = false;
       if(workerRef.current && v && v.videoWidth){
         try {
           const bmp = await createImageBitmap(v, { resizeWidth: 1920 });
           const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
+          if(r){ detConf = r.conf || 0; detLandscape = !!r.landscape; }
           if(r && r.buffer){
             const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
             c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0); rect = c;
+            detected = true;
           }
         } catch(_e){}
       }
@@ -10109,8 +10254,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       let ocrLines = [], cnNum = null, cnSet = null, idr = {};
       if(ocrReadyRef.current && window.CardScanner.identify){
         // number read is GATED behind a confident name — skips the slow cn det on
-        // clean cards (~halves snap latency); only reads it when the name is unsure.
-        try { const g = await identifyGated(rect, colIds); ocrLines = g.lines; cnNum = g.cnNum; cnSet = g.cnSet; idr = g.idr || {}; } catch(_e){}
+        // clean cards (~halves snap latency); only reads it when the name is unsure
+        // AND the rect is a real detect (guide-crop cn reads are 0% + pure latency).
+        try { const g = await identifyGated(rect, colIds, detected); ocrLines = g.lines; cnNum = g.cnNum; cnSet = g.cnSet; idr = g.idr || {}; } catch(_e){}
       }
       if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
 
@@ -10127,8 +10273,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
 
       // 6. assemble the QA reasoning payload + save (image + debug; no collection write)
       const debug = {
-        v: 1, kind: "qa-snap", ts: Date.now(),
+        v: 2, kind: "qa-snap", ts: Date.now(),
         conf: idr.conf || null, source: idr.source || null, nameConf: idr.nameConf || null,
+        nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
+        detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
         topGuess: top, candidates: cands,
         names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
         cn: { num: cnNum ?? null, set: cnSet ?? null },
@@ -10136,9 +10284,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         liveAmbientGuess: live,
       };
       const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
+      const rawBlob = rawCanvas ? await canvasToBlob(rawCanvas, 900) : null;
       // fire-and-forget: the flywheel upload is a network round-trip (and bigger now
       // at 1000px) — it must NOT block the snap feedback or the next tap. Best-effort.
-      if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug);
+      if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob);
       // in-session feedback row (thumbnail + guess + alternates) so testers see
       // what it read without leaving the scanner; full data is in the flywheel.
       let thumb = "";
@@ -10163,7 +10312,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(m === mode) return;
     setResult(null); setPreview(null); previewRef.current = null; pvKeyRef.current = ""; setFH("");
     steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 };
-    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, ocrBusy: false, ocrDoneKey: null, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0 };
+    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false };
     if(m === "ambient") ensureAudio();
     setMode(m);
     setStatus(m === "ambient" ? "Hover over a card" : "Place ONE card on a plain surface");
@@ -10172,12 +10321,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // data flywheel: log a (rectified photo -> confirmed card) example so we can
   // train a real-photo matcher later. corrected=true rows (the scanner's top guess
   // was wrong and the user fixed it) are the gold hard-negatives. Best-effort.
-  const uploadSample = async (cardId, predictedId, corrected, printing, blob, debug) => {
+  const uploadSample = async (cardId, predictedId, corrected, printing, blob, debug, rawBlob) => {
     try {
       if(!user || !blob || !sbClient) return;
       const uid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
       const path = user.id + "/" + uid + ".jpg";
       const up = await sbClient.storage.from("scan-samples").upload(path, blob, { contentType: "image/jpeg", upsert: false });
+      // QA snaps also carry the RAW camera frame (path recorded in debug) so
+      // detection misses can be reproduced + tuned offline — the rectified
+      // output alone can't show why the quad detector failed.
+      if(rawBlob && debug){
+        try {
+          const rawPath = user.id + "/" + uid + "_raw.jpg";
+          const upr = await sbClient.storage.from("scan-samples").upload(rawPath, rawBlob, { contentType: "image/jpeg", upsert: false });
+          if(upr && !upr.error) debug.rawPath = rawPath;
+        } catch(_e){}
+      }
       const row = {
         user_id: user.id, card_id: cardId, predicted_card_id: predictedId || null,
         corrected: !!corrected, printing: printing || null,
@@ -10278,19 +10437,23 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         </div></div>` : null}
     </div>`;
   } else if(mode === "ambient" && SCANNER_QA_ONLY){
-    // QA-only testing layout: tap → snap a photo + the scanner's guess/reasoning
-    // → upload for later review. No staging, no add, no collection writes.
+    // QA-only testing layout: the LIVE identify loop runs (badge + ✓ name lock,
+    // same as the real product) and tap → snap a photo + the scanner's full
+    // reasoning → upload for review. No staging, no add, no collection writes.
+    const qpv = preview;
+    const qmoney = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
     below = html`<div class="scanner-ambient scanner-qa">
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
-          <span class="scanner-amb-now-empty">${!workerReady ? "Loading detector…" : (detected ? "Card framed — tap 📸" : "Point at one card, then tap 📸")}</span>
+          ${qpv ? html`<span class="scanner-amb-now-name">${lbl(qpv.disp)}${qpv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${qmoney(qpv.mkt ?? qpv.low)}</span>`
+                : html`<span class="scanner-amb-now-empty">${!workerReady ? "Loading detector…" : (detected ? "Identifying…" : "Point at one card")}</span>`}
         </div>
         ${user ? html`<button class="scanner-shutter scanner-amb-add ready" onClick=${snapForQA} aria-label="Snap this card">📸</button>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
         <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
-      <div class="scanner-qa-note">Each 📸 saves the photo + the scanner's guess for our review. It doesn't identify live — just frame one card and tap. <b>Nothing is added to any collection.</b></div>
+      <div class="scanner-qa-note">The live guess shows above (✓ name = text-confirmed). Each 📸 saves the photo + the scanner's full reasoning for our review. <b>Nothing is added to any collection.</b></div>
       <div class="scanner-session">
         <div class="scanner-session-list">
           ${qaResults.length === 0

@@ -67,12 +67,13 @@ def textScore(qn, qnSq, qtok, qtri, c):
     return 0.42*L + 0.33*tok + 0.25*dice(qtri, c["_tri"])
 
 def rankNames_py(lines, cards, k=3):
-    """reusable: rank cards by OCR name candidate lines. mirrors scanner.js rankNames."""
+    """reusable: rank cards by OCR name candidate lines. mirrors scanner.js rankNames
+    (incl. the 2026-07-10 margin-aware conf rule — see conf_calibration.py)."""
     queries = []
     for ln in lines:
         qn = ocrCanon(ln)
         if len(qn) >= 3: queries.append((qn, qn.replace(" ", ""), toks(ln), trigrams(qn)))
-    if not queries: return {"top": [], "conf": "low", "score": 0}
+    if not queries: return {"top": [], "conf": "low", "score": 0, "marginChar": 0}
     best = []
     for c in cards:
         s = max((textScore(qn, qs, qt, qtr, c) for qn, qs, qt, qtr in queries), default=0)
@@ -80,8 +81,15 @@ def rankNames_py(lines, cards, k=3):
     best.sort(key=lambda x: -x[0])
     top = [{"id": c["id"], "name": c.get("n") or "", "version": c.get("v") or "", "score": s} for s, c in best[:k]]
     s0 = top[0]["score"] if top else 0; s1 = top[1]["score"] if len(top) > 1 else 0
-    conf = "high" if s0 >= 0.80 else "medium" if s0 >= 0.58 else "low"
-    return {"top": top, "conf": conf, "score": s0, "margin": s0 - s1}
+    n0 = ocrCanon(best[0][1].get("n") or "") if best else ""
+    marginChar = s0
+    for s, c in best[1:24]:
+        if ocrCanon(c.get("n") or "") != n0:
+            marginChar = s0 - s
+            break
+    conf = ("high" if (s0 >= 0.72 or (s0 >= 0.42 and marginChar >= 0.10) or (s0 >= 0.36 and marginChar >= 0.15))
+            else "medium" if (s0 >= 0.34 and marginChar >= 0.05) else "low")
+    return {"top": top, "conf": conf, "score": s0, "margin": s0 - s1, "marginChar": marginChar}
 
 def main():
     cards = json.loads((REPO/"scanner"/"text.json").read_text(encoding="utf-8"))

@@ -40,11 +40,24 @@ def main():
         cn, _ = cn_current(rim, Hd, Wd)
         # combined: always read number
         comb_id, comb_src = E.identify(names, cn, col)
-        # gated: name first; read number only if name not decisive
+        # gated (mirrors Index.html identifyGated): name first; read number when
+        # the name isn't decisive OR the character has near-tied versions (the
+        # cn is the version disambiguator on a tight rectify). A cn re-identify
+        # may only move the answer WITHIN the same character name.
+        from ocr_match_validate import rankNames_py
+        nm = rankNames_py(names, E.cards, 6)
+        ns = nm["top"]
+        version_tied = len(ns) >= 2 and ns[0]["name"] == ns[1]["name"] and (ns[0]["score"] - ns[1]["score"]) < 0.06
         g_id, g_src = E.identify(names, None, col)
         read_cn = "skip"
-        if g_src != "name":
-            g_id, g_src = E.identify(names, cn, col); read_cn = (cn or "-")
+        if g_src != "name" or version_tied:
+            g2_id, g2_src = E.identify(names, cn, col); read_cn = (cn or "-")
+            if g_src != "name":
+                g_id, g_src = g2_id, g2_src
+            else:
+                c2 = next((n for n in ns if n["id"] == g2_id), None)
+                if c2 is not None and c2["name"] == ns[0]["name"]:
+                    g_id, g_src = g2_id, g2_src
         else:
             skipped += 1
         if comb_id != g_id: diff += 1

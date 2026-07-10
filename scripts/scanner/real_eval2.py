@@ -23,15 +23,35 @@ def order_quad(pts):
     return np.array([pts[np.argmin(s)], pts[np.argmin(d)], pts[np.argmax(s)], pts[np.argmax(d)]], np.float32)
 
 
-def _scan(edges, sc, procW, procH, gates):
-    """find best quad on an edge map; gates = (rect_min, fill_min, ar_tol, area_min)."""
+def _pt_in_quad(p, q, tol=4.0):
+    """point inside a convex quad (sign-consistent cross test, tol px slack)."""
+    sign = 0
+    for i in range(4):
+        a = q[i]; b = q[(i+1) % 4]
+        ex, ey = b[0]-a[0], b[1]-a[1]
+        ln = (ex*ex+ey*ey) ** 0.5 or 1.0
+        d = (ex*(p[1]-a[1]) - ey*(p[0]-a[0])) / ln
+        if d > tol:
+            if sign < 0: return False
+            sign = 1
+        elif d < -tol:
+            if sign > 0: return False
+            sign = -1
+    return True
+
+
+def _scan(edges, sc, procW, procH, gates, containment=True):
+    """find best quad on an edge map; gates = (rect_min, fill_min, ar_tol, area_min).
+    containment=True adds the ART-BOX-TRAP fix: a card's inner art frame (~4:3
+    landscape ~= an inverted 5:7) passes every gate and can outscore the true card
+    boundary (centre bias) -> landscape-squashed rectifies of portrait cards. If a
+    bigger gate-passing quad fully CONTAINS the winner, take the outer one."""
     rect_min, fill_min, ar_tol, area_min = gates
     cnts, _ = cv2.findContours(edges, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
-    best = None; bestscore = 0; area_img = procW * procH
+    cands = []; area_img = procW * procH
     cx, cy = procW / 2, procH / 2; halfd = (cx**2 + cy**2) ** 0.5
 
     def consider(q, ca, clean):
-        nonlocal best, bestscore
         w1 = np.linalg.norm(q[0]-q[1]); w2 = np.linalg.norm(q[3]-q[2])
         h1 = np.linalg.norm(q[0]-q[3]); h2 = np.linalg.norm(q[1]-q[2])
         wq = (w1+w2)/2; hq = (h1+h2)/2
@@ -47,7 +67,7 @@ def _scan(edges, sc, procW, procH, gates):
         ctr = 1 - min(1, ((qx-cx)**2+(qy-cy)**2)**0.5/halfd)
         score = arsc*0.3 + rect*0.22 + fill*0.16 + min(1, qa/area_img)*0.1 + ctr*0.22
         if not clean: score *= 0.92
-        if score > bestscore: bestscore = score; best = q/sc
+        cands.append((q, score, qa))
     for c in cnts:
         a = cv2.contourArea(c)
         if a < area_img*area_min: continue
@@ -58,7 +78,24 @@ def _scan(edges, sc, procW, procH, gates):
                 consider(order_quad(ap.reshape(4, 2).astype(np.float32)), a, True); break
         box = cv2.boxPoints(cv2.minAreaRect(c))
         consider(order_quad(box.astype(np.float32)), a, False)
-    return best, bestscore
+    if not cands: return None, 0
+    best = max(cands, key=lambda t: t[1])
+    chosen = best
+    if containment:
+        # container must be fully INTERIOR to the frame — the image-border contour
+        # (Canny artifacts at the frame edge) passes every gate and contains
+        # everything, so without this it hijacks every detection. A real card
+        # boundary that lost to its own art box is interior (card fully in view).
+        # threshold 1.9x: art-box -> full card is ~2.2-3.1x (fires), a stack
+        # outline around the top card is ~1.2-1.6x (doesn't — validated on the
+        # close+real sets: 0 changes at 1.9, six stack over-grabs at 1.3).
+        m = 0.03 * min(procW, procH)
+        for q, s, qa in cands:
+            if qa <= best[2] * 1.9 or qa <= chosen[2]: continue
+            if not all(m < p[0] < procW - m and m < p[1] < procH - m for p in q): continue
+            if all(_pt_in_quad(p, q) for p in best[0]):
+                chosen = (q, s, qa)
+    return chosen[0]/sc, chosen[1]
 
 
 def detect(rgb, two_pass):

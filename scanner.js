@@ -311,23 +311,39 @@
   }
   // rank cards by (possibly garbled) OCR name candidates. `lines` = array of OCR
   // text strings (e.g. the tallest text lines from the name band). Scores each
-  // card against the best line. Returns {top:[{id,name,version,score}], conf, margin}.
+  // card against the best line. Returns {top:[{id,name,version,score}], conf,
+  // margin, marginChar}.
   function rankNames(lines, k){
-    buildNameDB(); if(!nameDB) return { top: [], conf: "low", score: 0, margin: 0 };
+    buildNameDB(); if(!nameDB) return { top: [], conf: "low", score: 0, margin: 0, marginChar: 0 };
     k = k || 5;
     var queries = [], li;
     for(li=0; li<lines.length; li++){ var qn = nmCanon(lines[li]); if(qn.length < 3) continue; queries.push({ qn: qn, qnSq: qn.replace(/ /g,""), qtok: nmTok(lines[li]), qtri: nmTri(qn) }); }
-    if(!queries.length) return { top: [], conf: "low", score: 0, margin: 0 };
+    if(!queries.length) return { top: [], conf: "low", score: 0, margin: 0, marginChar: 0 };
     var meta = nameDB.meta, best = new Float32Array(meta.length), i, qi;
     for(i=0;i<meta.length;i++){ var s=0; for(qi=0;qi<queries.length;qi++){ var q=queries[qi]; var sc=textScore(q.qn, q.qnSq, q.qtok, q.qtri, meta[i]); if(sc>s) s=sc; } best[i]=s; }
-    var order = topK(best, Math.max(k, 6));
+    // look deep enough past k that a card with many printings (6+ Minnies) still
+    // reaches the first DIFFERENT character for the margin computation.
+    var order = topK(best, Math.max(k, 24));
     var top = order.map(function(ri){ return { id: meta[ri].id, name: meta[ri].name, version: meta[ri].version, score: best[ri] }; });
     var s0 = top[0] ? top[0].score : 0, s1 = top[1] ? top[1].score : 0, margin = s0 - s1;
-    // conf is CHARACTER-confidence and keys on the score: a high score = the right
-    // character even when several of its printings tie (low margin) — colour /
-    // collector# / the top-3 tap pick the exact version.
-    var conf = (s0 >= 0.80) ? "high" : (s0 >= 0.58) ? "medium" : "low";
-    return { top: top.slice(0, k), conf: conf, score: s0, margin: margin };
+    // marginChar = gap to the best card of a DIFFERENT character name. The real
+    // separator on field reads: a correct read of a distinctive name beats every
+    // other character by a wide gap even when its absolute score is mid (garbled
+    // OCR), while rules-text bleed matches many characters weakly (tiny gap).
+    var n0 = top[0] ? nameDB.byId[top[0].id].nName : "", marginChar = s0;
+    for(i=1;i<order.length;i++){
+      if(nameDB.meta[order[i]].nName !== n0){ marginChar = s0 - best[order[i]]; break; }
+    }
+    // conf is CHARACTER-confidence: margin-aware, calibrated on 63 labeled real
+    // phone reads (scripts/scanner/conf_calibration.py, 2026-07-10): decisive
+    // coverage 6/63 -> 54/63 at 100% precision. Wrong top-1s max out at
+    // s0=0.321 / marginChar=0.069 — every branch keeps a buffer above that.
+    // (The old absolute-only rule high>=0.80 starved identify(): correct field
+    // reads live at 0.37-0.50 and were labeled low -> dead-weight cn reads +
+    // no ambient text lock.)
+    var conf = (s0 >= 0.72 || (s0 >= 0.42 && marginChar >= 0.10) || (s0 >= 0.36 && marginChar >= 0.15)) ? "high"
+             : (s0 >= 0.34 && marginChar >= 0.05) ? "medium" : "low";
+    return { top: top.slice(0, k), conf: conf, score: s0, margin: margin, marginChar: marginChar };
   }
   function lookupCN(num){ buildNameDB(); if(!nameDB || num == null) return []; return nameDB.cnLoose[String(num)] || []; }
 
@@ -362,21 +378,21 @@
     //    is the strongest, domain-gap-immune identification we can make.
     if(numIds.length){
       for(i=0;i<nameIds.length;i++) if(numSet[nameIds[i]]){
-        return { top3: dedupeIds([nameIds[i]].concat(orderByColour(numIds), nameIds, colour)).slice(0, 3), conf: "high", source: "cn+name", nameConf: nm.conf, names: nm.top };
+        return { top3: dedupeIds([nameIds[i]].concat(orderByColour(numIds), nameIds, colour)).slice(0, 3), conf: "high", source: "cn+name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
     }
     // 2. confident NAME alone → name wins (number absent or misread; colour orders the printing)
     if(nm.conf === "high" && nameIds.length){
-      return { top3: dedupeIds(orderByColour(nameIds).concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, names: nm.top };
+      return { top3: dedupeIds(orderByColour(nameIds).concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 3. number read but name weak → the numbered cards, ordered by name then colour (needs a tap)
     if(numIds.length){
       var ranked = rankCnCandidates(numIds, nm.top, colour);
-      return { top3: dedupeIds(ranked.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", nameConf: nm.conf, names: nm.top };
+      return { top3: dedupeIds(ranked.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 4. fallback: name + colour vote
     var fused = rrf([nameIds, colour], [3, 1]);
-    return { top3: dedupeIds(fused).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", nameConf: nm.conf, names: nm.top };
+    return { top3: dedupeIds(fused).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
   }
 
   window.CardScanner = {

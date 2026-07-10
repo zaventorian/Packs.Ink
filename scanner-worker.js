@@ -73,11 +73,25 @@ function medianOfMat(m) {
 // a minAreaRect bounding a sprawling stack). A SOFT centre-bias prefers the card
 // the user is pointing at; a clean 4-pt quad beats a minAreaRect fallback (but the
 // fallback still wins when it's the only read).
+// point inside a convex quad (sign-consistent cross test, tol px slack)
+function pointInQuad(p, q, tol) {
+  let sign = 0;
+  for (let i = 0; i < 4; i++) {
+    const a = q[i], b = q[(i + 1) % 4];
+    const ex = b.x - a.x, ey = b.y - a.y;
+    const len = Math.hypot(ex, ey) || 1;
+    const d = (ex * (p.y - a.y) - ey * (p.x - a.x)) / len;
+    if (d > tol) { if (sign < 0) return false; sign = 1; }
+    else if (d < -tol) { if (sign > 0) return false; sign = -1; }
+  }
+  return true;
+}
+
 function scanForQuad(edges, scale, procW, procH, gates) {
   const contours = new cv.MatVector(), hier = new cv.Mat();
   const imgArea = procW * procH;
   const cx = procW / 2, cy = procH / 2, halfDiag = Math.hypot(cx, cy);
-  let best = null, bestScore = 0, bestLandscape = false;
+  const cands = [];
   const consider = (q, contourArea, fromClean) => {
     const w1 = dist(q[0], q[1]), w2 = dist(q[3], q[2]);
     const h1 = dist(q[0], q[3]), h2 = dist(q[1], q[2]);
@@ -95,11 +109,7 @@ function scanForQuad(edges, scale, procW, procH, gates) {
     const centreScore = 1 - Math.min(1, Math.hypot(qx - cx, qy - cy) / halfDiag);
     let score = arScore * 0.3 + rect * 0.22 + fill * 0.16 + Math.min(1, quadArea / imgArea) * 0.1 + centreScore * 0.22;
     if (!fromClean) score *= 0.92;
-    if (score > bestScore) {
-      bestScore = score;
-      best = q.map((p) => ({ x: p.x / scale, y: p.y / scale }));
-      bestLandscape = wq > hq;
-    }
+    cands.push({ q, score, area: quadArea, landscape: wq > hq });
   };
   try {
     cv.findContours(edges, contours, hier, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
@@ -126,7 +136,34 @@ function scanForQuad(edges, scale, procW, procH, gates) {
       c.delete();
     }
   } finally { contours.delete(); hier.delete(); }
-  return { best, bestScore, bestLandscape };
+  if (!cands.length) return { best: null, bestScore: 0, bestLandscape: false };
+  let best = cands[0];
+  for (const c of cands) if (c.score > best.score) best = c;
+  // ART-BOX-TRAP fix: a card's inner art frame (~4:3 landscape ≈ an inverted
+  // 5:7) passes every gate and can outscore the true card boundary at close
+  // range → landscape-squashed rectifies of portrait cards (field QA ids
+  // 90/93/102). If a much larger gate-passing quad fully CONTAINS the winner,
+  // take the outer one. Guards (validated on the close+real sets, 0 changes):
+  //  · container must be fully INTERIOR to the frame — the image-border contour
+  //    passes every gate and contains everything, so it would hijack otherwise;
+  //  · ≥1.9× area — art-box→card is ~2.2-3.1×, a stack outline around the top
+  //    card is only ~1.2-1.6× (must NOT fire there).
+  let chosen = best;
+  const m = 0.03 * Math.min(procW, procH);
+  for (const c of cands) {
+    if (c.area <= best.area * 1.9 || c.area <= chosen.area) continue;
+    let interior = true;
+    for (const p of c.q) if (!(p.x > m && p.x < procW - m && p.y > m && p.y < procH - m)) { interior = false; break; }
+    if (!interior) continue;
+    let contains = true;
+    for (const p of best.q) if (!pointInQuad(p, c.q, 4)) { contains = false; break; }
+    if (contains) chosen = c;
+  }
+  return {
+    best: chosen.q.map((p) => ({ x: p.x / scale, y: p.y / scale })),
+    bestScore: chosen.score,
+    bestLandscape: chosen.landscape,
+  };
 }
 
 // Detect best card quad. mat is RGBA at the bitmap resolution; we downscale a
