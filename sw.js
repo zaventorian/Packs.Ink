@@ -10,12 +10,11 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=272',
+  '/styles.css?v=273',
   '/logo.js?v=253',
-  '/scanner.js?v=270',
-  '/scanner-cv.js?v=253',
-  '/scanner-worker.js?v=270',
-  '/scanner-ocr-worker.js?v=259',
+  // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
+  // admin-gated to ~2 users — they runtime-cache on first use instead of
+  // costing every visitor ~58KB at SW install.
   '/manifest.json',
   '/icon-192.png?v=5',
   '/icon-512.png?v=5',
@@ -44,10 +43,18 @@ self.addEventListener('activate', (event) => {
 // Fetch strategy:
 //   - Navigation requests (HTML): network-first, fall back to cached Index.html offline.
 //   - Same-origin static assets: cache-first.
-//   - Supabase API + TCGCSV + Lorcast + QR service: always network (no caching of dynamic data).
-//   - Lorcast card images: stale-while-revalidate (cheap to revalidate, big offline win).
+//   - Supabase API + TCGCSV + Lorcast API + QR service: always network (no caching of dynamic data).
 self.addEventListener('fetch', (event) => {
   const req = event.request;
+// Cache a response if it's usable. Cross-origin <img> loads are no-cors →
+// the response is "opaque" (status 0, res.ok === false) but still perfectly
+// renderable and cacheable. The old `if (res.ok)` guard silently rejected
+// every opaque response, which meant NO card art was ever cached — the image
+// branch below was dead code. Network errors still reject the fetch promise,
+// so a true failure is never cached; the residual risk is caching an opaque
+// 404, which the next online revalidation overwrites.
+const cacheable = (res) => res && (res.ok || res.type === 'opaque');
+
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
@@ -138,12 +145,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cross-origin (Google Fonts, html2canvas CDN, etc.): stale-while-revalidate.
+  // Cross-origin non-image (Google Fonts CSS, etc.): stale-while-revalidate.
   event.respondWith(
     caches.match(req).then((cached) => {
       const fetchPromise = fetch(req)
         .then((res) => {
-          if (res.ok) {
+          if (cacheable(res)) {
             const copy = res.clone();
             caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
           }

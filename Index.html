@@ -72,15 +72,15 @@
   Free tier; no credit card on file. If we want to add user attribution
   later, this is where to call Sentry.setUser({id:user.id}) post-auth.
 -->
-<script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
-  crossorigin="anonymous"></script>
 <script>
   // Scrub share tokens from anything Sentry captures. Tokens ride in the URL
   // query (?t=, ?token=, ?collection=) so a captured error on a share-link page
-  // would otherwise send the token to Sentry. The loader exposes Sentry.onLoad
-  // synchronously; init() here keeps the loader's DSN and adds our beforeSend.
-  if (window.Sentry && window.Sentry.onLoad) {
-    window.Sentry.onLoad(function () {
+  // would otherwise send the token to Sentry. The loader script below is
+  // DEFERRED (it's a third-party CDN fetch that must never block first paint);
+  // window.sentryOnLoad is the loader's documented pre-registration hook — it
+  // runs our init() with the loader's DSN once the SDK actually loads.
+  {
+    window.sentryOnLoad = (function () {
       var scrub = function (u) {
         return typeof u === "string"
           ? u.replace(/([?&])(t|token|collection)=[^&#]*/gi, "$1$2=[redacted]")
@@ -130,8 +130,15 @@
     });
   }
 </script>
+<script src="https://js.sentry-cdn.com/8eb7cada506131426389fd7506a0288e.min.js"
+  crossorigin="anonymous" defer></script>
+<!-- Warm the font hosts before the render-blocking CSS resolves — without the
+     gstatic preconnect the woff2 files wait on a cold TLS handshake and the
+     Cinzel titles visibly FOUT on first visit. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=272">
+<link rel="stylesheet" href="styles.css?v=273">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -186,8 +193,11 @@
 </script>
 <script src="/vendor/supabase.js?v=254"></script>
 <script src="logo.js?v=253"></script>
-<script src="scanner.js?v=270"></script>
-<script src="scanner-cv.js?v=253"></script>
+<!-- Scanner is admin-gated (~2 users); defer keeps it off every visitor's
+     critical path. Both scripts only attach globals used when the scan modal
+     opens, long after DOMContentLoaded. -->
+<script src="scanner.js?v=270" defer></script>
+<script src="scanner-cv.js?v=253" defer></script>
 <script>
 
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
@@ -664,9 +674,23 @@ function Tip(props){
     setPos({left: r.left + r.width/2, top: r.top});
   };
   const hide = () => setPos(null);
+  // Touch devices have no hover, so a tap toggles the bubble (auto-hiding
+  // after a few seconds). The click handler deliberately does NOT
+  // preventDefault/stopPropagation: a Tip wrapped around a chip or button
+  // still activates it — the tap explains AND acts.
+  const tapTimer = useRef(null);
+  const tap = () => {
+    if(!enabled) return;
+    clearTimeout(tapTimer.current);
+    if(pos){ hide(); return; }
+    show();
+    tapTimer.current = setTimeout(hide, 4000);
+  };
+  useEffect(() => () => clearTimeout(tapTimer.current), []);
   return html`<span ref=${ref}
       class=${(cls?cls+" ":"")+(enabled?"tip-trigger":"")}
       onMouseEnter=${show} onMouseLeave=${hide}
+      onClick=${tap}
       onFocus=${show} onBlur=${hide}>
     ${props.children}
     ${enabled && pos ? ReactDOM.createPortal(
@@ -675,6 +699,10 @@ function Tip(props){
     ) : null}
   </span>`;
 }
+
+// Graded surfaces announce themselves so the App-level graded-ToS prompt can
+// fire on first *graded* contact instead of greeting every visitor on load.
+const signalGradedSurface = () => { try { window.dispatchEvent(new Event("packsink:graded-surface")); } catch {} };
 
 // "Extras & Oddities" — bucket for one-off TCGPlayer variants that aren't
 // part of any mainline set (starter-deck-exclusive foils, set-bonus prints,
@@ -4093,7 +4121,7 @@ const PriceBadge = ({row, label, klass}) => {
 // filter state changes. Stable group references (see CardBrowser) make
 // this effective — without them the prop diff would always miss.
 const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossName, onDeckQtyChange, viewMode, showOwnedCounter=true,
-                       selectable, isSelected, onToggleSelect}) => {
+                       selectable, isSelected, onToggleSelect, onQuickAdd}) => {
   const img = group.img_normal || group.img_small || group.img_large;
   const productName = group["Product Name"];
   const showLabels = group.normal && group.foil;
@@ -4214,7 +4242,10 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
   const splitBadge = group.isSplitPrinting
     ? (group.foil ? "PRIZE FOIL" : "PRIZE WALL")
     : null;
-  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")} onClick=${onClick}>
+  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")} onClick=${onClick}
+    role="button" tabIndex="0"
+    onKeyDown=${e=>{ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); } }}
+    aria-label=${productName}>
     <div class="card-tile-img-wrap">
       ${img
         ? html`<img src=${img} alt=${productName} loading="lazy"/>`
@@ -4227,6 +4258,9 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       </div>`}
       ${deckMode && openModal && html`<button class="tile-expand-btn" onClick=${onExpand}
         title="View card details" aria-label="View card details">⤢</button>`}
+      ${!deckMode && onQuickAdd && html`<button class="tile-quickadd-btn"
+        onClick=${e=>{ e.stopPropagation(); onQuickAdd(group); }}
+        title="Add one copy to your collection" aria-label="Add one copy to your collection">+</button>`}
       ${onMagnify && html`<button class="tile-magnify-btn" onClick=${onMagnify}
         title="Enlarge card art" aria-label="Enlarge card art">
         <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
@@ -5635,6 +5669,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // forces the natural top-down order (card → toggle → changes → history).
   const detailTabInit = initialTab === "graded" ? "graded" : "history";
   const [detailTab, setDetailTab] = useState(detailTabInit);
+  useEffect(() => { if(detailTab === "graded") signalGradedSurface(); }, [detailTab]);
   const isGradedMode = gradedPremium && detailTab === "graded";
   const effPriceFirst = priceFirst && !gradedPremium;
   // text + flavor_text aren't cached in `raw` (too big for localStorage),
@@ -6015,7 +6050,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
 
         ${!user && html`<div class="signin-prompt">
           <span>Sign in to track this card in your collection.</span>
-          <button class="active" onClick=${onSignIn}>Sign in</button>
+          <button class="active" onClick=${onSignIn}>Sign in with Google</button>
         </div>`}
 
         ${gradedSummary && gradedSummary.count > 0 && html`<div class=${"card-detail-graded-note "+gradedSummary.type}>
@@ -7942,6 +7977,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
 const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       deckQtyAcrossName,
                       sortDefault="relevance",
+                      onQuickAdd,
                       selectable, isAuthed, onSignIn,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
@@ -8160,6 +8196,23 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   // Keep the module-level browse list in sync with the displayed order so the
   // detail modal + enlarged view can arrow/swipe to the prev/next card.
   useEffect(() => { setBrowseList(grouped); return () => setBrowseList([]); }, [grouped]);
+  // Windowed grid: the unfiltered catalog is ~2k tiles — mounting them all at
+  // once janks mobile layout/scroll. Render slabs of 150 and grow through an
+  // IntersectionObserver sentinel below the grid (1200px early margin makes
+  // the growth invisible while scrolling). Resets when the grouping changes.
+  const CARDS_WINDOW = 150;
+  const [visibleCount, setVisibleCount] = useState(CARDS_WINDOW);
+  const gridSentinelRef = useRef(null);
+  useEffect(() => { setVisibleCount(CARDS_WINDOW); }, [grouped]);
+  useEffect(() => {
+    const el = gridSentinelRef.current;
+    if(!el) return;
+    const io = new IntersectionObserver((es) => {
+      if(es.some(e => e.isIntersecting)) setVisibleCount(c => c + CARDS_WINDOW);
+    }, {rootMargin: "1200px 0px"});
+    io.observe(el);
+    return () => io.disconnect();
+  }, [grouped, visibleCount]);
   // Unique-per-tile key (card_id, + printing for split-printing sets).
   const isFiltering = filter !== deferredFilter;
   const parsedSummary = useMemo(() => {
@@ -8494,7 +8547,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       </div>
     </div>`}
     <div class=${(viewMode==="list"?"cards-list":"cards-grid")+(isFiltering?" cards-pending":"")}>
-      ${grouped.map((g,i) => html`<${CardTile}
+      ${grouped.slice(0, visibleCount).map((g,i) => html`<${CardTile}
         key=${(g.card_id ? g.card_id : g["Product Name"]+":"+i) + (g.isSplitPrinting ? "::"+(g.Printing||g.tcg_printing||"") : "")}
         group=${g} collection=${collection} viewMode=${viewMode}
         onSelectGroup=${onSelectGroup}
@@ -8502,11 +8555,19 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         deckQtyAcrossName=${deckQtyAcrossName ? deckQtyAcrossName(g) : undefined}
         onDeckQtyChange=${onDeckQtyChange}
         showOwnedCounter=${showOwnedCounter}
+        onQuickAdd=${onQuickAdd || null}
         selectable=${allowSelect}
         isSelected=${allowSelect && g.card_id ? selected.has(g.card_id) : false}
         onToggleSelect=${allowSelect ? toggleSelected : null}/>`)}
     </div>
-    ${grouped.length === 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
+    ${visibleCount < grouped.length && html`<div ref=${gridSentinelRef}
+      class="muted" style=${{textAlign:"center",padding:"14px 0 22px",fontSize:12}}>
+      Showing ${visibleCount.toLocaleString()} of ${grouped.length.toLocaleString()} cards — keep scrolling…
+    </div>`}
+    ${grouped.length === 0 && (!raw || raw.length === 0) && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
+      <div style=${{fontSize:15}}>Loading cards…</div>
+    </div>`}
+    ${grouped.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
       <div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
       ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
         onClick=${()=>setFilter(emptyFilter())} title="Clear all active filters and search">✕ Clear filters & search</button>`}
@@ -8556,6 +8617,18 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     setToast(msg);
     setTimeout(() => setToast(null), 2400);
   }, []);
+  // One-tap add from the grid: +1 of the group's Normal printing (foil-only
+  // chase cards fall back to the foil). The detail modal remains the place
+  // for foil/qty fine-tuning; this is the fast path for logging a set.
+  const quickAddOne = useCallback((g) => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    const row = g.normal || g.foil;
+    if(!row || !g.card_id) return;
+    const key = g.card_id + ":" + row.tcg_printing;
+    const cur = (collection && collection[key]) || 0;
+    updateQty(g.card_id, row.tcg_printing, cur + 1);
+    showToast(`Added ${g["Product Name"]} — you now have ${cur + 1}`);
+  }, [user, collection, updateQty, onSignIn, showToast]);
   // Build a card_id -> first-row index so we can find the canonical
   // tcg_printing key for each selected card without scanning raw on
   // every action.
@@ -8674,6 +8747,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   return html`<div>
     <${CardBrowser} raw=${raw} onSelectGroup=${openGroup} collection=${collection}
       selectable=${true}
+      onQuickAdd=${user && updateQty ? quickAddOne : null}
       isAuthed=${!!user}
       onSignIn=${onSignIn}
       onBulkAddCollection=${onBulkAddCollection}
@@ -9531,7 +9605,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const modeRef = useRef("ambient");      // mirror of `mode` for the loop closure
   const autoAddRef = useRef(false);       // mirror of `autoAdd`
   const previewRef = useRef(null);        // current ambient preview (for tap-commit)
-  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false });
+  const ambientRef = useRef({ frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false, firstQuadAt: 0, badgeState: "" });
   const ambByIdRef = useRef(null);        // memoized id->meta map for OCR fusion
   const commitAmbientRef = useRef(null);  // set after commitAmbient is defined
   const triggerOcrRef = useRef(null);     // set after triggerOcr is defined
@@ -9540,6 +9614,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const detFlagRef = useRef(false);       // last setDetected value (gate re-renders)
   const rdyFlagRef = useRef(false);       // last setReady value
   const pvKeyRef = useRef("");            // last preview art_key pushed to React
+  // ── QA telemetry (the "text video" of the session) ─────────────────────────
+  // Reviewing field tests offline needs to see the EXPERIENCE, not just the
+  // final snap: how long each stage took, when locks were acquired/lost, what
+  // the badge showed, what OCR actually looked at. traceRef records a rolling
+  // event log (every lock/OCR/badge/ping transition, ~500 events); each QA snap
+  // uploads its trailing slice + a 6-frame raw filmstrip + thumbnails of the
+  // last ambient OCR inputs; closing the scanner logs a whole-session summary.
+  const openedAtRef = useRef(Date.now());
+  const traceRef = useRef({ ev: [], n: { ticks: 0, quads: 0, noDet: 0, jumps: 0, ocrFires: 0, ocrEmpty: 0, confirms: 0, pings: 0, wipes: 0, badgeFlips: 0, snaps: 0 }, ocrMs: [], device: null });
+  const filmRef = useRef({ frames: [], i: 0 });   // ring of last 6 small raw frames
+  const ocrThumbRef = useRef([]);                 // last 3 {t,src,thumb} ambient-OCR inputs
+  const torchTrackRef = useRef(null);
 
   const [phase, setPhase] = useState("starting");
   const [err, setErr] = useState("");
@@ -9560,9 +9646,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [qaCount, setQaCount] = useState(0);      // QA snaps saved this session (admin testing tool)
   const [qaResults, setQaResults] = useState([]); // in-session QA snaps: {id,ts,thumb,guess,alts}
   const qaBusyRef = useRef(false);
+  const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
+  const [torchOn, setTorchOn] = useState(false);
 
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
+  const userRef = useRef(user);
+  useEffect(() => { userRef.current = user; }, [user]);
 
   const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
   const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
@@ -9593,7 +9683,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const w = new Worker(SCAN_WORKER_URL);
       w.onmessage = (e) => {
         const d = e.data;
-        if(d.type === "ready"){ if(!cancelled) setWorkerReady(true); return; }
+        if(d.type === "ready"){ if(!cancelled) setWorkerReady(true); trc("cv-ready"); return; }
         if(d.type === "failed"){ return; }   // stay on the fallback path
         const cb = pendingRef.current.get(d.id);
         if(cb){ pendingRef.current.delete(d.id); cb(d); }
@@ -9612,6 +9702,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         if(m.type === "ready"){
           ocrReadyRef.current = true;
           ocrLoadingRef.current = false;
+          trc("ocr-ready");
           // warm-up: one dummy det pass in the background so the first REAL read
           // doesn't pay the WASM JIT + memory-growth cost inside the user's
           // first snap (~1-2s on a phone). Best-effort.
@@ -9657,9 +9748,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           if(caps.focusMode && caps.focusMode.indexOf("continuous") >= 0){
             await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] });
           }
+          if(caps.torch){ torchTrackRef.current = track; if(!cancelled) setTorchAvail(true); }
         } catch(_e){}
         const v = videoRef.current;
         if(v){ v.srcObject = stream; try { await v.play(); } catch(_e){} }
+        deviceBlock(); trc("cam-ready");
         // create the AudioContext while the open-scanner tap's user activation is
         // still fresh — the text-confirm ping (beep) fires from the loop, not a
         // gesture, and iOS has no vibrate; without this the first pings are silent.
@@ -9677,6 +9770,24 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const w = workerRef.current; if(w){ try { w.terminate(); } catch(_e){} }
       const ow = ocrWorkerRef.current; if(ow){ try { ow.terminate(); } catch(_e){} }
       const s = streamRef.current; if(s) s.getTracks().forEach(t => t.stop());
+      // whole-session QA log (fire-and-forget): the full trace + counters +
+      // per-read latency stats. Snaps only carry their trailing slice; this row
+      // is the one place a session's arc (time-to-first-confirm, lock churn,
+      // OCR hit rate) is visible end-to-end. Best-effort — a killed PWA loses
+      // it, but every snap already embedded its own trace.
+      try {
+        const T = traceRef.current, u = userRef.current;
+        if(u && sbClient && T.ev.length > 6){
+          const ms = T.ocrMs.slice().sort((a, b) => a - b);
+          const q = (p) => ms.length ? ms[Math.min(ms.length - 1, Math.floor(p * ms.length))] : null;
+          sbClient.from("scan_samples").insert({
+            user_id: u.id, card_id: null, predicted_card_id: null, corrected: false, printing: null, image_path: null,
+            debug: { v: 3, kind: "qa-session", sessionMs: Date.now() - openedAtRef.current,
+              device: T.device, n: T.n, ocrMs: { n: ms.length, med: q(0.5), p90: q(0.9) },
+              trace: T.ev.slice(-500) },
+          }).then(() => {}, () => {});
+        }
+      } catch(_e){}
     };
   }, []);
 
@@ -9697,14 +9808,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // {doName, doNumber} lets the caller GATE the slow number read (see identifyGated).
   // Returns { lines: [name candidates tallest-first], cnNum, cnSet }.
   const ocrCardRegions = async (canvas, opts) => {
-    if(!canvas || !ocrReadyRef.current || !ocrWorkerRef.current) return { lines: [], cnNum: null, cnSet: null };
+    if(!canvas || !ocrReadyRef.current || !ocrWorkerRef.current) return { lines: [], cnNum: null, cnSet: null, nameMs: 0, cnMs: 0 };
     try {
       const W = canvas.width, H = canvas.height;
       const buf = canvas.getContext("2d").getImageData(0, 0, W, H).data.buffer;
       const r = await ocrPost(buf, W, H, opts);
-      if(!r) return { lines: [], cnNum: null, cnSet: null };
-      return { lines: r.lines || [], cnNum: r.cnNum || null, cnSet: r.cnSet || null };
-    } catch(_e){ return { lines: [], cnNum: null, cnSet: null }; }
+      if(!r) return { lines: [], cnNum: null, cnSet: null, nameMs: 0, cnMs: 0 };
+      return { lines: r.lines || [], cnNum: r.cnNum || null, cnSet: r.cnSet || null, nameMs: r.nameMs || 0, cnMs: r.cnMs || 0 };
+    } catch(_e){ return { lines: [], cnNum: null, cnSet: null, nameMs: 0, cnMs: 0 }; }
   };
   // Identify a rectified card with the number read GATED behind the name. The
   // collector-number det is the slowest op in the pipeline (a big upscaled-strip
@@ -9719,6 +9830,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const identifyGated = async (rect, colourIds, tight) => {
     const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
     const lines = o.lines || [];
+    const tm = { nameMs: o.nameMs || 0, cnMs: 0 };
     let cnNum = null, cnSet = null;
     let idr = (window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colourIds }) || {});
     // a decisive name still reads the number when the CHARACTER has several
@@ -9729,7 +9841,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const versionTied = ns.length >= 2 && (ns[0].name || "") === (ns[1].name || "") && (ns[0].score - ns[1].score) < 0.06;
     if((idr.source !== "name" || versionTied) && tight !== false){
       const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
-      cnNum = num.cnNum; cnSet = num.cnSet;
+      cnNum = num.cnNum; cnSet = num.cnSet; tm.cnMs = num.cnMs || 0;
       const idr2 = (window.CardScanner.identify({ lines, cnNum, cnSet, colourRanked: colourIds }) || {});
       // guard: when the name was already decisive, a misread cn must not hijack
       // the answer to a DIFFERENT character — accept the re-identify only if it
@@ -9742,7 +9854,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         else { cnNum = null; cnSet = null; }
       }
     }
-    return { idr, lines, cnNum, cnSet };
+    return { idr, lines, cnNum, cnSet, tm };
   };
 
   const roundRectPath = (ctx, x, y, w, h, r) => {
@@ -9856,7 +9968,26 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(!r){ try { bmp.close && bmp.close(); } catch(_e){} return; }
       const A = ambientRef.current;
       A.tick++;
+      traceRef.current.n.ticks++;
+      // raw-frame film ring (every 2nd tick ≈ last ~1.8s): a QA snap stitches
+      // these into a filmstrip so offline review can SEE the approach — hand
+      // shake, framing drift, the card sliding in — not just the final frame.
+      if(A.tick % 2 === 0){
+        try {
+          const F = filmRef.current, fw = 240, fh = Math.round(fw * v.videoHeight / v.videoWidth);
+          let fc = F.frames[F.i];
+          if(!fc){ fc = { c: document.createElement("canvas"), t: 0 }; F.frames[F.i] = fc; }
+          fc.c.width = fw; fc.c.height = fh;
+          fc.c.getContext("2d").drawImage(v, 0, 0, fw, fh);
+          fc.t = Date.now() - openedAtRef.current;
+          F.i = (F.i + 1) % 6;
+        } catch(_e){}
+      }
+      const hadQuad = !!A.lastQuad && A.emptyFrames === 0;
       const o = computeOutline(r.quad || null, r.conf || 0, bw);
+      if(r.quad){ traceRef.current.n.quads++;
+        if(!hadQuad || !A.firstQuadAt){ A.firstQuadAt = Date.now(); trc("quad", { c: Math.round((r.conf || 0) * 100) / 100 }); } }
+      else traceRef.current.n.noDet++;
       setDet(!!o.smooth); setRdy(o.locked);
       // a big quad jump = a new card → drop the vote history. Only the FIRST
       // jump of a burst counts: when detection NOISE alternates between two
@@ -10052,6 +10183,56 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     tick();
     return () => { running = false; clearTimeout(loopTimerRef.current); };
   }, [phase, workerReady, result]);
+
+  // --- QA telemetry helpers ---
+  // trc(event, info): one line in the rolling session trace. Kept tiny (short
+  // keys, ms-since-open timestamps) — a snap uploads the trailing ~150 events,
+  // the session log the last ~500. This is how a field session is reviewable
+  // offline: the trace replays what the user experienced (locks, OCR reads with
+  // per-stage ms, badge changes, pings) without needing a screen recording.
+  const trc = (e, info) => {
+    const T = traceRef.current;
+    const row = Object.assign({ t: Date.now() - openedAtRef.current, e }, info || {});
+    T.ev.push(row);
+    if(T.ev.length > 500) T.ev.splice(0, T.ev.length - 500);
+  };
+  const deviceBlock = () => {
+    const T = traceRef.current;
+    if(T.device) return T.device;
+    const v = videoRef.current;
+    let cam = null;
+    try { const tk = streamRef.current && streamRef.current.getVideoTracks()[0];
+      if(tk && tk.getSettings){ const s = tk.getSettings(); cam = { w: s.width, h: s.height, fps: s.frameRate, facing: s.facingMode }; } } catch(_e){}
+    T.device = {
+      ua: (navigator.userAgent || "").slice(0, 160),
+      cores: navigator.hardwareConcurrency || null, mem: navigator.deviceMemory || null,
+      dpr: window.devicePixelRatio || 1,
+      video: v && v.videoWidth ? { w: v.videoWidth, h: v.videoHeight } : null, cam,
+      standalone: !!(window.matchMedia && window.matchMedia("(display-mode: standalone)").matches),
+    };
+    return T.device;
+  };
+  // 160px thumb of the exact canvas an ambient OCR read looked at — "what did
+  // OCR see" is the #1 unanswerable question in offline review (the snap's
+  // rectify is a DIFFERENT frame than the ambient reads that failed before it).
+  const stashOcrThumb = (canvas, src) => {
+    try {
+      const w = 160, h = Math.max(1, Math.round(w * canvas.height / canvas.width));
+      const c = document.createElement("canvas"); c.width = w; c.height = h;
+      c.getContext("2d").drawImage(canvas, 0, 0, w, h);
+      const arr = ocrThumbRef.current;
+      arr.push({ t: Date.now() - openedAtRef.current, src, thumb: c.toDataURL("image/jpeg", 0.6) });
+      if(arr.length > 3) arr.shift();
+    } catch(_e){}
+  };
+  // torch (Android Chrome exposes it; iOS doesn't) — the coaching keeps saying
+  // "good light"; on devices that can, just MAKE the light.
+  const toggleTorch = async () => {
+    const tk = torchTrackRef.current; if(!tk) return;
+    const want = !torchOn;
+    try { await tk.applyConstraints({ advanced: [{ torch: want }] }); setTorchOn(want); trc("torch", { on: want ? 1 : 0 }); }
+    catch(_e){}
+  };
 
   // --- ambient feedback + commit + session list ---
   const ensureAudio = () => {
@@ -12095,6 +12276,7 @@ const clipSeriesFrom = (series, startMs) => {
 const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards}) => {
   const tips = useContext(TipsContext);
   const [mode, setMode] = useState("card");
+  useEffect(() => { if(mode === "graded") signalGradedSurface(); }, [mode]);
   // Sealed mode state — parallel to selectedGroup/cardQuery for cards.
   const [sealedSearch, setSealedSearch] = useState("");
   const [selectedSealedPid, setSelectedSealedPid] = useState(null);
@@ -13035,7 +13217,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
             </div>
             <div class="history-picker-hint">Click any card to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
             <div class="history-picker-list">
-              ${flatMatches != null ? (flatMatches.length === 0
+              ${(!raw || raw.length === 0)
+                ? html`<div class="history-picker-empty">Loading cards…</div>`
+                : flatMatches != null ? (flatMatches.length === 0
                 ? html`<div class="history-picker-empty">No cards match "${cardQuery}"</div>`
                 : flatMatches.map(c => {
                     const sel = isCardInCompare(c.card_id);
@@ -15104,6 +15288,7 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
 
 const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded, onOwnershipChanged, collection, updateQty}) => {
   const gradedPremium = useContext(GradedPremiumContext);
+  useEffect(() => { signalGradedSurface(); }, []);
   const [items, setItems] = useState(null);          // owned graded cards
   const [goals, setGoals] = useState(null);          // tracking goals
   const [submissions, setSubmissions] = useState([]); // grading_submissions (the "sent for grading" queue)
@@ -16082,7 +16267,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
 
   if(!user) return html`<div class="muted" style=${{fontSize:13,padding:"30px 0",textAlign:"center"}}>
     Sign in to track your graded collection.
-    <button class="active" onClick=${onSignIn} style=${{marginLeft:10,padding:"7px 14px",fontSize:12}}>Sign in</button>
+    <button class="active" onClick=${onSignIn} style=${{marginLeft:10,padding:"7px 14px",fontSize:12}}>Sign in with Google</button>
   </div>`;
   if(items == null) return html`<div class="muted" style=${{padding:"30px 0",textAlign:"center"}}>Loading graded collection…</div>`;
   if(loadErr) return html`<div style=${{padding:"20px 0",color:"var(--red)",fontSize:12}}>${loadErr}</div>`;
@@ -17318,7 +17503,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
   </div>`;
 };
 
-const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded}) => {
+const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded, openView}) => {
   const isViewerMode = !!viewerContext;
   // The whole graded↔raw sync (graded copies checking off raw completion + the
   // ◆ grade affordance) is premium-gated, same as the graded price data.
@@ -17945,6 +18130,16 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       </div>
     </div>`}
 
+    ${user && !viewerContext && !collectionLoading && totalCards === 0 && html`<div class="collection-empty-cta">
+      <h3 class="title-font">Start your collection</h3>
+      <p>You're signed in but haven't added any cards yet. Three ways to start:</p>
+      <div class="collection-empty-cta-actions">
+        <button class="active" onClick=${()=>openView && openView("cards")}>Browse Cards</button>
+        <button onClick=${()=>openView && openView("screener")}>Open the Screener</button>
+      </div>
+      <p class="muted" style=${{fontSize:12,marginTop:10}}>Tap the +/− on any card to track copies —
+        or bulk-load everything at once with <strong>Import CSV</strong> in the toolbar above.</p>
+    </div>`}
     <div class="collection-stats">
       <div class="stat-card">
         <div class="stat-card-lbl">Owned Value</div>
@@ -17952,7 +18147,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         <div class="stat-card-sub">${totalCards.toLocaleString()} cards · ${totalUnique.toLocaleString()} unique</div>
       </div>
       <div class="stat-card">
-        <div class="stat-card-lbl">${copies===1?"Master Set":copies===4?"Play Set":copies+"× Set"}</div>
+        <div class="stat-card-lbl"><${Tip} text=${"Completion toward "+(copies===1?"a Master Set — one copy of every card":copies===4?"a Play Set — four copies of every card (one of each chase)":copies+" copies of every card")+". Change the target with the copies dropdown above."}>${copies===1?"Master Set":copies===4?"Play Set":copies+"× Set"} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
         <div class="stat-card-val">${masterPct.toFixed(1)}%</div>
         <div class="stat-card-sub">${totalOwnedTowardNeed.toLocaleString()} / ${totalNeeded.toLocaleString()} needed</div>
       </div>
@@ -20521,6 +20716,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     try { return localStorage.getItem("packsink:screener:showGraded") === "1"; } catch { return false; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:showGraded", showGraded ? "1" : "0"); } catch{} }, [showGraded]);
+  useEffect(()=>{ if(showGraded) signalGradedSurface(); }, [showGraded]);
   // Premium accounts (graded_premium_viewers) get the per-sale model in graded
   // mode: rows come from graded_sales_rollup (Last Sold + Avg of Last 5 + sale
   // count + last-sold date) instead of TCGPriceLookup Δ% windows.
@@ -22134,6 +22330,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </div>
     </div>`}
     <div class="price-db-count muted">${filtered.length} cards${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
+    ${filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
+      No cards match the current filters — try clearing a chip or two, or switch the preset back to "All".
+    </div>`}
     <div class="price-db-tablewrap">
       <table class="price-db-table">
         <thead><tr>
@@ -24429,6 +24628,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick}) => {
         ? html`<button class="home-ev-strip-title home-title-link" onClick=${onTitleClick}
             title="Open Analytics → Expected Value">Recent set EV</button>`
         : html`<div class="home-ev-strip-title">Recent set EV</div>`}
+      <${Tip} text="EV (Expected Value) = the average total price of the cards you'd pull from one booster box at today's market prices. Compare it to the box price to see whether a set is 'worth cracking'."><span class="tip-info-glyph" aria-label="What is EV?">ⓘ</span><//>
       <div class="home-ev-strip-toggles">
         <label title="Treat cards under $1 as $0 — filters bulk pennies out of the average.">
           <input type="checkbox" checked=${nc} onChange=${e=>setNc(e.target.checked)}/>${" <$1→$0"}
@@ -27238,17 +27438,21 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Cutoff: only show decks created or edited since the most recent mainline
   // set's prerelease (LGS) date. Older decks built for rotated-out sets
   // shouldn't crowd the feed when newer metas have moved on.
-  const discoverCutoff = useMemo(() => {
+  const discoverCutoffs = useMemo(() => {
     const today = new Date().toISOString().slice(0, 10);
-    let latest = null;
+    const past = [];
     for(const s of MAINLINE_SETS){
       const d = SET_RELEASE_DATES[s];
-      if(d && d.lgs && d.lgs <= today){
-        if(!latest || d.lgs > latest) latest = d.lgs;
-      }
+      if(d && d.lgs && d.lgs <= today) past.push(d.lgs);
     }
-    return latest;
+    past.sort();
+    return { latest: past[past.length - 1] || null, prev: past[past.length - 2] || null };
   }, []);
+  // Cutoff the last Discover fetch actually used. Right after a set release
+  // the fresh window is nearly empty (nothing has been edited since the new
+  // LGS date yet), so refreshDiscover falls back to the previous set's
+  // window rather than presenting an abandoned-looking feed.
+  const [discoverCutoff, setDiscoverCutoff] = useState(null);
   const [discoverHasMore, setDiscoverHasMore] = useState(false);
   const [discoverLoading, setDiscoverLoading] = useState(false);
   // Creator profile state — when set, the Decks tab renders that creator's
@@ -27662,20 +27866,30 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const refreshDiscover = useCallback(async () => {
     setDiscoverLoading(true);
     try {
-      let q = sbClient.from("decks")
-        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
-        .eq("visibility", "public")
-        .order("updated_at", {ascending:false})
-        .limit(DISCOVER_LIMIT);
-      if(discoverCutoff) q = q.gte("updated_at", discoverCutoff);
-      // Exclude the user's own decks, but KEEP ownerless (tournament) decks
-      // — those have user_id = null. PostgREST's `.neq` returns NULL for
-      // null comparisons (SQL semantics), which filters tournament decks
-      // out. The `or(...)` form catches both "different user" + "no user".
-      if(user) q = q.or(`user_id.neq.${user.id},user_id.is.null`);
-      const {data: deckRows, error} = await q;
-      if(error) throw error;
-      if(!deckRows || !deckRows.length){
+      const fetchWindow = async (cutoff) => {
+        let q = sbClient.from("decks")
+          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
+          .eq("visibility", "public")
+          .order("updated_at", {ascending:false})
+          .limit(DISCOVER_LIMIT);
+        if(cutoff) q = q.gte("updated_at", cutoff);
+        // Exclude the user's own decks, but KEEP ownerless (tournament) decks
+        // — those have user_id = null. PostgREST's `.neq` returns NULL for
+        // null comparisons (SQL semantics), which filters tournament decks
+        // out. The `or(...)` form catches both "different user" + "no user".
+        if(user) q = q.or(`user_id.neq.${user.id},user_id.is.null`);
+        const {data, error} = await q;
+        if(error) throw error;
+        return data || [];
+      };
+      let usedCutoff = discoverCutoffs.latest;
+      let deckRows = await fetchWindow(usedCutoff);
+      if(deckRows.length < 12 && discoverCutoffs.prev){
+        usedCutoff = discoverCutoffs.prev;
+        deckRows = await fetchWindow(usedCutoff);
+      }
+      setDiscoverCutoff(usedCutoff);
+      if(!deckRows.length){
         setDiscoverEntries([]); setDiscoverHasMore(false); return;
       }
       const ids = deckRows.map(d => d.id);
@@ -27718,7 +27932,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     } finally {
       setDiscoverLoading(false);
     }
-  }, [user, hydrateDecksByIds, cardById, setsByProductName, discoverCutoff, mergeViewCounts]);
+  }, [user, hydrateDecksByIds, cardById, setsByProductName, discoverCutoffs, mergeViewCounts]);
   // Initial discover load on entering the tab — fires on every tabClick so
   // the feed picks up newly-published decks while the user is on the site.
   useEffect(()=>{ refreshDiscover(); }, [refreshDiscover, tabClickNonce]);
@@ -31649,11 +31863,16 @@ function App(){
   // the one-time graded ToS below. Init true so there's no first-paint flash of
   // the legacy view before the resolver effect runs.
   const [canViewGradedPremium, setCanViewGradedPremium] = useState(true);
-  // Premium graded ToS acceptance (migration 79). The effective premium flag below
-  // is `allowlisted && tosOk`, so the per-sale data stays locked until the user
-  // accepts. `tosDismissed` lets them defer for the session (re-prompts next load).
+  // Graded ToS acceptance (migration 79). The effective premium flag below is
+  // `canViewGradedPremium && tosOk`, so per-sale data stays locked until the
+  // user accepts. The prompt is SURFACE-TRIGGERED (2026-07-14 launch UX
+  // rework): graded surfaces dispatch packsink:graded-surface when they
+  // activate and the modal opens there — it no longer greets every visitor on
+  // page load. "Maybe later" is stamped to packsink:gradedTosDismissedAt and
+  // suppresses re-prompts for 7 days; until accepted, graded surfaces render
+  // the legacy TCGPriceLookup view (GradedPremiumContext stays false).
   const [gradedTosOk, setGradedTosOk] = useState(false);
-  const [gradedTosDismissed, setGradedTosDismissed] = useState(false);
+  const [gradedTosPromptOpen, setGradedTosPromptOpen] = useState(false);
   // Graded-dataset curator (graded_admins, migration 74) — edit/delete sales +
   // report queue. Localhost preview: packsink:gradedAdminPreview=1.
   const [isGradedAdmin, setIsGradedAdmin] = useState(false);
@@ -31708,11 +31927,28 @@ function App(){
   const acceptGradedTos = useCallback(() => {
     try { localStorage.setItem("packsink:gradedTos", GRADED_TOS_VERSION); } catch {}
     setGradedTosOk(true);
-    setGradedTosDismissed(true);
+    setGradedTosPromptOpen(false);
     // Durable record (best-effort — localStorage already unlocked the UI). Requires a
     // signed-in user; the localhost preview just relies on localStorage.
     sbClient.rpc("accept_graded_tos", { p_version: GRADED_TOS_VERSION }).then(()=>{}, ()=>{});
   }, []);
+
+  // Open the ToS prompt when a graded surface announces itself (screener
+  // graded mode, collection graded tab, card-detail graded tab, price-
+  // graphing graded mode) — first graded contact only, respecting the
+  // 7-day "Maybe later" stamp.
+  useEffect(() => {
+    const onSurface = () => {
+      if(!canViewGradedPremium || gradedTosOk) return;
+      try {
+        const at = parseInt(localStorage.getItem("packsink:gradedTosDismissedAt") || "0", 10) || 0;
+        if(Date.now() - at < 7 * 24 * 3600 * 1000) return;
+      } catch {}
+      setGradedTosPromptOpen(true);
+    };
+    window.addEventListener("packsink:graded-surface", onSurface);
+    return () => window.removeEventListener("packsink:graded-surface", onSurface);
+  }, [canViewGradedPremium, gradedTosOk]);
 
   // Graded-admin flag, same shape as the premium gate.
   useEffect(()=>{
@@ -32595,6 +32831,12 @@ function App(){
   // Returning visitors with a cached catalog (raw.length > 0) never hit this;
   // background-refresh failures keep the inline nav retry instead.
   const bootFailed = !!err && (!raw || raw.length === 0);
+  // Cold first visit: catalog still in flight and nothing cached — show a real
+  // loading state instead of eight empty views (the old UX was a bare shell
+  // with an 11px "Loading…" line in the nav). Cache-hit sessions never see
+  // this: raw fills from localStorage synchronously on boot.
+  const bootLoading = !bootFailed && loading && (!raw || raw.length === 0);
+  const viewsReady = !bootFailed && !bootLoading;
 
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><div>
     <${EnlargedCardOverlay}/>
@@ -32770,8 +33012,10 @@ function App(){
       onClose=${()=>{ setAvatarPickerOpen(false);
         if(welcomeAfterOnboarding.current){ welcomeAfterOnboarding.current = false; maybeOpenWelcome(); } }}/>`}
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
-    ${canViewGradedPremium && !gradedTosOk && !gradedTosDismissed && html`<${GradedTosModal}
-      onAccept=${acceptGradedTos} onDismiss=${()=>setGradedTosDismissed(true)}/>`}
+    ${gradedTosPromptOpen && !gradedTosOk && html`<${GradedTosModal}
+      onAccept=${acceptGradedTos}
+      onDismiss=${()=>{ setGradedTosPromptOpen(false);
+        try { localStorage.setItem("packsink:gradedTosDismissedAt", String(Date.now())); } catch {} }}/>`}
     ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
     ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}
       onGo=${(v)=>{ closeTour(); onTabClick(v); }}/>`}
@@ -32801,7 +33045,14 @@ function App(){
       <button class="boot-error-retry" onClick=${()=>loadFromSupabase({force:true})}>Try again</button>
       <div class="boot-error-detail muted">${err}</div>
     </div>`}
-    ${!bootFailed&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
+    ${bootLoading && html`<div class="boot-error boot-loading">
+      <img src="Logos/packs-ink-logo.png?v=5" alt="" class="boot-error-logo"/>
+      <div class="boot-loading-spinner" aria-hidden="true"></div>
+      <h2 class="title-font">Loading the card database…</h2>
+      <p class="muted">${loadProgress.current || "Fetching the latest prices"} — the first visit
+        takes a few seconds; after that it's instant.</p>
+    </div>`}
+    ${viewsReady&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
       updateQty=${updateQty} onSignIn=${signIn}
@@ -32813,14 +33064,15 @@ function App(){
       openScreenerWithFilter=${openScreenerWithFilter}
       sections=${homeSections}
       onEventArtistClick=${setIndyArtistPick}/>`}
-    ${!bootFailed&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
+    ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}
       incomingSearch=${incomingCardsSearch}
       incomingOpenCardId=${incomingCardsOpenId}
       onConsumedIncomingCardsSearch=${() => { setIncomingCardsSearch(null); setIncomingCardsOpenId(null); }}/>`}
-    ${!bootFailed&&view==="collection"&&html`<${CollectionView} raw=${raw}
+    ${viewsReady&&view==="collection"&&html`<${CollectionView} raw=${raw}
       onJumpToScreenerGraded=${openGradedMoversInScreener}
+      openView=${openView}
       user=${viewedCollectionId ? (viewedCollectionData?.profile || null) : user}
       collection=${viewedCollectionId ? (viewedCollectionData?.rawMap || {}) : collection}
       collectionLoading=${viewedCollectionId ? !viewedCollectionData : collectionLoading}
@@ -32848,7 +33100,7 @@ function App(){
         error: viewedCollectionError,
         onClose: closeViewedCollection,
       } : null}/>`}
-    ${!bootFailed&&view==="decks"&&html`<${DecksView} raw=${raw} user=${user}
+    ${viewsReady&&view==="decks"&&html`<${DecksView} raw=${raw} user=${user}
       collection=${collection} updateQty=${updateQty} tabClickNonce=${tabClickNonce}
       incomingDeckId=${incomingDeckId}
       onConsumedIncomingDeckId=${() => setIncomingDeckId(null)}
@@ -32864,12 +33116,12 @@ function App(){
       incomingDeckSection=${incomingDeckSection}
       onConsumedIncomingDeckSection=${() => setIncomingDeckSection(null)}
       onSignIn=${signIn} theme=${theme}/>`}
-    ${!bootFailed&&view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
+    ${viewsReady&&view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
       sealedPrices=${sealedPrices} setsMeta=${setsMeta}
       historyTarget=${historyTarget}
       incomingCompareCards=${incomingCompareCards}
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
-    ${!bootFailed&&view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
+    ${viewsReady&&view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}
       excludeEnchanted=${excludeEnchanted} setExcludeEnchanted=${setExcludeEnchanted}
       excludeIconic=${excludeIconic} setExcludeIconic=${setExcludeIconic}
@@ -32879,7 +33131,7 @@ function App(){
       sub=${marketSub} setSub=${setMarketSub}
       eloPinned=${eloPinned} setEloPinned=${setEloPinned}
       openSetHistory=${openSetHistory}/>`}
-    ${!bootFailed&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
+    ${viewsReady&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       onCompareCards=${startCompareCards}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
@@ -32889,7 +33141,7 @@ function App(){
     ${view==="faq"&&html`<${FAQView} user=${user}
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
-    ${!bootFailed&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
+    ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
   </div><//><//><//><//>`;
 }
