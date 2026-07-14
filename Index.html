@@ -236,6 +236,98 @@ async function sbFetchAll(path, params, token){
   return out;
 }
 
+// ── Deck obfuscation codec ────────────────────────────────────────────────
+// Decklists (card ids, quantities, deck names/descriptions) are stored in
+// Supabase as ciphertext so a raw database audit / backup / SQL-editor query
+// can't reveal what anyone's deck actually is. This is OBFUSCATION-grade, not
+// a cryptographic guarantee: the key ships in this file (it has to, so public
+// decks decode in every visitor's browser). It exists so the site owner can't
+// casually or accidentally read a private decklist — the honest claim is
+// "stored encoded, I'd have to deliberately decode it," not "I can't."
+//
+//  - encDeckDet: deterministic (same input → same token). Used for card_id so
+//    it stays a valid composite-PK component and onConflict upserts still work.
+//  - encDeckRnd: randomized IV. Used for quantity / name / description.
+//  - decDeck: prefix-aware. Legacy plaintext rows (no "e1:" sentinel) pass
+//    through untouched, so reads are safe before/during the backfill.
+// AES-GCM via Web Crypto (async). Decode happens at the data-access boundary
+// so all downstream render code sees plaintext and needs no changes.
+const DECK_ENC_KEY_B64 = "TFS-sPPVpi6lHP4MDDD1_VMS5csp0eggEnIIgqcCVYo";
+const DECK_ENC_PREFIX = "e1:";
+let _deckAesKey = null, _deckMacKey = null;
+function _deckB64e(bytes){ let s=""; for(const b of bytes) s += String.fromCharCode(b); return btoa(s).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""); }
+function _deckB64d(str){ str = String(str).replace(/-/g,"+").replace(/_/g,"/"); while(str.length%4) str+="="; const bin=atob(str); const out=new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
+async function _deckKeys(){
+  if(_deckAesKey) return {aes:_deckAesKey, mac:_deckMacKey};
+  const raw = _deckB64d(DECK_ENC_KEY_B64);
+  _deckAesKey = await crypto.subtle.importKey("raw", raw, {name:"AES-GCM"}, false, ["encrypt","decrypt"]);
+  _deckMacKey = await crypto.subtle.importKey("raw", raw, {name:"HMAC", hash:"SHA-256"}, false, ["sign"]);
+  return {aes:_deckAesKey, mac:_deckMacKey};
+}
+const _deckTE = new TextEncoder(), _deckTD = new TextDecoder();
+async function encDeckRnd(plain){
+  if(plain == null) return plain;
+  const {aes} = await _deckKeys();
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM", iv}, aes, _deckTE.encode(String(plain))));
+  const buf = new Uint8Array(12 + ct.length); buf.set(iv,0); buf.set(ct,12);
+  return DECK_ENC_PREFIX + _deckB64e(buf);
+}
+async function encDeckDet(plain){
+  if(plain == null) return plain;
+  const {aes, mac} = await _deckKeys();
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", mac, _deckTE.encode("iv:"+String(plain))));
+  const iv = sig.slice(0,12);
+  const ct = new Uint8Array(await crypto.subtle.encrypt({name:"AES-GCM", iv}, aes, _deckTE.encode(String(plain))));
+  const buf = new Uint8Array(12 + ct.length); buf.set(iv,0); buf.set(ct,12);
+  return DECK_ENC_PREFIX + _deckB64e(buf);
+}
+async function decDeck(token){
+  if(typeof token !== "string" || !token.startsWith(DECK_ENC_PREFIX)) return token; // plaintext passthrough
+  try {
+    const {aes} = await _deckKeys();
+    const buf = _deckB64d(token.slice(DECK_ENC_PREFIX.length));
+    const iv = buf.slice(0,12), ct = buf.slice(12);
+    return _deckTD.decode(await crypto.subtle.decrypt({name:"AES-GCM", iv}, aes, ct));
+  } catch(e){ return token; }
+}
+// Boundary helpers: shim a decks row / deck_cards rows in place.
+// encDeckMeta / decDeckMeta handle the deck header (name, description).
+// encDeckCards / decDeckCards handle card rows (card_id deterministic, quantity randomized).
+async function decDeckMeta(row){
+  if(!row) return row;
+  if("name" in row) row.name = await decDeck(row.name);
+  if("description" in row) row.description = await decDeck(row.description);
+  return row;
+}
+async function decDeckCards(rows){
+  if(!Array.isArray(rows)) return rows;
+  return Promise.all(rows.map(async r => {
+    const o = {...r};
+    if("card_id" in o) o.card_id = await decDeck(o.card_id);
+    return o;
+  }));
+}
+// Encode one card row for writing. Accepts {card_id, quantity, ...} with a
+// PLAINTEXT card_id; returns the row with card_id encrypted (deterministic so
+// the composite PK / onConflict upsert keeps working). quantity is left as a
+// plain int — a count next to an unreadable card_id reveals no decklist, and
+// keeping it int avoids an int→text column change + rewriting the tournament
+// RPCs. card identity + deck names are what actually expose a list.
+async function encDeckCardRow(row){
+  const o = {...row};
+  if("card_id" in o) o.card_id = await encDeckDet(o.card_id);
+  return o;
+}
+async function encDeckCardRows(rows){ return Promise.all((rows||[]).map(encDeckCardRow)); }
+// Encode a deck header patch ({name?, description?}) for writing.
+async function encDeckMetaPatch(patch){
+  const o = {...patch};
+  if("name" in o && o.name != null) o.name = await encDeckRnd(o.name);
+  if("description" in o && o.description != null) o.description = await encDeckRnd(o.description);
+  return o;
+}
+
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
 const CACHE_KEY = "packsink:catalog:v50";  // v50: Extras quest/gift tiles now use the real card_id (was extras:<pid>) + Deep Trouble Piglet is a real card — force cold-fetch so owned-item card_ids line up
@@ -8459,7 +8551,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     if(!user){ onSignIn && onSignIn(); return; }
     try {
       const {data: deckRow, error} = await sbClient.from("decks")
-        .insert({user_id: user.id, name: "New Deck from Cards"})
+        .insert({user_id: user.id, name: await encDeckRnd("New Deck from Cards")})
         .select("id").single();
       if(error) throw error;
       const rows = [];
@@ -8469,7 +8561,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
         rows.push({deck_id: deckRow.id, card_id: id, printing: row.tcg_printing, quantity: 1});
       }
       if(rows.length){
-        const ins = await sbClient.from("deck_cards").insert(rows);
+        const ins = await sbClient.from("deck_cards").insert(await encDeckCardRows(rows));
         if(ins.error) throw ins.error;
       }
       openDeckById && openDeckById(deckRow.id);
@@ -8487,11 +8579,12 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     if(!user || !deckId){ return; }
     try {
       // Pre-fetch existing rows in that deck so we can compute new quantities.
-      const {data: existing, error: e1} = await sbClient.from("deck_cards")
+      const {data: existingRaw, error: e1} = await sbClient.from("deck_cards")
         .select("card_id,printing,quantity").eq("deck_id", deckId);
       if(e1) throw e1;
+      const existing = await decDeckCards(existingRaw || []);
       const have = new Map();
-      for(const r of (existing || [])) have.set(r.card_id+":"+r.printing, r.quantity || 0);
+      for(const r of existing) have.set(r.card_id+":"+r.printing, r.quantity || 0);
       const upserts = [];
       for(const id of cardIds){
         const row = rowByCardId.get(id);
@@ -8507,7 +8600,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       }
       if(upserts.length){
         const {error: e2} = await sbClient.from("deck_cards")
-          .upsert(upserts, {onConflict: "deck_id,card_id,printing"});
+          .upsert(await encDeckCardRows(upserts), {onConflict: "deck_id,card_id,printing"});
         if(e2) throw e2;
       }
       // Touch the deck's updated_at so it reorders correctly.
@@ -8527,6 +8620,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       .eq("user_id", user.id)
       .order("updated_at", {ascending:false});
     if(error){ console.warn("fetch user decks failed:", error.message); return []; }
+    await Promise.all((data||[]).map(decDeckMeta)); // decode obfuscated names for the picker
     return data || [];
   }, [user]);
 
@@ -24418,6 +24512,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
           .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
           .slice(0, 15);
         if(!decks.length){ setEntries([]); writeJsonCache(CACHE_KEY, []); return; }
+        await Promise.all(decks.map(decDeckMeta)); // decode obfuscated deck names for tile display
 
         // Index the catalog two ways:
         // - card_id -> {inks, name, set}: per-printing metadata
@@ -24451,7 +24546,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
           const {data: dcRows} = await sbClient.from("deck_cards")
             .select("deck_id,card_id,quantity").in("deck_id", allFetchIds);
           const seen = {};
-          for(const dc of (dcRows || [])){
+          for(const dc of await decDeckCards(dcRows || [])){
             seen[dc.deck_id] = true;
             (cardsByDeck[dc.deck_id] = cardsByDeck[dc.deck_id] || []).push(dc);
           }
@@ -24462,7 +24557,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
                 .then(({data, error}) => ({deckId: d.id, rows: error ? [] : (data || [])}))
                 .catch(() => ({deckId: d.id, rows: []}))
             ));
-            for(const {deckId, rows} of rpcResults) cardsByDeck[deckId] = rows;
+            for(const {deckId, rows} of rpcResults) cardsByDeck[deckId] = await decDeckCards(rows);
           }
         }
         const coreSets = new Set(typeof computeCoreSets === "function" ? computeCoreSets() : []);
@@ -26470,7 +26565,7 @@ const TournamentDeckEditModal = ({tournament, result, raw, onClose, onSaved}) =>
           .eq("deck_id", result.deck_id);
         if(cancelled) return;
         if(e){ setError("Couldn't load deck cards: " + e.message); setLoaded(true); return; }
-        const lines = (data || []).map(dc => {
+        const lines = (await decDeckCards(data || [])).map(dc => {
           const c = cardById[dc.card_id];
           const name = c?.["Product Name"] || dc.card_id;
           return `${dc.quantity} ${name}`;
@@ -26664,7 +26759,7 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
           .in("deck_id", deckIds);
         if(cancelled) return;
         if(e){ setError("Couldn't load deck cards: " + e.message); setLoaded(true); return; }
-        for(const dc of (data || [])){
+        for(const dc of await decDeckCards(data || [])){
           if(!cardsByDeck[dc.deck_id]) cardsByDeck[dc.deck_id] = [];
           cardsByDeck[dc.deck_id].push(dc);
         }
@@ -27243,6 +27338,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           from += 1000;
         }
       }
+      // Decode obfuscated deck header + card fields at the read boundary so all
+      // downstream render code sees plaintext. Legacy plaintext rows pass through.
+      await Promise.all((deckRows||[]).map(decDeckMeta));
+      cardRows = await decDeckCards(cardRows);
       const cardsByDeck = {};
       for(const c of cardRows){
         if(!cardsByDeck[c.deck_id]) cardsByDeck[c.deck_id] = [];
@@ -27274,6 +27373,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     ]);
     if(decksRes.error) throw decksRes.error;
     const decksRows = decksRes.data || [];
+    await Promise.all(decksRows.map(decDeckMeta));
+    const decodedCards = await decDeckCards(cardsRes.data || []);
     const creatorIds = [...new Set(decksRows.map(d => d.user_id).filter(Boolean))];
     let creators = [];
     if(creatorIds.length){
@@ -27284,7 +27385,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
     const creatorById = Object.fromEntries(creators.map(c => [c.user_id, c]));
     const cardsByDeck = {};
-    for(const c of (cardsRes.data||[])){
+    for(const c of decodedCards){
       if(!cardsByDeck[c.deck_id]) cardsByDeck[c.deck_id] = [];
       cardsByDeck[c.deck_id].push(c);
     }
@@ -27323,10 +27424,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         ]);
         const d = deckRes.data && deckRes.data[0];
         if(!d) continue; // token rotated or deck went private — silently drop
+        await decDeckMeta(d);
+        const dCards = await decDeckCards(cardsRes.data || []);
         const {data: profile} = await sbClient.from("profiles")
           .select("display_name,avatar_url").eq("user_id", d.user_id).maybeSingle();
         tokenEntries.push({
-          deck: {...d, cards: cardsRes.data || []},
+          deck: {...d, cards: dCards},
           creator: profile || null,
           shareToken: token,
         });
@@ -27661,8 +27764,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const profP  = sbClient.from("profiles").select("display_name,avatar_url").eq("user_id", deckRow.user_id).maybeSingle();
       const [cardsResult, profileResult] = await Promise.all([cardsP, profP]);
       if(cancelled) return;
+      await decDeckMeta(deckRow);
+      const decCards = await decDeckCards(cardsResult.data || []);
       setExternalDeck({
-        deck: {...deckRow, cards: cardsResult.data || []},
+        deck: {...deckRow, cards: decCards},
         creator: profileResult.data || null,
         // Preserve the token so Favorite can capture it for later RPC use.
         shareToken: usedToken || deckRow.share_token || null,
@@ -27916,7 +28021,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(cardsRes.error) throw cardsRes.error;
     const row = Array.isArray(deckRes.data) ? deckRes.data[0] : deckRes.data;
     if(!row) throw new Error("Deck not found");
-    const deck = {...row, cards: cardsRes.data || []};
+    await decDeckMeta(row);
+    const deck = {...row, cards: await decDeckCards(cardsRes.data || [])};
     tournamentDeckCache.current.set(deckId, deck);
     return deck;
   }, []);
@@ -28174,7 +28280,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const createDeck = useCallback(async () => {
     if(!user) return;
     const {data, error} = await sbClient.from("decks")
-      .insert({user_id:user.id, name: "New Deck"})
+      .insert({user_id:user.id, name: await encDeckRnd("New Deck")})
       .select("id").single();
     if(error){ flashToast("Couldn't create deck: " + error.message); return; }
     await refreshDecks();
@@ -28187,7 +28293,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const renameDeckInline = useCallback(async (deckId, name) => {
     const clean = (name || "").trim();
     if(!clean) return false;
-    const {error} = await sbClient.from("decks").update({name: clean}).eq("id", deckId);
+    const {error} = await sbClient.from("decks").update({name: await encDeckRnd(clean)}).eq("id", deckId);
     if(error){ flashToast("Rename failed: " + error.message); return false; }
     setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, name: clean} : d));
     return true;
@@ -28211,8 +28317,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!src || !user) return;
     const newName = buildDuplicateName(src);
     const {data, error} = await sbClient.from("decks")
-      .insert({user_id:user.id, name: newName,
-               description: src.description || null,
+      .insert({user_id:user.id, name: await encDeckRnd(newName),
+               description: src.description ? await encDeckRnd(src.description) : null,
                inks: src.inks || null, tags: src.tags || null})
       .select("id").single();
     if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
@@ -28220,7 +28326,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       deck_id: data.id, card_id: c.card_id, printing: c.printing, quantity: c.quantity,
     }));
     if(rows.length){
-      const {error: e2} = await sbClient.from("deck_cards").insert(rows);
+      const {error: e2} = await sbClient.from("deck_cards").insert(await encDeckCardRows(rows));
       if(e2){
         console.error("duplicate-cards failed:", e2);
         flashToast(`Duplicated deck (header only) — cards copy failed: ${e2.message}`);
@@ -28238,8 +28344,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!src || !user) return;
     const newName = buildDuplicateName(src);
     const {data, error} = await sbClient.from("decks")
-      .insert({user_id:user.id, name: newName,
-               description: src.description || null,
+      .insert({user_id:user.id, name: await encDeckRnd(newName),
+               description: src.description ? await encDeckRnd(src.description) : null,
                inks: src.inks || null, tags: src.tags || null})
       .select("id").single();
     if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
@@ -28247,7 +28353,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       deck_id: data.id, card_id: c.card_id, printing: c.printing, quantity: c.quantity,
     }));
     if(rows.length){
-      const {error: e2} = await sbClient.from("deck_cards").insert(rows);
+      const {error: e2} = await sbClient.from("deck_cards").insert(await encDeckCardRows(rows));
       if(e2){
         console.error("duplicate-cards (external) failed:", e2);
         flashToast(`Saved deck header — couldn't copy cards: ${e2.message}`);
@@ -28300,11 +28406,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     try {
       if(newQty <= 0){
         const {error} = await sbClient.from("deck_cards").delete()
-          .eq("deck_id", deckId).eq("card_id", cardId).eq("printing", printing);
+          .eq("deck_id", deckId).eq("card_id", await encDeckDet(cardId)).eq("printing", printing);
         if(error) throw error;
       } else {
         const {error} = await sbClient.from("deck_cards")
-          .upsert({deck_id:deckId, card_id:cardId, printing, quantity:newQty},
+          .upsert(await encDeckCardRow({deck_id:deckId, card_id:cardId, printing, quantity:newQty}),
                   {onConflict:"deck_id,card_id,printing"});
         if(error) throw error;
       }
@@ -28356,10 +28462,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     setPending(p => p + 1);
     try {
       const {error: delErr} = await sbClient.from("deck_cards").delete()
-        .eq("deck_id", deckId).eq("card_id", oldCardId);
+        .eq("deck_id", deckId).eq("card_id", await encDeckDet(oldCardId));
       if(delErr) throw delErr;
       const {error: upErr} = await sbClient.from("deck_cards")
-        .upsert({deck_id: deckId, card_id: newCardId, printing: newPrinting, quantity: mergedQty},
+        .upsert(await encDeckCardRow({deck_id: deckId, card_id: newCardId, printing: newPrinting, quantity: mergedQty}),
                 {onConflict: "deck_id,card_id,printing"});
       if(upErr) throw upErr;
     } catch(e){
@@ -28439,16 +28545,16 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     try {
       for(const c of toDelete){
         const {error} = await sbClient.from("deck_cards").delete()
-          .eq("deck_id", deckId).eq("card_id", c.card_id).eq("printing", c.printing);
+          .eq("deck_id", deckId).eq("card_id", await encDeckDet(c.card_id)).eq("printing", c.printing);
         if(error) throw error;
       }
       if(toUpsert.length){
         const {error} = await sbClient.from("deck_cards")
-          .upsert(toUpsert, {onConflict: "deck_id,card_id,printing"});
+          .upsert(await encDeckCardRows(toUpsert), {onConflict: "deck_id,card_id,printing"});
         if(error) throw error;
       }
       if(Object.keys(metaPatch).length){
-        const {error} = await sbClient.from("decks").update(metaPatch).eq("id", deckId);
+        const {error} = await sbClient.from("decks").update(await encDeckMetaPatch(metaPatch)).eq("id", deckId);
         if(error) throw error;
       }
     } catch(e){
@@ -28470,11 +28576,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...patch} : d));
     setPending(p => p + 1);
     try {
-      const {data, error} = await sbClient.from("decks").update(patch).eq("id", deckId)
+      const {data, error} = await sbClient.from("decks").update(await encDeckMetaPatch(patch)).eq("id", deckId)
         .select("id,name,description,youtube_url,inks,tags,visibility,share_token,created_at,updated_at,user_id")
         .maybeSingle();
       if(error) throw error;
       if(data){
+        await decDeckMeta(data); // returned name/description are ciphertext — decode before merging into state
         setDecks(ds => (ds||[]).map(d => d.id === deckId ? {...d, ...data} : d));
       }
     } catch(e){
@@ -28491,7 +28598,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(next == null) return;
     const name = next.trim();
     if(!name || name === currentName) return;
-    const {error} = await sbClient.from("decks").update({name}).eq("id", deckId);
+    const {error} = await sbClient.from("decks").update({name: await encDeckRnd(name)}).eq("id", deckId);
     if(error){ flashToast("Rename failed: " + error.message); return; }
     await refreshDecks();
   }, [refreshDecks]);
