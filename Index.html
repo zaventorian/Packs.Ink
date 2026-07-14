@@ -31641,11 +31641,14 @@ function App(){
   // Tracks the post-sign-in fetch so the Home panel can show a "loading"
   // state instead of the "empty collection" CTA during the round-trip.
   const [collectionLoading, setCollectionLoading] = useState(false);
-  // Allowlist gate for the new graded experience (graded_premium_viewers,
-  // migration 73). When true, every graded surface swaps from the legacy
-  // TCGPriceLookup data to the per-sale graded_sales scatter (Last Sold / Avg
-  // of Last 5). Mirrors the can_view_store_report pattern.
-  const [canViewGradedPremium, setCanViewGradedPremium] = useState(false);
+  // Graded data is PUBLIC as of 2026-07-14: every graded surface renders the new
+  // per-sale graded_sales scatter (Last Sold / Avg of Last 5) for everyone, and
+  // the legacy TCGPriceLookup data (graded_prices_*) is no longer shown. The old
+  // graded_premium_viewers allowlist + can_view_graded_premium() RPC are retired
+  // (left in the DB, no longer consulted). Access is still click-through-gated by
+  // the one-time graded ToS below. Init true so there's no first-paint flash of
+  // the legacy view before the resolver effect runs.
+  const [canViewGradedPremium, setCanViewGradedPremium] = useState(true);
   // Premium graded ToS acceptance (migration 79). The effective premium flag below
   // is `allowlisted && tosOk`, so the per-sale data stays locked until the user
   // accepts. `tosDismissed` lets them defer for the session (re-prompts next load).
@@ -31674,24 +31677,11 @@ function App(){
     return () => subscription.unsubscribe();
   },[]);
 
-  // Resolve the graded-premium allowlist flag on sign-in. Server-side
-  // SECURITY DEFINER RPC (auth.uid()-scoped) so the gate can't be spoofed
-  // client-side. Cleared on sign-out. On localhost only, a localStorage flag
-  // (packsink:gradedPreview=1) forces the new view on for design/QA without
-  // signing in — same localhost-gated preview pattern as the onboarding tours.
-  useEffect(()=>{
-    try {
-      if(location.hostname === "localhost" && localStorage.getItem("packsink:gradedPreview") === "1"){
-        setCanViewGradedPremium(true); return;
-      }
-    } catch {}
-    if(!user){ setCanViewGradedPremium(false); return; }
-    let cancelled = false;
-    sbClient.rpc("can_view_graded_premium")
-      .then(({data}) => { if(!cancelled) setCanViewGradedPremium(!!data); })
-      .catch(() => { if(!cancelled) setCanViewGradedPremium(false); });
-    return () => { cancelled = true; };
-  }, [user]);
+  // Graded data is public (see above): the new per-sale view is on for everyone,
+  // signed in or not. The legacy allowlist resolver (can_view_graded_premium RPC)
+  // is retired; we just pin the flag true. Kept as an effect (not just initial
+  // state) so it stays true across sign-in/sign-out transitions.
+  useEffect(()=>{ setCanViewGradedPremium(true); }, []);
 
   // Resolve graded ToS acceptance once the user is on the allowlist. localStorage is
   // the fast path (and the only path on the localhost preview, which isn't signed in);
