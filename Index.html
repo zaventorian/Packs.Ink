@@ -25,7 +25,28 @@
 </script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Packs.Ink</title>
+<title>Packs.Ink — Lorcana Card Prices, Collection & Decks</title>
+<!-- SEO + social share metadata. og:image is a static 1200×630 baked by
+     scripts/make_og_image.py — rebake + bump the ?v= if the logo changes.
+     Social scrapers don't run JS, so these static tags are what Discord /
+     X / iMessage render. document.title + canonical are updated per-view
+     at runtime (see VIEW_TITLES in the app). -->
+<meta name="description" content="Track Disney Lorcana card prices, your collection's value, and winning decks — daily market data, price history charts, graded values, EV tools and more. Free.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Packs.Ink">
+<meta property="og:title" content="Packs.Ink — Lorcana Card Prices, Collection & Decks">
+<meta property="og:description" content="Track Disney Lorcana card prices, your collection's value, and winning decks — daily market data, price charts, graded values and more. Free.">
+<meta property="og:url" content="https://packs.ink/">
+<meta property="og:image" content="https://packs.ink/og-image.png?v=1">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Packs.Ink — Lorcana Card Prices, Collection & Decks">
+<meta name="twitter:description" content="Track Disney Lorcana card prices, your collection's value, and winning decks — daily market data, price charts, graded values and more. Free.">
+<meta name="twitter:image" content="https://packs.ink/og-image.png?v=1">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","name":"Packs.Ink","url":"https://packs.ink/","description":"Disney Lorcana card prices, collection tracking, deck building and tournament results."}
+</script>
 <!-- PWA: installable on mobile + offline shell via service worker. -->
 <link rel="manifest" href="/manifest.json">
 <meta name="theme-color" content="#0f0d20">
@@ -106,7 +127,7 @@
   }
 </script>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=257">
+<link rel="stylesheet" href="styles.css?v=272">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -7167,25 +7188,27 @@ const fisherYates = (arr) => {
   }
   return a;
 };
-// First-run guided tour — a short click-through carousel for new visitors.
-// Master switch for the onboarding tours (welcome + per-section). HELD OFF for
-// production while the per-section tours are being reworked into interactive
-// coachmarks — they ship dormant (code present, nothing auto-fires, no buttons
-// shown). Preview the work-in-progress on localhost with:
-//   localStorage.setItem("packsink:toursPreview","1")  (then reload)
-const TOURS_ENABLED = (() => { try { return localStorage.getItem("packsink:toursPreview") === "1"; } catch { return false; } })();
-// Auto-opens once on the first visit (gated by packsink:tourSeen) and is
-// re-openable from the Help page. Steps are plain content, not element-
-// anchored coachmarks, so they survive any layout/responsive change.
+// Onboarding tours — LIVE in production as of the 2026-07-14 pre-launch
+// rework. Two layers:
+//   1. WelcomeTourModal — a short carousel that fires ONCE, right after a
+//      brand-new account finishes the display-name → avatar onboarding
+//      (never on anonymous first paint — the v1 ambushed visitors before
+//      they'd seen the site). Replayable from Help.
+//   2. COACH_TOURS — per-section coachmarks that spotlight real controls.
+//      Auto-fire once per section (max one per browser session), plus the
+//      🧭 button (until seen) and the Help page list.
+const TOURS_ENABLED = true;
+// Welcome carousel content. Steps are plain content, not element-anchored,
+// so they survive any layout/responsive change. `go`/`cta` render a jump-in
+// button that navigates to that view and closes the carousel.
 const TOUR_STEPS = [
-  {emoji:"👋", title:"Welcome to Packs.Ink", body:"A market tracker and collection manager for Disney Lorcana. Here's a 30-second tour of what's inside."},
-  {emoji:"🔍", title:"Find any card", body:"Search the whole catalog from the bar up top — or open the Screener for a sortable price database with movers, gainers, buyouts and deep filters."},
-  {emoji:"📈", title:"Track the market", body:"Price Graphing charts a card's history and compares several at once. Analytics adds EV, Trade Compare, Playset Cost and more."},
-  {emoji:"🗂️", title:"Your collection", body:"Sign in with Google to track what you own — raw, sealed and graded — and watch your portfolio's value over time."},
-  {emoji:"🃏", title:"Decks & tournaments", body:"Build decks, browse the community Discover feed, and dig into tournament results. No sign-in needed to look around."},
-  {emoji:"⌨️", title:"Two quick shortcuts", body:"Press / to jump to search, and ? for the full shortcut list. You can reopen this tour anytime from Help."},
+  {emoji:"🎉", title:"Welcome to Packs.Ink", body:"You're all set up. Here's the 30-second lay of the land — every price on the site refreshes daily from TCGplayer market data."},
+  {emoji:"🗂️", title:"Track your collection", body:"Add your cards, sealed product and graded slabs. Set completion tracks itself, and your portfolio's value charts over time on the home page.", go:"collection", cta:"Open Collection"},
+  {emoji:"📈", title:"Watch the market", body:"The Screener is a sortable price database — movers, gainers, buyouts, deep filters. Price Graphing charts any card's history, up to 18 overlaid at once.", go:"screener", cta:"Try the Screener"},
+  {emoji:"🃏", title:"Build & discover decks", body:"Build with live prices, browse community decks, and dig into real tournament results.", go:"decks", cta:"Browse Decks"},
+  {emoji:"🧭", title:"Tours & shortcuts", body:"Each section has a quick spotlight tour — look for the 🧭 button, or replay anything from Help (the ? bubble up top). Press / to search from anywhere."},
 ];
-const WelcomeTourModal = ({onClose}) => {
+const WelcomeTourModal = ({onClose, onGo}) => {
   useEscToClose(onClose);
   const [i, setI] = useState(0);
   const step = TOUR_STEPS[i];
@@ -7196,6 +7219,8 @@ const WelcomeTourModal = ({onClose}) => {
       <div class="welcome-tour-emoji" aria-hidden="true">${step.emoji}</div>
       <h3 class="welcome-tour-title title-font">${step.title}</h3>
       <p class="welcome-tour-body">${step.body}</p>
+      ${step.go && onGo && html`<button class="welcome-tour-cta"
+        onClick=${()=>onGo(step.go)}>${step.cta} →</button>`}
       <div class="welcome-tour-dots">
         ${TOUR_STEPS.map((_, n) => html`<button key=${n}
           class=${"welcome-tour-dot" + (n===i ? " active" : "")}
@@ -7213,44 +7238,61 @@ const WelcomeTourModal = ({onClose}) => {
     </div>
   </div>`;
 };
-// Per-section INTERACTIVE tours (H5). Keyed by the App `view` name. Each step
-// anchors to a real on-page control via `sel` (a CSS selector, optionally a
-// comma list — querySelector takes the first match); the Coachmark spotlights
-// that element and points a tooltip at it. Steps with no/missing target fall
-// back to a centered card. Held behind TOURS_ENABLED while in review.
+// Per-section INTERACTIVE tours. Keyed by the App `view` name. Each step
+// anchors to a real on-page control via `sel` (a CSS selector — verified
+// against the actual rendered classes 2026-07-14; the v1 tours died on
+// selectors that matched nothing). Steps whose selector resolves to nothing
+// at open time are DROPPED (see Coachmark) rather than degrading into a
+// context-free centered card. `requiresUser: true` tours don't auto-fire or
+// offer buttons while signed out (the page is one big sign-in CTA then).
 const COACH_TOURS = {
+  home: { title: "Home", steps: [
+    {sel:".home-quick-search input", title:"Search everything", body:"Find any card by name — or jump to a set, rarity or ink. Press / to focus search from anywhere on the site."},
+    {sel:".home-toolbar", title:"Market movers", body:"The banners below track the day's biggest price moves. Pick a time window, flip gainers/droppers, or pause the scroll."},
+    {sel:".home-feed", title:"Community & results", body:"Tournament results land here, plus new decks from creators you follow once you're signed in."},
+  ]},
   cards: { title: "Cards", steps: [
-    {sel:".smart-search-wrap input, .cards-search input, input[type='search']", title:"Search & smart filters", body:"Type a name — or natural filters like \"amber rare\", \"lore 3\", or \"bodyguard\". Apostrophes and accents are optional."},
-    {sel:".cards-quickfilter-group, .cards-toolbar, .quickfilter-row", title:"Quick filters", body:"These chips filter by ink, cost and rarity at a glance. The Filters drawer adds type, keywords, classifications, stats, legality and artist."},
-    {sel:".card-tile", title:"Open a card", body:"Click any card for prices, history and a graded breakdown. The ⤢ button on a tile enlarges the art; +/- (signed in) tracks your copies."},
+    {sel:".smart-search-wrap input", title:"Smart search", body:"Type a name — or natural filters like \"amber rare\", \"cost 3\", \"bodyguard\". Stack as many as you like; apostrophes and accents optional."},
+    {sel:".cards-quickfilter-group", title:"Quick filters", body:"One-tap chips for ink, cost, rarity and legality. The ☰ Filters drawer adds type, keywords, classifications, stats and artist."},
+    {sel:".card-tile", title:"Open any card", body:"Click a card for prices, history and graded values. Signed in, the +/− on each tile tracks how many you own."},
   ]},
   screener: { title: "Screener", steps: [
-    {sel:".price-db-modebtn, .price-db-modes, .price-db-mode", title:"Raw · Graded · Sealed", body:"Switch what the database shows with this toggle."},
-    {sel:".price-db-presets, .price-db-preset", title:"Presets", body:"Jump to Movers, Gainers, Buyouts, Crashing and more in one tap."},
-    {sel:".price-db-winrow, .price-db-win, .price-db-presets", title:"Time window", body:"Pick the window (1D–1Y) that drives the Δ% columns. Click any column header to sort the table."},
-    {sel:".price-db-search input, input[type='search']", title:"Filter & search", body:"Search and the full Cards filter set live here — plus BUY / CRSH / DISC / PREM signal chips."},
+    {sel:".price-db-modebar", title:"Raw · Graded · Sealed", body:"One database, three markets — flip between raw singles, graded slabs and sealed product."},
+    {sel:".price-db-presets", title:"Presets", body:"Movers, Gainers, Buyouts, Crashing, Discount and more — each chip is a ready-made screen."},
+    {sel:"input.price-db-search", title:"Search & filters", body:"The full Cards smart-search works here too — plus BUY / CRSH / DISC / PREM signal chips, and owned/missing filters when signed in."},
+    {sel:".price-db-tablewrap", title:"Sort like a terminal", body:"Click any column header to sort. Click a row for full card detail — or tick checkboxes to graph several together."},
   ]},
   history: { title: "Price Graphing", steps: [
-    {sel:".history-toolbar .seg-toggle, .seg-toggle", title:"Pick what to chart", body:"Chart a single card, a sealed product, or a whole set's value over time."},
-    {sel:".history-picker-searchrow input, input[type='search']", title:"Build a Compare", body:"Search and add items — add several to overlay them on one chart. \"+ variants\" pulls in a card's other printings."},
+    {sel:".history-toolbar .seg-toggle", title:"Four chart modes", body:"Chart a card, a sealed product, a graded slab, or a whole set's value over time."},
+    {sel:".history-picker-searchrow input", title:"Compare up to 18", body:"Search and add items to overlay them on one chart. \"+ variants\" pulls in a card's other printings and rarities."},
   ]},
   market: { title: "Analytics", steps: [
-    {sel:".market-subtabs, .market-subtab, .seg-toggle", title:"Pick a tool", body:"Expected Value, Trade Compare, Playset Cost, Card Averages, a rarity Heatmap, Sealed pricing and Pack/Box simulators — each is a sub-tab, saved in the URL."},
+    {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Sealed, Card Averages, Playset Cost, Heatmap and pack/box simulators — each tab keeps its own URL, so any tool is shareable and bookmarkable."},
   ]},
-  collection: { title: "Collection", steps: [
-    {sel:".collection-section-tab, .collection-sections button, .seg-toggle", title:"Raw · Sealed · Graded", body:"Track each kind of collectible in its own section."},
-    {sel:".empty-state, .signin-btn, .signin-cta, [class*='signin']", title:"Sign in to track", body:"Sign in with Google to save what you own and chart your portfolio's value over time. Share any section read-only, or keep it private."},
+  collection: { title: "Collection", requiresUser: true, steps: [
+    {sel:".collection-section-tabs", title:"Cards · Sealed · Graded", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math."},
+    {sel:".collection-stats", title:"Your portfolio", body:"Owned value, set completion and extras at a glance — the home page charts it over time."},
+    {sel:".collection-share-btn", title:"Share it (or don't)", body:"Each section can be private, unlisted or public — share a read-only link without exposing what you paid."},
   ]},
   decks: { title: "Decks", steps: [
-    {sel:".deck-section-tab, .deck-sections button", title:"Sections", body:"Discover public decks, browse Tournaments, or sign in for Your Decks / Favorites / Following."},
-    {sel:".deck-list, .deck-card", title:"Tournaments", body:"Browse recent tournament results. Open any deck for its curve, legality, prices and a \"shop missing cards\" cart."},
+    {sel:".deck-section-tabs", title:"Five shelves", body:"Discover public decks and tournament results without signing in. Your Decks, Favorites and Following light up once you are."},
+    {sel:".deck-filter-row", title:"Filter by ink", body:"Tap ink shields to narrow any list. Open a deck for its curve, legality, live prices — and a shop-missing-cards link."},
   ]},
 };
 // Interactive coachmark: spotlights the step's target element and points a
 // tooltip at it. Re-measures on scroll/resize (and briefly after the smooth
 // scroll-into-view settles). Falls back to a centered card if the target
 // isn't on the page. ← / → arrow keys and Esc are wired.
-const Coachmark = ({title, steps, onClose}) => {
+const Coachmark = ({title, steps: allSteps, onClose, onAbort}) => {
+  // Resolve which steps actually have a live target BEFORE showing anything —
+  // a step whose selector matches nothing is dropped instead of degrading into
+  // a context-free centered card (the v1 tours' main failure mode). If nothing
+  // resolves (e.g. the view hasn't finished rendering), abort WITHOUT marking
+  // the tour seen so it can fire again later.
+  const [steps] = useState(() =>
+    (allSteps || []).filter(s => { try { return !s.sel || !!document.querySelector(s.sel); } catch { return false; } }));
+  const empty = steps.length === 0;
+  useEffect(() => { if(empty) (onAbort || onClose)(); }, [empty]);
   const [i, setI] = useState(0);
   const [box, setBox] = useState(null);
   const step = steps[i] || {};
@@ -7280,6 +7322,7 @@ const Coachmark = ({title, steps, onClose}) => {
     window.addEventListener("keydown", onKey);
     return () => { stopped = true; clearInterval(iv); clearTimeout(stopT); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true); window.removeEventListener("keydown", onKey); };
   }, [i, step.sel]);
+  if(empty) return null;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
   const vh = typeof window !== "undefined" ? window.innerHeight : 768;
   const TIP_W = Math.min(320, vw - 24);
@@ -19529,11 +19572,15 @@ function EloView({eloPinned, setEloPinned, user}){
   </div>`;
 }
 
-function FAQView({onStartTour}){
+function FAQView({onStartTour, onStartSectionTour, user}){
   return html`<div class="faq-section">
-    ${onStartTour && html`<button class="faq-tour-btn" onClick=${onStartTour}>
-      👋 Take the quick tour
-    </button>`}
+    ${onStartTour && html`<div class="faq-tours">
+      <button class="faq-tour-btn" onClick=${onStartTour}>👋 Quick welcome tour</button>
+      ${onStartSectionTour && Object.entries(COACH_TOURS)
+        .filter(([, t]) => !(t.requiresUser && !user))
+        .map(([v, t]) => html`<button key=${v} class="faq-tour-btn faq-tour-btn--section"
+          onClick=${()=>onStartSectionTour(v)}>🧭 ${t.title}</button>`)}
+    </div>`}
     <h2>What is Packs.Ink?</h2>
     <p>Packs.Ink is a market and collection tracker for the Disney Lorcana TCG. Use it to <strong>watch prices and price movement</strong>, <strong>track what you own</strong> (raw, sealed, and graded), <strong>build decks</strong>, and <strong>share lists and tournament results</strong> with the community. Prices update daily.</p>
 
@@ -26127,9 +26174,13 @@ const MAINLINE_RELEASE_ORDER = [
 ];
 // Sets that appear in release-order for DISPLAY (newest-first sorting + Infinity
 // legality) but have NOT physically released yet, so they're excluded from Core
-// rotation math — the format must not rotate weeks before the set drops. Remove
-// the entry on release day (2026-07-17 for Set 13) so Core rotates then.
-const PRERELEASE_SETS = new Set(["Attack of the Vine!"]);
+// rotation math — the format must not rotate weeks before the set drops. Entries
+// are date-gated [set name, retail release date]: a set drops out of pre-release
+// automatically at local midnight on release day, so Core rotates on schedule
+// without a code change.
+const PRERELEASE_SETS = new Set([
+  ["Attack of the Vine!", "2026-07-17"],
+].filter(([, rel]) => Date.now() < new Date(rel + "T00:00:00").getTime()).map(([name]) => name));
 
 // Compute the Core-Constructed legal window from the latest released set
 // number. Rotation drops the oldest 4-set group, keeping the two most
@@ -30686,6 +30737,20 @@ const VIEW_PATHS = {
   faq:        "/how-it-works",
   elo:        "/elo",   // hidden — Chicagoland Lorcana Elo leaderboard (no nav entry)
 };
+// Per-view document.title (+ canonical) — set by the view-sync effect so
+// section pages index distinctly and shared/bookmarked tabs read as more
+// than a bare "Packs.Ink". Keep in sync with VIEW_PATHS.
+const VIEW_TITLES = {
+  home:       "Packs.Ink — Lorcana Card Prices, Collection & Decks",
+  screener:   "Lorcana Card Screener — Packs.Ink",
+  history:    "Lorcana Price Graphing — Packs.Ink",
+  market:     "Lorcana Analytics & Tools — Packs.Ink",
+  cards:      "Browse Lorcana Cards — Packs.Ink",
+  collection: "My Lorcana Collection — Packs.Ink",
+  decks:      "Lorcana Decks & Tournaments — Packs.Ink",
+  faq:        "How Packs.Ink Works",
+  elo:        "Chicagoland Lorcana Elo — Packs.Ink",
+};
 const PATH_TO_VIEW = (() => {
   const m = {};
   for(const [v, p] of Object.entries(VIEW_PATHS)){
@@ -31142,6 +31207,16 @@ function App(){
       window.history.pushState({view}, "", url.toString());
     } catch {/* SSR / blocked storage / no-op */}
   }, [view]);
+  // Per-view <title> + canonical. The static head tags carry the home values
+  // for crawlers/scrapers that don't run JS; this keeps the live tab honest.
+  useEffect(() => {
+    try {
+      document.title = VIEW_TITLES[view] || VIEW_TITLES.home;
+      let link = document.querySelector('link[rel="canonical"]');
+      if(!link){ link = document.createElement("link"); link.rel = "canonical"; document.head.appendChild(link); }
+      link.href = "https://packs.ink" + (VIEW_PATHS[view] || "/");
+    } catch {/* no-op */}
+  }, [view]);
   // Mirror the Analytics sub-tab into ?a=<sub> while viewing Analytics.
   // Defined AFTER the view-sync effect so on entering Analytics it re-adds ?a
   // after view-sync strips it. First sync on entry uses replaceState (no
@@ -31261,12 +31336,20 @@ function App(){
   // field so they never hijack normal input. Esc-to-close is handled by each
   // modal/drawer's own listener.
   const [showShortcuts, setShowShortcuts] = useState(false);
-  // First-run guided tour (see WelcomeTourModal). Auto-open is wired below,
-  // after the visit counter is available.
+  // Welcome carousel (see WelcomeTourModal). Fires once, at the end of a NEW
+  // account's onboarding chain (display name → avatar → welcome) — wired in
+  // saveDisplayName + the AvatarPicker close handlers. Replayable from Help.
   const [tourOpen, setTourOpen] = useState(false);
   const closeTour = useCallback(() => {
     setTourOpen(false);
     try { localStorage.setItem("packsink:tourSeen", "1"); } catch {}
+  }, []);
+  // True while the avatar picker owes us a welcome carousel on close.
+  const welcomeAfterOnboarding = useRef(false);
+  const maybeOpenWelcome = useCallback(() => {
+    if(!TOURS_ENABLED) return;
+    try { if(localStorage.getItem("packsink:tourSeen") === "1") return; } catch {}
+    setTimeout(() => setTourOpen(true), 350);
   }, []);
   // Per-section guided tours (G5). activeTour holds the view-key of the open
   // tour (or null). Auto-opens once per section for users who completed the
@@ -31351,32 +31434,10 @@ function App(){
   const dismissInstallForever = () => {
     try { localStorage.setItem("packsink:installDismissed", "1"); } catch {}
   };
-  // Auto-open the welcome tour ONCE for brand-new visitors. Gated to the very
-  // first visit so it never collides with the install nudge (visits 2–3), and
-  // to packsink:tourSeen so it shows at most once. Re-openable from Help.
-  useEffect(() => {
-    let seen = true;
-    try { seen = localStorage.getItem("packsink:tourSeen") === "1"; } catch {}
-    if(!TOURS_ENABLED || seen || autoInstallVisits !== 1) return;
-    const t = setTimeout(() => setTourOpen(true), 700);
-    return () => clearTimeout(t);
-  }, [autoInstallVisits]);
-  // Auto-open a section's guided tour the first time a welcome-tour-completed
-  // user lands on it (one-time per section). The floating Tour button re-opens
-  // it anytime. Gating on the welcome flag means existing users (who never saw
-  // the welcome auto-open) aren't ambushed — they discover section tours via
-  // the button instead.
-  useEffect(() => {
-    if(!TOURS_ENABLED || !COACH_TOURS[view]) return;
-    let welcomeSeen = false, secSeen = true;
-    try {
-      welcomeSeen = localStorage.getItem("packsink:tourSeen") === "1";
-      secSeen = localStorage.getItem("packsink:sectionTourSeen:" + view) === "1";
-    } catch {}
-    if(!welcomeSeen || secSeen) return;
-    const t = setTimeout(() => setActiveTour(view), 650);
-    return () => clearTimeout(t);
-  }, [view]);
+  // NOTE (2026-07-14 tours rework): the welcome carousel no longer auto-opens
+  // on anonymous first paint — it fires at the end of a new account's
+  // onboarding (see saveDisplayName / AvatarPicker wiring). The per-section
+  // coachmark auto-fire effect lives further down, after `user` is declared.
   // Close settings popover on outside click / Escape.
   const settingsRef = useRef(null);
   useEffect(() => {
@@ -31781,11 +31842,42 @@ function App(){
     if(wasFirstTime && !avatarCardId && !localStorage.getItem("packsink:avatarPromptShown")){
       try { localStorage.setItem("packsink:avatarPromptShown", "1"); } catch(_) {}
       // Defer one tick so the name-prompt unmount animation doesn't fight
-      // the avatar-picker mount.
+      // the avatar-picker mount. The welcome carousel follows when the
+      // picker closes (welcomeAfterOnboarding is checked in its handlers).
+      welcomeAfterOnboarding.current = true;
       setTimeout(() => setAvatarPickerOpen(true), 200);
+    } else if(wasFirstTime){
+      // No avatar step (already has one / previously skipped the picker) —
+      // go straight to the welcome carousel.
+      maybeOpenWelcome();
     }
     return {ok:true};
-  }, [user, showNamePrompt, avatarCardId]);
+  }, [user, showNamePrompt, avatarCardId, maybeOpenWelcome]);
+  // Auto-open a section's coachmark tour the FIRST time someone lands on that
+  // section — once per section ever (packsink:sectionTourSeen:<view>), and at
+  // most ONE auto-fired tour per browser session so tab-hopping doesn't
+  // chain-interrupt. Home is exempt (the welcome carousel owns first contact;
+  // Home's tour stays available via the 🧭 button and Help). requiresUser
+  // tours (Collection) wait for sign-in — signed out, that page is one big
+  // CTA. The DOM check keeps it from firing over the name prompt / avatar
+  // picker / welcome carousel / an already-open tour.
+  useEffect(() => {
+    const tour = COACH_TOURS[view];
+    if(!TOURS_ENABLED || !tour || view === "home") return;
+    if(tour.requiresUser && !user) return;
+    let secSeen = true, sessionUsed = true;
+    try {
+      secSeen = localStorage.getItem("packsink:sectionTourSeen:" + view) === "1";
+      sessionUsed = sessionStorage.getItem("packsink:autoTourFired") === "1";
+    } catch {}
+    if(secSeen || sessionUsed) return;
+    const t = setTimeout(() => {
+      if(document.querySelector(".name-prompt-backdrop, .avatar-picker-backdrop, .welcome-tour, .coach-root")) return;
+      try { sessionStorage.setItem("packsink:autoTourFired", "1"); } catch {}
+      setActiveTour(view);
+    }, 900);
+    return () => clearTimeout(t);
+  }, [view, user]);
 
   // Tell Sentry who the current user is so errors get attributed in the
   // dashboard. The loader script stubs out a queue immediately, so calling
@@ -32503,6 +32595,13 @@ function App(){
   // while data is in flight; cache hits make this instantaneous after the
   // first visit.
 
+  // Cold-boot hard failure: the catalog never loaded AND the fetch errored —
+  // a first-time visitor would otherwise stare at an empty shell with only a
+  // tiny red note in the nav. Swap the view area for a branded error state.
+  // Returning visitors with a cached catalog (raw.length > 0) never hit this;
+  // background-refresh failures keep the inline nav retry instead.
+  const bootFailed = !!err && (!raw || raw.length === 0);
+
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
@@ -32516,7 +32615,7 @@ function App(){
       <div class="tabs tabs-grid">
         <div class="tabs-row">${TABS_TOP.map(renderTab)}</div>
         <div class="tabs-row">${TABS_BOTTOM.map(renderTab)}</div>
-        ${err&&html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8,alignSelf:"center"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
+        ${err && !bootFailed && html`<span style=${{fontSize:11,color:"var(--red)",marginLeft:8,alignSelf:"center"}}>${err} <button onClick=${()=>loadFromSupabase({force:true})} style=${{fontSize:11,padding:"2px 8px",marginLeft:6}}>retry</button></span>`}
       </div>
       <div class="top-nav-right">
         <div class="top-nav-right-row top-nav-right-row--primary"
@@ -32672,17 +32771,23 @@ function App(){
       ${loaded ? "Refreshing data\u2026" : (loadProgress.current || "Loading\u2026")}
     </div>`}
     ${avatarPickerOpen && html`<${AvatarPicker} raw=${raw}
-      onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false); }}
-      onClose=${()=>setAvatarPickerOpen(false)}/>`}
+      onPick=${cid=>{ setAvatarCardId(cid); setAvatarPickerOpen(false);
+        if(welcomeAfterOnboarding.current){ welcomeAfterOnboarding.current = false; maybeOpenWelcome(); } }}
+      onClose=${()=>{ setAvatarPickerOpen(false);
+        if(welcomeAfterOnboarding.current){ welcomeAfterOnboarding.current = false; maybeOpenWelcome(); } }}/>`}
     ${showNamePrompt && user && html`<${NamePromptModal} onSave=${saveDisplayName}/>`}
     ${canViewGradedPremium && !gradedTosOk && !gradedTosDismissed && html`<${GradedTosModal}
       onAccept=${acceptGradedTos} onDismiss=${()=>setGradedTosDismissed(true)}/>`}
     ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
-    ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}/>`}
+    ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}
+      onGo=${(v)=>{ closeTour(); onTabClick(v); }}/>`}
     ${activeTour && COACH_TOURS[activeTour] && html`<${Coachmark}
       title=${COACH_TOURS[activeTour].title} steps=${COACH_TOURS[activeTour].steps}
-      onClose=${closeSectionTour}/>`}
-    ${TOURS_ENABLED && COACH_TOURS[view] && !activeTour && !tourOpen && html`<button class="section-tour-btn"
+      onClose=${closeSectionTour} onAbort=${()=>setActiveTour(null)}/>`}
+    ${TOURS_ENABLED && COACH_TOURS[view] && !activeTour && !tourOpen
+      && !(COACH_TOURS[view].requiresUser && !user)
+      && (() => { try { return localStorage.getItem("packsink:sectionTourSeen:"+view) !== "1"; } catch { return true; } })()
+      && html`<button class="section-tour-btn"
       onClick=${()=>setActiveTour(view)}
       title=${"Take a guided tour of the "+COACH_TOURS[view].title+" page"}>🧭 Tour</button>`}
     ${indyArtistPick && html`<${ArtistAlleyModal}
@@ -32693,7 +32798,16 @@ function App(){
         openCardsWithSearch && openCardsWithSearch("artist: " + name);
         setIndyArtistPick(null);
       }}/>`}
-    ${view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
+    ${bootFailed && html`<div class="boot-error">
+      <img src="Logos/packs-ink-logo.png?v=5" alt="" class="boot-error-logo"/>
+      <h2 class="title-font">Can't reach the card database</h2>
+      <p class="muted">Packs.Ink couldn't load its price data — your connection may be
+        offline, or our data service is having a brief hiccup. Nothing is lost;
+        it usually clears in a moment.</p>
+      <button class="boot-error-retry" onClick=${()=>loadFromSupabase({force:true})}>Try again</button>
+      <div class="boot-error-detail muted">${err}</div>
+    </div>`}
+    ${!bootFailed&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
       updateQty=${updateQty} onSignIn=${signIn}
@@ -32705,13 +32819,13 @@ function App(){
       openScreenerWithFilter=${openScreenerWithFilter}
       sections=${homeSections}
       onEventArtistClick=${setIndyArtistPick}/>`}
-    ${view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
+    ${!bootFailed&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById}
       incomingSearch=${incomingCardsSearch}
       incomingOpenCardId=${incomingCardsOpenId}
       onConsumedIncomingCardsSearch=${() => { setIncomingCardsSearch(null); setIncomingCardsOpenId(null); }}/>`}
-    ${view==="collection"&&html`<${CollectionView} raw=${raw}
+    ${!bootFailed&&view==="collection"&&html`<${CollectionView} raw=${raw}
       onJumpToScreenerGraded=${openGradedMoversInScreener}
       user=${viewedCollectionId ? (viewedCollectionData?.profile || null) : user}
       collection=${viewedCollectionId ? (viewedCollectionData?.rawMap || {}) : collection}
@@ -32740,7 +32854,7 @@ function App(){
         error: viewedCollectionError,
         onClose: closeViewedCollection,
       } : null}/>`}
-    ${view==="decks"&&html`<${DecksView} raw=${raw} user=${user}
+    ${!bootFailed&&view==="decks"&&html`<${DecksView} raw=${raw} user=${user}
       collection=${collection} updateQty=${updateQty} tabClickNonce=${tabClickNonce}
       incomingDeckId=${incomingDeckId}
       onConsumedIncomingDeckId=${() => setIncomingDeckId(null)}
@@ -32756,12 +32870,12 @@ function App(){
       incomingDeckSection=${incomingDeckSection}
       onConsumedIncomingDeckSection=${() => setIncomingDeckSection(null)}
       onSignIn=${signIn} theme=${theme}/>`}
-    ${view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
+    ${!bootFailed&&view==="history"&&html`<${HistoryView} raw=${raw} sets=${sets} theme=${theme}
       sealedPrices=${sealedPrices} setsMeta=${setsMeta}
       historyTarget=${historyTarget}
       incomingCompareCards=${incomingCompareCards}
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
-    ${view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
+    ${!bootFailed&&view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}
       excludeEnchanted=${excludeEnchanted} setExcludeEnchanted=${setExcludeEnchanted}
       excludeIconic=${excludeIconic} setExcludeIconic=${setExcludeIconic}
@@ -32771,15 +32885,17 @@ function App(){
       sub=${marketSub} setSub=${setMarketSub}
       eloPinned=${eloPinned} setEloPinned=${setEloPinned}
       openSetHistory=${openSetHistory}/>`}
-    ${view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
+    ${!bootFailed&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       onCompareCards=${startCompareCards}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
       sealedMeta=${sealedMeta} updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
       incomingScreenerView=${incomingScreenerView}
       onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
-    ${view==="faq"&&html`<${FAQView} onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}/>`}
-    ${view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
+    ${view==="faq"&&html`<${FAQView} user=${user}
+      onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
+      onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
+    ${!bootFailed&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
   </div><//><//><//><//>`;
 }
