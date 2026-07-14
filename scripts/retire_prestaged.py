@@ -151,8 +151,18 @@ def main():
     except Exception as e:
         print(f"matview refresh failed: {e}")
     if failed:
-        print(f"Done with errors: {len(failed)} stand-in(s) kept after re-point failures.")
-        sys.exit(1)
+        # Keeping a stand-in is the safe, self-healing outcome — the card just
+        # shows a duplicate tile until a later run re-points it — NOT a pipeline
+        # failure. Surface it as a non-fatal GitHub warning so the daily
+        # metadata job stops emailing "Run failed" every night for a condition
+        # that retries on its own (matches the ETL's "only real failures notify"
+        # model). A persistent re-point 403 is usually a missing service_role
+        # grant on a referenced table (see migration 100).
+        msg = (f"{len(failed)} stand-in(s) kept after re-point failures "
+               f"(will retry next run): {', '.join(sorted(failed))}")
+        print(f"Done with warnings: {msg}")
+        print(f"::warning title=retire_prestaged re-point::{msg}")
+        return
     print("Done.")
 
 
