@@ -60,7 +60,11 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=5">
 <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=5">
 <script>
-  if ('serviceWorker' in navigator) {
+  // Native (Capacitor) builds skip the service worker entirely: assets are
+  // bundled on-device, so SW caching only adds a stale-copy failure mode.
+  // Capacitor injects window.Capacitor before any page script runs.
+  if ('serviceWorker' in navigator
+      && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('/sw.js').catch(() => {});
     });
@@ -110,12 +114,21 @@
         ],
         beforeSend: function (event) {
           try {
+            // Native (Capacitor) app serves from https://localhost — those errors
+            // ARE production and must NOT be dropped by the dev-host filter below.
+            // Tag them so app-vs-web issues are separable in Sentry.
+            var cap = window.Capacitor;
+            var isNativeApp = !!(cap && cap.isNativePlatform && cap.isNativePlatform());
+            if (isNativeApp) {
+              event.tags = event.tags || {};
+              event.tags.native_app = (cap.getPlatform && cap.getPlatform()) || "native";
+            }
             // Drop dev/preview noise — only real production packs.ink errors matter.
             // The local dev server (localhost:8766) and IDE webview were sending
             // mid-edit transients (e.g. an unbalanced htm template) tagged as prod.
             var host = (window.location && window.location.hostname) || "";
-            if (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0"
-                || host === "" || /\.local$/i.test(host)) return null;
+            if (!isNativeApp && (host === "localhost" || host === "127.0.0.1" || host === "0.0.0.0"
+                || host === "" || /\.local$/i.test(host))) return null;
             if (event.request && event.request.url) event.request.url = scrub(event.request.url);
             if (event.request && event.request.headers && event.request.headers.Referer)
               event.request.headers.Referer = scrub(event.request.headers.Referer);
@@ -469,9 +482,21 @@ const SECTION_SPLIT_SETS_GLOBAL = new Set([
 // without touching the dozens of <img> render sites individually.
 // Long-term we'll mirror the images into our own CDN (R2 / Bunny) and drop
 // the proxy entirely — see Q3 in the 2026-06-03 work-network discussion.
+//
+// Native app (Capacitor) builds serve the bundle from https://localhost, so
+// relative /img-proxy/* paths and window.location.origin-based share links
+// would resolve against the app's internal origin and 404 / copy dead links.
+// PROXY_ORIGIN absolutizes proxied art to prod — Netlify edge caches it 30
+// days immutable (the WebView HTTP cache honors that) and sends ACAO:* so
+// canvas exports stay untainted cross-origin. SITE_ORIGIN is for user-facing
+// copied/shared links, which must always say packs.ink. Both are inert on
+// the web ("" prefix / same origin).
+const IS_NATIVE_APP = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
+const SITE_ORIGIN  = IS_NATIVE_APP ? "https://packs.ink" : window.location.origin;
+const PROXY_ORIGIN = IS_NATIVE_APP ? "https://packs.ink" : "";
 const lorcastToProxy = (url) => {
   if(typeof url !== "string") return url;
-  if(url.startsWith("https://cards.lorcast.io/")) return "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
+  if(url.startsWith("https://cards.lorcast.io/")) return PROXY_ORIGIN + "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
   return url;
 };
 const AUX_VERSION_KEY   = "packsink:auxCacheVersion";
@@ -6628,8 +6653,8 @@ const deserializeFilter = (s) => {
 // products — without the proxy those render blank in every canvas export.
 const proxyImg = (url) => {
   if(!url || typeof url !== "string") return url;
-  if(url.startsWith("https://cards.lorcast.io/")) return "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
-  if(url.startsWith("https://tcgplayer-cdn.tcgplayer.com/")) return "/tcg-img-proxy/" + url.slice("https://tcgplayer-cdn.tcgplayer.com/".length);
+  if(url.startsWith("https://cards.lorcast.io/")) return PROXY_ORIGIN + "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
+  if(url.startsWith("https://tcgplayer-cdn.tcgplayer.com/")) return PROXY_ORIGIN + "/tcg-img-proxy/" + url.slice("https://tcgplayer-cdn.tcgplayer.com/".length);
   return url;
 };
 
@@ -13773,7 +13798,8 @@ function CollectionSharingPanel({profile, onChange, onRegenerate}){
   const anyUnlisted = sections.some(s => valueOf(s) === "unlisted");
   const anyPublic   = sections.some(s => valueOf(s) === "public");
   const allPrivate  = sections.every(s => valueOf(s) === "private");
-  const origin = window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, "/");
+  const origin = IS_NATIVE_APP ? (SITE_ORIGIN + "/")
+    : window.location.origin + window.location.pathname.replace(/\/[^\/]*$/, "/");
   const publicUrl   = `${origin}?collection=${profile.user_id}`;
   const unlistedUrl = `${origin}?collection=${profile.user_id}&token=${profile.collection_share_token||""}`;
   const change = async (section, level) => {
@@ -20569,7 +20595,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
   const shareTrade = () => {
     if(!sideA.length && !sideB.length){ flashToast("Add some cards first"); return; }
     const token = genTradeToken();
-    const url = window.location.origin + "/?t=" + token;
+    const url = SITE_ORIGIN + "/?t=" + token;
     try { navigator.clipboard && navigator.clipboard.writeText(url); } catch {}
     flashToast("Trade link copied — send it to the other party");
     saveTradeRecord(token, sideA, sideB, nameA, nameB).then(
@@ -25750,7 +25776,7 @@ const UpcomingSCsBox = () => {
   }) : visible;
   // Shareable link reproducing this exact view (NOT the pins — see above).
   const buildShareUrl = () => {
-    const u = new URL(window.location.origin + window.location.pathname);
+    const u = new URL(IS_NATIVE_APP ? (SITE_ORIGIN + "/") : (window.location.origin + window.location.pathname));
     if(zip) u.searchParams.set("sczip", zip);
     u.searchParams.set("scc", country);
     u.searchParams.set("scdist", String(radius));
@@ -28421,7 +28447,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!d) return null;
     if(d.visibility === "private") return null;
     try {
-      const url = new URL(window.location.href);
+      const url = new URL(IS_NATIVE_APP ? (SITE_ORIGIN + "/") : window.location.href);
       url.search = ""; url.hash = "";
       url.searchParams.set("deck", d.id);
       if(d.visibility !== "public" && d.share_token){
@@ -28548,7 +28574,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!r?.deck_id){ flashToast("Deck not available"); return; }
     let url;
     try {
-      const u = new URL(window.location.href);
+      const u = new URL(IS_NATIVE_APP ? (SITE_ORIGIN + "/") : window.location.href);
       u.search = ""; u.hash = "";
       u.searchParams.set("deck", r.deck_id);
       if(r.deck_share_token) u.searchParams.set("token", r.deck_share_token);
@@ -32957,6 +32983,14 @@ function App(){
   }, [user, collection]);
 
   const signIn = useCallback(()=>{
+    // Native app: Google refuses OAuth inside a WebView ("disallowed_useragent"),
+    // so redirecting here would dead-end on a Google error page. The real fix is
+    // the phase-2 native flow (system Custom Tab + deep link back + PKCE code
+    // exchange — see native/README.md). Until then, be honest instead of broken.
+    if(IS_NATIVE_APP){
+      flashToast("Sign-in inside the app is coming soon — browsing works now; use packs.ink in a browser for your collection.");
+      return;
+    }
     sbClient.auth.signInWithOAuth({
       provider:"google",
       options:{
