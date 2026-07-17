@@ -75,7 +75,10 @@ SITE_URL = "https://packs.ink/"
 # substring match), and the React mount node. If the shell loaded, all three
 # are present; a 200 error page / SPA fallback / blank deploy won't have them.
 SHELL_MARKERS = (
-    "<title>Packs.Ink</title>",
+    # Substring (not the full closing tag) so an SEO title suffix like
+    # "Packs.Ink — The Ultimate Disney Lorcana Tool" still matches, while
+    # per-view titles ("Artist Alley — …") won't false-match the home shell.
+    "<title>Packs.Ink",
     "styles.css",
     '<div id="root">',
 )

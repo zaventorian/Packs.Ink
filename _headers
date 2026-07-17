@@ -30,21 +30,29 @@
 #   style:   self + Google Fonts CSS;  font: self + gstatic
 #   img:     self + data:/blob: (LOGO_B64, canvas exports) + lorcast/tcgplayer/
 #            qrserver/ravensburger.cloud/ebay/google-photo CDNs
-#   connect: self + supabase (https+wss) + zippopotam + ravensburgerplay + sentry
-#            ingest + the cross-origin IMAGE CDNs. The image hosts appear here
-#            (not just in img-src) because the service worker intercepts every
-#            <img> request and re-fetches it via fetch(); a fetch() from the SW
-#            context is classified as connect-src, NOT img-src. The offline
-#            image downloader (Index.html startOfflineImagePack) fetches the
-#            same hosts from the page. Without these, enforcing the policy would
-#            break card-art caching + the offline downloader (report-only today).
+#   connect: self + data: + supabase (https+wss) + zippopotam + ravensburgerplay
+#            + sentry ingest/CDN + Google Fonts (googleapis+gstatic) + the cross-
+#            origin IMAGE CDNs. The image/font/sentry-cdn HOSTS appear here (not
+#            just in img-/font-/style-/script-src) because the service worker
+#            intercepts every cross-origin request and re-fetches it via fetch()
+#            (images per destination==="image"; fonts/CSS/other via the stale-
+#            while-revalidate branch, sw.js ~line 164) — a fetch() from the SW
+#            context is classified as connect-src, NOT its resource directive.
+#            The offline image downloader (Index.html startOfflineImagePack)
+#            fetches the same image hosts from the page. Without these, enforcing
+#            the policy would break card-art caching, web-font loading, the Sentry
+#            loader, and the offline downloader (report-only today).
+#   NOTE: the report-only 'eval:' violations (Sentry "JAVASCRIPT-R") come from
+#            browser-extension-injected scripts, NOT this app — no repo code uses
+#            eval/new Function. Do NOT add 'unsafe-eval' to accommodate them; the
+#            scanner/ONNX + exports only need 'wasm-unsafe-eval' (already set).
 #   frame:   youtube embeds;  worker: self + blob: (scanner + canvas workers)
 /*
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'none'
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.sentry-cdn.com https://browser.sentry-cdn.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; connect-src 'self' https://umwqowkiatjjltologrd.supabase.co wss://umwqowkiatjjltologrd.supabase.co https://api.zippopotam.us https://tcg.ravensburgerplay.com https://api.ravensburgerplay.com https://tcgcsv.com https://cdn.jsdelivr.net https://*.ingest.sentry.io https://*.sentry.io https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; frame-src https://www.youtube.com https://youtu.be; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; report-uri https://o4511390961303552.ingest.us.sentry.io/api/4511390972444672/security/?sentry_key=8eb7cada506131426389fd7506a0288e
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.sentry-cdn.com https://browser.sentry-cdn.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; connect-src 'self' data: https://umwqowkiatjjltologrd.supabase.co wss://umwqowkiatjjltologrd.supabase.co https://api.zippopotam.us https://tcg.ravensburgerplay.com https://api.ravensburgerplay.com https://tcgcsv.com https://cdn.jsdelivr.net https://js.sentry-cdn.com https://browser.sentry-cdn.com https://*.ingest.sentry.io https://*.sentry.io https://fonts.googleapis.com https://fonts.gstatic.com https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; frame-src https://www.youtube.com https://youtu.be; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; report-uri https://o4511390961303552.ingest.us.sentry.io/api/4511390972444672/security/?sentry_key=8eb7cada506131426389fd7506a0288e
   Permissions-Policy: geolocation=(), microphone=(), camera=(self)
   Strict-Transport-Security: max-age=31536000; includeSubDomains
 
