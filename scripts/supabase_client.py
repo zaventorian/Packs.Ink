@@ -245,9 +245,33 @@ class Supabase:
             end = start + page_size - 1
             headers["Range-Unit"] = "items"
             headers["Range"] = f"{start}-{end}"
-            r = requests.get(endpoint, headers=headers, params=params, timeout=60)
-            if r.status_code not in (200, 206):
-                r.raise_for_status()
+            # Retry on 5xx / 429 (transient) the same way upsert/update/delete do.
+            # A paginated read over a large table (e.g. prices_daily, ~3M rows) can
+            # intermittently hit Supabase's 57014 statement timeout mid-page; without
+            # a retry here a single blip fails the whole ETL job (e.g. the nightly
+            # smooth_low_prices read). GET is idempotent, so retrying is always safe.
+            last_err: Exception | None = None
+            r = None
+            for attempt in range(4):
+                try:
+                    r = requests.get(endpoint, headers=headers, params=params, timeout=60)
+                    if r.status_code in (200, 206):
+                        last_err = None
+                        break
+                    if 400 <= r.status_code < 500 and r.status_code != 429:
+                        raise RuntimeError(
+                            f"Select {table} failed ({r.status_code}): {r.text[:500]}"
+                        )
+                    last_err = RuntimeError(
+                        f"Select {table} returned {r.status_code}: {r.text[:200]}"
+                    )
+                except requests.RequestException as e:
+                    last_err = e
+                wait = 2 ** attempt
+                print(f"  retry {attempt + 1}/4 in {wait}s ({last_err})")
+                time.sleep(wait)
+            if last_err is not None:
+                raise last_err
             chunk = r.json()
             out.extend(chunk)
             if limit is not None and len(out) >= limit:
