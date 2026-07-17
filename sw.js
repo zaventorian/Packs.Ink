@@ -1,6 +1,13 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v273';
+const CACHE_VERSION = 'packsink-v274';
+// Card art + other images live in their own cache that is NOT wiped on
+// deploys. Before this existed, every CACHE_VERSION bump threw away every
+// runtime-cached card image, so devices never accumulated art for offline
+// use. Image bytes at a given URL are immutable (Lorcast/TCGplayer art URLs
+// never change content), so keeping them across app versions is safe. The
+// in-app "offline images" downloader writes into this same cache.
+const IMG_CACHE = 'packsink-img-v1';
 const CORE_ASSETS = [
   '/',
   '/Index.html',
@@ -10,7 +17,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=273',
+  '/styles.css?v=274',
   '/logo.js?v=253',
   // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
   // admin-gated to ~2 users — they runtime-cache on first use instead of
@@ -34,18 +41,12 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE_VERSION && k !== IMG_CACHE).map((k) => caches.delete(k)))
     )
   );
   self.clients.claim();
 });
 
-// Fetch strategy:
-//   - Navigation requests (HTML): network-first, fall back to cached Index.html offline.
-//   - Same-origin static assets: cache-first.
-//   - Supabase API + TCGCSV + Lorcast API + QR service: always network (no caching of dynamic data).
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
 // Cache a response if it's usable. Cross-origin <img> loads are no-cors →
 // the response is "opaque" (status 0, res.ok === false) but still perfectly
 // renderable and cacheable. The old `if (res.ok)` guard silently rejected
@@ -55,9 +56,43 @@ self.addEventListener('fetch', (event) => {
 // 404, which the next online revalidation overwrites.
 const cacheable = (res) => res && (res.ok || res.type === 'opaque');
 
+// Fetch strategy:
+//   - Navigation requests (HTML): network-first, fall back to cached Index.html offline.
+//   - Images (card art on lorcast.io / tcgplayer-cdn / etc + same-origin art):
+//     stale-while-revalidate into the deploy-surviving IMG_CACHE.
+//   - Same-origin static assets: cache-first.
+//   - Supabase API + TCGCSV + Lorcast API + QR service: always network (no caching of dynamic data).
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
+
+  // Images — card art (same-origin /img-proxy/ + /tcg-img-proxy/, Logos,
+  // ink/rarity icons, direct tcgplayer-cdn art, Supabase-storage prestaged
+  // art, lorcast.io). Stale-while-revalidate into IMG_CACHE so art
+  // accumulates on the device and survives deploys. This branch runs BEFORE
+  // the data-API skip on purpose: prestaged card art is served from Supabase
+  // storage, and PostgREST/data responses are never destination:"image" so
+  // they still fall through to the skip below.
+  if (req.destination === 'image' || url.hostname.endsWith('lorcast.io')) {
+    event.respondWith(
+      caches.open(IMG_CACHE).then((cache) =>
+        // Global match (not cache.match) so precached entries in the
+        // versioned cache (icons, wordmark) also satisfy image requests.
+        caches.match(req).then((cached) => {
+          const fetchPromise = fetch(req)
+            .then((res) => {
+              if (cacheable(res)) cache.put(req, res.clone());
+              return res;
+            })
+            .catch(() => cached);
+          return cached || fetchPromise;
+        })
+      )
+    );
+    return;
+  }
 
   // Skip data APIs entirely — they should always hit the network.
   if (
@@ -103,25 +138,6 @@ const cacheable = (res) => res && (res.ok || res.type === 'opaque');
         // ignoreSearch so a fresh Index.html asking for styles.css?v=156 can
         // still fall back to a cached ?v=155 when offline mid-version-bump.
         .catch(() => caches.match(req, { ignoreSearch: true }))
-    );
-    return;
-  }
-
-  // Lorcast card images: stale-while-revalidate.
-  if (url.hostname.endsWith('lorcast.io')) {
-    event.respondWith(
-      caches.match(req).then((cached) => {
-        const fetchPromise = fetch(req)
-          .then((res) => {
-            if (res.ok) {
-              const copy = res.clone();
-              caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
-            }
-            return res;
-          })
-          .catch(() => cached);
-        return cached || fetchPromise;
-      })
     );
     return;
   }

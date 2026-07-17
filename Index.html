@@ -513,6 +513,71 @@ try {
     localStorage.setItem(AUX_VERSION_KEY, AUX_CACHE_VERSION);
   }
 } catch {}
+
+// ---- IndexedDB key-value store ----
+// The catalog + per-user offline mirrors (collection, decks, …) outgrew
+// localStorage's ~5MB quota, and mobile browsers evict localStorage far more
+// eagerly than IndexedDB. One promise-wrapped kv object store. Every helper
+// RESOLVES (never rejects): reads → undefined on any failure, writes → false.
+// Callers treat IDB as best-effort and fall back to localStorage where a
+// legacy fallback exists (old private-mode Safari has no usable IDB).
+const IDB_NAME = "packsink";
+const IDB_STORE = "kv";
+let _idbOpenPromise = null;
+function idbOpen(){
+  if(_idbOpenPromise) return _idbOpenPromise;
+  _idbOpenPromise = new Promise((resolve, reject) => {
+    try {
+      const req = indexedDB.open(IDB_NAME, 1);
+      req.onupgradeneeded = () => { try { req.result.createObjectStore(IDB_STORE); } catch {} };
+      req.onsuccess = () => {
+        const db = req.result;
+        db.onversionchange = () => { try { db.close(); } catch {} _idbOpenPromise = null; };
+        resolve(db);
+      };
+      req.onerror = () => reject(req.error || new Error("idb open failed"));
+    } catch(e){ reject(e); }
+  });
+  _idbOpenPromise.catch(() => { _idbOpenPromise = null; }); // don't cache a rejection — retry next call
+  return _idbOpenPromise;
+}
+function idbGet(key){
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readonly");
+    const rq = tx.objectStore(IDB_STORE).get(key);
+    rq.onsuccess = () => resolve(rq.result);
+    rq.onerror = () => reject(rq.error);
+  })).catch(() => undefined);
+}
+function idbSet(key, value){
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).put(value, key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  })).catch(() => false);
+}
+function idbDel(key){
+  return idbOpen().then(db => new Promise((resolve, reject) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).delete(key);
+    tx.oncomplete = () => resolve(true);
+    tx.onerror = tx.onabort = () => reject(tx.error);
+  })).catch(() => false);
+}
+
+// Per-user offline mirrors. After a successful fetch of user data
+// (collection / sealed / graded / decks), stash the derived state in IDB;
+// when the same fetch later fails (offline, Supabase outage), serve the
+// stash so the app still renders what the user owns — a read-only view of
+// the last sync. Keys are namespaced "<what>:<user id>" so switching
+// accounts can't bleed one user's data into another's session.
+function offlineMirrorWrite(key, data){ return idbSet("mirror:"+key, {t: Date.now(), data}); }
+async function offlineMirrorRead(key){
+  const rec = await idbGet("mirror:"+key);
+  return rec && rec.data !== undefined ? rec.data : undefined;
+}
+
 // 24h cache — we always background-refresh when stale, so the user sees
 // cached data instantly and gets a fresh swap within seconds. Long TTL keeps
 // the experience snappy on slow Supabase nights without risking stale-price
@@ -521,7 +586,22 @@ const CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 // Minimum row count we'd ever expect. If cache has fewer than this it's
 // almost certainly from a partial fetch or older era — treat as missing.
 const CACHE_MIN_ROWS = 4000;
-function readCache(){
+// Catalog cache lives in IndexedDB under a fixed key; the record's `v` field
+// carries CACHE_KEY so a version bump orphans the old payload in place (the
+// next write replaces it — single key, self-cleaning). Legacy localStorage
+// catalogs migrate to IDB on first read, then the localStorage copy is
+// deleted to hand its ~2.5MB back to the aux caches. localStorage remains
+// the write fallback when IDB is unavailable.
+const CATALOG_IDB_KEY = "catalog";
+async function readCache(){
+  try {
+    const rec = await idbGet(CATALOG_IDB_KEY);
+    if(rec && rec.v === CACHE_KEY && typeof rec.t === "number" &&
+       Array.isArray(rec.rows) && rec.rows.length >= CACHE_MIN_ROWS){
+      return {rows: rec.rows, stale: Date.now() - rec.t > CACHE_MAX_AGE_MS, latestDate: rec.latestDate || null};
+    }
+  } catch {}
+  // Legacy / no-IDB fallback: the old localStorage cache.
   try {
     const s = localStorage.getItem(CACHE_KEY);
     if(!s) return null;
@@ -532,13 +612,29 @@ function readCache(){
       localStorage.removeItem(CACHE_KEY);
       return null;
     }
+    // One-shot migrate to IDB (same timestamp so staleness carries over),
+    // freeing the localStorage copy on success.
+    idbSet(CATALOG_IDB_KEY, {v: CACHE_KEY, t, rows, latestDate: latestDate || null})
+      .then(ok => { if(ok){ try { localStorage.removeItem(CACHE_KEY); } catch {} } });
     const stale = Date.now() - t > CACHE_MAX_AGE_MS;
     return {rows, stale, latestDate: latestDate || null};
   } catch { return null; }
 }
-function writeCache(rows, latestDate){
+async function writeCache(rows, latestDate){
   if(!Array.isArray(rows) || rows.length < CACHE_MIN_ROWS) return; // don't poison the cache with partial data
-  // Strip img_large AND text before caching.
+  // IndexedDB path: store the FULL rows — no img_large/text strip. The strip
+  // below exists purely for localStorage's ~5MB quota; IDB has no such
+  // ceiling, and keeping text means body-text smart search works on
+  // cache-replay sessions (including fully offline) without the lazy
+  // backfill, while img_large keeps the detail modal / posters sharp.
+  const idbOk = await idbSet(CATALOG_IDB_KEY, {v: CACHE_KEY, t: Date.now(), rows, latestDate: latestDate || null});
+  if(idbOk){
+    // Free the legacy localStorage copy — its ~2.5MB goes back to aux caches.
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
+    return;
+  }
+  // No-IDB fallback (old private-mode Safari): the original localStorage
+  // write. Strip img_large AND text before caching.
   //
   // img_large eats ~500KB across 5k rows and is only used as a fallback for
   // img_normal in three places (deck poster / hover preview / detail modal),
@@ -2000,13 +2096,13 @@ const tcgSetSearchUrl = (setName) => {
 const CARD_HIST_TTL_MS = 12 * 60 * 60 * 1000;
 const CARD_HIST_KEY_PREFIX = "packsink:hist:v1:";
 const cardHistKey = (productId, printing) => CARD_HIST_KEY_PREFIX + productId + ":" + printing;
-function readCardHistCache(productId, printing){
+function readCardHistCache(productId, printing, ignoreTtl){
   try {
     const s = localStorage.getItem(cardHistKey(productId, printing));
     if(!s) return null;
     const o = JSON.parse(s);
     if(!o || !Array.isArray(o.rows) || typeof o.t !== "number") return null;
-    if(Date.now() - o.t > CARD_HIST_TTL_MS) return null;
+    if(!ignoreTtl && Date.now() - o.t > CARD_HIST_TTL_MS) return null;
     return o.rows;
   } catch { return null; }
 }
@@ -2080,14 +2176,22 @@ async function fetchCardHistory(productId, printing){
   if(!productId || !printing) return [];
   const cached = readCardHistCache(productId, printing);
   if(cached) return cached;
-  const rows = await sbFetchAll("prices_daily", {
-    select: "date,low_price,market_price",
-    source: "eq.tcgcsv",
-    grade: "eq.raw",
-    tcgplayer_product_id: "eq." + productId,
-    printing: "eq." + printing,
-    order: "date.asc",
-  });
+  let rows;
+  try {
+    rows = await sbFetchAll("prices_daily", {
+      select: "date,low_price,market_price",
+      source: "eq.tcgcsv",
+      grade: "eq.raw",
+      tcgplayer_product_id: "eq." + productId,
+      printing: "eq." + printing,
+      order: "date.asc",
+    });
+  } catch(e){
+    // Offline / outage: an expired cache entry beats an empty chart.
+    const stale = readCardHistCache(productId, printing, true);
+    if(stale) return stale;
+    throw e;
+  }
   writeCardHistCache(productId, printing, rows || []);
   return rows;
 }
@@ -15630,11 +15734,33 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
           }).catch(()=>[]),
         ]);
         if(cancelled) return;
-        if(it.error){ setLoadErr(it.error.message); return; }
-        if(gl.error){ setLoadErr(gl.error.message); return; }
+        // Graded price matview: on success mirror it (shared, not per-user);
+        // offline the sbFetchAll .catch gave [] — fall back to the mirror so
+        // owned slabs still show values from the last sync.
+        if(lp && lp.length){
+          setLatestPrices(lp);
+          offlineMirrorWrite("gradedprices", lp);
+        } else {
+          const mlp = await offlineMirrorRead("gradedprices");
+          if(cancelled) return;
+          setLatestPrices(mlp || []);
+        }
+        if(it.error || gl.error){
+          // Offline / outage: hydrate items + goals from the last good mirror
+          // instead of dead-ending on the error banner.
+          const [mi, mg] = await Promise.all([
+            offlineMirrorRead("graded:"+user.id),
+            offlineMirrorRead("gradedgoals:"+user.id),
+          ]);
+          if(cancelled) return;
+          if(mi || mg){ setItems(mi || []); setGoals(mg || []); }
+          else setLoadErr((it.error || gl.error).message);
+          return;
+        }
         setItems(it.data || []);
         setGoals(gl.data || []);
-        setLatestPrices(lp || []);
+        offlineMirrorWrite("graded:"+user.id, it.data || []);
+        offlineMirrorWrite("gradedgoals:"+user.id, gl.data || []);
       } catch(e){ if(!cancelled) setLoadErr(String(e?.message || e)); }
     })();
     return () => { cancelled = true; };
@@ -17726,13 +17852,20 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       const [gi, ps] = await Promise.all([
         sbClient.from("graded_collection_items").select("card_id,printing,quantity,grader,grade").eq("user_id", user.id)
           .then(r => r.error ? sbClient.from("graded_collection_items").select("card_id,quantity").eq("user_id", user.id) : r)
-          .catch(()=>({data:[]})),
+          .catch(()=>({data:null})),
         sbClient.from("grading_submissions").select("card_id,printing,quantity,intended_grader,status").eq("user_id", user.id)
-          .then(r => r.error ? {data:[]} : r)
-          .catch(()=>({data:[]})),
+          .then(r => r.error ? {data:null} : r)
+          .catch(()=>({data:null})),
       ]);
+      if(gi.data == null || ps.data == null){
+        // Offline / outage (or table missing): last good mirror, else prior state.
+        const m = await offlineMirrorRead("gradedown:"+user.id);
+        if(m){ setGradedOwnRows(m.gi || []); setPendingRows(m.ps || []); }
+        return;
+      }
       setGradedOwnRows(gi.data || []);
       setPendingRows(ps.data || []);
+      offlineMirrorWrite("gradedown:"+user.id, {gi: gi.data || [], ps: ps.data || []});
     } catch { /* leave prior */ }
   }, [user, isViewerMode, gradedPremium]);
   useEffect(() => { reloadGradedOwnership(); }, [reloadGradedOwnership]);
@@ -27710,11 +27843,19 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         if(!cardsByDeck[c.deck_id]) cardsByDeck[c.deck_id] = [];
         cardsByDeck[c.deck_id].push(c);
       }
-      setDecks((deckRows||[]).map(d => ({...d, cards: cardsByDeck[d.id] || []})));
+      const hydrated = (deckRows||[]).map(d => ({...d, cards: cardsByDeck[d.id] || []}));
+      setDecks(hydrated);
+      // Offline mirror: decks + their cards (decoded) so Your Decks renders
+      // and opens read-only without a connection. Device-local storage of the
+      // user's own decks — the at-rest obfuscation invariant is about the DB.
+      offlineMirrorWrite("decks:"+user.id, hydrated);
       mergeFavoriteCounts(ids);
       mergeViewCounts(ids);
     } catch(e){
       console.error("decks fetch failed:", e);
+      // Offline / outage: last good mirror instead of an empty error state.
+      const mirror = await offlineMirrorRead("decks:"+user.id);
+      if(mirror && mirror.length){ setDecks(mirror); return; }
       setErr(e.message || String(e));
       setDecks([]);
     }
@@ -31125,6 +31266,127 @@ const navHandler = (fn) => (e) => {
   fn(e);
 };
 
+// ── Offline image pack ───────────────────────────────────────────────────
+// Downloads card display images into the SW's deploy-surviving
+// packsink-img-v1 cache so art renders offline. Runs from page context (the
+// window has the Cache API too); no-cors fetches store opaque responses —
+// the same thing the SW's runtime image caching writes, so the two paths
+// share one cache. Module-level task so closing the settings popover
+// doesn't abort a run in progress.
+const IMG_PACK_CACHE = "packsink-img-v1";
+const offlineImgTask = {
+  running: false, cancel: false, done: 0, total: 0, failed: 0, scope: null,
+  listeners: new Set(),
+  notify(){ for(const fn of this.listeners) fn(); },
+};
+async function startOfflineImagePack(urls, scope){
+  if(offlineImgTask.running || !urls.length) return;
+  Object.assign(offlineImgTask, {running: true, cancel: false, done: 0, total: urls.length, failed: 0, scope});
+  offlineImgTask.notify();
+  try {
+    const cache = await caches.open(IMG_PACK_CACHE);
+    const queue = urls.slice();
+    const worker = async () => {
+      while(queue.length && !offlineImgTask.cancel){
+        const url = queue.pop();
+        try {
+          if(!(await cache.match(url))){
+            const res = await fetch(url, {mode: "no-cors"});
+            if(res && (res.ok || res.type === "opaque")) await cache.put(url, res);
+            else offlineImgTask.failed++;
+          }
+        } catch { offlineImgTask.failed++; }
+        offlineImgTask.done++;
+        if(offlineImgTask.done % 20 === 0 || !queue.length) offlineImgTask.notify();
+      }
+    };
+    await Promise.all(Array.from({length: 6}, worker));
+    if(!offlineImgTask.cancel){
+      const saved = offlineImgTask.done - offlineImgTask.failed;
+      try { localStorage.setItem("packsink:offlineImages", JSON.stringify({t: Date.now(), count: saved, scope})); } catch {}
+      flashToast(`Offline images ready — ${saved.toLocaleString()} saved`);
+    }
+  } catch(e){
+    console.warn("offline image pack failed:", e?.message || e);
+  } finally {
+    offlineImgTask.running = false;
+    offlineImgTask.notify();
+  }
+}
+
+// Settings-popover block: scope buttons (collection / all), progress bar
+// with cancel, last-run + storage-usage status, and a clear action.
+function OfflineImagesPanel({raw, collection, user}){
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const fn = () => setTick(t => t + 1);
+    offlineImgTask.listeners.add(fn);
+    return () => offlineImgTask.listeners.delete(fn);
+  }, []);
+  const running = offlineImgTask.running;
+  const [usage, setUsage] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    try {
+      if(navigator.storage && navigator.storage.estimate){
+        navigator.storage.estimate().then(e => { if(!cancelled && e) setUsage(e.usage || 0); }).catch(()=>{});
+      }
+    } catch {}
+    return () => { cancelled = true; };
+  }, [running]);
+  const allUrls = useMemo(() => {
+    const s = new Set();
+    for(const r of (raw || [])){ const u = r.img_normal || r.img_small; if(u) s.add(u); }
+    return Array.from(s);
+  }, [raw]);
+  const collUrls = useMemo(() => {
+    if(!user || !collection) return [];
+    const owned = new Set();
+    for(const k of Object.keys(collection)){ if(collection[k] > 0) owned.add(k.split(":")[0]); }
+    if(!owned.size) return [];
+    const s = new Set();
+    for(const r of (raw || [])){
+      if(r.card_id && owned.has(r.card_id)){ const u = r.img_normal || r.img_small; if(u) s.add(u); }
+    }
+    return Array.from(s);
+  }, [raw, collection, user]);
+  // ~45KB per 400w image is a good average for Lorcast's encodes.
+  const est = n => { const mb = n * 45 / 1024; return (mb >= 100 ? Math.round(mb) : Math.max(1, Math.round(mb))) + " MB"; };
+  let last = null;
+  try { last = JSON.parse(localStorage.getItem("packsink:offlineImages") || "null"); } catch {}
+  const t = offlineImgTask;
+  return html`<div class="settings-row settings-row--block">
+    <span class="settings-row-label">Offline card images</span>
+    ${running ? html`<div class="offline-img-progress">
+        <div class="offline-img-bar"><div class="offline-img-bar-fill"
+          style=${{width: (t.total ? Math.round(100 * t.done / t.total) : 0) + "%"}}></div></div>
+        <div class="offline-img-meta">${t.done.toLocaleString()} / ${t.total.toLocaleString()}
+          <button class="settings-action link" onClick=${() => { t.cancel = true; }}>Cancel</button>
+        </div>
+      </div>`
+    : html`<div class="offline-img-actions">
+        ${user && collUrls.length > 0 && html`<button class="settings-action"
+          title=${"Save your collection's card images to this device (~" + est(collUrls.length) + ")"}
+          onClick=${() => startOfflineImagePack(collUrls, "collection")}>My collection · ${est(collUrls.length)}</button>`}
+        ${allUrls.length > 0 && html`<button class="settings-action"
+          title=${"Save every card image to this device (~" + est(allUrls.length) + ") — Wi-Fi recommended"}
+          onClick=${() => startOfflineImagePack(allUrls, "all")}>All cards · ${est(allUrls.length)}</button>`}
+        <div class="offline-img-meta muted">
+          ${last
+            ? `Saved ${new Date(last.t).toLocaleDateString()} — ${(last.count || 0).toLocaleString()} images${last.scope === "all" ? " (all cards)" : ""}.`
+            : "Art you browse is saved automatically; this pre-saves the rest for offline."}
+          ${usage != null ? ` Storage used: ~${Math.round(usage / 1024 / 1024).toLocaleString()} MB.` : ""}
+          <button class="settings-action link" onClick=${async () => {
+            try { await caches.delete(IMG_PACK_CACHE); } catch {}
+            try { localStorage.removeItem("packsink:offlineImages"); } catch {}
+            setTick(x => x + 1);
+            flashToast("Offline images cleared");
+          }}>Clear</button>
+        </div>
+      </div>`}
+  </div>`;
+}
+
 function App(){
   const [raw,setRaw]=useState([]);const [loading,setLoading]=useState(false);const [err,setErr]=useState(null);const [loaded,setLoaded]=useState(false);
   // Sealed-product price snapshot. Joined to sealed_products server-side
@@ -32320,6 +32582,11 @@ function App(){
           .range(from, from + PAGE - 1);
         if(error){
           console.error("collection fetch failed:", error);
+          // Offline / outage: serve the last good mirror so the collection
+          // still renders (read-only snapshot of the last sync).
+          const mirror = await offlineMirrorRead("collection:"+user.id);
+          if(cancelled) return;
+          if(mirror) setCollection(mirror);
           setCollectionLoading(false);
           return;
         }
@@ -32335,6 +32602,7 @@ function App(){
       }
       setCollection(map);
       setCollectionLoading(false);
+      offlineMirrorWrite("collection:"+user.id, map);
     })();
     return ()=>{ cancelled = true; };
   },[user]);
@@ -32376,6 +32644,11 @@ function App(){
           // Table not deployed yet, or transient error — leave the map
           // empty rather than crashing. Console logs the reason for ops.
           console.warn("sealed collection fetch failed (run supabase/17_*.sql?):", error.message || error);
+          // Offline / outage: hydrate from the last good mirror.
+          const mirror = await offlineMirrorRead("sealed:"+user.id);
+          if(cancelled || !mirror) return;
+          setSealedCollection(mirror.qty || {});
+          setSealedMeta(mirror.meta || {});
           return;
         }
         if(cancelled) return;
@@ -32397,6 +32670,7 @@ function App(){
       }
       setSealedCollection(map);
       setSealedMeta(meta);
+      offlineMirrorWrite("sealed:"+user.id, {qty: map, meta});
     })();
     return ()=>{ cancelled = true; };
   }, [user]);
@@ -32414,6 +32688,8 @@ function App(){
       if(cancelled) return;
       if(error){
         console.warn("pack-art fetch failed (run supabase/72_*.sql?):", error.message || error);
+        const mirror = await offlineMirrorRead("packarts:"+user.id);
+        if(!cancelled && mirror) setPackArts(mirror);
         return;
       }
       const map = {};
@@ -32421,6 +32697,7 @@ function App(){
         (map[row.tcgplayer_product_id] ||= {})[row.art_index] = true;
       }
       setPackArts(map);
+      offlineMirrorWrite("packarts:"+user.id, map);
     })();
     return ()=>{ cancelled = true; };
   }, [user]);
@@ -32502,7 +32779,9 @@ function App(){
         return next;
       });
       if(newQty<=0 && prevMeta) setSealedMeta(m => ({...m, [pid]: prevMeta}));
-      flashToast("Couldn't save — change reverted");
+      flashToast(navigator.onLine === false
+        ? "You're offline — changes can't be saved"
+        : "Couldn't save — change reverted");
     }
   }, [user]);
 
@@ -32581,7 +32860,9 @@ function App(){
         else next[key] = prevQty;
         return next;
       });
-      flashToast("Couldn't save — change reverted");
+      flashToast(navigator.onLine === false
+        ? "You're offline — changes can't be saved"
+        : "Couldn't save — change reverted");
     }
   }, [user]);
 
@@ -32732,7 +33013,7 @@ function App(){
     setErr(null);
 
     // 1. Show cached data instantly if available (and not forced refresh).
-    const cached = force ? null : readCache();
+    const cached = force ? null : await readCache();
     if(cached && cached.rows.length){
       setPromoBaseSet(cached.rows);
       setRaw(cached.rows);setLoaded(true);setLoading(false);
@@ -32929,6 +33210,27 @@ function App(){
   // while data is in flight; cache hits make this instantaneous after the
   // first visit.
 
+  // Online/offline awareness. navigator.onLine === false is trustworthy
+  // ("definitely offline"); true only means "maybe online". Drives the
+  // offline pill, offline-aware boot-error copy, and save-failure toasts.
+  const [isOnline, setIsOnline] = useState(() => navigator.onLine !== false);
+  useEffect(() => {
+    // Regaining connectivity re-runs the catalog probe immediately so a
+    // PWA that comes back online swaps to fresh prices without a reload.
+    const on  = () => { setIsOnline(true); loadFromSupabase(); };
+    const off = () => setIsOnline(false);
+    window.addEventListener("online", on);
+    window.addEventListener("offline", off);
+    return () => { window.removeEventListener("online", on); window.removeEventListener("offline", off); };
+  }, [loadFromSupabase]);
+  // One-shot best-effort persistent-storage request: asks the browser to
+  // shield IndexedDB + Cache storage (catalog, offline mirrors, card art)
+  // from storage-pressure eviction. Chrome decides via heuristics (install
+  // state, engagement); Safari grants silently for installed PWAs. No UI.
+  useEffect(() => {
+    try { navigator.storage && navigator.storage.persist && navigator.storage.persist().catch(()=>{}); } catch {}
+  }, []);
+
   // Cold-boot hard failure: the catalog never loaded AND the fetch errored —
   // a first-time visitor would otherwise stare at an empty shell with only a
   // tiny red note in the nav. Swap the view area for a branded error state.
@@ -32945,6 +33247,7 @@ function App(){
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
+    ${!isOnline && html`<div class="offline-pill" role="status">📡 Offline — showing saved data</div>`}
     <div class="top-nav">
       <a class="tabs-logo-btn" href="/"
         onClick=${navHandler(()=>onTabClick("home"))}
@@ -33072,6 +33375,7 @@ function App(){
                 </label>`)}
               </div>
             </div>
+            <${OfflineImagesPanel} raw=${raw} collection=${collection} user=${user}/>
             <div class="settings-divider"></div>
             ${user
               ? html`<button class="settings-action danger"
@@ -33142,10 +33446,10 @@ function App(){
       }}/>`}
     ${bootFailed && html`<div class="boot-error">
       <img src="Logos/packs-ink-logo.png?v=5" alt="" class="boot-error-logo"/>
-      <h2 class="title-font">Can't reach the card database</h2>
-      <p class="muted">Packs.Ink couldn't load its price data — your connection may be
-        offline, or our data service is having a brief hiccup. Nothing is lost;
-        it usually clears in a moment.</p>
+      <h2 class="title-font">${isOnline ? "Can't reach the card database" : "You're offline"}</h2>
+      <p class="muted">${isOnline
+        ? "Packs.Ink couldn't load its price data — your connection may be offline, or our data service is having a brief hiccup. Nothing is lost; it usually clears in a moment."
+        : "Packs.Ink needs one visit with a connection to save the card database to this device. After that, cards, prices, your collection, and your decks all work offline."}</p>
       <button class="boot-error-retry" onClick=${()=>loadFromSupabase({force:true})}>Try again</button>
       <div class="boot-error-detail muted">${err}</div>
     </div>`}
