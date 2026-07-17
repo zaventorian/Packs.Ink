@@ -350,6 +350,52 @@
   }
   function lookupCN(num){ buildNameDB(); if(!nameDB || num == null) return []; return nameDB.cnLoose[String(num)] || []; }
 
+  // ---- VERSION tiebreak by BODY text (rules/flavor/subtitle) -----------------
+  // A confident NAME identifies the CHARACTER, but the version subtitle rarely
+  // OCRs (small font, crowded out of the tallest-boxes cut by rules text) — the
+  // character's versions then tie on name score and the pick fell to COLOUR
+  // (~30%). The fix uses text the reads ALREADY contain: rules + flavor lines
+  // are a per-version fingerprint (e.g. "Bodyguard (This character may enter
+  // play exerted…" = Rajah - Devoted Protector). Score = trigram containment of
+  // the concatenated OCR lines against each version's text.json body, both
+  // space-stripped (PP-OCR glues words — "chooseonewithBodyguard").
+  // Calibrated on the 2026-07-17 phone batch: 7/7 verified wrong versions fixed
+  // (Mickey ×2, Mulan, Rajah, Dale, Basil, Lady), 0 regressions; every
+  // weak-signal case abstains. Floor s1>=0.22, margin >=0.12 vs the best
+  // DIFFERENT version (same-version reprints share one body → grouped).
+  var bodyTriCache = Object.create(null);
+  function bodyTri(id, b){
+    var t = bodyTriCache[id];
+    if(!t){ t = nmTri(nmCanon(b || "")); bodyTriCache[id] = t; }
+    return t;
+  }
+  function rankVersionsByBody(charName, lines){
+    if(!text.loaded || !lines || !lines.length) return null;
+    var nName = nmNorm(charName);
+    var cs = text.cards, group = [], i;
+    for(i=0;i<cs.length;i++) if(nmNorm(cs[i].n || "") === nName) group.push(cs[i]);
+    if(group.length < 2) return null;
+    var q = nmCanon(lines.join(" ")).replace(/ /g, "");
+    var cn = nmCanon(charName).replace(/ /g, "");
+    if(cn) q = q.replace(cn, "");   // the shared name substring can't separate versions
+    var Q = nmTri(q), nQ = setSize(Q);
+    if(nQ < 12) return null;        // only the name read → no body signal, abstain
+    var byVer = Object.create(null), order = [], k;
+    for(i=0;i<group.length;i++){
+      var v = group[i].v || "";
+      var T = bodyTri(group[i].id, group[i].b), inter = 0;
+      for(k in Q) if(T[k]) inter++;
+      var sc = inter / nQ;
+      if(byVer[v] == null){ byVer[v] = { v: v, score: sc, ids: [group[i].id] }; order.push(byVer[v]); }
+      else { byVer[v].ids.push(group[i].id); if(sc > byVer[v].score) byVer[v].score = sc; }
+    }
+    if(order.length < 2) return null;
+    order.sort(function(a, b){ return b.score - a.score; });
+    var s1 = order[0].score, s2 = order[1].score;
+    if(!(s1 >= 0.22 && (s1 - s2) >= 0.12)) return null;
+    return { ids: order[0].ids, version: order[0].v, score: s1, margin: s1 - s2 };
+  }
+
   // IDENTITY — PARALLEL fusion (vote, don't gate). The collector NUMBER is the
   // backbone: set+number → ~1 card (near-unique primary key). Name-OCR + colour
   // are independent voters that order the narrowed field. Falls back to
@@ -385,8 +431,18 @@
         return { top3: dedupeIds([nameIds[i]].concat(orderByColour(numIds), nameIds, colour)).slice(0, 3), conf: "high", source: "cn+name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
     }
-    // 2. confident NAME alone → name wins (number absent or misread; colour orders the printing)
+    // 2. confident NAME alone → name wins (number absent or misread). The
+    //    VERSION comes from the body-text tiebreak when the rules/flavor lines
+    //    carry a fingerprint; colour only orders printings within the version
+    //    (and is the fallback orderer when the body abstains).
     if(nm.conf === "high" && nameIds.length){
+      var vb = null;
+      try { vb = rankVersionsByBody(nm.top[0].name, opts.lines || []); } catch(e){}
+      if(vb && vb.ids.length){
+        return { top3: dedupeIds(orderByColour(vb.ids).concat(orderByColour(nameIds), colour)).slice(0, 3),
+                 conf: "high", source: "name", verBy: "body", verMargin: Math.round(vb.margin * 1000) / 1000,
+                 nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      }
       return { top3: dedupeIds(orderByColour(nameIds).concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 3. number read but name weak → the numbered cards, ordered by name then colour (needs a tap)
@@ -405,6 +461,7 @@
     colorSig: colorSig,
     dhash64: dhash64,
     rankNames: rankNames,
+    rankVersionsByBody: rankVersionsByBody,
     lookupCN: lookupCN,
     identify: identify,
     loadText: loadText,
