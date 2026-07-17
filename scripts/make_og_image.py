@@ -15,7 +15,7 @@ OUT = os.path.join(ROOT, "og-image.png")
 W, H = 1200, 630
 BG = (15, 13, 32)          # #0f0d20 — matches theme-color / PWA icons
 GLOW = (240, 199, 94)      # warm gold, matches the logo burst
-TAGLINE = "Disney Lorcana prices  ·  collection tracking  ·  decks"
+TAGLINE = "Price tracking · Daily movement · Collection · Search · Deckbuilding"
 TAG_COLOR = (232, 200, 119)
 
 img = Image.new("RGB", (W, H), BG)
@@ -43,9 +43,16 @@ def load_font(size):
             continue
     return ImageFont.load_default()
 
-font = load_font(32)
 d = ImageDraw.Draw(img)
-tw = d.textlength(TAGLINE, font=font)
+# Auto-shrink the tagline so it never overruns the image width (the segment
+# list can grow); start at 32 and step down until it fits with a side margin.
+size = 32
+while size > 20:
+    font = load_font(size)
+    tw = d.textlength(TAGLINE, font=font)
+    if tw <= W - 80:
+        break
+    size -= 1
 d.text(((W - tw) / 2, 556), TAGLINE, font=font, fill=TAG_COLOR)
 
 img.save(OUT, "PNG", optimize=True)
