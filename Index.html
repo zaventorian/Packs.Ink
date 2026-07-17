@@ -151,7 +151,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=276">
+<link rel="stylesheet" href="styles.css?v=278">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9751,7 +9751,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // uploads its trailing slice + a 6-frame raw filmstrip + thumbnails of the
   // last ambient OCR inputs; closing the scanner logs a whole-session summary.
   const openedAtRef = useRef(Date.now());
-  const traceRef = useRef({ ev: [], n: { ticks: 0, quads: 0, noDet: 0, jumps: 0, ocrFires: 0, ocrEmpty: 0, confirms: 0, pings: 0, wipes: 0, badgeFlips: 0, snaps: 0 }, ocrMs: [], device: null });
+  const traceRef = useRef({ ev: [], n: { ticks: 0, quads: 0, noDet: 0, jumps: 0, ocrFires: 0, ocrEmpty: 0, confirms: 0, pings: 0, wipes: 0, badgeFlips: 0, snaps: 0, snapLocks: 0, snapFixes: 0 }, ocrMs: [], device: null });
   const filmRef = useRef({ frames: [], i: 0 });   // ring of last 6 small raw frames
   const ocrThumbRef = useRef([]);                 // last 3 {t,src,thumb} ambient-OCR inputs
   const torchTrackRef = useRef(null);
@@ -9774,7 +9774,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [savedMsg, setSavedMsg] = useState("");   // "N cards saved to your collection ✓"
   const [qaCount, setQaCount] = useState(0);      // QA snaps saved this session (admin testing tool)
   const [qaResults, setQaResults] = useState([]); // in-session QA snaps: {id,ts,thumb,guess,alts}
-  const qaBusyRef = useRef(false);
+  const qaTapAtRef = useRef(0);                   // tap debounce (shutter + tap-anywhere both fire)
+  const qaJobsRef = useRef({ q: [], running: false }); // background identify queue — a snap never blocks the camera
+  const qaOcrHoldRef = useRef(0);                 // >0: a snap's name read wants the OCR worker → ambient reads yield
   const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
   const [torchOn, setTorchOn] = useState(false);
 
@@ -9914,7 +9916,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           const q = (p) => ms.length ? ms[Math.min(ms.length - 1, Math.floor(p * ms.length))] : null;
           sbClient.from("scan_samples").insert({
             user_id: u.id, card_id: null, predicted_card_id: null, corrected: false, printing: null, image_path: null,
-            debug: { v: 3, kind: "qa-session", sessionMs: Date.now() - openedAtRef.current,
+            debug: { v: 4, kind: "qa-session", sessionMs: Date.now() - openedAtRef.current,
               device: T.device, n: T.n, ocrMs: { n: ms.length, med: q(0.5), p90: q(0.9) },
               trace: T.ev.slice(-500) },
           }).then(() => {}, () => {});
@@ -10117,7 +10119,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       }
       const hadQuad = !!A.lastQuad && A.emptyFrames === 0;
       const o = computeOutline(r.quad || null, r.conf || 0, bw);
-      if(r.quad){ traceRef.current.n.quads++;
+      if(r.quad){ traceRef.current.n.quads++; A.lastQuadAt = Date.now();
         if(!hadQuad || !A.firstQuadAt){ A.firstQuadAt = Date.now(); trc("quad", { c: Math.round((r.conf || 0) * 100) / 100 }); } }
       else traceRef.current.n.noDet++;
       setDet(!!o.smooth); setRdy(o.locked);
@@ -10240,7 +10242,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           // no detect gap), it's the only signal that the card changed — a
           // newly confirmed different name replaces the lock (confirmed may
           // only be replaced by confirmed, never by a colour guess).
-          if(ocrLive && !A.ocrBusy && o.smooth &&
+          if(ocrLive && !A.ocrBusy && !qaOcrHoldRef.current && o.smooth &&
              (A.lockText ? (A.tick % 16 === 0) : (A.ocrTries < 3 || A.tick % 8 === 0))){
             A.ocrBusy = true; A.ocrTries++;
             const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
@@ -10281,11 +10283,15 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         // crop so a sloppy hover still resolves instead of demanding perfect
         // framing. Slow cadence (~1/s) — it's the same OCR worker.
         const ocrLive2 = ocrReadyRef.current && !!triggerOcrRef.current;
-        if(ocrLive2 && !A.lockText && !A.ocrBusy && A.noDet >= 4 && A.noDet % 7 === 0){
+        if(ocrLive2 && !A.lockText && !A.ocrBusy && !qaOcrHoldRef.current && A.noDet >= 4 && A.noDet % 7 === 0){
           A.ocrBusy = true; A.ocrTries++;
           triggerOcrRef.current(A.epoch, [], true).finally(() => { ambientRef.current.ocrBusy = false; });
         }
       }
+      // right after a snap, the on-card label reads "✓ Snapped" for ~1s — the
+      // tap's receipt — before flipping to identifying the next card.
+      if(A.snapFlashUntil && Date.now() < A.snapFlashUntil && o.smooth)
+        label = { name: "✓ Snapped", low: null, mkt: null, confident: true };
       drawOutline(o.smooth, bw, bh, o.locked, label);
     } catch(_e){} finally { ambBusyRef.current = false; }
   };
@@ -10397,6 +10403,23 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       }
     } catch(_e){}
     setFlash(true); setTimeout(() => setFlash(false), 230);
+  };
+  // distinct from pingFeedback (the ✓-identified chime): a snap is a CAPTURE cue.
+  // Fires AT the tap — lower blip + flash + short haptic — so the shutter feels
+  // instant even though identification may continue in the background.
+  const snapFeedback = () => {
+    try { navigator.vibrate && navigator.vibrate(18); } catch(_e){}
+    try {
+      const ctx = audioCtxRef.current; if(ctx){
+        const o = ctx.createOscillator(), g = ctx.createGain();
+        o.type = "square"; o.frequency.value = 470;
+        g.gain.setValueAtTime(0.0001, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.07, ctx.currentTime + 0.008);
+        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.09);
+        o.connect(g).connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.1);
+      }
+    } catch(_e){}
+    setFlash(true); setTimeout(() => setFlash(false), 160);
   };
   const entryKeyOf = (card) => {
     const g = resolveGroup(card);
@@ -10561,7 +10584,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const META = window.CardScanner.state.cards;
       const byId = ambByIdRef.current || (ambByIdRef.current = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
       const chosen = byId.get(topId); if(!chosen) return;
-      if(A.lockText && A.lockKey === chosen.art_key) return;   // re-verify agreed — nothing to update
+      if(A.lockText && A.lockKey === chosen.art_key){ A.lockReadAt = tFire; return; }   // re-verify agreed — refresh the lock's evidence age
       const cands = idr.top3.map(id => byId.get(id)).filter(Boolean);
       if(ambientRef.current.epoch !== epoch) return;
       // CONFIRMED: text lock + preview + one ping per physical card
@@ -10572,6 +10595,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":1:t"; setPreview(pv);
       if(A.lockKey !== chosen.art_key) A.pinged = false;   // a NEW card pings again
       A.lockKey = chosen.art_key; A.lockCard = chosen; A.lockText = true; A.challengerKey = null; A.challengerCount = 0;
+      A.lockReadAt = tFire;   // age of the FRAME that proved this card (not read-finish — reads take 1-2s)
       traceRef.current.n.confirms++;
       trc("confirm", { top: chosen.id, try: A.ocrTries,
         ms: A.firstQuadAt ? Date.now() - A.firstQuadAt : null });   // ms = quad→confirmed (the felt "time to ping")
@@ -10701,111 +10725,219 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   }, [raw]);
   captureRef.current = capture;
 
-  // QA "Snap": a one-tap capture that saves the photo + the scanner's full
-  // reasoning (top guess, ranked candidates with colour scores, OCR lines,
-  // collector-number read, conf/source, and the live ambient guess at that
-  // moment) to the flywheel — WITHOUT staging or labeling. Lets us scan a stack
-  // fast and review later (photo + guess + thought process) instead of clicking
-  // right/wrong per card. Best-effort; never throws into React.
-  const snapForQA = useCallback(async () => {
-    if(qaBusyRef.current) return;
-    if(!user){ onSignIn && onSignIn(); return; }
-    qaBusyRef.current = true; setSavedMsg("Snapping…");
-    const tSnap = Date.now();
-    const tmr = { rectMs: 0, colourMs: 0, nameMs: 0, cnMs: 0, totalMs: 0 };
+  // QA "Snap" — point, snap, move on. The tap freezes the frame INSTANTLY,
+  // drops a result row, and frees the camera for the next card:
+  //   · live badge is text-CONFIRMED (✓ name) → the snap LOCKS that answer on
+  //     the spot — no re-identify. The ambient multi-read vote is more reliable
+  //     than one fresh read (field case 7/17: ambient "Dale" right, fresh snap
+  //     read "Gale"), and 0ms beats the 10-14s the old full re-identify took.
+  //   · not confirmed yet → the row shows "Identifying…" and a background job
+  //     resolves it name-first (~2-3s); the collector-number read (8-10s on
+  //     phone at a ~25% field read rate — QA batch 7/17) is demoted to an
+  //     idle-time refinement that can never hold up a row or the next card.
+  // Photo + full reasoning still upload to the flywheel exactly as before.
+  // Best-effort; never throws into React; no staging, no collection writes.
+  const updateQaRow = (rid, patch) => setQaResults(prev => prev.map(x => x.id === rid ? { ...x, ...patch } : x));
+  // centre 5:7 crop of the FROZEN raw frame — the fallback when detection missed.
+  // (guideCropCanvas reads the LIVE video, which by identify-time is already
+  // pointing at the next card — the async flow must never touch it.)
+  const rawGuideCrop = (raw) => {
     try {
-      // 0. grab the RAW camera frame first (before any await moves the scene) —
-      // uploaded alongside the rectify so detection failures can be tuned
-      // offline. The rectified output alone can't tell us WHY detection missed.
-      let rawCanvas = null;
-      const v = videoRef.current;
-      try {
-        if(v && v.videoWidth){
-          const rw = Math.min(900, v.videoWidth);
-          rawCanvas = document.createElement("canvas");
-          rawCanvas.width = rw; rawCanvas.height = Math.round(rw * v.videoHeight / v.videoWidth);
-          rawCanvas.getContext("2d").drawImage(v, 0, 0, rawCanvas.width, rawCanvas.height);
+      const sh = raw.height * 0.92, sw = Math.min(raw.width * 0.92, sh * 5 / 7);
+      const c = document.createElement("canvas");
+      c.width = Math.round(sw); c.height = Math.round(Math.min(sh, sw * 7 / 5));
+      c.getContext("2d").drawImage(raw, (raw.width - c.width) / 2, (raw.height - c.height) / 2, c.width, c.height, 0, 0, c.width, c.height);
+      return c;
+    } catch(_e){ return null; }
+  };
+  const thumbOf = (src) => {
+    try { const tc = document.createElement("canvas"); tc.width = 96; tc.height = Math.round(96 * src.height / src.width);
+      tc.getContext("2d").drawImage(src, 0, 0, tc.width, tc.height); return tc.toDataURL("image/jpeg", 0.7); } catch(_e){ return ""; }
+  };
+  const qaLabelOf = (m) => m ? ((m.name || "?") + (m.version ? " - " + m.version : "")) : null;
+  const runQaQueue = () => {
+    const J = qaJobsRef.current;
+    if(J.running || !J.q.length) return;
+    J.running = true;
+    const job = J.q.shift();
+    runQaJob(job).catch(() => {}).finally(() => {
+      if(job.holdsOcr){ job.holdsOcr = false; qaOcrHoldRef.current = Math.max(0, qaOcrHoldRef.current - 1); }
+      J.running = false; runQaQueue();
+    });
+  };
+  const runQaJob = async (job) => {
+    const { rid, lock } = job;
+    const tmr = { rectMs: 0, colourMs: 0, nameMs: 0, cnMs: 0, rowMs: 0, totalMs: 0 };
+    // 1. rectify the frozen frame (detect worker; fast)
+    let rect = null, detected = false, detConf = 0, detLandscape = false;
+    const tRect = Date.now();
+    try {
+      const bmp = await job.bmpP;
+      if(bmp && workerRef.current){
+        const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
+        if(r){ detConf = r.conf || 0; detLandscape = !!r.landscape; }
+        if(r && r.buffer){
+          const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
+          c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
+          rect = c; detected = true;
         }
-      } catch(_e){ rawCanvas = null; }
-      // 1. high-res rectify (fall back to the guide crop)
-      let rect = null, detected = false, detConf = 0, detLandscape = false;
-      const tRect = Date.now();
-      if(workerRef.current && v && v.videoWidth){
+      }
+    } catch(_e){}
+    tmr.rectMs = Date.now() - tRect;
+    if(!rect && job.rawCanvas) rect = rawGuideCrop(job.rawCanvas);
+    if(!rect){ updateQaRow(rid, { status: "done", conf: lock ? "lock" : "low" }); return; }
+    const rectThumb = thumbOf(rect);
+    if(rectThumb) updateQaRow(rid, { thumb: rectThumb });   // card-only thumb replaces the raw-frame one
+    // 2. colour match (fast; kept for the debug payload + the no-OCR fallback)
+    let colour = [];
+    const tCol = Date.now();
+    try {
+      const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
+      const seenc = new Set();
+      for(const x of res){ if(seenc.has(x.card.id)) continue; seenc.add(x.card.id);
+        colour.push({ id: x.card.id, name: x.card.name, version: x.card.version, score: Math.round((x.color || 0) * 1000) / 1000 });
+        if(colour.length >= 10) break; }
+    } catch(_e){}
+    tmr.colourMs = Date.now() - tCol;
+    const colIds = colour.map(c => c.id);
+    // 3. identity: the live lock wins outright; else name-read in the background
+    let ocrLines = [], cnNum = null, cnSet = null, idr = {};
+    if(lock){
+      idr = { conf: "high", source: "live-lock", nameConf: "high", top3: [lock.id], names: [] };
+      traceRef.current.n.snapLocks++;
+      // stale-lock verify (see snapForQA): re-read the frozen frame; a DECISIVE
+      // read of a different character means the card swapped under the lock —
+      // correct the row. Anything less keeps the lock (consensus beats one read).
+      if(job.lockVerify && ocrReadyRef.current && window.CardScanner.identify){
         try {
-          const bmp = await createImageBitmap(v, { resizeWidth: 1920 });
-          const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
-          if(r){ detConf = r.conf || 0; detLandscape = !!r.landscape; }
-          if(r && r.buffer){
-            const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
-            c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0); rect = c;
-            detected = true;
-          }
+          const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+          ocrLines = o.lines || []; tmr.nameMs = o.nameMs || 0;
+          const idrV = window.CardScanner.identify({ lines: ocrLines, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
+          const vTop = (idrV.names || [])[0];
+          if(idrV.conf === "high" && vTop && (vTop.name || "") !== (lock.name || "")){
+            idr = idrV;
+            traceRef.current.n.snapFixes = (traceRef.current.n.snapFixes || 0) + 1;
+            trc("snap-fix", { from: lock.id, to: (idrV.top3 || [])[0] });
+          } else if(idrV.names){ idr.names = idrV.names; }   // keep the read for the debug payload
         } catch(_e){}
       }
-      tmr.rectMs = Date.now() - tRect;
-      if(!rect) rect = guideCropCanvas();
-      if(!rect){ setSavedMsg("Couldn't read it — frame the card and snap again"); setTimeout(()=>setSavedMsg(""), 2200); return; }
-
-      // 2. colour match (keep scores) + 3. OCR + 4. identify — same pipeline as capture()
-      let colour = [];
-      const tCol = Date.now();
+    } else if(ocrReadyRef.current && window.CardScanner.identify){
       try {
-        const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
-        const seenc = new Set();
-        for(const x of res){ if(seenc.has(x.card.id)) continue; seenc.add(x.card.id);
-          colour.push({ id: x.card.id, name: x.card.name, version: x.card.version, score: Math.round((x.color || 0) * 1000) / 1000 });
-          if(colour.length >= 10) break; }
+        const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+        ocrLines = o.lines || []; tmr.nameMs = o.nameMs || 0;
+        idr = window.CardScanner.identify({ lines: ocrLines, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
       } catch(_e){}
-      tmr.colourMs = Date.now() - tCol;
-      const colIds = colour.map(c => c.id);
-      let ocrLines = [], cnNum = null, cnSet = null, idr = {};
-      if(ocrReadyRef.current && window.CardScanner.identify){
-        // number read is GATED behind a confident name — skips the slow cn det on
-        // clean cards (~halves snap latency); only reads it when the name is unsure
-        // AND the rect is a real detect (guide-crop cn reads are 0% + pure latency).
-        try { const g = await identifyGated(rect, colIds, detected); ocrLines = g.lines; cnNum = g.cnNum; cnSet = g.cnSet; idr = g.idr || {};
-          if(g.tm){ tmr.nameMs = g.tm.nameMs; tmr.cnMs = g.tm.cnMs; } } catch(_e){}
-      }
-      if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
-
-      // 5. resolve the top guess + a readable candidate list
-      const META = window.CardScanner.state.cards;
-      const byId = capture._byId || (capture._byId = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
-      const orderedIds = (idr.top3 && idr.top3.length) ? idr.top3.concat(colour.map(c => c.id)) : colour.map(c => c.id);
-      const seenL = new Set(), cands = [];
+    }
+    if(job.holdsOcr){ job.holdsOcr = false; qaOcrHoldRef.current = Math.max(0, qaOcrHoldRef.current - 1); }
+    if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
+    // 4. resolve candidates + finalize the row NOW (the cn refinement never holds it)
+    const META = window.CardScanner.state.cards;
+    const byId = capture._byId || (capture._byId = (() => { const m = new Map(); for(const c of META) if(!m.has(c.id)) m.set(c.id, c); return m; })());
+    const candsOf = (theIdr) => {
+      const orderedIds = (theIdr.top3 && theIdr.top3.length) ? theIdr.top3.concat(colIds) : colIds;
+      const seenL = new Set(), out = [];
       for(const id of orderedIds){ const m = byId.get(id); if(!m) continue; const k = (m.name||"")+"|"+(m.version||""); if(seenL.has(k)) continue; seenL.add(k);
-        cands.push({ id, name: m.name, version: m.version, rarity: m.rarity, colourScore: (colour.find(c => c.id === id) || {}).score ?? null });
-        if(cands.length >= 6) break; }
-      const top = cands[0] || null;
-      const live = previewRef.current && previewRef.current.disp ? { id: previewRef.current.disp.id, name: lbl(previewRef.current.disp), textOk: !!previewRef.current.textOk } : null;
-
-      // 6. assemble the QA reasoning payload + save (image + debug; no collection write)
-      tmr.totalMs = Date.now() - tSnap;
-      trc("snap", { ms: tmr.totalMs }); traceRef.current.n.snaps++;
-      const debug = {
-        v: 3, kind: "qa-snap", ts: Date.now(),
-        conf: idr.conf || null, source: idr.source || null, nameConf: idr.nameConf || null,
-        nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
-        detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
-        topGuess: top, candidates: cands,
-        names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
-        cn: { num: cnNum ?? null, set: cnSet ?? null },
-        ocrLines: (ocrLines || []).slice(0, 10),
-        liveAmbientGuess: live,
-        // telemetry v3 — enough context to replay the experience offline:
-        // per-stage ms, the trailing ambient event trace, what the last live OCR
-        // reads actually looked at, and the device profile.
-        timings: tmr,
-        trace: traceRef.current.ev.slice(-150),
-        counters: Object.assign({}, traceRef.current.n),
-        ocrThumbs: ocrThumbRef.current.map(x => ({ t: x.t, src: x.src, img: x.thumb })),
-        device: traceRef.current.device || deviceBlock(),
-      };
-      const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
-      const rawBlob = rawCanvas ? await canvasToBlob(rawCanvas, 900) : null;
-      // filmstrip: the last ~6 ambient frames (~1.8s) stitched oldest→newest —
-      // the closest thing to "watching the video" of how the snap was approached.
-      let stripBlob = null;
+        out.push({ id, name: m.name, version: m.version, rarity: m.rarity, colourScore: (colour.find(c => c.id === id) || {}).score ?? null });
+        if(out.length >= 6) break; }
+      return out;
+    };
+    let cands = candsOf(idr);
+    if(lock && idr.source === "live-lock" && (!cands.length || cands[0].id !== lock.id))
+      cands = [{ id: lock.id, name: lock.name, version: lock.version, rarity: lock.rarity, colourScore: null }].concat(cands).slice(0, 6);
+    let top = cands[0] || null;
+    const rowConf = (lock && idr.source === "live-lock") ? "lock" : (idr.conf || "low");
+    tmr.rowMs = Date.now() - job.tSnap;
+    updateQaRow(rid, { status: "done", guess: qaLabelOf(top), conf: rowConf,
+      alts: (rowConf === "lock" || rowConf === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+    trc("snap-id", { ms: tmr.rowMs, conf: idr.conf || null, src: idr.source || null, lock: lock ? 1 : 0 });
+    // 5. collector-number REFINEMENT — lull-time only. On-phone the cn read is
+    // ~9s at a ~25% read rate AND the OCR worker is serial, so a cn started
+    // while the user is mid-flow would stall the NEXT card's name reads. It runs
+    // strictly when: name undecided, real detect (guide-crop cn ROI =
+    // background), no newer snap waiting, and no quad seen for 2.5s (the user
+    // paused — reviewing rows / phone down). If it lands, the row upgrades in
+    // place — same-character guard as before.
+    const ns0 = idr.names || [];
+    const versionTied = ns0.length >= 2 && (ns0[0].name || "") === (ns0[1].name || "") && (ns0[0].score - ns0[1].score) < 0.06;
+    let ambientLull = false;
+    if(!lock && detected && (idr.source !== "name" || versionTied) && ocrReadyRef.current){
+      // wait up to ~4s for the lull to develop (user lowering the phone after
+      // the snap); a new snap or a live quad in view cancels the refinement.
+      for(let w = 0; w < 8; w++){
+        if(qaJobsRef.current.q.length) break;
+        if(Date.now() - (ambientRef.current.lastQuadAt || 0) > 2500){ ambientLull = true; break; }
+        await new Promise(res => setTimeout(res, 500));
+      }
+    }
+    if(ambientLull && !qaJobsRef.current.q.length){
+      try {
+        const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
+        tmr.cnMs = num.cnMs || 0;
+        if(num.cnNum){
+          const idr2 = window.CardScanner.identify({ lines: ocrLines, cnNum: num.cnNum, cnSet: num.cnSet, colourRanked: colIds }) || {};
+          let accept = false;
+          if(idr.source !== "name") accept = !!(idr2.top3 && idr2.top3.length);
+          else {
+            const m2 = (idr2.top3 || [])[0];
+            const c2 = m2 && (idr2.names || []).concat(ns0).find(n => n.id === m2);
+            accept = !!(c2 && ns0[0] && (c2.name || "") === (ns0[0].name || ""));
+          }
+          if(accept){
+            cnNum = num.cnNum; cnSet = num.cnSet; idr = idr2;
+            cands = candsOf(idr); top = cands[0] || top;
+            const rc = idr.conf || "low";
+            updateQaRow(rid, { guess: qaLabelOf(top), conf: rc,
+              alts: (rc === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+            trc("snap-cn", { ms: tmr.cnMs, num: num.cnNum, set: num.cnSet || null, conf: idr.conf || null });
+          }
+        }
+      } catch(_e){}
+    }
+    // 6. flywheel payload + upload (fire-and-forget — network never gates a row)
+    tmr.totalMs = Date.now() - job.tSnap;
+    const debug = {
+      v: 4, kind: "qa-snap", ts: job.tSnap, usedLiveLock: !!lock, lockStale: !!(lock && job.lockVerify),
+      conf: lock ? "high" : (idr.conf || null), source: idr.source || null, nameConf: idr.nameConf || null,
+      nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
+      detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
+      topGuess: top, candidates: cands,
+      names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
+      cn: { num: cnNum ?? null, set: cnSet ?? null },
+      ocrLines: (ocrLines || []).slice(0, 10),
+      liveAmbientGuess: job.live,
+      timings: tmr,
+      trace: job.trace, counters: job.counters, ocrThumbs: job.thumbs,
+      device: traceRef.current.device || deviceBlock(),
+    };
+    const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
+    const rawBlob = job.rawCanvas ? await canvasToBlob(job.rawCanvas, 900) : null;
+    let stripBlob = null;
+    try { if(job.stripCanvas) stripBlob = await new Promise(res => job.stripCanvas.toBlob(res, "image/jpeg", 0.7)); } catch(_e){}
+    if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob, stripBlob);
+  };
+  const snapForQA = useCallback(() => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    const now = Date.now();
+    if(now - qaTapAtRef.current < 350) return;   // one snap per tap (shutter + tap-anywhere)
+    qaTapAtRef.current = now;
+    const J = qaJobsRef.current;
+    if(J.q.length >= 3){ setSavedMsg("Hold on — still identifying the last snaps"); setTimeout(() => setSavedMsg(""), 1600); return; }
+    const v = videoRef.current;
+    if(!v || !v.videoWidth){ setSavedMsg("Camera not ready — try again"); setTimeout(() => setSavedMsg(""), 1600); return; }
+    try {
+      ensureAudio(); snapFeedback();
+      // freeze the frame AT the tap — the scene moves on immediately after
+      let rawCanvas = null;
+      try {
+        const rw = Math.min(900, v.videoWidth);
+        rawCanvas = document.createElement("canvas");
+        rawCanvas.width = rw; rawCanvas.height = Math.round(rw * v.videoHeight / v.videoWidth);
+        rawCanvas.getContext("2d").drawImage(v, 0, 0, rawCanvas.width, rawCanvas.height);
+      } catch(_e){ rawCanvas = null; }
+      let bmpP;
+      try { bmpP = createImageBitmap(v, { resizeWidth: 1920 }).catch(() => null); } catch(_e){ bmpP = Promise.resolve(null); }
+      // filmstrip of the approach — stitched NOW (the ring keeps rolling for the next card)
+      let stripCanvas = null;
       try {
         const F = filmRef.current, frames = [];
         for(let k = 0; k < 6; k++){ const f = F.frames[(F.i + k) % 6]; if(f && f.c.width) frames.push(f); }
@@ -10821,27 +10953,49 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             sx.fillStyle = "#8f8"; sx.font = "11px monospace"; sx.fillText((f.t / 1000).toFixed(1) + "s", x + 3, 11);
             x += f.c.width;
           }
-          stripBlob = await new Promise(res => sc.toBlob(res, "image/jpeg", 0.7));
+          stripCanvas = sc;
         }
       } catch(_e){}
-      // fire-and-forget: the flywheel upload is a network round-trip (and bigger now
-      // at 1000px) — it must NOT block the snap feedback or the next tap. Best-effort.
-      if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob, stripBlob);
-      // in-session feedback row (thumbnail + guess + alternates) so testers see
-      // what it read without leaving the scanner; full data is in the flywheel.
-      let thumb = "";
-      try { const tc = document.createElement("canvas"); tc.width = 96; tc.height = Math.round(96 * rect.height / rect.width);
-        tc.getContext("2d").drawImage(rect, 0, 0, tc.width, tc.height); thumb = tc.toDataURL("image/jpeg", 0.7); } catch(_e){}
-      const guessLabel = top ? ((top.name || "?") + (top.version ? " - " + top.version : "")) : null;
-      const alts = cands.slice(1, 3).map(c => (c.name || "") + (c.version ? " - " + c.version : "")).filter(Boolean).join(", ");
-      const rid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
-      setQaResults(prev => [{ id: rid, ts: Date.now(), thumb, guess: guessLabel, alts }].concat(prev).slice(0, 40));
-      ensureAudio(); pingFeedback();
+      const A = ambientRef.current;
+      const lock = (A.lockText && A.lockCard) ? A.lockCard : null;
+      // stale-lock guard: a same-position card swap right before the tap leaves
+      // the OLD card's lock in place (no quad jump; the ~2.4s re-verify may not
+      // have fired yet — reproduced in the headless e2e). If the frame that
+      // proved the lock is older than ~1.2s, the job re-reads the FROZEN frame
+      // in the background and a decisive different-name read corrects the row.
+      const lockVerify = !!(lock && (now - (A.lockReadAt || 0) > 1200));
+      const livePv = previewRef.current;
+      const live = livePv && livePv.disp ? { id: livePv.disp.id, name: lbl(livePv.disp), textOk: !!livePv.textOk } : null;
+      const rid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (now + "-" + Math.random().toString(36).slice(2));
+      // the row lands IMMEDIATELY — locked answer, or "Identifying…" filled by the job
+      setQaResults(prev => [{ id: rid, ts: now, thumb: rawCanvas ? thumbOf(rawCanvas) : "",
+        guess: lock ? qaLabelOf(lock) : null, alts: "",
+        conf: lock ? "lock" : null, status: lock ? "done" : "identifying" }].concat(prev).slice(0, 40));
       setQaCount(n => n + 1);
-      setSavedMsg(top ? ("Saved — guessed " + guessLabel + " ✓") : "Saved (no match) ✓");
-      setTimeout(() => setSavedMsg(""), 2200);
-    } catch(_e){ setSavedMsg("Snap failed — try again"); setTimeout(()=>setSavedMsg(""), 2000); }
-    finally { qaBusyRef.current = false; }
+      trc("snap", { lock: lock ? 1 : 0 }); traceRef.current.n.snaps++;
+      if(lock){ setSavedMsg("✓ " + qaLabelOf(lock) + " — next card"); setTimeout(() => setSavedMsg(""), 1400); }
+      // snapshot the telemetry BEFORE the release below extends it
+      const job = { rid, tSnap: now, rawCanvas, bmpP, lock, lockVerify, live, stripCanvas,
+        trace: traceRef.current.ev.slice(-150),
+        counters: Object.assign({}, traceRef.current.n),
+        thumbs: ocrThumbRef.current.map(x => ({ t: x.t, src: x.src, img: x.thumb })),
+        holdsOcr: false };
+      // this card is DONE — release the ambient lock/votes/epoch so the badge
+      // hunts the NEXT card at full cadence instead of holding the old name.
+      // (Same-position stack rips never quad-jump, so without this the next
+      // card sat on the slow ~2.4s re-verify path — and the badge showing the
+      // previous card's name over the new card read as "it changed cards".)
+      A.frames = []; A.nameVotes = []; A.ocrTries = 0; A.epoch++;
+      A.lockKey = null; A.lockCard = null; A.lockText = false; A.pinged = false;
+      A.challengerKey = null; A.challengerCount = 0; A.armed = true; A.committedKey = null;
+      A.snapFlashUntil = Date.now() + 1100;
+      previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); }
+      trc("snap-release");
+      // an unconfirmed snap needs the OCR worker next — ambient reads yield to it
+      if(!lock && ocrReadyRef.current){ job.holdsOcr = true; qaOcrHoldRef.current++; }
+      J.q.push(job);
+      runQaQueue();
+    } catch(_e){ setSavedMsg("Snap failed — try again"); setTimeout(() => setSavedMsg(""), 2000); }
   }, [user, onSignIn]);
 
   const resume = () => { setResult(null); setRdy(false); steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 }; setStatus("Place ONE card on a plain surface"); };
@@ -10990,6 +11144,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // reasoning → upload for review. No staging, no add, no collection writes.
     const qpv = preview;
     const qmoney = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
+    const qaConfChip = (cf) => cf === "lock" ? html`<span class="scanner-qa-conf lock" title="Snapped from the live ✓-confirmed ID">✓</span>`
+      : cf === "high" ? html`<span class="scanner-qa-conf high" title="High confidence">✓</span>`
+      : cf === "medium" ? html`<span class="scanner-qa-conf med" title="Medium confidence">≈</span>`
+      : html`<span class="scanner-qa-conf low" title="Low confidence — check the alternates">?</span>`;
     below = html`<div class="scanner-ambient scanner-qa">
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
@@ -10998,22 +11156,25 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         </div>
         ${user ? html`<div class="scanner-amb-mid">
                  ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">🔦</button>` : null}
-                 <button class="scanner-shutter scanner-amb-add ready" onClick=${snapForQA} aria-label="Snap this card">📸</button>
+                 <button class=${"scanner-shutter scanner-amb-add ready" + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label="Snap this card"
+                   title=${qpv && qpv.textOk ? "Log this card and move to the next" : "Snap — identifies in the background"}>📸</button>
                </div>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
         <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
-      <div class="scanner-qa-note">The live guess shows above (✓ name = text-confirmed). Each 📸 saves the photos (card, last frames) + the scanner's full reasoning &amp; timing trace for our review. <b>Nothing is added to any collection.</b></div>
+      <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, 📸 logs it instantly. Not confirmed yet? 📸 still captures and identifies in the background, so you can move straight to the next card. Each snap saves the photos + full reasoning for our review. <b>Nothing is added to any collection.</b></div>
       <div class="scanner-session">
         <div class="scanner-session-list">
           ${qaResults.length === 0
-            ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b> (or tap anywhere on the camera). Hold close — one card, good light.</div>`
-            : qaResults.map(x => html`<div class="scanner-session-row" key=${x.id}>
-                <img class="scanner-session-thumb" src=${x.thumb} loading="lazy"/>
+            ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b> (or tap anywhere on the camera). Hold close — one card, good light. No need to wait between snaps.</div>`
+            : qaResults.map(x => html`<div class=${"scanner-session-row" + (x.status === "identifying" ? " scanner-qa-pending" : "")} key=${x.id}>
+                ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
                 <div class="scanner-qa-rowinfo">
-                  <span class="scanner-session-name">${x.guess || "(no match)"}</span>
-                  ${x.alts ? html`<span class="scanner-qa-alts">also: ${x.alts}</span>` : null}
+                  ${x.status === "identifying"
+                    ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
+                    : html`<span class="scanner-session-name">${qaConfChip(x.conf)} ${x.guess || "(no match)"}</span>`}
+                  ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
                 </div>
               </div>`)}
         </div>
