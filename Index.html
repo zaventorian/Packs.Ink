@@ -138,7 +138,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=273">
+<link rel="stylesheet" href="styles.css?v=274">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -196,7 +196,7 @@
 <!-- Scanner is admin-gated (~2 users); defer keeps it off every visitor's
      critical path. Both scripts only attach globals used when the scan modal
      opens, long after DOMContentLoaded. -->
-<script src="scanner.js?v=270" defer></script>
+<script src="scanner.js?v=274" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -9557,12 +9557,12 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
-const SCAN_WORKER_URL = "scanner-worker.js?v=270";
+const SCAN_WORKER_URL = "scanner-worker.js?v=274";
 // PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
 // in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
-const OCR_WORKER_URL = "scanner-ocr-worker.js?v=259";
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=274";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -9721,6 +9721,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       ow.onerror = () => {};
       ocrWorkerRef.current = ow;
     } catch(e){ /* no OCR worker → colour-only still works */ }
+    // dev/e2e escape hatch: lets a devtools session (or the headless e2e) read
+    // the live trace + ambient state without auth. Modal is admin-gated anyway.
+    try { window.__scanQA = { trace: traceRef.current, amb: ambientRef.current, opened: openedAtRef.current }; } catch(_e){}
     (async () => {
       if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }
       try { await window.CardScanner.load(); }
@@ -10022,8 +10025,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           // when the jump SUSTAINS 2+ consecutive frames — a real card swap
           // moves the quad and keeps it moved.
           if(jumped){ A.frames = []; A.challengerKey = null; A.challengerCount = 0; A.nameVotes = []; A.ocrTries = 0; A.epoch++; A.armed = true; A.committedKey = null;
+            A.firstQuadAt = Date.now(); traceRef.current.n.jumps++; trc("jump");
             if(!A.lockText){ A.lockKey = null; A.lockCard = null; A.pinged = false; } }
-          if(A.lockText && A.jumpStreak >= 3){ A.lockKey = null; A.lockCard = null; A.lockText = false; A.pinged = false; }
+          if(A.lockText && A.jumpStreak >= 3){ A.lockKey = null; A.lockCard = null; A.lockText = false; A.pinged = false; trc("unlock", { why: "jump" }); }
           const frame = new Map(), cardOf = new Map();
           for(const x of res){ const k = x.card.art_key; if(!frame.has(k) || x.color > frame.get(k)){ frame.set(k, x.color); cardOf.set(k, x.card); } }
           A.frames.push({ frame, cardOf });
@@ -10049,12 +10053,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
               if(topKey === A.lockKey){ A.challengerKey = null; A.challengerCount = 0; }
               else if(aggOf(topKey) / (aggOf(A.lockKey) || 1) >= 1.18){
                 if(A.challengerKey === topKey) A.challengerCount++; else { A.challengerKey = topKey; A.challengerCount = 1; }
-                if(A.challengerCount >= 4){ A.lockKey = topKey; A.lockCard = latestCard.get(topKey) || A.lockCard; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.ocrDoneKey = null; }
+                if(A.challengerCount >= 4){ A.lockKey = topKey; A.lockCard = latestCard.get(topKey) || A.lockCard; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; trc("lockC-switch"); }
               } else { A.challengerKey = null; A.challengerCount = 0; }
             }
             // (colour-lock key out of window, or a text lock) → just keep holding
           } else if(enough){
-            A.lockKey = topKey; A.lockCard = latestCard.get(topKey); A.lockText = false; A.challengerKey = null; A.challengerCount = 0;
+            A.lockKey = topKey; A.lockCard = latestCard.get(topKey); A.lockText = false; A.challengerKey = null; A.challengerCount = 0; trc("lockC");
           }
           const dispKey = A.lockKey || topKey;
           const dispCard = (A.lockKey && A.lockCard) ? A.lockCard : latestCard.get(dispKey);
@@ -10093,6 +10097,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             if(pvKeyRef.current !== "@reading"){ pvKeyRef.current = "@reading"; setPreview(null); }
             label = { name: "Identifying…", low: null, mkt: null, confident: false };
           }
+          // badge-state transitions: ok = text-confirmed, guess = colour
+          // fallback shown, id = "Identifying…". The flip COUNT is the
+          // "badge jumping between cards" complaint, quantified.
+          const bst = A.lockText ? "ok:" + dispKey : ((top1 && showGuess) ? "guess:" + dispKey : "id");
+          if(A.badgeState !== bst){ A.badgeState = bst; traceRef.current.n.badgeFlips++; trc("badge", { s: bst.length > 46 ? bst.slice(0, 46) : bst }); }
           // Fire the name-OCR as soon as a quad exists — NOT gated on the
           // 4-frame steady lock (that gate added ~1s before the good signal
           // even started). One read in flight at a time; after 3 misses drop
@@ -10107,9 +10116,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             A.ocrBusy = true; A.ocrTries++;
             const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
             // alternate the OCR source: odd tries read the detect+rectify, even
-            // tries read the raw centre crop — so a WRONG quad (art-box lock,
+            // tries read the raw guide crop — so a WRONG quad (art-box lock,
             // whose rectify contains no text) can't starve the name read forever.
-            triggerOcrRef.current(A.epoch, colorIds, (A.ocrTries % 2 === 0) ? "only" : false).finally(() => { ambientRef.current.ocrBusy = false; });
+            // Once TEXT-LOCKED the quad is proven good, so re-verify always uses
+            // the rectify — alternating there burned half the (already slow)
+            // re-verify cadence on guide crops that read nothing (e2e trace).
+            triggerOcrRef.current(A.epoch, colorIds, (!A.lockText && A.ocrTries % 2 === 0) ? "only" : false).finally(() => { ambientRef.current.ocrBusy = false; });
           }
           // opt-in auto-add — prefers a text-CONFIRMED identity; the colour
           // margin path only applies once OCR has had its shots (showGuess).
@@ -10132,7 +10144,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         // old 3-frame (~450ms) wipe meant ordinary hand wobble reset a correct
         // text lock back to colour guessing — the "had it right, then went back
         // to a wrong card" complaint.
-        if(A.emptyFrames >= 13){ A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.nameVotes = []; A.ocrTries = 0; A.epoch++; A.pinged = false; }
+        if(A.emptyFrames >= 13){ A.frames = []; previewRef.current = null; if(pvKeyRef.current){ pvKeyRef.current = ""; setPreview(null); } A.voteKey = null; A.lockKey = null; A.lockCard = null; A.lockText = false; A.challengerKey = null; A.challengerCount = 0; A.nameVotes = []; A.ocrTries = 0; A.epoch++; A.pinged = false;
+          if(A.firstQuadAt || A.badgeState){ traceRef.current.n.wipes++; trc("wipe"); } A.firstQuadAt = 0; A.badgeState = ""; }
         // Detection-free identity: the quad detector misses cards that are
         // plainly in view (validated on QA snaps — the guide-crop fallback read
         // names fine). If detection has been dry for ~0.6s, OCR a raw center
@@ -10242,6 +10255,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){}
   };
   const pingFeedback = () => {
+    traceRef.current.n.pings++; trc("ping");
     try { navigator.vibrate && navigator.vibrate(30); } catch(_e){}
     try {
       const ctx = audioCtxRef.current; if(ctx){
@@ -10271,6 +10285,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // collection. Nothing touches the real collection until the user reviews the
     // list and taps "Save to collection" (saveSessionToCollection).
     const p = priceOf(g);
+    // stash both printings' identities + prices so the staged row can flip
+    // Non-Foil ⇄ Foil at review time without re-resolving the group (the scan
+    // itself can't tell foil from non-foil — that's a review-time call).
+    const pxOf = (row) => row ? { low: row["Low Price"] ?? null, mkt: row["TCGPlayer Market"] ?? row["Market Price"] ?? null } : null;
+    const prN = g && g.normal ? g.normal.tcg_printing : null;
+    const prF = g && g.foil ? g.foil.tcg_printing : null;
     const eid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : String(Date.now() + Math.random());
     setSession(prev => {
       const i = prev.findIndex(x => x.key === key);
@@ -10278,9 +10298,28 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       return [{ eid, key, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(card)),
         rarity: card.rarity, low: p.low, mkt: p.mkt, qty: 1, art_key: card.art_key,
         thumb: SCAN_THUMB(card.id), cands: (cands || []).slice(0, 4), expanded: false,
-        predicted: card.id, _blob: null }, ...prev];
+        predicted: card.id, _blob: null,
+        hasFoilPair: !!(prN && prF), prN, prF,
+        pxN: g ? pxOf(g.normal) : null, pxF: g ? pxOf(g.foil) : null }, ...prev];
     });
   };
+  // review-time printing flip on a staged row (merges into an existing row for
+  // the other printing if one is already staged).
+  const swapFoil = (eid) => setSession(prev => {
+    const i = prev.findIndex(x => x.eid === eid); if(i < 0) return prev;
+    const x = prev[i];
+    if(!x.hasFoilPair) return prev;
+    const toFoil = x.printing === x.prN;
+    const pr2 = toFoil ? x.prF : x.prN;
+    if(!pr2) return prev;
+    const key2 = x.cardId + ":" + pr2;
+    const px = (toFoil ? x.pxF : x.pxN) || { low: null, mkt: null };
+    const cp = prev.slice();
+    const j = cp.findIndex(y => y.key === key2);
+    if(j >= 0){ cp[j] = { ...cp[j], qty: cp[j].qty + x.qty }; cp.splice(i, 1); return cp; }
+    cp[i] = { ...x, key: key2, printing: pr2, low: px.low, mkt: px.mkt };
+    return cp;
+  });
   // stash the scanned photo (blob) on the row so a later correction can log it as
   // a hard-negative training example.
   const attachBlob = (key, blob) => setSession(prev => { const i = prev.findIndex(x => x.key === key); if(i < 0) return prev; const cp = prev.slice(); cp[i] = { ...cp[i], _blob: blob }; return cp; });
@@ -10353,7 +10392,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const triggerOcr = async (epoch, colorIds, allowGuideCrop) => {
     try {
       const v = videoRef.current; if(!v || !v.videoWidth) return;
-      let rect = null;
+      const tFire = Date.now();
+      let rect = null, src = "rect";
       if(allowGuideCrop !== "only"){
         const bmp = await createImageBitmap(v, { resizeWidth: 1600 });
         const r = await post("capture", { bitmap: bmp, outW: 1000, outH: 1400 }, [bmp]);
@@ -10366,15 +10406,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // crop. This is the escape hatch for a WRONG quad: when detection locks the
       // card's inner art frame, the rectify contains no text at all — alternating
       // to the raw scene gives the name a chance to read anyway.
-      if(!rect && allowGuideCrop) rect = guideCropCanvas();
+      if(!rect && allowGuideCrop){ rect = guideCropCanvas(); src = "guide"; }
       if(!rect) return;
+      stashOcrThumb(rect, src);
+      traceRef.current.n.ocrFires++;
       const o = await ocrCardRegions(rect, { doNumber: false });
-      if(!o.lines || !o.lines.length) return;
+      const readMs = Date.now() - tFire;
+      traceRef.current.ocrMs.push(readMs);
+      if(traceRef.current.ocrMs.length > 200) traceRef.current.ocrMs.shift();
+      if(!o.lines || !o.lines.length){ traceRef.current.n.ocrEmpty++; trc("ocr-none", { ms: readMs, src }); return; }
       const A = ambientRef.current;
-      if(A.epoch !== epoch) return;   // card changed while we were reading
+      if(A.epoch !== epoch){ trc("ocr-stale", { ms: readMs }); return; }   // card changed while we were reading
       const idr = window.CardScanner.identify({ lines: o.lines, cnNum: null, cnSet: null, colourRanked: colorIds || [] });
-      if(!idr || !idr.top3 || !idr.top3.length) return;
+      if(!idr || !idr.top3 || !idr.top3.length){ trc("ocr-res", { ms: readMs, src, n: o.lines.length, conf: "none" }); return; }
       const topId = idr.top3[0];
+      trc("ocr-res", { ms: readMs, src, n: o.lines.length, top: topId, conf: idr.nameConf || "low",
+        mc: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null });
       A.nameVotes.push({ id: topId, conf: idr.nameConf || "low" });
       if(A.nameVotes.length > 4) A.nameVotes.shift();
       const L = A.nameVotes.length;
@@ -10396,6 +10443,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       previewRef.current = pv; pvKeyRef.current = chosen.art_key + ":1:t"; setPreview(pv);
       if(A.lockKey !== chosen.art_key) A.pinged = false;   // a NEW card pings again
       A.lockKey = chosen.art_key; A.lockCard = chosen; A.lockText = true; A.challengerKey = null; A.challengerCount = 0;
+      traceRef.current.n.confirms++;
+      trc("confirm", { top: chosen.id, try: A.ocrTries,
+        ms: A.firstQuadAt ? Date.now() - A.firstQuadAt : null });   // ms = quad→confirmed (the felt "time to ping")
       // one ping per identification — and a re-confirm of the SAME card within a
       // few seconds (spurious lock release on a noisy scene) stays silent.
       if(!A.pinged && !(A.lastPingKey === chosen.art_key && Date.now() - (A.lastPingAt || 0) < 6000)){
@@ -10532,6 +10582,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(qaBusyRef.current) return;
     if(!user){ onSignIn && onSignIn(); return; }
     qaBusyRef.current = true; setSavedMsg("Snapping…");
+    const tSnap = Date.now();
+    const tmr = { rectMs: 0, colourMs: 0, nameMs: 0, cnMs: 0, totalMs: 0 };
     try {
       // 0. grab the RAW camera frame first (before any await moves the scene) —
       // uploaded alongside the rectify so detection failures can be tuned
@@ -10548,6 +10600,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       } catch(_e){ rawCanvas = null; }
       // 1. high-res rectify (fall back to the guide crop)
       let rect = null, detected = false, detConf = 0, detLandscape = false;
+      const tRect = Date.now();
       if(workerRef.current && v && v.videoWidth){
         try {
           const bmp = await createImageBitmap(v, { resizeWidth: 1920 });
@@ -10560,11 +10613,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           }
         } catch(_e){}
       }
+      tmr.rectMs = Date.now() - tRect;
       if(!rect) rect = guideCropCanvas();
       if(!rect){ setSavedMsg("Couldn't read it — frame the card and snap again"); setTimeout(()=>setSavedMsg(""), 2200); return; }
 
       // 2. colour match (keep scores) + 3. OCR + 4. identify — same pipeline as capture()
       let colour = [];
+      const tCol = Date.now();
       try {
         const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
         const seenc = new Set();
@@ -10572,13 +10627,15 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           colour.push({ id: x.card.id, name: x.card.name, version: x.card.version, score: Math.round((x.color || 0) * 1000) / 1000 });
           if(colour.length >= 10) break; }
       } catch(_e){}
+      tmr.colourMs = Date.now() - tCol;
       const colIds = colour.map(c => c.id);
       let ocrLines = [], cnNum = null, cnSet = null, idr = {};
       if(ocrReadyRef.current && window.CardScanner.identify){
         // number read is GATED behind a confident name — skips the slow cn det on
         // clean cards (~halves snap latency); only reads it when the name is unsure
         // AND the rect is a real detect (guide-crop cn reads are 0% + pure latency).
-        try { const g = await identifyGated(rect, colIds, detected); ocrLines = g.lines; cnNum = g.cnNum; cnSet = g.cnSet; idr = g.idr || {}; } catch(_e){}
+        try { const g = await identifyGated(rect, colIds, detected); ocrLines = g.lines; cnNum = g.cnNum; cnSet = g.cnSet; idr = g.idr || {};
+          if(g.tm){ tmr.nameMs = g.tm.nameMs; tmr.cnMs = g.tm.cnMs; } } catch(_e){}
       }
       if(!idr.source) idr = (window.CardScanner.identify ? window.CardScanner.identify({ lines: ocrLines, cnNum, cnSet, colourRanked: colIds }) : {}) || {};
 
@@ -10594,8 +10651,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const live = previewRef.current && previewRef.current.disp ? { id: previewRef.current.disp.id, name: lbl(previewRef.current.disp), textOk: !!previewRef.current.textOk } : null;
 
       // 6. assemble the QA reasoning payload + save (image + debug; no collection write)
+      tmr.totalMs = Date.now() - tSnap;
+      trc("snap", { ms: tmr.totalMs }); traceRef.current.n.snaps++;
       const debug = {
-        v: 2, kind: "qa-snap", ts: Date.now(),
+        v: 3, kind: "qa-snap", ts: Date.now(),
         conf: idr.conf || null, source: idr.source || null, nameConf: idr.nameConf || null,
         nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
         detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
@@ -10604,12 +10663,41 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         cn: { num: cnNum ?? null, set: cnSet ?? null },
         ocrLines: (ocrLines || []).slice(0, 10),
         liveAmbientGuess: live,
+        // telemetry v3 — enough context to replay the experience offline:
+        // per-stage ms, the trailing ambient event trace, what the last live OCR
+        // reads actually looked at, and the device profile.
+        timings: tmr,
+        trace: traceRef.current.ev.slice(-150),
+        counters: Object.assign({}, traceRef.current.n),
+        ocrThumbs: ocrThumbRef.current.map(x => ({ t: x.t, src: x.src, img: x.thumb })),
+        device: traceRef.current.device || deviceBlock(),
       };
       const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
       const rawBlob = rawCanvas ? await canvasToBlob(rawCanvas, 900) : null;
+      // filmstrip: the last ~6 ambient frames (~1.8s) stitched oldest→newest —
+      // the closest thing to "watching the video" of how the snap was approached.
+      let stripBlob = null;
+      try {
+        const F = filmRef.current, frames = [];
+        for(let k = 0; k < 6; k++){ const f = F.frames[(F.i + k) % 6]; if(f && f.c.width) frames.push(f); }
+        if(frames.length >= 2){
+          const fh = Math.max.apply(null, frames.map(f => f.c.height));
+          const sc = document.createElement("canvas");
+          sc.width = frames.reduce((s, f) => s + f.c.width, 0); sc.height = fh + 14;
+          const sx = sc.getContext("2d");
+          sx.fillStyle = "#000"; sx.fillRect(0, 0, sc.width, sc.height);
+          let x = 0;
+          for(const f of frames){
+            sx.drawImage(f.c, x, 14);
+            sx.fillStyle = "#8f8"; sx.font = "11px monospace"; sx.fillText((f.t / 1000).toFixed(1) + "s", x + 3, 11);
+            x += f.c.width;
+          }
+          stripBlob = await new Promise(res => sc.toBlob(res, "image/jpeg", 0.7));
+        }
+      } catch(_e){}
       // fire-and-forget: the flywheel upload is a network round-trip (and bigger now
       // at 1000px) — it must NOT block the snap feedback or the next tap. Best-effort.
-      if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob);
+      if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob, stripBlob);
       // in-session feedback row (thumbnail + guess + alternates) so testers see
       // what it read without leaving the scanner; full data is in the flywheel.
       let thumb = "";
@@ -10634,7 +10722,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(m === mode) return;
     setResult(null); setPreview(null); previewRef.current = null; pvKeyRef.current = ""; setFH("");
     steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 };
-    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false };
+    ambientRef.current = { frames: [], voteKey: null, margin: 0, armed: true, committedKey: null, emptyFrames: 0, noDet: 0, lastQuad: null, wasJumped: false, ocrBusy: false, rearmTimer: 0, lockKey: null, lockCard: null, lockText: false, challengerKey: null, challengerCount: 0, tick: 0, nameVotes: [], ocrTries: 0, epoch: 0, pinged: false, firstQuadAt: 0, badgeState: "" };
+    trc("mode", { m });
     if(m === "ambient") ensureAudio();
     setMode(m);
     setStatus(m === "ambient" ? "Hover over a card" : "Place ONE card on a plain surface");
@@ -10643,7 +10732,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // data flywheel: log a (rectified photo -> confirmed card) example so we can
   // train a real-photo matcher later. corrected=true rows (the scanner's top guess
   // was wrong and the user fixed it) are the gold hard-negatives. Best-effort.
-  const uploadSample = async (cardId, predictedId, corrected, printing, blob, debug, rawBlob) => {
+  const uploadSample = async (cardId, predictedId, corrected, printing, blob, debug, rawBlob, stripBlob) => {
     try {
       if(!user || !blob || !sbClient) return;
       const uid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
@@ -10657,6 +10746,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           const rawPath = user.id + "/" + uid + "_raw.jpg";
           const upr = await sbClient.storage.from("scan-samples").upload(rawPath, rawBlob, { contentType: "image/jpeg", upsert: false });
           if(upr && !upr.error) debug.rawPath = rawPath;
+        } catch(_e){}
+      }
+      // …and the 6-frame filmstrip of the approach (telemetry v3).
+      if(stripBlob && debug){
+        try {
+          const stripPath = user.id + "/" + uid + "_strip.jpg";
+          const ups = await sbClient.storage.from("scan-samples").upload(stripPath, stripBlob, { contentType: "image/jpeg", upsert: false });
+          if(ups && !ups.error) debug.stripPath = stripPath;
         } catch(_e){}
       }
       const row = {
@@ -10770,12 +10867,15 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           ${qpv ? html`<span class="scanner-amb-now-name">${lbl(qpv.disp)}${qpv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${qmoney(qpv.mkt ?? qpv.low)}</span>`
                 : html`<span class="scanner-amb-now-empty">${!workerReady ? "Loading detector…" : (detected ? "Identifying…" : "Point at one card")}</span>`}
         </div>
-        ${user ? html`<button class="scanner-shutter scanner-amb-add ready" onClick=${snapForQA} aria-label="Snap this card">📸</button>`
+        ${user ? html`<div class="scanner-amb-mid">
+                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">🔦</button>` : null}
+                 <button class="scanner-shutter scanner-amb-add ready" onClick=${snapForQA} aria-label="Snap this card">📸</button>
+               </div>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
         <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
-      <div class="scanner-qa-note">The live guess shows above (✓ name = text-confirmed). Each 📸 saves the photo + the scanner's full reasoning for our review. <b>Nothing is added to any collection.</b></div>
+      <div class="scanner-qa-note">The live guess shows above (✓ name = text-confirmed). Each 📸 saves the photos (card, last frames) + the scanner's full reasoning &amp; timing trace for our review. <b>Nothing is added to any collection.</b></div>
       <div class="scanner-session">
         <div class="scanner-session-list">
           ${qaResults.length === 0
@@ -10803,6 +10903,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
                : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : "Loading detector…")}</span>`}
         </div>
         ${user ? html`<div class="scanner-amb-mid">
+                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">🔦</button>` : null}
                  <button class="scanner-amb-snap" onClick=${snapForQA}
                    title="QA snap — saves this photo + the scanner's full guess & reasoning for review later. Does NOT stage or add the card."
                    aria-label="QA snap">📸${qaCount ? html` <span class="scanner-amb-snap-n">${qaCount}</span>` : null}</button>
@@ -10824,18 +10925,21 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             ? html`<div class="scanner-session-empty">${savedMsg ? "Saved. Keep scanning to stage more." : html`Point at a card and tap <b>＋</b> to stage it. Fix any wrong matches, then <b>Save</b> — <u>nothing is added to your collection until you tap Save</u>.`}</div>`
             : session.map(x => html`<div class=${"scanner-session-row" + (Number(x.mkt ?? x.low ?? 0) >= 20 ? " valuable" : "")} key=${x.eid}>
                 <img class="scanner-session-thumb" src=${x.thumb} loading="lazy" onClick=${() => toggleRow(x.eid)}/>
-                <span class="scanner-session-name" onClick=${() => toggleRow(x.eid)}>${x.name}</span>
+                <span class="scanner-session-name" onClick=${() => toggleRow(x.eid)}>${x.name}${x.printing && x.printing !== "Normal" ? html` <span class="scanner-session-pr">${x.printing === "Holofoil" ? "Holo" : x.printing}</span>` : null}</span>
                 <span class="scanner-session-qty">×${x.qty}</span>
                 <span class="scanner-session-price">${money(x.mkt ?? x.low)}</span>
                 <button class="scanner-session-rm" onClick=${() => removeRow(x.eid)} aria-label="Remove from list">×</button>
-                ${x.expanded && x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts">
-                  <div class="scanner-session-alts-lbl">Wrong card? Tap the right one:</div>
+                ${x.expanded && ((x.cands && x.cands.length > 1) || x.hasFoilPair) ? html`<div class="scanner-session-alts">
+                  ${x.hasFoilPair ? html`<button class="scanner-session-foilbtn" onClick=${() => swapFoil(x.eid)}>
+                    ⇄ Make it ${x.printing === x.prN ? ((x.prF === "Holofoil" ? "Holo" : x.prF) || "Foil") : "Non-Foil"}${(() => { const px = x.printing === x.prN ? x.pxF : x.pxN; const m = px && (px.mkt ?? px.low); return m != null ? " (" + money(m) + ")" : ""; })()}
+                  </button>` : null}
+                  ${x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts-lbl">Wrong card? Tap the right one:</div>
                   <div class="scanner-cand-row">
                     ${x.cands.map(cc => html`<button key=${cc.art_key} class=${"scanner-cand" + (cc.art_key === x.art_key ? " top" : "")} onClick=${() => correctEntry(x.eid, cc)}>
                       <img src=${SCAN_THUMB(cc.id)} alt=${lbl(toDisp(cc))} loading="lazy"/>
                       <span class="scanner-cand-name">${lbl(toDisp(cc))}</span>
                     </button>`)}
-                  </div>
+                  </div>` : null}
                 </div>` : null}
               </div>`)}
         </div>
