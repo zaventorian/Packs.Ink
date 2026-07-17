@@ -215,8 +215,8 @@ def main():
             r["likely_lot"] = bool(LOT_HINT.search(row.get("title") or ""))
             flags["unmatched"].append(r)
 
-        if args.verbose or i % 100 == 0:
-            print(f"  [{i}/{len(rows)}] {row['item_id']} ocr_cn={ocr_cn}/{cn_conf} grade={ocr_grade}")
+        if args.verbose or i % 25 == 0:
+            print(f"  [{i}/{len(rows)}] {row['item_id']} ocr_cn={ocr_cn}/{cn_conf} grade={ocr_grade}", flush=True)
 
     for k in flags:
         flags[k].sort(key=lambda r: (r.get("price") or 0), reverse=True)
