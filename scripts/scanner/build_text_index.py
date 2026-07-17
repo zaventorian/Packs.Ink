@@ -23,8 +23,13 @@ def main():
     load_dotenv(HERE.parent / ".env")
     DATA.mkdir(parents=True, exist_ok=True)
     sb = Supabase()
+    # printed set code per set_id ("1".."13", "P1", "D23", ...) — the same code
+    # printed on the card's bottom line next to the collector number
+    # ("147/204 · EN · 3"), so an OCR'd (set, number) pair keys cnBySet exactly.
+    sets = sb.select("sets", columns="id,code")
+    set_code = {s["id"]: (s.get("code") or "").strip().upper() or None for s in sets}
     rows = sb.select("cards",
-        columns="id,name,version,card_type,classifications,cost,strength,willpower,lore,inkable,ink,collector_number,text,flavor_text",
+        columns="id,name,version,set_id,card_type,classifications,cost,strength,willpower,lore,inkable,ink,collector_number,text,flavor_text",
         filters={"image_normal": "not.is.null"})
     out = []
     for r in rows:
@@ -37,6 +42,7 @@ def main():
             "id": r["id"],
             "name": r.get("name"), "version": r.get("version"),
             "type": r.get("card_type"), "classifications": cls,
+            "set": set_code.get(r.get("set_id")),
             "cost": r.get("cost"), "strength": r.get("strength"),
             "willpower": r.get("willpower"), "lore": r.get("lore"),
             "cn": (r.get("collector_number") or ""),
@@ -45,12 +51,14 @@ def main():
     (DATA / "text_index.json").write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
     print(f"wrote text_index.json: {len(out)} cards")
 
-    # slim SHIPPABLE version the PWA loads: id + name + version + blob (+ exact-
-    # match fields cost/strength/willpower/cn for boosting). ~150KB gzipped.
+    # slim SHIPPABLE version the PWA loads: id + name + version + blob + the
+    # exact-match keys (set code + collector number → cnBySet). NOTE: `s` is the
+    # PRINTED SET CODE (was strength pre-2026-07-14 — nothing ever consumed it as
+    # strength; scanner.js buildNameDB keys cnBySet on it). c/w were dead weight.
     REPO = HERE.parent.parent
     slim = [{
         "id": c["id"], "n": c["name"], "v": c["version"], "b": c["blob"],
-        "c": c["cost"], "s": c["strength"], "w": c["willpower"], "cn": c["cn"],
+        "s": c["set"], "cn": c["cn"],
     } for c in out]
     (REPO / "scanner" / "text.json").write_text(json.dumps(slim, separators=(",", ":")), encoding="utf-8")
     sz = (REPO / "scanner" / "text.json").stat().st_size

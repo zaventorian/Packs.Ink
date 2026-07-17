@@ -28,6 +28,16 @@ PASSTHROUGH_FOLDERS = ("Logos", "scripts", "supabase", ".github")
 
 
 class SPAHandler(http.server.SimpleHTTPRequestHandler):
+    # MIME overrides checked before the platform map. Windows' mimetypes
+    # consults the REGISTRY, which can hand .mjs/.wasm a wrong type —
+    # a non-JS MIME hard-breaks the dynamic import() inside onnxruntime's
+    # WASM glue (vendor/ort/), which Netlify serves correctly in prod.
+    extensions_map = {
+        ".wasm": "application/wasm",
+        ".mjs": "text/javascript",
+        ".onnx": "application/octet-stream",
+    }
+
     # Force no-cache for Index.html / styles.css / logo.js so live edits
     # actually show up after a normal reload. Browsers (especially Chrome)
     # otherwise serve stale copies via the disk cache even when mtime

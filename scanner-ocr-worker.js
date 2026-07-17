@@ -24,8 +24,15 @@
  */
 "use strict";
 
-var ORT_VER = "1.20.1";
-var ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@" + ORT_VER + "/dist/";
+// onnxruntime-web is VENDORED same-origin (vendor/ort/, v1.20.1) — the 2026-06-27
+// audit moved every boot lib off CDNs after the unpkg outage blank-page crash;
+// the OCR engine was the one CDN dependency left. A jsdelivr blip would have
+// silently degraded the scanner to colour-only (~30% top-1) with no error
+// surfaced. Same-origin also means the SW runtime cache + _headers apply.
+// MUST be root-absolute ("/vendor/…"): ort loads its wasm glue via dynamic
+// import(), and a bare "vendor/…" prefix is treated as an unresolvable module
+// specifier (verified: "Failed to resolve module specifier"), not a relative path.
+var ORT_BASE = "/vendor/ort/";
 
 // PP-OCRv3 det preprocessing (rapidocr config.yaml, verbatim)
 var DET_MEAN = [0.485, 0.456, 0.406];
@@ -260,6 +267,7 @@ function handleOcr(d) {
   // pixel height and crowd it out of the top-4, leaving identify() with only rules
   // text (it then mis-fused to a wrong card). 6 keeps the title in the candidate set
   // while still carrying the smaller VERSION subtitle for same-named disambiguation.
+  var t0 = Date.now(), tName = 0;
   var namePromise = doName
     ? ocrRegion(card, 0, 0, W, Math.round(H * 0.74), "min", DET_SIDE).then(function (lines) {
         var cand = lines.filter(function (l) {
@@ -270,9 +278,15 @@ function handleOcr(d) {
     : Promise.resolve([]);
 
   namePromise.then(function (namelines) {
+    tName = Date.now() - t0;
+    var t1 = Date.now();
     var numPromise = doNumber ? readNumber(card, W, H) : Promise.resolve({ cnNum: null, cnSet: null });
     return numPromise.then(function (num) {
-      self.postMessage({ type: "result", id: d.id, lines: namelines, cnNum: num.cnNum, cnSet: num.cnSet });
+      // nameMs/cnMs: on-device per-region latency for the QA telemetry — the
+      // field-latency profile can't be reproduced offline (WASM speed varies
+      // 10-30x between phones and the headless preview).
+      self.postMessage({ type: "result", id: d.id, lines: namelines, cnNum: num.cnNum, cnSet: num.cnSet,
+        nameMs: doName ? tName : 0, cnMs: doNumber ? (Date.now() - t1) : 0 });
     });
   }).catch(function (err) {
     self.postMessage({ type: "result", id: d.id, lines: [], cnNum: null, cnSet: null, error: String(err && err.message || err) });
@@ -293,7 +307,23 @@ function parseCN(txt) {
   var m = t.match(/(\d{1,3})\s*\/\s*(\d{2,3})/)        // a real slash (clean read)
        || t.match(/(\d{1,3})\s*[1lI|]\s*(\d{2,3})/)     // slash misread as 1/l/I/|
        || t.match(/(\d{1,3})\s+(\d{2,3})(?!\d)/);        // slash dropped -> a space
-  if (m) return { cnNum: m[1].replace(/^0+(?=\d)/, ""), cnTot: m[2] };
+  if (m) {
+    // SET code: the bottom line prints it right after the language token —
+    // "147/204 · EN · 3". Only trust a set read anchored on a clean language
+    // token (EN/FR/DE/IT) AFTER the number match; a bare trailing digit could be
+    // artist-credit noise. (set,number) keys cnBySet in scanner.js — near-unique
+    // → the version/set disambiguator (kills the Mirabel-142→Mulan-142 class).
+    var rest = t.slice(m.index + m[0].length);
+    // (?:^|[^A-Za-z]) instead of \b: rec sometimes glues the whole line
+    // ("147/204EN3") and \b can't split a digit from a letter.
+    var sm = rest.match(/(?:^|[^A-Za-z])(?:EN|FR|DE|IT)(?![A-Za-z])[^0-9A-Za-z]{0,4}(\d{1,2})(?!\d)/);
+    var cnSet = null;
+    if (sm) { var sv = sm[1].replace(/^0+(?=\d)/, ""); if (+sv >= 1 && +sv <= 30) cnSet = sv; }
+    return { cnNum: m[1].replace(/^0+(?=\d)/, ""), cnTot: m[2], cnSet: cnSet };
+  }
+  // promo form: the "total" IS the set code ("4/P1 · EN") — accept P/Q/C/D codes
+  m = t.match(/(\d{1,3})\s*[\/1lI|]\s*([PQCD]\d{1,2}|D23)\b/i);
+  if (m) return { cnNum: m[1].replace(/^0+(?=\d)/, ""), cnTot: null, cnSet: m[2].toUpperCase() };
   return null;
 }
 // Two bottom-left ROIs, upscaled so rec sees the tiny digits, det+rec, parseCN.
@@ -320,7 +350,7 @@ function readNumber(card, W, H) {
       lines.sort(function (a, b) { return a.x0 - b.x0; }); // left-to-right
       var txt = lines.map(function (l) { return l.text; }).join(" ");
       var cn = parseCN(txt);
-      if (cn) return { cnNum: cn.cnNum, cnSet: null };
+      if (cn) return { cnNum: cn.cnNum, cnSet: cn.cnSet || null };
       return tryNext();
     });
   }

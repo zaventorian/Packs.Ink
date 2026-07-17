@@ -19,7 +19,8 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
-  var IDXV = "?v=2"; // bump when color.bin/index.json content changes (e.g. WB rebuild)
+  var IDXV = "?v=3"; // bump when color.bin/index.json content changes (v3 = Set 13 rebuild 2026-07-14)
+  var TXTV = "?v=3"; // bump when text.json content/shape changes (v3 = `s` is the printed SET CODE)
 
   var state = {
     loaded: false,
@@ -199,7 +200,7 @@
   function loadText() {
     if (text.loaded) return Promise.resolve(text);
     if (text.loading) return text.loading;
-    text.loading = fetch(BASE + "text.json").then(function (r) { return r.json(); }).then(function (cards) {
+    text.loading = fetch(BASE + "text.json" + TXTV).then(function (r) { return r.json(); }).then(function (cards) {
       text.cards = cards;
       var N = cards.length, df = Object.create(null);
       text.toks = new Array(N);
@@ -275,8 +276,10 @@
   function buildNameDB(){
     if(nameDB || !text.cards) return;
     var cards = text.cards, N = cards.length, i;
-    // cnLoose: collector-number → [ids] (across all sets). cnBySet: "set|number"
-    // → [ids] (near-unique: 1-2 cards, the printings). byId: id → meta.
+    // cnLoose: collector-number → [ids] (across all sets). cnBySet: "SETCODE|number"
+    // → [ids] (near-unique: 1-2 cards, the printings). `s` in text.json v3 is the
+    // PRINTED set code ("1".."13", "P1", …) — the same token the OCR worker reads
+    // off the card's bottom line, so the two sides key identically. byId: id → meta.
     nameDB = { meta: new Array(N), cnLoose: Object.create(null), cnBySet: Object.create(null), byId: Object.create(null) };
     for(i=0;i<N;i++){
       var c = cards[i], nm = c.n || "", ver = c.v || "", full = (nm + " " + ver).replace(/\s+/g," ").trim();
@@ -286,7 +289,7 @@
       nameDB.meta[i] = m; nameDB.byId[c.id] = m;
       if(c.cn != null){ var num = String(c.cn).replace(/\D/g,""); if(num){
         (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id);
-        if(c.s != null){ var k = c.s + "|" + num; (nameDB.cnBySet[k] = nameDB.cnBySet[k] || []).push(c.id); }
+        if(c.s){ var k = String(c.s).toUpperCase() + "|" + num; (nameDB.cnBySet[k] = nameDB.cnBySet[k] || []).push(c.id); }
       }}
     }
   }
@@ -364,7 +367,8 @@
     if(opts.cnNum != null && nameDB){
       var num = String(opts.cnNum).replace(/\D/g, "");
       if(num){
-        if(opts.cnSet != null && nameDB.cnBySet[opts.cnSet + "|" + num]) numIds = nameDB.cnBySet[opts.cnSet + "|" + num];
+        var setKey = opts.cnSet != null ? String(opts.cnSet).toUpperCase() + "|" + num : null;
+        if(setKey && nameDB.cnBySet[setKey]) numIds = nameDB.cnBySet[setKey];
         else numIds = nameDB.cnLoose[num] || [];
       }
     }
