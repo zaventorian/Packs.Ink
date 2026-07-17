@@ -151,7 +151,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=274">
+<link rel="stylesheet" href="styles.css?v=275">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -25685,7 +25685,29 @@ const UpcomingSCsBox = () => {
   // App URL-cleanup effect) so the link wins over localStorage on a fresh open.
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
   const scParams = (() => { try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); } })();
-  const pZip = scParams.get("sczip"), pCtry = scParams.get("scc"), pDist = scParams.get("scdist"), pDate = scParams.get("scdate");
+  const pZip = scParams.get("sczip"), pCtry = scParams.get("scc"), pDist = scParams.get("scdist"), pDate = scParams.get("scdate"), pMode = scParams.get("scmode");
+  // Which event type the box shows: "all" (Set Championships + Prereleases
+  // merged in one search), "sc" (competitive Set Championships only), or
+  // "prerelease" (a set's launch-weekend sealed events only). The two tables
+  // share an identical column list + tile/modal layout, so a mode is just which
+  // table(s) to read + which label to print. "all" reads both and tags each row
+  // with _kind so mixed tiles/modals still label correctly.
+  const [mode, setMode] = useState(() => {
+    try {
+      const raw = (pMode || localStorage.getItem("packsink:scMode") || "all").toLowerCase();
+      if(raw === "prerelease" || raw === "pre" || raw === "pr") return "prerelease";
+      if(raw === "sc" || raw === "champ" || raw === "championships") return "sc";
+      return "all";
+    } catch { return "all"; }
+  });
+  const isPre = mode === "prerelease", isAll = mode === "all";
+  // Component-level labels (used for the title / empty states). In "all" mode
+  // per-row labels come from _kind instead — see scKindLabel below.
+  const KIND_LABEL = isPre ? "Prerelease" : "Set Championship";
+  const KIND_PLURAL = isAll ? "Lorcana Events" : isPre ? "Prereleases" : "Set Championships";
+  // Label for one result row, honoring its _kind tag in mixed ("all") mode.
+  const scKindLabel = (row) => (row && row._kind === "pre") ? "Prerelease"
+    : (row && row._kind === "sc") ? "Set Championship" : KIND_LABEL;
   const [zip, setZip] = useState(() => { try { return pZip || localStorage.getItem("packsink:scZip") || ""; } catch { return pZip || ""; } });
   const [radius, setRadius] = useState(() => {
     const fromUrl = parseInt(pDist, 10);
@@ -25707,6 +25729,7 @@ const UpcomingSCsBox = () => {
   const [country, setCountry] = useState(() => { try { return (pCtry || localStorage.getItem("packsink:scCountry") || "US").toUpperCase(); } catch { return "US"; } });
   const didAuto = useRef(false);
   useEffect(() => { try { localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
+  useEffect(() => { try { localStorage.setItem("packsink:scMode", mode); } catch {} }, [mode]);
   useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dateFrom); } catch {} }, [dateFrom]);
@@ -25735,14 +25758,25 @@ const UpcomingSCsBox = () => {
       setOrigin({lat, lng, city: o.city, state: o.state, zip: z, country: ctry});
       const dLa = r/69, dLo = r/(69*Math.max(0.15, Math.cos(lat*Math.PI/180)));
       const today = new Date().toISOString().slice(0,10);
-      const {data, error} = await sbClient.from("set_championships")
-        .select("event_id,name,set_name,store_name,store_website,city,state,country,start_datetime,end_datetime,timezone,full_address,latitude,longitude,capacity,cost_cents,currency,gameplay_format,url")
-        .gte("latitude", lat-dLa).lte("latitude", lat+dLa)
-        .gte("longitude", lng-dLo).lte("longitude", lng+dLo)
-        .gte("start_datetime", today)
-        .order("start_datetime").limit(800);
-      if(error) throw error;
-      const out = (data || [])
+      const cols = "event_id,name,set_name,store_name,store_website,city,state,country,start_datetime,end_datetime,timezone,full_address,latitude,longitude,capacity,cost_cents,currency,gameplay_format,url";
+      // One bounding-box query against a table, rows tagged with their _kind so
+      // mixed "all"-mode tiles/modals can label per row.
+      const queryTable = async (table, kind) => {
+        const {data, error} = await sbClient.from(table)
+          .select(cols)
+          .gte("latitude", lat-dLa).lte("latitude", lat+dLa)
+          .gte("longitude", lng-dLo).lte("longitude", lng+dLo)
+          .gte("start_datetime", today)
+          .order("start_datetime").limit(800);
+        if(error) throw error;
+        return (data || []).map(e => ({...e, _kind: kind}));
+      };
+      // "all" reads both tables in parallel; single modes read just one.
+      const tables = mode === "all"
+        ? [["set_championships","sc"], ["prerelease_events","pre"]]
+        : mode === "prerelease" ? [["prerelease_events","pre"]] : [["set_championships","sc"]];
+      const fetched = (await Promise.all(tables.map(([t,k]) => queryTable(t,k)))).flat();
+      const out = fetched
         .map(e => ({...e, _mi: haversineMi(lat, lng, e.latitude, e.longitude), _day: scLocalDay(e.start_datetime, e.timezone)}))
         .filter(e => e._mi <= r)
         // by upcoming DAY (the event's LOCAL day, matching the tile), closest first within the day.
@@ -25751,13 +25785,21 @@ const UpcomingSCsBox = () => {
       try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
     } catch(e){ setErr(String(e && e.message || e)); setResults(null); }
     finally { setLoading(false); }
-  }, []);
+  }, [mode]);
 
   // Auto-run once on mount when a ZIP is already saved.
   useEffect(() => {
     if(!didAuto.current && scZipReady(zip, country)){ didAuto.current = true; runSearch(zip, radius, country); }
   }, [zip, radius, runSearch]);
 
+  // Switching Set Championships <-> Prereleases re-queries the other table.
+  useEffect(() => {
+    if(!didAuto.current) return;          // nothing searched yet
+    setSel(null); setResults(null); setErr(null);
+    if(scZipReady(zip, country)) runSearch(zip, radius, country);
+  }, [mode]);
+
+  const pickMode = (m) => { if(m !== mode){ setSel(null); setResults(null); setErr(null); setMode(m); } };
   const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip, country)) runSearch(zip, r, country); };
 
   // Optional client-side date filter applied on top of the radius results.
@@ -25780,6 +25822,7 @@ const UpcomingSCsBox = () => {
     if(zip) u.searchParams.set("sczip", zip);
     u.searchParams.set("scc", country);
     u.searchParams.set("scdist", String(radius));
+    if(mode !== "all") u.searchParams.set("scmode", mode);
     if(dateActive) u.searchParams.set("scdate", dateFrom);
     return u.toString();
   };
@@ -25796,7 +25839,7 @@ const UpcomingSCsBox = () => {
     <div class="sc-box-head">
       <button class="sc-box-title sc-box-title-btn" type="button" onClick=${()=>setExpanded(x=>!x)}
         title=${expanded?"Exit full screen":"Expand to full screen"}>
-        Upcoming Set Championships Near Me
+        Upcoming ${KIND_PLURAL} Near Me
         <span class="sc-title-expand-hint" aria-hidden="true">${expanded?"✕":"⤢"}</span>
       </button>
       <div class="sc-box-head-actions">
@@ -25815,6 +25858,14 @@ const UpcomingSCsBox = () => {
       </div>
     </div>
     ${(!collapsed || expanded) && html`<div class="sc-box-body">
+      <div class="sc-mode-toggle" role="group" aria-label="Event type">
+        <button type="button" class=${"sc-mode-btn"+(mode==="all"?" active":"")}
+          aria-pressed=${mode==="all"} onClick=${()=>pickMode("all")}>All</button>
+        <button type="button" class=${"sc-mode-btn"+(mode==="sc"?" active":"")}
+          aria-pressed=${mode==="sc"} onClick=${()=>pickMode("sc")}>Set Champs</button>
+        <button type="button" class=${"sc-mode-btn"+(mode==="prerelease"?" active":"")}
+          aria-pressed=${mode==="prerelease"} onClick=${()=>pickMode("prerelease")}>Prereleases</button>
+      </div>
       <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius, country); }}>
         <select class="sc-country-select" value=${country} aria-label="Country"
           onChange=${e=>{ setCountry(e.target.value); setZip(""); setOrigin(null); setResults(null); setErr(null); }}>
@@ -25855,7 +25906,7 @@ const UpcomingSCsBox = () => {
       ${err && html`<div class="sc-msg sc-msg-err">${err}</div>`}
       ${loading && html`<div class="sc-msg muted">Finding events…</div>`}
       ${!loading && results && results.length === 0 && html`<div class="sc-msg muted">
-        No Set Championships within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
+        No ${KIND_PLURAL} within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
       ${!loading && results && results.length > 0 && visible.length === 0 && html`<div class="sc-msg muted">
         No events on that date. Pick another day or turn the filter off.</div>`}
       ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class="sc-results">
@@ -25869,7 +25920,10 @@ const UpcomingSCsBox = () => {
               </span>
               <span class="sc-tile-main">
                 <span class="sc-tile-store">${e.store_name}</span>
-                <span class="sc-tile-loc">${e.city}, ${e.state}</span>
+                <span class="sc-tile-loc">
+                  ${isAll && html`<span class=${"sc-tile-kind sc-tile-kind--"+(e._kind==="pre"?"pre":"sc")}>${e._kind==="pre"?"Prerelease":"Set Champ"}</span>`}
+                  ${e.city}, ${e.state}
+                </span>
               </span>
               <span class="sc-tile-mi">${fmtSCMiles(e._mi)}</span>
             </button>
@@ -25881,16 +25935,17 @@ const UpcomingSCsBox = () => {
         </div>
       </div>`}
       ${!loading && !results && !err && html`<div class="sc-msg muted">
-        Enter your ZIP to find Wilds Unknown Set Championships near you.</div>`}
+        Enter your ZIP to find ${isAll?"Set Championships & Prereleases":isPre?"set-launch Prereleases":"Set Championships"} near you.</div>`}
     </div>`}
     ${sel && (() => {
       const cost = fmtSCCost(sel.cost_cents, sel.currency);
+      const selLabel = scKindLabel(sel);
       return html`<div class="sc-modal-overlay" onClick=${()=>setSel(null)}>
         <div class="sc-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-modal="true">
           <button class="sc-modal-close" onClick=${()=>setSel(null)} aria-label="Close">×</button>
-          <div class="sc-modal-set">${sel.set_name} Set Championship</div>
+          <div class="sc-modal-set">${sel.set_name} ${selLabel}</div>
           <h3 class="sc-modal-store">${sel.store_name}</h3>
-          ${sel.name && sel.name.toLowerCase() !== `${(sel.set_name||"").toLowerCase()} set championship` && html`<div class="sc-modal-evname">${sel.name}</div>`}
+          ${sel.name && sel.name.toLowerCase() !== `${(sel.set_name||"").toLowerCase()} ${selLabel.toLowerCase()}` && html`<div class="sc-modal-evname">${sel.name}</div>`}
           <div class="sc-modal-when">${fmtSCDate(sel.start_datetime, sel.timezone)} · ${fmtSCTime(sel.start_datetime, sel.timezone)}</div>
           <dl class="sc-modal-rows">
             <div><dt>Where</dt><dd>${sel.full_address || `${sel.city}, ${sel.state}`}</dd></div>

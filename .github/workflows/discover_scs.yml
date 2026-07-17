@@ -36,7 +36,10 @@ jobs:
   discover:
     name: Discover Set Championships
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Two full RPH scans now run in this job (Set Championships + Prereleases),
+    # each unioning several passes over the ~18k upcoming-Lorcana index, plus the
+    # roster scrape. Bumped 20 -> 35 to leave headroom.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -67,6 +70,18 @@ jobs:
             echo "Discovering SCs for ALL sets"
             python scripts/elo/discover_wu_scs.py --all-sets
           fi
+
+      # Discover set-launch Prereleases into public.prerelease_events (sibling of
+      # set_championships; powers the "Prereleases" mode of the home box). Same
+      # RPH event source, classified by discover_prereleases.py. Independent of
+      # the SC row it upserts to, so order vs the SC step doesn't matter — it just
+      # needs the same env. Idempotent upsert on event_id; past launch weekends
+      # fall out of the site's start_datetime>=today query on their own.
+      - name: Discover & upsert Prereleases
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/discover_prereleases.py
 
       # Refresh elo_tracked_stores from the freshly-upserted SCs. A Chicagoland
       # store (incl. a NEW location of a chain we already track, e.g. "Chupacabra

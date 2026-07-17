@@ -158,7 +158,7 @@ FALLBACK_SETS = (
     "The First Chapter", "Rise of the Floodborn", "Into the Inklands",
     "Ursula's Return", "Shimmering Skies", "Azurite Sea", "Archazia's Island",
     "Reign of Jafar", "Fabled", "Whispers in the Well", "Winterspell",
-    "Wilds Unknown", "Attack of the Vines",
+    "Wilds Unknown", "Attack of the Vine!",
 )
 
 # Stores name the set loosely: they truncate ("Unknown"), reorder ("Unknown
