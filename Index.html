@@ -151,7 +151,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=278">
+<link rel="stylesheet" href="styles.css?v=280">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9777,6 +9777,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaTapAtRef = useRef(0);                   // tap debounce (shutter + tap-anywhere both fire)
   const qaJobsRef = useRef({ q: [], running: false }); // background identify queue — a snap never blocks the camera
   const qaOcrHoldRef = useRef(0);                 // >0: a snap's name read wants the OCR worker → ambient reads yield
+  const qaLookBusyRef = useRef(false);            // one second-look re-read in flight at a time
+  const artImgsRef = useRef(new Map());           // catalog art Image cache for the live on-card label
   const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
   const [torchOn, setTorchOn] = useState(false);
 
@@ -10014,8 +10016,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     ctx.font = "800 " + pfs + "px system-ui, sans-serif";
     const priceW = ctx.measureText(price).width;
     const padX = fs * 0.7;
-    const boxW = Math.min(bw * 0.86, Math.max(nameW, priceW) + padX * 2);
-    const boxH = fs * 1.25 + pfs * 1.2 + fs * 0.5;
+    // matched-card art column on the left (when loaded) — the visual "is that
+    // actually my card?" check without leaving the camera
+    const im = label.img || null;
+    const textH = fs * 1.25 + pfs * 1.2 + fs * 0.5;
+    const imH = im ? Math.max(textH, Math.round(bw * 0.085)) : 0;
+    const imW = im ? Math.round(imH * 5 / 7) : 0;
+    const imGap = im ? Math.round(padX * 0.7) : 0;
+    const textW = Math.max(nameW, priceW);
+    const boxW = Math.min(bw * 0.9, textW + padX * 2 + imW + imGap);
+    const boxH = Math.max(textH, im ? imH + fs * 0.45 : 0);
     let bx = mid - boxW / 2;
     let by = minY - boxH - bw * 0.015;
     if(by < 4) by = Math.min(maxY - boxH - 6, minY + 8);   // no room above → inside top
@@ -10024,13 +10034,25 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     roundRectPath(ctx, bx, by, boxW, boxH, 10); ctx.fill();
     ctx.strokeStyle = label.confident ? "rgba(90,240,130,0.85)" : "rgba(255,255,255,0.18)";
     ctx.lineWidth = 2; ctx.stroke();
+    if(im){
+      try {
+        ctx.save();
+        roundRectPath(ctx, bx + padX * 0.5, by + (boxH - imH) / 2, imW, imH, 5);
+        ctx.clip();
+        ctx.drawImage(im, bx + padX * 0.5, by + (boxH - imH) / 2, imW, imH);
+        ctx.restore();
+      } catch(_e){ try { ctx.restore(); } catch(_e2){} }
+    }
+    const tx = bx + (im ? padX * 0.5 + imW + imGap : 0);
+    const tw = boxW - (im ? padX * 0.5 + imW + imGap : 0);
+    const ty = by + (boxH - textH) / 2;
     ctx.textAlign = "center"; ctx.textBaseline = "top";
     let nm = name; ctx.font = "700 " + fs + "px system-ui, sans-serif";
-    while(ctx.measureText(nm).width > boxW - padX * 2 && nm.length > 4){ nm = nm.slice(0, -2); }
+    while(ctx.measureText(nm).width > tw - padX * 2 && nm.length > 4){ nm = nm.slice(0, -2); }
     if(nm !== name) nm = nm.replace(/…?$/, "…");
-    ctx.fillStyle = "#fff"; ctx.fillText(nm, bx + boxW / 2, by + fs * 0.5);
+    ctx.fillStyle = "#fff"; ctx.fillText(nm, tx + tw / 2, ty + fs * 0.5);
     ctx.fillStyle = "#e8c850"; ctx.font = "800 " + pfs + "px system-ui, sans-serif";
-    ctx.fillText(price, bx + boxW / 2, by + fs * 0.5 + fs * 1.2);
+    ctx.fillText(price, tx + tw / 2, ty + fs * 0.5 + fs * 1.2);
     ctx.textAlign = "start"; ctx.textBaseline = "alphabetic";
   };
   const drawOutline = (quad, bw, bh, isReady, label) => {
@@ -10220,7 +10242,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             const confident = A.lockText || (enough && A.margin > 0.16 && o.locked);
             const pv = { card: top1, disp: toDisp(top1), group: g, low: p.low, mkt: p.mkt, cands, confident, textOk: A.lockText, shiny };
             previewRef.current = pv;
-            label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident };
+            label = { name: lbl(pv.disp), low: p.low, mkt: p.mkt, confident,
+              img: artImg(pv.disp && pv.disp.thumb) };
             const pk = dispKey + ":" + (confident ? 1 : 0) + (A.lockText ? ":t" : "");
             if(pvKeyRef.current !== pk){ pvKeyRef.current = pk; setPreview(pv); }
           } else if(top1){
@@ -10242,7 +10265,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           // no detect gap), it's the only signal that the card changed — a
           // newly confirmed different name replaces the lock (confirmed may
           // only be replaced by confirmed, never by a colour guess).
-          if(ocrLive && !A.ocrBusy && !qaOcrHoldRef.current && o.smooth &&
+          // ambient reads also yield while snap jobs are queued/running: at rapid
+          // blind-snap cadence a confirm can never land before the next tap, so
+          // ambient reads were pure worker overhead inflating the row backlog
+          // (7/18 batch: 0/30 locks, rowMs 2.5s→29s). When the queue drains
+          // (deliberate pacing) ambient resumes and the ✓-lock fast path returns.
+          if(ocrLive && !A.ocrBusy && !qaOcrHoldRef.current
+             && !qaJobsRef.current.q.length && !qaJobsRef.current.running && o.smooth &&
              (A.lockText ? (A.tick % 16 === 0) : (A.ocrTries < 3 || A.tick % 8 === 0))){
             A.ocrBusy = true; A.ocrTries++;
             const colorIds = ranked.map(([k]) => { const cd = latestCard.get(k); return cd && cd.id; }).filter(Boolean);
@@ -10283,7 +10312,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         // crop so a sloppy hover still resolves instead of demanding perfect
         // framing. Slow cadence (~1/s) — it's the same OCR worker.
         const ocrLive2 = ocrReadyRef.current && !!triggerOcrRef.current;
-        if(ocrLive2 && !A.lockText && !A.ocrBusy && !qaOcrHoldRef.current && A.noDet >= 4 && A.noDet % 7 === 0){
+        if(ocrLive2 && !A.lockText && !A.ocrBusy && !qaOcrHoldRef.current
+           && !qaJobsRef.current.q.length && !qaJobsRef.current.running && A.noDet >= 4 && A.noDet % 7 === 0){
           A.ocrBusy = true; A.ocrTries++;
           triggerOcrRef.current(A.epoch, [], true).finally(() => { ambientRef.current.ocrBusy = false; });
         }
@@ -10788,6 +10818,24 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     try { return await createImageBitmap(c); } catch(_e){ return null; }
   };
   const qaLabelOf = (m) => m ? ((m.name || "?") + (m.version ? " - " + m.version : "")) : null;
+  // catalog art + price for a resolved guess — the row shows the MATCHED card's
+  // image next to the snap photo (wrong version becomes visually obvious) + price
+  const qaCardInfo = (m) => {
+    if(!m) return { img: null, price: null };
+    try {
+      const g = resolveGroup(m), p = priceOf(g);
+      return { img: toDisp(m).thumb || null, price: p.mkt ?? p.low ?? null };
+    } catch(_e){ return { img: null, price: null }; }
+  };
+  // loaded-or-loading catalog art for the on-camera label (canvas drawImage
+  // needs a COMPLETE image — returns null until the fetch lands, then draws)
+  const artImg = (url) => {
+    if(!url) return null;
+    const M = artImgsRef.current;
+    let im = M.get(url);
+    if(!im){ im = new Image(); im.decoding = "async"; im.src = url; M.set(url, im); }
+    return (im.complete && im.naturalWidth) ? im : null;
+  };
   const runQaQueue = () => {
     const J = qaJobsRef.current;
     if(J.running || !J.q.length) return;
@@ -10890,40 +10938,101 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // version honesty: conf keys on the CHARACTER. When the character's versions
     // tied on the name score AND the body-text tiebreak (scanner.js) abstained,
     // the version shown is a colour guess — the row says ≈ and keeps the alts.
-    // (The 5-min collector-number "refinement" is GONE from the snap path: 8-10s
-    // on-phone at a ~25% read rate, and its lull-wait serialized the queue.)
-    const tied0 = (a) => !!(a && a.length >= 2 && (a[0].name || "") === (a[1].name || "") && (a[0].score - a[1].score) < 0.06);
-    const verUnsure = (lock && idr.source === "live-lock")
+    // The tie must be between DIFFERENT versions — same-name reprints of a
+    // single version (Develop Your Brain base + enchanted) are not ambiguity
+    // (7/18 batch: false ≈ chips on single-version cards).
+    const tied0 = (a) => {
+      if(!a || a.length < 2) return false;
+      for(let j = 1; j < a.length; j++){
+        if((a[j].name || "") !== (a[0].name || "")) return false;
+        if((a[j].version || "") === (a[0].version || "")) continue;
+        return (a[0].score - a[j].score) < 0.06;
+      }
+      return false;
+    };
+    let verUnsure = (lock && idr.source === "live-lock")
       ? (job.lockVerBy !== "body" && tied0(job.lockNames))
       : (idr.verBy !== "body" && tied0(idr.names));
+    const rowInfo = qaCardInfo(top);
     tmr.rowMs = Date.now() - job.tSnap;
     updateQaRow(rid, { status: "done", guess: qaLabelOf(top), conf: rowConf, ver: verUnsure,
+      cardImg: rowInfo.img, price: rowInfo.price,
       alts: (!verUnsure && (rowConf === "lock" || rowConf === "high")) ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
     trc("snap-id", { ms: tmr.rowMs, conf: idr.conf || null, src: idr.source || null, lock: lock ? 1 : 0,
       vb: idr.verBy || (lock ? job.lockVerBy : null) || null, vu: verUnsure ? 1 : 0 });
-    // 5. flywheel payload + upload (fire-and-forget — network never gates a row)
-    tmr.totalMs = Date.now() - job.tSnap;
-    const debug = {
-      v: 4, kind: "qa-snap", ts: job.tSnap, usedLiveLock: !!lock, lockStale: !!(lock && job.lockVerify),
-      conf: lock ? "high" : (idr.conf || null), source: idr.source || null, nameConf: idr.nameConf || null,
-      nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
-      verBy: idr.verBy || (lock ? job.lockVerBy : null) || null,
-      verMargin: idr.verMargin ?? null, verUnsure,
-      detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
-      topGuess: top, candidates: cands,
-      names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
-      cn: { num: cnNum ?? null, set: cnSet ?? null },
-      ocrLines: (ocrLines || []).slice(0, 10),
-      liveAmbientGuess: job.live,
-      timings: tmr,
-      trace: job.trace, counters: job.counters, ocrThumbs: job.thumbs,
-      device: traceRef.current.device || deviceBlock(),
+    // 5. tail — second-look refinement + flywheel upload. Runs UN-AWAITED so the
+    // next queued snap's identify starts immediately (the awaited blob/upload
+    // prep was quietly serializing the queue: rowMs climbed 2.5s→29s on 7/18).
+    const tail = async () => {
+      try {
+        // SECOND LOOK — the 7/18 version-misses all abstained because THIS
+        // frame's det read almost nothing (["MICKEYMOUSE","MIC"], ["NALA"]…).
+        // The alternate crop (raw guide-crop vs the tight rectify) is a
+        // genuinely different input; merged lines give the body tiebreak a
+        // second chance. A decisive different-NAME read also rescues the
+        // flavor-attribution hijack (only "—Monterey Jack" read → guessed the
+        // quoted character while the real name never OCR'd).
+        // (Yield a beat first: this job is still marked running until its
+        // promise settles — checking synchronously always self-blocked.)
+        await new Promise(res => setTimeout(res, 120));
+        if(!lock && detected && (verUnsure || rowConf === "low" || rowConf === "medium")
+           && ocrReadyRef.current && window.CardScanner.identify
+           && !qaJobsRef.current.q.length && !qaJobsRef.current.running && !qaLookBusyRef.current){
+          qaLookBusyRef.current = true;
+          try {
+            const rawC = await blobToCanvas(await job.rawBlobP);
+            const altRect = rawC ? rawGuideCrop(rawC) : null;
+            if(altRect){
+              const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false });
+              const extra = (o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0);
+              if(extra.length){
+                const merged = (ocrLines || []).concat(extra);
+                const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
+                const charOf = (id) => { const m = byId.get(id); return m ? (m.name || "") : ""; };
+                const sameChar = top && idr2.top3 && idr2.top3.length && charOf(idr2.top3[0]) === (top.name || "");
+                const accept = idr2.conf === "high" && (sameChar || (idr2.nameMargin ?? 0) >= 0.15);
+                if(accept){
+                  idr = idr2; ocrLines = merged; cands = candsOf(idr); top = cands[0] || top;
+                  verUnsure = idr.verBy !== "body" && tied0(idr.names);
+                  const info2 = qaCardInfo(top);
+                  updateQaRow(rid, { guess: qaLabelOf(top), conf: idr.conf, ver: verUnsure,
+                    cardImg: info2.img, price: info2.price,
+                    alts: (!verUnsure && idr.conf === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+                  traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
+                  trc("snap-look", { conf: idr.conf, top: (idr.top3 || [])[0], flip: sameChar ? 0 : 1,
+                    vb: idr.verBy || null, n: merged.length });
+                }
+              }
+            }
+          } finally { qaLookBusyRef.current = false; }
+        }
+      } catch(_e){ qaLookBusyRef.current = false; }
+      try {
+        tmr.totalMs = Date.now() - job.tSnap;
+        const debug = {
+          v: 4, kind: "qa-snap", ts: job.tSnap, usedLiveLock: !!lock, lockStale: !!(lock && job.lockVerify),
+          conf: lock ? "high" : (idr.conf || null), source: idr.source || null, nameConf: idr.nameConf || null,
+          nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
+          verBy: idr.verBy || (lock ? job.lockVerBy : null) || null,
+          verMargin: idr.verMargin ?? null, verUnsure,
+          detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
+          topGuess: top, candidates: cands,
+          names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
+          cn: { num: cnNum ?? null, set: cnSet ?? null },
+          ocrLines: (ocrLines || []).slice(0, 10),
+          liveAmbientGuess: job.live,
+          timings: tmr,
+          trace: job.trace, counters: job.counters, ocrThumbs: job.thumbs,
+          device: traceRef.current.device || deviceBlock(),
+        };
+        const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
+        let rawBlob = null, stripBlob = null;
+        try { rawBlob = await job.rawBlobP; } catch(_e){}
+        try { stripBlob = await job.stripBlobP; } catch(_e){}
+        if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob, stripBlob);
+      } catch(_e){}
     };
-    const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
-    let rawBlob = null, stripBlob = null;
-    try { rawBlob = await job.rawBlobP; } catch(_e){}
-    try { stripBlob = await job.stripBlobP; } catch(_e){}
-    if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob, stripBlob);
+    tail();
   };
   const snapForQA = useCallback(() => {
     if(!user){ onSignIn && onSignIn(); return; }
@@ -10990,8 +11099,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const live = livePv && livePv.disp ? { id: livePv.disp.id, name: lbl(livePv.disp), textOk: !!livePv.textOk } : null;
       const rid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (now + "-" + Math.random().toString(36).slice(2));
       // the row lands IMMEDIATELY — locked answer, or "Identifying…" filled by the job
+      const lockInfo = lock ? qaCardInfo(lock) : { img: null, price: null };
       setQaResults(prev => [{ id: rid, ts: now, thumb: rawThumb,
         guess: lock ? qaLabelOf(lock) : null, alts: "",
+        cardImg: lockInfo.img, price: lockInfo.price,
         conf: lock ? "lock" : null, status: lock ? "done" : "identifying" }].concat(prev).slice(0, 40));
       setQaCount(n => n + 1);
       trc("snap", { lock: lock ? 1 : 0 }); traceRef.current.n.snaps++;
@@ -11176,7 +11287,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     below = html`<div class="scanner-ambient scanner-qa">
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
-          ${qpv ? html`<span class="scanner-amb-now-name">${lbl(qpv.disp)}${qpv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${qmoney(qpv.mkt ?? qpv.low)}</span>`
+          ${qpv ? html`${qpv.disp && qpv.disp.thumb ? html`<img class="scanner-amb-now-img" src=${qpv.disp.thumb} alt=""/>` : null}<span class="scanner-amb-now-name">${lbl(qpv.disp)}${qpv.textOk ? html` <span class="scanner-amb-ok">✓ name</span>` : null}</span><span class="scanner-amb-now-price">${qmoney(qpv.mkt ?? qpv.low)}</span>`
                 : html`<span class="scanner-amb-now-empty">${!workerReady ? "Loading detector…" : (detected ? "Identifying…" : "Point at one card")}</span>`}
         </div>
         ${user ? html`<div class="scanner-amb-mid">
@@ -11193,14 +11304,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <div class="scanner-session-list">
           ${qaResults.length === 0
             ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b> (or tap anywhere on the camera). Hold close — one card, good light. No need to wait between snaps.</div>`
-            : qaResults.map(x => html`<div class=${"scanner-session-row" + (x.status === "identifying" ? " scanner-qa-pending" : "")} key=${x.id}>
-                ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
+            : qaResults.map(x => html`<div class=${"scanner-session-row scanner-qa-row" + (x.status === "identifying" ? " scanner-qa-pending" : "")} key=${x.id}>
+                ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy" title="Your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
+                ${x.cardImg ? html`<img class="scanner-session-thumb scanner-qa-cardimg" src=${x.cardImg} loading="lazy" title="Matched card — compare with your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-cardimg empty"></span>`}
                 <div class="scanner-qa-rowinfo">
                   ${x.status === "identifying"
                     ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
                     : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.guess || "(no match)"}</span>`}
                   ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
                 </div>
+                <span class="scanner-session-price">${x.price != null ? "$" + Number(x.price).toFixed(2) : ""}</span>
               </div>`)}
         </div>
       </div>
