@@ -364,10 +364,25 @@
   // weak-signal case abstains. Floor s1>=0.22, margin >=0.12 vs the best
   // DIFFERENT version (same-version reprints share one body → grouped).
   var bodyTriCache = Object.create(null);
+  // unpadded trigrams — nmTri's boundary-space padding inflates the query set
+  // (the containment DENOMINATOR) and shaved a real decide margin (0.1205)
+  // under the 0.12 threshold; the offline calibration used unpadded sets.
+  function bodyTriSet(s){ var o = Object.create(null), i; for(i=0;i<=s.length-3;i++) o[s.substr(i,3)]=1; return o; }
   function bodyTri(id, b){
     var t = bodyTriCache[id];
-    if(!t){ t = nmTri(nmCanon(b || "")); bodyTriCache[id] = t; }
+    if(!t){ t = bodyTriSet(nmCanon(b || "").replace(/ /g, "")); bodyTriCache[id] = t; }
     return t;
+  }
+  var charCanonSet = null;   // canon'd character names (≥5 chars) for scene-mix filtering
+  function buildCharCanonSet(){
+    if(charCanonSet || !text.loaded) return charCanonSet;
+    var s = Object.create(null), i;
+    for(i=0;i<text.cards.length;i++){
+      var cn = nmCanon(text.cards[i].n || "").replace(/ /g, "");
+      if(cn.length >= 5) s[cn] = 1;
+    }
+    charCanonSet = Object.keys(s);
+    return charCanonSet;
   }
   function rankVersionsByBody(charName, lines){
     if(!text.loaded || !lines || !lines.length) return null;
@@ -375,10 +390,30 @@
     var cs = text.cards, group = [], i;
     for(i=0;i<cs.length;i++) if(nmNorm(cs[i].n || "") === nName) group.push(cs[i]);
     if(group.length < 2) return null;
-    var q = nmCanon(lines.join(" ")).replace(/ /g, "");
+    // SCENE-MIX filter (7/18 batch 4, id 225): a frame holding TWO cards mixes
+    // both cards' text into the query — the foreign card's trigrams dilute the
+    // containment ratio below the decide margin (Rapunzel stayed "Sunshine"
+    // because the Mulan lines in frame drowned the GLEAM AND GLOW signal).
+    // Drop lines that contain ANOTHER character's name; if that empties the
+    // set, keep the originals (a card whose own rules mention another name —
+    // "…named Pascal…" — degrades to an abstain, never to a wrong pick).
+    var ownCn = nmCanon(charName).replace(/ /g, "");
+    var names = buildCharCanonSet() || [];
+    var use = [], j;
+    for(i=0;i<lines.length;i++){
+      var lc = nmCanon(lines[i]).replace(/ /g, ""), foreign = false;
+      for(j=0;j<names.length;j++){
+        var nm2 = names[j];
+        if(nm2 === ownCn || (ownCn && (ownCn.indexOf(nm2) >= 0 || nm2.indexOf(ownCn) >= 0))) continue;
+        if(lc.indexOf(nm2) >= 0){ foreign = true; break; }
+      }
+      if(!foreign) use.push(lines[i]);
+    }
+    if(!use.length) use = lines;
+    var q = nmCanon(use.join(" ")).replace(/ /g, "");
     var cn = nmCanon(charName).replace(/ /g, "");
     if(cn) q = q.replace(cn, "");   // the shared name substring can't separate versions
-    var Q = nmTri(q), nQ = setSize(Q);
+    var Q = bodyTriSet(q), nQ = setSize(Q);
     if(nQ < 12) return null;        // only the name read → no body signal, abstain
     var byVer = Object.create(null), order = [], k;
     for(i=0;i<group.length;i++){
