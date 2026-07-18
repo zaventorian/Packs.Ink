@@ -10699,6 +10699,78 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){ /* best-effort */ }
   };
   triggerOcrRef.current = triggerOcr;
+  // Headless BENCH hook (QA tooling, 7/18): replay a RAW camera frame through
+  // the exact snap pipeline — detect+rectify (with the sliver gate) → colour →
+  // name read → identify → second-look merge — and report every stage. Drives
+  // the batch regression harness over the collected field frames
+  // (scripts/scanner/data/bench, gitignored) so accuracy is MEASURED on real
+  // frames before a deploy instead of asserted from spot checks. No uploads,
+  // no rows, no collection writes; inert unless called.
+  window.__scanBench = async (canvas) => {
+    const out = { detected: false, detConf: 0 };
+    let rect = null;
+    try {
+      const bmp = await createImageBitmap(canvas);
+      const bw2 = bmp.width, bh2 = bmp.height;
+      const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
+      if(r){ out.detConf = Math.round((r.conf || 0) * 100) / 100; }
+      if(r && r.buffer && r.quad && bw2){
+        const qxs = r.quad.map(p => p.x), qys = r.quad.map(p => p.y);
+        if(((Math.max(...qxs) - Math.min(...qxs)) * (Math.max(...qys) - Math.min(...qys))) < bw2 * bh2 * 0.08) r.buffer = null;
+      }
+      if(r && r.buffer){
+        const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
+        c.getContext("2d").putImageData(new ImageData(new Uint8ClampedArray(r.buffer), r.width, r.height), 0, 0);
+        rect = c; out.detected = true;
+      }
+    } catch(_e){}
+    if(!rect) rect = rawGuideCrop(canvas);
+    if(!rect) return out;
+    let colour = [];
+    try {
+      const res = window.CardScanner.searchCrop(rect, 0, 0, rect.width, rect.height, 20, 0.12);
+      const seen = new Set();
+      for(const x of res){ if(seen.has(x.card.id)) continue; seen.add(x.card.id); colour.push(x.card.id); if(colour.length >= 10) break; }
+    } catch(_e){}
+    let lines = [], idr = {};
+    try {
+      const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+      lines = o.lines || [];
+      idr = window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colour }) || {};
+    } catch(_e){}
+    out.primary = { top: (idr.top3 || [])[0] || null, conf: idr.conf || null, verBy: idr.verBy || null, nLines: lines.length };
+    try {
+      const altRect = out.detected ? rawGuideCrop(canvas) : null;   // same alternate crop the deferred look uses
+      if(altRect){
+        const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false });
+        const extra = (o2.lines || []).filter(l => lines.indexOf(l) < 0);
+        if(extra.length){
+          const merged = lines.concat(extra);
+          const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colour }) || {};
+          out.look = { top: (idr2.top3 || [])[0] || null, conf: idr2.conf || null, verBy: idr2.verBy || null, nExtra: extra.length };
+          if(idr2.conf === "high") idr = idr2;
+        }
+      }
+    } catch(_e){}
+    // idle-time COLLECTOR-NUMBER stage (the deferred look's finisher): when the
+    // answer is still version-tied or sub-high, read the cn off the rectify —
+    // set+number is an exact key that overrides both the shortest-name version
+    // fallback AND the flavor-attribution hijack. Slow (~9s on phone) but the
+    // idle look has no cadence to protect.
+    try {
+      const tied = (idr.verBy !== "body") && qaVerTied(idr.names);
+      if(out.detected && (tied || idr.conf !== "high")){
+        const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
+        if(num && num.cnNum){
+          const idr3 = window.CardScanner.identify({ lines, cnNum: num.cnNum, cnSet: num.cnSet, colourRanked: colour }) || {};
+          out.cn = { num: num.cnNum, set: num.cnSet || null, top: (idr3.top3 || [])[0] || null, conf: idr3.conf || null, src: idr3.source || null };
+          if(idr3.source === "cn+name" || (idr3.source === "cn" && idr3.conf !== "low")) idr = idr3;
+        } else { out.cn = { num: null }; }
+      }
+    } catch(_e){}
+    out.final = { top: (idr.top3 || [])[0] || null, conf: idr.conf || null, verBy: idr.verBy || null };
+    return out;
+  };
   const undoLast = () => {
     setSession(prev => {
       if(!prev.length) return prev;
@@ -11132,6 +11204,31 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
               cardImg: info2.img, price: info2.price, alts: "" });
             traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
             trc("snap-look", { conf: idr.conf, top: idr.top3[0], flip: 0, vb: "body", n: lines2.length, lockVer: 1 });
+          }
+          // idle COLLECTOR-NUMBER finisher: if the row is STILL version-tied or
+          // sub-high after the re-reads, spend the ~9s cn read on the frozen
+          // rect — set+number is an exact key that overrides both the
+          // shortest-version fallback AND the flavor-attribution hijack
+          // (batch 5: Reflecting/Power-Hamster/Ghostly-Tiger picks + 3 Dale
+          // frames hijacked by "—Monterey Jack", all with legible collector
+          // lines). Idle-only by construction (we're inside the deferred look).
+          const stillUnsure = (idr.verBy !== "body" && qaVerTied(idr.names)) || (idr.conf !== "high");
+          if(stillUnsure && detected && rectBlob){
+            const rc3 = await blobToCanvas(rectBlob);
+            if(rc3){
+              const num = await ocrCardRegions(rc3, { doName: false, doNumber: true });
+              if(num && num.cnNum){
+                const idr3 = window.CardScanner.identify({ lines: ocrLines, cnNum: num.cnNum, cnSet: num.cnSet, colourRanked: colIds }) || {};
+                if(idr3.source === "cn+name" || (idr3.source === "cn" && idr3.conf !== "low")){
+                  idr = idr3; cands = candsOf(idr); top = cands[0] || top;
+                  verUnsure = false;
+                  const info3 = qaCardInfo(top);
+                  updateQaRow(rid, { guess: qaLabelOf(top), conf: idr.conf, ver: false,
+                    cardImg: info3.img, price: info3.price, alts: "" });
+                  trc("snap-cn", { num: num.cnNum, set: num.cnSet || null, src: idr.source, top: (idr.top3 || [])[0] });
+                }
+              }
+            }
           }
         };
         if(!qaJobsRef.current.q.length && !qaJobsRef.current.running && !qaLookBusyRef.current){
