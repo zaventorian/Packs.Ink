@@ -9712,7 +9712,7 @@ const SCANNER_QA_ONLY = true;
 // upload so a test session is provably on the intended build (two field
 // sessions have already been burned testing stale code). Bump with every
 // scanner-affecting deploy, in lockstep with the SW CACHE_VERSION number.
-const SCANNER_BUILD = "b281";
+const SCANNER_BUILD = "b282";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -9784,6 +9784,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaJobsRef = useRef({ q: [], running: false }); // background identify queue — a snap never blocks the camera
   const qaOcrHoldRef = useRef(0);                 // >0: a snap's name read wants the OCR worker → ambient reads yield
   const qaLookBusyRef = useRef(false);            // one second-look re-read in flight at a time
+  const qaLookPendRef = useRef([]);               // looks deferred while snaps queue — drained at queue-idle, never dropped
   const artImgsRef = useRef(new Map());           // catalog art Image cache for the live on-card label
   const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
   const [torchOn, setTorchOn] = useState(false);
@@ -10891,6 +10892,21 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(!im){ im = new Image(); im.decoding = "async"; im.src = url; M.set(url, im); }
     return (im.complete && im.naturalWidth) ? im : null;
   };
+  // drain deferred second-looks — only while the snap queue is idle; a new tap
+  // pauses the drain (loop condition) and the rest stay queued for the next idle.
+  const drainQaLooks = () => {
+    (async () => {
+      if(qaLookBusyRef.current) return;
+      qaLookBusyRef.current = true;
+      try {
+        const P = qaLookPendRef.current;
+        while(P.length && !qaJobsRef.current.q.length && !qaJobsRef.current.running){
+          const fn = P.shift();
+          try { await fn(); } catch(_e){}
+        }
+      } finally { qaLookBusyRef.current = false; }
+    })();
+  };
   const runQaQueue = () => {
     const J = qaJobsRef.current;
     if(J.running || !J.q.length) return;
@@ -10898,7 +10914,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const job = J.q.shift();
     runQaJob(job).catch(() => {}).finally(() => {
       if(job.holdsOcr){ job.holdsOcr = false; qaOcrHoldRef.current = Math.max(0, qaOcrHoldRef.current - 1); }
-      J.running = false; runQaQueue();
+      J.running = false;
+      if(J.q.length) runQaQueue(); else drainQaLooks();
     });
   };
   const runQaJob = async (job) => {
@@ -11032,93 +11049,100 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         // (Yield a beat first: this job is still marked running until its
         // promise settles — checking synchronously always self-blocked.)
         await new Promise(res => setTimeout(res, 120));
-        // The look is NO LONGER idle-gated for unsure rows (7/18 batch 4: the
-        // queue-empty gate meant the look never fired mid-flow — both empty-OCR
-        // "Lilo" rows and the cut-crop "Perdita" went uncorrected while their
-        // raw frames plainly showed the card). A wrong row costs more than one
-        // extra ~1.5s background read. Serialized via the look mutex; a busy
-        // mutex is WAITED on (briefly), not skipped.
+        // ROUND-5 REORDER (7/18 batch 5): the always-INLINE look competed with
+        // the next snaps' primary reads on the serial OCR worker — rowMs
+        // climbed 2s→44s across the 65-snap burst. Upload goes out first (it
+        // never touches the OCR worker, and rect can be released); the look
+        // runs immediately only when the snap queue is idle, otherwise it's
+        // queued in qaLookPendRef and drained the moment the queue empties —
+        // deferred, never dropped (batch 4's skip-forever bug). Note: the
+        // uploaded row keeps the pre-look answer; snap-look trace events carry
+        // the correction for offline review.
+        let rectBlob = null;
+        try {
+          tmr.totalMs = Date.now() - job.tSnap;
+          const debug = {
+            v: 4, build: SCANNER_BUILD, kind: "qa-snap", ts: job.tSnap, usedLiveLock: !!lock, lockStale: !!(lock && job.lockVerify),
+            conf: lock ? "high" : (idr.conf || null), source: idr.source || null, nameConf: idr.nameConf || null,
+            nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
+            verBy: idr.verBy || (lock ? job.lockVerBy : null) || null,
+            verMargin: idr.verMargin ?? null, verUnsure,
+            detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
+            topGuess: top, candidates: cands,
+            names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
+            cn: { num: cnNum ?? null, set: cnSet ?? null },
+            ocrLines: (ocrLines || []).slice(0, 10),
+            liveAmbientGuess: job.live,
+            timings: tmr,
+            trace: job.trace, counters: job.counters, ocrThumbs: job.thumbs,
+            device: traceRef.current.device || deviceBlock(),
+          };
+          rectBlob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
+          rect = null;   // release the ~8MB canvas — deferred looks re-decode rectBlob
+          let rawBlob = null, stripBlob = null;
+          try { rawBlob = await job.rawBlobP; } catch(_e){}
+          try { stripBlob = await job.stripBlobP; } catch(_e){}
+          if(rectBlob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, rectBlob, debug, rawBlob, stripBlob);
+        } catch(_e){}
         const unsure = verUnsure || rowConf === "low" || rowConf === "medium" || !(ocrLines || []).length;
-        if(unsure && ocrReadyRef.current && window.CardScanner.identify){
-          for(let w = 0; w < 10 && qaLookBusyRef.current; w++) await new Promise(res => setTimeout(res, 400));
-        }
-        if(unsure && ocrReadyRef.current && window.CardScanner.identify && !qaLookBusyRef.current){
+        if(!(unsure && ocrReadyRef.current && window.CardScanner.identify)) return;
+        const doLook = async () => {
+          if(!ocrReadyRef.current || !window.CardScanner.identify) return;
+          trc("look-run", { lock: lock ? 1 : 0 });   // fires whether or not the look ACCEPTS — proves drains execute
+          const charOf = (id) => { const m = byId.get(id); return m ? (m.name || "") : ""; };
+          if(!lock && detected){
+            const rawC = await blobToCanvas(await job.rawBlobP);
+            const altRect = rawC ? rawGuideCrop(rawC) : null;
+            if(!altRect) return;
+            const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false });
+            const extra = (o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0);
+            if(!extra.length) return;
+            const merged = (ocrLines || []).concat(extra);
+            const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
+            const sameChar = top && idr2.top3 && idr2.top3.length && charOf(idr2.top3[0]) === (top.name || "");
+            const accept = idr2.conf === "high" && (sameChar || (idr2.nameMargin ?? 0) >= 0.15);
+            if(!accept) return;
+            idr = idr2; ocrLines = merged; cands = candsOf(idr); top = cands[0] || top;
+            verUnsure = idr.verBy !== "body" && tied0(idr.names);
+            const info2 = qaCardInfo(top);
+            updateQaRow(rid, { guess: qaLabelOf(top), conf: idr.conf, ver: verUnsure,
+              cardImg: info2.img, price: info2.price,
+              alts: (!verUnsure && idr.conf === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+            traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
+            trc("snap-look", { conf: idr.conf, top: (idr.top3 || [])[0], flip: sameChar ? 0 : 1,
+              vb: idr.verBy || null, n: merged.length });
+          } else if(lock && verUnsure && rectBlob){
+            // lock rows: the ambient consensus proved the CHARACTER but the
+            // version was a coin flip (7/18: locked "Sunshine" twice on a
+            // Gifted with Healing). Re-read the FROZEN frame; accept only a
+            // same-character, body-DECIDED re-version — never a character
+            // change (the stale-lock verify owns that).
+            const rc2 = await blobToCanvas(rectBlob);
+            if(!rc2) return;
+            const o2 = await ocrCardRegions(rc2, { doName: true, doNumber: false });
+            const lines2 = o2.lines || [];
+            if(!lines2.length) return;
+            const idr2 = window.CardScanner.identify({ lines: lines2, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
+            if(!(idr2.verBy === "body" && idr2.conf === "high" && idr2.top3 && idr2.top3.length
+               && charOf(idr2.top3[0]) === (lock.name || ""))) return;
+            idr = idr2; ocrLines = lines2; cands = candsOf(idr); top = cands[0] || top;
+            verUnsure = false;
+            const info2 = qaCardInfo(top);
+            updateQaRow(rid, { guess: qaLabelOf(top), conf: "high", ver: false,
+              cardImg: info2.img, price: info2.price, alts: "" });
+            traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
+            trc("snap-look", { conf: idr.conf, top: idr.top3[0], flip: 0, vb: "body", n: lines2.length, lockVer: 1 });
+          }
+        };
+        if(!qaJobsRef.current.q.length && !qaJobsRef.current.running && !qaLookBusyRef.current){
           qaLookBusyRef.current = true;
-          try {
-            const charOf = (id) => { const m = byId.get(id); return m ? (m.name || "") : ""; };
-            if(!lock && detected){
-              const rawC = await blobToCanvas(await job.rawBlobP);
-              const altRect = rawC ? rawGuideCrop(rawC) : null;
-              if(altRect){
-                const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false });
-                const extra = (o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0);
-                if(extra.length){
-                  const merged = (ocrLines || []).concat(extra);
-                  const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
-                  const sameChar = top && idr2.top3 && idr2.top3.length && charOf(idr2.top3[0]) === (top.name || "");
-                  const accept = idr2.conf === "high" && (sameChar || (idr2.nameMargin ?? 0) >= 0.15);
-                  if(accept){
-                    idr = idr2; ocrLines = merged; cands = candsOf(idr); top = cands[0] || top;
-                    verUnsure = idr.verBy !== "body" && tied0(idr.names);
-                    const info2 = qaCardInfo(top);
-                    updateQaRow(rid, { guess: qaLabelOf(top), conf: idr.conf, ver: verUnsure,
-                      cardImg: info2.img, price: info2.price,
-                      alts: (!verUnsure && idr.conf === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
-                    traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
-                    trc("snap-look", { conf: idr.conf, top: (idr.top3 || [])[0], flip: sameChar ? 0 : 1,
-                      vb: idr.verBy || null, n: merged.length });
-                  }
-                }
-              }
-            } else if(lock && verUnsure && rect){
-              // lock rows: the ambient consensus proved the CHARACTER but the
-              // version was a coin flip (7/18: locked "Sunshine" twice on a
-              // Gifted with Healing). Re-read the FROZEN frame; accept only a
-              // same-character, body-DECIDED re-version — never a character
-              // change (the stale-lock verify owns that).
-              const o2 = await ocrCardRegions(rect, { doName: true, doNumber: false });
-              const lines2 = o2.lines || [];
-              if(lines2.length){
-                const idr2 = window.CardScanner.identify({ lines: lines2, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
-                if(idr2.verBy === "body" && idr2.conf === "high" && idr2.top3 && idr2.top3.length
-                   && charOf(idr2.top3[0]) === (lock.name || "")){
-                  idr = idr2; ocrLines = lines2; cands = candsOf(idr); top = cands[0] || top;
-                  verUnsure = false;
-                  const info2 = qaCardInfo(top);
-                  updateQaRow(rid, { guess: qaLabelOf(top), conf: "high", ver: false,
-                    cardImg: info2.img, price: info2.price, alts: "" });
-                  traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
-                  trc("snap-look", { conf: idr.conf, top: idr.top3[0], flip: 0, vb: "body", n: lines2.length, lockVer: 1 });
-                }
-              }
-            }
-          } finally { qaLookBusyRef.current = false; }
+          try { await doLook(); } finally { qaLookBusyRef.current = false; drainQaLooks(); }
+        } else {
+          const P = qaLookPendRef.current;
+          P.push(doLook);
+          if(P.length > 40) P.shift();   // runaway backstop; oldest look is the least useful
         }
       } catch(_e){ qaLookBusyRef.current = false; }
-      try {
-        tmr.totalMs = Date.now() - job.tSnap;
-        const debug = {
-          v: 4, build: SCANNER_BUILD, kind: "qa-snap", ts: job.tSnap, usedLiveLock: !!lock, lockStale: !!(lock && job.lockVerify),
-          conf: lock ? "high" : (idr.conf || null), source: idr.source || null, nameConf: idr.nameConf || null,
-          nameMargin: idr.nameMargin != null ? Math.round(idr.nameMargin * 1000) / 1000 : null,
-          verBy: idr.verBy || (lock ? job.lockVerBy : null) || null,
-          verMargin: idr.verMargin ?? null, verUnsure,
-          detected, detConf: Math.round(detConf * 100) / 100, landscape: detLandscape,
-          topGuess: top, candidates: cands,
-          names: (idr.names || []).slice(0, 6).map(n => ({ id: n.id, name: n.name, version: n.version, score: Math.round((n.score || 0) * 1000) / 1000 })),
-          cn: { num: cnNum ?? null, set: cnSet ?? null },
-          ocrLines: (ocrLines || []).slice(0, 10),
-          liveAmbientGuess: job.live,
-          timings: tmr,
-          trace: job.trace, counters: job.counters, ocrThumbs: job.thumbs,
-          device: traceRef.current.device || deviceBlock(),
-        };
-        const blob = await canvasToBlob(rect, 1000); // hi-res so cn/name are re-OCR-able offline
-        let rawBlob = null, stripBlob = null;
-        try { rawBlob = await job.rawBlobP; } catch(_e){}
-        try { stripBlob = await job.stripBlobP; } catch(_e){}
-        if(blob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, blob, debug, rawBlob, stripBlob);
-      } catch(_e){}
     };
     tail();
   };
@@ -11167,18 +11191,22 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           lc.getContext("2d").drawImage(v, 0, 0, lc.width, lc.height);
           live = { c: lc, tag: "live", age: 0, sh: sharpness(lc) };
         } catch(_e){}
-        let picked = live;
+        let picked = live, bestRingSh = 0, bestRingAge = null;
         try {
           for(const sl of frameRingRef.current.slots){
             if(!sl || !sl.c.width || (now - sl.t) > 800) continue;
             const sh = sharpness(sl.c);
+            if(sh > bestRingSh){ bestRingSh = sh; bestRingAge = now - sl.t; }
             const beatsLive = !live || sh > live.sh * 1.4;
             const beatsPicked = !picked || picked === live || sh > (picked.sh || 0);
             if(beatsLive && beatsPicked) picked = { c: sl.c, tag: "ring", age: now - sl.t, sh };
           }
         } catch(_e){}
         if(picked){
-          trc("snap-frame", { src: picked.tag, age: picked.age, sh: Math.round((picked.sh || 0) / 1000) });
+          // ringSh/ringAge logged even when live wins — batch 5 had 0/66 ring
+          // picks and no way to tell if the 1.4× bar or ring staleness was why.
+          trc("snap-frame", { src: picked.tag, age: picked.age, sh: Math.round((picked.sh || 0) / 1000),
+            ringSh: Math.round(bestRingSh / 1000), ringAge: bestRingAge });
           const rw = Math.min(900, picked.c.width);
           const rc = document.createElement("canvas");
           rc.width = rw; rc.height = Math.round(rw * picked.c.height / picked.c.width);
@@ -11424,7 +11452,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <div class="scanner-session">
         <div class="scanner-session-list">
           ${qaResults.length === 0
-            ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b> (or tap anywhere on the camera). Hold close — one card, good light. No need to wait between snaps.</div>`
+            ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b>. Hold close — one card, good light. No need to wait between snaps.</div>`
             : qaResults.map(x => html`<div class=${"scanner-session-row scanner-qa-row" + (x.status === "identifying" ? " scanner-qa-pending" : "")} key=${x.id}>
                 ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy" title="Your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
                 ${x.cardImg ? html`<img class="scanner-session-thumb scanner-qa-cardimg" src=${x.cardImg} loading="lazy" title="Matched card — compare with your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-cardimg empty"></span>`}
@@ -11502,9 +11530,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>`;
   }
 
-  // QA mode: tapping anywhere on the camera snaps (fast rapid testing). Otherwise
-  // the ambient stage-tap stages a card.
-  const stageTap = SCANNER_QA_ONLY ? (user ? snapForQA : (onSignIn || null))
+  // QA mode: the 📸 BUTTON is the only shutter (7/18 field: tap-anywhere fired
+  // on incidental touches — adjusting grip, tapping to focus — and read as the
+  // scanner "auto-snapping" on its own). Signed-out taps still route to sign-in.
+  const stageTap = SCANNER_QA_ONLY ? (user ? null : (onSignIn || null))
     : ((mode === "ambient" && !result && user) ? tapCommit : null);
   return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
     <div class="scanner-head">
@@ -11520,7 +11549,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "tap to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "📸 to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
       ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
