@@ -240,7 +240,7 @@ function ocrRegion(srcCanvas, sx, sy, sw, sh, limitType, side) {
     return boxes.reduce(function (chain, b) {
       return chain.then(function () {
         return recOne(srcCanvas, sx + b.x0, sy + b.y0, sx + b.x1, sy + b.y1).then(function (txt) {
-          if (txt && txt.trim().length >= 1) res.push({ text: txt, x0: b.x0, h: b.h });
+          if (txt && txt.trim().length >= 1) res.push({ text: txt, x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1, h: b.h });
         });
       });
     }, Promise.resolve()).then(function () { return res; });
@@ -273,7 +273,32 @@ function handleOcr(d) {
         var cand = lines.filter(function (l) {
           return l.text.trim().length >= 2 && /[A-Za-z]/.test(l.text);
         }).sort(function (a, b) { return b.h - a.h; });
-        return cand.slice(0, 6).map(function (l) { return l.text; });
+        var texts = cand.slice(0, 6).map(function (l) { return l.text; });
+        if (!cand.length) return texts;
+        // SUBTITLE BAND (2026-07-18): the region-scale det misses the small
+        // VERSION subtitle on loose crops (~9-12px there), which is exactly why
+        // a character's versions tied and the pick fell to colour. det+rec a
+        // ×2.5 upscaled strip anchored directly under the NAME box — same trick
+        // readNumber uses for the collector line. Validated offline on the 192-
+        // frame field corpus: version-correct 15→20 of 41 truth rows, zero
+        // character regressions, ~1/8 of the name det's pixel cost.
+        var name = cand[0];
+        var nh = Math.max(4, name.y1 - name.y0);
+        var by0 = Math.max(0, Math.round(name.y1 - 0.15 * nh));
+        var by1 = Math.min(Math.round(H * 0.74), Math.round(name.y1 + 3.4 * nh));
+        var bx0 = Math.max(0, Math.round(name.x0 - 2.0 * nh));
+        var bw = W - bx0, bh = by1 - by0;
+        if (bh < 6 || bw < 20) return texts;
+        var us = scratch(Math.round(bw * 2.5), Math.round(bh * 2.5));
+        us.ctx.drawImage(card, bx0, by0, bw, bh, 0, 0, us.c.width, us.c.height);
+        return ocrRegion(us.c, 0, 0, us.c.width, us.c.height, "min", DET_SIDE).then(function (bl) {
+          bl.sort(function (a, b) { return a.y0 - b.y0 || a.x0 - b.x0; });
+          for (var i = 0; i < bl.length && texts.length < 10; i++) {
+            var t = bl[i].text;
+            if (t.trim().length >= 2 && texts.indexOf(t) < 0) texts.push(t);
+          }
+          return texts;
+        });
       })
     : Promise.resolve([]);
 
