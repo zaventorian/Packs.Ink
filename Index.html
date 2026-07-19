@@ -209,7 +209,7 @@
 <!-- Scanner is admin-gated (~2 users); defer keeps it off every visitor's
      critical path. Both scripts only attach globals used when the scan modal
      opens, long after DOMContentLoaded. -->
-<script src="scanner.js?v=281" defer></script>
+<script src="scanner.js?v=285" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -9691,7 +9691,7 @@ const SCAN_WORKER_URL = "scanner-worker.js?v=274";
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
 // in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
-const OCR_WORKER_URL = "scanner-ocr-worker.js?v=283";
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=285";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -9798,6 +9798,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const [qaEditOpen, setQaEditOpen] = useState(null); // rid of the row with the inline editor open (one at a time)
   const [qaEditQ, setQaEditQ] = useState("");         // editor card-search query
   const [qaDeckBusy, setQaDeckBusy] = useState(false);
+  const [qaUndo, setQaUndo] = useState(null);         // {label} — undo chip after a row delete
+  const qaUndoRef = useRef(null);                     // { row, idx, timer }
+  const [qaClearArm, setQaClearArm] = useState(false);
+  const qaRestoredRef = useRef(false);
+  const qaPersistTimerRef = useRef(0);
   const artImgsRef = useRef(new Map());           // catalog art Image cache for the live on-card label
   const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
   const [torchOn, setTorchOn] = useState(false);
@@ -9806,6 +9811,37 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
+
+  // ── QA session persistence: a killed PWA / accidental close must not eat a
+  //    100-card review session. Resolved rows mirror to IDB (debounced) on
+  //    every change; reopening the scanner within 24h restores them. Rows are
+  //    plain JSON (thumbs are small dataURLs) so this is a few MB at worst.
+  const qaPersistKey = (SCANNER_QA_ONLY && user) ? "scanSession:" + user.id : null;
+  useEffect(() => {
+    if(!qaPersistKey || qaRestoredRef.current) return;
+    qaRestoredRef.current = true;
+    (async () => {
+      try {
+        const saved = await idbGet(qaPersistKey);
+        if(!saved || !Array.isArray(saved.rows) || !saved.rows.length) return;
+        if(Date.now() - (saved.t || 0) > 24 * 3600 * 1000){ idbDel(qaPersistKey); return; }
+        setQaResults(prev => prev.length ? prev : saved.rows);
+        setSavedMsg("Restored " + saved.rows.length + " scan" + (saved.rows.length === 1 ? "" : "s") + " from your last session");
+        setTimeout(() => setSavedMsg(""), 3200);
+      } catch(_e){}
+    })();
+  }, [qaPersistKey]);
+  useEffect(() => {
+    if(!qaPersistKey) return;
+    clearTimeout(qaPersistTimerRef.current);
+    qaPersistTimerRef.current = setTimeout(() => {
+      // in-flight rows are dropped (their identify jobs die with the modal);
+      // everything else persists verbatim, including user edits + saved marks
+      const rows = qaResults.filter(x => x.status !== "identifying");
+      idbSet(qaPersistKey, { t: Date.now(), rows });
+    }, 600);
+    return () => clearTimeout(qaPersistTimerRef.current);
+  }, [qaResults, qaPersistKey]);
 
   const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
   const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
@@ -9863,7 +9899,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             const wc = document.createElement("canvas"); wc.width = 96; wc.height = 96;
             const wctx = wc.getContext("2d"); wctx.fillStyle = "#fff"; wctx.fillRect(0, 0, 96, 96);
             wctx.fillStyle = "#000"; wctx.font = "24px sans-serif"; wctx.fillText("WARM", 8, 48);
-            ocrPost(wctx.getImageData(0, 0, 96, 96).data.buffer, 96, 96, { doNumber: false });
+            ocrPost(wctx.getImageData(0, 0, 96, 96).data.buffer, 96, 96, { doNumber: false, doBand: false });
           } catch(_e){}
           return;
         }
@@ -9953,7 +9989,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const wk = ocrWorkerRef.current; if(!wk){ resolve(null); return; }
     const id = ++ocrMsgIdRef.current; ocrPendingRef.current.set(id, resolve);
     const doName = !opts || opts.doName !== false, doNumber = !opts || opts.doNumber !== false;
-    try { wk.postMessage({ type: "ocr", id, buffer, w, h, doName, doNumber }, [buffer]); }
+    const doBand = !opts || opts.doBand !== false;
+    try { wk.postMessage({ type: "ocr", id, buffer, w, h, doName, doNumber, doBand }, [buffer]); }
     catch(e){ ocrPendingRef.current.delete(id); resolve(null); }
   });
   // OCR the rectified card via the PP-OCR worker → the NAME (the tallest text on a
@@ -10659,7 +10696,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(!rect) return;
       stashOcrThumb(rect, src);
       traceRef.current.n.ocrFires++;
-      const o = await ocrCardRegions(rect, { doNumber: false });
+      // doBand:false — the subtitle-band det on every AMBIENT read is what
+      // collapsed batch 6 (nameMs 1.8s→7.3s median on-phone → serial queue
+      // backlogged → ambient starved → 1 live lock in 102 snaps → rowMs p90
+      // 260s). The hot loop reads the NAME fast; versions are refined by the
+      // deferred look (band ON there) + the idle cn finisher at queue-idle.
+      const o = await ocrCardRegions(rect, { doNumber: false, doBand: false });
       const readMs = Date.now() - tFire;
       traceRef.current.ocrMs.push(readMs);
       if(traceRef.current.ocrMs.length > 200) traceRef.current.ocrMs.shift();
@@ -10747,7 +10789,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){}
     let lines = [], idr = {};
     try {
-      const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+      // bench replays the queue-idle snap (band ON) — the flow-critical
+      // burst path skips the band, but accuracy analysis wants the full read
+      const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: true });
       lines = o.lines || [];
       idr = window.CardScanner.identify({ lines, cnNum: null, cnSet: null, colourRanked: colour }) || {};
     } catch(_e){}
@@ -11071,6 +11115,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaEditMatches = useMemo(() => {
     const q = qaEditQ.trim();
     if(q.length < 2) return [];
+    // collector-number search: the tester is HOLDING the card — "154" or
+    // "154/204" reads straight off the bottom line and beats typing a name.
+    const cnm = q.match(/^(\d{1,3})(?:\s*\/\s*\d{1,3})?$/);
+    if(cnm){
+      const num = String(parseInt(cnm[1], 10));
+      const hits = [];
+      for(const r of qaSearchPool){
+        const rn = String(r.Number || "").split("/")[0].replace(/\D/g, "");
+        if(rn && String(parseInt(rn, 10)) === num){ hits.push(r); if(hits.length >= 12) break; }
+      }
+      return hits;
+    }
     const out = [];
     for(const r of qaSearchPool){
       if(nameMatches(q, r["Product Name"])){ out.push(r); if(out.length >= 60) break; }
@@ -11177,7 +11233,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(job.lockVerify && ocrReadyRef.current && window.CardScanner.identify){
         job.holdsOcr = true; qaOcrHoldRef.current++;
         try {
-          const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+          // character-level check only — no band (speed matters, versions don't)
+          const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: false });
           ocrLines = o.lines || []; tmr.nameMs = o.nameMs || 0;
           const idrV = window.CardScanner.identify({ lines: ocrLines, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
           const vTop = (idrV.names || [])[0];
@@ -11195,7 +11252,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // batch: 0/27 snaps ever saw a text lock; no locks → no instant rows).
       job.holdsOcr = true; qaOcrHoldRef.current++;
       try {
-        const o = await ocrCardRegions(rect, { doName: true, doNumber: false });
+        // adaptive band: at deliberate pacing (queue empty) the ~4×-costlier
+        // subtitle-band read runs inline so the version is right at row-land;
+        // during a burst it's skipped (the deferred look re-reads WITH band at
+        // queue-idle) so the queue can never backlog like batch 6 did.
+        const o = await ocrCardRegions(rect, { doName: true, doNumber: false, doBand: !qaJobsRef.current.q.length });
         ocrLines = o.lines || []; tmr.nameMs = o.nameMs || 0;
         idr = window.CardScanner.identify({ lines: ocrLines, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
       } catch(_e){}
@@ -11299,13 +11360,17 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             const rawC = await blobToCanvas(await job.rawBlobP);
             const altRect = rawC ? rawGuideCrop(rawC) : null;
             if(!altRect) return;
-            const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false });
+            const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false, doBand: true });
             const extra = (o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0);
             if(!extra.length) return;
             const merged = (ocrLines || []).concat(extra);
             const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
             const sameChar = top && idr2.top3 && idr2.top3.length && charOf(idr2.top3[0]) === (top.name || "");
-            const accept = idr2.conf === "high" && (sameChar || (idr2.nameMargin ?? 0) >= 0.15);
+            // a rescue verdict carries its own field-calibrated dominance
+            // margins (scanner.js rescueByQuote) — accept it like a decisive
+            // read even though its conf is deliberately capped at medium.
+            const accept = (idr2.conf === "high" && (sameChar || (idr2.nameMargin ?? 0) >= 0.15))
+              || idr2.source === "rescue";
             if(!accept) return;
             idr = idr2; ocrLines = merged; cands = candsOf(idr); top = cands[0] || top;
             verUnsure = idr.verBy !== "body" && tied0(idr.names);
@@ -11322,7 +11387,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             // change (the stale-lock verify owns that).
             const rc2 = await blobToCanvas(rectBlob);
             if(!rc2) return;
-            const o2 = await ocrCardRegions(rc2, { doName: true, doNumber: false });
+            // band ON — this re-read exists precisely to catch the version
+            // subtitle, and it only runs at queue-idle.
+            const o2 = await ocrCardRegions(rc2, { doName: true, doNumber: false, doBand: true });
             const lines2 = o2.lines || [];
             if(!lines2.length) return;
             const idr2 = window.CardScanner.identify({ lines: lines2, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
@@ -11541,13 +11608,40 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     setQaEditOpen(null);
   };
   const qaDeleteRow = (rid) => {
-    const x = qaResults.find(r => r.id === rid);
-    if(!x) return;
+    const idx = qaResults.findIndex(r => r.id === rid);
+    if(idx < 0) return;
+    const x = qaResults[idx];
     traceRef.current.n.userDeletes++;
     trc("user-del", { conf: x.conf || null, had: x.guessId || null });
     pendingLabelRef.current.delete(rid);
     if(qaEditOpen === rid) setQaEditOpen(null);
+    const u = qaUndoRef.current;
+    if(u && u.timer) clearTimeout(u.timer);
+    qaUndoRef.current = { row: x, idx, timer: setTimeout(() => { qaUndoRef.current = null; setQaUndo(null); }, 6000) };
+    setQaUndo({ label: x.guess || "scan" });
     setQaResults(prev => prev.filter(r => r.id !== rid));
+  };
+  const qaUndoDelete = () => {
+    const u = qaUndoRef.current;
+    if(!u) return;
+    clearTimeout(u.timer);
+    qaUndoRef.current = null; setQaUndo(null);
+    setQaResults(prev => {
+      if(prev.some(r => r.id === u.row.id)) return prev;
+      const cp = prev.slice();
+      cp.splice(Math.min(u.idx, cp.length), 0, u.row);
+      return cp;
+    });
+  };
+  // two-tap clear (window.confirm is banned in this codebase; same pattern as
+  // the graded view's armed remove)
+  const qaClearAll = () => {
+    if(!qaClearArm){ setQaClearArm(true); setTimeout(() => setQaClearArm(false), 3000); return; }
+    setQaClearArm(false); setQaEditOpen(null);
+    trc("user-clear", { n: qaResults.length });
+    pendingLabelRef.current.clear();
+    qaUndoRef.current = null; setQaUndo(null);
+    setQaResults([]);
   };
   const qaFlipRow = (rid, side) => {
     const x = qaResults.find(r => r.id === rid);
@@ -11809,7 +11903,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             <span class="scanner-cand-name">${qaLabelOf(c)}</span>
           </button>`)}
         </div>` : null}
-        <input class="scanner-qa-search" type="search" placeholder="Search the correct card…" value=${qaEditQ}
+        <input class="scanner-qa-search" type="search" placeholder="Search name or collector # (e.g. 154/204)…" value=${qaEditQ}
           onInput=${e => setQaEditQ(e.target.value)} autocomplete="off" autocapitalize="off" spellcheck="false"/>
         ${qaEditMatches.length ? html`<div class="scanner-qa-search-list">
           ${qaEditMatches.map(r => html`<button key=${r.card_id} class="scanner-qa-search-row" onClick=${() => qaCorrectRow(x.id, { id: r.card_id, label: r["Product Name"], rarity: r.Rarity }, "search")}>
@@ -11878,6 +11972,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
+      ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
       <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, 📸 logs it instantly. Not confirmed yet? 📸 still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b></div>
       <div class="scanner-session">
         <div class="scanner-session-head">
@@ -11963,6 +12058,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     <div class="scanner-qa-review-head">
       <button class="scanner-link" onClick=${() => setQaReview(false)}>← Camera</button>
       <span class="scanner-session-count">${qaResults.length} scan${qaResults.length === 1 ? "" : "s"}</span>
+      ${qaResults.length ? html`<button class=${"scanner-link scanner-qa-clear" + (qaClearArm ? " armed" : "")} onClick=${qaClearAll}>${qaClearArm ? "Tap again to clear all" : "Clear all"}</button>` : null}
       <span class="scanner-session-total">${qmoney(qaAgg.total)}</span>
     </div>
     ${qaAgg.pairs ? html`<div class="scanner-qa-review-tools">
@@ -11971,6 +12067,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("F")}>All Foil</button>
     </div>` : null}
     ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
+    ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
     <div class="scanner-session-list scanner-qa-review-list">
       ${qaResults.length === 0
         ? html`<div class="scanner-session-empty">Nothing scanned yet — go back to the camera and 📸 some cards.</div>`

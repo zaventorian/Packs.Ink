@@ -257,6 +257,12 @@ function handleOcr(d) {
   // pass, then a number-only pass ONLY when the name wasn't decisive. doName/doNumber
   // default true (a single combined call, the old behaviour) when the flags are absent.
   var doName = d.doName !== false, doNumber = d.doNumber !== false;
+  // doBand gates the subtitle-band second det. FIELD LESSON (batch 6, v10):
+  // running the band on EVERY read made nameMs 1.8s→7.3s median on-phone —
+  // the serial queue backlogged, ambient starved (1 live lock in 102 snaps),
+  // rowMs p90 hit 260s. The caller now requests the band only off the hot
+  // path (queue-idle snaps, deferred looks); ambient reads never band.
+  var doBand = d.doBand !== false;
 
   // NAME: det the upper 0.74, keep the 6 tallest boxes that contain a letter
   // (excludes the tall cost/lore digits). identify()'s rankNames scores each card
@@ -274,7 +280,7 @@ function handleOcr(d) {
           return l.text.trim().length >= 2 && /[A-Za-z]/.test(l.text);
         }).sort(function (a, b) { return b.h - a.h; });
         var texts = cand.slice(0, 6).map(function (l) { return l.text; });
-        if (!cand.length) return texts;
+        if (!cand.length || !doBand) return texts;
         // SUBTITLE BAND (2026-07-18): the region-scale det misses the small
         // VERSION subtitle on loose crops (~9-12px there), which is exactly why
         // a character's versions tied and the pick fell to colour. det+rec a

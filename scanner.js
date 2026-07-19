@@ -19,8 +19,8 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
-  var IDXV = "?v=3"; // bump when color.bin/index.json content changes (v3 = Set 13 rebuild 2026-07-14)
-  var TXTV = "?v=3"; // bump when text.json content/shape changes (v3 = `s` is the printed SET CODE)
+  var IDXV = "?v=4"; // bump when color.bin/index.json content changes (v4 = Set 13 REAL Lorcast art 2026-07-19; v3 was prestaged art)
+  var TXTV = "?v=4"; // bump when text.json content/shape changes (v4 = Set 13 real Lorcast text/cn 2026-07-19)
 
   var state = {
     loaded: false,
@@ -431,6 +431,72 @@
     return { ids: order[0].ids, version: order[0].v, score: s1, margin: s1 - s2 };
   }
 
+  // ---- FLAVOR-ATTRIBUTION HIJACK RESCUE --------------------------------------
+  // A card QUOTING character X in its flavor text ("—Monterey Jack") hijacks
+  // the name match when the real card's NAME doesn't OCR but its rules/flavor
+  // lines DO — X wins the name score while every other line belongs to the
+  // quoting card. Detector: trigram containment of the full OCR text against
+  // (a) X's own card bodies vs (b) the bodies of cards that MENTION X. Fire
+  // only when the quoter DOMINATES — margin rule calibrated on the full
+  // 315-row field corpus (2026-07-19): best>=0.35, own<=0.45, margin>=0.30,
+  // >=25 query trigrams → fires on exactly the 2 image-verified hijacks
+  // (Merlin->Develop Your Brain, Monterey Jack->Dale - Ready for His Shot)
+  // and on ZERO verified-correct rows. A real scan OF the quoted character is
+  // own-dominant (0.76 on a true Monterey Jack) and never fires. Quoters are
+  // found per-character on demand (one pass over text.cards, cached) — a full
+  // char->quoters index would cost seconds at load for no benefit.
+  var quotersCache = Object.create(null);
+  function quotersFor(charName){
+    var key = nmNorm(charName);
+    var hit = quotersCache[key];
+    if(hit) return hit;
+    var cn = nmCanon(charName).replace(/ /g, "");
+    var out = [];
+    if(text.loaded && cn.length >= 5){
+      for(var i=0;i<text.cards.length;i++){
+        var c = text.cards[i];
+        if(nmNorm(c.n || "") === key) continue;
+        var bc = nmCanon(c.b || "").replace(/ /g, "");
+        if(bc.indexOf(cn) >= 0) out.push(c);
+      }
+    }
+    quotersCache[key] = out;
+    return out;
+  }
+  function rescueByQuote(charName, lines){
+    if(!text.loaded || !charName || !lines || !lines.length) return null;
+    var quoters = quotersFor(charName);
+    if(!quoters.length) return null;
+    var q = nmCanon(lines.join(" ")).replace(/ /g, "");
+    var Q = bodyTriSet(q), nQ = setSize(Q);
+    if(nQ < 25) return null;
+    var contain = function(card){
+      var T = bodyTri(card.id, card.b), inter = 0, k;
+      for(k in Q) if(T[k]) inter++;
+      return inter / nQ;
+    };
+    var key = nmNorm(charName), own = 0, i;
+    for(i=0;i<text.cards.length;i++){
+      var oc = text.cards[i];
+      if(nmNorm(oc.n || "") !== key) continue;
+      var so = contain(oc);
+      if(so > own) own = so;
+    }
+    var best = 0, bc = null;
+    for(i=0;i<quoters.length;i++){
+      var sc = contain(quoters[i]);
+      if(sc > best){ best = sc; bc = quoters[i]; }
+    }
+    if(!(bc && best >= 0.35 && own <= 0.45 && (best - own) >= 0.30)) return null;
+    var ids = [], bn = nmNorm(bc.n || ""), bv = bc.v || "";
+    for(i=0;i<text.cards.length;i++){
+      var c2 = text.cards[i];
+      if(nmNorm(c2.n || "") === bn && (c2.v || "") === bv) ids.push(c2.id);
+    }
+    return { ids: ids.length ? ids : [bc.id], name: bc.n || "", version: bv,
+             score: Math.round(best * 1000) / 1000, margin: Math.round((best - own) * 1000) / 1000 };
+  }
+
   // IDENTITY — PARALLEL fusion (vote, don't gate). The collector NUMBER is the
   // backbone: set+number → ~1 card (near-unique primary key). Name-OCR + colour
   // are independent voters that order the narrowed field. Falls back to
@@ -466,11 +532,22 @@
         return { top3: dedupeIds([nameIds[i]].concat(orderByColour(numIds), nameIds, colour)).slice(0, 3), conf: "high", source: "cn+name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
     }
-    // 2. confident NAME alone → name wins (number absent or misread). The
-    //    VERSION comes from the body-text tiebreak when the rules/flavor lines
-    //    carry a fingerprint; colour only orders printings within the version
-    //    (and is the fallback orderer when the body abstains).
+    // 2. confident NAME alone → name wins (number absent or misread). But
+    //    FIRST check the flavor-attribution hijack: if the body evidence
+    //    overwhelmingly belongs to a card that merely QUOTES this character,
+    //    the "confident" name is the quote line, not the card — return the
+    //    quoter at medium conf (amber ≈, alternates kept) so the UI stays
+    //    honest about the override. Never reached when the collector number
+    //    corroborated the name (branch 1 returns first).
     if(nm.conf === "high" && nameIds.length){
+      var rz = null;
+      try { rz = rescueByQuote(nm.top[0].name, opts.lines || []); } catch(e){}
+      if(rz && rz.ids.length){
+        return { top3: dedupeIds(orderByColour(rz.ids).concat(orderByColour(nameIds), colour)).slice(0, 3),
+                 conf: "medium", source: "rescue", verBy: null,
+                 rescue: { from: nm.top[0].name, score: rz.score, margin: rz.margin },
+                 nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      }
       var vb = null;
       try { vb = rankVersionsByBody(nm.top[0].name, opts.lines || []); } catch(e){}
       if(vb && vb.ids.length){
@@ -485,7 +562,19 @@
       var ranked = rankCnCandidates(numIds, nm.top, colour);
       return { top3: dedupeIds(ranked.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
-    // 4. fallback: name + colour vote
+    // 4. fallback: name + colour vote. Same hijack check — the field case
+    //    that motivated the rescue (Monterey Jack over Dale) landed HERE
+    //    (medium fusion), not in branch 2.
+    if(nm.top.length){
+      var rz2 = null;
+      try { rz2 = rescueByQuote(nm.top[0].name, opts.lines || []); } catch(e){}
+      if(rz2 && rz2.ids.length){
+        return { top3: dedupeIds(orderByColour(rz2.ids).concat(nameIds, colour)).slice(0, 3),
+                 conf: "medium", source: "rescue",
+                 rescue: { from: nm.top[0].name, score: rz2.score, margin: rz2.margin },
+                 nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      }
+    }
     var fused = rrf([nameIds, colour], [3, 1]);
     return { top3: dedupeIds(fused).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
   }
@@ -497,6 +586,7 @@
     dhash64: dhash64,
     rankNames: rankNames,
     rankVersionsByBody: rankVersionsByBody,
+    rescueByQuote: rescueByQuote,
     lookupCN: lookupCN,
     identify: identify,
     loadText: loadText,
