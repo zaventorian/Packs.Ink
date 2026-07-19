@@ -9745,7 +9745,7 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v14";
+const SCANNER_BUILD = "v15";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -9840,6 +9840,33 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   useEffect(() => { autoAddRef.current = autoAdd; }, [autoAdd]);
   const userRef = useRef(user);
   useEffect(() => { userRef.current = user; }, [user]);
+
+  // ── FORCE-FRESH on scanner open — no tester ever scans on a stale build ─────
+  // The SW auto-reload (index head) already updates a resumed PWA, but this is
+  // the guarantee the tester experience needs: the moment the scanner opens we
+  // fetch the LIVE Index.html (network-first — Accept:text/html routes it past
+  // the SW's cache-first asset branch; cache:no-store beats the HTTP cache) and
+  // read its SCANNER_BUILD stamp. If a newer scanner is deployed and this tab is
+  // running old code, we update the SW and hard-refresh to it before scanning.
+  // Offline (fetch fails) → keep running the cached build (correct). The reload
+  // is a one-time-per-deploy event; the in-progress scan list persists to IDB.
+  const [staleUpdating, setStaleUpdating] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/?scanbuild=" + Date.now(), { cache: "no-store", headers: { "Accept": "text/html" } });
+        if(!res.ok || cancelled) return;
+        const html = await res.text();
+        const m = html.match(/SCANNER_BUILD\s*=\s*"(v\d+)"/);
+        if(cancelled || !m || m[1] === SCANNER_BUILD) return;
+        setStaleUpdating(true);
+        try { const reg = navigator.serviceWorker && await navigator.serviceWorker.getRegistration(); if(reg) await reg.update(); } catch(_e){}
+        setTimeout(() => { if(!cancelled) location.reload(); }, 700);
+      } catch(_e){}
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
   // ── QA session persistence: a killed PWA / accidental close must not eat a
   //    100-card review session. Resolved rows mirror to IDB (debounced) on
@@ -11907,6 +11934,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     <button class="scanner-btn primary" onClick=${onClose}>Close</button>
   </div>`;
 
+  if(staleUpdating){
+    return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
+      <div class="scanner-head"><span class="scanner-title">Scan a card</span></div>
+      ${errBody("Updating to the latest version…", "A newer scanner just went live — refreshing so you're testing the current build. One sec.")}
+    </div>`;
+  }
   if(phase === "denied" || phase === "nocam" || phase === "noindex" || phase === "error"){
     const m = { denied: ["Camera blocked", "Allow camera access for packs.ink in your browser settings, then reopen the scanner."],
       nocam: ["No camera found", "This device doesn't expose a camera to the browser. Try on your phone."],
