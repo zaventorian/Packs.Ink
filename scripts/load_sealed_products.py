@@ -185,6 +185,14 @@ def main() -> None:
                     help="Print summary and a sample. Do not write to Supabase.")
     ap.add_argument("--sample", type=int, default=20,
                     help="How many rows to show in the dry-run sample (default 20).")
+    ap.add_argument("--skip-promo-singles", action="store_true",
+                    help="Drop rows classified as 'Promo Single' before writing — genuine "
+                         "sealed products only. This is the mode the daily ETL runs. Two "
+                         "reasons it's the right default for an automated run: (1) the sealed "
+                         "UI filters out product_type=='Promo Single' everywhere, so those "
+                         "rows never surface in the tab anyway; (2) keeping those pids OUT of "
+                         "sealed_products is exactly what lets reconcile_catalog.py still flag "
+                         "them as missing singles — writing them here would blind that watchdog.")
     args = ap.parse_args()
 
     load_dotenv()
@@ -235,6 +243,14 @@ def main() -> None:
     for t, n in type_counts.most_common():
         print(f"  {t:<22s}  {n}")
 
+    if args.skip_promo_singles:
+        before = len(all_rows)
+        all_rows = [r for r in all_rows if r["product_type"] != "Promo Single"]
+        dropped = before - len(all_rows)
+        print(f"\n--skip-promo-singles: dropped {dropped} 'Promo Single' row(s) — hidden in "
+              f"the UI and owned by the reconcile watchdog. {len(all_rows)} genuine sealed "
+              f"product(s) to write.")
+
     if args.dry_run:
         print(f"\n--- DRY RUN — first {args.sample} rows ---")
         for row in all_rows[:args.sample]:
@@ -248,6 +264,16 @@ def main() -> None:
 
     print(f"\nUpserting {len(all_rows)} rows...")
     sb.upsert("sealed_products", all_rows, on_conflict="tcgplayer_product_id")
+
+    # Refresh the matview the sealed UI reads (sealed_products JOIN prices_daily)
+    # so a newly-added product surfaces in the tab immediately instead of waiting
+    # for the next prices ETL. Best-effort: if it transient-fails, the daily
+    # prices refresh + the selfheal job will pick it up.
+    try:
+        print("Refreshing sealed_prices_latest matview...")
+        sb.rpc("refresh_sealed_prices_latest")
+    except Exception as e:  # noqa: BLE001 — non-fatal, next ETL heals it
+        print(f"  (matview refresh failed, non-fatal: {e})")
     print("Done.")
 
 
