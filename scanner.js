@@ -431,6 +431,51 @@
     return { ids: order[0].ids, version: order[0].v, score: s1, margin: s1 - s2 };
   }
 
+  // ---- VERSION tiebreak by SUBTITLE -----------------------------------------
+  // The body tiebreak needs the rules/flavor text; but the version SUBTITLE
+  // itself often reads (the ×2.5 band, or a lucky tall read) — "Elegant
+  // Spaniel", "Amber Champion", "Charging Ahead". rankNames doesn't lean on it
+  // because the tall NAME line matches every version of the character equally
+  // (both Lady prints match "LADY"), so a decided character with a tied name
+  // falls to colour's shortest-name bias (v11: Lady→Family Dog with "Elegant
+  // Spanie" RIGHT THERE, Mickey→Giant Mouse, Mulan→Reflecting). Score each
+  // version's subtitle against the best OCR line (squashed lev + trigram Dice);
+  // fire only when one subtitle clearly wins (>=0.60, margin >=0.15) so a
+  // garbled/absent subtitle abstains rather than guessing.
+  function rankVersionsBySubtitle(charName, lines){
+    if(!text.loaded || !lines || !lines.length) return null;
+    var nName = nmNorm(charName), group = [], i;
+    for(i=0;i<text.cards.length;i++) if(nmNorm(text.cards[i].n || "") === nName) group.push(text.cards[i]);
+    if(group.length < 2) return null;
+    var lineSq = [], lineTri = [], j;
+    for(j=0;j<lines.length;j++){ var lc = nmCanon(lines[j]); var sq = lc.replace(/ /g, ""); if(sq.length >= 4){ lineSq.push(sq); lineTri.push(nmTri(lc)); } }
+    if(!lineSq.length) return null;
+    var byVer = Object.create(null), order = [];
+    for(i=0;i<group.length;i++){
+      var v = group[i].v || ""; if(!v) continue;
+      var vc = nmCanon(v), vsq = vc.replace(/ /g, ""); if(vsq.length < 4) continue;
+      var vtri = nmTri(vc), best = 0;
+      for(j=0;j<lineSq.length;j++){ var s = 0.65 * levSim(lineSq[j], vsq) + 0.35 * diceSet(lineTri[j], vtri); if(s > best) best = s; }
+      if(byVer[v] == null){ byVer[v] = { v: v, score: best, ids: [group[i].id] }; order.push(byVer[v]); }
+      else { byVer[v].ids.push(group[i].id); if(best > byVer[v].score) byVer[v].score = best; }
+    }
+    if(order.length < 2) return null;
+    order.sort(function(a, b){ return b.score - a.score; });
+    var s1 = order[0].score, s2 = order[1].score;
+    if(!(s1 >= 0.60 && (s1 - s2) >= 0.15)) return null;
+    return { ids: order[0].ids, version: order[0].v, score: s1, margin: s1 - s2 };
+  }
+  // combined version tiebreak: subtitle first (direct evidence), then body.
+  function rankVersion(charName, lines){
+    var vs = null;
+    try { vs = rankVersionsBySubtitle(charName, lines); } catch(e){}
+    if(vs){ vs.by = "subtitle"; return vs; }
+    var vb = null;
+    try { vb = rankVersionsByBody(charName, lines); } catch(e){}
+    if(vb){ vb.by = "body"; return vb; }
+    return null;
+  }
+
   // ---- FLAVOR-ATTRIBUTION HIJACK RESCUE --------------------------------------
   // A card QUOTING character X in its flavor text ("—Monterey Jack") hijacks
   // the name match when the real card's NAME doesn't OCR but its rules/flavor
@@ -497,6 +542,24 @@
              score: Math.round(best * 1000) / 1000, margin: Math.round((best - own) * 1000) / 1000 };
   }
 
+  // Reorder a candidate id list so the BODY-decided version of the top card's
+  // character comes first. The body-text version tiebreak used to run ONLY in
+  // the name-high branch; when a slightly mis-OCR'd name ("AJAH"/"RAJAM") fell
+  // to fusion/cn, colour picked the version and its shortest-name bias won —
+  // Rajah "Ghostly Tiger" over "Devoted Protector", Rapunzel "Sunshine" over
+  // "Gifted with Healing" (v11 field: 5 such misses). Safe by construction: it
+  // only reorders when the TOP card's OWN character has a body-matching version,
+  // so a wrong-character fusion pick (garbled name → "Merlin") abstains and is
+  // left untouched — never made worse.
+  function bodyVersionReorder(ids, lines){
+    if(!ids || !ids.length || !nameDB) return { ids: ids, vb: null };
+    var m0 = nameDB.byId[ids[0]];
+    if(!m0) return { ids: ids, vb: null };
+    var vb = rankVersion(m0.name, lines || []);
+    if(!vb || !vb.ids || !vb.ids.length) return { ids: ids, vb: null };
+    return { ids: dedupeIds(vb.ids.concat(ids)), vb: vb };
+  }
+
   // IDENTITY — PARALLEL fusion (vote, don't gate). The collector NUMBER is the
   // backbone: set+number → ~1 card (near-unique primary key). Name-OCR + colour
   // are independent voters that order the narrowed field. Falls back to
@@ -548,11 +611,10 @@
                  rescue: { from: nm.top[0].name, score: rz.score, margin: rz.margin },
                  nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
-      var vb = null;
-      try { vb = rankVersionsByBody(nm.top[0].name, opts.lines || []); } catch(e){}
+      var vb = rankVersion(nm.top[0].name, opts.lines || []);
       if(vb && vb.ids.length){
         return { top3: dedupeIds(orderByColour(vb.ids).concat(orderByColour(nameIds), colour)).slice(0, 3),
-                 conf: "high", source: "name", verBy: "body", verMargin: Math.round(vb.margin * 1000) / 1000,
+                 conf: "high", source: "name", verBy: vb.by || "body", verMargin: Math.round(vb.margin * 1000) / 1000,
                  nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
       return { top3: dedupeIds(orderByColour(nameIds).concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
@@ -560,7 +622,8 @@
     // 3. number read but name weak → the numbered cards, ordered by name then colour (needs a tap)
     if(numIds.length){
       var ranked = rankCnCandidates(numIds, nm.top, colour);
-      return { top3: dedupeIds(ranked.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      var frc = bodyVersionReorder(ranked, opts.lines);
+      return { top3: dedupeIds(frc.ids.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", verBy: frc.vb ? "body" : undefined, verMargin: frc.vb ? Math.round(frc.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 4. fallback: name + colour vote. Same hijack check — the field case
     //    that motivated the rescue (Monterey Jack over Dale) landed HERE
@@ -576,7 +639,8 @@
       }
     }
     var fused = rrf([nameIds, colour], [3, 1]);
-    return { top3: dedupeIds(fused).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+    var frf = bodyVersionReorder(fused, opts.lines);
+    return { top3: dedupeIds(frf.ids).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", verBy: frf.vb ? "body" : undefined, verMargin: frf.vb ? Math.round(frf.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
   }
 
   window.CardScanner = {
@@ -586,6 +650,7 @@
     dhash64: dhash64,
     rankNames: rankNames,
     rankVersionsByBody: rankVersionsByBody,
+    rankVersionsBySubtitle: rankVersionsBySubtitle,
     rescueByQuote: rescueByQuote,
     lookupCN: lookupCN,
     identify: identify,

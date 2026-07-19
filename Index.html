@@ -70,6 +70,35 @@
     });
   }
 </script>
+<script>
+  // Keep the installed PWA from serving STALE code after a deploy. sw.js already
+  // does skipWaiting()+clients.claim(), so a new version activates as soon as it
+  // downloads — this reloads the page ONCE when that new SW takes control, and
+  // proactively checks for an update whenever the app is reopened/refocused.
+  // Without it, reopening a backgrounded PWA just resumes the already-loaded old
+  // page (the "scanner opened to an old version · v10" report). Guard: only arm
+  // the reload when a controller ALREADY exists at load — so the very first
+  // install's initial claim doesn't trigger a spurious first-visit reload, only
+  // a genuine version update does. Native (Capacitor) builds are excluded (their
+  // assets are bundled, not SW-served). The QA scan session persists to IDB, so
+  // an auto-reload never loses a tester's in-progress list.
+  if ('serviceWorker' in navigator
+      && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
+    if (navigator.serviceWorker.controller) {
+      let swReloaded = false;
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        if (swReloaded || !navigator.serviceWorker.controller) return;
+        swReloaded = true;
+        window.location.reload();
+      });
+    }
+    const checkForUpdate = () => {
+      navigator.serviceWorker.getRegistration().then((r) => { if (r) r.update(); }).catch(() => {});
+    };
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
+    window.addEventListener('focus', checkForUpdate);
+  }
+</script>
 <!--
   Sentry — error-only monitoring. Loader script auto-initializes lazily
   on the first error/unhandled rejection; no Sentry.init() call needed.
@@ -151,7 +180,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=286">
+<link rel="stylesheet" href="styles.css?v=287">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -209,7 +238,7 @@
 <!-- Scanner is admin-gated (~2 users); defer keeps it off every visitor's
      critical path. Both scripts only attach globals used when the scan modal
      opens, long after DOMContentLoaded. -->
-<script src="scanner.js?v=285" defer></script>
+<script src="scanner.js?v=287" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -9716,7 +9745,7 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v12";
+const SCANNER_BUILD = "v13";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -10395,8 +10424,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       }
       // coaching hint (priority: shiny > too-far > one-card)
       if(label && shiny) setFH("✨ Shiny card — tilt slightly to kill the glare");
-      else if(tinyQuad) setFH("Move closer so the card fills the frame");
-      else if(label && areaFrac > 0 && areaFrac < 0.14) setFH("Move closer so the card fills the frame");
+      else if(tinyQuad) setFH("Move closer — hold ONE card so it fills the frame");
+      // v11 field: cards filled only ~21% of frame on average → detection kept
+      // locking a neighbour in the pile (the "green box is always off"). Coach
+      // to fill the frame well below the point where the box goes unreliable.
+      else if(label && areaFrac > 0 && areaFrac < 0.28) setFH("Move closer — one card, filling the frame, reads best");
       else if(!r.quad && A.noDet >= 12) setFH("Hold over ONE card on a plain surface, good light");
       else setFH("");
 
@@ -11289,11 +11321,29 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     let verUnsure = (lock && idr.source === "live-lock")
       ? (job.lockVerBy !== "body" && tied0(job.lockNames))
       : (idr.verBy !== "body" && tied0(idr.names));
+    // NO-NAME REJECT: when OCR read no legible name (empty or pure garbage) and
+    // the answer is a colour-only fusion/cn guess, DON'T present a confident
+    // card. Colour-only is domain-gap unreliable and maps a foil-glare / bad-
+    // rectify / no-card frame to a palette lookalike (v11 field: Pegasus→Scar,
+    // Go Go→Hiro-enchanted, an empty test frame → a card). Show a "couldn't
+    // read" row instead; the colour guesses stay as editor suggestions so the
+    // tester can still pick. A live lock or any real name read is never rejected;
+    // the deferred look can still upgrade an unread row if a re-read finds text.
+    const hasName = (ocrLines || []).some(l => /[A-Za-z]{4,}/.test(l));
+    const unread = !lock && !hasName && (idr.source === "fusion" || idr.source === "cn");
     tmr.rowMs = Date.now() - job.tSnap;
-    updateQaRow(rid, { status: "done", ...qaRowFields(top, cands), conf: rowConf, ver: verUnsure,
-      alts: (!verUnsure && (rowConf === "lock" || rowConf === "high")) ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
-    trc("snap-id", { ms: tmr.rowMs, conf: idr.conf || null, src: idr.source || null, lock: lock ? 1 : 0,
-      vb: idr.verBy || (lock ? job.lockVerBy : null) || null, vu: verUnsure ? 1 : 0 });
+    if(unread){
+      updateQaRow(rid, { status: "done", guess: null, guessId: null, predId: (top && top.id) || null,
+        cardImg: null, price: null, conf: "unread", ver: false,
+        hasFoilPair: false, prN: null, prF: null, printing: null,
+        cands: cands.slice(0, 6).map(c => ({ id: c.id, name: c.name, version: c.version, rarity: c.rarity })),
+        alts: cands.slice(0, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+    } else {
+      updateQaRow(rid, { status: "done", ...qaRowFields(top, cands), conf: rowConf, ver: verUnsure,
+        alts: (!verUnsure && (rowConf === "lock" || rowConf === "high")) ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
+    }
+    trc("snap-id", { ms: tmr.rowMs, conf: unread ? "unread" : (idr.conf || null), src: idr.source || null, lock: lock ? 1 : 0,
+      vb: idr.verBy || (lock ? job.lockVerBy : null) || null, vu: verUnsure ? 1 : 0, unread: unread ? 1 : 0 });
     // 5. tail — second-look refinement + flywheel upload. Runs UN-AWAITED so the
     // next queued snap's identify starts immediately (the awaited blob/upload
     // prep was quietly serializing the queue: rowMs climbed 2.5s→29s on 7/18).
@@ -11357,11 +11407,19 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           trc("look-run", { lock: lock ? 1 : 0 });   // fires whether or not the look ACCEPTS — proves drains execute
           const charOf = (id) => { const m = byId.get(id); return m ? (m.name || "") : ""; };
           if(!lock && detected){
+            // band-read the GOOD RECT first — it's the best subtitle source for
+            // the version fixes (v11: Mickey→Amber Champion, Lady→Elegant
+            // Spaniel, Little John→Camp Cook all abstained on the hot-path
+            // no-band read). Then the raw guide-crop as an alternate character
+            // rescue input. Both merged so the body/name tiebreak gets every line.
+            let extra = [];
+            if(rectBlob){ const rc = await blobToCanvas(rectBlob);
+              if(rc){ const ob = await ocrCardRegions(rc, { doName: true, doNumber: false, doBand: true });
+                extra = extra.concat((ob.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0)); } }
             const rawC = await blobToCanvas(await job.rawBlobP);
             const altRect = rawC ? rawGuideCrop(rawC) : null;
-            if(!altRect) return;
-            const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false, doBand: true });
-            const extra = (o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0);
+            if(altRect){ const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false, doBand: true });
+              extra = extra.concat((o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0 && extra.indexOf(l) < 0)); }
             if(!extra.length) return;
             const merged = (ocrLines || []).concat(extra);
             const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
@@ -11852,6 +11910,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qmoney = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
   const qaConfChip = (cf, ver) => cf === "user"
     ? html`<span class="scanner-qa-conf user" title="Set by you">✓</span>`
+    : cf === "unread"
+    ? html`<span class="scanner-qa-conf low" title="Couldn't read the card name">⚠</span>`
     : (cf === "lock" || cf === "high")
     ? (ver ? html`<span class="scanner-qa-conf med" title="Character confirmed — version may be off, check the alternates">≈</span>`
            : html`<span class=${"scanner-qa-conf " + (cf === "lock" ? "lock" : "high")} title=${cf === "lock" ? "Snapped from the live ✓-confirmed ID" : "High confidence"}>✓</span>`)
@@ -11878,7 +11938,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <div class="scanner-qa-rowinfo">
         ${x.status === "identifying"
           ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
-          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.guess || "(no match)"}</span>`}
+          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">Couldn't read — tap ✎ to pick</span>` : (x.guess || "(no match)")}</span>`}
         ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
         ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
             <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>Non-Foil</button>
