@@ -9745,7 +9745,7 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v13";
+const SCANNER_BUILD = "v14";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -10261,11 +10261,19 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // neighbouring card, a sleeve) — never a scannable card. Treat it as
       // no-detect for identity and coach instead (7/18 field: "it would try to
       // match a card that only a corner of was in frame").
-      let tinyQuad = false;
+      let tinyQuad = false, offBox = false;
       if(r.quad){
         const txs = r.quad.map(p => p.x), tys = r.quad.map(p => p.y);
         if(((Math.max(...txs) - Math.min(...txs)) * (Math.max(...tys) - Math.min(...tys))) / (bw * bh) < 0.10){
           tinyQuad = true; r.quad = null;
+        } else {
+          // BOX GATE (the ".scanner-softframe" the user aims with is only a
+          // visual guide — the worker searches the WHOLE frame and 27% of v11
+          // detections locked a NEIGHBOUR card in the pile, off to the side).
+          // Reject a quad whose centre sits outside the central box region so
+          // the green outline tracks the card you lined up, not its neighbour.
+          const cx = (Math.min(...txs) + Math.max(...txs)) / 2 / bw, cy = (Math.min(...tys) + Math.max(...tys)) / 2 / bh;
+          if(cx < 0.20 || cx > 0.80 || cy < 0.20 || cy > 0.80){ offBox = true; r.quad = null; }
         }
       }
       const o = computeOutline(r.quad || null, r.conf || 0, bw);
@@ -10425,6 +10433,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // coaching hint (priority: shiny > too-far > one-card)
       if(label && shiny) setFH("✨ Shiny card — tilt slightly to kill the glare");
       else if(tinyQuad) setFH("Move closer — hold ONE card so it fills the frame");
+      else if(offBox) setFH("Line the card up inside the box");
       // v11 field: cards filled only ~21% of frame on average → detection kept
       // locking a neighbour in the pile (the "green box is always off"). Coach
       // to fill the frame well below the point where the box goes unreliable.
@@ -10803,7 +10812,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(r){ out.detConf = Math.round((r.conf || 0) * 100) / 100; }
       if(r && r.buffer && r.quad && bw2){
         const qxs = r.quad.map(p => p.x), qys = r.quad.map(p => p.y);
-        if(((Math.max(...qxs) - Math.min(...qxs)) * (Math.max(...qys) - Math.min(...qys))) < bw2 * bh2 * 0.08) r.buffer = null;
+        const qcx = (Math.min(...qxs) + Math.max(...qxs)) / 2 / bw2, qcy = (Math.min(...qys) + Math.max(...qys)) / 2 / bh2;
+        if(((Math.max(...qxs) - Math.min(...qxs)) * (Math.max(...qys) - Math.min(...qys))) < bw2 * bh2 * 0.08
+           || qcx < 0.20 || qcx > 0.80 || qcy < 0.20 || qcy > 0.80) r.buffer = null;
       }
       if(r && r.buffer){
         const c = document.createElement("canvas"); c.width = r.width; c.height = r.height;
@@ -11220,12 +11231,15 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
         if(r){ detConf = r.conf || 0; detLandscape = !!r.landscape; }
         // a sliver quad (<8% of the frame — a neighbouring card's edge, a
-        // sleeve) rectifies to garbage that colour then "matches" (7/18: two
-        // empty/cut crops scored as "Lilo"). Fall through to the guide crop
-        // of the frozen raw instead — the user aimed at SOMETHING.
+        // sleeve) OR an OFF-BOX quad (a neighbour card in the pile whose centre
+        // is outside the guide box the user aimed with — v11: 17/64 snaps)
+        // rectifies to the WRONG card. Fall through to the guide crop of the
+        // frozen raw (the box region) instead — that's what the user framed.
         if(r && r.buffer && r.quad && bmpW){
           const qxs = r.quad.map(p => p.x), qys = r.quad.map(p => p.y);
-          if(((Math.max(...qxs) - Math.min(...qxs)) * (Math.max(...qys) - Math.min(...qys))) < bmpW * bmpH * 0.08)
+          const qcx = (Math.min(...qxs) + Math.max(...qxs)) / 2 / bmpW, qcy = (Math.min(...qys) + Math.max(...qys)) / 2 / bmpH;
+          if(((Math.max(...qxs) - Math.min(...qxs)) * (Math.max(...qys) - Math.min(...qys))) < bmpW * bmpH * 0.08
+             || qcx < 0.20 || qcx > 0.80 || qcy < 0.20 || qcy > 0.80)
             r.buffer = null;
         }
         if(r && r.buffer){
