@@ -86,7 +86,8 @@ SEALED_NAME_HINTS = (
     "booster box", "booster pack", "booster display", "display box",
     "starter deck", "starter set", "starter blister", "gift set", "gift box",
     "prerelease pack", "trove", "quest", "deep trouble", "collector's edition",
-    "collectors edition", "bundle", "gateway", "case", "set of", "(set of",
+    "collectors edition", "curator's collection", "curators collection",
+    "bundle", "gateway", "case", "set of", "(set of",
     "d23 expo promo set", "d23 collection", "illumineer's trove",
 )
 

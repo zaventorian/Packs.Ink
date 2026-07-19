@@ -100,10 +100,13 @@ def classify(name: str) -> str:
         return "Starter Deck"
     if "gift set" in n or "gift box" in n:
         return "Gift Set"
-    # Prerelease Packs are a recurring per-set SKU distinct from Troves —
-    # bucket them on their own so the UI can surface "latest prerelease" as
-    # a separate thing from "set's Illumineer's Trove".
-    if "prerelease pack" in n:
+    # Prerelease products — the per-set Prerelease Pack, plus the Prerelease Box
+    # and its Case — are all sealed. Match "prerelease" broadly (not just
+    # "prerelease pack") so the Box / Box Case don't fall through to Promo Single
+    # and go invisible. The UI's deriveSealedDisplayType reroutes any "…Case"
+    # name to the Cases section, so the Box Case still lands sensibly. Bucketed
+    # apart from Troves so the UI can surface "latest prerelease" on its own.
+    if "prerelease" in n:
         return "Prerelease Pack"
     if "trove" in n:
         return "Trove"
@@ -111,7 +114,14 @@ def classify(name: str) -> str:
     # own SKUs with names containing "Quest" or specific Quest titles.
     if "quest" in n or "deep trouble" in n:
         return "Quest"
-    if "collector's edition" in n or "collectors edition" in n:
+    # "Curator's Collection: <Heroines/Villains/…> Edition" is a premium boxed
+    # collection (~$500) that TCGPlayer files under the generic Promo Cards
+    # group with no collector number — it's a sealed product, not a single.
+    # Bucket it with the other Collector's Editions so it lands in that section
+    # of the Sealed tab. Match the product-line name so future editions catch
+    # automatically.
+    if ("collector's edition" in n or "collectors edition" in n
+            or "curator's collection" in n or "curators collection" in n):
         return "Collector's Edition"
     # Misc sealed bundle SKUs that don't fit a cleaner bucket — portfolio
     # bundles, collector set bundles, starter blister bundles, etc. Catches
