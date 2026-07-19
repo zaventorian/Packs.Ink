@@ -151,7 +151,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=280">
+<link rel="stylesheet" href="styles.css?v=285">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9702,10 +9702,13 @@ function scanRRF(lists, weights, k){
   return Array.from(score.entries()).sort((a, b) => b[1] - a[1]).map(e => ({ id: e[0], score: e[1] }));
 }
 
-// While the scanner is still in testing, lock it to QA-ONLY: every tap just
+// While the scanner is still in testing, lock it to QA-ONLY: every tap
 // captures a photo + the scanner's guess/reasoning and uploads it for later
-// review — NO collection writes, no staging, no add buttons (data-safety after
-// the auto-add incident, and so extra testers can't touch their collections).
+// review. Testers can fix/confirm rows (each fix writes a ground-truth label
+// back onto the uploaded sample — free QA), toggle foil, and use the
+// review-&-save screen's EXPLICIT buttons to add to collection / a new deck —
+// those two buttons are the only write paths (stage → review → save, the
+// post-incident invariant; nothing else can touch a collection).
 // Flip to false to bring back the Stack-scan / Single collection workflow.
 const SCANNER_QA_ONLY = true;
 // Visible build stamp — shown in the scanner title + stamped into every QA
@@ -9713,8 +9716,8 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v10";
-function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview }){
+const SCANNER_BUILD = "v11";
+function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
   const overlayRef = useRef(null);
@@ -9757,7 +9760,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // uploads its trailing slice + a 6-frame raw filmstrip + thumbnails of the
   // last ambient OCR inputs; closing the scanner logs a whole-session summary.
   const openedAtRef = useRef(Date.now());
-  const traceRef = useRef({ ev: [], n: { ticks: 0, quads: 0, noDet: 0, jumps: 0, ocrFires: 0, ocrEmpty: 0, confirms: 0, pings: 0, wipes: 0, badgeFlips: 0, snaps: 0, snapLocks: 0, snapFixes: 0 }, ocrMs: [], device: null });
+  const traceRef = useRef({ ev: [], n: { ticks: 0, quads: 0, noDet: 0, jumps: 0, ocrFires: 0, ocrEmpty: 0, confirms: 0, pings: 0, wipes: 0, badgeFlips: 0, snaps: 0, snapLocks: 0, snapFixes: 0,
+    // tester review actions — the free-QA labeling signal (edits are hard
+    // negatives, confirms are verified positives; all also land per-row in
+    // scan_samples via labelSample).
+    userEdits: 0, userConfirms: 0, userDeletes: 0, userFoilFlips: 0, flipAlls: 0, savedRows: 0, deckRows: 0 }, ocrMs: [], device: null });
   const filmRef = useRef({ frames: [], i: 0 });   // ring of last 6 small raw frames
   const frameRingRef = useRef({ slots: [], i: 0 }); // 2×1600px pre-tap frames — the snap picks the sharpest vs live
   const ocrThumbRef = useRef([]);                 // last 3 {t,src,thumb} ambient-OCR inputs
@@ -9786,6 +9793,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaOcrHoldRef = useRef(0);                 // >0: a snap's name read wants the OCR worker → ambient reads yield
   const qaLookBusyRef = useRef(false);            // one second-look re-read in flight at a time
   const qaLookPendRef = useRef([]);               // looks deferred while snaps queue — drained at queue-idle, never dropped
+  const pendingLabelRef = useRef(new Map());      // rid -> scan_samples label patch waiting for the upload's row id
+  const [qaReview, setQaReview] = useState(false);    // full-screen review-&-save panel over the camera
+  const [qaEditOpen, setQaEditOpen] = useState(null); // rid of the row with the inline editor open (one at a time)
+  const [qaEditQ, setQaEditQ] = useState("");         // editor card-search query
+  const [qaDeckBusy, setQaDeckBusy] = useState(false);
   const artImgsRef = useRef(new Map());           // catalog art Image cache for the live on-card label
   const [torchAvail, setTorchAvail] = useState(false); // camera exposes a flashlight (Android)
   const [torchOn, setTorchOn] = useState(false);
@@ -10900,7 +10912,24 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   //     idle-time refinement that can never hold up a row or the next card.
   // Photo + full reasoning still upload to the flywheel exactly as before.
   // Best-effort; never throws into React; no staging, no collection writes.
-  const updateQaRow = (rid, patch) => setQaResults(prev => prev.map(x => x.id === rid ? { ...x, ...patch } : x));
+  // Pipeline patches respect the human: once a tester has set/confirmed a row
+  // (userSet), a deferred look / cn finisher may not overwrite the identity —
+  // only bookkeeping fields still land. A user-chosen foil side survives
+  // identity refinements by re-deriving `printing` from the new card's pair.
+  const updateQaRow = (rid, patch) => setQaResults(prev => prev.map(x => {
+    if(x.id !== rid) return x;
+    let p = patch;
+    if(x.userSet && ("guess" in p || "guessId" in p)){
+      p = {};
+      for(const k of ["status", "sampleId", "uploadPredId"]) if(k in patch) p[k] = patch[k];
+    } else if(x.userPrSide && ("printing" in p)){
+      const side = x.userPrSide;
+      const pr2 = side === "F" ? (p.prF || p.prN) : (p.prN || p.prF);
+      const px2 = side === "F" ? (p.prF ? p.pxF : p.pxN) : (p.prN ? p.pxN : p.pxF);
+      p = { ...p, printing: pr2 ?? p.printing, price: px2 ? (px2.mkt ?? px2.low ?? p.price) : p.price };
+    }
+    return { ...x, ...p };
+  }));
   // centre 5:7 crop of the FROZEN raw frame — the fallback when detection missed.
   // (guideCropCanvas reads the LIVE video, which by identify-time is already
   // pointing at the next card — the async flow must never touch it.)
@@ -10956,6 +10985,105 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       return { img: toDisp(m).thumb || null, price: p.mkt ?? p.low ?? null };
     } catch(_e){ return { img: null, price: null }; }
   };
+  // Both printings' identities + prices for a QA row, so the row can flip
+  // Non-Foil ⇄ Foil at review time without re-resolving the group. The scan
+  // itself can't tell foil from non-foil — that's a human review-time call
+  // (mirrors the staged-row hasFoilPair model).
+  const qaPrintInfo = (m) => {
+    const out = { prN: null, prF: null, pxN: null, pxF: null, hasFoilPair: false, printing: null };
+    if(!m) return out;
+    try {
+      const g = resolveGroup(m);
+      if(!g) return out;
+      const pxOf = (row) => row ? { low: row["Low Price"] ?? null, mkt: row["TCGPlayer Market"] ?? row["Market Price"] ?? null } : null;
+      out.prN = g.normal ? g.normal.tcg_printing : null;
+      out.prF = g.foil ? g.foil.tcg_printing : null;
+      out.pxN = pxOf(g.normal); out.pxF = pxOf(g.foil);
+      out.hasFoilPair = !!(out.prN && out.prF);
+      out.printing = out.prN || out.prF || null;
+      return out;
+    } catch(_e){ return out; }
+  };
+  // One identity patch for a QA row: guess/img/price + the printing model + a
+  // light candidate list (the inline editor's tappable alternates). Every
+  // pipeline answer-site (snap lock, primary id, looks, cn finisher) routes
+  // through this so rows always carry what review/save needs. predId = the
+  // scanner's own answer, frozen from user edits (corrected-vs-truth math).
+  const qaRowFields = (top, cands) => {
+    const info = qaCardInfo(top);
+    const pi = qaPrintInfo(top);
+    const px = (pi.printing && pi.printing === pi.prF) ? pi.pxF : pi.pxN;
+    return {
+      guess: qaLabelOf(top), guessId: top ? top.id : null, predId: top ? top.id : null,
+      cardImg: info.img,
+      price: px ? (px.mkt ?? px.low ?? info.price) : info.price,
+      prN: pi.prN, prF: pi.prF, pxN: pi.pxN, pxF: pi.pxF,
+      hasFoilPair: pi.hasFoilPair, printing: pi.printing,
+      cands: (cands || []).filter(Boolean).slice(0, 6).map(c => ({ id: c.id, name: c.name, version: c.version, rarity: c.rarity })),
+    };
+  };
+  // Tester corrections → ground-truth labels on the uploaded scan_samples row
+  // (the free-QA flywheel: card_id becomes the human truth, corrected marks a
+  // scanner miss = hard negative, printing records the foil call, reviewed
+  // stamps it human-judged). Best-effort background UPDATE (owner RLS, mig 87/
+  // 98). Rows whose upload hasn't landed yet pend by rid and flush when the
+  // sample id arrives. `__truth` defers the corrected computation to write
+  // time, when uploadPredId (the id the upload recorded as predicted) is known.
+  const labelSample = (row, patch) => {
+    try {
+      if(!sbClient || !user) return;
+      if(row.sampleId == null){
+        const P = pendingLabelRef.current;
+        P.set(row.id, { ...(P.get(row.id) || {}), ...patch });
+        return;
+      }
+      const p = { ...patch };
+      if("__truth" in p){
+        const base = row.uploadPredId != null ? row.uploadPredId : (row.predId != null ? row.predId : null);
+        p.card_id = p.__truth;
+        p.corrected = base != null ? (p.__truth !== base) : false;
+        delete p.__truth;
+      }
+      if(p.reviewed) p.reviewed_at = new Date().toISOString();
+      sbClient.from("scan_samples").update(p).eq("id", row.sampleId).then(() => {}, () => {});
+    } catch(_e){}
+  };
+  const flushPendingLabel = (rid, sid, upPred) => {
+    const P = pendingLabelRef.current;
+    const patch = P.get(rid);
+    if(!patch) return;
+    P.delete(rid);
+    labelSample({ id: rid, sampleId: sid, uploadPredId: upPred }, patch);
+  };
+  // Editor card search: whole catalog, one entry per card_id (Normal-printing
+  // row preferred), matched with the site-wide nameMatches (diacritics,
+  // apostrophes, typo tolerance).
+  const qaSearchPool = useMemo(() => {
+    if(!raw) return [];
+    const seen = new Map();
+    for(const r of raw){
+      if(!r.card_id || !r["Product Name"]) continue;
+      const cur = seen.get(r.card_id);
+      if(!cur || (cur.tcg_printing !== "Normal" && r.tcg_printing === "Normal")) seen.set(r.card_id, r);
+    }
+    return Array.from(seen.values());
+  }, [raw]);
+  const qaEditMatches = useMemo(() => {
+    const q = qaEditQ.trim();
+    if(q.length < 2) return [];
+    const out = [];
+    for(const r of qaSearchPool){
+      if(nameMatches(q, r["Product Name"])){ out.push(r); if(out.length >= 60) break; }
+    }
+    const ql = searchNorm(q.toLowerCase());
+    const norm = (s) => searchNorm(String(s || "").toLowerCase());
+    out.sort((a, b) => {
+      const an = norm(a["Product Name"]), bn = norm(b["Product Name"]);
+      const as = an.startsWith(ql) ? 0 : 1, bs = bn.startsWith(ql) ? 0 : 1;
+      return (as - bs) || (an.length - bn.length);
+    });
+    return out.slice(0, 12);
+  }, [qaEditQ, qaSearchPool]);
   // loaded-or-loading catalog art for the on-camera label (canvas drawImage
   // needs a COMPLETE image — returns null until the fetch lands, then draws)
   const artImg = (url) => {
@@ -11100,10 +11228,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     let verUnsure = (lock && idr.source === "live-lock")
       ? (job.lockVerBy !== "body" && tied0(job.lockNames))
       : (idr.verBy !== "body" && tied0(idr.names));
-    const rowInfo = qaCardInfo(top);
     tmr.rowMs = Date.now() - job.tSnap;
-    updateQaRow(rid, { status: "done", guess: qaLabelOf(top), conf: rowConf, ver: verUnsure,
-      cardImg: rowInfo.img, price: rowInfo.price,
+    updateQaRow(rid, { status: "done", ...qaRowFields(top, cands), conf: rowConf, ver: verUnsure,
       alts: (!verUnsure && (rowConf === "lock" || rowConf === "high")) ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
     trc("snap-id", { ms: tmr.rowMs, conf: idr.conf || null, src: idr.source || null, lock: lock ? 1 : 0,
       vb: idr.verBy || (lock ? job.lockVerBy : null) || null, vu: verUnsure ? 1 : 0 });
@@ -11155,7 +11281,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           let rawBlob = null, stripBlob = null;
           try { rawBlob = await job.rawBlobP; } catch(_e){}
           try { stripBlob = await job.stripBlobP; } catch(_e){}
-          if(rectBlob) uploadSample(top ? top.id : null, top ? top.id : null, false, null, rectBlob, debug, rawBlob, stripBlob);
+          // capture the pre-look predicted id NOW — `top` is reassigned by the
+          // deferred looks below, and corrected-vs-truth must compare against
+          // what this upload recorded as the prediction.
+          const upPred = top ? top.id : null;
+          if(rectBlob) uploadSample(top ? top.id : null, upPred, false, null, rectBlob, debug, rawBlob, stripBlob)
+            .then(sid => { if(sid != null){ updateQaRow(rid, { sampleId: sid, uploadPredId: upPred }); flushPendingLabel(rid, sid, upPred); } })
+            .catch(() => {});
         } catch(_e){}
         const unsure = verUnsure || rowConf === "low" || rowConf === "medium" || !(ocrLines || []).length;
         if(!(unsure && ocrReadyRef.current && window.CardScanner.identify)) return;
@@ -11177,9 +11309,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             if(!accept) return;
             idr = idr2; ocrLines = merged; cands = candsOf(idr); top = cands[0] || top;
             verUnsure = idr.verBy !== "body" && tied0(idr.names);
-            const info2 = qaCardInfo(top);
-            updateQaRow(rid, { guess: qaLabelOf(top), conf: idr.conf, ver: verUnsure,
-              cardImg: info2.img, price: info2.price,
+            updateQaRow(rid, { ...qaRowFields(top, cands), conf: idr.conf, ver: verUnsure,
               alts: (!verUnsure && idr.conf === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
             traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
             trc("snap-look", { conf: idr.conf, top: (idr.top3 || [])[0], flip: sameChar ? 0 : 1,
@@ -11200,9 +11330,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
                && charOf(idr2.top3[0]) === (lock.name || ""))) return;
             idr = idr2; ocrLines = lines2; cands = candsOf(idr); top = cands[0] || top;
             verUnsure = false;
-            const info2 = qaCardInfo(top);
-            updateQaRow(rid, { guess: qaLabelOf(top), conf: "high", ver: false,
-              cardImg: info2.img, price: info2.price, alts: "" });
+            updateQaRow(rid, { ...qaRowFields(top, cands), conf: "high", ver: false, alts: "" });
             traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
             trc("snap-look", { conf: idr.conf, top: idr.top3[0], flip: 0, vb: "body", n: lines2.length, lockVer: 1 });
           }
@@ -11223,9 +11351,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
                 if(idr3.source === "cn+name" || (idr3.source === "cn" && idr3.conf !== "low")){
                   idr = idr3; cands = candsOf(idr); top = cands[0] || top;
                   verUnsure = false;
-                  const info3 = qaCardInfo(top);
-                  updateQaRow(rid, { guess: qaLabelOf(top), conf: idr.conf, ver: false,
-                    cardImg: info3.img, price: info3.price, alts: "" });
+                  updateQaRow(rid, { ...qaRowFields(top, cands), conf: idr.conf, ver: false, alts: "" });
                   trc("snap-cn", { num: num.cnNum, set: num.cnSet || null, src: idr.source, top: (idr.top3 || [])[0] });
                 }
               }
@@ -11345,12 +11471,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const livePv = previewRef.current;
       const live = livePv && livePv.disp ? { id: livePv.disp.id, name: lbl(livePv.disp), textOk: !!livePv.textOk } : null;
       const rid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (now + "-" + Math.random().toString(36).slice(2));
-      // the row lands IMMEDIATELY — locked answer, or "Identifying…" filled by the job
-      const lockInfo = lock ? qaCardInfo(lock) : { img: null, price: null };
-      setQaResults(prev => [{ id: rid, ts: now, thumb: rawThumb,
-        guess: lock ? qaLabelOf(lock) : null, alts: "",
-        cardImg: lockInfo.img, price: lockInfo.price,
-        conf: lock ? "lock" : null, status: lock ? "done" : "identifying" }].concat(prev).slice(0, 40));
+      // the row lands IMMEDIATELY — locked answer, or "Identifying…" filled by
+      // the job. Cap 400 (was 40): review-&-save sessions keep every row; the
+      // rows are ~96px dataURL thumbs so even a big pile stays a few MB.
+      setQaResults(prev => [{ id: rid, ts: now, thumb: rawThumb, saved: false,
+        ...(lock
+          ? { ...qaRowFields(lock, [lock]), alts: "", conf: "lock", status: "done" }
+          : { guess: null, alts: "", cardImg: null, price: null, conf: null, status: "identifying" }) }].concat(prev).slice(0, 400));
       setQaCount(n => n + 1);
       trc("snap", { lock: lock ? 1 : 0 }); traceRef.current.n.snaps++;
       if(lock){ setSavedMsg("✓ " + qaLabelOf(lock) + " — next card"); setTimeout(() => setSavedMsg(""), 1400); }
@@ -11379,6 +11506,139 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       runQaQueue();
     } catch(_e){ setSavedMsg("Snap failed — try again"); setTimeout(() => setSavedMsg(""), 2000); }
   }, [user, onSignIn]);
+
+  // ── tester review actions (edit / confirm / foil / delete / save) ──────────
+  // Side effects (counters, trace, label writeback) read the render-scope row
+  // and run OUTSIDE the setState updater so they can never double-fire.
+  const qaOpenEdit = (rid) => { setQaEditQ(""); setQaEditOpen(cur => cur === rid ? null : rid); };
+  // user picked the truth for a row — from a candidate chip or the search.
+  // pick = { id, label ("Name - Version"), rarity }.
+  const qaCorrectRow = (rid, pick, how) => {
+    const x = qaResults.find(r => r.id === rid);
+    if(!x || !pick || !pick.id) return;
+    const di = (pick.label || "").indexOf(" - ");
+    const m = { id: pick.id, name: di > 0 ? pick.label.slice(0, di) : (pick.label || ""),
+      version: di > 0 ? pick.label.slice(di + 3) : "", rarity: pick.rarity };
+    const f = qaRowFields(m, []);
+    delete f.predId; delete f.cands;   // the scanner's answer + alternates stay frozen
+    if(pick.label) f.guess = pick.label;
+    const changed = (x.guessId || null) !== pick.id;
+    traceRef.current.n[changed ? "userEdits" : "userConfirms"]++;
+    trc(changed ? "user-edit" : "user-confirm", { from: x.guessId || null, to: pick.id, how: how || "search", conf: x.conf || null });
+    labelSample(x, { __truth: pick.id, reviewed: true, printing: f.printing || null });
+    setQaResults(prev => prev.map(r => r.id === rid
+      ? { ...r, ...f, status: "done", conf: "user", ver: false, alts: "", userSet: true, userPrSide: null }
+      : r));
+    setQaEditOpen(null);
+  };
+  const qaConfirmRow = (rid) => {
+    const x = qaResults.find(r => r.id === rid);
+    if(!x || !x.guessId) return;
+    traceRef.current.n.userConfirms++;
+    trc("user-confirm", { id: x.guessId, conf: x.conf || null });
+    labelSample(x, { __truth: x.guessId, reviewed: true, printing: x.printing || null });
+    setQaResults(prev => prev.map(r => r.id === rid ? { ...r, conf: "user", ver: false, alts: "", userSet: true } : r));
+    setQaEditOpen(null);
+  };
+  const qaDeleteRow = (rid) => {
+    const x = qaResults.find(r => r.id === rid);
+    if(!x) return;
+    traceRef.current.n.userDeletes++;
+    trc("user-del", { conf: x.conf || null, had: x.guessId || null });
+    pendingLabelRef.current.delete(rid);
+    if(qaEditOpen === rid) setQaEditOpen(null);
+    setQaResults(prev => prev.filter(r => r.id !== rid));
+  };
+  const qaFlipRow = (rid, side) => {
+    const x = qaResults.find(r => r.id === rid);
+    if(!x || !x.hasFoilPair) return;
+    const cur = x.printing === x.prF ? "F" : "N";
+    const to = side || (cur === "F" ? "N" : "F");
+    if(to === cur) return;
+    const pr2 = to === "F" ? x.prF : x.prN;
+    if(!pr2) return;
+    const px2 = to === "F" ? x.pxF : x.pxN;
+    traceRef.current.n.userFoilFlips++;
+    trc("user-foil", { to: pr2 });
+    labelSample(x, { printing: pr2 });
+    setQaResults(prev => prev.map(r => r.id === rid
+      ? { ...r, printing: pr2, price: px2 ? (px2.mkt ?? px2.low ?? r.price) : r.price, userPrSide: to }
+      : r));
+  };
+  // review-screen bulk foil set. Counters/trace only — no per-row DB label
+  // (a 100-row flip-all would fire 100 background updates for a bulk guess;
+  // the deliberate per-row flips are the trainable signal).
+  const qaFlipAll = (side) => {
+    traceRef.current.n.flipAlls++;
+    trc("user-foil-all", { to: side });
+    setQaResults(prev => prev.map(x => {
+      if(!x.hasFoilPair) return x;
+      const pr2 = side === "F" ? x.prF : x.prN;
+      if(!pr2 || x.printing === pr2) return x;
+      const px2 = side === "F" ? x.pxF : x.pxN;
+      return { ...x, printing: pr2, price: px2 ? (px2.mkt ?? px2.low ?? x.price) : x.price, userPrSide: side };
+    }));
+  };
+  // The ONLY collection write in QA mode: the explicit review-screen button.
+  // Stage → human review → explicit save, same invariant as the staging flow.
+  const qaSaveToCollection = () => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    const rows = qaResults.filter(x => !x.saved && x.guessId && x.printing && x.status !== "identifying");
+    if(!rows.length) return;
+    const agg = new Map();
+    for(const x of rows){
+      const k = x.guessId + ":" + x.printing;
+      const a = agg.get(k) || { cardId: x.guessId, printing: x.printing, n: 0 };
+      a.n++; agg.set(k, a);
+    }
+    let n = 0;
+    for(const a of agg.values()){
+      const cur = (collection && collection[a.cardId + ":" + a.printing]) || 0;
+      updateQty(a.cardId, a.printing, cur + a.n);
+      n += a.n;
+    }
+    traceRef.current.n.savedRows += n;
+    trc("user-save", { n, uniq: agg.size });
+    const ids = new Set(rows.map(x => x.id));
+    setQaResults(prev => prev.map(x => ids.has(x.id) ? { ...x, saved: true } : x));
+    setSavedMsg(n + " card" + (n === 1 ? "" : "s") + " added to your collection ✓");
+    setTimeout(() => setSavedMsg(""), 2800);
+  };
+  // Create a new deck from the reviewed scans (one row per card_id, qty
+  // summed, printing = the chosen side) and jump to it in the Decks tab.
+  const qaCreateDeck = async () => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    if(qaDeckBusy) return;
+    const rows = qaResults.filter(x => x.guessId && x.printing && x.status !== "identifying");
+    if(!rows.length) return;
+    setQaDeckBusy(true);
+    try {
+      const name = "Scanned " + new Date().toLocaleDateString(undefined, { month: "short", day: "numeric" });
+      const { data: deckRow, error } = await sbClient.from("decks")
+        .insert({ user_id: user.id, name: await encDeckRnd(name) })
+        .select("id").single();
+      if(error) throw error;
+      const agg = new Map();
+      for(const x of rows){
+        const a = agg.get(x.guessId) || { card_id: x.guessId, printing: x.printing, quantity: 0 };
+        a.quantity = Math.min(99, a.quantity + 1);
+        agg.set(x.guessId, a);
+      }
+      const cardRows = Array.from(agg.values()).map(a => ({ deck_id: deckRow.id, ...a }));
+      if(cardRows.length){
+        const ins = await sbClient.from("deck_cards").insert(await encDeckCardRows(cardRows));
+        if(ins.error) throw ins.error;
+      }
+      traceRef.current.n.deckRows += rows.length;
+      trc("user-deck", { n: rows.length, uniq: agg.size });
+      flashToast("Deck \"" + name + "\" created with " + rows.length + " card" + (rows.length === 1 ? "" : "s") + " ✓");
+      if(onOpenDeck) onOpenDeck(deckRow.id);
+      else onClose && onClose();
+    } catch(e){
+      setSavedMsg("Couldn't create deck: " + ((e && e.message) || String(e)));
+      setTimeout(() => setSavedMsg(""), 3200);
+    } finally { setQaDeckBusy(false); }
+  };
 
   const resume = () => { setResult(null); setRdy(false); steadyRef.current = { lastRaw: null, smooth: null, count: 0, misses: 0 }; setStatus("Place ONE card on a plain surface"); };
   // switch scan modes — clear any single-mode result + ambient preview/vote so the
@@ -11426,11 +11686,17 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         corrected: !!corrected, printing: printing || null,
         image_path: (up && !up.error) ? path : null,
       };
-      const { error } = await sbClient.from("scan_samples").insert(debug ? { ...row, debug } : row);
+      // returns the inserted row id so tester corrections can write ground-truth
+      // labels back onto this exact sample (labelSample).
+      const ins = await sbClient.from("scan_samples").insert(debug ? { ...row, debug } : row).select("id").single();
       // schema-tolerant: a pre-migration-95 DB has no `debug` column (PGRST204 /
       // 42703) — retry the plain row so the photo + prediction still log.
-      if(error && debug) await sbClient.from("scan_samples").insert(row);
-    } catch(_e){ /* best-effort */ }
+      if(ins && ins.error && debug){
+        const ins2 = await sbClient.from("scan_samples").insert(row).select("id").single();
+        return (ins2 && ins2.data) ? ins2.data.id : null;
+      }
+      return (ins && ins.data) ? ins.data.id : null;
+    } catch(_e){ return null; /* best-effort */ }
   };
   // downscale a rectified-card canvas to a JPEG blob for the flywheel. Default
   // ~400px (the training flywheel only colour-matches, doesn't need more), but QA
@@ -11487,6 +11753,75 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>`;
   }
 
+  // ── QA rows: shared renderer + aggregates (live list AND the review-&-save
+  //    screen render the same row, so fixes made in either place stick) ──────
+  const qmoney = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
+  const qaConfChip = (cf, ver) => cf === "user"
+    ? html`<span class="scanner-qa-conf user" title="Set by you">✓</span>`
+    : (cf === "lock" || cf === "high")
+    ? (ver ? html`<span class="scanner-qa-conf med" title="Character confirmed — version may be off, check the alternates">≈</span>`
+           : html`<span class=${"scanner-qa-conf " + (cf === "lock" ? "lock" : "high")} title=${cf === "lock" ? "Snapped from the live ✓-confirmed ID" : "High confidence"}>✓</span>`)
+    : cf === "medium" ? html`<span class="scanner-qa-conf med" title="Medium confidence">≈</span>`
+    : html`<span class="scanner-qa-conf low" title="Low confidence — check the alternates">?</span>`;
+  const qaAgg = (() => {
+    let total = 0, savable = 0, unsaved = 0, pending = 0, unmatched = 0, unpriceable = 0, pairs = 0;
+    for(const x of qaResults){
+      if(x.status === "identifying"){ pending++; continue; }
+      if(!x.guessId){ unmatched++; continue; }
+      if(x.price != null) total += Number(x.price) || 0;
+      if(x.hasFoilPair) pairs++;
+      if(x.printing){ savable++; if(!x.saved) unsaved++; }
+      else unpriceable++;
+    }
+    return { total, savable, unsaved, pending, unmatched, unpriceable, pairs };
+  })();
+  const qaRowJsx = (x) => {
+    const editing = qaEditOpen === x.id;
+    const others = (x.cands || []).filter(c => c.id !== x.guessId).slice(0, 4);
+    return html`<div class=${"scanner-session-row scanner-qa-row" + (x.status === "identifying" ? " scanner-qa-pending" : "") + (editing ? " editing" : "")} key=${x.id}>
+      ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy" title="Your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
+      ${x.cardImg ? html`<img class="scanner-session-thumb scanner-qa-cardimg" src=${x.cardImg} loading="lazy" title="Matched card — compare with your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-cardimg empty"></span>`}
+      <div class="scanner-qa-rowinfo">
+        ${x.status === "identifying"
+          ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
+          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.guess || "(no match)"}</span>`}
+        ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
+        ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
+            <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>Non-Foil</button>
+            <button class=${"scanner-qa-foilbtn" + (x.printing === x.prF ? " on" : "")} onClick=${() => qaFlipRow(x.id, "F")}>${x.prF === "Holofoil" ? "Holo" : "Foil"}</button>
+          </span>`
+          : (x.printing && x.printing !== "Normal" && x.printing !== "Non-Foil" && x.status !== "identifying" ? html`<span class="scanner-qa-pronly">${x.printing === "Holofoil" ? "Holo" : x.printing}</span>` : null)}
+      </div>
+      <div class="scanner-qa-side">
+        <span class="scanner-session-price">${x.price != null ? "$" + Number(x.price).toFixed(2) : ""}</span>
+        ${x.saved ? html`<span class="scanner-qa-savedchip">✓ saved</span>` : null}
+        <span class="scanner-qa-actions">
+          <button class="scanner-qa-editbtn" title="Wrong card? Fix or confirm it" aria-label="Edit this scan" onClick=${() => qaOpenEdit(x.id)}>✎</button>
+          <button class="scanner-qa-editbtn scanner-qa-delbtn" title="Remove this scan" aria-label="Remove this scan" onClick=${() => qaDeleteRow(x.id)}>×</button>
+        </span>
+      </div>
+      ${editing ? html`<div class="scanner-qa-edit">
+        ${x.guessId && !x.userSet && x.status !== "identifying" ? html`<button class="scanner-qa-okbtn" onClick=${() => qaConfirmRow(x.id)}>✓ This is right</button>` : null}
+        ${others.length ? html`<div class="scanner-session-alts-lbl">Scanner's other guesses:</div>
+        <div class="scanner-cand-row">
+          ${others.map(c => html`<button key=${c.id} class="scanner-cand" onClick=${() => qaCorrectRow(x.id, { id: c.id, label: qaLabelOf(c), rarity: c.rarity }, "cand")}>
+            <img src=${SCAN_THUMB(c.id)} alt=${qaLabelOf(c)} loading="lazy"/>
+            <span class="scanner-cand-name">${qaLabelOf(c)}</span>
+          </button>`)}
+        </div>` : null}
+        <input class="scanner-qa-search" type="search" placeholder="Search the correct card…" value=${qaEditQ}
+          onInput=${e => setQaEditQ(e.target.value)} autocomplete="off" autocapitalize="off" spellcheck="false"/>
+        ${qaEditMatches.length ? html`<div class="scanner-qa-search-list">
+          ${qaEditMatches.map(r => html`<button key=${r.card_id} class="scanner-qa-search-row" onClick=${() => qaCorrectRow(x.id, { id: r.card_id, label: r["Product Name"], rarity: r.Rarity }, "search")}>
+            <img src=${r.img_small || SCAN_THUMB(r.card_id)} loading="lazy" alt=""/>
+            <span class="scanner-qa-search-name">${r["Product Name"]}</span>
+            <span class="scanner-qa-search-meta">${[r.Set, r.Rarity].filter(Boolean).join(" · ")}</span>
+          </button>`)}
+        </div>` : (qaEditQ.trim().length >= 2 ? html`<div class="scanner-qa-search-none">No card matches "${qaEditQ.trim()}"</div>` : null)}
+      </div>` : null}
+    </div>`;
+  };
+
   let below;
   if(result){
     const c = result.cands[result.sel], disp = c.disp, g = c.group;
@@ -11523,14 +11858,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   } else if(mode === "ambient" && SCANNER_QA_ONLY){
     // QA-only testing layout: the LIVE identify loop runs (badge + ✓ name lock,
     // same as the real product) and tap → snap a photo + the scanner's full
-    // reasoning → upload for review. No staging, no add, no collection writes.
+    // reasoning → upload for review. Rows are editable in place (✎ fix/confirm,
+    // foil toggle, remove — every fix writes a ground-truth label back onto the
+    // uploaded sample); "Review & save" opens the full-list screen whose
+    // explicit buttons are the ONLY collection/deck write paths.
     const qpv = preview;
-    const qmoney = (x) => x != null ? "$" + Number(x).toFixed(2) : "—";
-    const qaConfChip = (cf, ver) => (cf === "lock" || cf === "high")
-      ? (ver ? html`<span class="scanner-qa-conf med" title="Character confirmed — version may be off, check the alternates">≈</span>`
-             : html`<span class=${"scanner-qa-conf " + (cf === "lock" ? "lock" : "high")} title=${cf === "lock" ? "Snapped from the live ✓-confirmed ID" : "High confidence"}>✓</span>`)
-      : cf === "medium" ? html`<span class="scanner-qa-conf med" title="Medium confidence">≈</span>`
-      : html`<span class="scanner-qa-conf low" title="Low confidence — check the alternates">?</span>`;
     below = html`<div class="scanner-ambient scanner-qa">
       <div class="scanner-amb-bar">
         <div class="scanner-amb-now">
@@ -11546,22 +11878,17 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
-      <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, 📸 logs it instantly. Not confirmed yet? 📸 still captures and identifies in the background, so you can move straight to the next card. Each snap saves the photos + full reasoning for our review. <b>Nothing is added to any collection.</b></div>
+      <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, 📸 logs it instantly. Not confirmed yet? 📸 still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b></div>
       <div class="scanner-session">
+        <div class="scanner-session-head">
+          <span class="scanner-session-count">${qaResults.length} scanned</span>
+          <span class="scanner-session-total">${qaResults.length ? qmoney(qaAgg.total) : ""}</span>
+          ${qaResults.length ? html`<button class="scanner-save-btn" onClick=${() => setQaReview(true)}>${"Review & save →"}</button>` : null}
+        </div>
         <div class="scanner-session-list">
           ${qaResults.length === 0
             ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b>. Hold close — one card, good light. No need to wait between snaps.</div>`
-            : qaResults.map(x => html`<div class=${"scanner-session-row scanner-qa-row" + (x.status === "identifying" ? " scanner-qa-pending" : "")} key=${x.id}>
-                ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy" title="Your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
-                ${x.cardImg ? html`<img class="scanner-session-thumb scanner-qa-cardimg" src=${x.cardImg} loading="lazy" title="Matched card — compare with your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-cardimg empty"></span>`}
-                <div class="scanner-qa-rowinfo">
-                  ${x.status === "identifying"
-                    ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
-                    : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.guess || "(no match)"}</span>`}
-                  ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
-                </div>
-                <span class="scanner-session-price">${x.price != null ? "$" + Number(x.price).toFixed(2) : ""}</span>
-              </div>`)}
+            : qaResults.map(qaRowJsx)}
         </div>
       </div>
     </div>`;
@@ -11628,6 +11955,39 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>`;
   }
 
+  // Full-list review-&-save screen: replaces the camera + list while open. The
+  // camera/identify loop keeps running underneath so "Identifying…" rows keep
+  // resolving and deferred looks keep draining while the user reviews.
+  const qaReviewing = SCANNER_QA_ONLY && qaReview && mode === "ambient" && !result;
+  const qaReviewPanel = !qaReviewing ? null : html`<div class="scanner-qa-review">
+    <div class="scanner-qa-review-head">
+      <button class="scanner-link" onClick=${() => setQaReview(false)}>← Camera</button>
+      <span class="scanner-session-count">${qaResults.length} scan${qaResults.length === 1 ? "" : "s"}</span>
+      <span class="scanner-session-total">${qmoney(qaAgg.total)}</span>
+    </div>
+    ${qaAgg.pairs ? html`<div class="scanner-qa-review-tools">
+      <span>Foil (${qaAgg.pairs} card${qaAgg.pairs === 1 ? " has" : "s have"} both printings):</span>
+      <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("N")}>All Non-Foil</button>
+      <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("F")}>All Foil</button>
+    </div>` : null}
+    ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
+    <div class="scanner-session-list scanner-qa-review-list">
+      ${qaResults.length === 0
+        ? html`<div class="scanner-session-empty">Nothing scanned yet — go back to the camera and 📸 some cards.</div>`
+        : qaResults.map(qaRowJsx)}
+    </div>
+    <div class="scanner-qa-review-actions">
+      <button class="scanner-btn primary" disabled=${!qaAgg.unsaved} onClick=${qaSaveToCollection}>
+        ${qaAgg.unsaved ? "+ Add " + qaAgg.unsaved + " to collection" : (qaAgg.savable ? "Added to collection ✓" : "+ Add to collection")}
+      </button>
+      <button class="scanner-btn" disabled=${!qaAgg.savable || qaDeckBusy} onClick=${qaCreateDeck}>${qaDeckBusy ? "Creating deck…" : "New deck"}</button>
+    </div>
+    ${(qaAgg.pending || qaAgg.unmatched || qaAgg.unpriceable) ? html`<div class="scanner-qa-note">${[
+      qaAgg.pending ? qaAgg.pending + " still identifying" : null,
+      qaAgg.unmatched ? qaAgg.unmatched + " with no match (✎ to fix)" : null,
+      qaAgg.unpriceable ? qaAgg.unpriceable + " not in the price catalog" : null,
+    ].filter(Boolean).join(" · ")} — these won't be added.</div>` : null}
+  </div>`;
   // QA mode: the 📸 BUTTON is the only shutter (7/18 field: tap-anywhere fired
   // on incidental touches — adjusting grip, tapping to focus — and read as the
   // scanner "auto-snapping" on its own). Signed-out taps still route to sign-in.
@@ -11642,7 +12002,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       </div>` : null}
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
-    <div class="scanner-stage" ref=${stageRef} onClick=${stageTap}>
+    <div class="scanner-stage" ref=${stageRef} onClick=${stageTap} style=${qaReviewing ? { display: "none" } : null}>
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
@@ -11652,7 +12012,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
     </div>
-    ${below}
+    ${qaReviewing ? qaReviewPanel : below}
   </div>`;
 }
 
@@ -34050,6 +34410,7 @@ function App(){
       user=${user} onSignIn=${signIn}
       onClose=${()=>setScanOpen(false)}
       onOpenReview=${isGradedAdmin ? ()=>{ setScanOpen(false); setScanReviewOpen(true); } : null}
+      onOpenDeck=${(id)=>{ setScanOpen(false); openDeckById(id); }}
       onOpenDetail=${(g)=>{ setScanOpen(false); openCardsWithSearch("", g.card_id); }}/>`}
     ${scanReviewOpen && isGradedAdmin && html`<${ScanReviewModal}
       raw=${raw} onClose=${()=>setScanReviewOpen(false)}/>`}
