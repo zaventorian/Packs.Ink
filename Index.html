@@ -12846,71 +12846,114 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
 // Enchanted to browse every Enchanted in the game and see which you own.
 const ALL_CARDS_VIEW = "__all_cards__";
 
-// A collection completion goal is a per-printing target: n = non-foil copies,
-// f = foil copies. Chase rarities (Enchanted / Iconic / Epic / Promo) are
-// foil-only, so they use f. Master Set = {n:1,f:1}, Play Set = {n:4,f:4};
-// Custom allows an asymmetric split (e.g. 4 non-foil + 1 foil) and counts
-// above 4. When n===f this is byte-identical to the old single "copies"
-// target, so the presets don't change any existing behaviour.
-const isPresetGoal = (g, n, f) => ((g?.n|0) === n && (g?.f|0) === f);
+// A collection completion goal has three per-printing/rarity targets:
+//   n = non-foil copies, f = foil copies, c = "chase/special" copies for
+//   Epic / Enchanted / Iconic / Promo (these fall awkwardly into the foil
+//   bucket — most are single-print collector cards you want a different count
+//   of, or none at all). Optionally `chase` overrides c per rarity:
+//   {epic, enchanted, iconic, promo}. Master Set = {1,1,1}, Play Set = {4,4,4}.
+//   Legacy {n,f} goals migrate with c defaulting to f (the old behaviour where
+//   chase used the foil target), so nothing regresses.
+const SPECIAL_RARITIES = ["Epic", "Enchanted", "Iconic", "Promo"];
+const isSpecialRarity = (r) => SPECIAL_RARITIES.includes(r);
+const specialKey = (r) => (r || "").toLowerCase();
+// Target for a special card of the given rarity under a goal.
+const goalChaseTarget = (goal, rarity) => {
+  const base = (goal && goal.c != null) ? Math.max(0, goal.c|0) : 1;
+  if(goal && goal.chase && typeof goal.chase === "object"){
+    const v = goal.chase[specialKey(rarity)];
+    return Number.isFinite(v) ? Math.max(0, v|0) : base;
+  }
+  return base;
+};
+// A preset is uniform (n===f===c===v) with no per-rarity override.
+const isPresetGoal = (g, v) => ((g?.n|0) === v && (g?.f|0) === v && (g?.c|0) === v && !g?.chase);
+const _clampG = (v) => Math.max(0, Math.min(99, (v|0) || 0));
 const normalizeGoal = (g) => {
-  let n = Math.max(0, Math.min(99, (g?.n|0) || 0));
-  let f = Math.max(0, Math.min(99, (g?.f|0) || 0));
-  if(n === 0 && f === 0) n = 1;   // never let both be 0 (would mark all complete)
-  return {n, f};
+  const n = _clampG(g?.n), f = _clampG(g?.f);
+  const c = (g?.c != null) ? _clampG(g.c) : (g?.f != null ? _clampG(g.f) : 1); // migrate: chase ← foil
+  let chase = null;
+  if(g?.chase && typeof g.chase === "object"){
+    chase = {epic:_clampG(g.chase.epic ?? c), enchanted:_clampG(g.chase.enchanted ?? c),
+             iconic:_clampG(g.chase.iconic ?? c), promo:_clampG(g.chase.promo ?? c)};
+  }
+  const anyChase = chase && Object.values(chase).some(v => v > 0);
+  const out = {n, f, c, chase};
+  if(n === 0 && f === 0 && c === 0 && !anyChase) out.n = 1; // never all-zero (would mark everything complete)
+  return out;
 };
 const goalLabel = (g) => {
-  const n = g?.n|0, f = g?.f|0;
-  if(n === 1 && f === 1) return "master set";
-  if(n === 4 && f === 4) return "playset";
-  if(n === f)  return n + "× set";
-  if(f === 0)  return n + "× non-foil";
-  if(n === 0)  return f + "× foil";
-  return n + "× non-foil / " + f + "× foil";
+  const n = g?.n|0, f = g?.f|0, c = g?.c|0;
+  if(n === 1 && f === 1 && c === 1 && !g?.chase) return "master set";
+  if(n === 4 && f === 4 && c === 4 && !g?.chase) return "playset";
+  return "custom goal";
 };
-// Title-cased variant for headings/chips ("Master Set", "Play Set", "4× Set").
+// Title-cased variant for headings/chips.
 const goalTitle = (g) => {
-  const n = g?.n|0, f = g?.f|0;
-  if(n === 1 && f === 1) return "Master Set";
-  if(n === 4 && f === 4) return "Play Set";
-  if(n === f)  return n + "× Set";
-  if(f === 0)  return n + "× Non-foil";
-  if(n === 0)  return f + "× Foil";
-  return n + "× NF / " + f + "× Foil";
+  const n = g?.n|0, f = g?.f|0, c = g?.c|0;
+  if(n === 1 && f === 1 && c === 1 && !g?.chase) return "Master Set";
+  if(n === 4 && f === 4 && c === 4 && !g?.chase) return "Play Set";
+  return "Custom";
 };
 
-// Segmented Master / Play / Custom control. In Custom, two number inputs set
-// the non-foil and foil targets independently. `foilMode` (from the set-detail
-// lens; null at the collection level) dims the input for a printing that's
-// currently out of scope — the two controls cooperate rather than fight.
-const GoalControl = ({goal, setGoal, foilMode}) => {
-  const preset = isPresetGoal(goal, 1, 1) ? "master" : isPresetGoal(goal, 4, 4) ? "play" : "custom";
-  const [showCustom, setShowCustom] = useState(preset === "custom");
-  const inputsOpen = showCustom || preset === "custom";
-  // Clamp the edited field only — 0 is valid in ONE field (e.g. {4,0} = a
-  // non-foil playset). A transient {0,0} is harmless: every consumer guards it
-  // (goalN/goalF Math.max, totalNeeded 0 → 0%). The persisted-load path
-  // (normalizeGoal in CollectionView) is what nudges a stored {0,0} back to 1.
+// Segmented Master / Play / Custom control. Custom reveals two number inputs
+// (non-foil + foil targets, independent — both always editable). While Custom
+// is active the preset buttons grey out and don't read as "active" even if the
+// values happen to equal a preset, and entering Custom resets the foil lens to
+// "Either" (setFoilMode; null at the collection level / Extras) so both inputs
+// start relevant — you set e.g. 4/4, then use the lens to focus on one side.
+const GoalControl = ({goal, setGoal, setFoilMode}) => {
+  const rawPreset = isPresetGoal(goal, 1) ? "master" : isPresetGoal(goal, 4) ? "play" : "custom";
+  const [showCustom, setShowCustom] = useState(rawPreset === "custom");
+  const inputsOpen = showCustom || rawPreset === "custom";
+  const activePreset = inputsOpen ? "custom" : rawPreset;
+  const perRarity = !!(goal && goal.chase);
+  // Clamp the edited field only — 0 is valid in a field (e.g. {n:4,c:0} = a
+  // non-foil playset, no chase). normalizeGoal nudges an all-zero goal back to 1.
   const clampField = (v) => Math.max(0, Math.min(99, parseInt(v, 10) || 0));
-  const setN = (v) => setGoal((g) => ({n: clampField(v), f: g.f|0}));
-  const setF = (v) => setGoal((g) => ({n: g.n|0, f: clampField(v)}));
-  const inStyle = {width:52, padding:"3px 6px", border:"1px solid var(--btn-border)", borderRadius:4,
+  const setN = (v) => setGoal((g) => ({...g, n: clampField(v)}));
+  const setF = (v) => setGoal((g) => ({...g, f: clampField(v)}));
+  const setC = (v) => setGoal((g) => ({...g, c: clampField(v)}));
+  const setChaseKey = (k, v) => setGoal((g) => ({...g, chase: {...(g.chase || {}), [k]: clampField(v)}}));
+  // Toggle per-rarity chase targets: seed the four from the current c, or drop
+  // back to the single c value.
+  const togglePerRarity = () => setGoal((g) => g.chase
+    ? {...g, chase: null}
+    : {...g, chase: {epic:g.c|0, enchanted:g.c|0, iconic:g.c|0, promo:g.c|0}});
+  // Reset the lens to "Either" only when ENTERING Custom (not when re-clicking
+  // it) so a deliberate Non-foil/Foil focus isn't undone.
+  const enterCustom = () => { if(!inputsOpen && setFoilMode) setFoilMode("either"); setShowCustom(true); };
+  const inStyle = {width:48, padding:"3px 6px", border:"1px solid var(--btn-border)", borderRadius:4,
     background:"var(--bg-solid)", color:"var(--text)", fontSize:12};
-  const nDisabled = foilMode === "foil";    // non-foil out of the current lens
-  const fDisabled = foilMode === "normal";  // foil out of the current lens
+  const lblStyle = {display:"flex", alignItems:"center", gap:4};
+  const dim = inputsOpen ? {opacity:0.45} : null;
   return html`<div class="setdet-goal" style=${{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
-    <div class="seg-toggle" title="Completion target per card — Master = 1 of each, Play = 4 of each, or a custom non-foil/foil split.">
-      <button class=${preset==="master"?"active":""} onClick=${()=>{ setShowCustom(false); setGoal({n:1,f:1}); }}>Master Set</button>
-      <button class=${preset==="play"?"active":""} onClick=${()=>{ setShowCustom(false); setGoal({n:4,f:4}); }}>Play Set</button>
-      <button class=${inputsOpen?"active":""} onClick=${()=>setShowCustom(true)}>✎ Custom</button>
+    <div class="seg-toggle" title="Completion target — Master = 1 of each, Play = 4 of each, or a custom non-foil / foil / chase split.">
+      <button class=${activePreset==="master"?"active":""} style=${dim} onClick=${()=>{ setShowCustom(false); setGoal({n:1,f:1,c:1,chase:null}); }}>Master Set</button>
+      <button class=${activePreset==="play"?"active":""} style=${dim} onClick=${()=>{ setShowCustom(false); setGoal({n:4,f:4,c:4,chase:null}); }}>Play Set</button>
+      <button class=${activePreset==="custom"?"active":""} onClick=${enterCustom}>✎ Custom</button>
     </div>
-    ${inputsOpen && html`<div class="setdet-goal-custom" style=${{display:"flex", alignItems:"center", gap:10, fontSize:11}}>
-      <label class=${nDisabled?"muted":""} style=${{display:"flex", alignItems:"center", gap:4}}>Non-foil
-        <input type="number" min="0" max="99" value=${goal.n|0} disabled=${nDisabled}
-          onInput=${(e)=>setN(e.target.value)} style=${nDisabled?{...inStyle,opacity:0.4}:inStyle}/></label>
-      <label class=${fDisabled?"muted":""} style=${{display:"flex", alignItems:"center", gap:4}}>Foil
-        <input type="number" min="0" max="99" value=${goal.f|0} disabled=${fDisabled}
-          onInput=${(e)=>setF(e.target.value)} style=${fDisabled?{...inStyle,opacity:0.4}:inStyle}/></label>
+    ${inputsOpen && html`<div class="setdet-goal-custom" style=${{display:"flex", alignItems:"center", gap:10, fontSize:11, flexWrap:"wrap"}}>
+      <label style=${lblStyle}>Non-foil
+        <input type="number" min="0" max="99" value=${goal.n|0} onInput=${(e)=>setN(e.target.value)} style=${inStyle}/></label>
+      <label style=${lblStyle}>Foil
+        <input type="number" min="0" max="99" value=${goal.f|0} onInput=${(e)=>setF(e.target.value)} style=${inStyle}/></label>
+      ${perRarity
+        ? html`<span style=${{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap", paddingLeft:6, borderLeft:"1px solid var(--border)"}}>
+            <label style=${lblStyle} title="Epic">Epic
+              <input type="number" min="0" max="99" value=${goal.chase.epic|0} onInput=${(e)=>setChaseKey("epic", e.target.value)} style=${inStyle}/></label>
+            <label style=${lblStyle} title="Enchanted">Ench.
+              <input type="number" min="0" max="99" value=${goal.chase.enchanted|0} onInput=${(e)=>setChaseKey("enchanted", e.target.value)} style=${inStyle}/></label>
+            <label style=${lblStyle} title="Iconic">Iconic
+              <input type="number" min="0" max="99" value=${goal.chase.iconic|0} onInput=${(e)=>setChaseKey("iconic", e.target.value)} style=${inStyle}/></label>
+            <label style=${lblStyle} title="Promo">Promo
+              <input type="number" min="0" max="99" value=${goal.chase.promo|0} onInput=${(e)=>setChaseKey("promo", e.target.value)} style=${inStyle}/></label>
+          </span>`
+        : html`<label style=${lblStyle} title="Epic / Enchanted / Iconic / Promo — set to 0 to ignore chase cards">Chase
+            <input type="number" min="0" max="99" value=${goal.c|0} onInput=${(e)=>setC(e.target.value)} style=${inStyle}/></label>`}
+      <button class="chip" onClick=${togglePerRarity} style=${{fontSize:10, padding:"3px 8px"}}
+        title=${perRarity ? "Use one target for all chase cards" : "Set Epic / Enchanted / Iconic / Promo separately"}>
+        ${perRarity ? "↩ Simple chase" : "⋯ Per rarity"}</button>
     </div>`}
   </div>`;
 };
@@ -13010,13 +13053,16 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     localStorage.setItem("packsink:allCards:separate", separateBySet ? "1" : "0");
     localStorage.setItem("packsink:allCards:filter", serializeFilter(drawerFilter));
   } catch {} }, [allMode, separateBySet, drawerFilter]);
-  // Per-printing completion targets from the shared goal — goalN for non-foil,
-  // goalF for foil (chase rarities are foil-only, so they use goalF). Passed in
-  // from CollectionView's goal control. Falls back to a 1× master set so the
-  // set-detail view still works in isolation. When goalN===goalF this is the
-  // old uniform "copies" target — nothing regresses for the presets.
+  // Completion targets from the shared goal — goalN non-foil, goalF foil.
+  // Special rarities (Epic / Enchanted / Iconic / Promo) use their own chase
+  // target instead (goalChaseTarget), so they don't ride the foil number.
+  // Falls back to a 1× master set if a caller omits the goal.
   const goalN = goal ? Math.max(0, goal.n|0) : 1;
   const goalF = goal ? Math.max(0, goal.f|0) : 1;
+  // Target + display bucket for a group's printing side. Special cards use the
+  // chase target and the "chase" bucket regardless of which printing they are.
+  const targetForSide = (g, side) => isSpecialRarity(g.Rarity) ? goalChaseTarget(goal, g.Rarity) : (side === "normal" ? goalN : goalF);
+  const bucketForSide = (g, side) => isSpecialRarity(g.Rarity) ? "chase" : (side === "normal" ? "nonfoil" : "foil");
 
   // Which printings of a group are "in scope" for the current Non-foil/Foil
   // lens. A SINGLE-VERSION card — only one printing exists (chase rarities
@@ -13102,10 +13148,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       const ownF = fApplies ? (collection[g.card_id+":"+g.foil.tcg_printing]   || 0) : null;
       const covN = nApplies ? slotCover(g.card_id, g.normal.tcg_printing) : 0;
       const covF = fApplies ? slotCover(g.card_id, g.foil.tcg_printing)   : 0;
-      const shortN = nApplies ? Math.max(0, goalN - (ownN + covN)) : 0;
-      const shortF = fApplies ? Math.max(0, goalF - (ownF + covF)) : 0;
-      const overN  = nApplies ? Math.max(0, ownN - goalN) : 0;
-      const overF  = fApplies ? Math.max(0, ownF - goalF) : 0;
+      const tN = targetForSide(g, "normal"), tF = targetForSide(g, "foil");
+      const shortN = nApplies ? Math.max(0, tN - (ownN + covN)) : 0;
+      const shortF = fApplies ? Math.max(0, tF - (ownF + covF)) : 0;
+      const overN  = nApplies ? Math.max(0, ownN - tN) : 0;
+      const overF  = fApplies ? Math.max(0, ownF - tF) : 0;
       const totalShort = shortN + shortF;
       const totalOver  = overN  + overF;
 
@@ -13126,7 +13173,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       return groups.filter(g => predicate(g, {...parsed, nameMatchMode:"any"}));
     }
     return groups.filter(g => predicate(g, parsed));
-  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, goalN, goalF, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
+  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, goal, goalN, goalF, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
 
   // Filter-aware "missing" summary — for each visible printing, counts the
   // copies the user is SHORT of the goal (goalN non-foil, goalF foil). Value
@@ -13134,26 +13181,60 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // so toggling Enchanted off, etc., drops it from the totals.
   const visibleMissing = useMemo(() => {
     let count = 0, value = 0;
+    const byBucket = {nonfoil:{count:0,value:0}, foil:{count:0,value:0}, chase:{count:0,value:0}};
     for(const g of visibleGroups){
       if(nInScope(g)){
         const qty = (collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing);
-        const short = Math.max(0, goalN - qty);
+        const short = Math.max(0, targetForSide(g, "normal") - qty);
         if(short > 0){
-          count += short;
-          value += (g.normal["Low Price"] ?? g.normal["TCGPlayer Market"] ?? 0) * short;
+          const v = (g.normal["Low Price"] ?? g.normal["TCGPlayer Market"] ?? 0) * short;
+          count += short; value += v;
+          const bk = bucketForSide(g, "normal");
+          byBucket[bk].count += short; byBucket[bk].value += v;
         }
       }
       if(fInScope(g)){
         const qty = (collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing);
-        const short = Math.max(0, goalF - qty);
+        const short = Math.max(0, targetForSide(g, "foil") - qty);
         if(short > 0){
-          count += short;
-          value += (g.foil["Low Price"] ?? g.foil["TCGPlayer Market"] ?? 0) * short;
+          const v = (g.foil["Low Price"] ?? g.foil["TCGPlayer Market"] ?? 0) * short;
+          count += short; value += v;
+          const bk = bucketForSide(g, "foil");
+          byBucket[bk].count += short; byBucket[bk].value += v;
         }
       }
     }
-    return {count, value};
-  }, [visibleGroups, collection, foilMode, goalN, goalF, slotCover]);
+    return {count, value, byBucket};
+  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
+
+  // Owned completion per bucket (non-foil / foil / chase) for the current view +
+  // goal: `have` = cards where owned+graded ≥ the bucket's target; `total` = in-
+  // scope cards in that bucket. Only buckets that are part of the goal (target
+  // > 0) count. Drives the top-of-set "you own X/N of each" breakdown.
+  const ownedBreakdown = useMemo(() => {
+    const b = {nonfoil:{have:0,total:0}, foil:{have:0,total:0}, chase:{have:0,total:0}};
+    for(const g of visibleGroups){
+      if(nInScope(g)){
+        const t = targetForSide(g, "normal");
+        if(t > 0){
+          const bk = bucketForSide(g, "normal");
+          b[bk].total++;
+          const qty = (collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing);
+          if(qty >= t) b[bk].have++;
+        }
+      }
+      if(fInScope(g)){
+        const t = targetForSide(g, "foil");
+        if(t > 0){
+          const bk = bucketForSide(g, "foil");
+          b[bk].total++;
+          const qty = (collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing);
+          if(qty >= t) b[bk].have++;
+        }
+      }
+    }
+    return b;
+  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
 
   // "Buy bulk on TCGplayer" link: a TCGplayer mass-entry cart pre-filled with
   // every missing copy in the current (filtered) view, so one click loads them
@@ -13167,16 +13248,16 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       if(!nm) continue;
       let short = 0;
       if(nInScope(g))
-        short += Math.max(0, goalN - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
+        short += Math.max(0, targetForSide(g, "normal") - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
       if(fInScope(g))
-        short += Math.max(0, goalF - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
+        short += Math.max(0, targetForSide(g, "foil") - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
       if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
     }
     if(!byName.size) return null;
     const lines = [...byName].map(([nm, n]) => `${n} ${nm}`);
     const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
     return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
-  }, [visibleGroups, collection, foilMode, goalN, goalF, slotCover]);
+  }, [visibleGroups, collection, foilMode, goal, goalN, goalF, slotCover]);
 
   // Filter-aware "owned value" summary — total $ for cards in the visible
   // view that the user actually owns. Sums every owned copy at current Low
@@ -13239,7 +13320,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
           </div>
         </span>`}
       <div class="setdet-toolbar-goalgroup" style=${{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
-        ${setGoal && !readOnly && html`<${GoalControl} goal=${goal} setGoal=${setGoal} foilMode=${isExtrasView ? "foil" : foilMode}/>`}
+        ${setGoal && !readOnly && html`<${GoalControl} goal=${goal} setGoal=${setGoal} setFoilMode=${isExtrasView ? null : setFoilMode}/>`}
         ${!isExtrasView && html`<div class="seg-toggle">
           ${[["either","Either"],["normal","Non-foil"],["foil","Foil"]].map(([k,l]) =>
             html`<button key=${k} class=${foilMode===k?"active":""} onClick=${()=>setFoilMode(k)}>${l}</button>`)}
@@ -13265,6 +13346,25 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       </div>
     </div>
 
+    ${(() => {
+      // Owned-completion breakdown by printing bucket (non-foil / foil / chase),
+      // respecting the current filter + goal: "you have X of the N cards" per
+      // bucket. Only shows buckets that are in scope + part of the goal.
+      const ob = ownedBreakdown;
+      const buckets = [["nonfoil","Non-foil",ob.nonfoil],["foil","Foil",ob.foil],["chase","Chase",ob.chase]].filter(([,,d])=>d.total>0);
+      if(!buckets.length) return null;
+      return html`<div class="setdet-completion" style=${{display:"flex",gap:8,flexWrap:"wrap",marginBottom:10}}>
+        ${buckets.map(([k,label,d]) => {
+          const pct = d.total ? Math.round(d.have/d.total*100) : 0;
+          return html`<div key=${k} style=${{flex:"1 1 130px",minWidth:118,background:"var(--bg-surface)",border:"1px solid var(--border)",borderRadius:8,padding:"8px 12px"}}>
+            <div style=${{fontSize:10,textTransform:"uppercase",letterSpacing:0.6,color:"var(--text-muted)",fontWeight:700}}>${label} owned</div>
+            <div style=${{fontSize:18,fontWeight:700,fontVariantNumeric:"tabular-nums",marginTop:2}}>${d.have.toLocaleString()} <span style=${{color:"var(--text-muted)",fontSize:13,fontWeight:400}}>/ ${d.total.toLocaleString()}</span> <span style=${{color:"var(--text-muted)",fontSize:12,marginLeft:2}}>${pct}%</span></div>
+            <div style=${{height:5,background:"var(--border)",borderRadius:3,marginTop:5,overflow:"hidden"}}><div style=${{width:pct+"%",height:"100%",background:"var(--accent)"}}></div></div>
+          </div>`;
+        })}
+      </div>`;
+    })()}
+
     <div class="setdet-value-stats">
       <div class="setdet-stat">
         <div class="setdet-stat-lbl">Owned value</div>
@@ -13275,6 +13375,16 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
         <div class="setdet-stat-lbl">Missing value</div>
         <div class="setdet-stat-val red">$${visibleMissing.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
         <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</div>
+        ${(() => {
+          // Split the missing value across non-foil / foil / chase — only when
+          // more than one bucket is short (otherwise it just echoes the total).
+          const mb = visibleMissing.byBucket;
+          const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([k])=>mb[k].count>0);
+          if(parts.length < 2) return null;
+          return html`<div class="setdet-stat-sub" style=${{marginTop:3,display:"flex",gap:"2px 10px",flexWrap:"wrap"}}>
+            ${parts.map(([k,label]) => html`<span key=${k}>${label} ${fmt(mb[k].value)} <span style=${{opacity:0.65}}>(${mb[k].count})</span></span>`)}
+          </div>`;
+        })()}
       </div>
     </div>
 
@@ -19106,7 +19216,7 @@ const GradedCollectionGoalModal = ({setNameById, setIdsByName, extrasBucketOptio
   </div>`;
 };
 
-const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, tabClickNonce, onSignIn, theme, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded, openView}) => {
+const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bulkUpdateCollection, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, tabClickNonce, onSignIn, theme, goal, setGoal, viewerContext, currentUser, viewerOwnCollection, viewerOwnSealedCollection, ownerProfile, saveCollectionVisibility, regenerateCollectionShareToken, onJumpToScreenerGraded, openView}) => {
   const isViewerMode = !!viewerContext;
   // The whole graded↔raw sync (graded copies checking off raw completion + the
   // ◆ grade affordance) is premium-gated, same as the graded price data.
@@ -19172,22 +19282,16 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   useEffect(() => {
     if(tabClickNonce > 0) setSelectedSet(null);
   }, [tabClickNonce]);
-  // Completion goal: per-printing targets {n: non-foil, f: foil}. Master Set =
-  // {1,1}, Play Set = {4,4}; Custom allows a split (e.g. 4 non-foil + 1 foil).
-  // Shared with CollectionSetDetail so the goal is one source of truth across
-  // the headline %, per-set missing totals, and the set-detail view. Persisted
-  // so a chosen goal sticks between visits.
-  const [goal, setGoal] = useState(() => {
-    try { return normalizeGoal(JSON.parse(localStorage.getItem("packsink:collection:goal") || "null") || {n:1,f:1}); }
-    catch { return {n:1, f:1}; }
-  });
-  useEffect(() => { try { localStorage.setItem("packsink:collection:goal", JSON.stringify(goal)); } catch {} }, [goal]);
-  const goalN = Math.max(0, goal.n|0), goalF = Math.max(0, goal.f|0);
-  // Per-printing target for a raw row: chase rarities are foil-only (→ goalF);
-  // otherwise non-foil printings use goalN, foil printings use goalF.
+  // Completion goal {n: non-foil, f: foil} comes from App (props) so it's one
+  // source of truth and syncs to user_metadata across devices. Master Set =
+  // {1,1}, Play Set = {4,4}; Custom allows a split. Fall back to a 1× master
+  // set if a caller ever omits it.
+  const goalN = goal ? Math.max(0, goal.n|0) : 1, goalF = goal ? Math.max(0, goal.f|0) : 1;
+  // Per-printing target for a raw row: special rarities (Epic/Enchanted/Iconic/
+  // Promo) use their chase target; otherwise non-foil→goalN, foil→goalF.
   const needForRow = useCallback((r) =>
-    (r.Rarity==="Enchanted"||r.Rarity==="Iconic"||r.Rarity==="Epic") ? goalF
-      : (r.tcg_printing==="Normal" ? goalN : goalF), [goalN, goalF]);
+    isSpecialRarity(r.Rarity) ? goalChaseTarget(goal, r.Rarity)
+      : (r.tcg_printing==="Normal" ? goalN : goalF), [goal, goalN, goalF]);
   // CSV import flow state. null when idle; {report, mode, busy} when a file
   // has been parsed and the user is reviewing the preview modal.
   const [importState, setImportState] = useState(null);
@@ -19409,6 +19513,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   const valueStats = useMemo(()=>{
     let totalValue = 0, totalCards = 0, totalUnique = 0;
     let missing = 0, extras = 0, ownedTowardNeed = 0;
+    const ownedByBucket = {nonfoil:0, foil:0, chase:0};
+    const neededByBucket = {nonfoil:0, foil:0, chase:0};
     const seenKey = new Set();
     const creditedCover = new Set();
     const seenBucket = new Set();
@@ -19434,18 +19540,20 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       const over  = Math.max(0, qty - need);
       missing += short * price;
       extras  += over  * price;
-      // Owned-toward-need for the headline master/play %: raw + graded/pending
-      // cover, capped at the target. Dedupe by rarity-or-foil bucket so the
-      // denominator (setCardLists totals) and numerator agree, and skip the
-      // Extras bucket (curio, excluded from the completion goal).
+      // Owned-toward-need + total-needed for the headline % and its non-foil /
+      // foil / chase split. Dedupe per (card_id, printing-class) so foil-label
+      // variants don't double-count; special rarities (Epic/Enchanted/Iconic/
+      // Promo) roll into the "chase" bucket with their own target. Skip Extras.
       if(r.Set !== EXTRAS_SET_NAME){
-        const bk = (r.Rarity==="Enchanted"||r.Rarity==="Iconic"||r.Rarity==="Epic") ? r.Rarity
-                 : (r.tcg_printing==="Normal" ? "Normal" : "FOIL");
-        const dk = r.card_id+"|"+bk;
+        const dk = r.card_id+"|"+(r.tcg_printing==="Normal" ? "N" : "F");
         if(!seenBucket.has(dk)){
           seenBucket.add(dk);
           const bcover = gradedCompletion.cover(r.card_id, r.tcg_printing);
-          ownedTowardNeed += Math.min(need, qty + bcover);
+          const ownForNeed = Math.min(need, qty + bcover);
+          ownedTowardNeed += ownForNeed;
+          const bucket = isSpecialRarity(r.Rarity) ? "chase" : (r.tcg_printing==="Normal" ? "nonfoil" : "foil");
+          ownedByBucket[bucket]  += ownForNeed;
+          neededByBucket[bucket] += need;
         }
       }
     }
@@ -19460,7 +19568,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         totalValue += price * qty;
       }
     }
-    return {totalValue, totalCards, totalUnique, missing, extras, ownedTowardNeed};
+    const totalNeeded = neededByBucket.nonfoil + neededByBucket.foil + neededByBucket.chase;
+    return {totalValue, totalCards, totalUnique, missing, extras, ownedTowardNeed, ownedByBucket, neededByBucket, totalNeeded};
   }, [raw, collection, cardByKey, needForRow, gradedCompletion]);
 
   // For per-set missing dollar amounts — same logic, scoped to a set.
@@ -19557,21 +19666,16 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   const setsToShow = [...SET_ORDER].reverse().filter(s => setTotals[s]);
   const totalMissingCount = Object.values(setMissing).reduce((s,v)=>s+v.count, 0);
 
-  // For overall master/play set %: count owned vs needed across all main-set
-  // printings. Extras & Oddities is a curio bucket (starter-deck-exclusive
-  // foils etc), not part of the mainline "complete the set" goal — exclude
-  // it from both totals so the headline % isn't artificially deflated.
-  let totalNeeded = 0;
-  for(const k of Object.keys(setCardLists)){
-    if(k === EXTRAS_SET_NAME) continue;
-    const tot = setTotals[k];
-    // Non-foil printings need goalN; foil + chase printings need goalF.
-    totalNeeded += tot.normal * goalN + (tot.foil + tot.enchanted + tot.iconic + tot.epic) * goalF;
-  }
-  // Includes graded/pending coverage (computed inside valueStats so the raw
-  // catalog is scanned only once and the result is memoized).
+  // Overall master/play set % + its non-foil / foil / chase split. All computed
+  // inside valueStats (single raw scan, dedup per card+printing, Extras excluded,
+  // special rarities in the chase bucket with their own target) so numerator and
+  // denominator always agree.
+  const neededByBucket = valueStats.neededByBucket || {nonfoil:0, foil:0, chase:0};
+  const ownedByBucket = valueStats.ownedByBucket || {nonfoil:0, foil:0, chase:0};
+  const totalNeeded = valueStats.totalNeeded || 0;
   const totalOwnedTowardNeed = valueStats.ownedTowardNeed;
   const masterPct = totalNeeded ? (totalOwnedTowardNeed / totalNeeded * 100) : 0;
+  const bucketPct = (b) => neededByBucket[b] ? (ownedByBucket[b] / neededByBucket[b] * 100) : 0;
 
   // Viewer-mode: if the user lands on a tab whose section isn't visible
   // to them (private to them), fall back to the first visible section.
@@ -19702,7 +19806,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       ? html`<div class="empty-state"><p>No sections of this collection are visible to you.</p></div>`
       : html`<div>
     <div class="collection-controls">
-      <${GoalControl} goal=${goal} setGoal=${setGoal} foilMode=${null}/>
+      <${GoalControl} goal=${goal} setGoal=${setGoal} setFoilMode=${null}/>
       <button class="import-csv-btn allcards-btn" onClick=${()=>setSelectedSet(ALL_CARDS_VIEW)}
         title="Browse every card across all sets in one grid — sort, filter, and see which you own">▦ All Cards</button>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
@@ -19765,6 +19869,14 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         <div class="stat-card-lbl"><${Tip} text=${"Completion toward a "+goalLabel(goal)+" — how many of the copies you're targeting you already own (graded/pending copies count). Change the target with the Master / Play / Custom control above."}>${goalTitle(goal)} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
         <div class="stat-card-val">${masterPct.toFixed(1)}%</div>
         <div class="stat-card-sub">${totalOwnedTowardNeed.toLocaleString()} / ${totalNeeded.toLocaleString()} needed</div>
+        ${(() => {
+          // Split the completion % across non-foil / foil / chase.
+          const parts = [["nonfoil","Non-foil"],["foil","Foil"],["chase","Chase"]].filter(([b])=>neededByBucket[b]>0);
+          if(parts.length < 2) return null;
+          return html`<div class="stat-card-sub" style=${{marginTop:3,display:"flex",gap:"2px 10px",flexWrap:"wrap"}}>
+            ${parts.map(([b,label]) => html`<span key=${b}>${label} ${bucketPct(b).toFixed(0)}% <span style=${{opacity:0.65}}>(${ownedByBucket[b].toLocaleString()}/${neededByBucket[b].toLocaleString()})</span></span>`)}
+          </div>`;
+        })()}
       </div>
       <div class="stat-card">
         <div class="stat-card-lbl">Extras</div>
@@ -33399,6 +33511,14 @@ function App(){
   useEffect(() => {
     try { localStorage.setItem("packsink:elo:pinned", eloPinned ? "1" : "0"); } catch {}
   }, [eloPinned]);
+  // Collection completion goal {n:non-foil, f:foil} — lifted to App so it can
+  // be synced to user_metadata (with the theme prefs below) and follow the user
+  // across devices. localStorage is the fast/offline path + signed-out fallback.
+  const [collectionGoal, setCollectionGoal] = useState(() => {
+    try { return normalizeGoal(JSON.parse(localStorage.getItem("packsink:collection:goal") || "null") || {n:1,f:1}); }
+    catch { return {n:1, f:1}; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:collection:goal", JSON.stringify(collectionGoal)); } catch {} }, [collectionGoal]);
   // Card-as-avatar: stored as the card_id of the chosen card. Falls back to
   // Google avatar (frequently 403s) and then the first initial.
   const [avatarCardId, setAvatarCardId] = useState(() => {
@@ -34020,6 +34140,7 @@ function App(){
     if(typeof meta.tipsEnabled === "boolean") setTipsEnabled(meta.tipsEnabled);
     if(typeof meta.eloPinned === "boolean") setEloPinned(meta.eloPinned);
     if(typeof meta.avatarCardId === "string" || meta.avatarCardId === null) setAvatarCardId(meta.avatarCardId);
+    if(meta.collectionGoal && typeof meta.collectionGoal === "object") setCollectionGoal(normalizeGoal(meta.collectionGoal));
   }, [user]);
 
   // After hydration, write any change back to user_metadata. Debounced to a
@@ -34035,11 +34156,11 @@ function App(){
   useEffect(() => {
     if(!prefsHydrated.current) return;
     const t = setTimeout(() => {
-      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId}}).catch(e =>
+      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId, collectionGoal}}).catch(e =>
         console.error("user prefs sync failed:", e));
     }, 250);
     return () => clearTimeout(t);
-  }, [themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId]);
+  }, [themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId, collectionGoal]);
 
   // Mirror the chosen avatar card's image URL into public.profiles so other
   // users see it on shared decks / creator profiles. Google avatar URLs are
@@ -35073,6 +35194,7 @@ function App(){
       updatePackArt=${viewedCollectionId ? (()=>{}) : updatePackArt}
       tabClickNonce=${tabClickNonce}
       onSignIn=${signIn} theme=${theme}
+      goal=${collectionGoal} setGoal=${setCollectionGoal}
       currentUser=${user}
       ownerProfile=${viewedCollectionId ? null : profile}
       saveCollectionVisibility=${saveCollectionVisibility}
