@@ -60,13 +60,15 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/icon-192.png?v=5">
 <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png?v=5">
 <script>
-  // Native (Capacitor) builds skip the service worker entirely: assets are
-  // bundled on-device, so SW caching only adds a stale-copy failure mode.
-  // Capacitor injects window.Capacitor before any page script runs.
-  if ('serviceWorker' in navigator
-      && !(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform())) {
+  // Web registers the full app-shell SW (sw.js). The native app registers a
+  // narrow IMAGE-ONLY SW instead (sw-native-images.js): it never caches the
+  // shell (that's what the "no SW in native" rule protects against) — it only
+  // serves pre-downloaded card art from packsink-img-v1 so the whole catalog
+  // renders offline. Capacitor injects window.Capacitor before any page script.
+  if ('serviceWorker' in navigator) {
+    const nativeApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.register(nativeApp ? '/sw-native-images.js' : '/sw.js').catch(() => {});
     });
   }
 </script>
@@ -180,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=287">
+<link rel="stylesheet" href="styles.css?v=290">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -245,8 +247,17 @@
 // ── Data source: Supabase (PostgREST). Publishable key is safe client-side. ──
 const SUPABASE_URL = "https://umwqowkiatjjltologrd.supabase.co";
 const SUPABASE_KEY = "sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0";
+// PKCE flow in the native app: Google refuses OAuth in a WebView, so sign-in
+// happens in a system Custom Tab and returns via the ink.packs.app:// deep link
+// with a ?code= we exchange manually. PKCE puts the code in a query param
+// (reliable across the custom-scheme handoff, unlike an implicit-flow #hash).
+// Web keeps the library default so production sign-in behavior is unchanged.
+const __isNativeApp = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const sbClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
-  auth: {persistSession:true, autoRefreshToken:true, detectSessionInUrl:true},
+  auth: {
+    persistSession:true, autoRefreshToken:true, detectSessionInUrl:true,
+    ...(__isNativeApp ? {flowType:"pkce"} : {}),
+  },
 });
 
 // Build PostgREST request headers. Pass an access_token to query as the
@@ -8929,7 +8940,141 @@ const Badge=({rarity,foil,theme})=>{const s=getBadgeStyle(rarity,theme);return h
 const SetSel=({val,onChange,placeholder,sets})=>html`<select value=${val} onChange=${e=>onChange(e.target.value)} style=${{maxWidth:280,flex:1}}><option value="">${placeholder}</option>${sets.map(s=>html`<option key=${s} value=${s}>${s}</option>`)}</select>`;
 const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span class="tip-icon">?</span><span class="tip-box">${text}</span></span>`;
 
-const Footer = ({lastEtlDate, lastRawPriceDate})=>{
+// Footer "Send feedback" widget. Anyone can submit a short comment; the page
+// URL, the user's account (server-side, when signed in), and the user agent
+// are captured via the submit_feedback RPC (migration 106).
+const FeedbackModal = ({user, onClose})=>{
+  useEscToClose(onClose);
+  const [text, setText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+  const [err, setErr]   = useState(null);
+  const page = (typeof window !== "undefined") ? (window.location.pathname + window.location.search) : "";
+  const submit = useCallback(async ()=>{
+    const comment = text.trim();
+    if(!comment){ setErr("Please type something first."); return; }
+    setBusy(true); setErr(null);
+    try {
+      const ua = (typeof navigator !== "undefined") ? navigator.userAgent : "";
+      const {error} = await sbClient.rpc("submit_feedback", {p_comment: comment, p_page: page, p_user_agent: ua});
+      if(error){ setErr(error.message || "Couldn't send — please try again."); setBusy(false); return; }
+      setDone(true);
+    } catch(e){ setErr((e && e.message) || "Couldn't send — please try again."); setBusy(false); }
+  }, [text, page]);
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:460}}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${done ? "Thanks!" : "Send feedback"}</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
+      </div>
+      <div class="modal-body" style=${{padding:18}}>
+        ${done
+          ? html`<div>
+              <p style=${{margin:"0 0 16px",fontSize:14,lineHeight:1.5}}>Got it — thanks for helping make Packs.Ink better. 🙏</p>
+              <div style=${{display:"flex",justifyContent:"flex-end"}}>
+                <button class="active" onClick=${onClose} style=${{padding:"7px 16px",fontSize:13}}>Close</button>
+              </div>
+            </div>`
+          : html`<div>
+              <p class="muted" style=${{fontSize:12,margin:"0 0 12px",lineHeight:1.5}}>
+                Found a bug, or have an idea? Tell us what's on your mind — we read every note.
+              </p>
+              <textarea value=${text} onInput=${e=>setText(e.target.value)} rows=${5} autoFocus
+                placeholder="What's working, what's broken, what you'd like to see…"
+                style=${{width:"100%",boxSizing:"border-box",resize:"vertical",minHeight:96,
+                  padding:"9px 11px",border:"1px solid var(--btn-border)",borderRadius:6,
+                  background:"var(--bg-solid)",color:"var(--text)",fontSize:13,fontFamily:"inherit"}}/>
+              <div class="muted" style=${{fontSize:11,marginTop:8,lineHeight:1.5}}>
+                ${user
+                  ? html`Attached to your account (<strong>${user.email}</strong>) so we can follow up.`
+                  : html`You're not signed in — sign in first if you'd like a reply.`}
+                <br/>We'll also record which page you're on (<code>${page || "/"}</code>).
+              </div>
+              ${err && html`<div style=${{padding:"8px 0 0",color:"var(--red)",fontSize:12}}>${err}</div>`}
+              <div style=${{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
+                <button onClick=${onClose} disabled=${busy}>Cancel</button>
+                <button class="active" onClick=${submit} disabled=${busy || !text.trim()}
+                  style=${{padding:"7px 16px",fontSize:13}}>${busy ? "Sending…" : "Send"}</button>
+              </div>
+            </div>`}
+      </div>
+    </div>
+  </div>`;
+};
+
+// Admin-only inbox (gated on is_graded_admin via the get_feedback RPC). Lists
+// submissions newest-first with account + page + time; resolve/reopen + delete.
+const FeedbackAdminModal = ({onClose})=>{
+  useEscToClose(onClose);
+  const [rows, setRows]     = useState(null);
+  const [err, setErr]       = useState(null);
+  const [filter, setFilter] = useState("open");   // "open" | "all"
+  const [armedDel, setArmedDel] = useState(null);  // id armed for delete
+  const load = useCallback(()=>{
+    setErr(null);
+    sbClient.rpc("get_feedback").then(({data, error})=>{
+      if(error){ setErr(error.message || "Couldn't load feedback"); setRows([]); return; }
+      setRows(data || []);
+    }).catch(e=>{ setErr((e && e.message) || "Couldn't load feedback"); setRows([]); });
+  }, []);
+  useEffect(()=>{ load(); }, [load]);
+  const toggleResolved = async (id, resolved)=>{
+    setRows(rs => (rs||[]).map(r => r.id===id ? {...r, resolved} : r));
+    const {error} = await sbClient.rpc("set_feedback_resolved", {p_id:id, p_resolved:resolved});
+    if(error){ flashToast("Update failed: " + error.message); load(); }
+  };
+  const del = async (id)=>{
+    setArmedDel(null);
+    setRows(rs => (rs||[]).filter(r => r.id!==id));
+    const {error} = await sbClient.rpc("delete_feedback", {p_id:id});
+    if(error){ flashToast("Delete failed: " + error.message); load(); }
+  };
+  const shown = (rows||[]).filter(r => filter==="all" || !r.resolved);
+  const openCount = (rows||[]).filter(r => !r.resolved).length;
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:620,width:"94vw"}}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Feedback inbox${rows ? html` <span class="muted" style=${{fontSize:13,fontWeight:400}}>· ${openCount} open</span>` : ""}</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
+      </div>
+      <div class="modal-body" style=${{padding:"12px 16px"}}>
+        <div style=${{display:"flex",gap:8,alignItems:"center",marginBottom:12}}>
+          <div class="seg-toggle">
+            <button class=${filter==="open"?"active":""} onClick=${()=>setFilter("open")}>Open</button>
+            <button class=${filter==="all"?"active":""} onClick=${()=>setFilter("all")}>All</button>
+          </div>
+          <button onClick=${load} title="Refresh" style=${{marginLeft:"auto"}}>↻ Refresh</button>
+        </div>
+        ${err && html`<div style=${{padding:"8px 0",color:"var(--red)",fontSize:12}}>${err}</div>`}
+        ${rows===null
+          ? html`<div class="muted" style=${{padding:"20px 0",textAlign:"center",fontSize:13}}>Loading…</div>`
+          : shown.length===0
+            ? html`<div class="muted" style=${{padding:"24px 0",textAlign:"center",fontSize:13}}>${filter==="open" ? "No open feedback. 🎉" : "No feedback yet."}</div>`
+            : html`<div style=${{display:"flex",flexDirection:"column",gap:8,maxHeight:"60vh",overflowY:"auto"}}>
+                ${shown.map(r => html`<div key=${r.id} style=${{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:8,
+                    background: r.resolved ? "var(--bg-surface)" : "var(--bg-card)", opacity: r.resolved ? 0.7 : 1}}>
+                  <div style=${{fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>${r.comment}</div>
+                  <div class="muted" style=${{fontSize:11,marginTop:6,display:"flex",flexWrap:"wrap",gap:"2px 8px"}}>
+                    <span>${r.user_email || "anonymous"}</span>
+                    <span>· <code>${r.page || "—"}</code></span>
+                    <span title=${absoluteLocalTime(r.created_at)}>· ${relativeTime(r.created_at)}</span>
+                  </div>
+                  <div style=${{display:"flex",gap:6,marginTop:8,justifyContent:"flex-end"}}>
+                    <button onClick=${()=>toggleResolved(r.id, !r.resolved)} style=${{fontSize:12,padding:"3px 10px"}}>
+                      ${r.resolved ? "↩ Reopen" : "✓ Resolve"}
+                    </button>
+                    ${armedDel===r.id
+                      ? html`<button class="danger" onClick=${()=>del(r.id)} style=${{fontSize:12,padding:"3px 10px"}}>Confirm delete</button>`
+                      : html`<button onClick=${()=>{ setArmedDel(r.id); setTimeout(()=>setArmedDel(a=>a===r.id?null:a), 3000); }} style=${{fontSize:12,padding:"3px 10px"}}>Delete</button>`}
+                  </div>
+                </div>`)}
+              </div>`}
+      </div>
+    </div>
+  </div>`;
+};
+
+const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback})=>{
   // Warn when the daily ETL hasn't refreshed prices on schedule. Anchor
   // to 21:00 UTC of the snapshot date (when the cron actually runs) plus
   // a 30h grace window — covers the natural "cron is running / TCGCSV is
@@ -8954,6 +9099,16 @@ const Footer = ({lastEtlDate, lastRawPriceDate})=>{
       <div class="footer-disclosure">
         Packs.Ink is a TCGplayer affiliate — purchases made through TCGplayer links on this site may earn us a commission at no extra cost to you.
       </div>
+      ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
+          style=${{display:"inline-flex",alignItems:"center",gap:6,background:"var(--btn-bg)",border:"1px solid var(--btn-border)",
+            color:"var(--btn-text)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          💬 Send feedback</button>`}
+        ${onViewFeedback && html`<button class="footer-feedback-btn" onClick=${onViewFeedback}
+          style=${{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"1px solid var(--btn-border)",
+            color:"var(--text-muted)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
+          📥 Feedback inbox</button>`}
+      </div>`}
       ${stale && html`<div class="footer-stale" title=${"Last successful ETL on " + lastEtlDate + " (your local time). The daily price refresh may be failing — check the ETL cron."}>
         ⚠ Prices may be stale (last update ${relativeTime(lastEtlDate)})
       </div>`}
@@ -12691,7 +12846,76 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
 // Enchanted to browse every Enchanted in the game and see which you own.
 const ALL_CARDS_VIEW = "__all_cards__";
 
-const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, copies, setCopies, readOnly, compareMode, viewerOwnCollection, gradedCover, gradedMark, gradedCopies, onGradedChanged, gradedPremium}) => {
+// A collection completion goal is a per-printing target: n = non-foil copies,
+// f = foil copies. Chase rarities (Enchanted / Iconic / Epic / Promo) are
+// foil-only, so they use f. Master Set = {n:1,f:1}, Play Set = {n:4,f:4};
+// Custom allows an asymmetric split (e.g. 4 non-foil + 1 foil) and counts
+// above 4. When n===f this is byte-identical to the old single "copies"
+// target, so the presets don't change any existing behaviour.
+const isPresetGoal = (g, n, f) => ((g?.n|0) === n && (g?.f|0) === f);
+const normalizeGoal = (g) => {
+  let n = Math.max(0, Math.min(99, (g?.n|0) || 0));
+  let f = Math.max(0, Math.min(99, (g?.f|0) || 0));
+  if(n === 0 && f === 0) n = 1;   // never let both be 0 (would mark all complete)
+  return {n, f};
+};
+const goalLabel = (g) => {
+  const n = g?.n|0, f = g?.f|0;
+  if(n === 1 && f === 1) return "master set";
+  if(n === 4 && f === 4) return "playset";
+  if(n === f)  return n + "× set";
+  if(f === 0)  return n + "× non-foil";
+  if(n === 0)  return f + "× foil";
+  return n + "× non-foil / " + f + "× foil";
+};
+// Title-cased variant for headings/chips ("Master Set", "Play Set", "4× Set").
+const goalTitle = (g) => {
+  const n = g?.n|0, f = g?.f|0;
+  if(n === 1 && f === 1) return "Master Set";
+  if(n === 4 && f === 4) return "Play Set";
+  if(n === f)  return n + "× Set";
+  if(f === 0)  return n + "× Non-foil";
+  if(n === 0)  return f + "× Foil";
+  return n + "× NF / " + f + "× Foil";
+};
+
+// Segmented Master / Play / Custom control. In Custom, two number inputs set
+// the non-foil and foil targets independently. `foilMode` (from the set-detail
+// lens; null at the collection level) dims the input for a printing that's
+// currently out of scope — the two controls cooperate rather than fight.
+const GoalControl = ({goal, setGoal, foilMode}) => {
+  const preset = isPresetGoal(goal, 1, 1) ? "master" : isPresetGoal(goal, 4, 4) ? "play" : "custom";
+  const [showCustom, setShowCustom] = useState(preset === "custom");
+  const inputsOpen = showCustom || preset === "custom";
+  // Clamp the edited field only — 0 is valid in ONE field (e.g. {4,0} = a
+  // non-foil playset). A transient {0,0} is harmless: every consumer guards it
+  // (goalN/goalF Math.max, totalNeeded 0 → 0%). The persisted-load path
+  // (normalizeGoal in CollectionView) is what nudges a stored {0,0} back to 1.
+  const clampField = (v) => Math.max(0, Math.min(99, parseInt(v, 10) || 0));
+  const setN = (v) => setGoal((g) => ({n: clampField(v), f: g.f|0}));
+  const setF = (v) => setGoal((g) => ({n: g.n|0, f: clampField(v)}));
+  const inStyle = {width:52, padding:"3px 6px", border:"1px solid var(--btn-border)", borderRadius:4,
+    background:"var(--bg-solid)", color:"var(--text)", fontSize:12};
+  const nDisabled = foilMode === "foil";    // non-foil out of the current lens
+  const fDisabled = foilMode === "normal";  // foil out of the current lens
+  return html`<div class="setdet-goal" style=${{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+    <div class="seg-toggle" title="Completion target per card — Master = 1 of each, Play = 4 of each, or a custom non-foil/foil split.">
+      <button class=${preset==="master"?"active":""} onClick=${()=>{ setShowCustom(false); setGoal({n:1,f:1}); }}>Master Set</button>
+      <button class=${preset==="play"?"active":""} onClick=${()=>{ setShowCustom(false); setGoal({n:4,f:4}); }}>Play Set</button>
+      <button class=${inputsOpen?"active":""} onClick=${()=>setShowCustom(true)}>✎ Custom</button>
+    </div>
+    ${inputsOpen && html`<div class="setdet-goal-custom" style=${{display:"flex", alignItems:"center", gap:10, fontSize:11}}>
+      <label class=${nDisabled?"muted":""} style=${{display:"flex", alignItems:"center", gap:4}}>Non-foil
+        <input type="number" min="0" max="99" value=${goal.n|0} disabled=${nDisabled}
+          onInput=${(e)=>setN(e.target.value)} style=${nDisabled?{...inStyle,opacity:0.4}:inStyle}/></label>
+      <label class=${fDisabled?"muted":""} style=${{display:"flex", alignItems:"center", gap:4}}>Foil
+        <input type="number" min="0" max="99" value=${goal.f|0} disabled=${fDisabled}
+          onInput=${(e)=>setF(e.target.value)} style=${fDisabled?{...inStyle,opacity:0.4}:inStyle}/></label>
+    </div>`}
+  </div>`;
+};
+
+const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCollection, onBack, theme, user, onSignIn, goal, setGoal, readOnly, compareMode, viewerOwnCollection, gradedCover, gradedMark, gradedCopies, onGradedChanged, gradedPremium}) => {
   const allMode = setName === ALL_CARDS_VIEW;
   // Filter helper. In viewer (read-only) mode, the viewer can ask to see
   // only cards they're missing or only cards they share. The match is on
@@ -12786,10 +13010,23 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     localStorage.setItem("packsink:allCards:separate", separateBySet ? "1" : "0");
     localStorage.setItem("packsink:allCards:filter", serializeFilter(drawerFilter));
   } catch {} }, [allMode, separateBySet, drawerFilter]);
-  // Per-card target: 1 for Master Set, 4 for Playset, etc. Passed in from
-  // CollectionView's top-level segmented toggle. Falls back to 1 if missing
-  // so the set detail view still works in isolation.
-  const TARGET = Math.max(1, copies || 1);
+  // Per-printing completion targets from the shared goal — goalN for non-foil,
+  // goalF for foil (chase rarities are foil-only, so they use goalF). Passed in
+  // from CollectionView's goal control. Falls back to a 1× master set so the
+  // set-detail view still works in isolation. When goalN===goalF this is the
+  // old uniform "copies" target — nothing regresses for the presets.
+  const goalN = goal ? Math.max(0, goal.n|0) : 1;
+  const goalF = goal ? Math.max(0, goal.f|0) : 1;
+
+  // Which printings of a group are "in scope" for the current Non-foil/Foil
+  // lens. A SINGLE-VERSION card — only one printing exists (chase rarities
+  // Enchanted/Iconic/Epic, and single-printing promos) — is always in scope on
+  // its one side, because the foil↔non-foil toggle only splits DUAL-printing
+  // cards. Without the `!g.foil` / `!g.normal` escape hatch, a foil-only card
+  // under the "Non-foil" lens had NEITHER side apply and rendered as two empty
+  // counters with no +/- and no price (the reported bug).
+  const nInScope = (g) => !!g.normal && (foilMode !== "foil"   || !g.foil);
+  const fInScope = (g) => !!g.foil   && (foilMode !== "normal" || !g.normal);
 
   // Graded + pending coverage for raw set completion, computed in CollectionView
   // (card-level for single-printing cards, foil-exact for dual-printing ones).
@@ -12856,26 +13093,27 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       }
 
       // For the active foil mode, count which printings are "in scope" and
-      // how complete the user is on each. Graded/pending copies satisfy the
-      // slot for completeness (shortfall) but never count as extras.
-      const nApplies = foilMode !== "foil"   && !!g.normal;
-      const fApplies = foilMode !== "normal" && !!g.foil;
+      // how complete the user is on each. Single-version cards stay in scope on
+      // their one side regardless of the lens (see nInScope/fInScope). Graded/
+      // pending copies satisfy the slot for completeness but never count as extras.
+      const nApplies = nInScope(g);
+      const fApplies = fInScope(g);
       const ownN = nApplies ? (collection[g.card_id+":"+g.normal.tcg_printing] || 0) : null;
       const ownF = fApplies ? (collection[g.card_id+":"+g.foil.tcg_printing]   || 0) : null;
       const covN = nApplies ? slotCover(g.card_id, g.normal.tcg_printing) : 0;
       const covF = fApplies ? slotCover(g.card_id, g.foil.tcg_printing)   : 0;
-      const shortN = nApplies ? Math.max(0, TARGET - (ownN + covN)) : 0;
-      const shortF = fApplies ? Math.max(0, TARGET - (ownF + covF)) : 0;
-      const overN  = nApplies ? Math.max(0, ownN - TARGET) : 0;
-      const overF  = fApplies ? Math.max(0, ownF - TARGET) : 0;
+      const shortN = nApplies ? Math.max(0, goalN - (ownN + covN)) : 0;
+      const shortF = fApplies ? Math.max(0, goalF - (ownF + covF)) : 0;
+      const overN  = nApplies ? Math.max(0, ownN - goalN) : 0;
+      const overF  = fApplies ? Math.max(0, ownF - goalF) : 0;
       const totalShort = shortN + shortF;
       const totalOver  = overN  + overF;
 
       if(statusFilter === "complete"   && totalShort > 0) return false;
       if(statusFilter === "incomplete" && totalShort === 0) return false;
       if(statusFilter === "extras"     && totalOver === 0) return false;
-      // If no printing applies under the foilMode (e.g., chase card under
-      // foilMode='normal'), only "all" should include it.
+      // With single-version cards always in scope, this only trips for a group
+      // with no printings at all — a safety net, not the chase-card path.
       if(!nApplies && !fApplies && statusFilter !== "all") return false;
       return true;
     };
@@ -12888,26 +13126,26 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       return groups.filter(g => predicate(g, {...parsed, nameMatchMode:"any"}));
     }
     return groups.filter(g => predicate(g, parsed));
-  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
+  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, goalN, goalF, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
 
   // Filter-aware "missing" summary — for each visible printing, counts the
-  // copies the user is SHORT of TARGET (Master Set = 1, Playset = 4). Value
+  // copies the user is SHORT of the goal (goalN non-foil, goalF foil). Value
   // = short copies × current Low. Respects rarity / ink / foilMode filters
   // so toggling Enchanted off, etc., drops it from the totals.
   const visibleMissing = useMemo(() => {
     let count = 0, value = 0;
     for(const g of visibleGroups){
-      if(foilMode !== "foil" && g.normal){
+      if(nInScope(g)){
         const qty = (collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing);
-        const short = Math.max(0, TARGET - qty);
+        const short = Math.max(0, goalN - qty);
         if(short > 0){
           count += short;
           value += (g.normal["Low Price"] ?? g.normal["TCGPlayer Market"] ?? 0) * short;
         }
       }
-      if(foilMode !== "normal" && g.foil){
+      if(fInScope(g)){
         const qty = (collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing);
-        const short = Math.max(0, TARGET - qty);
+        const short = Math.max(0, goalF - qty);
         if(short > 0){
           count += short;
           value += (g.foil["Low Price"] ?? g.foil["TCGPlayer Market"] ?? 0) * short;
@@ -12915,7 +13153,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       }
     }
     return {count, value};
-  }, [visibleGroups, collection, foilMode, TARGET, slotCover]);
+  }, [visibleGroups, collection, foilMode, goalN, goalF, slotCover]);
 
   // "Buy bulk on TCGplayer" link: a TCGplayer mass-entry cart pre-filled with
   // every missing copy in the current (filtered) view, so one click loads them
@@ -12928,33 +13166,33 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       const nm = g["Product Name"] || g.name || g.normal?.["Product Name"] || g.foil?.["Product Name"] || "";
       if(!nm) continue;
       let short = 0;
-      if(foilMode !== "foil" && g.normal)
-        short += Math.max(0, TARGET - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
-      if(foilMode !== "normal" && g.foil)
-        short += Math.max(0, TARGET - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
+      if(nInScope(g))
+        short += Math.max(0, goalN - ((collection[g.card_id+":"+g.normal.tcg_printing] || 0) + slotCover(g.card_id, g.normal.tcg_printing)));
+      if(fInScope(g))
+        short += Math.max(0, goalF - ((collection[g.card_id+":"+g.foil.tcg_printing] || 0) + slotCover(g.card_id, g.foil.tcg_printing)));
       if(short > 0) byName.set(nm, (byName.get(nm) || 0) + short);
     }
     if(!byName.size) return null;
     const lines = [...byName].map(([nm, n]) => `${n} ${nm}`);
     const dest = `https://www.tcgplayer.com/massentry?productline=Lorcana TCG&c=${encodeURIComponent(lines.join("||"))}`;
     return TCG_AFFILIATE_BASE + "?u=" + encodeURIComponent(dest);
-  }, [visibleGroups, collection, foilMode, TARGET]);
+  }, [visibleGroups, collection, foilMode, goalN, goalF, slotCover]);
 
   // Filter-aware "owned value" summary — total $ for cards in the visible
   // view that the user actually owns. Sums every owned copy at current Low
-  // (capped at TARGET would feel weird — extras are still real value, so
+  // (capping at the goal would feel weird — extras are still real value, so
   // we count them all).
   const visibleOwned = useMemo(() => {
     let count = 0, value = 0;
     for(const g of visibleGroups){
-      if(foilMode !== "foil" && g.normal){
+      if(nInScope(g)){
         const qty = collection[g.card_id+":"+g.normal.tcg_printing] || 0;
         if(qty > 0){
           count += qty;
           value += (g.normal["Low Price"] ?? g.normal["TCGPlayer Market"] ?? 0) * qty;
         }
       }
-      if(foilMode !== "normal" && g.foil){
+      if(fInScope(g)){
         const qty = collection[g.card_id+":"+g.foil.tcg_printing] || 0;
         if(qty > 0){
           count += qty;
@@ -13000,18 +13238,17 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
             </button>`)}
           </div>
         </span>`}
-      ${allMode && setCopies && html`<div class="seg-toggle" title="Completion target per card — Master Set = 1 copy, Play Set = 4">
-        <button class=${copies===1?"active":""} onClick=${()=>setCopies(1)}>Master</button>
-        <button class=${copies===4?"active":""} onClick=${()=>setCopies(4)}>Play</button>
-      </div>`}
-      <div class="seg-toggle">
-        ${[["all","All"],["complete","Complete"],["incomplete","Incomplete"],["extras","Extras"]].map(([k,l]) =>
-          html`<button key=${k} class=${statusFilter===k?"active":""} onClick=${()=>setStatusFilter(k)}>${l}</button>`)}
+      <div class="setdet-toolbar-goalgroup" style=${{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+        ${setGoal && !readOnly && html`<${GoalControl} goal=${goal} setGoal=${setGoal} foilMode=${isExtrasView ? "foil" : foilMode}/>`}
+        ${!isExtrasView && html`<div class="seg-toggle">
+          ${[["either","Either"],["normal","Non-foil"],["foil","Foil"]].map(([k,l]) =>
+            html`<button key=${k} class=${foilMode===k?"active":""} onClick=${()=>setFoilMode(k)}>${l}</button>`)}
+        </div>`}
+        <div class="seg-toggle">
+          ${[["all","All"],["complete","Complete"],["incomplete","Incomplete"],["extras","Extras"]].map(([k,l]) =>
+            html`<button key=${k} class=${statusFilter===k?"active":""} onClick=${()=>setStatusFilter(k)}>${l}</button>`)}
+        </div>
       </div>
-      ${!isExtrasView && html`<div class="seg-toggle">
-        ${[["either","Either"],["normal","Non-foil"],["foil","Foil"]].map(([k,l]) =>
-          html`<button key=${k} class=${foilMode===k?"active":""} onClick=${()=>setFoilMode(k)}>${l}</button>`)}
-      </div>`}
       <select value=${sortKey} onChange=${e=>setSortKeyState(e.target.value)} class="setdet-sort" title="Sort">
         ${allMode && html`<option value="set-new">Set · newest first</option>`}
         ${allMode && html`<option value="set-old">Set · oldest first</option>`}
@@ -13037,7 +13274,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       <div class="setdet-stat">
         <div class="setdet-stat-lbl">Missing value</div>
         <div class="setdet-stat-val red">$${visibleMissing.value.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}</div>
-        <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${copies===1?"master":copies===4?"playset":copies+"×"} ${allMode ? "(all sets)" : "set"}</div>
+        <div class="setdet-stat-sub">${visibleMissing.count.toLocaleString()} to complete ${goalLabel(goal)} ${allMode ? "(all sets)" : "set"}</div>
       </div>
     </div>
 
@@ -13115,8 +13352,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
             const g = projectForPrinting(gOrig, printingMode);
             const nKey = g.normal ? g.card_id+":"+g.normal.tcg_printing : null;
             const fKey = g.foil   ? g.card_id+":"+g.foil.tcg_printing   : null;
-            const showNormal = printingMode ? (printingMode === "normal" && !!g.normal) : (foilMode !== "foil"   && g.normal);
-            const showFoil   = printingMode ? (printingMode === "foil"   && !!g.foil)   : (foilMode !== "normal" && g.foil);
+            const showNormal = printingMode ? (printingMode === "normal" && !!g.normal) : nInScope(g);
+            const showFoil   = printingMode ? (printingMode === "foil"   && !!g.foil)   : fInScope(g);
             // Extras cards stamp their variant label into `Rarity`; surface
             // it as a subtitle (e.g. "Starter Deck Exclusive Foil").
             const subtitle = g.variant_label || (isExtrasView ? g.Rarity : null);
@@ -13133,8 +13370,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
             const g = projectForPrinting(gOrig, printingMode);
             const nKey = g.normal ? g.card_id+":"+g.normal.tcg_printing : null;
             const fKey = g.foil   ? g.card_id+":"+g.foil.tcg_printing   : null;
-            const showNormal = printingMode ? (printingMode === "normal" && !!g.normal) : (foilMode !== "foil"   && g.normal);
-            const showFoil   = printingMode ? (printingMode === "foil"   && !!g.foil)   : (foilMode !== "normal" && g.foil);
+            const showNormal = printingMode ? (printingMode === "normal" && !!g.normal) : nInScope(g);
+            const showFoil   = printingMode ? (printingMode === "foil"   && !!g.foil)   : fInScope(g);
             const subtitle = g.variant_label || (isExtrasView ? g.Rarity : null);
             return html`<${SetDetailCardTile} key=${g.card_id+":"+(printingMode||"")} group=${g} theme=${theme}
               normalQty=${nKey ? (collection[nKey]||0) : 0}
@@ -18935,8 +19172,22 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   useEffect(() => {
     if(tabClickNonce > 0) setSelectedSet(null);
   }, [tabClickNonce]);
-  // 1 = Master Set, 4 = Play Set. Any integer 1-4 supported.
-  const [copies, setCopies] = useState(1);
+  // Completion goal: per-printing targets {n: non-foil, f: foil}. Master Set =
+  // {1,1}, Play Set = {4,4}; Custom allows a split (e.g. 4 non-foil + 1 foil).
+  // Shared with CollectionSetDetail so the goal is one source of truth across
+  // the headline %, per-set missing totals, and the set-detail view. Persisted
+  // so a chosen goal sticks between visits.
+  const [goal, setGoal] = useState(() => {
+    try { return normalizeGoal(JSON.parse(localStorage.getItem("packsink:collection:goal") || "null") || {n:1,f:1}); }
+    catch { return {n:1, f:1}; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:collection:goal", JSON.stringify(goal)); } catch {} }, [goal]);
+  const goalN = Math.max(0, goal.n|0), goalF = Math.max(0, goal.f|0);
+  // Per-printing target for a raw row: chase rarities are foil-only (→ goalF);
+  // otherwise non-foil printings use goalN, foil printings use goalF.
+  const needForRow = useCallback((r) =>
+    (r.Rarity==="Enchanted"||r.Rarity==="Iconic"||r.Rarity==="Epic") ? goalF
+      : (r.tcg_printing==="Normal" ? goalN : goalF), [goalN, goalF]);
   // CSV import flow state. null when idle; {report, mode, busy} when a file
   // has been parsed and the user is reviewing the preview modal.
   const [importState, setImportState] = useState(null);
@@ -19152,9 +19403,9 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     return m;
   }, [collection, cardByKey, cardById, gradedOwnRows, pendingRows, remapGradedId]);
 
-  // Compute missing $ and extras $ relative to the chosen copies target.
-  // Iterate every main-set (card, printing) pair: needed=copies, owned=qty,
-  // missing += max(0, needed-owned)*price, extras += max(0, owned-needed)*price.
+  // Compute missing $ and extras $ relative to the chosen goal. Iterate every
+  // main-set (card, printing) pair: needed=needForRow(r) (goalN non-foil, goalF
+  // foil), owned=qty, missing += max(0, need-owned)*price, extras likewise.
   const valueStats = useMemo(()=>{
     let totalValue = 0, totalCards = 0, totalUnique = 0;
     let missing = 0, extras = 0, ownedTowardNeed = 0;
@@ -19171,7 +19422,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       seenKey.add(key);
       const qty = collection[key] || 0;
       const price = r["Low Price"] ?? r["TCGPlayer Market"] ?? 0;
-      const need = copies;
+      const need = needForRow(r);
       // Graded/pending copies reduce what you're MISSING (not your owned/
       // extras value — those stay raw-priced to avoid double-counting the
       // graded value that already lives in the Graded totals). Credit once
@@ -19194,7 +19445,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         if(!seenBucket.has(dk)){
           seenBucket.add(dk);
           const bcover = gradedCompletion.cover(r.card_id, r.tcg_printing);
-          ownedTowardNeed += Math.min(copies, qty + bcover);
+          ownedTowardNeed += Math.min(need, qty + bcover);
         }
       }
     }
@@ -19210,7 +19461,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       }
     }
     return {totalValue, totalCards, totalUnique, missing, extras, ownedTowardNeed};
-  }, [raw, collection, cardByKey, copies, gradedCompletion]);
+  }, [raw, collection, cardByKey, needForRow, gradedCompletion]);
 
   // For per-set missing dollar amounts — same logic, scoped to a set.
   const setMissing = useMemo(()=>{
@@ -19221,7 +19472,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       if(!r.card_id || !r.tcg_printing) continue;
       const key = r.card_id+":"+r.tcg_printing;
       const qty = collection[key] || 0;
-      const need = copies;
+      const need = needForRow(r);
       const ck = r.card_id+"|"+(r.tcg_printing==="Normal" ? "Normal" : "FOIL");
       const cover = creditedCover.has(ck) ? 0 : gradedCompletion.cover(r.card_id, r.tcg_printing);
       if(cover) creditedCover.add(ck);
@@ -19233,7 +19484,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       m[r.Set].value += short * price;
     }
     return m;
-  }, [raw, collection, copies, gradedCompletion]);
+  }, [raw, collection, needForRow, gradedCompletion]);
 
   const handleImportFile = useCallback(async (file) => {
     if(!file) return;
@@ -19295,7 +19546,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   if(selectedSet) return html`<${CollectionSetDetail} setName=${selectedSet} raw=${raw}
     collection=${collection} updateQty=${updateQty} bulkUpdateCollection=${bulkUpdateCollection}
     onBack=${()=>setSelectedSet(null)} theme=${theme}
-    user=${user} onSignIn=${onSignIn} copies=${copies} setCopies=${isViewerMode ? null : setCopies}
+    user=${user} onSignIn=${onSignIn} goal=${goal} setGoal=${isViewerMode ? null : setGoal}
     readOnly=${isViewerMode}
     compareMode=${canCompare ? compareMode : "all"}
     gradedCover=${gradedCompletion.cover} gradedMark=${gradedCompletion.mark} gradedCopies=${gradedCopiesFor}
@@ -19314,7 +19565,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   for(const k of Object.keys(setCardLists)){
     if(k === EXTRAS_SET_NAME) continue;
     const tot = setTotals[k];
-    totalNeeded += (tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic) * copies;
+    // Non-foil printings need goalN; foil + chase printings need goalF.
+    totalNeeded += tot.normal * goalN + (tot.foil + tot.enchanted + tot.iconic + tot.epic) * goalF;
   }
   // Includes graded/pending coverage (computed inside valueStats so the raw
   // catalog is scanned only once and the result is memoized).
@@ -19450,17 +19702,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       ? html`<div class="empty-state"><p>No sections of this collection are visible to you.</p></div>`
       : html`<div>
     <div class="collection-controls">
-      <div class="seg-toggle">
-        <button class=${copies===1?"active":""} onClick=${()=>setCopies(1)}>Master Set</button>
-        <button class=${copies===4?"active":""} onClick=${()=>setCopies(4)}>Play Set</button>
-      </div>
-      <label class="copies-select">
-        <span>Copies:</span>
-        <select value=${copies} onChange=${e=>setCopies(parseInt(e.target.value,10))}>
-          <option value="1">1</option><option value="2">2</option>
-          <option value="3">3</option><option value="4">4</option>
-        </select>
-      </label>
+      <${GoalControl} goal=${goal} setGoal=${setGoal} foilMode=${null}/>
       <button class="import-csv-btn allcards-btn" onClick=${()=>setSelectedSet(ALL_CARDS_VIEW)}
         title="Browse every card across all sets in one grid — sort, filter, and see which you own">▦ All Cards</button>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
@@ -19520,7 +19762,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         <div class="stat-card-sub">${totalCards.toLocaleString()} cards · ${totalUnique.toLocaleString()} unique</div>
       </div>
       <div class="stat-card">
-        <div class="stat-card-lbl"><${Tip} text=${"Completion toward "+(copies===1?"a Master Set — one copy of every card":copies===4?"a Play Set — four copies of every card (one of each chase)":copies+" copies of every card")+". Change the target with the copies dropdown above."}>${copies===1?"Master Set":copies===4?"Play Set":copies+"× Set"} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
+        <div class="stat-card-lbl"><${Tip} text=${"Completion toward a "+goalLabel(goal)+" — how many of the copies you're targeting you already own (graded/pending copies count). Change the target with the Master / Play / Custom control above."}>${goalTitle(goal)} <span class="tip-info-glyph" aria-hidden="true">ⓘ</span><//></div>
         <div class="stat-card-val">${masterPct.toFixed(1)}%</div>
         <div class="stat-card-sub">${totalOwnedTowardNeed.toLocaleString()} / ${totalNeeded.toLocaleString()} needed</div>
       </div>
@@ -22020,6 +22262,23 @@ function priceDbSignals(r){
   return out;
 }
 
+// Compact "how long ago did this last sell" label for the graded screener's
+// Last Sold column + recency filter. Returns null for missing/unparseable
+// dates; otherwise {days, short} (e.g. {days:3, short:"3d"}).
+function screenerSoldAge(dateStr){
+  if(!dateStr) return null;
+  const then = Date.parse(dateStr + "T00:00:00");
+  if(isNaN(then)) return null;
+  const days = Math.max(0, Math.floor((Date.now() - then) / 86400000));
+  let short;
+  if(days === 0) short = "today";
+  else if(days < 7) short = days + "d";
+  else if(days < 56) short = Math.round(days / 7) + "w";
+  else if(days < 365) short = Math.round(days / 30) + "mo";
+  else short = Math.floor(days / 365) + "y+";
+  return { days, short };
+}
+
 function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
@@ -22146,6 +22405,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:filterGraders", JSON.stringify(Array.from(filterGraders))); } catch{} }, [filterGraders]);
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:filterGrades",  JSON.stringify(Array.from(filterGrades)));  } catch{} }, [filterGrades]);
+  // Graded "last sold within N days" recency filter ("" = any). Applies only in
+  // the per-sale graded view (premiumGraded — now open to all via the graded ToS,
+  // no longer an allowlist); last_sold_date lives solely on graded_sales_rollup.
+  const [soldWithin, setSoldWithin] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:soldWithin") || ""; } catch { return ""; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:soldWithin", soldWithin); } catch{} }, [soldWithin]);
   const [graderOpen, setGraderOpen] = useState(false);
   const [gradeOpen, setGradeOpen] = useState(false);
   const graderRef = useRef(null);
@@ -22194,6 +22460,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // Going back to raw: clear graded-specific filters.
       setFilterGraders(new Set());
       setFilterGrades(new Set());
+      setSoldWithin("");
       setMinPrice("5");
       setFilterRarities(new Set());
     }
@@ -23019,6 +23286,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         // Grader / grade filters (multi-select).
         if(filterGraders.size > 0 && !filterGraders.has(r.grader)) return false;
         if(filterGrades.size  > 0 && !filterGrades.has(r.grade))   return false;
+        // Recency filter — per-sale graded view only (premiumGraded; ToS-gated but
+        // open to all now), where last_sold_date lives on the rollup rows.
+        if(premiumGraded && soldWithin){
+          const cutoff = Date.now() - (parseInt(soldWithin, 10) * 86400000);
+          const d = r.last_sold_date ? Date.parse(r.last_sold_date + "T00:00:00") : NaN;
+          if(isNaN(d) || d < cutoff) return false;
+        }
         if(preset === "top" && !(r.low_today != null && r.low_today >= 100)) return false;
         // Δ%-window presets — work for both legacy and premium graded (the rollup
         // now carries windowed pct, migration 75). Graded has no 1D, so a 1D
@@ -23083,7 +23357,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return sd ? bv - av : av - bv;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedSynth, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedSynth, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldWithin, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
 
   const onSort = (k) => {
     if(sortKey === k) setSortDesc((d) => !d);
@@ -23145,6 +23419,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       setFilterRarities(preset === "all" ? new Set(["Enchanted"]) : new Set());
       setFilterGraders(new Set());
       setFilterGrades(new Set());
+      setSoldWithin("");
       setMinPrice("");
       setMaxPrice("");
     } else {
@@ -23277,6 +23552,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     const salesCol = {key:"sales", label:"Sales", defaultHidden:true,
       th:()=>html`<th key="sales" class="sortable th-num" onClick=${()=>onSort("sale_count")}>Sales${arrow("sale_count")}</th>`,
       td:(r)=>html`<td key="sales" class="td-num" title=${r.last_sold_date?"Last sold "+r.last_sold_date:""}>${r.sale_count!=null?r.sale_count:"—"}</td>`};
+    // How recently this grader/grade last sold on eBay. Value + sort key already
+    // live on the row (last_sold_date, from graded_sales_rollup). Recent sales
+    // (<=14d) render in accent so fresh comps pop; >90d dims to muted.
+    const soldCol = {key:"sold", label:"Sold",
+      th:()=>html`<th key="sold" class="sortable th-num" title="How recently this grader/grade last sold on eBay — click to sort by recency" onClick=${()=>onSort("last_sold_date")}>Sold${arrow("last_sold_date")}</th>`,
+      td:(r)=>{ const a=screenerSoldAge(r.last_sold_date);
+        return html`<td key="sold" class=${"td-num"+(a&&a.days>90?" muted":"")}
+          title=${r.last_sold_date||""}
+          style=${a&&a.days<=14?{color:"var(--accent)",fontWeight:600}:null}>${a?a.short:"—"}</td>`; }};
     // Individual Δ% window columns — each toggleable in the gear. Default-show
     // 1W / 1M / 3M; 1D / 6M / 1Y available but hidden by default. (premium graded
     // has no 1D.) The column tracks the Use Low / Use NM Market toggle.
@@ -23305,6 +23589,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     if(premiumGraded) return [setCol, rarityCol,
       money("low","Last Sold","low","low_today","Most recent recorded eBay sale price for this grader/grade"),
       money("market","Avg Last 5","market","market_today","Average of the last 5 recorded eBay sales"),
+      soldCol,
       salesCol,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
@@ -23503,6 +23788,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${filterGrades.size > 0 && html`<button class="price-db-multiclear"
             onClick=${()=>setFilterGrades(new Set())}>Clear</button>`}
         </div>`}
+      </div>`}
+      ${premiumGraded && html`<div class="price-db-presets" style=${{display:"inline-flex",gap:4,alignItems:"center"}}>
+        <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginLeft:4}}>Sold</span>
+        ${[["","Any"],["7","≤7d"],["30","≤30d"],["90","≤90d"]].map(([v,l])=>html`<button key=${v||"any"}
+          class=${"price-db-preset" + (soldWithin===v ? " active" : "")}
+          title=${v ? "Only cards with a recorded eBay sale in the last "+v+" days" : "No recency filter"}
+          onClick=${()=>setSoldWithin(v)}>${l}</button>`)}
       </div>`}
       <button class="price-db-advbtn" onClick=${clearUserFilters}
         title="Clear filters you've added on top of the active preset. Preset-baked defaults stay (e.g. All in graded mode keeps the Enchanted default).">
@@ -32479,6 +32771,9 @@ const offlineImgTask = {
 };
 async function startOfflineImagePack(urls, scope){
   if(offlineImgTask.running || !urls.length) return;
+  // Starting a download means the user wants offline art — clear any prior
+  // opt-out so the native auto-prefetch keeps it topped up with new releases.
+  try { localStorage.removeItem("packsink:offlineImages:optOut"); } catch {}
   Object.assign(offlineImgTask, {running: true, cancel: false, done: 0, total: urls.length, failed: 0, scope});
   offlineImgTask.notify();
   try {
@@ -32577,9 +32872,12 @@ function OfflineImagesPanel({raw, collection, user}){
           <button class="settings-action link" onClick=${async () => {
             try { await caches.delete(IMG_PACK_CACHE); } catch {}
             try { localStorage.removeItem("packsink:offlineImages"); } catch {}
+            // Native auto-downloads all art; a manual delete is an opt-out, else
+            // the auto-prefetch would just pull it all back on next launch.
+            if(IS_NATIVE_APP){ try { localStorage.setItem("packsink:offlineImages:optOut", "1"); } catch {} }
             setTick(x => x + 1);
-            flashToast("Offline images cleared");
-          }}>Clear</button>
+            flashToast("Offline images deleted");
+          }}>${IS_NATIVE_APP ? "Delete downloaded images" : "Clear"}</button>
         </div>
       </div>`}
   </div>`;
@@ -32792,6 +33090,8 @@ function App(){
   const [incomingCardsOpenId, setIncomingCardsOpenId] = useState(null);
   const [scanOpen, setScanOpen] = useState(false);
   const [scanReviewOpen, setScanReviewOpen] = useState(false);
+  const [feedbackOpen, setFeedbackOpen] = useState(false);
+  const [feedbackAdminOpen, setFeedbackAdminOpen] = useState(false);
   const openCardsWithSearch = useCallback((query, openCardId) => {
     setIncomingCardsSearch(query || "");
     setIncomingCardsOpenId(openCardId || null);
@@ -33198,6 +33498,7 @@ function App(){
     } catch { return 0; }
   });
   useEffect(() => {
+    if(IS_NATIVE_APP) return; // already installed as a native app — no PWA nudge
     if(isStandalone) return;
     if(!isIOS && !isAndroid) return;
     let dismissed = false;
@@ -34154,13 +34455,28 @@ function App(){
     return {ok:true, written};
   }, [user, collection]);
 
-  const signIn = useCallback(()=>{
-    // Native app: Google refuses OAuth inside a WebView ("disallowed_useragent"),
-    // so redirecting here would dead-end on a Google error page. The real fix is
-    // the phase-2 native flow (system Custom Tab + deep link back + PKCE code
-    // exchange — see native/README.md). Until then, be honest instead of broken.
+  const signIn = useCallback(async ()=>{
+    // Native app: Google refuses OAuth inside a WebView ("disallowed_useragent").
+    // Real fix (phase 2, now live): open the Supabase-built Google URL in a
+    // system Custom Tab (real Chrome — Google allows it), let it redirect back
+    // to ink.packs.app://auth-callback?code=..., and exchange the PKCE code in
+    // the appUrlOpen listener below. See native/README.md.
     if(IS_NATIVE_APP){
-      flashToast("Sign-in inside the app is coming soon — browsing works now; use packs.ink in a browser for your collection.");
+      try {
+        const {data, error} = await sbClient.auth.signInWithOAuth({
+          provider:"google",
+          options:{
+            redirectTo:"ink.packs.app://auth-callback",
+            skipBrowserRedirect:true,
+            queryParams:{prompt:"select_account"},
+          },
+        });
+        if(error || !data?.url){ flashToast("Couldn't start sign-in — try again."); return; }
+        await window.Capacitor.Plugins.Browser.open({url:data.url});
+      } catch(e){
+        console.error("native oauth start failed:", e);
+        flashToast("Couldn't start sign-in — try again.");
+      }
       return;
     }
     sbClient.auth.signInWithOAuth({
@@ -34174,6 +34490,61 @@ function App(){
         queryParams: {prompt: "select_account"},
       },
     });
+  },[]);
+  // Native deep-link handler: the Custom Tab OAuth flow returns to
+  // ink.packs.app://auth-callback?code=... — exchange the PKCE code for a
+  // session, then close the Custom Tab. Inert on web.
+  useEffect(()=>{
+    if(!IS_NATIVE_APP) return;
+    const AppPlugin = window.Capacitor?.Plugins?.App;
+    const BrowserPlugin = window.Capacitor?.Plugins?.Browser;
+    if(!AppPlugin) return;
+    let handle;
+    const onUrl = async ({url})=>{
+      if(!url || url.indexOf("ink.packs.app://auth-callback") !== 0) return;
+      try {
+        const q = url.split("?")[1] || "";
+        const code = new URLSearchParams(q).get("code");
+        if(code){ await sbClient.auth.exchangeCodeForSession(code); }
+      } catch(e){
+        console.error("native oauth exchange failed:", e);
+        flashToast("Sign-in didn't complete — try again.");
+      }
+      try { await BrowserPlugin?.close(); } catch {}
+    };
+    Promise.resolve(AppPlugin.addListener("appUrlOpen", onUrl)).then(h=>{ handle=h; });
+    return ()=>{ try { handle?.remove?.(); } catch {} };
+  },[]);
+  // Native app: keep the FULL card-art library on-device so the catalog renders
+  // completely offline. Fires once the catalog is ready (deferred so it doesn't
+  // fight first paint), skips art already cached (cheap on later launches —
+  // only new releases get pulled), and honors the user's opt-out (the settings
+  // "Delete downloaded images" button sets it). Serves back via the image-only
+  // service worker (packsink-img-v1). Inert on web (web has the manual pack).
+  useEffect(()=>{
+    if(!IS_NATIVE_APP) return;
+    if(!raw || raw.length < 1000) return;
+    let optOut = false;
+    try { optOut = localStorage.getItem("packsink:offlineImages:optOut") === "1"; } catch {}
+    if(optOut) return;
+    const urls = []; const seen = new Set();
+    for(const r of raw){ const u = r.img_normal || r.img_small; if(u && !seen.has(u)){ seen.add(u); urls.push(u); } }
+    if(!urls.length) return;
+    let last = null;
+    try { last = JSON.parse(localStorage.getItem("packsink:offlineImages") || "null"); } catch {}
+    const freshEnough = last && last.scope === "all"
+      && (Date.now() - last.t < 24*3600*1000)
+      && (last.count || 0) >= urls.length;
+    if(freshEnough) return;
+    const t = setTimeout(()=>{ startOfflineImagePack(urls, "all"); }, 4000);
+    return ()=>clearTimeout(t);
+  },[raw]);
+  // Capgo live-update: signal that this JS bundle booted successfully so the
+  // updater commits it instead of rolling back to the previous one. Must run
+  // every native launch. No-op on web / before the plugin is present.
+  useEffect(()=>{
+    if(!IS_NATIVE_APP) return;
+    try { window.Capacitor?.Plugins?.CapacitorUpdater?.notifyAppReady?.(); } catch {}
   },[]);
   const signOut = useCallback(async ()=>{
     try { await sbClient.auth.signOut(); }
@@ -34469,7 +34840,7 @@ function App(){
       <div class="top-nav-right">
         <div class="top-nav-right-row top-nav-right-row--primary"
           ref=${settingsRef} style=${{position:"relative",display:"inline-flex",gap:4,alignItems:"center"}}>
-          ${!isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
+          ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
             onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
             title="Install Packs.Ink as an app" aria-label="Install app">📲</button>`}
           ${user
@@ -34757,7 +35128,11 @@ function App(){
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
-    <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}/>
+    <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
+      user=${user} onFeedback=${()=>setFeedbackOpen(true)}
+      onViewFeedback=${isGradedAdmin ? ()=>setFeedbackAdminOpen(true) : null}/>
+    ${feedbackOpen && html`<${FeedbackModal} user=${user} onClose=${()=>setFeedbackOpen(false)}/>`}
+    ${feedbackAdminOpen && isGradedAdmin && html`<${FeedbackAdminModal} onClose=${()=>setFeedbackAdminOpen(false)}/>`}
   </div><//><//><//><//>`;
 }
 
