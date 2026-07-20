@@ -23,6 +23,10 @@ const FILES = [
   ["Index.html", "index.html"], // Capacitor's local server wants lowercase index.html
   "styles.css",
   "logo.js",
+  // Image-ONLY service worker (not the excluded app-shell sw.js). Serves
+  // pre-downloaded card art from packsink-img-v1 so the catalog is fully
+  // offline. Registered only in native (see the SW-registration script).
+  "sw-native-images.js",
   "scanner.js",
   "scanner-cv.js",
   "scanner-worker.js",
@@ -36,7 +40,12 @@ const FILES = [
   "apple-touch-icon.png",
 ];
 const DIRS = [
-  ["vendor", { exclude: ["ort"] }],
+  // vendor/ort (onnxruntime WASM) + scanner/ (ONNX weights) are bundled so the
+  // camera scanner runs natively — ~27 MB. The scanner is admin-gated, so this
+  // weight only matters for signed-in admins, but the files must be on-device
+  // for getUserMedia + model inference to work at the app's local origin.
+  ["vendor", {}],
+  ["scanner", {}],
   ["Logos", {}],
 ];
 

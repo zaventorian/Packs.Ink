@@ -75,6 +75,66 @@ npm run app:assets   # regenerate launcher icons/splashes from native/assets/log
 After ANY edit to Index.html / styles.css / logo.js / vendor / Logos, run
 `npm run app:sync` before building the app again.
 
+## Update SOP — "we changed packs.ink, now what?"
+
+Mental model: **the app is a snapshot of the web files + the same Supabase
+backend.** Data flows to the app live; code ships per-surface. Decision:
+
+**1. Backend / data / content only** — ETL, SQL migrations, Supabase, new cards
+or prices, tournament uploads. → Deploy the web as usual. **The app updates
+itself automatically** (same backend, same image proxies). Nothing to do for the
+app.
+
+**2. Web UI / logic** — any edit to `Index.html` / `styles.css` / `logo.js`.
+→ (a) Ship to web the normal way (commit, then push per the CLAUDE.md push
+policy — ask first). (b) The installed app does NOT get it from a Netlify
+deploy. To push it to app users, cut an **app release** (recipe below). You do
+NOT have to release the app for every web tweak — batch them.
+
+**3. Native shell** — new Capacitor plugin, `AndroidManifest`, permission,
+`capacitor.config.json`, native OAuth/scanner plumbing, app icon/splash.
+→ **Must** be an app release (recipe below). This can never ship over-the-air,
+even if Capgo is later turned on.
+
+### App-release recipe
+
+```
+npm run app:sync                       # rebuild native/www + cap sync
+# bump versionCode (+1, integer) and versionName in android/app/build.gradle
+```
+
+Then build + test locally (JBR + SDK env — this machine has no global JAVA_HOME):
+
+```
+cd android
+JAVA_HOME="C:\Program Files\Android\Android Studio\jbr" \
+ANDROID_HOME="$LOCALAPPDATA\Android\Sdk" ./gradlew.bat assembleDebug
+# install to a plugged-in phone or the packsink_test emulator:
+"$LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe" install -r \
+  app/build/outputs/apk/debug/app-debug.apk
+```
+
+For the **Play Store**, build a signed AAB instead (`./gradlew bundleRelease`)
+and upload to the Play Console (internal-testing track first). That needs the
+one-time signing setup — see Phase 3 (keystore + Play App Signing), not yet done.
+
+### Cadence
+
+Deploy the web continuously; cut an app release **periodically** (when
+meaningful UI changes accumulate, or a native change lands). The website is
+always current; the app trailing by a release is expected and fine. Each Play
+upload MUST have a higher `versionCode` than the last.
+
+### Chosen update strategy (2026-07-17)
+
+**Store-releases-only.** Capgo (`@capacitor/capacitor-updater`) is installed but
+**dormant** (`autoUpdate:false` in `capacitor.config.json`) — zero cost, zero
+network calls. Capgo cloud has no free tier ($14/mo Solo = 2k MAU). If instant
+OTA ever becomes worth it, the cheap path is **self-hosting** the bundle on
+Cloudflare R2 + a tiny worker (the plugin points at your own endpoint) — free at
+our scale. Until then, free Play releases are sufficient (OTA is convenience,
+not necessity; the app is secondary to the always-current website).
+
 ## First build (one-time setup — the only thing missing on this machine)
 
 1. Install **Android Studio** (bundles the JDK and SDK): https://developer.android.com/studio
