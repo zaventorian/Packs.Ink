@@ -47,6 +47,23 @@ OVERRIDES = {
     "Lenny - Toy Binoculars|49": 692481,
     "Zipper - Tiny Helper|50": 692482,
     "Will o' the Wisp - Forest Spirit|51": 692483,
+    # Promo Set 3 #52-55 — Wilds Unknown SC promos that Lorcast NOW indexes
+    # (with tcgplayer_id null). Apply the pid to the Lorcast-indexed row instead
+    # of minting a duplicate crd_custom_ row. The old crd_custom_ #52-55 rows
+    # were deleted in supabase/107; #56 (Buzz - On the Way) stays a synthetic
+    # card below because Lorcast still doesn't index it.
+    "Dash Parr - Lava Runner|52": 692484,
+    "Woody - Jungle Guide|53": 692485,          # SC Participant (Normal)
+    "Woody - Jungle Guide|54": 692486,          # SC Championship (Holofoil)
+    "Violet Parr - Learning New Powers|55": 692487,
+    # Attack of the Vine! prerelease-box promos (set_aotv_promos). Prestaged as
+    # image+name; TCGplayer has now assigned pids, so link them for prices.
+    "Pocahontas - Guiding the Tribe|3": 705068,
+    "Vixey - Expert Fisher|4": 705072,
+    "Buzz Lightyear - Providing Cover|5": 705073,
+    "Boo - Energetic Child|6": 702706,
+    "Merlin - Envisioning the Future|7": 705074,
+    "Maximus - Relentless Stallion|8": 702707,
     "Mickey Mouse - Playful Sorcerer|7": 559564,
     "Iago - Out of Reach|8": 630086,
     "Mickey Mouse - True Friend|36": 653906,            # Promo Set 2 — Puzzle Promo
@@ -156,56 +173,12 @@ def main() -> None:
         # duplicates sharing the same pid (double matview rows). Deleted in
         # supabase/82_quest_card_piglet.sql follow-up; EXTRAS_MAP renders them via
         # the real Lorcast card_id now.
-        # --- Promo Set 3 #52-56: Wilds Unknown Store-Championship promos that
-        # Lorcast does not index. Stats mirror each card's Wilds Unknown base.
-        {  # Dash Parr - Lava Runner — P3 #52 (Cold Foil promo)
-            "id": "crd_custom_692484_dash_lava_runner",
-            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",  # Promo Set 3
-            "name": "Dash Parr", "version": "Lava Runner",
-            "rarity": "Promo", "ink": "Amethyst", "inks": ["Amethyst"],
-            "collector_number": "52", "cost": 4, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Storyborn", "Super", "Hero"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(692484, 200), "image_normal": tcg_img(692484, 400), "image_large": tcg_img(692484, 400),
-            "tcgplayer_product_id": 692484,
-        },
-        {  # Woody - Jungle Guide — P3 #53 (Store Championship Participant, Normal)
-            "id": "crd_custom_692485_woody_jungle_participant",
-            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
-            "name": "Woody", "version": "Jungle Guide",
-            "rarity": "Promo", "ink": "Amber", "inks": ["Amber"],
-            "collector_number": "53", "cost": 5, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Floodborn", "Hero", "Toy"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(692485, 200), "image_normal": tcg_img(692485, 400), "image_large": tcg_img(692485, 400),
-            "tcgplayer_product_id": 692485,
-        },
-        {  # Woody - Jungle Guide — P3 #54 (Store Championship, Holofoil)
-            "id": "crd_custom_692486_woody_jungle_sc",
-            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
-            "name": "Woody", "version": "Jungle Guide",
-            "rarity": "Promo", "ink": "Amber", "inks": ["Amber"],
-            "collector_number": "54", "cost": 5, "inkable": False,
-            "card_type": "Character",
-            "classifications": ["Floodborn", "Hero", "Toy"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(692486, 200), "image_normal": tcg_img(692486, 400), "image_large": tcg_img(692486, 400),
-            "tcgplayer_product_id": 692486,
-        },
-        {  # Violet Parr - Learning New Powers — P3 #55 (Cold Foil promo)
-            "id": "crd_custom_692487_violet_new_powers",
-            "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
-            "name": "Violet Parr", "version": "Learning New Powers",
-            "rarity": "Promo", "ink": "Amethyst", "inks": ["Amethyst"],
-            "collector_number": "55", "cost": 3, "inkable": True,
-            "card_type": "Character",
-            "classifications": ["Storyborn", "Super", "Hero"],
-            "text": None, "flavor_text": None,
-            "image_small": tcg_img(692487, 200), "image_normal": tcg_img(692487, 400), "image_large": tcg_img(692487, 400),
-            "tcgplayer_product_id": 692487,
-        },
+        # --- Promo Set 3 #56: Buzz Lightyear - On the Way. Lorcast does NOT
+        # index it (its P3 feed stops at #55), so it stays a synthetic row.
+        # #52-55 used to live here too, but Lorcast now indexes those, so they
+        # moved to OVERRIDES above (pid applied to the Lorcast row) and the old
+        # crd_custom_ rows were removed in supabase/107 to kill the duplicate
+        # tiles. #57 (Buzz - Space Ranger) is built via REPRINT_PROMOS below.
         {  # Buzz Lightyear - On the Way — P3 #56 (Holofoil promo)
             "id": "crd_custom_692488_buzz_on_the_way",
             "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
@@ -238,6 +211,15 @@ def main() -> None:
         692041: 692040, 692093: 692050, 692180: 692179, 692061: 692060,
         692063: 692062, 692082: 692081, 692097: 690212, 678861: 675499,
         678862: 675500, 678863: 676217, 678864: 676218,
+        # Attack of the Vine! — Cold Foil printings sold as a separate TCGPlayer
+        # SKU (foil_pid: base_pid). Prices sit in prices_daily under the foil pid
+        # but were never shown until these rows exist + Index.html CONNECTING_FOILS.
+        702683: 702684,   # Carl Fredricksen - Loving Husband (#74)
+        702685: 702686,   # Ellie Fredricksen - Loving Wife (#75)
+        704618: 704619,   # Yzma - Choosy Customer (#110)
+        704620: 704621,   # Kuzco - Picky Customer (#111)
+        704655: 704656,   # Maid Marian - Created by the Vine (#158)
+        704657: 704658,   # Robin Hood - Created by the Vine (#159)
     }
     print("\nBuilding connecting-foil companion rows (clone base, carry foil pid)...")
     base_pids = sorted(set(CONNECTING_FOIL_ROWS.values()))
@@ -291,6 +273,52 @@ def main() -> None:
             print(f"  upserted {len(over_rows)} oversized row(s).")
     except Exception as e:
         print(f"  oversized upsert failed: {repr(e)[:300]}")
+
+    # Promo reprints Lorcast doesn't index as a separate printing, but each is a
+    # reprint of a Lorcast-indexed card. Clone the base row (by pid) and override
+    # set / collector# / id / rarity / pid + swap to the promo's TCGplayer art.
+    #   (base_pid, set_id, collector_number, new_id, promo_pid)
+    AVP_SET = "set_aotv_promos"        # Attack of the Vine! Promos (folds under Set 13)
+    CC1_SET = "set_curators_cc1"       # Curator's Collection: Heroines
+    P3_SET  = "set_1e6669367c7a4a208ce51fd8bd7d2c41"
+    REPRINT_PROMOS = [
+        (702677, AVP_SET, "9",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo
+        (702660, AVP_SET, "10", "crd_avp_10_tigger_hunny_barbarian",  705083),  # buy-a-box promo
+        (504451, CC1_SET, "1",  "crd_cc1_1_ariel_spectacular_singer", 702517),
+        (619434, CC1_SET, "2",  "crd_cc1_2_elsa_trusted_sister",      702518),
+        (586172, CC1_SET, "3",  "crd_cc1_3_jasmine_royal_seafarer",   702519),
+        (544494, CC1_SET, "4",  "crd_cc1_4_mulan_elite_archer",       702520),
+        (631455, CC1_SET, "5",  "crd_cc1_5_anna_trusting_sister",     702521),
+        (503357, CC1_SET, "6",  "crd_cc1_6_tinker_bell_giant_fairy",  702603),
+        (692164, P3_SET,  "57", "crd_custom_692489_buzz_space_ranger",692489),  # Promo Set 3 tail
+    ]
+    print("\nBuilding promo-reprint rows (clone base, carry promo pid + set/cn)...")
+    try:
+        rp_base_pids = sorted({b for b, *_ in REPRINT_PROMOS})
+        rp_base = sb.select("cards", columns=clone_cols,
+                            filters={"tcgplayer_product_id": f"in.({','.join(str(p) for p in rp_base_pids)})"})
+        rp_by_pid = {r["tcgplayer_product_id"]: r for r in rp_base}
+        rp_rows = []
+        for base_pid, set_id, cn, new_id, promo_pid in REPRINT_PROMOS:
+            b = rp_by_pid.get(base_pid)
+            if not b:
+                print(f"  skip reprint {new_id}: base {base_pid} not in cards")
+                continue
+            row = dict(b)
+            row["id"] = new_id
+            row["set_id"] = set_id
+            row["collector_number"] = cn
+            row["rarity"] = "Promo"
+            row["tcgplayer_product_id"] = promo_pid
+            row["image_small"]  = tcg_img(promo_pid, 200)
+            row["image_normal"] = tcg_img(promo_pid, 400)
+            row["image_large"]  = tcg_img(promo_pid, 400)
+            rp_rows.append(row)
+        if rp_rows:
+            sb.upsert("cards", rp_rows, on_conflict="id")
+            print(f"  upserted {len(rp_rows)} promo-reprint row(s).")
+    except Exception as e:
+        print(f"  promo-reprint upsert failed: {repr(e)[:300]}")
 
     print("\nRefreshing card_prices_latest matview...")
     try:
