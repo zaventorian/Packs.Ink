@@ -29,9 +29,13 @@ def main():
     sets = sb.select("sets", columns="id,code")
     set_code = {s["id"]: (s.get("code") or "").strip().upper() or None for s in sets}
     rows = sb.select("cards",
-        columns="id,name,version,set_id,card_type,classifications,cost,strength,willpower,lore,inkable,ink,collector_number,text,flavor_text",
+        columns="id,name,version,set_id,card_type,classifications,cost,strength,willpower,lore,inkable,ink,collector_number,text,flavor_text,rarity",
         filters={"image_normal": "not.is.null"})
     out = []
+    # single-char rarity code — scanner.js uses it to order same-(name,version)
+    # reprint groups base-first (chase = E/I/X/P loses ties without evidence).
+    RMAP = {"Common": "C", "Uncommon": "U", "Rare": "R", "Super Rare": "S",
+            "Legendary": "L", "Enchanted": "E", "Iconic": "I", "Epic": "X", "Promo": "P"}
     for r in rows:
         cls = r.get("classifications") or []
         blob = " ".join([
@@ -46,6 +50,7 @@ def main():
             "cost": r.get("cost"), "strength": r.get("strength"),
             "willpower": r.get("willpower"), "lore": r.get("lore"),
             "cn": (r.get("collector_number") or ""),
+            "rarity": r.get("rarity"), "r": RMAP.get(r.get("rarity") or "", ""),
             "blob": re.sub(r"\s+", " ", blob).strip(),
         })
     (DATA / "text_index.json").write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
@@ -58,7 +63,7 @@ def main():
     REPO = HERE.parent.parent
     slim = [{
         "id": c["id"], "n": c["name"], "v": c["version"], "b": c["blob"],
-        "s": c["set"], "cn": c["cn"],
+        "s": c["set"], "cn": c["cn"], "r": c["r"],
     } for c in out]
     (REPO / "scanner" / "text.json").write_text(json.dumps(slim, separators=(",", ":")), encoding="utf-8")
     sz = (REPO / "scanner" / "text.json").stat().st_size

@@ -20,7 +20,7 @@
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
   var IDXV = "?v=4"; // bump when color.bin/index.json content changes (v4 = Set 13 REAL Lorcast art 2026-07-19; v3 was prestaged art)
-  var TXTV = "?v=4"; // bump when text.json content/shape changes (v4 = Set 13 real Lorcast text/cn 2026-07-19)
+  var TXTV = "?v=5"; // bump when text.json content/shape changes (v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
 
   var state = {
     loaded: false,
@@ -201,6 +201,33 @@
     if (text.loaded) return Promise.resolve(text);
     if (text.loading) return text.loading;
     text.loading = fetch(BASE + "text.json" + TXTV).then(function (r) { return r.json(); }).then(function (cards) {
+      // CANONICAL ORDER — base printing before chase reprints (v16, 2026-07-23).
+      // Same-(name,version) groups (base + Enchanted/Iconic/Epic/Promo reprints
+      // + custom variants) arrived in DB fetch order (no ORDER BY = arbitrary),
+      // and every downstream tie inherited it: rankNames' topK is a stable sort,
+      // rankVersions*' per-version id lists push in this order, orderByColour is
+      // stable for colour-unranked ids. Net effect: ~half the reprint pairs
+      // defaulted to the CHASE card on a text-identical read (v15 field: Scar -
+      // Finally King → Enchanted ×4, Merida → Iconic ×5, Hades → Iconic ×3,
+      // Show Me More! → Enchanted…). One stable sort here fixes every consumer:
+      // within a group the base printing leads; chase/custom reprints win only
+      // on positive evidence (colour rank, exact collector number). Groups keep
+      // their first-occurrence position; members become adjacent. `r` is the
+      // rarity code from text.json v5 (missing on a stale cache → no reorder,
+      // which is just the old behavior).
+      var CHASE_R = { E: 1, I: 1, X: 1, P: 1 };  // Enchanted / Iconic / Epic / Promo
+      var firstAt = Object.create(null), ci;
+      for (ci = 0; ci < cards.length; ci++) {
+        var cc = cards[ci], gk = (cc.n || "") + "|" + (cc.v || "");
+        if (firstAt[gk] == null) firstAt[gk] = ci;
+        cc._gk = gk; cc._i = ci;
+        cc._demote = (CHASE_R[cc.r] ? 2 : 0) + (String(cc.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0);
+      }
+      cards.sort(function (a, b) {
+        if (firstAt[a._gk] !== firstAt[b._gk]) return firstAt[a._gk] - firstAt[b._gk];
+        if (a._demote !== b._demote) return a._demote - b._demote;
+        return a._i - b._i;
+      });
       text.cards = cards;
       var N = cards.length, df = Object.create(null);
       text.toks = new Array(N);
@@ -285,7 +312,7 @@
       var c = cards[i], nm = c.n || "", ver = c.v || "", full = (nm + " " + ver).replace(/\s+/g," ").trim();
       var tok = nmTok(nm), tv = nmTok(ver), kk; for(kk in tv) tok[kk]=1;
       var cn = nmCanon(nm), cf = nmCanon(full);
-      var m = { id: c.id, name: nm, version: ver, set: c.s, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
+      var m = { id: c.id, name: nm, version: ver, set: c.s, r: c.r, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
       nameDB.meta[i] = m; nameDB.byId[c.id] = m;
       if(c.cn != null){ var num = String(c.cn).replace(/\D/g,""); if(num){
         (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id);
@@ -447,15 +474,32 @@
     var nName = nmNorm(charName), group = [], i;
     for(i=0;i<text.cards.length;i++) if(nmNorm(text.cards[i].n || "") === nName) group.push(text.cards[i]);
     if(group.length < 2) return null;
-    var lineSq = [], lineTri = [], j;
-    for(j=0;j<lines.length;j++){ var lc = nmCanon(lines[j]); var sq = lc.replace(/ /g, ""); if(sq.length >= 4){ lineSq.push(sq); lineTri.push(nmTri(lc)); } }
-    if(!lineSq.length) return null;
+    var lineSq = [], lineTri = [], lineSqShort = [], j;
+    for(j=0;j<lines.length;j++){
+      var lc = nmCanon(lines[j]); var sq = lc.replace(/ /g, "");
+      if(sq.length >= 4){ lineSq.push(sq); lineTri.push(nmTri(lc)); }
+      else if(sq.length >= 2) lineSqShort.push(sq);   // micro-lines ("v10") for exact digit-subtitle matches
+    }
+    if(!lineSq.length && !lineSqShort.length) return null;
     var byVer = Object.create(null), order = [];
     for(i=0;i<group.length;i++){
       var v = group[i].v || ""; if(!v) continue;
-      var vc = nmCanon(v), vsq = vc.replace(/ /g, ""); if(vsq.length < 4) continue;
-      var vtri = nmTri(vc), best = 0;
-      for(j=0;j<lineSq.length;j++){ var s = 0.65 * levSim(lineSq[j], vsq) + 0.35 * diceSet(lineTri[j], vtri); if(s > best) best = s; }
+      var vc = nmCanon(v), vsq = vc.replace(/ /g, ""), best = 0;
+      if(vsq.length < 4){
+        // "V.8"/"V.10"-class micro-subtitles (canon "v8"/"v10") are too short
+        // for fuzzy scoring — and the ≥4-char line filter dropped their reads
+        // too, so they could NEVER win a subtitle rank (v15 field: OCR read
+        // "V.10" verbatim, the ranker skipped it, name-score noise picked V.8
+        // ×3). Digit-bearing micro-subtitles now match by EXACT squashed-line
+        // equality only; no exact read → abstain (fuzzy 2-3 char compares
+        // would false-fire constantly).
+        if(!/\d/.test(vsq)) continue;
+        for(j=0;j<lineSqShort.length && !best;j++) if(lineSqShort[j] === vsq) best = 1;
+        if(!best) continue;
+      } else {
+        var vtri = nmTri(vc);
+        for(j=0;j<lineSq.length;j++){ var s = 0.65 * levSim(lineSq[j], vsq) + 0.35 * diceSet(lineTri[j], vtri); if(s > best) best = s; }
+      }
       if(byVer[v] == null){ byVer[v] = { v: v, score: best, ids: [group[i].id] }; order.push(byVer[v]); }
       else { byVer[v].ids.push(group[i].id); if(best > byVer[v].score) byVer[v].score = best; }
     }
@@ -542,6 +586,37 @@
              score: Math.round(best * 1000) / 1000, margin: Math.round((best - own) * 1000) / 1000 };
   }
 
+  // Same-(name,version) reprint HEAD GUARD (v16). Text is IDENTICAL between a
+  // base printing and its Enchanted/Iconic/Epic/Promo reprints, so a chase card
+  // at the head of the candidate list can only be there via colour rank or list
+  // order — never via text evidence. Base printings outnumber chase pulls ~50:1
+  // in real scans (v15 field: 19 base cards mislabeled as their chase reprint,
+  // 1 the other way), so a chase/custom head must EARN the slot: an exact
+  // collector number (branch 1 returns before this) or a TOP-5 colour rank
+  // (a real Enchanted's full-art is visually distinctive). A weak or absent
+  // colour rank falls back to the base sibling; the chase stays in the
+  // alternates one tap away.
+  var CHASE_RARITY = { E: 1, I: 1, X: 1, P: 1 };  // Enchanted / Iconic / Epic / Promo
+  function reprintDemote(m){
+    if(!m) return 0;
+    return (CHASE_RARITY[m.r] ? 2 : 0) + (String(m.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0);
+  }
+  function baseGuard(ids, colour){
+    if(!nameDB || !ids || ids.length < 2) return ids;
+    var head = nameDB.byId[ids[0]];
+    if(!head || !reprintDemote(head)) return ids;
+    var j;
+    for(j=0;j<(colour||[]).length && j<5;j++) if(colour[j] === ids[0]) return ids;
+    for(j=1;j<ids.length;j++){
+      var m = nameDB.byId[ids[j]];
+      if(m && m.nName === head.nName && (m.version || "") === (head.version || "") && reprintDemote(m) < reprintDemote(head)){
+        var out = ids.slice(); out.splice(j, 1); out.unshift(ids[j]);
+        return out;
+      }
+    }
+    return ids;
+  }
+
   // Reorder a candidate id list so the BODY-decided version of the top card's
   // character comes first. The body-text version tiebreak used to run ONLY in
   // the name-high branch; when a slightly mis-OCR'd name ("AJAH"/"RAJAM") fell
@@ -613,17 +688,17 @@
       }
       var vb = rankVersion(nm.top[0].name, opts.lines || []);
       if(vb && vb.ids.length){
-        return { top3: dedupeIds(orderByColour(vb.ids).concat(orderByColour(nameIds), colour)).slice(0, 3),
+        return { top3: baseGuard(dedupeIds(orderByColour(vb.ids).concat(orderByColour(nameIds), colour)), colour).slice(0, 3),
                  conf: "high", source: "name", verBy: vb.by || "body", verMargin: Math.round(vb.margin * 1000) / 1000,
                  nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
-      return { top3: dedupeIds(orderByColour(nameIds).concat(colour)).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      return { top3: baseGuard(dedupeIds(orderByColour(nameIds).concat(colour)), colour).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 3. number read but name weak → the numbered cards, ordered by name then colour (needs a tap)
     if(numIds.length){
       var ranked = rankCnCandidates(numIds, nm.top, colour);
       var frc = bodyVersionReorder(ranked, opts.lines);
-      return { top3: dedupeIds(frc.ids.concat(nameIds, colour)).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", verBy: frc.vb ? "body" : undefined, verMargin: frc.vb ? Math.round(frc.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      return { top3: baseGuard(dedupeIds(frc.ids.concat(nameIds, colour)), colour).slice(0, 3), conf: numIds.length <= 2 ? "medium" : "low", source: "cn", verBy: frc.vb ? "body" : undefined, verMargin: frc.vb ? Math.round(frc.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 4. fallback: name + colour vote. Same hijack check — the field case
     //    that motivated the rescue (Monterey Jack over Dale) landed HERE
@@ -640,7 +715,7 @@
     }
     var fused = rrf([nameIds, colour], [3, 1]);
     var frf = bodyVersionReorder(fused, opts.lines);
-    return { top3: dedupeIds(frf.ids).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", verBy: frf.vb ? "body" : undefined, verMargin: frf.vb ? Math.round(frf.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+    return { top3: baseGuard(dedupeIds(frf.ids), colour).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", verBy: frf.vb ? "body" : undefined, verMargin: frf.vb ? Math.round(frf.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
   }
 
   window.CardScanner = {
