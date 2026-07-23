@@ -692,7 +692,18 @@
                  conf: "high", source: "name", verBy: vb.by || "body", verMargin: Math.round(vb.margin * 1000) / 1000,
                  nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
       }
-      return { top3: baseGuard(dedupeIds(orderByColour(nameIds).concat(colour)), colour).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
+      // colour is a PRINTING tie-breaker, not a character vote: with a
+      // high-conf name, only the top character's own printings may be
+      // colour-reordered. A visually-similar DIFFERENT card must not outrank
+      // the read name (v15 #566: "EHURLEHISTHUNDERROL" ranked He Hurled His
+      // Thunderbolt 0.477/high, but colour promoted The Thunderquack — a
+      // mid-list 0.25 name candidate with lookalike lightning art).
+      var n0m = nameDB.byId[nameIds[0]], sameChar = [], restIds = [], ci;
+      for(ci = 0; ci < nameIds.length; ci++){
+        var mc = nameDB.byId[nameIds[ci]];
+        if(n0m && mc && mc.nName === n0m.nName) sameChar.push(nameIds[ci]); else restIds.push(nameIds[ci]);
+      }
+      return { top3: baseGuard(dedupeIds(orderByColour(sameChar).concat(restIds, colour)), colour).slice(0, 3), conf: "high", source: "name", nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
     }
     // 3. number read but name weak → the numbered cards, ordered by name then colour (needs a tap)
     if(numIds.length){

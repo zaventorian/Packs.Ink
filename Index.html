@@ -10294,19 +10294,39 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   };
   // Was the VERSION pick a coin flip? True when the top same-character entries
   // tie on name score (no subtitle read) — i.e. the pick fell to colour. Skips
-  // same-version reprints (not ambiguity) AND different-character entries
-  // (scene noise: a second card's text in frame ranked Mulan between two
-  // Rapunzels on 7/18 and hid the real tie). Shared by the live badge, the
-  // lock stash, and the QA rows.
+  // base-vs-chase same-version reprints (the v16 base-first prior resolves
+  // those) AND different-character entries (scene noise: a second card's text
+  // in frame ranked Mulan between two Rapunzels on 7/18 and hid the real tie).
+  // Shared by the live badge, the lock stash, and the QA rows.
+  // SAME-rarity reprints in DIFFERENT sets (SoaRF set 2 vs set 9 — v15: 10
+  // copies all answered set 9, ≥5 physically set 2) are textually identical
+  // AND prior-less — only the printed set number decides — so they DO count
+  // as ties: the ≈ chip shows and the deferred look's cn read finishes it.
+  let scanTxtById = null;   // id → {s: set code, r: rarity} from the scanner text index (lazy)
+  const scanTxtMeta = (id) => {
+    try {
+      if(!scanTxtById){
+        const t = window.CardScanner && window.CardScanner.textState;
+        if(!(t && t.loaded)) return null;
+        scanTxtById = new Map(t.cards.map(c => [c.id, c]));
+      }
+      return scanTxtById.get(id) || null;
+    } catch(_e){ return null; }
+  };
   const qaVerTied = (a) => {
     if(!a || a.length < 2) return false;
     for(let j = 1; j < a.length; j++){
       if((a[j].name || "") !== (a[0].name || "")) continue;
-      if((a[j].version || "") === (a[0].version || "")) continue;
+      if((a[j].version || "") === (a[0].version || "")){
+        const m0 = scanTxtMeta(a[0].id), mj = scanTxtMeta(a[j].id);
+        if(m0 && mj && m0.r === mj.r && m0.s !== mj.s && (a[0].score - a[j].score) < 0.06) return true;
+        continue;
+      }
       return (a[0].score - a[j].score) < 0.06;
     }
     return false;
   };
+  window.__qaVerTied = qaVerTied;   // bench/e2e handle (same spirit as __scanBench)
 
   const roundRectPath = (ctx, x, y, w, h, r) => {
     r = Math.min(r, w / 2, h / 2);
@@ -11228,6 +11248,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const pr2 = side === "F" ? (p.prF || p.prN) : (p.prN || p.prF);
       const px2 = side === "F" ? (p.prF ? p.pxF : p.pxN) : (p.prN ? p.pxN : p.pxF);
       p = { ...p, printing: pr2 ?? p.printing, price: px2 ? (px2.mkt ?? px2.low ?? p.price) : p.price };
+    }
+    // Pipeline SELF-correction (deferred look / cn finisher / lock verify
+    // changed an already-identified row) → keep the flywheel sample in sync.
+    // Auto, not a human label: card_id + printing only — reviewed/corrected
+    // stay human-owned, and predicted_card_id keeps the upload-time answer,
+    // so unreviewed rows' card_id now records what the tester actually SAW
+    // (v15 analysis undercounted the live experience by freezing pre-look
+    // guesses). Idempotent PATCH — a double-invoked updater is harmless.
+    if(!x.userSet && "guessId" in p && x.guessId != null && p.guessId != null && p.guessId !== x.guessId){
+      labelSample(x, { card_id: p.guessId, printing: ("printing" in p ? p.printing : x.printing) || null });
     }
     return { ...x, ...p };
   }));
