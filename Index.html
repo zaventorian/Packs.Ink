@@ -9932,7 +9932,7 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v16";
+const SCANNER_BUILD = "v17";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -10302,6 +10302,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // copies all answered set 9, ≥5 physically set 2) are textually identical
   // AND prior-less — only the printed set number decides — so they DO count
   // as ties: the ≈ chip shows and the deferred look's cn read finishes it.
+  // kana / CJK ideograph / halfwidth-kana ranges — the print-language signal
+  // for the scanner's non-English reject (shared by the row build + the
+  // deferred look so a re-read can't flip a foreign card to a wrong EN guess).
+  const CJK_RE = /[぀-ヿ㐀-䶿一-鿿ｦ-ﾝ]/g;
   let scanTxtById = null;   // id → {s: set code, r: rarity} from the scanner text index (lazy)
   const scanTxtMeta = (id) => {
     try {
@@ -11588,11 +11592,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // tester can still pick. A live lock or any real name read is never rejected;
     // the deferred look can still upgrade an unread row if a re-read finds text.
     const hasName = (ocrLines || []).some(l => /[A-Za-z]{4,}/.test(l));
-    const unread = !lock && !hasName && (idr.source === "fusion" || idr.source === "cn");
+    // Non-English print (JP/CN cards keep appearing in tester batches): the EN
+    // name index can only ever produce a wrong guess, so say so instead. The
+    // ch_PP-OCR rec model genuinely reads kana/CJK glyphs — ≥2 CJK codepoints
+    // on one line is a reliable print-language signal (a single hallucinated
+    // glyph on stylized EN art stays under the floor). Out of scope per the
+    // 2026-07-23 product call; a text-locked row is never rejected.
+    const foreign = !lock && (ocrLines || []).some(l => ((l.match(CJK_RE) || []).length) >= 2);
+    const unread = foreign || (!lock && !hasName && (idr.source === "fusion" || idr.source === "cn"));
     tmr.rowMs = Date.now() - job.tSnap;
     if(unread){
       updateQaRow(rid, { status: "done", guess: null, guessId: null, predId: (top && top.id) || null,
-        cardImg: null, price: null, conf: "unread", ver: false,
+        cardImg: null, price: null, conf: "unread", ver: false, foreign,
         hasFoilPair: false, prN: null, prF: null, printing: null,
         cands: cands.slice(0, 6).map(c => ({ id: c.id, name: c.name, version: c.version, rarity: c.rarity })),
         alts: cands.slice(0, 3).map(qaLabelOf).filter(Boolean).join(", ") });
@@ -11601,7 +11612,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         alts: (!verUnsure && (rowConf === "lock" || rowConf === "high")) ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
     }
     trc("snap-id", { ms: tmr.rowMs, conf: unread ? "unread" : (idr.conf || null), src: idr.source || null, lock: lock ? 1 : 0,
-      vb: idr.verBy || (lock ? job.lockVerBy : null) || null, vu: verUnsure ? 1 : 0, unread: unread ? 1 : 0 });
+      vb: idr.verBy || (lock ? job.lockVerBy : null) || null, vu: verUnsure ? 1 : 0, unread: unread ? 1 : 0, cjk: foreign ? 1 : 0 });
     // 5. tail — second-look refinement + flywheel upload. Runs UN-AWAITED so the
     // next queued snap's identify starts immediately (the awaited blob/upload
     // prep was quietly serializing the queue: rowMs climbed 2.5s→29s on 7/18).
@@ -11680,6 +11691,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
               extra = extra.concat((o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0 && extra.indexOf(l) < 0)); }
             if(!extra.length) return;
             const merged = (ocrLines || []).concat(extra);
+            // foreign-print rows stay rejected — a re-read of a JP/CN card must
+            // not clear the accept bar and flip the row to a wrong EN card.
+            if(merged.some(l => ((l.match(CJK_RE) || []).length) >= 2)) return;
             const idr2 = window.CardScanner.identify({ lines: merged, cnNum: null, cnSet: null, colourRanked: colIds }) || {};
             const sameChar = top && idr2.top3 && idr2.top3.length && charOf(idr2.top3[0]) === (top.name || "");
             // a rescue verdict carries its own field-calibrated dominance
@@ -12202,7 +12216,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <div class="scanner-qa-rowinfo">
         ${x.status === "identifying"
           ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
-          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">Couldn't read — tap ✎ to pick</span>` : (x.guess || "(no match)")}</span>`}
+          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap ✎ to pick"}</span>` : (x.guess || "(no match)")}</span>`}
         ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
         ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
             <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>Non-Foil</button>
