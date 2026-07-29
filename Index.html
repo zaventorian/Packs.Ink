@@ -24359,6 +24359,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
 // We fetch enough to bucket client-side and take top 20 per bucket.
 const CHASE_RARS = new Set(["Enchanted","Iconic","Epic"]);
 const RARELEG_RARS = new Set(["Rare","Super Rare","Legendary"]);
+const MOVER_FOIL_PRINTINGS = new Set(["Cold Foil","Holofoil","Foil"]);
 
 // Window definitions for the Home movers toolbar. Each window maps to a low
 // snapshot column (for the "started >= $5 in this window" floor), a low Δ%
@@ -26837,7 +26838,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
 // tablet (≤1100px), stacked on desktop. Uses JS viewport detection
 // instead of CSS media queries so cache-stale styles.css can't break the
 // layout — the inline gridTemplateColumns is computed in React.
-const ChaseRowWithTourney = ({raw, chase, rareLeg, winLabel, directionLabel, windowKey,
+const ChaseRowWithTourney = ({raw, chase, rareLeg, rareLegControls, winLabel, directionLabel, windowKey,
                               visibleWindows, paused, showTournaments=true, openBannerInScreener, openCard,
                               openDeckById, openTournamentById, openTournamentsList}) => {
   const [isNarrow, setIsNarrow] = useState(() =>
@@ -26870,6 +26871,7 @@ const ChaseRowWithTourney = ({raw, chase, rareLeg, winLabel, directionLabel, win
   const rareLegBanner = html`<${MoversBanner}
     title="Rare – Legendary Movers"
     subtitle=${`Rare · Super Rare · Legendary — top 20 by ${winLabel} ${directionLabel}`}
+    controls=${rareLegControls}
     cards=${rareLeg}
     activeWindow=${windowKey}
     visibleWindows=${visibleWindows}
@@ -27767,7 +27769,10 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     if(which === "chase"){
       openScreenerWithFilter({...base, filterRarities: ["Enchanted","Iconic","Epic"]});
     } else if(which === "rareLeg"){
-      openScreenerWithFilter({...base, filterRarities: ["Rare","Super Rare","Legendary"]});
+      // Carry the banner's printing selection into the Screener's Foil /
+      // Non-Foil chips so the jump lands on the same slice of the market.
+      openScreenerWithFilter({...base, filterRarities: ["Rare","Super Rare","Legendary"],
+        showFoil: rlPrinting !== "normal", showNonFoil: rlPrinting !== "foil"});
     } else if(which === "promo"){
       openScreenerWithFilter({...base, filterRarities: ["Promo"]});
     } else if(which === "newest"){
@@ -27812,6 +27817,19 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   useEffect(() => {
     try { localStorage.setItem("packsink:home:valuableMode", valuableMode); } catch {}
   }, [valuableMode]);
+  // Rare–Legendary banner printing filter: "all" | "normal" | "foil".
+  // Those three rarities are the only movers bucket with a real foil/non-foil
+  // duality (chase + promo cards have a single printing each), so the toggle
+  // is scoped to that banner instead of the shared toolbar.
+  const [rlPrinting, setRlPrinting] = useState(() => {
+    try {
+      const v = localStorage.getItem("packsink:home:rlPrinting");
+      return (v === "normal" || v === "foil") ? v : "all";
+    } catch { return "all"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:rlPrinting", rlPrinting); } catch {}
+  }, [rlPrinting]);
 
   // Resolve a mover (carries card_id + tcgplayer_product_id) to the
   // CardDetailModal-shaped "group" via O(1) lookups instead of scanning
@@ -27965,12 +27983,19 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       // Inject as image_normal so MoverTile's existing image_large → image_normal → image_small chain picks it up.
       return fb ? {...r, image_normal: fb} : r;
     });
+    // Printing filter, rare-leg only. "Holofoil" is TCGCSV's mislabel for the
+    // in-pack cold foil (see transformSupabaseData's holofoil rule), so it
+    // buckets with foil rather than being its own third state.
+    const rareLegFiltered = rlPrinting === "all" ? rareLeg : rareLeg.filter(r => {
+      const isFoil = MOVER_FOIL_PRINTINGS.has(r.printing);
+      return rlPrinting === "foil" ? isFoil : !isFoil;
+    });
     return {
       chase:   enrich(chase  ).slice(0,20),
-      rareLeg: enrich(rareLeg).slice(0,20),
+      rareLeg: enrich(rareLegFiltered).slice(0,20),
       promo:   enrich(promo  ).slice(0,20),
     };
-  }, [state.rows, windowKey, showUp, showDown, raw]);
+  }, [state.rows, windowKey, showUp, showDown, raw, rlPrinting]);
 
   const directionLabel = (showUp && showDown) ? "|Δ%|"
                        : showUp ? "Δ% (gains)"
@@ -28087,6 +28112,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <button class=${valuableMode==="chase"?"active":""} onClick=${()=>setValuableMode("chase")} style=${{fontSize:11,padding:"3px 8px"}}>Chase</button>
   </div>`;
 
+  const rareLegControls = html`<div class="seg-grp" role="group" aria-label="Rare–Legendary printing" style=${{padding:2}}>
+    ${[["all","Both","Show both non-foil and foil printings"],
+       ["normal","Normal","Show only non-foil printings"],
+       ["foil","Cold Foil","Show only foil printings (Cold Foil / Holofoil)"]].map(([k,l,t]) => html`<button key=${k}
+      class=${rlPrinting===k?"active":""} onClick=${()=>setRlPrinting(k)}
+      title=${t} style=${{fontSize:11,padding:"3px 8px"}}>${l}</button>`)}
+  </div>`;
+
   // "News" tile: the newest set while it's still pre-release (reveal season).
   // Counts distinct cards we have live for that set, updating as more arrive,
   // and deep-links to the Cards tab filtered to the set.
@@ -28192,6 +28225,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       raw=${raw}
                       chase=${chase}
                       rareLeg=${rareLeg}
+                      rareLegControls=${rareLegControls}
                       winLabel=${winLabel}
                       directionLabel=${directionLabel}
                       windowKey=${windowKey}
