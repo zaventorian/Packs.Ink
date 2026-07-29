@@ -21,8 +21,8 @@ Exception: explicit user instruction in the current turn ("push it", "ship this"
   - **Matviews**: `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`, `graded_prices_latest`.
 - **ETL** (`.github/workflows/etl.yml`):
   1. `scripts/etl_tcgcsv_daily.py` — TCGCSV → `prices_daily`, then refreshes the 4 raw-price matviews. Idempotent: skips fetch when today's snapshot is already loaded; exits 0 (not error) when TCGCSV hasn't published yet (>95% byte-identical to yesterday's).
-  2. `scripts/etl_tcgpricelookup_daily.py` — TCGPriceLookup Trader tier → `graded_prices_daily`, refreshes `graded_prices_latest`. Chained `needs: prices`.
-  3. Weekly Lorcast metadata refresh: Sundays 22:00 UTC.
+  2. Daily Lorcast metadata refresh: 21:00 UTC (bumped weekly→daily so a pre-order set fills in within a day of each spoiler; deliberately NOT fired by `job=='both'`, which pings thrice daily).
+  3. **RETIRED 2026-06-30 — there is no graded ETL.** The third-party graded feed was discontinued; `graded_prices_daily` / `graded_prices_latest` are **frozen** at their final 2026-06-30 snapshot and still read by the legacy (non-premium) graded UI, which labels them with an as-of date. Graded *value* now comes from the in-house `graded_sales` scrape (see "Graded pricing: legacy vs current"). `scripts/etl_tcgpricelookup_daily.py`, `scripts/graded_overrides.json`, and the `probe_/backfill_/cleanup_*graded*` scripts remain on disk for reference but are **invoked nowhere and cannot run** (the API is gone). Don't wire them back up; don't chase "graded is stale" alerts.
 - **Card metadata**: Lorcast (`scripts/load_lorcast.py`).
 - **Sealed catalog**: `scripts/load_sealed_products.py`.
 - **MCP**: `.mcp.json` configures Supabase MCP server (`mcp.supabase.com/mcp?project_ref=...`). Loads on session start; gives the agent direct DB query/mutation access without paste-back.
@@ -46,7 +46,7 @@ Android/iOS shell around the SAME zero-build web app. **Read `native/README.md` 
 
 Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-style line glyphs), `stroke="currentColor"` so they inherit theme color. To add/swap an icon: edit the `path` for that key in NAV_ICONS, no asset file needed.
 
-- **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + TCGPriceLookup graded data.
+- **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + graded data.
 - **Price Graphing** = per-card history + multi-card Compare (handoff from Screener batch action).
 - **Analytics** = umbrella for calculator-y tools (EV, Trade Compare, Card Averages, Playset Cost, Heatmap, Sealed, Simulate, Monte Carlo). Sub-tab is reflected in the URL (`?a=<sub>`) — see "Trade Comparison tool".
 
@@ -117,7 +117,7 @@ The PWA works offline after one online visit. Layers:
 - **RLS broadening trap.** When a SELECT policy has `OR <condition non-owner can satisfy>`, an unfiltered select returns every visible row. Explicitly `.eq("user_id", user.id)` for "my own" reads.
 - **`NOTIFY pgrst, 'reload schema';` at the end of every migration.**
 - **`SECURITY DEFINER` functions must pin `search_path` to include `extensions`** if they use pgcrypto (`gen_random_bytes`, `gen_random_uuid`, etc.).
-- **Long-running RPCs need explicit `statement_timeout`.** Every refresh function pins `set statement_timeout = '5min'`.
+- **Long-running RPCs need explicit `statement_timeout`.** Every refresh function pins `set statement_timeout = '5min'`. Without it the RPC inherits PostgREST's role setting (anon 3s / authenticated 8s) and dies with 57014 — `service_role` has no `rolconfig` of its own, so it does NOT get a free pass. **Re-running an old migration silently reverts this.** Migration 16 was re-run after 25 and clobbered the pin off `refresh_sealed_prices_latest`, which then failed intermittently for weeks (fatal in `etl_tcgcsv_daily.py`, swallowed as non-fatal in `load_sealed_products.py`) until migration **109** restored it. When you re-run any historical migration, diff the function bodies against the newest migration that touched them.
 - **When recreating a matview, re-grant SELECT to every role that needs it.** `grant select on X to anon, authenticated, service_role`. service_role does NOT inherit implicitly. Migration 45 retroactively grants on all 5 price matviews + prices_daily after a missing service_role grant broke the selfheal job on 2026-05-23.
 - **Views authored as the dashboard user are SECURITY DEFINER by default** — triggers `0010_security_definer_view` linter alert. Create with `with (security_invoker = on)`.
 - **`information_schema.role_table_grants` does NOT include matviews.** To check matview grants, use `has_table_privilege('role','public.matview','SELECT')` against `pg_matviews`.
@@ -322,7 +322,7 @@ Multi-product overlay chart. Items in `compareCards` array, each: `{kind, card_i
 
 Both `graded_prices_daily` and `graded_collection_items` are printing-aware:
 
-- **`graded_prices_daily` PK** (mig 49): `(tcgplayer_product_id, printing, grader, grade, date)`. The `printing` value comes from TCGPriceLookup's `variant` field on each card record — values are `"Normal"`, `"Cold Foil"`, `"Holofoil"`. Split-printing cards (TFC Cold Foil rares, LCP C1 Holofoils) appear as multiple TCGPriceLookup records sharing one `tcgplayer_id`; the ETL captures each variant as its own row instead of silently overwriting on upsert (pre-49 behavior caused foil/non-foil prices to conflate randomly).
+- **`graded_prices_daily` PK** (mig 49): `(tcgplayer_product_id, printing, grader, grade, date)`. The `printing` value came from the legacy feed's `variant` field — values are `"Normal"`, `"Cold Foil"`, `"Holofoil"`. Split-printing cards (TFC Cold Foil rares, LCP C1 Holofoils) arrived as multiple records sharing one `tcgplayer_id`; the retired ETL captured each variant as its own row instead of silently overwriting on upsert (pre-49 behavior caused foil/non-foil prices to conflate randomly). Still the shape of the frozen data the client reads.
 - **`graded_collection_items` PK** (mig 50): `(user_id, card_id, printing, grader, grade)`. Users can own foil + non-foil graded copies of the same card_id as distinct slots. `get_shared_collection_graded(uuid, text)` RPC was recreated to project `printing` (drop-and-recreate; PostgREST RETURNS TABLE can't be altered).
 - **`service_role` needs explicit `DELETE` on `graded_prices_daily`** for ETL overrides + the cleanup script. Granted in migration 49. Without this, every delete throws 403.
 - All client queries against `graded_prices_latest` / `graded_prices_daily` must select `printing` and key lookups by `pid|printing|grader|grade`.
@@ -340,7 +340,7 @@ When iterating `cardsForGoal` in the graded view's `grouped` useMemo: if the goa
 
 ## Per-user graded value override (migration 51)
 
-`graded_collection_items.custom_value numeric(12,2)` (nullable, added migration 51). When set, the user's owned slot uses this value instead of the TCGPriceLookup eBay average — covers two cases: (a) low-volume cards with NO graded market data at all (the GradedPricesTab early-returns "No graded sales recorded" but the user still owns the slot), (b) any card where the user disagrees with the algorithmic price.
+`graded_collection_items.custom_value numeric(12,2)` (nullable, added migration 51). When set, the user's owned slot uses this value instead of the graded market average — covers two cases: (a) low-volume cards with NO graded market data at all (the GradedPricesTab early-returns "No graded sales recorded" but the user still owns the slot), (b) any card where the user disagrees with the algorithmic price.
 
 - **Surface**: `CardDetailModal` → graded focus → "Your Graded Copies" panel (gold box above the Price History / Graded tabs). For every owned slot, an inline `<CostDateInputs showCustomValue=${true}/>` renders three always-visible fields: **Paid** / **Acquired** / **Value**. The whole panel sits ABOVE the tab content, so it works even when GradedPricesTab early-returns on empty market data.
 - **Plumbing**: `updateItemMeta({card_id, printing, grader, grade}, {custom_value: N|null})` writes through. Fetch path includes `custom_value` in the SELECT with a schema-tolerant fallback for pre-mig-51 environments. `get_shared_collection_graded` RPC was recreated (drop+create) to return `custom_value` too.
@@ -348,21 +348,16 @@ When iterating `cardsForGoal` in the graded view's `grouped` useMemo: if the goa
 - **UI affordance**: when `custom_value` is set, the slot's price pill flips from green API price to gold `✎ $N` so the user can see at a glance which copies are overridden.
 - **`CostDateInputs` props**: `currentPaid`, `currentDate`, `currentCustomValue`, `showCustomValue`, `onCommit(patch)`. The component is shared between sealed (no custom value) and graded (with). Don't pass `showCustomValue` for sealed.
 
-## Manual graded price overrides
+## Graded pricing: legacy vs current
 
-`scripts/graded_overrides.json` is hand-curated graded price entries the daily ETL merges AFTER pulling TCGPriceLookup (overrides win on PK collision). Use when TCGPriceLookup conflates printings (e.g. LCP C1 Baymax — pid 595439 — has only a "Normal" TCGPriceLookup record but its CGC 8/8.5 sales clearly reflect Holofoil pricing).
+Two graded price systems coexist. Which one a user sees is gated by `can_view_graded_premium()` (`graded_premium_viewers`, migration 73) and surfaced in the client as `GradedPremiumContext`.
 
-Two arrays:
-- `overrides[]` — full row inserts. PK fields required; `date: "today"` resolves at ETL time. `source: "manual_override"` is the default tag.
-- `delete[]` — `{pid, printing, grader, grade}` keys to drop from today's snapshot AFTER the upsert (so the TCGPriceLookup row we're suppressing doesn't outrank our override on read).
+- **Legacy (default, frozen).** `graded_prices_daily` → `graded_prices_latest`, per `(pid, printing, grader, grade, date)`. Sourced from a third-party feed that was **discontinued 2026-06-30**, so the newest row is forever `2026-06-30`. Still read by the non-premium graded UI, which shows a `gradedAsOf` date next to the header totals so the numbers don't read as current. Display contract is `ebay_avg_1d ?? ebay_avg_30d ?? ebay_avg_7d`. **Nothing writes to these tables anymore** — no ETL, no overrides, no backfill.
+- **Current (premium).** `graded_sales` — our own per-sale eBay record (Terapeak scrape, see the graded-pipeline runbook memory) → `graded_sales_rollup`. Because it stores individual sales rather than daily aggregates, it supports real **Last Sold** + **Avg of last 5** instead of a rolling average.
 
-`notes` field on each entry is freeform and ignored. Don't blow up the schema; if you need bulk corrections, write a one-off `scripts/cleanup_*.py` instead.
+The retired tooling (`etl_tcgpricelookup_daily.py`, `graded_overrides.json`, `probe_graded_printings.py`, `probe_graded_history.py`, `backfill_graded_history.py`, `dump_graded_history.py`, `cleanup_stale_graded_printings.py`) is still on disk but **inert and unrunnable** — the API behind all of it is gone. The `TCGPRICELOOKUP_API_KEY` GitHub secret is unused and can be deleted.
 
-## Graded ops scripts
-
-- **`scripts/probe_graded_printings.py [pids...]`** — audit utility. Walks the TCGPriceLookup catalog and reports any `tcgplayer_id`s with multiple records (= split-printing cards). Use to verify whether new cards have foil/non-foil records BEFORE adding them to `SPLIT_BY_PRINTING_SETS_GLOBAL`.
-- **`scripts/cleanup_stale_graded_printings.py [--commit]`** — purges `graded_prices_daily` rows whose `(pid, printing)` combo doesn't exist in TCGPriceLookup's catalog (e.g. pre-migration-49 "Normal" rows for Holofoil-only cards). Run after any printing-related schema/ETL change. Default is dry-run; `--commit` actually deletes.
-- **`scripts/backfill_graded_history.py [--pids 510153,...]`** — pulls a year of `/history` per card. Now captures `printing` from each record's `variant` field. Re-run after a schema migration to backfill correct printing labels.
+The printing/PK schema notes below still matter: the frozen data is keyed per printing and the client still reads it that way.
 
 ## Graded view UX patterns
 
@@ -429,7 +424,7 @@ Mobile constraint: the per-row `<select>` elements need explicit `width:100%; bo
 
 - The 8 inline fallback chains throughout Index.html (~lines 1687, 1696, 8432, 9893, 9965, 10257, 10294, 10538) all switched from `ebay_avg_7d ?? ebay_avg_1d ?? ebay_avg_30d` → `ebay_avg_1d ?? ebay_avg_30d ?? ebay_avg_7d`.
 - The GradedPricesTab detail table renders all three columns explicitly (header reads "Latest avg · 7d avg · 30d avg") so users can inspect the windowed history — only the SINGLE-PRICE displays elsewhere on the site swapped.
-- "Last Sale + Avg of last 5" was the user's literal request. Not implementable today because TCGPriceLookup only exposes daily aggregates, not individual sale records. See memory `project_future_graded_db.md` for the eventual own-database plan.
+- "Last Sale + Avg of last 5" was the user's literal request. **Since shipped** for premium viewers off the in-house `graded_sales` per-sale table (the old feed only exposed daily aggregates, which is why it was impossible then). Non-premium users still see the frozen legacy averages.
 
 ## CardDetailModal foil checkbox auto-hide
 
@@ -499,7 +494,7 @@ Migration 48 added optional `amount_paid numeric(12,2)` + `acquired_date date` t
   - Graded: rows already include `amount_paid` / `acquired_date` (no parallel state needed). `updateItemMeta({card_id, grader, grade}, patch)` callback.
 - **Schema-tolerant fetches**: both fetch paths probe with the new columns, retry without on 42703 (column missing) so the frontend still works pre-migration. Safe to deploy code before applying the migration.
 - **Chart gating** (`computeCollectionValueHistory` + `computeGradedValueHistory`): per-key acquired_date map. A slot contributes $0 to dates strictly before its acquired_date so historical value reflects only what the user actually owned at the time. Slots without acquired_date keep the existing earliest-snapshot behavior.
-- **Graded chart backward-fill (two places)**: TCGPriceLookup graded `/history` is extremely sparse (avg 10 rows/slot/year, median slot's first row is months into a 1y window). **(1) Per-section:** `computeGradedValueHistory` seeds each slot's `prev` with its first known price so a slot is always represented once we have ANY data for it. Without this, plain forward-fill produced an artificial ramp ($100 → $2500) as more slots came online with their first data point. **(2) Combined-chart sum:** the combined-line builder in `CollectionPanel`'s `chartSeries` memo seeds each section's cursor with `s.sorted[0]?.value` so dates BEFORE a section's earliest data point still receive that section's earliest value. Without this, the combined line dropped to (cards + sealed only) on early dates and then jumped up when graded's first datapoint hit — even though the individual graded line in split mode was flat across the entire range. The two backward-fills compose: per-slot inside graded's own series, then per-section across the sum. Acquired_date gating still wins on the per-slot side.
+- **Graded chart backward-fill (two places)**: the legacy graded history is extremely sparse (avg 10 rows/slot/year, median slot's first row is months into a 1y window). **(1) Per-section:** `computeGradedValueHistory` seeds each slot's `prev` with its first known price so a slot is always represented once we have ANY data for it. Without this, plain forward-fill produced an artificial ramp ($100 → $2500) as more slots came online with their first data point. **(2) Combined-chart sum:** the combined-line builder in `CollectionPanel`'s `chartSeries` memo seeds each section's cursor with `s.sorted[0]?.value` so dates BEFORE a section's earliest data point still receive that section's earliest value. Without this, the combined line dropped to (cards + sealed only) on early dates and then jumped up when graded's first datapoint hit — even though the individual graded line in split mode was flat across the entire range. The two backward-fills compose: per-slot inside graded's own series, then per-section across the sum. Acquired_date gating still wins on the per-slot side.
 
 ## Collection Value chart: phantom-spike smoothing (migration 55)
 
@@ -968,8 +963,7 @@ SELECT public.refresh_graded_prices_latest();
 - Low price can also be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
 - Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded URL>`. The `tcgUrl()` helper wraps every TCGPlayer link — never link directly.
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
-- **TCGPriceLookup `/history` endpoint caps at ~1 year.** `period=2y`/`5y`/`all`/`max` silently fall through to a short default. They simply don't have data older than that. Confirmed via `scripts/probe_graded_history.py`.
-- **TCGPriceLookup's `/history` graded coverage is sparse for low-liquidity cards** (e.g. Cinderella - Ballroom Sensation Enchanted has 0 PSA 10 entries across a year). Only cards with regular eBay PSA sales build a real history.
+- **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why `graded_prices_daily` history is thin and why the graded value chart needs its backward-fill. Kept here only to explain the shape of the frozen data; the API no longer exists.
 - **`scripts/backfill_graded_history.py --pids 510153,527802`** for targeted re-backfill. Without `--pids` walks the full catalog (~677 cards w/ graded data, ~12-15 min at 1 req/sec).
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
 
@@ -1000,13 +994,11 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 `permissions: contents: read` is pinned at the workflow level — required when repo workflow permissions setting is anything other than "Read and write".
 
-**Graded ETL retries on transient network errors (2026-05-30).** `fetch_page` in `etl_tcgpricelookup_daily.py` catches `requests.exceptions.RequestException` (parent of ReadTimeout / ConnectionError) inside the existing retry loop, also retries on 5xx, and uses `timeout=60` instead of `30`. Run #80's graded job failed on a single 30s ReadTimeout to api.tcgpricelookup.com; that path now sleep+retries (`RETRY_ON_RATE=8` attempts × `RETRY_SLEEP=8s` = ~64s of patience) before giving up. Terminal failure message includes the last underlying error so you can tell which path (timeout vs 5xx vs persistent 429) hit the wall.
-
 **Phantom-spike smoothing ETL** (`smooth_low_prices.py`, added 2026-05-30) is chained `needs: prices` after the TCGCSV daily ETL. See "Collection Value chart: phantom-spike smoothing" for details. Idempotent; safe to fire alongside cron-job.org + GH safety-net pings.
 
 ### Auth / grants
 
-- **Required GitHub Actions secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `TCGPRICELOOKUP_API_KEY`, `SUPABASE_ANON_KEY` (used as read fallback in `matview_self_heal.py` when service_role gets 403).
+- **Required GitHub Actions secrets**: `SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `SUPABASE_ANON_KEY` (used as read fallback in `matview_self_heal.py` when service_role gets 403). `TCGPRICELOOKUP_API_KEY` is **no longer used** (graded feed retired 2026-06-30) and can be deleted from the repo secrets.
 - **service_role MUST have explicit SELECT grants on all matviews + prices_daily** (migration 45). Missing this breaks selfheal with HTTP 403.
 
 ### PWA + caches
