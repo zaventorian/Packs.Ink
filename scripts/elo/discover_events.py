@@ -222,9 +222,16 @@ def main() -> None:
             # gets one rather than being dropped (matches the old --all-sets job).
             set_name = detect_set(ev.get("name") or "", sets_sorted, aliases_sorted) or current_set
         else:
-            pre_set, _via = classify_prerelease(
+            pre_set, via = classify_prerelease(
                 ev, sets_sorted, aliases_sorted, launch_sets, templates)
-            if pre_set:
+            # Gate on `via` (the REASON it matched), not on the set name. classify()
+            # returns (None, "name") for "definitely a prerelease, but I can't tell
+            # which set" — which is the normal case OUTSIDE a launch window, where
+            # fetch_launch_sets() is empty so there's no default set to fall back
+            # on. Gating on the name instead silently demoted clearly-titled
+            # prereleases to 'other' ("Second Chance PreRelease (Sealed)",
+            # "Hyperia City PreRelease"). set_name is nullable for exactly this.
+            if via:
                 kind, set_name = "prerelease", pre_set
             else:
                 # Regular play. set_name stays NULL unless the title names a set —

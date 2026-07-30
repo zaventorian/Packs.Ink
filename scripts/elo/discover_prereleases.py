@@ -207,7 +207,17 @@ def derive_prerelease_templates(raw: list[dict]) -> dict[str, int]:
 def classify(ev: dict, sets_sorted, aliases_sorted, launch_sets,
              prerelease_templates: dict[str, int]) -> tuple[str | None, str]:
     """Return (set_name, via) — via ∈ {template, name, window, ""} — or
-    (None, "") if this event isn't a prerelease."""
+    (None, "") if this event isn't a prerelease.
+
+    ⚠️  CALLERS: gate on `via`, NOT on set_name. `(None, "name")` is a legitimate
+    result meaning "definitely a prerelease, but I can't tell which set" — which
+    is the NORMAL case outside a launch window, where fetch_launch_sets() returns
+    empty so there's no default set to fall back on. Gating on the set name
+    silently demotes clearly-titled prereleases ("Second Chance PreRelease
+    (Sealed)", "Hyperia City PreRelease" — 6 live events on 2026-07-30).
+    main() below has this bug; it only ever hid because prerelease_events was
+    written during launch windows and never pruned. discover_events.py, which is
+    what the daily job actually runs, gates on `via`."""
     name = (ev.get("name") or "").lower()
     if not name:
         return None, ""
