@@ -418,7 +418,7 @@ async function encDeckMetaPatch(patch){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v50";  // v50: Extras quest/gift tiles now use the real card_id (was extras:<pid>) + Deep Trouble Piglet is a real card — force cold-fetch so owned-item card_ids line up
+const CACHE_KEY = "packsink:catalog:v51";  // v51: [Format Coconut] leader rows are synthesized in transformSupabaseData, which only runs on a network fetch — a cache replay has no Coconut rows, so the Coconut type filter matched nothing. Cold-fetch required.
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -899,6 +899,21 @@ const signalGradedSurface = () => { try { window.dispatchEvent(new Event("packsi
 //   - the home page's "newest set" walk (which scans SET_ORDER end → start
 //     looking for the most recent priced set) never selects it.
 const EXTRAS_SET_NAME = "Extras & Oddities";
+
+// [Format Coconut] leader cards. Their catalog rows are synthesized in
+// transformSupabaseData (grep isCoconut) — the full card data lives in
+// COCONUT_CARDS, further down with the deck-format constants.
+//
+// COCONUT_SET_NAME is deliberately absent from SET_ORDER and MAINLINE_SETS.
+// That's the load-bearing exclusion, not an oversight: the Collection view and
+// every set-completion denominator gate on SET_ORDER.includes(r.Set), and the
+// deck-builder's card picker gates on MAINLINE_SETS — so leaving it out of both
+// keeps unownable, un-deckable cards out of all of them with no extra code.
+// Adding it to either list will silently break those invariants.
+const COCONUT_SET_NAME = "Format Coconut";
+// Coconut leaders aren't Characters/Actions/Items/Locations/Songs — they're
+// their own card type, which is also how they're filtered and searched.
+const COCONUT_CARD_TYPE = "Coconut";
 
 // Mainline booster-pack sets — drives EV / pack sim / box sim / set values /
 // history / etc. Promo sets and Extras & Oddities are intentionally NOT
@@ -2086,6 +2101,72 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     });
   }
 
+  // [Format Coconut] leaders. Synthetic client-side rows so the 18 beta cards
+  // are browsable + searchable in Cards — they're real cards players choose
+  // from, so hiding them entirely was wrong.
+  //
+  // They are NOT `cards` table rows and must stay out of every ownership /
+  // pricing / deck-contents surface: you can't own one, they have no price or
+  // TCGPlayer SKU, and they're picked per-deck as a leader rather than being
+  // put INSIDE a deck. Three properties of this row shape do that work
+  // structurally, so most surfaces need no gate at all:
+  //
+  //   Set "Format Coconut" is deliberately NOT in SET_ORDER — the Collection
+  //     view and its set-completion denominators all gate on
+  //     SET_ORDER.includes(r.Set), so this keeps them out of all of it. It's
+  //     also not in MAINLINE_SETS, which is what the deck-builder card picker
+  //     filters on (deckRaw), so they can't be added to a deck.
+  //   set_id null keeps them out of graded goals / bulk-add / the Screener's
+  //     set dropdown, which all key off set_id.
+  //   Null prices keep them out of every value rollup.
+  //
+  // `isCoconut` is the explicit flag for the handful of surfaces that scan ALL
+  // catalog rows and never look at Set (Trade Compare, the Price Graphing card
+  // picker, graded add, home quick-search, the deck variant-swap popover,
+  // parseDeckText). Grep isCoconut to find them.
+  //
+  // Product Name carries a "(Coconut)" suffix on purpose: several surfaces
+  // dedupe by Product Name, and these names are all reprints of real cards, so
+  // a bare name would let a Coconut row win the dedupe and become the click
+  // target for the real card.
+  for(const cc of (COCONUT_CARDS || [])){
+    const displayName = `${cc.name} - ${cc.version} (Coconut)`;
+    const img = coconutArtUrl(cc.cn);
+    rows.push({
+      "Set":              COCONUT_SET_NAME,
+      "set_id":           null,
+      "card_id":          `coconut::${cc.slug}`,
+      "tcgplayer_product_id": null,
+      "Product Name":     displayName,
+      // No rarity — RarityTag/normalizeRarity both short-circuit on falsy, so
+      // the tile just renders without a rarity chip.
+      "Rarity":           null,
+      "Printing":         "Normal",
+      "tcg_printing":     "Normal",
+      "Low Price":        null,
+      "TCGPlayer Market": null,
+      "Market Price":     null,
+      "Number":           String(cc.cn),
+      "img_small":        img,
+      "img_normal":       img,
+      "img_large":        img,
+      "ink":              cc.ink,
+      "inks":             [cc.ink],
+      "cost":             null,
+      "inkable":          null,
+      "card_type":        COCONUT_CARD_TYPE,
+      "classifications":  null,
+      "keywords":         null,
+      // Left null even though two entries carry an `artist`: populating this
+      // would pull them into the Artist Alley poster, which is for real cards.
+      "illustrators":     null,
+      "text":             cc.ability,
+      "variant_label":    "Format Coconut",
+      "isCoconut":        true,
+      "coconutSlug":      cc.slug,
+    });
+  }
+
   setPromoBaseSet(rows);
   return rows;
 };
@@ -3176,6 +3257,9 @@ const SET_NICKNAMES = {
 const CARD_TYPE_ALIASES = {
   character:"Character", action:"Action", item:"Item",
   location:"Location", song:"Song",
+  // Lets a bare "coconut" query resolve to the leader cards. "leader" is
+  // accepted too since that's what players call them.
+  coconut:COCONUT_CARD_TYPE, leader:COCONUT_CARD_TYPE,
 };
 // Only classifications that ACTUALLY appear on cards. "spirit"/"witch"/"cat"/
 // "dog"/"animal"/"wizard"/"soldier"/"merfolk"/"undead"/"duke" were listed but
@@ -3805,7 +3889,9 @@ const COST_BUCKETS = [1,2,3,4,5,6,7,8,9];
 const STRENGTH_BUCKETS  = [0,1,2,3,4,5,6,7,8,9];
 const WILLPOWER_BUCKETS = [1,2,3,4,5,6,7,8,9];
 const LORE_BUCKETS      = [0,1,2,3,4];
-const CARD_TYPES = ["Character","Action","Item","Location","Song"];
+// Last entry is the [Format Coconut] leaders — its own type, so the Type
+// filter chips double as the "show me the Coconut cards" button.
+const CARD_TYPES = ["Character","Action","Item","Location","Song",COCONUT_CARD_TYPE];
 // Canonical rarity display order, common → rare. Legendary → Epic → Enchanted
 // → Iconic at the top: this is the "value-tier" ordering most folks read by
 // (Epic above Enchanted is a recent re-canonicalization once Epic became the
@@ -5105,6 +5191,8 @@ const GradedSaleEditModal = ({sale, onClose, onChanged}) => {
     const out = [], seen = new Set();
     for(const r of (raw||[])){
       if(!r.card_id || seen.has(r.card_id)) continue;
+      // Never a valid re-attribution target for a real graded sale.
+      if(r.isCoconut) continue;
       if((r["Product Name"]||r.name||"").toLowerCase().includes(q)){ seen.add(r.card_id); out.push(r); if(out.length>=8) break; }
     }
     return out;
@@ -6353,8 +6441,16 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       if(ca !== cb) return ca - cb;
       return (a.meta["Product Name"]||"").localeCompare(b.meta["Product Name"]||"");
     });
+    // The leader's own card (the only 4-of) leads the grid, right beside the
+    // leader tile it matches. Stable partition — everything else keeps the
+    // section/cost order above.
+    const leader = getCoconutCard(deck.coconut_card);
+    if(leader){
+      const isLeaderCard = (x) => x.meta["Product Name"] === leader.associated;
+      return [...arr.filter(isLeaderCard), ...arr.filter(x => !isLeaderCard(x))];
+    }
     return arr;
-  }, [deck.cards, cardById]);
+  }, [deck.cards, cardById, deck.coconut_card]);
 
   // Primary ink(s) for the background gradient.
   const deckInks = useMemo(() => {
@@ -6704,7 +6800,16 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const qrSrc = (showQr && shareUrl)
     ? `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(shareUrl)}&size=200x200&margin=8`
     : null;
-  const inkLabel = deckInks.slice(0,2).join(" · ") || "—";
+  // Coconut decks get a third ink, so the label can't stay capped at 2.
+  const posterCoconut = getCoconutCard(deck.coconut_card);
+  // Legality issues printed on the poster itself. A shared decklist image is
+  // often the only thing someone sees, so "why isn't this legal" has to travel
+  // with it rather than living in a tooltip back in the editor.
+  const posterIssues = useMemo(() => {
+    try { return checkDeckLegality(deck, cardById).issues || []; }
+    catch(e){ return []; }
+  }, [deck, cardById]);
+  const inkLabel = deckInks.slice(0, posterCoconut ? COCONUT_INK_LIMIT : 2).join(" · ") || "—";
   const textColor = isLightBg ? "#1a1334" : "#fff";
   const subColor  = isLightBg ? "rgba(0,0,0,0.65)" : "rgba(255,255,255,0.72)";
   const accent    = isLightBg ? "#3f9352" : "#a7e3b3";
@@ -6836,7 +6941,28 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             style=${{width:96,height:96,background:"#fff",borderRadius:6,padding:4,display:"block"}}/>`}
         </div>
       </div>
+      ${posterIssues.length > 0 && html`<div style=${{marginBottom:12,padding:"9px 12px",
+        borderRadius:8,background:isLightBg?"rgba(146,64,14,0.12)":"rgba(245,158,11,0.16)",
+        border:`1px solid ${isLightBg?"rgba(146,64,14,0.3)":"rgba(245,158,11,0.4)"}`}}>
+        <div style=${{fontSize:10,fontWeight:800,letterSpacing:0.6,textTransform:"uppercase",
+          color:isLightBg?"#92400e":"#f59e0b",marginBottom:3}}>
+          ⚠ Not tournament legal${posterCoconut ? " — " + COCONUT_SET_NAME : ""}
+        </div>
+        <div style=${{fontSize:11,lineHeight:1.5,color:textColor}}>
+          ${posterIssues.join(" · ")}
+        </div>
+      </div>`}
       <div style=${{display:"grid",gridTemplateColumns:`repeat(${cols},1fr)`,gap:10}}>
+        ${/* Leader as the first cell of the grid, spanning 2x2 so it reads as
+              THE card of the deck (the inkDecks treatment). No caption — the
+              render already says "[FORMAT COCONUT]", the name and the ability.
+              It isn't one of the 60, so it's prepended rather than in `cards`. */""}
+        ${posterCoconut && html`<div style=${{position:"relative",gridColumn:"span 2",gridRow:"span 2"}}>
+          <img src=${coconutArtUrl(posterCoconut.cn)} crossOrigin="anonymous"
+            alt=${coconutDisplayName(posterCoconut)}
+            style=${{width:"100%",height:"100%",objectFit:"cover",borderRadius:10,
+              boxShadow:"0 4px 12px rgba(0,0,0,0.4)",display:"block"}}/>
+        </div>`}
         ${cards.map(c => html`<div key=${c.card_id} style=${{position:"relative"}}>
           ${c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
             alt=${c.meta["Product Name"]||""}
@@ -6853,10 +6979,12 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             }}
             style=${{width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
               boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`}
-          <span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
+          ${/* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
+                only the multiples are worth calling out. */""}
+          ${(!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
             fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
             fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
-            boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>
+            boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`}
         </div>`)}
       </div>
       <div style=${{marginTop:16,display:"flex",justifyContent:"space-between",
@@ -7756,6 +7884,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       selectable, isAuthed, onSignIn,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
+                      coconutCard, onPickCoconut, inkBudget,
                       defaultInks, urlSync=false}) => {
   // When opened inside the deck editor, prefill the ink chips with the
   // deck's current inks (1-2 colors) so the user keeps seeing in-ink cards
@@ -7930,6 +8059,28 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   const allGroups = useMemo(() => { setPromoBaseSet(raw); return groupCards(raw); }, [raw]);
   const grouped = useMemo(()=>{
     let groups = smartCardFilter(allGroups, deferredFilter, parsed);
+    // Coconut ink budget. A dual-ink card contributes BOTH of its inks, so once
+    // a 3-ink Coconut deck is established a dual that brings a 4th ink can
+    // never be legally added — showing it is just a trap. Hides any card whose
+    // inks wouldn't fit the remaining budget (covers singles too, but duals are
+    // where it bites, since they can eat two slots at once).
+    if(inkBudget && inkBudget.max){
+      const allowed = new Set(inkBudget.allowed || []);
+      // A deck can ALREADY be over budget (it's warn-only — you're allowed to
+      // build an illegal list). In that case a plain `<= max` test excludes
+      // every card in the catalog and the browser goes blank, with no way to
+      // fix the deck. So the ceiling is whichever is larger: the format's limit
+      // or what the deck already uses. Over-budget decks can still add cards
+      // from the inks they already have, just not a further one.
+      const ceiling = Math.max(inkBudget.max, allowed.size);
+      groups = groups.filter(g => {
+        const list = (g.inks && g.inks.length) ? g.inks : (g.ink ? [g.ink] : []);
+        if(!list.length) return true;              // colourless / unknown — never blocks
+        const merged = new Set(allowed);
+        for(const i of list) merged.add(i);
+        return merged.size <= ceiling;
+      });
+    }
     // "Only show cards in my collection" toggle. A group qualifies if the
     // user owns >=1 of either its Normal or Foil printing. Collection map is
     // keyed by `card_id:tcg_printing` (see CollectionView).
@@ -8243,6 +8394,18 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         title=${showOwnedCounter ? "Hide the 'how many you own' counter on each tile" : "Show how many of each card you already own in your collection"}>
         ${showOwnedCounter ? "Owned shown" : "Show owned"}
       </button>`}
+      ${/* Coconut leaders are excluded from this browser on purpose — a leader
+            isn't one of your 60 cards. So the entry point has to live here as
+            an action, or searching "coconut" in the deck builder just looks
+            broken. */""}
+      ${deckMode && onPickCoconut && html`<button
+        class=${"chip coconut-deck-btn"+(coconutCard?" active":"")}
+        onClick=${onPickCoconut}
+        title=${coconutCard
+          ? `Coconut leader: ${coconutDisplayName(getCoconutCard(coconutCard))}. Click to change or remove.`
+          : "Build a [Format Coconut] deck — pick a leader, then build around it"}>
+        ${coconutCard ? "🥥 " + coconutDisplayName(getCoconutCard(coconutCard)) : "🥥 Coconut deck"}
+      </button>`}
       <div class="cards-count" style=${{marginLeft:"auto"}}>${grouped.length.toLocaleString()} cards</div>
     </div>
     ${parsedSummary.length > 0 && html`<div class="parsed-hint">
@@ -8343,9 +8506,19 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       <div style=${{fontSize:15}}>Loading cards…</div>
     </div>`}
     ${grouped.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"48px 16px",color:"var(--text-muted)"}}>
-      <div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
+      ${/* Searching "coconut" in the deck builder legitimately returns nothing
+            (leaders aren't deck contents), which reads as a bug. Say so and
+            offer the real action instead of a bare dead end. */""}
+      ${(deckMode && onPickCoconut && /coconut|leader/i.test(filter.search||""))
+        ? html`<div class="coconut-deadend">
+            <div style=${{fontSize:15,marginBottom:6}}>Coconut leaders aren't deck cards.</div>
+            <p>A leader sits alongside your 60 — you pick one for the deck rather than
+               adding copies of it. ${COCONUT_CARDS.length} to choose from.</p>
+            <button class="chip active" onClick=${onPickCoconut}>🥥 Pick a Coconut leader</button>
+          </div>`
+        : html`<div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
       ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
-        onClick=${()=>setFilter(emptyFilter())} title="Clear all active filters and search">✕ Clear filters & search</button>`}
+        onClick=${()=>setFilter(emptyFilter())} title="Clear all active filters and search">✕ Clear filters & search</button>`}`}
     </div>`}
     ${drawerOpen && html`<${FilterDrawer} filter=${filter} setFilter=${setFilter}
       setsByGroup=${setsByGroup} allIllustrators=${allIllustrators}
@@ -14027,6 +14200,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     const seen = new Map();
     for(const r of raw){
       if(!r.card_id) continue;
+      // Coconut leaders have no TCGPlayer SKU, so there's no price history to
+      // graph — picking one would fire a fetch that can't return anything.
+      if(r.isCoconut) continue;
       if(!seen.has(r.card_id)) seen.set(r.card_id, r);
     }
     return Array.from(seen.values());
@@ -18381,6 +18557,8 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
     const out = [];
     for(const r of (raw||[])){
       if(!r.card_id || seen.has(r.card_id)) continue;
+      // Coconut leaders are digital — there's no physical copy to have graded.
+      if(r.isCoconut) continue;
       if(!matchesCardFilter(r, {}, parsed)) continue;
       if(numberTokens.length){
         const num = String(r.Number || "").split("/")[0];
@@ -21642,7 +21820,9 @@ const fetchTradeRecord = async (token) => {
 function TradeView({ raw, shareToken, shareBlob, theme, user, collection, updateQty, onSignIn }){
   const blankFilter = useMemo(()=>emptyFilter(), []);
   const [detailGroup, setDetailGroup] = useState(null);
-  const groups = useMemo(()=>groupCards(raw||[]), [raw]);
+  // Coconut leaders are dropped before grouping — they're digital, unownable
+  // and priceless, so they can't be one side of a trade.
+  const groups = useMemo(()=>groupCards((raw||[]).filter(r => !r.isCoconut)), [raw]);
   const groupByKey = useMemo(()=>{
     const m = new Map();
     for(const g of groups) m.set(tradeGroupKey(g), g);
@@ -26091,7 +26271,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
         const directTasks = [];
         if(followedIds.length){
           directTasks.push(sbClient.from("decks")
-            .select("id,user_id,name,inks,visibility,created_at,updated_at,share_token")
+            .select("id,user_id,name,inks,visibility,created_at,updated_at,share_token,coconut_card")
             .in("user_id", followedIds)
             .eq("visibility", "public")
             .order("updated_at", {ascending:false})
@@ -26099,7 +26279,7 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
         }
         if(directFavIds.length){
           directTasks.push(sbClient.from("decks")
-            .select("id,user_id,name,inks,visibility,created_at,updated_at,share_token")
+            .select("id,user_id,name,inks,visibility,created_at,updated_at,share_token,coconut_card")
             .in("id", directFavIds)
             .order("updated_at", {ascending:false})
             .limit(30));
@@ -26587,6 +26767,11 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
     for(const r of (raw || [])){
       const name = r["Product Name"];
       if(!name) continue;
+      // Home quick-search is the fast path to a card's PRICE, which is the one
+      // thing a Coconut leader can never have — surfacing them here would be a
+      // dead end. They're discoverable in Cards via the Coconut type filter or
+      // a "coconut" search instead.
+      if(r.isCoconut) continue;
       if(!matchesCardFilter(r, {}, parsed)) continue;
       const cur = byName.get(name);
       if(!cur){ byName.set(name, r); continue; }
@@ -27866,6 +28051,137 @@ function computeCoreSets(){
   return released.slice(firstLegalSetNum - 1, latest);
 }
 
+// ── [Format Coconut] ─────────────────────────────────────────────────
+// Ravensburger's thematic multiplayer format. Open beta since 2026-07-28.
+// Rules: files.disneylorcana.com/FormatCoconut_Rules.pdf
+//   • pick a Coconut leader card (chosen in the Companion app)
+//   • up to THREE inks, one of which must match the leader's ink
+//   • at least 60 cards, max 1 copy of any card EXCEPT up to 4 of the
+//     leader's associated card — plus whatever extra exception the leader's
+//     own text grants (currently only Nick Wilde's Pawpsicle)
+//   • first to 25 lore wins; 3-4 players recommended
+//
+// Deliberately NOT rows in `cards`: Coconut cards can't be owned, priced or
+// collected, so inserting them would put 18 phantom entries into Cards
+// browse, the Screener, Collection and every set-completion denominator.
+// Pure static reference data, same as SPECIAL_DECK_LIMITS.
+//
+// `associated` and `extraLimits` keys are Product Names ("<Name> - <Version>",
+// or a bare name for versionless cards like Pawpsicle) — the same key space
+// SPECIAL_DECK_LIMITS uses, because the copy cap is per-NAME across printings.
+// That matters: every leader name has 1-5 printings in our catalog (base,
+// Enchanted/Iconic, promos), and all of them share the one 4-copy allowance.
+//
+// `cn` is the beta collector number and only addresses the art. Slugs are the
+// stable id (stored in decks.coconut_card) because Ravensburger can renumber
+// during the beta but won't rename.
+//
+// Art is the official beta render — grayscale with a "FOR BETA TEST ONLY"
+// watermark, which is Ravensburger's own marking, not a rendering bug. These
+// aren't on Lorcast or the official gallery, so they're re-hosted in our
+// card-art bucket via scripts/upload_coconut_art.py. New Coconut cards land
+// WEEKLY during the beta: add an entry here, drop the render in the bucket.
+const COCONUT_LORE_GOAL = 25;
+const COCONUT_INK_LIMIT = 3;
+const COCONUT_CARDS = [
+  {slug:"ariel-spectacular-singer", cn:2, name:"Ariel", version:"Spectacular Singer",
+   ink:"Amber", artist:"Alice Pisoni", associated:"Ariel - Spectacular Singer",
+   ability:"Whenever a Princess character of yours sings a song, gain lore equal to her {L}."},
+  {slug:"pocahontas-peacekeeper", cn:17, name:"Pocahontas", version:"Peacekeeper",
+   ink:"Amber", associated:"Pocahontas - Peacekeeper",
+   ability:"Once during your turn, you may choose a character. Until the start of your next turn, they get +1 {L} and can't challenge and must quest if able."},
+  {slug:"stitch-rock-star", cn:4, name:"Stitch", version:"Rock Star",
+   ink:"Amber", associated:"Stitch - Rock Star",
+   ability:"Once during your turn, you may play a character with cost 2 or less from your hand for free. If you have a character named Stitch in play, you may play a character with cost 2 or less from your discard for free instead."},
+
+  {slug:"dumbo-ninth-wonder-of-the-universe", cn:18, name:"Dumbo", version:"Ninth Wonder of the Universe",
+   ink:"Amethyst", associated:"Dumbo - Ninth Wonder of the Universe",
+   ability:"You may use the {E} abilities of your characters the turn they're played."},
+  {slug:"snow-white-merry-as-the-morning", cn:9, name:"Snow White", version:"Merry as the Morning",
+   ink:"Amethyst", associated:"Snow White - Merry as the Morning",
+   ability:"Once per game during your turn, you may reveal your hand. If you have a Snow White and 7 or more Seven Dwarfs character cards with different names among the cards in your hand, in your discard, and in play, your characters get +2 {L} for the rest of the game."},
+  {slug:"winnie-the-pooh-hunny-wizard", cn:3, name:"Winnie the Pooh", version:"Hunny Wizard",
+   ink:"Amethyst", associated:"Winnie the Pooh - Hunny Wizard",
+   ability:"Whenever you play a character without an ability, you may pay 1 {I} to draw a card."},
+
+  {slug:"donald-duck-fred-honeywell", cn:10, name:"Donald Duck", version:"Fred Honeywell",
+   ink:"Emerald", associated:"Donald Duck - Fred Honeywell",
+   ability:"You pay 1 {I} less to use Boost abilities."},
+  {slug:"robin-hood-sneaky-sleuth", cn:14, name:"Robin Hood", version:"Sneaky Sleuth",
+   ink:"Emerald", associated:"Robin Hood - Sneaky Sleuth",
+   ability:"Once per game during your turn, you may deal 1 damage to each opposing character."},
+  {slug:"ursula-deceiver-of-all", cn:5, name:"Ursula", version:"Deceiver of All",
+   ink:"Emerald", associated:"Ursula - Deceiver of All",
+   ability:"Your characters count as having +1 cost for singing songs. Your characters named Ursula count as having +2 cost instead."},
+
+  {slug:"mickey-mouse-brave-little-tailor", cn:6, name:"Mickey Mouse", version:"Brave Little Tailor",
+   ink:"Ruby", associated:"Mickey Mouse - Brave Little Tailor",
+   ability:"Mickey Mouse character cards in your hand, deck, and discard gain Shift 2 {I}."},
+  {slug:"mr-incredible-super-strong", cn:11, name:"Mr. Incredible", version:"Super Strong",
+   ink:"Ruby", associated:"Mr. Incredible - Super Strong",
+   ability:"Whenever you play a Super character, they gain Rush this turn and you may exert chosen opposing character with less {S} than them."},
+  {slug:"sisu-emboldened-warrior", cn:16, name:"Sisu", version:"Emboldened Warrior",
+   ink:"Ruby", associated:"Sisu - Emboldened Warrior",
+   ability:"All characters with more {S} than each opposing character can quest the turn they're played."},
+
+  {slug:"moana-curious-explorer", cn:12, name:"Moana", version:"Curious Explorer",
+   ink:"Sapphire", associated:"Moana - Curious Explorer",
+   ability:"During your turn, if you have a Moana, Heihei, or Pua character in play, you may ink an additional card."},
+  {slug:"mufasa-ruler-of-pride-rock", cn:7, name:"Mufasa", version:"Ruler of Pride Rock",
+   ink:"Sapphire", associated:"Mufasa - Ruler of Pride Rock",
+   ability:"Once per game during your turn, you may pay 5 {I} to put the top 3 cards of your deck into your inkwell facedown and exerted."},
+  // The only leader that grants a SECOND copy-limit exception via its own text.
+  {slug:"nick-wilde-wily-fox", cn:8, name:"Nick Wilde", version:"Wily Fox",
+   ink:"Sapphire", artist:"Brian Weisz", associated:"Nick Wilde - Wily Fox",
+   extraLimits:{"Pawpsicle":4},
+   ability:"You can have up to 4 copies of an item card named Pawpsicle in your deck.\nOnce during your turn, you may banish 4 of your items. If you do, gain 4 lore."},
+
+  {slug:"john-silver-greedy-treasure-seeker", cn:13, name:"John Silver", version:"Greedy Treasure Seeker",
+   ink:"Steel", associated:"John Silver - Greedy Treasure Seeker",
+   ability:"Each of your locations gains Resist +1 for each character there."},
+  {slug:"scar-finally-king", cn:1, name:"Scar", version:"Finally King",
+   ink:"Steel", associated:"Scar - Finally King",
+   ability:"During your turn, you pay 1 {I} less for the first Ally character you play."},
+  {slug:"tinker-bell-giant-fairy", cn:15, name:"Tinker Bell", version:"Giant Fairy",
+   ink:"Steel", associated:"Tinker Bell - Giant Fairy",
+   ability:"Whenever one of your other abilities or actions deals damage to an opposing character, deal 1 damage to that character."},
+];
+const coconutArtUrl = (cn) =>
+  `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`;
+const COCONUT_BY_SLUG = Object.fromEntries(COCONUT_CARDS.map(c => [c.slug, c]));
+const getCoconutCard = (slug) => (slug && COCONUT_BY_SLUG[slug]) || null;
+const coconutDisplayName = (c) => c ? `${c.name} - ${c.version}` : "";
+// Ability text is stored with the catalog's glyph placeholders ({I} ink, {L}
+// lore, {S} strength, {W} willpower, {E} exert) so it matches `cards.text` and
+// stays searchable. Nothing else in the app DISPLAYS card text — it's only ever
+// a search haystack — so there's no glyph renderer to reuse; substitute readable
+// words at render time instead of leaking "{I}" into the UI.
+const COCONUT_GLYPH_WORDS = {I:"ink", L:"lore", S:"strength", W:"willpower", E:"⟳"};
+const coconutAbilityText = (s) =>
+  (s || "").replace(/\{([ILSWE])\}/g, (m, k) => COCONUT_GLYPH_WORDS[k] || m);
+// Per-name copy caps for a Coconut deck: everything is 1-of except the
+// leader's associated card and whatever extra its text allows.
+// Precedence, highest first:
+//   1. the leader's own associated card         → 4
+//   2. an extra the leader's text grants        → its value (Nick Wilde's Pawpsicle)
+//   3. a card whose OWN text bypasses the cap   → SPECIAL_DECK_LIMITS wins
+//   4. everything else                          → 1 (Coconut's near-singleton rule)
+//
+// (3) is a judgement call — the beta rules say "no more than 1 copy of any
+// other card" and don't address cards that grant their own exception, so
+// Microbots (unlimited) and Dalmatian Puppy - Tail Wagger (99) could read
+// either way. Ruling here: card text beats the format default, which is
+// consistent with Coconut itself using card text (Nick Wilde) to modify limits.
+// Revisit if Ravensburger clarifies.
+const coconutDeckLimit = (coconut, productName) => {
+  if(!coconut) return getDeckLimit(productName);
+  if(productName === coconut.associated) return 4;
+  const extra = coconut.extraLimits && coconut.extraLimits[productName];
+  if(extra != null) return extra;
+  if(SPECIAL_DECK_LIMITS[productName] != null) return SPECIAL_DECK_LIMITS[productName];
+  return 1;
+};
+
 const DECK_FORMATS = [
   {key:"infinity", label:"Infinity",
    description:"Every released mainline set is legal.",
@@ -27873,6 +28189,13 @@ const DECK_FORMATS = [
   {key:"core",     label:"Core Constructed",
    description:"Rotating — only the most recent two 4-set groups are legal.",
    legalSets: () => new Set(computeCoreSets())},
+  // Declared, not derived — a Coconut deck is one that has a leader stored on
+  // it (decks.coconut_card). The other two are inferred from the cards alone,
+  // which is why this entry carries `declared` and no rotation logic. The beta
+  // rules say nothing about set legality, so the pool is treated as Infinity's.
+  {key:"coconut",  label:"Coconut", declared:true,
+   description:"Multiplayer beta — one leader, near-singleton, 3 inks, 25 lore.",
+   legalSets: () => new Set(MAINLINE_RELEASE_ORDER)},
 ];
 const getFormat = (key) => DECK_FORMATS.find(f => f.key === key) || DECK_FORMATS[0];
 
@@ -29036,7 +29359,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       // — which polluted "Your Decks" with externally-favorited decks and
       // made delete silently fail (RLS rejects deletes of others' rows).
       const {data: deckRows, error: e1} = await sbClient.from("decks")
-        .select("id,name,description,youtube_url,inks,tags,visibility,share_token,created_at,updated_at,user_id")
+        .select("id,name,description,youtube_url,inks,tags,visibility,share_token,coconut_card,created_at,updated_at,user_id")
         .eq("user_id", user.id)
         .order("updated_at", {ascending:false});
       if(e1) throw e1;
@@ -29094,7 +29417,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!ids.length) return [];
     const [decksRes, cardsRes] = await Promise.all([
       sbClient.from("decks")
-        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
+        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
         .in("id", ids),
       sbClient.from("deck_cards")
         .select("deck_id,card_id,printing,quantity")
@@ -29191,7 +29514,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       setUserFollows(new Set(followedIds));
       if(!followedIds.length){ setFollowingFeed([]); return; }
       const {data: deckRows, error: dErr} = await sbClient.from("decks")
-        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
+        .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
         .in("user_id", followedIds)
         .eq("visibility", "public")
         .order("updated_at", {ascending:false})
@@ -29338,7 +29661,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     try {
       const fetchWindow = async (cutoff) => {
         let q = sbClient.from("decks")
-          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
+          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
           .eq("visibility", "public")
           .order("updated_at", {ascending:false})
           .limit(DISCOVER_LIMIT);
@@ -29417,7 +29740,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       const [profileRes, decksRes] = await Promise.all([
         sbClient.from("profiles").select("user_id,display_name,avatar_url").eq("user_id", creatorId).maybeSingle(),
         sbClient.from("decks")
-          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,updated_at")
+          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
           .eq("user_id", creatorId).eq("visibility", "public")
           .order("updated_at", {ascending:false}),
       ]);
@@ -29470,7 +29793,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       //    null for unlisted-without-token or private-not-yours).
       if(!deckRow){
         const {data, error} = await sbClient.from("decks")
-          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,share_token,updated_at")
+          .select("id,user_id,name,description,youtube_url,inks,tags,visibility,share_token,coconut_card,updated_at")
           .eq("id", incomingDeckId).maybeSingle();
         if(cancelled) return;
         if(error){
@@ -30058,7 +30381,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     const {data, error} = await sbClient.from("decks")
       .insert({user_id:user.id, name: await encDeckRnd(newName),
                description: src.description ? await encDeckRnd(src.description) : null,
-               inks: src.inks || null, tags: src.tags || null})
+               inks: src.inks || null, tags: src.tags || null,
+               // Carry the Coconut leader across — without it a duplicated
+               // Coconut deck silently comes back as a normal deck, and its
+               // 1-of list then reads as a pile of illegal 4-ofs.
+               coconut_card: src.coconut_card || null})
       .select("id").single();
     if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
     const rows = (src.cards||[]).map(c => ({
@@ -30085,7 +30412,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     const {data, error} = await sbClient.from("decks")
       .insert({user_id:user.id, name: await encDeckRnd(newName),
                description: src.description ? await encDeckRnd(src.description) : null,
-               inks: src.inks || null, tags: src.tags || null})
+               inks: src.inks || null, tags: src.tags || null,
+               // Carry the Coconut leader across — without it a duplicated
+               // Coconut deck silently comes back as a normal deck, and its
+               // 1-of list then reads as a pile of illegal 4-ofs.
+               coconut_card: src.coconut_card || null})
       .select("id").single();
     if(error){ flashToast("Couldn't duplicate: " + error.message); return; }
     const rows = (src.cards||[]).map(c => ({
@@ -30238,6 +30569,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       description: deck.description || null,
       youtube_url: deck.youtube_url || null,
       visibility: deck.visibility,
+      coconut_card: deck.coconut_card || null,
     });
   }, [editMode, selectedDeckId, decks, editSnapshot]);
 
@@ -30270,6 +30602,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if((deck.description || "") !== (editSnapshot.description || "")) metaPatch.description = editSnapshot.description;
     if((deck.youtube_url || "") !== (editSnapshot.youtube_url || "")) metaPatch.youtube_url = editSnapshot.youtube_url;
     if(deck.visibility !== editSnapshot.visibility) metaPatch.visibility = editSnapshot.visibility;
+    if((deck.coconut_card || null) !== (editSnapshot.coconut_card || null)) metaPatch.coconut_card = editSnapshot.coconut_card;
     if(!toDelete.length && !toUpsert.length && !Object.keys(metaPatch).length) return;
     const prev = decks;
     setDecks(ds => (ds || []).map(d => {
@@ -30316,7 +30649,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     setPending(p => p + 1);
     try {
       const {data, error} = await sbClient.from("decks").update(await encDeckMetaPatch(patch)).eq("id", deckId)
-        .select("id,name,description,youtube_url,inks,tags,visibility,share_token,created_at,updated_at,user_id")
+        .select("id,name,description,youtube_url,inks,tags,visibility,share_token,coconut_card,created_at,updated_at,user_id")
         .maybeSingle();
       if(error) throw error;
       if(data){
@@ -30830,8 +31163,21 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
 //   issues: [strings] — empty when format is core/infinity
 function checkDeckLegality(deck, cardById, setsByProductName){
   const issues = [];
+  // Coconut is a DECLARED format: the deck carries its leader (see migration
+  // 110). Core/Infinity are derived from the cards, so they can't express
+  // "which leader did you pick" — hence the stored slug is the only signal.
+  const isCoconut = !!deck?.coconut_card;
+  const coconut = getCoconutCard(deck?.coconut_card);
+  if(isCoconut && !coconut){
+    // Slug present but unrecognised (retired beta card, or bad data). Surface
+    // it instead of silently falling back to Infinity, which would relabel the
+    // deck and quietly re-permit 4-ofs.
+    issues.push(`Unknown Coconut card "${deck.coconut_card}"`);
+  }
+
   const total = (deck.cards||[]).reduce((s,c)=>s+c.quantity, 0);
   // 60 is the minimum; going over is allowed (Lorcana has no upper cap).
+  // Coconut keeps the same floor.
   if(total < 60) issues.push(`${total} / 60 cards — need ${60 - total} more`);
   // Dual-ink cards contribute BOTH colors to the deck's ink set. A deck with
   // an Emerald/Sapphire dual + an Amber single uses 3 inks (Amber, Emerald,
@@ -30842,12 +31188,24 @@ function checkDeckLegality(deck, cardById, setsByProductName){
     const inksList = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
     for(const i of inksList) inks.add(i);
   }
-  if(inks.size > 2) issues.push(`${inks.size} inks (${Array.from(inks).join(", ")}) — limit is 2`);
+  // Coconut is the first format to allow a third ink, but one of them has to
+  // match the leader's.
+  const inkLimit = isCoconut ? COCONUT_INK_LIMIT : 2;
+  if(inks.size > inkLimit){
+    issues.push(`${inks.size} inks (${Array.from(inks).join(", ")}) — limit is ${inkLimit}`);
+  }
+  // Skipped while the deck is empty — a fresh Coconut deck already reads
+  // "0 / 60 cards", and adding "must include <ink>" on top is just noise.
+  if(coconut && inks.size && !inks.has(coconut.ink)){
+    issues.push(`No ${coconut.ink} cards — one ink must match ${coconutDisplayName(coconut)}`);
+  }
 
-  // Quantity cap — Lorcana's default is 4-of-any-card, but a handful of cards
-  // (Dalmatian Puppy - Tail Wagger: 99, Microbots: unlimited) bypass it via
-  // card text. Variants count toward the same total, so we sum by Product
-  // Name across card_ids before comparing.
+  // Quantity cap. Default Lorcana is 4-of-any-card, with a few cards
+  // (Dalmatian Puppy - Tail Wagger: 99, Microbots: unlimited) bypassing it via
+  // card text. Coconut inverts the default to 1-of, excepting the leader's
+  // associated card (4) and any extra its text grants. Either way variants
+  // count toward the same total, so we sum by Product Name across card_ids —
+  // each leader name has 1-5 printings sharing one allowance.
   const qtyByName = {};
   for(const c of deck.cards||[]){
     const meta = (cardById[c.card_id]||[])[0];
@@ -30855,7 +31213,7 @@ function checkDeckLegality(deck, cardById, setsByProductName){
     qtyByName[name] = (qtyByName[name] || 0) + c.quantity;
   }
   for(const [name, qty] of Object.entries(qtyByName)){
-    const limit = getDeckLimit(name);
+    const limit = isCoconut ? coconutDeckLimit(coconut, name) : getDeckLimit(name);
     if(qty > limit){
       issues.push(`${qty}× ${name} — limit is ${limit === Infinity ? "unlimited" : limit}`);
     }
@@ -30863,9 +31221,22 @@ function checkDeckLegality(deck, cardById, setsByProductName){
 
   // The structural rules above decide infinity vs invalid. Format = Core
   // additionally requires every card to be in a currently-legal set.
-  const structurallyLegal = issues.length === 0;
+  const legal = issues.length === 0;
   let format;
-  if(!structurallyLegal){
+  if(isCoconut){
+    // Declared, so there's nothing to infer — and the format STICKS even when
+    // the deck breaks the rules. Warn-only is deliberate: people legitimately
+    // build lists that don't validate (a placeholder standing in for a card
+    // that's been announced but isn't in the catalog yet, a deliberately
+    // illegal brew). Collapsing those to "invalid" would strip the leader
+    // showcase and the Coconut poster treatment off exactly the
+    // work-in-progress decks that most need them. `issues` carries the
+    // warnings; `legal` says whether there are any.
+    //
+    // The beta rules say nothing about set legality, so the card pool is left
+    // as Infinity's (see DECK_FORMATS).
+    format = "coconut";
+  } else if(!legal){
     format = "invalid";
   } else {
     const coreLegal = getFormat("core").legalSets();
@@ -30886,7 +31257,7 @@ function checkDeckLegality(deck, cardById, setsByProductName){
     });
     format = allInCore ? "core" : "infinity";
   }
-  return {format, issues, total, inkCount: inks.size};
+  return {format, issues, total, inkCount: inks.size, coconut, legal};
 }
 
 // Serialize a deck to the plain-text "QTY NAME" format common in Lorcana
@@ -30941,6 +31312,10 @@ function parseDeckText(text, raw){
   const candidatesByName = {};
   for(const r of raw){
     if(!r.card_id) continue;
+    // A pasted decklist can never mean a Coconut leader — they aren't deck
+    // contents. Skipped outright rather than score-demoted so they can't win a
+    // name match when the real card is missing from the catalog.
+    if(r.isCoconut) continue;
     const n = (r["Product Name"] || "").trim();
     if(!n) continue;
     const k = normalizeCardName(n);
@@ -31295,6 +31670,51 @@ const swatchStyle = (inkKey, gradientPrefix) => {
 // Deck editor: card browser on the left, deck summary on the right. The
 // browser is a slimmer version of CardsView's filter UI; +/- buttons on
 // each card row update the current deck's quantity (max 4 per card).
+// [Format Coconut] leader picker. Renders the 18 beta leaders grouped by ink.
+// The art is Ravensburger's official beta render — grayscale with a "FOR BETA
+// TEST ONLY" watermark baked in. That's their marking, not a rendering fault;
+// don't try to "fix" it.
+const COCONUT_INK_ORDER = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
+const CoconutLeaderPicker = ({current, onPick, onClose}) => {
+  useEffect(() => {
+    const onKey = (e) => { if(e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return html`<div class="card-detail-overlay" onClick=${onClose}>
+    <div class="coconut-picker" onClick=${e=>e.stopPropagation()}>
+      <button class="card-detail-close" onClick=${onClose} aria-label="Close">✕</button>
+      <h3 class="title-font">Choose a Coconut leader</h3>
+      <p class="coconut-picker-blurb">
+        Picking a leader makes this a <strong>${COCONUT_SET_NAME}</strong> deck: you get a third
+        ink (one must match the leader's), up to 4 copies of the leader's own card and
+        <strong>1 of everything else</strong>, and the game runs to ${COCONUT_LORE_GOAL} lore with 3-4 players.
+        Nothing is blocked — an illegal list still saves, it just gets flagged.
+      </p>
+      ${COCONUT_INK_ORDER.map(ink => html`
+        <div key=${ink} class="coconut-picker-inkgroup">
+          <div class="coconut-picker-inkhead">
+            <img src=${INK_ICONS[ink]} alt="" aria-hidden="true"/><span>${ink}</span>
+          </div>
+          <div class="coconut-picker-grid">
+            ${COCONUT_CARDS.filter(c => c.ink === ink).map(c => html`
+              <button key=${c.slug} class=${"coconut-picker-card"+(current===c.slug?" active":"")}
+                onClick=${()=>onPick(c.slug)}>
+                <img src=${coconutArtUrl(c.cn)} alt=${coconutDisplayName(c)} loading="lazy"/>
+                <span class="coconut-picker-name">${coconutDisplayName(c)}</span>
+                <span class="coconut-picker-ability">${coconutAbilityText(c.ability)}</span>
+              </button>`)}
+          </div>
+        </div>`)}
+      ${current && html`<div class="coconut-picker-footer">
+        <button class="coconut-picker-remove" onClick=${()=>onPick(null)}>
+          Remove leader — make this a normal deck
+        </button>
+      </div>`}
+    </div>
+  </div>`;
+};
+
 const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
@@ -31324,6 +31744,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // Share popover (owner-only). Holds visibility radio + share URL.
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  // [Format Coconut] leader picker. Declaring a leader is what makes a deck a
+  // Coconut deck (see migration 110) — there's no separate format switch, and
+  // no dialog on "New deck", so this slot is the only entry point. It also
+  // means an existing deck can be converted, or its leader swapped, any time.
+  const [coconutPickerOpen, setCoconutPickerOpen] = useState(false);
   const shareRef = useRef(null);
   // Variant picker — shared popover (fixed-positioned, anchored to the
   // clicked chevron via anchorRect). Only one open at a time. The chevron
@@ -31342,6 +31767,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     for(const r of (raw || [])){
       const name = r && r["Product Name"];
       if(!name || !r.card_id) continue;
+      // This popover offers alternate PRINTINGS of a card that's in the deck.
+      // Coconut leaders share their names with real cards, so without this
+      // they'd be offered as a swappable printing of a legal deck card.
+      if(r.isCoconut) continue;
       let m = byName.get(name);
       if(!m){ m = new Map(); byName.set(name, m); }
       const existing = m.get(r.card_id);
@@ -31733,6 +32162,31 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   }, [deck.cards, collection]);
 
   // Sort comparator for items inside each section.
+  // ── [Format Coconut] deck-editor derivations ───────────────────────
+  const coconutCard = getCoconutCard(deck.coconut_card);
+  // The ink budget for the card browser. Allowed = the leader's ink (fixed by
+  // the rules) plus whatever the deck already uses; once that hits 3, nothing
+  // introducing a 4th can be added. Derived rather than declared — there's no
+  // "pick your 3 inks" step, and deriving means the budget opens back up if you
+  // remove the last card of an ink.
+  const coconutInkBudget = useMemo(() => {
+    if(!coconutCard) return null;
+    const allowed = new Set([coconutCard.ink]);
+    for(const c of deck.cards||[]){
+      const meta = (cardById[c.card_id]||[])[0];
+      const list = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
+      for(const i of list) allowed.add(i);
+    }
+    return {allowed: Array.from(allowed), max: COCONUT_INK_LIMIT};
+  }, [coconutCard, deck.cards, cardById]);
+  // Per-card copy cap under the active format. Used for the over-limit flag on
+  // each row/tile — the +/- stepper deliberately does NOT use this (warn-only:
+  // nothing blocks you from building an illegal list).
+  const coconutLimitFor = useCallback((meta) => {
+    if(!coconutCard || !meta) return null;
+    return coconutDeckLimit(coconutCard, meta["Product Name"]);
+  }, [coconutCard]);
+
   const sortItems = useCallback((items) => {
     const get = (it, k) => {
       if(k === "cost") return it.meta?.cost ?? 99;
@@ -31748,8 +32202,15 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       case "price-desc":copy.sort((a,b) => get(b,"price") - get(a,"price")); break;
       case "price-asc": copy.sort((a,b) => get(a,"price") - get(b,"price")); break;
     }
+    // The leader's own card is the deck's centrepiece (and the only 4-of), so
+    // it sits first within its section regardless of the chosen sort. Stable
+    // partition — everything else keeps the sort order above.
+    if(coconutCard){
+      const isLeaderCard = (it) => it.meta?.["Product Name"] === coconutCard.associated;
+      return [...copy.filter(isLeaderCard), ...copy.filter(it => !isLeaderCard(it))];
+    }
     return copy;
-  }, [sortBy, cardById]);
+  }, [sortBy, cardById, coconutCard]);
 
   // Group deck rows into sections. Default is by card_type (Characters /
   // Actions / Items / Locations) using DECK_SECTIONS' built-in matchers;
@@ -31887,14 +32348,42 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         ? html`<h2 class="title-font deck-name-display" style=${{cursor:"default"}}>${deck.name}</h2>`
         : html`<${EditableDeckName} name=${deck.name} onSave=${onRename}/>`}
       <span class="muted" style=${{fontSize:11}}>${inkColorsInDeck.join(" · ")}</span>
-      <span class=${"deck-legal-badge "+legality.format}
-        title=${legality.format === "invalid" ? legality.issues.join(" • ") :
+      ${/* Coconut keeps its badge even when the deck breaks the rules — the
+            format is declared, not inferred, so it stays "Coconut" and just
+            picks up a ⚠. Warn-only: nothing here blocks saving. */""}
+      <span class=${"deck-legal-badge "+legality.format+(legality.format==="coconut" && !legality.legal ? " warn" : "")}
+        title=${legality.format === "coconut"
+                  ? (legality.legal
+                      ? `Legal ${COCONUT_SET_NAME} deck — ${coconutDisplayName(legality.coconut)}, first to ${COCONUT_LORE_GOAL} lore.`
+                      : legality.issues.join(" • "))
+                : legality.format === "invalid" ? legality.issues.join(" • ") :
                 legality.format === "core" ? "Legal in both Core Constructed and Infinity." :
                 "Legal in Infinity. Contains cards from rotated-out sets, so not Core Constructed."}>
-        ${legality.format === "core" ? "Core Constructed"
+        ${legality.format === "coconut" ? (legality.legal ? "Coconut" : "Coconut ⚠")
+        : legality.format === "core" ? "Core Constructed"
         : legality.format === "infinity" ? "Infinity"
         : "Invalid Deck"}
       </span>
+      ${/* Leader slot. Owners always see it AND can always use it — deliberately
+            NOT gated on edit mode. Opening your own deck defaults to VIEW mode
+            (readOnly), and a `!readOnly` gate here hid the slot entirely on a
+            leaderless deck and disabled it on one with a leader, leaving no way
+            to start or change a Coconut deck without first hitting Edit. The
+            leader is deck METADATA, like visibility/Share, which view mode also
+            lets you change. Viewers see it read-only once a leader exists. */""}
+      ${(legality.coconut || isOwnDeck) && html`
+        <button class=${"deck-coconut-slot"+(legality.coconut?" set":"")}
+          disabled=${!isOwnDeck}
+          onClick=${()=>setCoconutPickerOpen(true)}
+          title=${legality.coconut
+            ? `${coconutDisplayName(legality.coconut)} — ${legality.coconut.ink}. Click to change or remove.`
+            : "Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore."}>
+          ${legality.coconut
+            ? html`<img class="deck-coconut-slot-art" src=${coconutArtUrl(legality.coconut.cn)}
+                     alt="" aria-hidden="true" loading="lazy"/>
+                   <span>${coconutDisplayName(legality.coconut)}</span>`
+            : html`<span>＋ Coconut leader</span>`}
+        </button>`}
       ${!readOnly && html`<span class=${"deck-save-status "+(pending>0?"saving":"saved")}
         title=${pending>0 ? "Saving to your account…" : "All changes saved to your account"}>
         ${pending>0 ? "Saving…" : "Saved ✓"}
@@ -32007,11 +32496,29 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
       </div>
     </div>
-    ${legality.format === "invalid" && html`<div class="deck-legal-issues">
+    ${/* Gated on `legal`, not on format === "invalid" — a Coconut deck keeps its
+          format when it breaks the rules, so an "invalid"-only check meant
+          Coconut decks showed a ⚠ badge with no explanation anywhere but a
+          tooltip. */""}
+    ${!legality.legal && html`<div class="deck-legal-issues">
       ${legality.issues.map((i,idx) => html`<div key=${idx}>${i}</div>`)}
     </div>`}
 
     ${(() => {
+      // Leader showcase. Just the card, big — the render already carries the
+      // name, ink and full ability text, so restating any of it alongside was
+      // pure duplication. Declared BEFORE statsBlock because statsBlock embeds
+      // it (it renders directly under the stats box) and html`` evaluates
+      // eagerly, so a later `const` would hit the temporal dead zone.
+      const coconutBlock = coconutCard ? html`<div class="deck-coconut-showcase">
+        <span class="deck-coconut-showcase-tag">${COCONUT_SET_NAME} deck</span>
+        <img class="deck-coconut-showcase-art" src=${coconutArtUrl(coconutCard.cn)}
+          alt=${coconutDisplayName(coconutCard)}
+          title=${isOwnDeck ? "Change or remove leader" : coconutDisplayName(coconutCard)}
+          onClick=${isOwnDeck ? (()=>setCoconutPickerOpen(true)) : null}
+          style=${isOwnDeck ? {cursor:"pointer"} : null}/>
+      </div>` : null;
+
       const statsBlock = html`<div class="deck-stat-row">
         <div class="deck-stat">
           <div class="deck-stat-lbl">Total value</div>
@@ -32036,6 +32543,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               <div class="deck-stat-sub">to complete</div>
             </div>`}
       </div>
+      ${coconutBlock}
       ${totalCount > 0 && html`<div class="deck-charts">
         <${DeckCostChart} costByInk=${aggregates.costByInk} cardCountLabel=${cardCountLabel} uniqueCount=${uniqueCount}/>
         <div class="deck-pie-row">
@@ -32132,6 +32640,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         // .owned-dim to .missing-fade so the semantic matches what it does.
         const dimClass = (highlightMissing && short > 0) ? " missing-fade" : "";
         const cardMax = getDeckLimitForUI(meta["Product Name"]);
+        const gridCocoLimit = coconutLimitFor(meta);
+        const gridOverLimit = gridCocoLimit != null && item.quantity > gridCocoLimit;
         const have = ownedShortByKey[k]?.have || 0;
         const haveCapped = Math.min(have, item.quantity);
         // X/Y badge: green when fully owned, red when missing copies. Keeps
@@ -32144,11 +32654,15 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         // unnecessary here but kept available for the hover preview below.
         const tileImg = meta.img_normal || meta.img_small;
         if(viewLayout === "grid"){
-          return html`<div key=${k} class=${"deck-grid-tile"+dimClass}>
+          return html`<div key=${k} class=${"deck-grid-tile"+dimClass+(gridOverLimit?" coconut-over":"")}>
             ${tileImg
               ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
-            <span class="deck-grid-tile-qty">${item.quantity}×</span>
+            ${(!coconutCard || item.quantity > 1 || gridOverLimit) && html`
+              <span class=${"deck-grid-tile-qty"+(gridOverLimit?" over":"")}
+                title=${gridOverLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${gridCocoLimit === Infinity ? "any number" : gridCocoLimit}` : null}>
+                ${gridOverLimit ? "⚠ " : ""}${item.quantity}×
+              </span>`}
             ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
             ${ownedFracBadge}
             ${price!=null && aff && html`<a class="deck-grid-tile-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
@@ -32197,10 +32711,19 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         const rowBg = rowTints.length === 2
           ? `linear-gradient(90deg, ${rowTints[0]} 0%, ${rowTints[1]} 100%)`
           : rowTints[0] || undefined;
-        return html`<div key=${k} class=${"deck-row"+dimClass}
+        // Coconut is near-singleton, so a column of "1×" is pure noise — blank
+        // it and let anything above 1 stand out. Over-limit copies get a flag
+        // (warn-only; adding them is still allowed).
+        const cocoLimit = coconutLimitFor(meta);
+        const overLimit = cocoLimit != null && item.quantity > cocoLimit;
+        const qtyText = (coconutCard && item.quantity === 1) ? "" : item.quantity + "×";
+        return html`<div key=${k} class=${"deck-row"+dimClass+(overLimit?" coconut-over":"")}
           style=${rowBg ? {background: rowBg} : undefined}
           onMouseEnter=${onRowEnter} onMouseMove=${onRowMove} onMouseLeave=${onRowLeave}>
-          <span class="deck-row-qty">${item.quantity}×</span>
+          <span class=${"deck-row-qty"+(overLimit?" over":"")}
+            title=${overLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${cocoLimit === Infinity ? "any number" : cocoLimit}` : null}>
+            ${overLimit ? html`<span class="coconut-over-flag" aria-label="Over the Coconut copy limit">⚠</span>` : ""}${qtyText}
+          </span>
           <span class="deck-row-costshield" title=${meta.inkable===false?`Cost ${meta.cost ?? "—"} · Uninkable`:`Cost ${meta.cost ?? "—"} · Inkable`}>
             <${CostInkShield} cost=${meta.cost} inkable=${meta.inkable !== false}/>
           </span>
@@ -32343,6 +32866,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      deckQty=${deckQtyForGroup}
                      deckQtyAcrossName=${deckQtyByNameForGroup}
                      onDeckQtyChange=${onDeckQtyChangeStable}
+                     coconutCard=${deck.coconut_card || null}
+                     onPickCoconut=${isOwnDeck ? (()=>setCoconutPickerOpen(true)) : null}
+                     inkBudget=${coconutInkBudget}
                      defaultInks=${inkColorsInDeck}/>
                  </div>
                  <aside class="deck-editor-panel">${listBlock}${statsBlock}</aside>`}
@@ -32396,6 +32922,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       isOwner=${isOwnDeck}
       onChangeVisibility=${(v)=>setVisibility(v)}
       onClose=${()=>setPosterOpen(false)}/>`}
+    ${coconutPickerOpen && html`<${CoconutLeaderPicker}
+      current=${deck.coconut_card || null}
+      onPick=${(slug)=>{ setCoconutPickerOpen(false); if(onUpdateMeta) onUpdateMeta({coconut_card: slug}); }}
+      onClose=${()=>setCoconutPickerOpen(false)}/>`}
     ${hoverPreview && html`<div class="deck-hover-preview"
       style=${{
         left:  Math.min(window.innerWidth  - 210, hoverPreview.x + 16) + "px",
