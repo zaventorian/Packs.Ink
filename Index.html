@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=299">
+<link rel="stylesheet" href="styles.css?v=300">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -426,7 +426,7 @@ const CACHE_KEY = "packsink:catalog:v50";  // v50: Extras quest/gift tiles now u
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-06-24-graded-foil-split-rollup";
+const AUX_CACHE_VERSION = "2026-07-29-legacy-graded-feed-removed";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -458,6 +458,18 @@ const variantBadge = (p) => (p && !VARIANT_BADGE_HIDE.has(p)) ? (PRINTING_VARIAN
 // foil/cold-foil/holo finish → "Foil"; everything else (incl. untagged) → "Non-Foil".
 const GRADED_FOIL_PRINTINGS = new Set(["foil", "cold foil", "holofoil", "holo"]);
 const gradedFoilBucket = (p) => GRADED_FOIL_PRINTINGS.has((p || "").toLowerCase().trim()) ? "Foil" : "Non-Foil";
+// Three-way variant of gradedFoilBucket for matching graded SALES to owned slots.
+// Unlike gradedFoilBucket it keeps "unknown" distinct from "Non-Foil" (a sale we
+// never classified is not evidence of a non-foil sale) and leaves version variants
+// (Two Swords / Text Error) exact, since those are different cards, not finishes.
+const GRADED_NONFOIL_PRINTINGS = new Set(["normal", "non-foil", "nonfoil"]);
+const gradedSlotBucket = (p) => {
+  const s = (p || "").toLowerCase().trim();
+  if(!s || s === "unknown") return null;
+  if(GRADED_FOIL_PRINTINGS.has(s)) return "Foil";
+  if(GRADED_NONFOIL_PRINTINGS.has(s)) return "Non-Foil";
+  return s;
+};
 // Screener badge label for a graded-rollup printing, given the card's set:
 //   C1 → Top Prize / Prize Wall · mainline foil-split → Foil / Non-Foil ·
 //   version cards → the variant (Two Swords / Text Error) · baseline → null.
@@ -642,6 +654,20 @@ async function offlineMirrorRead(key){
   const rec = await idbGet("mirror:"+key);
   return rec && rec.data !== undefined ? rec.data : undefined;
 }
+
+// One-shot eviction of the "gradedprices" mirror. It held rows from the legacy
+// TCGPriceLookup matview, which was dropped — and because the old code fell back
+// to this mirror whenever the fetch came up empty, a device that had synced once
+// would have kept serving those frozen June prices forever. Nothing reads the
+// key anymore, so this is purely reclaiming the space and making sure a stale
+// copy can't be resurrected by a future mirror-read added under the same name.
+try {
+  const EVICT_KEY = "packsink:evictedGradedPricesMirror";
+  if(localStorage.getItem(EVICT_KEY) !== "1"){
+    idbDel("mirror:gradedprices");
+    localStorage.setItem(EVICT_KEY, "1");
+  }
+} catch {}
 
 // 24h cache — we always background-refresh when stale, so the user sees
 // cached data instantly and gets a fresh swap within seconds. Long TTL keeps
@@ -2298,114 +2324,14 @@ async function fetchCardHistory(productId, printing){
 // timeout, and a full-year × full-collection query blows past it. With
 // 80-ID batches running in parallel, each individual query stays small
 // enough to land in under a second.
-const COLLECTION_HISTORY_BATCH = 80;
-// Pull daily graded price history for a user's owned (pid, printing,
-// grader, grade) slots since a given date. PostgREST doesn't support
-// multi-column IN, so we query by tcgplayer_product_id IN(...) (in
-// batches to keep URLs short) and then filter client-side to the
-// requested combos. Printing was added in migration 49 so foil and
-// non-foil rows under the same pid are no longer collapsed.
-async function fetchGradedHistoryFor(slots, sinceDate){
-  if(!slots.length) return [];
-  const pids = Array.from(new Set(slots.map(s => s.pid).filter(Number.isFinite)));
-  if(!pids.length) return [];
-  // Match by (pid, grader, grade) only — printing fallback happens in
-  // computeGradedValueHistory so slots whose stored printing has no rows
-  // can still resolve to an alternate printing's series.
-  const wantKey = new Set(slots.map(s => `${s.pid}|${s.grader}|${s.grade}`));
-  const BATCH = 60;
-  const batches = [];
-  for(let i=0; i<pids.length; i+=BATCH) batches.push(pids.slice(i, i+BATCH));
-  const results = await Promise.all(batches.map(b => sbFetchAll("graded_prices_daily", {
-    select: "tcgplayer_product_id,printing,grader,grade,date,ebay_avg_7d,ebay_avg_1d,ebay_avg_30d",
-    tcgplayer_product_id: "in.(" + b.join(",") + ")",
-    date: "gte." + sinceDate,
-    order: "tcgplayer_product_id.asc,printing.asc,grader.asc,grade.asc,date.asc",
-  })));
-  const rows = results.flat();
-  return rows.filter(r => wantKey.has(`${r.tcgplayer_product_id}|${r.grader}|${r.grade}`));
-}
-
-// Roll up graded_prices_daily rows into a {date, value} series.
-// ownedSlots: array of {pid, grader, grade, qty}. Forward-fills missing dates
-// from the last known price so cards that didn't tick still contribute.
-function computeGradedValueHistory(rows, ownedSlots){
-  // Slots may carry an optional `acquired_date` ("YYYY-MM-DD"); when set, the
-  // slot contributes $0 on dates strictly before that date so historical
-  // value reflects only what the user actually owned at the time.
-  //
-  // TCGPriceLookup's graded `/history` is extremely sparse — median slot has
-  // its first row months into the queried range, so plain forward-fill leaves
-  // most slots contributing $0 across the early window and the rolled-up
-  // chart ramps up artificially as each slot "comes online" with its first
-  // data point. We seed `prev` with each slot's first known price (backward
-  // fill) so a slot is always represented once we have ANY data for it. This
-  // doesn't manufacture history — it just declines to drop owned cards to $0
-  // because the vendor lacks rows for them on that date. Acquired-date
-  // gating still wins: a slot contributes $0 before the date the user got it.
-  const bySlot = {};
-  for(const r of rows){
-    const k = `${r.tcgplayer_product_id}|${r.printing||"Normal"}|${r.grader}|${r.grade}`;
-    if(!bySlot[k]) bySlot[k] = [];
-    bySlot[k].push(r);
-  }
-  // The forward-fill below (and the firstPrice scan) assume each slot series is
-  // date-ascending. PostgREST can reassemble paginated results out of order, so
-  // sort defensively — mirrors computeGradedDeltas / computeSealedDeltas.
-  for(const k in bySlot) bySlot[k].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  // Resolve each slot to the best-matching printing's series. Tries the
-  // slot's stored printing first, then Normal / Holofoil / Cold Foil so
-  // mig-50-backfilled "Normal"-default slots for Holofoil-only cards still
-  // find data, and so slots whose stored printing has no rows yet (post-
-  // cleanup pre-backfill) fall back to whatever printing the vendor has.
-  const resolveSeries = (s) => {
-    const stored = s.printing || "Normal";
-    const tried = new Set();
-    for(const p of [stored, "Normal", "Holofoil", "Cold Foil"]){
-      if(tried.has(p)) continue;
-      tried.add(p);
-      const series = bySlot[`${s.pid}|${p}|${s.grader}|${s.grade}`];
-      if(series && series.length) return series;
-    }
-    return null;
-  };
-  const dateSet = new Set();
-  for(const s of ownedSlots){
-    const series = resolveSeries(s); if(!series) continue;
-    for(const r of series) dateSet.add(r.date);
-  }
-  const dates = Array.from(dateSet).sort();
-  if(!dates.length) return [];
-  const valueByDate = Object.fromEntries(dates.map(d => [d, 0]));
-  for(const s of ownedSlots){
-    const series = resolveSeries(s);
-    if(!series || !series.length) continue;
-    // Pre-roll: find the first valid price across this slot's series.
-    let firstPrice = null;
-    for(const r of series){
-      const p = r.ebay_avg_1d ?? r.ebay_avg_30d ?? r.ebay_avg_7d;
-      if(p != null){ firstPrice = Number(p); break; }
-    }
-    if(firstPrice == null) continue;
-    const acqDate = s.acquired_date || null;
-    let prev = firstPrice, si = 0;
-    for(const date of dates){
-      while(si < series.length && series[si].date <= date){
-        const r = series[si];
-        const p = r.ebay_avg_1d ?? r.ebay_avg_30d ?? r.ebay_avg_7d;
-        if(p != null) prev = Number(p);
-        si++;
-      }
-      if(acqDate && date < acqDate) continue;
-      valueByDate[date] += s.qty * prev;
-    }
-  }
-  return dates.map(d => ({date: d, value: valueByDate[d]}));
-}
-
-// Premium portfolio chart: pull individual graded sales for the user's owned
-// card_ids since a date. Keyed by card_id (the per-sale dataset isn't
-// printing-aware). card_ids are `crd_<hex>` — safe to interpolate unquoted.
+// Portfolio chart: pull individual graded sales for the user's owned card_ids
+// since a date. card_ids are `crd_<hex>` — safe to interpolate unquoted.
+// `printing` is selected because the dataset IS printing-aware and a slot must
+// only be valued by sales of its own finish (see makeGradedSlotSeries).
+// `excluded` MUST be filtered: quarantined rows (foreign-language, autographs,
+// lots, troll listings, cn-conflicts — migration 76) are skipped by
+// graded_sales_rollup and the card-detail scatter, and this chart has to agree
+// with them or it renders value nobody else can see.
 async function fetchGradedSalesFor(slots, sinceDate){
   if(!slots.length) return [];
   const cardIds = Array.from(new Set(slots.map(s => s.card_id).filter(Boolean)));
@@ -2414,28 +2340,75 @@ async function fetchGradedSalesFor(slots, sinceDate){
   const batches = [];
   for(let i=0;i<cardIds.length;i+=BATCH) batches.push(cardIds.slice(i, i+BATCH));
   const results = await Promise.all(batches.map(b => sbFetchAll("graded_sales", {
-    select: "card_id,grader,grade,sale_price,sold_date",
+    select: "card_id,grader,grade,printing,sale_price,sold_date",
     card_id: "in.(" + b.join(",") + ")",
     sold_date: "gte." + sinceDate,
+    excluded: "is.false",
     order: "card_id.asc,sold_date.asc",
   })));
   return results.flat();
 }
 
+// Resolve which per-sale rows may value a given owned slot. Returns a lookup
+// (slot) => sorted [{date, price}] | null.
+//
+// graded_sales is printing-aware and the two finishes of one card_id can be
+// entirely different markets: Cinderella - Stouthearted PSA 10 (Challenge Promo
+// C1) has a Non-Foil "Prize Wall" median of $280 against a Foil "Top Prize"
+// median of $1,707. Keying only on (card_id, grader, grade) let a $33k Top-8
+// Prize foil sale value a $450 non-foil slab, which is what put a 2-day $67k
+// spike on the collection chart.
+//
+// The split is only enforced on cards that actually HAVE two labelled printings.
+// When a card has at most one, every row (including unclassified ones) values the
+// slot regardless of what printing the slot stored — the same fallback
+// lookupGradedPx does, and for the same reason: foil-only chase cards
+// (Enchanted / Iconic / Epic) have owned slots stamped printing='Normal' by the
+// migration-50 backfill, and a strict match would silently drop them to $0.
+function makeGradedSlotSeries(sales){
+  const byCard = new Map();
+  for(const r of (sales || [])){
+    if(r.grade == null || r.sale_price == null) continue;
+    const ck = `${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`;
+    let g = byCard.get(ck);
+    if(!g){ g = {buckets:new Set(), rows:[]}; byCard.set(ck, g); }
+    const b = gradedSlotBucket(r.printing);
+    if(b) g.buckets.add(b);
+    g.rows.push({date: r.sold_date, price: Number(r.sale_price), bucket: b});
+  }
+  for(const g of byCard.values())
+    g.rows.sort((a,b) => String(a.date).localeCompare(String(b.date)));
+  const cache = new Map();
+  return (slot) => {
+    const ck = `${slot.card_id}|${(slot.grader||"").toLowerCase()}|${slot.grade}`;
+    const want = gradedSlotBucket(slot.printing) || "Non-Foil";
+    const key = ck + "|" + want;
+    if(cache.has(key)) return cache.get(key);
+    const g = byCard.get(ck);
+    let series = null;
+    if(g){
+      // 2+ labelled printings = a genuinely split card (C1 Top Prize vs Prize
+      // Wall, Genie Two Swords vs Normal). Only this printing's own sales count;
+      // unclassified rows are dropped rather than guessed.
+      const rows = g.buckets.size >= 2
+        ? g.rows.filter(r => r.bucket === want)
+        : g.rows;
+      if(rows.length) series = rows;
+    }
+    cache.set(key, series);
+    return series;
+  };
+}
+
 // Roll up individual graded sales into a {date, value} series for the premium
 // portfolio chart. Mirrors computeGradedValueHistory (forward-fill, backward-
-// fill seed, acquired-date gating) but keyed by card_id and driven by per-sale
-// prices. grader matched case-insensitively (sales store UPPERCASE, owned slots
-// lowercase). ownedSlots: [{card_id, grader, grade, qty, acquired_date}].
+// fill seed, acquired-date gating) but driven by per-sale prices and keyed on
+// (card_id, printing, grader, grade) via makeGradedSlotSeries — printing is NOT
+// optional, see that function. grader matched case-insensitively (sales store
+// UPPERCASE, owned slots lowercase).
+// ownedSlots: [{card_id, printing, grader, grade, qty, acquired_date}].
 function computeSalesValueHistory(sales, ownedSlots){
-  const bySlot = {};
-  for(const r of (sales||[])){
-    if(r.grade == null || r.sale_price == null) continue;
-    const k = `${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`;
-    (bySlot[k] = bySlot[k] || []).push({date: r.sold_date, price: Number(r.sale_price)});
-  }
-  for(const k in bySlot) bySlot[k].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  const seriesFor = (s) => bySlot[`${s.card_id}|${(s.grader||"").toLowerCase()}|${s.grade}`] || null;
+  const seriesFor = makeGradedSlotSeries(sales);
   const dateSet = new Set();
   for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
   const dates = Array.from(dateSet).sort();
@@ -2459,14 +2432,7 @@ function computeSalesValueHistory(sales, ownedSlots){
 // valued at the mean of its most recent ≤5 sales (rolling window) instead of the
 // single last sale. Same forward/backward-fill + acquired-date gating.
 function computeSalesValueHistoryAvg5(sales, ownedSlots){
-  const bySlot = {};
-  for(const r of (sales||[])){
-    if(r.grade == null || r.sale_price == null) continue;
-    const k = `${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`;
-    (bySlot[k] = bySlot[k] || []).push({date: r.sold_date, price: Number(r.sale_price)});
-  }
-  for(const k in bySlot) bySlot[k].sort((a,b)=>String(a.date).localeCompare(String(b.date)));
-  const seriesFor = (s) => bySlot[`${s.card_id}|${(s.grader||"").toLowerCase()}|${s.grade}`] || null;
+  const seriesFor = makeGradedSlotSeries(sales);
   const dateSet = new Set();
   for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
   const dates = Array.from(dateSet).sort();
@@ -2489,78 +2455,15 @@ function computeSalesValueHistoryAvg5(sales, ownedSlots){
 
 // Single source of truth for a graded slot's dollar value. basis "last" (default)
 // prefers the most recent sale (graded_sales_rollup.last_sold_price); "avg5"
-// prefers the avg-of-5 (ebay_avg_1d on the rollup). Non-premium TCGPriceLookup
-// rows have no last_sold_price, so both basis values fall back to the avg chain.
+// prefers the avg-of-5. NOTE: `ebay_avg_*` are the field names priceByKey's
+// synthesizer emits (rowOf sets ebay_avg_1d = avg_last_5) — NOT columns on any
+// table. The legacy feed that originally owned those names is gone.
 const gradedRowValue = (p, basis) => {
   if(!p) return null;
   const avg = p.ebay_avg_1d ?? p.ebay_avg_30d ?? p.ebay_avg_7d ?? null;
   const last = p.last_sold_price != null ? Number(p.last_sold_price) : null;
   return basis === "avg5" ? (avg ?? last) : (last ?? avg);
 };
-
-// Synthesize per-slot Δ% rows from raw graded_prices_daily history. Mirrors
-// the Screener's original inline gradedSynth memo — hoisted to module scope
-// so the home "Your Top Movers" graded mode and the GradedCollectionView
-// Δ% display + movers banner can all consume the same shape. Returns an
-// array of rows keyed by (pid|printing|grader|grade), each carrying:
-//   low_today / market_today  — today's price (avg_1d → avg_30d → avg_7d
-//                                fallback, same priority as everywhere else)
-//   pct_1d / pct_7d / pct_30d / pct_90d / pct_180d / pct_365d
-//   mkt_pct_*                 — mirror of pct_* so the Screener's priceMode
-//                                toggle (Low vs NM Market) is a no-op here
-//   abs_pct_1d                — for sort-by-magnitude
-//   ebay_low_price / ebay_high_price — 30d window bounds
-//   history_points            — slot's snapshot count (debug / sort tiebreak)
-function computeGradedDeltas(history){
-  if(!history || !history.length) return [];
-  const byKey = new Map();
-  for(const h of history){
-    const key = h.tcgplayer_product_id + "|" + (h.printing||"Normal") + "|" + (h.grader||"") + "|" + h.grade;
-    if(!byKey.has(key)) byKey.set(key, []);
-    byKey.get(key).push(h);
-  }
-  const todayMs = Date.now();
-  const DAY = 86400000;
-  const WINDOWS = [["pct_1d",1],["pct_7d",7],["pct_30d",30],["pct_90d",90],["pct_180d",180],["pct_365d",365]];
-  const priceNDaysAgo = (pts, days) => {
-    const cutMs = todayMs - days * DAY;
-    let best = null, bestMs = -Infinity;
-    for(const p of pts){
-      const t = new Date(p.date + "T00:00:00Z").getTime();
-      if(t <= cutMs && t > bestMs){ best = p; bestMs = t; }
-    }
-    return best ? (best.ebay_avg_1d ?? best.ebay_avg_7d ?? best.ebay_avg_30d) : null;
-  };
-  const out = [];
-  for(const pts of byKey.values()){
-    // Ascending by date so latest is at the tail — PostgREST can return mixed
-    // orderings across pages, so sort defensively (mirrors computeSealedDeltas).
-    pts.sort((a,b) => a.date.localeCompare(b.date));
-    const latest = pts[pts.length-1];
-    const price = latest.ebay_avg_1d ?? latest.ebay_avg_7d ?? latest.ebay_avg_30d;
-    if(price == null) continue;
-    const row = {
-      tcgplayer_product_id: latest.tcgplayer_product_id,
-      printing: latest.printing || "Normal",
-      grader: (latest.grader||"").toLowerCase(),
-      grade:  String(latest.grade),
-      low_today:    price,
-      market_today: latest.ebay_avg_30d,
-      low_prev:     null,
-      ebay_low_price:  latest.ebay_low_price,
-      ebay_high_price: latest.ebay_high_price,
-      history_points: pts.length,
-    };
-    for(const [k, days] of WINDOWS){
-      const past = priceNDaysAgo(pts, days);
-      row[k] = (past != null && past > 0) ? ((price - past) / past * 100) : null;
-      row[k.replace("pct_", "mkt_pct_")] = row[k];
-    }
-    row.abs_pct_1d = row.pct_1d == null ? null : Math.abs(row.pct_1d);
-    out.push(row);
-  }
-  return out;
-}
 
 // Per-sealed-pid Δ% rollup. Mirrors computeGradedDeltas + the raw
 // price_movers matview shape so the Screener's sealed mode + the sealed-
@@ -4663,326 +4566,16 @@ const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
 const GRADER_LABEL = {psa:"PSA", bgs:"BGS", cgc:"CGC", sgc:"SGC", tag:"TAG"};
 const GRADER_ORDER = ["psa","cgc","bgs","sgc","tag"];
 const GRADER_COLOR = {psa:"#c92a2a", cgc:"#2563eb", bgs:"#7c3aed", sgc:"#0f9d58", tag:"#d97706"};
-// Build a single LineChart-ready series from graded history rows for a
-// specific (printing, grader, grade) combo. Returns null when fewer than
-// 2 valid points exist (LineChart bails on <2 anyway, but checking up
-// front lets us skip rendering chart chrome entirely). printingKey is
-// optional — when omitted, history rows for all printings of this pid
-// merge into one series (legacy callers).
-const buildGradedSeries = (history, graderKey, gradeStr, label, printingKey) => {
-  if(!history || !history.length) return null;
-  const g = (graderKey || "").toLowerCase();
-  const gr = String(gradeStr);
-  const pr = printingKey ? String(printingKey) : null;
-  const pts = [];
-  for(const h of history){
-    if((h.grader || "").toLowerCase() !== g) continue;
-    if(String(h.grade) !== gr) continue;
-    if(pr && (h.printing || "Normal") !== pr) continue;
-    const v = h.ebay_avg_1d != null ? Number(h.ebay_avg_1d) : null;
-    if(v == null || !Number.isFinite(v)) continue;
-    pts.push({x: new Date(h.date + "T00:00:00Z").getTime(), y: v});
-  }
-  if(pts.length < 2) return null;
-  return {
-    label: label || (GRADER_LABEL[g] + " " + gr),
-    color: GRADER_COLOR[g] || "#888",
-    data: pts,
-  };
-};
-const GradedPricesTab = ({graded, gradedOwned, onGradedAdjust, onGradedMetaUpdate, focusPrinting}) => {
-  // Inline-expand state must live above the early returns (Rules of Hooks).
-  // Clicking a row's sparkline toggles a full-size chart underneath that row.
-  const [expanded, setExpanded] = useState(() => new Set());
-  // Owned-quantity lookup by "printing|grader|grade" → quantity. Used to
-  // render per-row +/- when the modal is opened from the graded view.
-  const ownedByKey = useMemo(() => {
-    const m = new Map();
-    for(const it of (gradedOwned || []))
-      m.set((it.printing||"Normal") + "|" + it.grader + "|" + it.grade, it.quantity || 0);
-    return m;
-  }, [gradedOwned]);
-  // Per-slot meta lookup: amount_paid / acquired_date / custom_value indexed
-  // by the same key as ownedByKey. Used to seed the always-on Paid / Acquired
-  // / Value inputs underneath each owned row.
-  const metaByKey = useMemo(() => {
-    const m = new Map();
-    for(const it of (gradedOwned || [])){
-      m.set((it.printing||"Normal") + "|" + it.grader + "|" + it.grade, {
-        amount_paid:   it.amount_paid   != null ? Number(it.amount_paid)   : null,
-        acquired_date: it.acquired_date || null,
-        custom_value:  it.custom_value  != null ? Number(it.custom_value)  : null,
-      });
-    }
-    return m;
-  }, [gradedOwned]);
-  const canEdit = typeof onGradedAdjust === "function";
-  const canEditMeta = typeof onGradedMetaUpdate === "function";
-  if(graded.loading){
-    return html`<div class="chart-empty large">Loading graded prices…</div>`;
-  }
-  if(!graded.latest || graded.latest.length === 0){
-    return html`<div class="chart-empty large">No graded sales recorded for this card.</div>`;
-  }
-  // Filter to one printing when the caller is focused on it (e.g. modal
-  // launched from a C1 Foil tile).
-  const visibleLatest = focusPrinting
-    ? graded.latest.filter(r => (r.printing || "Normal") === focusPrinting)
-    : graded.latest;
-  const visibleHistory = focusPrinting
-    ? (graded.history || []).filter(r => (r.printing || "Normal") === focusPrinting)
-    : (graded.history || []);
-  // Group latest rows by (printing, grader). When multiple printings exist
-  // in the data (split-printing cards: TFC Cold Foils, LCP C1 Holofoils),
-  // render each printing as its own section so users see foil vs non-foil
-  // prices clearly separated instead of conflated.
-  const byPrintingGrader = new Map();    // printing -> Map<grader, [rows]>
-  const printingsSeen = new Set();
-  for(const row of visibleLatest){
-    const pr = row.printing || "Normal";
-    const g = (row.grader || "").toLowerCase();
-    printingsSeen.add(pr);
-    if(!byPrintingGrader.has(pr)) byPrintingGrader.set(pr, new Map());
-    const inner = byPrintingGrader.get(pr);
-    if(!inner.has(g)) inner.set(g, []);
-    inner.get(g).push(row);
-  }
-  for(const inner of byPrintingGrader.values()){
-    for(const list of inner.values()){
-      list.sort((a,b) => parseFloat(b.grade) - parseFloat(a.grade));
-    }
-  }
-  const orderedPrintings = ["Normal", "Cold Foil", "Holofoil"]
-    .filter(p => printingsSeen.has(p))
-    .concat(Array.from(printingsSeen).filter(p => !["Normal","Cold Foil","Holofoil"].includes(p)));
-  const showPrintingHeaders = orderedPrintings.length > 1;
-
-  // Build history index: (printing|grader|grade) -> [{date, avg_1d, low, high}, ...]
-  const histByKey = new Map();
-  for(const h of visibleHistory){
-    const key = (h.printing || "Normal") + "|" + (h.grader || "").toLowerCase() + "|" + h.grade;
-    if(!histByKey.has(key)) histByKey.set(key, []);
-    histByKey.get(key).push(h);
-  }
-
-  // "Last sale" inference. The matview's price_date is just when our ETL
-  // last wrote a row — today's daily snapshot makes every row read "today"
-  // even though no new sale happened. Walk history newest→oldest and find
-  // the first date where avg_1d (or low/high) actually changed from its
-  // predecessor. That's the date a real sale moved the average.
-  const lastSaleDate = (key) => {
-    const pts = histByKey.get(key) || [];
-    if(!pts.length) return null;
-    const num = (v) => (v == null ? null : Number(v));
-    const eq = (a, b) => {
-      const x = num(a), y = num(b);
-      if(x == null && y == null) return true;
-      if(x == null || y == null) return false;
-      return Math.abs(x - y) < 0.001;
-    };
-    for(let i = pts.length - 1; i >= 1; i--){
-      const cur = pts[i], prev = pts[i-1];
-      if(!eq(cur.ebay_avg_1d, prev.ebay_avg_1d)
-         || !eq(cur.ebay_low_price,  prev.ebay_low_price)
-         || !eq(cur.ebay_high_price, prev.ebay_high_price)){
-        return cur.date;
-      }
-    }
-    // Single-point history → that point IS the most recent known sale.
-    return pts[0].date;
-  };
-
-  const fmt = (v) => (v == null ? "—" : "$" + Number(v).toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2}));
-  const fmtShort = (v) => (v == null ? "—" : "$" + Number(v).toLocaleString(undefined, {maximumFractionDigits:0}));
-
-  // Mini-sparkline SVG: drawn from avg_1d series (or avg_30d when avg_1d is null).
-  const sparkline = (points, color) => {
-    const xs = points.filter(p => p.ebay_avg_1d != null || p.ebay_avg_30d != null)
-      .map(p => ({d: p.date, v: p.ebay_avg_1d != null ? p.ebay_avg_1d : p.ebay_avg_30d}));
-    if(xs.length < 2) return null;
-    const W = 110, H = 28, padY = 3;
-    const ts = xs.map(p => new Date(p.d + "T00:00:00Z").getTime());
-    const vs = xs.map(p => p.v);
-    const tMin = ts[0], tMax = ts[ts.length-1] || tMin+1;
-    const vMin = Math.min(...vs), vMax = Math.max(...vs);
-    const xOf = (t) => (tMax === tMin) ? 0 : ((t - tMin) / (tMax - tMin)) * W;
-    const yOf = (v) => (vMax === vMin) ? H/2 : H - padY - ((v - vMin) / (vMax - vMin)) * (H - padY*2);
-    const path = xs.map((p, i) => (i === 0 ? "M" : "L") + xOf(ts[i]).toFixed(1) + " " + yOf(p.v).toFixed(1)).join(" ");
-    const last = xs[xs.length-1];
-    return html`<svg viewBox=${`0 0 ${W} ${H}`} style=${{width:W+"px",height:H+"px",display:"block"}}>
-      <path d=${path} fill="none" stroke=${color} stroke-width="1.5"/>
-      <circle cx=${xOf(ts[ts.length-1])} cy=${yOf(last.v)} r="2" fill=${color}/>
-    </svg>`;
-  };
-
-  // Featured-chart pick: PSA 10 by default (the gold-standard graded grade).
-  // Picks the highest-priority printing that has PSA 10 history. If no
-  // printing has PSA 10, falls back to the first available combo in
-  // display order.
-  let featuredSeries = null;
-  let featuredLabel = "";
-  for(const pr of orderedPrintings){
-    const s = buildGradedSeries(visibleHistory, "psa", "10",
-      (showPrintingHeaders ? pr + " · " : "") + "PSA 10", pr);
-    if(s){ featuredSeries = s; featuredLabel = (showPrintingHeaders ? pr + " · " : "") + "PSA 10"; break; }
-  }
-  if(!featuredSeries){
-    outer: for(const pr of orderedPrintings){
-      const inner = byPrintingGrader.get(pr);
-      for(const g of GRADER_ORDER.filter(x => inner.has(x))){
-        for(const row of inner.get(g)){
-          const s = buildGradedSeries(visibleHistory, g, row.grade, null, pr);
-          if(s){
-            featuredSeries = s;
-            featuredLabel = (showPrintingHeaders ? pr + " · " : "") + (GRADER_LABEL[g] || g.toUpperCase()) + " " + row.grade;
-            break outer;
-          }
-        }
-      }
-    }
-  }
-
-  const toggleExpand = (key) => setExpanded(prev => {
-    const next = new Set(prev);
-    next.has(key) ? next.delete(key) : next.add(key);
-    return next;
-  });
-
-  return html`<div class="graded-tab">
-    <div class="graded-tab-explain">
-      Latest eBay sold averages by grader · ranges show the price spread within the window · click any sparkline for full history.
-    </div>
-    ${canEditMeta && html`<div class="graded-tab-meta-explain muted">
-      For any slot you own, three optional fields appear below the row:
-      <strong>Paid</strong> tracks what you spent (used by the value chart's acquired-date gating),
-      <strong>Acquired</strong> is the date you got it (chart credits value only from that date forward),
-      and <strong>Value</strong> is a custom per-slot price that overrides the eBay average — leave blank to keep the market price, set a number for cards with no eBay data or to record what you think yours is actually worth.
-    </div>`}
-    ${featuredSeries && html`<div class="graded-featured-chart">
-      <div class="graded-featured-head">
-        <span class="graded-featured-label" style=${{color: featuredSeries.color}}>${featuredLabel} history</span>
-        <span class="graded-featured-sub muted">12-month eBay sold average</span>
-      </div>
-      <${LineChart} series=${[featuredSeries]} height=${160}/>
-    </div>`}
-    ${orderedPrintings.map(printing => {
-      const innerByGrader = byPrintingGrader.get(printing);
-      const orderedGraders = GRADER_ORDER.filter(g => innerByGrader.has(g))
-        .concat(Array.from(innerByGrader.keys()).filter(g => !GRADER_ORDER.includes(g)));
-      return html`<${React.Fragment} key=${"printing-"+printing}>
-        ${showPrintingHeaders && html`<div class="graded-printing-header">
-          <span class="graded-printing-header-tag">${printing}</span>
-        </div>`}
-        <div class=${"graded-tab-table" + (canEdit ? " graded-tab-table-editable" : "")}>
-          <div class="graded-tab-thead">
-            <div>Grader</div>
-            <div>Grade</div>
-            <div>Latest avg</div>
-            <div>30d avg</div>
-            <div>Range (30d)</div>
-            <div>Trend</div>
-            <div>Last sale</div>
-            ${canEdit && html`<div>Owned</div>`}
-          </div>
-          ${orderedGraders.map(g => innerByGrader.get(g).map(row => {
-            const key = printing + "|" + g + "|" + row.grade;
-            const points = histByKey.get(key) || [];
-            const grade = String(row.grade);
-            const isTop = grade === "10";
-            const color = GRADER_COLOR[g] || "#888";
-            const isExpanded = expanded.has(key);
-            const expandedSeries = isExpanded ? buildGradedSeries(visibleHistory, g, grade, null, printing) : null;
-            return html`<${React.Fragment} key=${key}>
-              <div class=${"graded-row"+(isTop?" is-top":"")+(isExpanded?" is-expanded":"")}>
-                <div class="graded-grader" style=${{color}}>${GRADER_LABEL[g] || g.toUpperCase()}</div>
-                <div class="graded-grade">${grade}</div>
-                <div class="graded-cell graded-cell-main">${fmt(row.ebay_avg_1d)}</div>
-                <div class="graded-cell">${fmt(row.ebay_avg_30d)}</div>
-                <div class="graded-cell graded-cell-range">
-                  ${row.ebay_low_price != null || row.ebay_high_price != null
-                    ? html`<span>${fmtShort(row.ebay_low_price)}</span><span class="dash">–</span><span>${fmtShort(row.ebay_high_price)}</span>`
-                    : html`<span class="muted">—</span>`}
-                </div>
-                <button class=${"graded-cell graded-spark graded-spark-btn"+(isExpanded?" is-active":"")}
-                  type="button"
-                  title=${isExpanded ? "Hide full history" : "Show full history"}
-                  onClick=${()=>toggleExpand(key)}>
-                  ${sparkline(points, color) || html`<span class="muted" style=${{fontSize:10}}>—</span>`}
-                </button>
-            <div class="graded-cell graded-date" title=${lastSaleDate(key) ? "Most recent date the price changed (inferred from history)" : "No recorded sales"}>
-              ${(() => {
-                const d = lastSaleDate(key);
-                if(!d) return "—";
-                const days = Math.round((Date.now() - new Date(d+"T00:00:00Z").getTime()) / 86400000);
-                if(days <= 0)  return "today";
-                if(days === 1) return "1d ago";
-                if(days < 30)  return days + "d ago";
-                if(days < 365) return Math.round(days/30) + "mo ago";
-                return Math.round(days/30) + "mo ago";
-              })()}
-            </div>
-            ${canEdit && html`<div class="graded-cell graded-owned-cell" onClick=${e=>e.stopPropagation()}>
-              <button class="graded-qty-btn" title="Decrement owned"
-                aria-label=${"Decrement owned " + (GRADER_LABEL[g] || g.toUpperCase()) + " " + grade}
-                disabled=${(ownedByKey.get(key)||0) <= 0}
-                onClick=${()=>onGradedAdjust(g, grade, -1, printing)}>−</button>
-              <span class=${"graded-qty-num"+((ownedByKey.get(key)||0)>0?" has":"")}>${ownedByKey.get(key)||0}</span>
-              <button class="graded-qty-btn" title="Increment owned"
-                aria-label=${"Increment owned " + (GRADER_LABEL[g] || g.toUpperCase()) + " " + grade}
-                disabled=${(ownedByKey.get(key)||0) >= 99}
-                onClick=${()=>onGradedAdjust(g, grade, +1, printing)}>+</button>
-            </div>`}
-          </div>
-          ${isExpanded && html`<div class="graded-row-expand">
-            ${expandedSeries
-              ? html`<${LineChart} series=${[expandedSeries]} height=${140}/>`
-              : html`<div class="chart-empty">Not enough data yet</div>`}
-          </div>`}
-          ${canEditMeta && (ownedByKey.get(key)||0) > 0 && html`<div class="graded-row-meta" onClick=${e=>e.stopPropagation()}>
-            <span class="graded-row-meta-tag">${(GRADER_LABEL[g] || g.toUpperCase()) + " " + grade} — your copy</span>
-            <${CostDateInputs}
-              currentPaid=${(metaByKey.get(key) || {}).amount_paid ?? null}
-              currentDate=${(metaByKey.get(key) || {}).acquired_date || null}
-              onCommit=${patch => onGradedMetaUpdate(g, grade, printing, patch)}/>
-          </div>`}
-            </${React.Fragment}>`;
-          }))}
-        </div>
-      </${React.Fragment}>`;
-    })}
+// Shown where the legacy frozen-feed UI used to render. Graded data is public
+// but licence-gated on ToS acceptance, so a visitor who hasn't accepted yet gets
+// this instead of prices. Clicking re-fires the surface signal that opens the
+// ToS modal (App listens on "packsink:graded-surface").
+const GradedTosGate = ({compact}) => html`
+  <div class=${"graded-tos-gate" + (compact ? " compact" : "")}>
+    <div class="gtg-title">Graded sales data</div>
+    <div class="gtg-body">Per-sale eBay prices are available once you accept the graded-data terms.</div>
+    <button class="gtg-btn" onClick=${() => signalGradedSurface()}>Review terms</button>
   </div>`;
-};
-
-// Fetch graded prices (PSA / BGS / CGC / SGC / TAG) for a set of TCGPlayer
-// product IDs. Returns { latest, history } where:
-//   latest:  [{tcgplayer_product_id, printing, grader, grade, price_date, ebay_avg_1d, ebay_avg_7d, ebay_avg_30d, ebay_low_price, ebay_high_price}, ...]
-//   history: [{tcgplayer_product_id, printing, grader, grade, date, ebay_avg_1d, ebay_low_price, ebay_high_price}, ...]  (full year, asc by date)
-// `printing` distinguishes split-printing rows (LCP C1: Normal vs Holofoil
-// under the same tcgplayer_product_id). Callers filter on it where needed.
-// Both empty arrays if the card has no graded data.
-const fetchGradedPrices = async (productIds) => {
-  const ids = (productIds || []).filter(x => x != null);
-  if(!ids.length) return {latest: [], history: []};
-  const idClause = "in.(" + ids.join(",") + ")";
-  try {
-    const [latest, history] = await Promise.all([
-      sbFetchAll("graded_prices_latest", {
-        select: "tcgplayer_product_id,printing,grader,grade,price_date,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,ebay_low_price,ebay_high_price",
-        tcgplayer_product_id: idClause,
-        order: "printing.asc,grader.asc,grade.asc",
-      }),
-      sbFetchAll("graded_prices_daily", {
-        select: "tcgplayer_product_id,printing,grader,grade,date,ebay_avg_1d,ebay_low_price,ebay_high_price",
-        tcgplayer_product_id: idClause,
-        order: "date.asc",
-      }),
-    ]);
-    return {latest: latest || [], history: history || []};
-  } catch(e) {
-    console.warn("graded fetch failed:", e?.message || e);
-    return {latest: [], history: []};
-  }
-};
 
 // Premium graded view: every individual eBay sale we've recorded for a card
 // (graded_sales, migration 71). One row = one sold slab. Ordered oldest→newest
@@ -5773,7 +5366,6 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   const isGradedFocus = initialTab === "graded";
   const tips = useContext(TipsContext);
   const [history, setHistory] = useState({normal:null, foil:null, loading:true});
-  const [graded, setGraded] = useState({latest: [], history: [], loading: true});
   // Premium graded path (graded_premium_viewers): per-sale rows from graded_sales.
   // Only fetched when gradedPremium is true; the legacy `graded` state stays
   // empty in that case (and vice-versa).
@@ -5995,23 +5587,10 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // keyed by TCGPlayer product id.
   useEffect(()=>{
     let cancelled = false;
-    if(gradedPremium){
-      setGraded({latest: [], history: [], loading: false});
-      if(!group?.card_id){ setGradedSales({rows: [], loading: false}); return; }
-      setGradedSales({rows: [], loading: true});
-      fetchGradedSales(group.card_id).then(rows => {
-        if(!cancelled) setGradedSales({rows: rows || [], loading: false});
-      });
-      return () => { cancelled = true; };
-    }
-    setGradedSales({rows: [], loading: false});
-    setGraded({latest: [], history: [], loading: true});
-    const pids = [];
-    if(group?.normal?.tcgplayer_product_id) pids.push(group.normal.tcgplayer_product_id);
-    if(group?.foil?.tcgplayer_product_id)   pids.push(group.foil.tcgplayer_product_id);
-    if(!pids.length){ setGraded({latest: [], history: [], loading: false}); return; }
-    fetchGradedPrices(pids).then(res => {
-      if(!cancelled) setGraded({...res, loading: false});
+    if(!gradedPremium || !group?.card_id){ setGradedSales({rows: [], loading: false}); return; }
+    setGradedSales({rows: [], loading: true});
+    fetchGradedSales(group.card_id).then(rows => {
+      if(!cancelled) setGradedSales({rows: rows || [], loading: false});
     });
     return () => { cancelled = true; };
   }, [group?.card_id, gradedPremium, gradedRefreshKey]);
@@ -6359,10 +5938,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         <button class=${"card-detail-tab"+(detailTab==="history"?" active":"")}
           onClick=${()=>setDetailTab("history")}>Price History</button>
         <button class=${"card-detail-tab"+(detailTab==="graded"?" active":"")}
-          onClick=${()=>setDetailTab("graded")}>
-          Graded
-          ${graded.latest.length > 0 && html`<span class="card-detail-tab-count">${graded.latest.length}</span>`}
-        </button>
+          onClick=${()=>setDetailTab("graded")}>Graded</button>
       </div>`}
       ${detailTab === "history" && html`<div>
         <div class="card-detail-history-head">
@@ -6431,9 +6007,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
             }}
             onReport=${user ? (s)=>setReportSale(s) : null}
             canEditGraded=${isGradedAdmin} onEditGraded=${(s)=>setEditSale(s)}/>`
-        : html`<${GradedPricesTab} graded=${graded}
-            gradedOwned=${gradedOwned} onGradedAdjust=${onGradedAdjust}
-            onGradedMetaUpdate=${onGradedMetaUpdate}/>`)}
+        : html`<${GradedTosGate}/>`)}
     </div>
   </div>
   </div>
@@ -14136,8 +13710,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   const [sealedSearch, setSealedSearch] = useState("");
   const [selectedSealedPid, setSelectedSealedPid] = useState(null);
   const [sealedHist, setSealedHist] = useState({rows:null, loading:false});
-  // Graded mode state — picker options come from graded_prices_latest joined
-  // with raw for card metadata. Each option is a (pid, grader, grade) triple.
+  // Graded mode state — picker options come from graded_sales_rollup joined with
+  // raw for card metadata. Each option is a (card_id, printing, grader, grade).
   const [gradedSearch, setGradedSearch] = useState("");
   const [gradedOptions, setGradedOptions] = useState(null);
   const [gradedGraderFilter, setGradedGraderFilter] = useState(() => new Set());
@@ -14218,7 +13792,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Fetch each graphed product's history in parallel. Only fetch items whose
   // history we don't already have cached in compareSeries — this avoids
   // re-fetching the whole list every time the user checks one more box.
-  // Graded items go to graded_prices_daily; everything else (cards/sealed)
+  // Graded items go to graded_sales (per-sale); everything else (cards/sealed)
   // goes to fetchCardHistory.
   useEffect(()=>{
     if(!compareCards.length) return;
@@ -14228,19 +13802,26 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     setCompareLoading(true);
     const tasks = missing.map(c => {
       if(c.kind === "graded"){
-        // Pull every snapshot for this (pid, printing, grader, grade) from
-        // graded_prices_daily. Printing was added in migration 49 — without
-        // filtering on it we'd get both Normal and Holofoil rows on the same
-        // date for split-printing cards, double-plotting the chart.
+        // Every individual sale for this (card_id, printing, grader, grade).
+        // Was graded_prices_daily, whose feed died 2026-06-30 — so every graded
+        // line stopped dead at that date for every user.
+        //
+        // Printing MUST be filtered: Challenge Promo (C1) cards share one
+        // card_id across Top Prize foil and Prize Wall non-foil, which are
+        // different markets (Cinderella - Stouthearted PSA 10: $1,707 vs $280).
+        // Unfiltered, both tiers plot as one zig-zagging line.
         const params = {
-          select: "date,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,ebay_low_price,ebay_high_price",
-          tcgplayer_product_id: "eq." + c.productId,
+          select: "sold_date,sale_price",
+          card_id: "eq." + c.gradedCardId,
           grader: "eq." + c.grader,
           grade:  "eq." + c.grade,
-          order: "date.asc",
+          excluded: "is.false",
+          order: "sold_date.asc",
         };
-        if(c.gradedPrinting) params.printing = "eq." + c.gradedPrinting;
-        return sbFetchAll("graded_prices_daily", params)
+        // The rollup coalesces an unclassified printing to ""; on the sales
+        // table that same row is NULL.
+        params.printing = c.gradedPrinting ? "eq." + c.gradedPrinting : "is.null";
+        return sbFetchAll("graded_sales", params)
         .then(rows => ({id: c.card_id, rows, kind: "graded"}))
         .catch(() => ({id: c.card_id, rows: [], kind: "graded"}));
       }
@@ -14254,14 +13835,25 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         const next = {...prev};
         for(const {id, rows, kind} of results){
           if(kind === "graded"){
-            next[id] = (rows || []).map(r => ({
-              x: new Date(r.date + "T00:00:00Z").getTime(),
-              // Graded items don't have raw NM Low/Market — map the eBay
-              // sold avg to both "low" and "market" so the same render
-              // path works regardless of the showLow / showMarket toggle.
-              low: r.ebay_avg_1d == null ? null : +r.ebay_avg_1d,
-              market: r.ebay_avg_30d == null ? null : +r.ebay_avg_30d,
-            }));
+            // Graded has no raw Low/Market, so the shared showLow/showMarket
+            // toggle is repurposed: `low` = each individual sale, `market` =
+            // the rolling mean of that sale and the 4 before it. Same Last Sold
+            // vs Avg-of-5 duality the rest of the graded UI uses, and it maps
+            // onto the existing render path untouched. gradedPriceLabel()
+            // relabels the toggle so it doesn't read "Low / NM Market".
+            const win = [];
+            next[id] = (rows || [])
+              .filter(r => r.sale_price != null && r.sold_date)
+              .map(r => {
+                const price = +r.sale_price;
+                win.push(price);
+                if(win.length > 5) win.shift();
+                return {
+                  x: new Date(r.sold_date + "T00:00:00Z").getTime(),
+                  low: price,
+                  market: win.reduce((a,b) => a+b, 0) / win.length,
+                };
+              });
           } else {
             // Drop pre-release rows for the card's set (TCGplayer pre-release
             // prices sit 10-20x the eventual floor; including them spikes the
@@ -14286,24 +13878,30 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Fetch graded picker options lazily — only when the user first opens
   // the By Graded tab. Keeps the Price Graphing initial load fast for
   // users who never touch graded.
+  //
+  // Source is graded_sales_rollup (our own per-sale data), NOT the legacy
+  // graded_prices_latest — that feed died 2026-06-30 and this tab was still
+  // graphing it for everyone, so every line flat-lined at that date.
+  // The rollup is keyed by card_id, which is also a better catalog join than
+  // tcgplayer_product_id (pids are null or wrong for a chunk of promos).
   useEffect(() => {
     if(mode !== "graded" || gradedOptions != null) return;
     let cancelled = false;
-    sbFetchAll("graded_prices_latest", {
-      select: "tcgplayer_product_id,printing,grader,grade,ebay_avg_7d,ebay_avg_1d,ebay_avg_30d",
-      order: "ebay_avg_30d.desc.nullslast",
+    sbFetchAll("graded_sales_rollup", {
+      select: "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count,last_sold_date",
+      order: "last_sold_price.desc.nullslast",
     }).then(rows => {
       if(cancelled) return;
-      // Build a pid -> raw row index for quick metadata join.
-      const byPid = new Map();
+      // card_id -> catalog row for metadata. Split-printing sets emit one raw
+      // row per printing under the same card_id; any of them carries the
+      // name/set/image we need, so first-wins.
+      const byCardId = new Map();
       for(const r of (raw || [])){
-        if(r.tcgplayer_product_id != null && !byPid.has(r.tcgplayer_product_id)){
-          byPid.set(r.tcgplayer_product_id, r);
-        }
+        if(r.card_id != null && !byCardId.has(r.card_id)) byCardId.set(r.card_id, r);
       }
       const out = [];
       for(const r of (rows || [])){
-        const meta = byPid.get(r.tcgplayer_product_id);
+        const meta = byCardId.get(r.card_id);
         if(!meta) continue;
         out.push({...r, _meta: meta});
       }
@@ -14798,27 +14396,46 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       image: s.image_url || null,
     };
   }, []);
-  // Each graded compare item is keyed by (pid, printing, grader, grade) so
-  // split-printing cards can graph foil vs non-foil as distinct lines.
-  // `printing` here is the chart-label string (kept for back-compat with
-  // fetchCardHistory); the actual printing value lives on `gradedPrinting`.
+  // Compare-list key for a graded rollup row. MUST be the single source of
+  // truth: the picker's "is this selected" test and the built item's card_id
+  // used to be computed separately and disagreed on whether printing was part
+  // of the key, so a graded tier could never be un-checked (the filter matched
+  // nothing) and clicking twice added a duplicate line.
+  //
+  // The rollup stores unclassified printing as "" (its own coalesce), so
+  // normalise that to a literal marker rather than letting it collapse into
+  // "Normal" — an unknown printing is not the same tier as a known non-foil.
+  const gradedCompareId = useCallback((g) => {
+    if(!g || !g.card_id) return null;
+    return `graded-${g.card_id}-${g.printing || "-"}-${g.grader}-${g.grade}`;
+  }, []);
+  // Each graded compare item is keyed by (card_id, printing, grader, grade) so
+  // split-printing cards graph Top Prize foil vs Prize Wall non-foil as
+  // distinct lines. `printing` here is the chart-label string; the real
+  // printing value lives on `gradedPrinting`.
   const buildGradedCompareItem = useCallback((g) => {
-    if(!g || g.tcgplayer_product_id == null) return null;
+    const id = gradedCompareId(g);
+    if(!id) return null;
     const meta = g._meta || {};
-    const realPrinting = g.printing || "Normal";
-    const printingTag = realPrinting === "Normal" ? "" : (" " + realPrinting);
+    const tier = (g.grader || "").toUpperCase() + " " + g.grade;
+    // C1 cards read as "Top Prize"/"Prize Wall"; plain finishes read as-is.
+    const label = gradedVariantLabel(g.printing, meta.Set);
+    const printingTag = label ? " " + label : "";
     return {
       kind: "graded",
-      card_id: `graded-${g.tcgplayer_product_id}-${realPrinting}-${g.grader}-${g.grade}`,
-      productId: g.tcgplayer_product_id,
+      card_id: id,
+      gradedCardId: g.card_id,
+      // Kept so the shared pre-release clip (releaseFloorByPid) still applies.
+      productId: meta.tcgplayer_product_id ?? null,
       grader: g.grader, grade: g.grade,
-      gradedPrinting: realPrinting,
-      printing: (g.grader||"").toUpperCase() + " " + g.grade + printingTag,
-      name: (meta["Product Name"] || meta.name || "Unknown") + " — " + (g.grader||"").toUpperCase() + " " + g.grade + printingTag,
-      sub: (meta.Set ? meta.Set + (meta.Number ? " · #" + String(meta.Number).split("/")[0] : "") : "") + " · " + (g.grader||"").toUpperCase() + " " + g.grade + printingTag,
+      gradedPrinting: g.printing || null,
+      printing: tier + printingTag,
+      name: (meta["Product Name"] || meta.name || "Unknown") + " — " + tier + printingTag,
+      sub: (meta.Set ? meta.Set + (meta.Number ? " · #" + String(meta.Number).split("/")[0] : "") : "")
+           + " · " + tier + printingTag,
       image: meta.img_normal || meta.img_small || null,
     };
-  }, []);
+  }, [gradedCompareId]);
 
   // Inline picker used inside Compare mode so users can add cards / sealed
   // without leaving the report. Top 8 card hits and top 4 sealed hits.
@@ -14891,7 +14508,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     </div>
 
     ${(mode === "sealed" || mode === "card" || mode === "set" || mode === "graded") ? (() => {
-      const priceLabel = showLow ? "Low" : "NM Market";
+      // Graded series carry individual sales in `low` and the rolling avg-of-5
+      // in `market` (there is no raw Low / NM Market for a slab), so the toggle
+      // has to say what it actually switches between.
+      const priceLabel = mode === "graded"
+        ? (showLow ? "Sale price" : "Avg of last 5")
+        : (showLow ? "Low" : "NM Market");
       // Per-pid earliest acceptable timestamp = release date + 1 day. Used to
       // drop pre-release spike days from each compared card individually
       // (different cards have different release dates so a single shared
@@ -14987,7 +14609,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         }
       };
       const toggleGraded = (g) => {
-        const gid = `graded-${g.tcgplayer_product_id}-${g.grader}-${g.grade}`;
+        const gid = gradedCompareId(g);
+        if(!gid) return;
         if(isCardInCompare(gid)){
           setCompareCards(prev => prev.filter(p => p.card_id !== gid));
         } else if(!isFull){
@@ -15172,13 +14795,15 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 ? html`<div class="history-picker-empty">Loading graded sales…</div>`
                 : gradedFiltered.length === 0
                   ? html`<div class="history-picker-empty">${gradedOptions.length === 0
-                      ? "No graded sales data is available right now — check back after the next daily update."
+                      ? "No graded sales recorded yet."
                       : `No matches for "${gradedSearch}"`}</div>`
                   : gradedFiltered.map(g => {
-                      const gid = `graded-${g.tcgplayer_product_id}-${g.grader}-${g.grade}`;
+                      const gid = gradedCompareId(g);
                       const sel = isCardInCompare(gid);
                       const m = g._meta || {};
-                      const px = g.ebay_avg_1d ?? g.ebay_avg_30d ?? g.ebay_avg_7d;
+                      const px = g.last_sold_price ?? g.avg_last_5;
+                      const variant = gradedVariantLabel(g.printing, m.Set);
+                      const n = g.sale_count || 0;
                       return html`<button key=${gid}
                         class=${"history-picker-item picker-multi "+(sel?"active":"")}
                         disabled=${!sel && isFull}
@@ -15189,8 +14814,10 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                           <span class="hpi-name">${m["Product Name"] || m.name || "Unknown"}</span>
                           <span class="hpi-sub">
                             <span style=${{color:"#c8a846",fontWeight:700}}>${(g.grader||"").toUpperCase()} ${g.grade}</span>
+                            ${variant ? " " + variant : ""}
                             ${m.Set ? " · " + m.Set : ""}
                             ${px != null ? " · $" + Number(px).toLocaleString(undefined,{maximumFractionDigits:0}) : ""}
+                            ${" · " + n + (n === 1 ? " sale" : " sales")}
                           </span>
                         </span>
                       </button>`;
@@ -15276,8 +14903,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 </div>`}
                 <div class="history-chart-controls">
                   <div class="seg-toggle">
-                    <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>Low</button>
-                    <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>NM Market</button>
+                    <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>${mode === "graded" ? "Sale price" : "Low"}</button>
+                    <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>${mode === "graded" ? "Avg of last 5" : "NM Market"}</button>
                   </div>
                 </div>
                 ${compareLoading
@@ -16606,30 +16233,23 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, p
     const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
     let cancelled = false;
     setState({loading: true, error: null});
-    (premium ? fetchGradedSalesFor(slots, since) : fetchGradedHistoryFor(slots, since))
+    fetchGradedSalesFor(slots, since)
       .then(rows => { if(!cancelled){ setHistoryRows(rows); setState({loading:false, error:null}); } })
       .catch(e => { if(!cancelled) setState({loading:false, error: String(e?.message || e)}); });
     return () => { cancelled = true; };
-  }, [slotsKey, rangeKey, premium]);
+  }, [slotsKey, rangeKey]);
 
-  // Last-sold history (premium) or the avg-based daily history (non-premium).
   const lastSeries = useMemo(() => historyRows
-    ? (premium ? computeSalesValueHistory(historyRows, slots) : computeGradedValueHistory(historyRows, slots))
-    : null, [historyRows, slots, premium]);
-  // Avg-of-5 history only exists for premium (needs per-sale rows).
-  const avgSeries = useMemo(() => (premium && historyRows)
-    ? computeSalesValueHistoryAvg5(historyRows, slots) : null, [historyRows, slots, premium]);
+    ? computeSalesValueHistory(historyRows, slots) : null, [historyRows, slots]);
+  const avgSeries = useMemo(() => historyRows
+    ? computeSalesValueHistoryAvg5(historyRows, slots) : null, [historyRows, slots]);
   const toXY = (s) => s.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value}));
   const chartSeries = useMemo(() => {
     const out = [];
-    if(premium){
-      if(showLast && lastSeries && lastSeries.length) out.push({label:"Last sold",  color:"var(--accent)", dashed:false, data:toXY(lastSeries)});
-      if(showAvg  && avgSeries  && avgSeries.length)  out.push({label:"Avg last 5",  color:"#7e54c4",      dashed:true,  data:toXY(avgSeries)});
-    } else if(lastSeries && lastSeries.length){
-      out.push({label:"Graded value", color:"var(--accent)", dashed:false, data:toXY(lastSeries)});
-    }
+    if(showLast && lastSeries && lastSeries.length) out.push({label:"Last sold",  color:"var(--accent)", dashed:false, data:toXY(lastSeries)});
+    if(showAvg  && avgSeries  && avgSeries.length)  out.push({label:"Avg last 5",  color:"#7e54c4",      dashed:true,  data:toXY(avgSeries)});
     return out;
-  }, [premium, showLast, showAvg, lastSeries, avgSeries]);
+  }, [showLast, showAvg, lastSeries, avgSeries]);
 
   // The headline number + range delta track the chosen basis (last vs avg5).
   const headSeries = (premium && basis === "avg5" && avgSeries) ? avgSeries : lastSeries;
@@ -17151,7 +16771,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [goals, setGoals] = useState(null);          // tracking goals
   const [submissions, setSubmissions] = useState([]); // grading_submissions (the "sent for grading" queue)
   const [collGradeOpen, setCollGradeOpen] = useState(false); // "Grade from collection" picker modal
-  const [latestPrices, setLatestPrices] = useState(null); // graded_prices_latest cache
   const [rollup, setRollup] = useState(null);        // graded_sales_rollup (premium)
   const [addOpen, setAddOpen] = useState(false);
   // When clicking a tracked tile's + button, jump straight to the Add modal
@@ -17379,22 +16998,8 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               }
               return r;
             }),
-          sbFetchAll("graded_prices_latest", {
-            select: "tcgplayer_product_id,printing,grader,grade,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,price_date",
-          }).catch(()=>[]),
         ]);
         if(cancelled) return;
-        // Graded price matview: on success mirror it (shared, not per-user);
-        // offline the sbFetchAll .catch gave [] — fall back to the mirror so
-        // owned slabs still show values from the last sync.
-        if(lp && lp.length){
-          setLatestPrices(lp);
-          offlineMirrorWrite("gradedprices", lp);
-        } else {
-          const mlp = await offlineMirrorRead("gradedprices");
-          if(cancelled) return;
-          setLatestPrices(mlp || []);
-        }
         if(it.error || gl.error){
           // Offline / outage: hydrate items + goals from the last good mirror
           // instead of dead-ending on the error banner.
@@ -17415,21 +17020,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     })();
     return () => { cancelled = true; };
   }, [user, readOnly]);
-  // Fetch latest prices in read-only mode too (anon-readable matview).
-  useEffect(() => {
-    if(!readOnly) return;
-    let cancelled = false;
-    (async () => {
-      try {
-        const lp = await sbFetchAll("graded_prices_latest", {
-          select: "tcgplayer_product_id,printing,grader,grade,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,price_date",
-        }).catch(()=>[]);
-        if(!cancelled) setLatestPrices(lp || []);
-      } catch {/* ignore */}
-    })();
-    return () => { cancelled = true; };
-  }, [readOnly]);
-
   // Premium accounts value owned slabs from the per-sale rollup (Avg of Last 5,
   // falling back to Last Sold) instead of TCGPriceLookup averages. Anon-readable
   // matview, so it loads in read-only viewer mode too.
@@ -17468,49 +17058,25 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     }
     return out;
   }, [items, cardById]);
-  const tileSlotsKey = useMemo(() => tileSlots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}`).sort().join(","), [tileSlots]);
-  const [tileHistory, setTileHistory] = useState(null);
-  // Fetch fires when either the tile Δ% toggle is on OR the Graded Movers
-  // banner is expanded — both consume the same history map. A user who
-  // wants neither pays no fetch cost.
-  const needsTileHistory = !gradedPremium && (showDeltas || !gradedMoversCollapsed) && tileSlots.length > 0;
-  useEffect(() => {
-    if(!needsTileHistory){ setTileHistory(null); return; }
-    const since = new Date(Date.now() - 35*24*3600*1000).toISOString().slice(0,10);
-    let cancelled = false;
-    fetchGradedHistoryFor(tileSlots, since)
-      .then(rows => { if(!cancelled) setTileHistory(rows); })
-      .catch(() => { if(!cancelled) setTileHistory([]); });
-    return () => { cancelled = true; };
-  }, [needsTileHistory, tileSlotsKey]);
+  // Δ% map for the tile pills + the Graded Movers banner, from the per-sale
+  // rollup (last_sold + windowed pct, migration 75). Keyed by
+  // (pid, printing, grader, grade) under every plausible printing because the
+  // owned slot's stored printing and the rollup's may disagree.
   const tileDeltasByKey = useMemo(() => {
-    // Premium: build the Δ% map from the per-sale rollup (last_sold + windowed
-    // pct, migration 75) keyed like the legacy map so the movers banner + tile
-    // pills consume it unchanged. No 1D window (graded is sparse).
-    if(gradedPremium){
-      if(!rollup) return null;
-      const m = new Map();
-      const PR = ["Normal", "Holofoil", "Cold Foil", "Foil"];
-      for(const r of rollup){
-        const meta = cardById.get(r.card_id);
-        if(!meta || !meta.tcgplayer_product_id) continue;
-        const grader = (r.grader||"").toLowerCase();
-        const d = {tcgplayer_product_id: meta.tcgplayer_product_id, grader, grade: r.grade,
-          low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
-          pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d};
-        for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${grader}|${r.grade}`, d);
-      }
-      return m;
-    }
-    if(!tileHistory || !tileHistory.length) return null;
-    const deltas = computeGradedDeltas(tileHistory);
+    if(!rollup) return null;
     const m = new Map();
-    for(const d of deltas){
-      const k = `${d.tcgplayer_product_id}|${d.printing||"Normal"}|${(d.grader||"").toLowerCase()}|${d.grade}`;
-      m.set(k, d);
+    const PR = ["Normal", "Holofoil", "Cold Foil", "Foil"];
+    for(const r of rollup){
+      const meta = cardById.get(r.card_id);
+      if(!meta || !meta.tcgplayer_product_id) continue;
+      const grader = (r.grader||"").toLowerCase();
+      const d = {tcgplayer_product_id: meta.tcgplayer_product_id, grader, grade: r.grade,
+        low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
+        pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d};
+      for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${grader}|${r.grade}`, d);
     }
     return m;
-  }, [gradedPremium, rollup, cardById, tileHistory]);
+  }, [rollup, cardById]);
   // Map "1d" | "1w" | "1m" → the pct_* key on the delta row. Tile slots
   // always show all three windows so they don't need a window→key lookup
   // — only the banner's sort-by-window picker uses bannerPctKey now.
@@ -17554,13 +17120,14 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // Legacy callers that don't know printing can look up under "Normal".
   const priceByKey = useMemo(() => {
     const m = new Map();
-    if(gradedPremium){
-      // Synthesize legacy-shaped rows from the per-sale rollup so every existing
-      // consumer (header totals, slot pills, add modal, poster) reads Avg-of-5
-      // without touching each call site. The rollup isn't printing-aware and its
-      // grader is UPPERCASE, so lowercase it (matches the lowercase convention
-      // in graded_prices_latest / graded_collection_items) and emit the same
-      // value under every plausible printing key for the card's pid.
+    {
+      // Synthesize rows shaped like the old feed's from the per-sale rollup so
+      // every existing consumer (header totals, slot pills, add modal, poster)
+      // reads Avg-of-5 without touching each call site. `ebay_avg_*` here is an
+      // internal field name, NOT a legacy column — see gradedRowValue. The
+      // rollup's grader is UPPERCASE, so lowercase it to match the convention in
+      // graded_collection_items, and emit the value under every plausible
+      // printing key for the card's pid.
       const PRINTINGS = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
       // Which owned-item printing keys a split-card rollup row should price. The
       // rollup's printing is "" (non-split → price every printing the same),
@@ -17590,19 +17157,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       }
       return m;
     }
-    for(const p of (latestPrices||[])){
-      m.set(p.tcgplayer_product_id + "|" + (p.printing||"Normal") + "|" + (p.grader||"") + "|" + p.grade, p);
-    }
-    return m;
-  }, [gradedPremium, rollup, latestPrices, cardById]);
-  // TCGPriceLookup feed retired 2026-06-30 — graded_prices_latest is frozen.
-  // Show non-premium users the last snapshot date next to the header totals.
-  const gradedAsOf = useMemo(() => {
-    if(gradedPremium) return null;
-    let max = null;
-    for(const p of (latestPrices||[])) if(p.price_date && (!max || p.price_date > max)) max = p.price_date;
-    return max;
-  }, [gradedPremium, latestPrices]);
+  }, [rollup, cardById]);
   // Group cards in raw by set so the goal flow + main render can lay them out.
   const cardsBySetId = useMemo(() => {
     const m = new Map();
@@ -18172,7 +17727,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
             onClick=${onJumpToScreenerGraded}
             title="Open the Screener filtered to your graded cards, sorted by 1W Δ%">View in Screener →</button>`}
         </div>
-        ${(gradedPremium ? tileDeltasByKey == null : tileHistory == null)
+        ${(tileDeltasByKey == null)
           ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>Loading graded history…</div>`
           : gradedBannerMovers.length === 0
             ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:12}}>
@@ -18212,7 +17767,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       <div class="graded-collection-totals">
         <div class="gc-stat"><div class="gc-stat-val">${totals.uniqueCards}</div><div class="gc-stat-lbl">Unique cards owned</div></div>
         ${totals.totalCopies !== totals.uniqueCards && html`<div class="gc-stat"><div class="gc-stat-val">${totals.totalCopies}</div><div class="gc-stat-lbl">Total copies owned</div></div>`}
-        ${gradedAsOf && html`<span class="muted" style=${{fontSize:11,alignSelf:"center"}}>prices as of ${gradedAsOf}</span>`}
       </div>
       <div class="graded-collection-header-actions gc-caps-row">
         <div class="seg-toggle gc-caps-seg" title="Browse the slabs you own, or track set / rarity goals">
@@ -18852,7 +18406,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
     }
   }
   const hasPriceData = !!priceRow;
-  const priceVal = priceRow && (priceRow.ebay_avg_1d ?? priceRow.ebay_avg_30d ?? priceRow.ebay_avg_7d);
+  const priceVal = priceRow && gradedRowValue(priceRow, "avg5");
 
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:560}}>
@@ -23055,52 +22609,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return () => { cancelled = true; };
   }, []);
 
-  // Graded prices (eBay PSA/CGC/BGS/SGC/TAG) — lazy-fetched the first time
-  // the user flips the Graded toggle on. Skipping this on initial mount cuts
-  // the screener's load time roughly in half (5K-row paginated query).
-  const [gradedHistory, setGradedHistory] = useState(null);
-  useEffect(() => {
-    if(!showGraded || gradedHistory != null) return;
-    let cancelled = false;
-    sbFetchAll("graded_prices_daily", {
-      select: "tcgplayer_product_id,printing,grader,grade,date,ebay_avg_1d,ebay_avg_7d,ebay_avg_30d,ebay_low_price,ebay_high_price",
-      order: "date.asc",
-    }).then(rows => { if(!cancelled) setGradedHistory(rows || []); })
-      .catch(e => { if(!cancelled){ console.warn("graded fetch:", e?.message || e); setGradedHistory([]); } });
-    return () => { cancelled = true; };
-  }, [showGraded, gradedHistory]);
-
-  // Synthesize per-(pid, grader, grade) graded "rows" from the full history.
-  // Each entry carries the latest price + Δ% windows derived from finding
-  // the closest historical snapshot to N days ago. These rows are then
-  // dropped into the screener's regular filter/sort pipeline whenever the
-  // Graded toggle is on, so Gainers/Buyouts/etc. operate on graded prices.
-  // Synthesize per-slot Δ% rows from graded history. Pure computation lives
-  // in computeGradedDeltas (module scope) so the home page graded movers and
-  // GradedCollectionView Δ% display + movers banner reuse the exact shape.
-  const gradedSynth = useMemo(() => computeGradedDeltas(gradedHistory), [gradedHistory]);
-
-  // The TCGPriceLookup feed was retired 2026-06-30, so graded_prices_daily is
-  // frozen — surface the last snapshot date so non-premium users know the
-  // numbers aren't current.
-  const gradedAsOf = useMemo(() => {
-    let max = null;
-    for(const r of (gradedHistory || [])) if(r.date && (!max || r.date > max)) max = r.date;
-    return max;
-  }, [gradedHistory]);
-
-  // Index: tcgplayer_product_id -> array of synthesized graded rows.
-  // Lets us O(1) look up "does this card have any graded entries?" + walk
-  // them all from a raw row's pid.
-  const gradedByPid = useMemo(() => {
-    const out = new Map();
-    for(const r of gradedSynth){
-      if(!out.has(r.tcgplayer_product_id)) out.set(r.tcgplayer_product_id, []);
-      out.get(r.tcgplayer_product_id).push(r);
-    }
-    return out;
-  }, [gradedSynth]);
-
   // Sealed price history — lazy-fetched the first time the user flips
   // the Sealed toggle on, then cached for the session. Pulls 1y of
   // prices_daily for every sealed pid the client knows about. The volume
@@ -23399,33 +22907,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         });
       }
       rows = synth;
-    } else if(showGraded){
-      const synth = [];
-      for(const g of gradedSynth){
-        const m = movRowByPid.get(g.tcgplayer_product_id);
-        if(!m) continue;
-        synth.push({
-          // Metadata from the raw row.
-          card_id: m.card_id, set_id: m.set_id, name: m.name, version: m.version,
-          rarity: m.rarity, ink: m.ink, collector_number: m.collector_number,
-          image_small: m.image_small, image_normal: m.image_normal,
-          tcgplayer_product_id: g.tcgplayer_product_id,
-          // Graded-specific identity (acts as the "printing" for keying/dedupe).
-          printing: ((g.grader||"").toUpperCase() + " " + g.grade),
-          grader: g.grader, grade: g.grade,
-          // Graded prices + Δ% windows.
-          low_today: g.low_today, low_prev: g.low_prev,
-          market_today: g.market_today,
-          pct_1d: g.pct_1d, pct_7d: g.pct_7d, pct_30d: g.pct_30d,
-          pct_90d: g.pct_90d, pct_180d: g.pct_180d, pct_365d: g.pct_365d,
-          mkt_pct_1d: g.mkt_pct_1d, mkt_pct_7d: g.mkt_pct_7d,
-          mkt_pct_30d: g.mkt_pct_30d, mkt_pct_90d: g.mkt_pct_90d,
-          mkt_pct_180d: g.mkt_pct_180d, mkt_pct_365d: g.mkt_pct_365d,
-          abs_pct_1d: g.abs_pct_1d,
-          ebay_low_price: g.ebay_low_price, ebay_high_price: g.ebay_high_price,
-        });
-      }
-      rows = synth;
     }
     // Smart-search: route the search box and chip filters (Rarity / Ink /
     // Set) through the canonical matchesCardFilter against the catalog row.
@@ -23636,7 +23117,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return sd ? bv - av : av - bv;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedSynth, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldWithin, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldWithin, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
 
   const onSort = (k) => {
     if(sortKey === k) setSortDesc((d) => !d);
@@ -23873,9 +23354,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
       ...winCols, signalsCol];
-    if(showGraded) return [setCol, rarityCol,
-      money("low","Graded Price","low","low_today","Graded eBay 7d-avg price"),
-      ...winCols, signalsCol];
     return [setCol, rarityCol,
       money("low","Low","low","low_today","TCGplayer Low — lowest active listing across any condition"),
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
@@ -23927,7 +23405,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         title="Sealed products — booster boxes, packs, bundles, troves. Each row is one SKU sortable by Low / Market / Δ%.">
         Sealed
       </button>
-      ${showGraded && !premiumGraded && gradedAsOf && html`<span class="muted" style=${{fontSize:11,alignSelf:"center",marginLeft:6}}>as of ${gradedAsOf}</span>`}
     </div>
     <div class="price-db-presets">
       ${activePresets.map(([k, l, tip]) => html`<button key=${k}
@@ -24273,6 +23750,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </div>`}
       </div>
     </div>`}
+    ${showGraded && !gradedPremium
+      ? html`<${GradedTosGate}/>`
+      : html`<${React.Fragment}>
     <div class="price-db-count muted">${filtered.length} cards${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
     ${filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
       No cards match the current filters — try clearing a chip or two, or switch the preset back to "All".
@@ -24322,6 +23802,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </table>
       ${filtered.length > 1000 && html`<div class="muted" style=${{padding: "10px 6px", textAlign: "center", fontSize: 11}}>Showing first 1,000 of ${filtered.length} — tighten filters to see more.</div>`}
     </div>
+    <//>`}
     ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${() => { setSelectedGroup(null); setSelectedInitialPrinting(null); }}
@@ -26011,38 +25492,10 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     }
     return out;
   }, [gradedItems, pidByCardId]);
-  const gradedCurrentValue = useMemo(() => {
-    // We can't price slots without the graded_prices_latest snapshot.
-    // valueSeries below computes it from the rolled-up history; use the
-    // last point as the current value to stay consistent with the chart.
-    return 0;
-  }, []);
-  const [gradedHistoryRows, setGradedHistoryRows] = useState(null);
   const gradedSlotsKey = useMemo(() => gradedSlots.map(s => `${s.pid}|${s.printing}|${s.grader}|${s.grade}|${s.qty}`).sort().join(","), [gradedSlots]);
-  // Fetch graded history when the chart's Graded line is on OR when the
-  // movers panel is in graded mode. Decoupled from showGraded alone so a
-  // user who hid Graded from the chart can still see graded movers below.
-  // Non-premium only — premium reads the per-sale dataset (gradedSalesRows below).
-  const needsGradedHistory = !gradedPremium && (showGraded || moversMode === "graded") && gradedSlots.length > 0;
-  useEffect(() => {
-    if(!needsGradedHistory){ setGradedHistoryRows(null); return; }
-    // The movers panel can sit on windows up to 1y (MOVER_WINDOWS) while the
-    // chart's rangeKey defaults to 3m. Always pull at least 365 days so the
-    // 1y Δ% column doesn't go null when the chart range is short.
-    const rangeDays = (COLLECTION_RANGES.find(r => r.key === rangeKey) || COLLECTION_RANGES[1]).days;
-    const days = (moversMode === "graded") ? Math.max(rangeDays, 365) : rangeDays;
-    const since = new Date(Date.now() - days*24*3600*1000).toISOString().slice(0,10);
-    let cancelled = false;
-    fetchGradedHistoryFor(gradedSlots, since)
-      .then(rows => { if(!cancelled) setGradedHistoryRows(rows); })
-      .catch(() => { if(!cancelled) setGradedHistoryRows([]); });
-    return () => { cancelled = true; };
-  }, [gradedSlotsKey, rangeKey, needsGradedHistory, moversMode]);
-  // Premium: pull the user's individual graded SALES (not the legacy daily
-  // history) — the same path the card-detail and collection-tab charts use.
-  // Drives BOTH the value line and the graded movers list. Fetched whenever the
-  // graded chart line is on OR the movers panel is in graded mode (>=365d so the
-  // 1Y window has a reference).
+  // Pull the user's individual graded SALES. Drives BOTH the value line and the
+  // graded movers list. Fetched whenever the graded chart line is on OR the
+  // movers panel is in graded mode (>=365d so the 1Y window has a reference).
   const [gradedSalesRows, setGradedSalesRows] = useState(null);
   useEffect(() => {
     if(!(gradedPremium && (showGraded || moversMode === "graded") && gradedSlots.length)){ setGradedSalesRows(null); return; }
@@ -26056,10 +25509,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     return () => { cancelled = true; };
   }, [gradedSlotsKey, rangeKey, gradedPremium, showGraded, moversMode]);
   const gradedValueSeries = useMemo(() =>
-    gradedPremium
-      ? (gradedSalesRows ? computeSalesValueHistory(gradedSalesRows, gradedSlots) : null)
-      : (gradedHistoryRows ? computeGradedValueHistory(gradedHistoryRows, gradedSlots) : null),
-    [gradedPremium, gradedSalesRows, gradedHistoryRows, gradedSlots]);
+    gradedSalesRows ? computeSalesValueHistory(gradedSalesRows, gradedSlots) : null,
+    [gradedSalesRows, gradedSlots]);
   const gradedLatestValue = useMemo(() => (gradedValueSeries && gradedValueSeries.length) ? gradedValueSeries[gradedValueSeries.length-1].value : 0, [gradedValueSeries]);
 
   // Multi-series chart. Each {date,value} series → one line. Toggled-off
@@ -26177,16 +25628,6 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     for(const r of (raw||[])) if(r.tcgplayer_product_id) m.set(r.tcgplayer_product_id, r);
     return m;
   }, [raw]);
-  // Index owned graded slots by the same composite key computeGradedDeltas
-  // emits — so we can filter the delta rows down to ONLY ones the user owns.
-  const ownedGradedSlotsByKey = useMemo(() => {
-    const m = new Map();
-    for(const s of gradedSlots){
-      const key = `${s.pid}|${s.printing||"Normal"}|${(s.grader||"").toLowerCase()}|${s.grade}`;
-      m.set(key, s);
-    }
-    return m;
-  }, [gradedSlots]);
   // Graded counterpart to collectionMovers. Window/direction controls are
   // shared with raw — only the data source differs. Same shape (image, name,
   // price, Δ%) so the render path can stay uniform; the only graded-specific
@@ -26194,11 +25635,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   const gradedCollectionMovers = useMemo(() => {
     if(moversMode !== "graded" || !user || !gradedSlots.length) return [];
     const out = [];
-    if(gradedPremium){
-      // Per-slot Δ% from the user's raw sales (gradedSalesRows). Sales aren't
-      // printing-aware → group by card_id|grader|grade. computeGradedSaleWindows
-      // returns pct_1w/1m/3m/6m/1y; map the movers window onto those (no 1D for
-      // sparse graded — 1D falls back to 1W).
+    {
+      // Per-slot Δ% from the user's raw sales (gradedSalesRows), grouped by
+      // card_id|grader|grade. computeGradedSaleWindows returns
+      // pct_1w/1m/3m/6m/1y; map the movers window onto those (no 1D for sparse
+      // graded — 1D falls back to 1W).
       if(!gradedSalesRows) return [];
       const SALEWIN = {"1d":"pct_1w","1w":"pct_1w","1m":"pct_1m","3m":"pct_3m","6m":"pct_6m","1y":"pct_1y"};
       const wk = SALEWIN[moversWindow] || "pct_1w";
@@ -26221,32 +25662,13 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
         if(!row) continue;
         out.push({row, slot, mover:{low_today: w.lastSold}, pct});
       }
-    } else {
-      if(!gradedHistoryRows) return [];
-      const deltas = computeGradedDeltas(gradedHistoryRows);
-      for(const d of deltas){
-        const key = `${d.tcgplayer_product_id}|${d.printing||"Normal"}|${(d.grader||"").toLowerCase()}|${d.grade}`;
-        const slot = ownedGradedSlotsByKey.get(key);
-        if(!slot) continue;
-        const pct = d[moversWin.pctLow];
-        if(pct == null || pct === 0) continue;
-        if(pct > 0 && !moversUp) continue;
-        if(pct < 0 && !moversDown) continue;
-        // Floor: skip noise. Graded prices are inherently > $5 for any card
-        // worth tracking; this guards against junk grades / data outliers.
-        const today = d.low_today ?? 0;
-        if(today < 5) continue;
-        const row = rowByPid.get(d.tcgplayer_product_id);
-        if(!row) continue;
-        out.push({row, slot, mover:d, pct});
-      }
     }
     const cmpAbs  = (a,b) => Math.abs(b.pct) - Math.abs(a.pct);
     const cmpDesc = (a,b) => b.pct - a.pct;
     const cmpAsc  = (a,b) => a.pct - b.pct;
     out.sort((moversUp && moversDown) ? cmpAbs : moversUp ? cmpDesc : moversDown ? cmpAsc : cmpAbs);
     return out.slice(0, 10);
-  }, [moversMode, user, gradedPremium, gradedSalesRows, gradedHistoryRows, ownedGradedSlotsByKey, rowByPid, moversWin.pctLow, moversWindow, moversUp, moversDown, gradedSlots]);
+  }, [moversMode, user, gradedSalesRows, rowByPid, moversWindow, moversUp, moversDown, gradedSlots]);
 
   if(!user) return html`<aside class="collection-panel">
     <div class="panel-header">
@@ -26401,7 +25823,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
               </tr>`;
             })}
           </tbody></table>`)
-        : (gradedHistoryRows == null
+        : (gradedSalesRows == null
           ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>Loading graded history…</div>`
           : gradedCollectionMovers.length === 0
             ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>

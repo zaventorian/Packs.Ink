@@ -350,14 +350,66 @@ When iterating `cardsForGoal` in the graded view's `grouped` useMemo: if the goa
 
 ## Graded pricing: legacy vs current
 
-Two graded price systems coexist. Which one a user sees is gated by `can_view_graded_premium()` (`graded_premium_viewers`, migration 73) and surfaced in the client as `GradedPremiumContext`.
+Two graded price systems coexist. `GradedPremiumContext` selects between them.
 
-- **Legacy (default, frozen).** `graded_prices_daily` → `graded_prices_latest`, per `(pid, printing, grader, grade, date)`. Sourced from a third-party feed that was **discontinued 2026-06-30**, so the newest row is forever `2026-06-30`. Still read by the non-premium graded UI, which shows a `gradedAsOf` date next to the header totals so the numbers don't read as current. Display contract is `ebay_avg_1d ?? ebay_avg_30d ?? ebay_avg_7d`. **Nothing writes to these tables anymore** — no ETL, no overrides, no backfill.
-- **Current (premium).** `graded_sales` — our own per-sale eBay record (Terapeak scrape, see the graded-pipeline runbook memory) → `graded_sales_rollup`. Because it stores individual sales rather than daily aggregates, it supports real **Last Sold** + **Avg of last 5** instead of a rolling average.
+**The allowlist is retired — graded is public.** `canViewGradedPremium` is hardcoded `true` (2026-07-14) and `can_view_graded_premium()` / `graded_premium_viewers` (migration 73) are **dead code, called from nowhere**. The provider value is `canViewGradedPremium && gradedTosOk`, so the only live gate is **ToS acceptance** (`GRADED_TOS_VERSION`, surface-triggered — see the tours/ToS notes). Every premium data source (`graded_sales`, `graded_sales_rollup`) is already anon-readable, so nothing server-side gates it either. `is_graded_admin()` is a SEPARATE thing and IS enforced server-side across ~10 RPCs and several RLS policies — don't conflate them.
 
-The retired tooling (`etl_tcgpricelookup_daily.py`, `graded_overrides.json`, `probe_graded_printings.py`, `probe_graded_history.py`, `backfill_graded_history.py`, `dump_graded_history.py`, `cleanup_stale_graded_printings.py`) is still on disk but **inert and unrunnable** — the API behind all of it is gone. The `TCGPRICELOOKUP_API_KEY` GitHub secret is unused and can be deleted.
+- **Legacy (frozen, MID-DELETION).** `graded_prices_daily` → `graded_prices_latest`, per `(pid, printing, grader, grade, date)`. Third-party feed **discontinued 2026-06-30**; newest row is forever `2026-06-30`. Display contract is `ebay_avg_1d ?? ebay_avg_30d ?? ebay_avg_7d`. Still read only by the pre-ToS graded UI, which stamps a `gradedAsOf` date. **See "Legacy graded deletion — in progress" below before touching any of it.**
+- **Current.** `graded_sales` — our own per-sale eBay record (Terapeak scrape, see the graded-pipeline runbook memory) → `graded_sales_rollup`. Because it stores individual sales rather than daily aggregates, it supports real **Last Sold** + **Avg of last 5** instead of a rolling average.
 
-The printing/PK schema notes below still matter: the frozen data is keyed per printing and the client still reads it that way.
+### Portfolio chart: printing is part of the key (do NOT regress)
+
+`computeSalesValueHistory` / `computeSalesValueHistoryAvg5` value a slab at its **most recent sale, forward-filled** — so ONE wrong row IS the user's portfolio for days. Two invariants keep that honest, both in `makeGradedSlotSeries`:
+
+1. **Match on printing, not just `(card_id, grader, grade)`.** Challenge Promo (C1) cards share one `card_id` across Top Prize foil and Prize Wall non-foil, which are different markets (Cinderella - Stouthearted PSA 10: **$1,707 foil vs $280 non-foil**). Keying without printing let a $33,493 Top-8 foil sale value a ~$450 non-foil slab — a two-day $67k spike on a $35k collection (2026-07-17). Vocabularies differ between tables (sales say `Foil`/`Non-Foil`/null, owned slots say `Normal`/`Holofoil`/`Cold Foil`), so both sides go through `gradedSlotBucket`, which keeps **unknown distinct from Non-Foil** and leaves version variants (Two Swords / Text Error) exact.
+2. **Only enforce the split on cards that actually have two labelled printings.** With ≤1 known printing, every row (including unclassified) values the slot regardless of what it stored — the same fallback `lookupGradedPx` does, because foil-only chase cards have slots stamped `printing='Normal'` by the migration-50 backfill and a strict match would silently zero them.
+
+**`fetchGradedSalesFor` MUST filter `excluded: "is.false"`.** It didn't until 2026-07-29, so the chart rendered 8.3k quarantined rows (foreign-language, autographs, lots) that `graded_sales_rollup` and the card-detail scatter both correctly skip. Every other `graded_sales` read path filters it; audited 2026-07-29.
+
+Guarded by `node scripts/test_graded_slot_series.mjs`, which extracts the real function text out of Index.html so it can't drift from what ships. Run it after touching any of these three functions.
+
+### Bad-sale defences
+
+Attribution is title-based, so wrong rows are inevitable. Three layers, in pipeline order:
+
+1. **`terapeak_load.py`** — `exclude_reason_for()` (foreign / troll / auto) + `is_nonsingle()` (lot / set / pack / demo) decide `excluded` at load. `printing_of()` also reads the Challenge prize tiers: `Top Prize`/`Top N`/`Continentals` → Foil, `Prize Wall`/`Side Event` → Non-Foil. The foil side additionally requires C1/C2/challenge context because **Set Championship promos also say "Top Prize"** and aren't C1 foils.
+2. **`scripts/backfill_graded_printing.py`** — re-derives `printing` + `exclude_reason` on existing rows from their titles. Only ever ADDS a printing where NULL (never overwrites a hand-corrected value). New exclusions are gated behind `--apply-exclusions` because hiding a sale is user-visible and the foreign-language rule can strand a regional-only card (Mickey - True Friend #25ja) with no sales at all.
+3. **`scripts/flag_graded_outliers.py`** — the ingest guard; the graded analogue of `smooth_low_prices.py`. Per `(card_id, printing bucket, grader, grade)`, compares each sale to the **median of its ≤12 nearest-in-time neighbours within ±120 days** and quarantines beyond 6x / ÷6. Median not mean, and neighbours-in-time not whole-series, so a genuine ramp (Baymax $180 → $500 in two months) is not flagged. Needs ≥5 neighbours or it has no opinion, which also means it can never strand a card. Has a `--self-test` that runs automatically and **refuses to touch real data if it fails**; `--unflag` reverses every outlier decision in bulk.
+
+**`graded_sales.exclude_reason`** (migration 111) is what makes that reversible: before it, `excluded` was a bare boolean, so a mis-set threshold couldn't be undone without also undoing every hand-reviewed exclusion. Values: `outlier`, `lot`, `foreign`, `auto`, `troll`, `cn-conflict`, `nomatch`, `manual`; NULL for rows excluded before 111.
+
+**Counting `#NNN` occurrences does NOT detect multi-card lots** — sellers append PSA cert and inventory numbers in the same form, so the rule flagged 574 ordinary single-card sales against 1 real lot. Don't reintroduce it; the note is in `terapeak_match.py`.
+
+### Price Graphing "By Graded" mode
+
+Ported off the frozen legacy feed onto `graded_sales` 2026-07-29 (it had been graphing lines that all flat-lined at 2026-06-30 for every user).
+
+- **Picker** reads `graded_sales_rollup`, joined to the catalog by **`card_id`** — not `tcgplayer_product_id`, which is null or wrong for a chunk of promos. Rows show `last_sold_price` + `sale_count` + the C1 `Top Prize`/`Prize Wall` variant label.
+- **Series** are per-sale from `graded_sales`, filtered `excluded=is.false` **and on printing** — same trap as the portfolio chart: C1 cards share a `card_id` across two very different markets, and unfiltered they plot as one zig-zag. The rollup stores an unclassified printing as `""` while the sales table stores `NULL`, so the fetch maps `""` → `printing=is.null`.
+- **The Low / NM Market toggle is repurposed**, because a slab has neither: `low` = each individual sale, `market` = the rolling mean of that sale and the 4 before it. Both the toggle buttons and `priceLabel` relabel to **Sale price / Avg of last 5** when `mode === "graded"`, and revert for every other mode.
+- **`gradedCompareId(g)` is the single source of truth for the compare-list key.** The picker's selected-state test and the built item's `card_id` used to be computed independently and disagreed about whether printing was in the key — so a graded tier could never be un-checked and clicking twice added a duplicate line. Never inline that template string again.
+
+### Legacy graded feed — DELETED 2026-07-29
+
+The third-party TCGPriceLookup feed (discontinued 2026-06-30) and everything that read it are gone. `graded_sales` → `graded_sales_rollup` is now the ONLY graded price source.
+
+**Client:** deleted `fetchGradedPrices`, `fetchGradedHistoryFor`, `computeGradedValueHistory`, `computeGradedDeltas`, `GradedPricesTab` (~260 lines), `buildGradedSeries`, both `gradedAsOf` staleness stamps, and the orphans that fell out (`latestPrices`, `gradedSynth`, `gradedByPid`, `gradedHistoryRows`, `ownedGradedSlotsByKey`, `tileHistory`, `gradedCurrentValue`). Every `gradedPremium ? new : legacy` collapsed to the new side. 28 + 6 dead `.graded-*` CSS rules removed from styles.css.
+
+**The ToS gate stays.** `gradedPremium` resolves to `gradedTosOk`, so where the legacy UI used to render, `<GradedTosGate/>` now does — a compact "Review terms" card that re-fires `signalGradedSurface()`. Live on the card-detail Graded tab and the Screener in graded mode. Collapsing the gate instead would have shown licensed data to users who never accepted the terms.
+
+**DB:** `supabase/112_drop_legacy_graded_feed.sql` — **still NOT applied.** Safe to run now (verified: zero query-position references to either table remain; only comments), but the ordering rule stands: deploy the client → confirm prod → then apply. All 70,990 rows archived to `Desktop/graded_prices_daily_archive_20260729.jsonl` first, because `graded_sales` is wider (2023-06-19..present, 7,704 tiers vs 1,761) but **not a superset — 103 legacy tiers have no rows in it.**
+
+**Scripts:** all 8 retired helpers deleted; `etl.yml` + the `etl-debug` skill de-referenced (the skill had advertised `job=graded` as valid long after that job ceased to exist).
+
+Things that survived the cull and must NOT be "cleaned up" later:
+
+- **`gradedRowValue` and its `ebay_avg_1d ?? ebay_avg_30d ?? ebay_avg_7d` chain.** Those are the field names `priceByKey`'s synthesizer emits (`rowOf` sets `ebay_avg_1d = avg_last_5`), NOT columns on any table. Deleting them breaks premium valuation and the Last/Avg-5 toggle. `GradedCollectionAddModal` was the last place poking them directly and now goes through `gradedRowValue(row, "avg5")`.
+- **`.graded-tab`, `.graded-tab-explain`, `.graded-qty-btn`, `.graded-printing-toggle`** — look legacy, still used by `GradedSalesTab` / the owned-copies panel.
+- **`!premiumGraded` in the Screener is NOT a legacy signal.** `premiumGraded = showGraded && gradedPremium`, so it is also true in Raw and Sealed mode; the signal chips and Non-Foil/Foil chips are gated on it and must keep rendering there. Left untouched deliberately.
+
+**One-shot IDB eviction shipped.** The old code mirrored legacy prices to `offlineMirrorWrite("gradedprices")` and read them back whenever the fetch came up empty — after the drop that would have served frozen June prices from IndexedDB forever. The fetch, the write and the read are gone, plus a guarded `idbDel("mirror:gradedprices")` behind `packsink:evictedGradedPricesMirror`. `graded:` / `gradedgoals:` / `gradedown:` are separate buckets — don't wipe those.
+
+Verified in-browser: app boots clean, no console errors; Screener graded shows the rollup columns (Last Sold / Avg Last 5 / Sold / Raw Low / Raw Mkt) with ToS accepted and `<GradedTosGate/>` without; card-detail graded renders the per-sale scatter; Price Graphing graded plots identical coordinates to its pre-rip baseline. `node scripts/test_graded_slot_series.mjs` passes.
 
 ## Graded view UX patterns
 
@@ -963,8 +1015,7 @@ SELECT public.refresh_graded_prices_latest();
 - Low price can also be contaminated by foreign-language listings — prefer Market when in doubt, but for set-level averages the `processData` fallback means Low is more inclusive.
 - Affiliate URL: `https://partner.tcgplayer.com/c/7285926/1780961/21018?u=<encoded URL>`. The `tcgUrl()` helper wraps every TCGPlayer link — never link directly.
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
-- **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why `graded_prices_daily` history is thin and why the graded value chart needs its backward-fill. Kept here only to explain the shape of the frozen data; the API no longer exists.
-- **`scripts/backfill_graded_history.py --pids 510153,527802`** for targeted re-backfill. Without `--pids` walks the full catalog (~677 cards w/ graded data, ~12-15 min at 1 req/sec).
+- **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
 
 ## Ops

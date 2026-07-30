@@ -1,7 +1,8 @@
 """
 terapeak_load.py — load cleaned + matched Terapeak graded sales into Supabase
-`graded_sales` (migration 71). This is a NEW table, separate from the old
-TCGPriceLookup graded data (graded_prices_daily/_latest).
+`graded_sales` (migration 71). This is now the ONLY graded price source; the old
+TCGPriceLookup feed (graded_prices_daily/_latest) was retired 2026-06-30 and its
+tables are being dropped (migration 112).
 
 Loads the single-graded-card buckets (GRADED + NEEDS_GRADE); the EXCLUDE_*
 buckets (lots/sealed/accessory/raw/other-TCG) are skipped — they aren't
@@ -27,7 +28,7 @@ import requests
 from dotenv import load_dotenv
 
 from terapeak_clean import load_all_dedup, classify
-from terapeak_match import build_index, match_one
+from terapeak_match import build_index, match_one, is_nonsingle
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -52,6 +53,22 @@ def parse_date(s):
         return None
 
 
+# Lorcana Challenge (C1/C2) prize tiers imply the finish even when the title never
+# says "foil": the Top Prize / Top N / Continentals cards ARE the foil printing and
+# the Prize Wall handouts are non-foil. Both share ONE card_id, and their markets
+# are far apart (Cinderella - Stouthearted PSA 10 medians $1,707 foil vs $280
+# non-foil), so an unlabelled row is indistinguishable downstream and gets dropped
+# rather than guessed.
+#
+# "Prize Wall" is Challenge-exclusive terminology, so it stands alone. "Top Prize"
+# is NOT — Set Championship promos in Promo Set 1/2 use it too ("Ursula Set
+# Championship Top Prize Promo 38/P1", $66), and those aren't C1 foils. So the
+# foil side additionally requires Challenge context.
+CHALLENGE_CTX_RE = re.compile(r"\bc[12]\b|/\s*c[12]\b|challenge|continentals", re.I)
+TOP_PRIZE_RE = re.compile(r"\btop\s*(?:prize|4|8|16|32|64)\b|\bcontinentals\b", re.I)
+PRIZE_WALL_RE = re.compile(r"\bprize\s*wall\b|\bside\s*event\b", re.I)
+
+
 def printing_of(title: str):
     t = (title or "").lower()
     if re.search(r"non[\s-]?foil", t):
@@ -59,6 +76,10 @@ def printing_of(title: str):
     if "cold foil" in t:
         return "Cold Foil"
     if "foil" in t or "holo" in t:
+        return "Foil"
+    if PRIZE_WALL_RE.search(t):
+        return "Non-Foil"
+    if TOP_PRIZE_RE.search(t) and CHALLENGE_CTX_RE.search(t):
         return "Foil"
     return None
 
@@ -126,8 +147,17 @@ def is_autograph(title: str) -> bool:
     return bool(AUTOGRAPH_RE.search(title or ""))
 
 
-def is_excluded(title: str) -> bool:
-    return is_foreign_lang(title) or is_troll_listing(title) or is_autograph(title)
+def exclude_reason_for(title: str):
+    """Why this listing shouldn't count as a graded sale, or None if it should.
+    Recorded in graded_sales.exclude_reason (migration 111) so exclusions stay
+    auditable and one class can be reversed without disturbing the others."""
+    if is_foreign_lang(title):
+        return "foreign"
+    if is_troll_listing(title):
+        return "troll"
+    if is_autograph(title):
+        return "auto"
+    return None
 
 
 def upsert(batch):
@@ -205,6 +235,15 @@ def main():
             grade = None
         if cn_conflict:
             stats["conflict"] += 1
+        # Lots/sets/packs and collector#-conflicts are the matcher's verdict; the
+        # title-based reasons are the loader's. Attribution failure loses to a
+        # concrete title reason only when there isn't one.
+        reason = exclude_reason_for(title)
+        if reason is None:
+            if is_nonsingle(title):
+                reason = "lot"
+            elif cn_conflict:
+                reason = "cn-conflict"
         out.append({
             "item_id": item_id,
             "title": title,
@@ -224,7 +263,8 @@ def main():
             "printing": printing_of(title),
             "match_confidence": conf,
             "cn_conflict": cn_conflict,
-            "excluded": is_excluded(title),
+            "excluded": reason is not None,
+            "exclude_reason": reason,
         })
         if args.limit and len(out) >= args.limit:
             break

@@ -215,13 +215,17 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/link_preorder_pids.py --commit
 
-  # graded job (TCGPriceLookup -> graded_prices_daily, refresh graded_prices_latest)
-  # RETIRED 2026-06-30: the TCGPriceLookup feed was discontinued. The legacy
-  # graded_prices_daily / graded_prices_latest data is intentionally LEFT FROZEN
-  # in place (still read by the legacy graded UI) and slated for eventual deletion.
-  # Graded *value* now comes from the in-house graded_sales scrape. The
-  # etl_tcgpricelookup_daily.py script + graded_overrides.json are kept on disk
-  # but no longer invoked anywhere. (TCGPRICELOOKUP_API_KEY secret is now unused.)
+  # There is NO graded job. The TCGPriceLookup feed was discontinued 2026-06-30
+  # and the whole legacy path was deleted 2026-07-29: graded_prices_daily /
+  # graded_prices_latest dropped (migration 112, rows archived to
+  # Desktop/graded_prices_daily_archive_20260729.jsonl), and the scripts
+  # (etl_tcgpricelookup_daily.py, graded_overrides.json, the probe_/backfill_/
+  # dump_/cleanup_*graded* helpers) removed from the repo.
+  #
+  # Graded prices now come from graded_sales -> graded_sales_rollup, populated by
+  # the MANUAL Terapeak scrape — deliberately not a cron job (it drives a
+  # logged-in browser). See the graded-pipeline runbook. Don't add a graded job
+  # here, and delete the unused TCGPRICELOOKUP_API_KEY secret when convenient.
 
   metadata:
     name: Lorcast metadata refresh

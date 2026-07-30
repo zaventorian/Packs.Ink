@@ -65,6 +65,7 @@ edition ed new near english eng set chapter pristine card slab gemmt""".split())
 NONSINGLE_RX = re.compile(
     r"\bpromo\s+set\b"
     r"|\bcomplete\s+set\b"
+    r"|\bcollection\s+set\b"
     r"|\bset\s+of\s+\d"
     r"|\blot\b"
     r"|\bbundle\b"
@@ -77,15 +78,33 @@ NONSINGLE_RX = re.compile(
     r"|\btest\s+print\b",
     re.I,
 )
+# "Complete PSA 10 Set", "D100 Collection Full PSA 10 Set" — a qualifier sits
+# between the adjective and "set", so the adjacent-word patterns above miss it.
+#
+# Deliberately does NOT include "collection" or "all": "Fabled Collection Starter
+# Set" describes where a SINGLE card came from (Tinker Bell 11/P3), not a lot of
+# cards. Adjacent "collection set" stays in NONSINGLE_RX above, which still
+# catches the "D23 Expo 2022 Collection Set" lots without the starter-set
+# false positive.
+LOOSE_SET_RX = re.compile(
+    r"\b(complete|sequential|full|master|entire)\b"
+    r"(?:\s+\S+){0,3}?\s+\bsets?\b", re.I)
 # Multiple DISTINCT card characters named in one title is also a lot (e.g.
 # "Mickey/Maleficent/Elsa"). Cheap heuristic: 3+ "/"-separated name chunks or an
 # explicit "x2"/"x3" quantity.
 MULTI_QTY_RX = re.compile(r"\bx\s?[2-9]\b", re.I)
+# NOTE: counting "#NNN" occurrences does NOT work as a multi-card signal, even
+# though multi-card titles do carry several ("PSA 10 - Mickey #208 - Mickey #208 -
+# Son Goku #122"). Sellers routinely append a PSA cert or inventory number in the
+# same form — "Peter Pan-Enchanted #215 Text Error-PSA 10 GEM MINT #91341596",
+# "FOIL Stitch #23 PSA 10 #5372" — so the rule flagged 574 ordinary single-card
+# sales against 1 real lot. Don't reintroduce it.
 
 
 def is_nonsingle(title: str) -> bool:
     """True when the title is a lot / set / pack / demo — i.e. NOT one graded card."""
-    return bool(NONSINGLE_RX.search(title or "") or MULTI_QTY_RX.search(title or ""))
+    t = title or ""
+    return bool(NONSINGLE_RX.search(t) or LOOSE_SET_RX.search(t) or MULTI_QTY_RX.search(t))
 
 
 def norm_cn(cn: str) -> str:
