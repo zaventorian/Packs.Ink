@@ -17,6 +17,7 @@ Exception: explicit user instruction in the current turn ("push it", "ship this"
   - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
   - **User**: `profiles` (carries collection-sharing visibility + share_token cols), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`, `screener_views`.
   - **Tournament**: `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker on).
+  - **Events (RPH)**: `lorcana_events` (migration 113) — EVERY upcoming Ravensburger Play Lorcana event (~17k), `kind` ∈ `sc|prerelease|other`. What the site's "Upcoming near me" box reads. `set_championships` is the SC subset kept in lockstep for the Elo pipeline only. `prerelease_events` is dead once 113's client ships — drop it after prod is confirmed. See "Upcoming-events finder".
   - **Misc**: `trades` (token-keyed shareable Trade Compare payloads; RLS-locked, access only via `create_trade` / `get_trade` RPCs — migration 54). **30-day retention** via `cleanup_old_trades()` (migration 65), called daily by the selfheal job in `matview_self_heal.py`.
   - **Matviews**: `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`, `graded_prices_latest`.
 - **ETL** (`.github/workflows/etl.yml`):
@@ -1073,6 +1074,25 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 ## Disclaimer
 
 Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. Disney Lorcana TCG is a trademark of Disney; the game is operated by Ravensburger. This site is not affiliated with, endorsed by, or sponsored by Disney or Ravensburger."
+
+## Upcoming-events finder (home "Upcoming near me" box)
+
+`UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.
+
+- **One table, one query.** All three modes read `lorcana_events` through the `get_nearby_lorcana_events(lat, lng, radius_mi, kind, max_series, max_occurrences)` RPC; a mode is just the `kind` filter. Before, "all" merged two tables client-side, so a mis-classified event could appear in one tab and not the other. `p_kind` is `null` for All.
+- **Results are SERIES, not events.** 68% of upcoming events are the same weekly repeating (measured 2026-07-30: 4050 of 5953 in a 3-week window), so Los Angeles at 50mi is ~1.8k rows but only ~58 real listings. The RPC groups and the tile reads "Every Thu 6:00 PM · 4 upcoming ▾", expanding to the individual dates. Grouping server-side is deliberate — client-side would ship a half-MB of near-duplicates to a phone.
+- **Series key = store + kind + format + local weekday + local start time.** Explicitly NOT the title: stores stamp the date into it ("7/30/26 Lake Forest Lorcana Core Constructed Thursday"), which would split every weekly into one-offs. A genuine one-off is just a series of length 1. Cadence itself is re-derived client-side from the real dates (`scCadence`) so a biweekly isn't mislabelled weekly; irregular spacing falls back to "N dates".
+- **Pins and the modal are per-series / per-occurrence.** `packsink:scPinned` now holds `series_key` strings (was event ids — old numeric pins simply stop matching, which is the intended lapse). The modal takes `{series, occ}`: venue/format/geo from the series, date + entry + capacity + the registration link from the one date clicked.
+- **No date ceiling.** The RPC returns everything upcoming; series collapsing is what makes that readable. `p_max_series` caps at 400 listings, `p_max_occurrences` caps each series' expanded date list at 24 (`occurrence_count` stays the true total).
+- **Deep links**: `?sczip/scc/scdist/scdate/scmode`. `SC_DEEP_LINKED` gates force-rendering the box when the home panel is hidden — `scmode` was missing from that list until 2026-07-30.
+- **`safe_local_ts(ts, tz)`** wraps `at time zone` so one malformed RPH timezone can't fail the whole query.
+
+**Discovery: `scripts/elo/discover_events.py`** (daily, `.github/workflows/discover_scs.yml`). ONE scan of the ~17k-row upcoming index → classifies every event → writes both `lorcana_events` (all kinds) and `set_championships` (SC subset, unchanged, because the Elo pipeline binds to that table). Replaced two full scans of the same index.
+
+- Classification is **imported, not reimplemented**: `is_sc()` from `discover_wu_scs.py`, `classify()` from `discover_prereleases.py`. Everything both reject is `kind='other'`. Those two scripts stay on disk — they own the logic and still work for targeted single-set re-pulls.
+- **RPH's own `event_type` cannot do this job** — it reads `LOCALS` for ~99% of events (1972 of the soonest 1991, measured 2026-07-30). Same for `gameplay_format`: an SC and a league night are both Core Constructed.
+- `set_name` stays **NULL for `kind='other'`** unless the title names a set. A Thursday league night belongs to no set and must not claim one.
+- **Pruning (new).** Every upsert stamps `last_seen_at`; after the pull, upcoming rows this run didn't see are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
 
 ## Brand assets
 

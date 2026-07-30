@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=300">
+<link rel="stylesheet" href="styles.css?v=301">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -26959,13 +26959,50 @@ const geocodeZip = async (zip, country = "US") => {
 const scZipReady = (zip, country) => (country||"US")==="US"
   ? /^\d{5}$/.test(String(zip||"")) : String(zip||"").trim().length >= 2;
 
+const SC_DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+// "18:00" (the series' local start time, computed server-side in the event's own
+// timezone) -> "6:00 PM".
+const scLocalTime12 = (hhmm) => {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ""));
+  if(!m) return "";
+  let h = +m[1];
+  const ap = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  return `${h}:${m[2]} ${ap}`;
+};
+// How often does this series run? Read it off the actual dates rather than
+// trusting a store's title: weekly is the common case (68% of upcoming events
+// repeat, measured 2026-07-30) but plenty of stores run biweekly or monthly, and
+// a one-off is simply a series of length 1. Returns null when the spacing is
+// irregular enough that naming a cadence would be a lie — the tile falls back to
+// "N dates" then.
+const scCadence = (occ) => {
+  if(!occ || occ.length < 2) return null;
+  const ms = occ.map(o => Date.parse(o.start_datetime)).filter(n => !isNaN(n)).sort((a,b) => a-b);
+  if(ms.length < 2) return null;
+  const gaps = [];
+  for(let i = 1; i < ms.length; i++) gaps.push(Math.round((ms[i]-ms[i-1]) / 86400000));
+  const counts = {};
+  gaps.forEach(g => { counts[g] = (counts[g] || 0) + 1; });
+  const [best, n] = Object.entries(counts).sort((a,b) => b[1]-a[1])[0];
+  if(n / gaps.length < 0.6) return null;            // no dominant spacing
+  const g = parseInt(best, 10);
+  if(g === 7)  return "Every";
+  if(g === 14) return "Every other";
+  if(g >= 28 && g <= 31) return "Monthly on";
+  return null;
+};
+const SC_KIND_LABEL = {sc: "Set Championship", prerelease: "Prerelease", other: "Event"};
+const SC_KIND_BADGE = {sc: "Set Champ", prerelease: "Prerelease", other: "Locals"};
+const SC_KIND_CLASS = {sc: "sc", prerelease: "pre", other: "other"};
+
 // Captured at module load (before any App URL-cleanup effect): did this visit
-// arrive on an SC deep link? Forces the Set Championships box to render even
-// when the user has hidden the home panel — otherwise shared links dead-end.
+// arrive on an event deep link? Forces the box to render even when the user has
+// hidden the home panel — otherwise shared links dead-end.
 const SC_DEEP_LINKED = (() => {
   try {
     const p = new URLSearchParams(window.location.search);
-    return ["sczip","scc","scdist","scdate"].some(k => p.has(k));
+    return ["sczip","scc","scdist","scdate","scmode"].some(k => p.has(k));
   } catch { return false; }
 })();
 
@@ -26976,12 +27013,12 @@ const UpcomingSCsBox = () => {
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
   const scParams = (() => { try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); } })();
   const pZip = scParams.get("sczip"), pCtry = scParams.get("scc"), pDist = scParams.get("scdist"), pDate = scParams.get("scdate"), pMode = scParams.get("scmode");
-  // Which event type the box shows: "all" (Set Championships + Prereleases
-  // merged in one search), "sc" (competitive Set Championships only), or
-  // "prerelease" (a set's launch-weekend sealed events only). The two tables
-  // share an identical column list + tile/modal layout, so a mode is just which
-  // table(s) to read + which label to print. "all" reads both and tags each row
-  // with _kind so mixed tiles/modals still label correctly.
+  // Which event type the box shows: "all" (EVERY Lorcana event RPH lists near
+  // you — locals, league nights, drafts, prereleases and Set Championships),
+  // "sc" (competitive Set Championships only), or "prerelease" (a set's
+  // launch-weekend sealed events only). All three read the SAME table now
+  // (lorcana_events); a mode is just a `kind` filter, so "all" can never
+  // disagree with the narrow tabs the way two separate tables could.
   const [mode, setMode] = useState(() => {
     try {
       const raw = (pMode || localStorage.getItem("packsink:scMode") || "all").toLowerCase();
@@ -26991,13 +27028,9 @@ const UpcomingSCsBox = () => {
     } catch { return "all"; }
   });
   const isPre = mode === "prerelease", isAll = mode === "all";
-  // Component-level labels (used for the title / empty states). In "all" mode
-  // per-row labels come from _kind instead — see scKindLabel below.
-  const KIND_LABEL = isPre ? "Prerelease" : "Set Championship";
   const KIND_PLURAL = isAll ? "Lorcana Events" : isPre ? "Prereleases" : "Set Championships";
-  // Label for one result row, honoring its _kind tag in mixed ("all") mode.
-  const scKindLabel = (row) => (row && row._kind === "pre") ? "Prerelease"
-    : (row && row._kind === "sc") ? "Set Championship" : KIND_LABEL;
+  // Label for one series, from the `kind` the discovery script classified it as.
+  const scKindLabel = (row) => SC_KIND_LABEL[row && row.kind] || "Event";
   const [zip, setZip] = useState(() => { try { return pZip || localStorage.getItem("packsink:scZip") || ""; } catch { return pZip || ""; } });
   const [radius, setRadius] = useState(() => {
     const fromUrl = parseInt(pDist, 10);
@@ -27009,7 +27042,8 @@ const UpcomingSCsBox = () => {
   const [results, setResults] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState(null);
-  const [sel, setSel] = useState(null);
+  const [sel, setSel] = useState(null);            // {series, occ} — one date of one series
+  const [openSeries, setOpenSeries] = useState({}); // series_key -> showing its full date list
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("packsink:scCollapsed") === "1"; } catch { return false; } });
   const [expanded, setExpanded] = useState(() => !!pZip);  // a deep-link opens straight into the full-screen view
   const [copied, setCopied] = useState(false);
@@ -27046,32 +27080,17 @@ const UpcomingSCsBox = () => {
       const o = await geocodeZip(z, ctry);
       const lat = o.lat, lng = o.lng;
       setOrigin({lat, lng, city: o.city, state: o.state, zip: z, country: ctry});
-      const dLa = r/69, dLo = r/(69*Math.max(0.15, Math.cos(lat*Math.PI/180)));
-      const today = new Date().toISOString().slice(0,10);
-      const cols = "event_id,name,set_name,store_name,store_website,city,state,country,start_datetime,end_datetime,timezone,full_address,latitude,longitude,capacity,cost_cents,currency,gameplay_format,url";
-      // One bounding-box query against a table, rows tagged with their _kind so
-      // mixed "all"-mode tiles/modals can label per row.
-      const queryTable = async (table, kind) => {
-        const {data, error} = await sbClient.from(table)
-          .select(cols)
-          .gte("latitude", lat-dLa).lte("latitude", lat+dLa)
-          .gte("longitude", lng-dLo).lte("longitude", lng+dLo)
-          .gte("start_datetime", today)
-          .order("start_datetime").limit(800);
-        if(error) throw error;
-        return (data || []).map(e => ({...e, _kind: kind}));
-      };
-      // "all" reads both tables in parallel; single modes read just one.
-      const tables = mode === "all"
-        ? [["set_championships","sc"], ["prerelease_events","pre"]]
-        : mode === "prerelease" ? [["prerelease_events","pre"]] : [["set_championships","sc"]];
-      const fetched = (await Promise.all(tables.map(([t,k]) => queryTable(t,k)))).flat();
-      const out = fetched
-        .map(e => ({...e, _mi: haversineMi(lat, lng, e.latitude, e.longitude), _day: scLocalDay(e.start_datetime, e.timezone)}))
-        .filter(e => e._mi <= r)
-        // by upcoming DAY (the event's LOCAL day, matching the tile), closest first within the day.
-        .sort((a,b) => (a._day||"").localeCompare(b._day||"") || a._mi - b._mi);
-      setResults(out);
+      // One RPC does the bounding box, the haversine refine AND the collapse into
+      // series. Grouping server-side matters at this scale: with every RPH event
+      // in the table and no date ceiling, a dense metro is ~1.8k raw rows but only
+      // ~58 real weekly series (measured LA @ 50mi, 2026-07-30), so this returns
+      // a few dozen rows instead of a half-megabyte of near-duplicates.
+      const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
+        p_lat: lat, p_lng: lng, p_radius_mi: r,
+        p_kind: mode === "all" ? null : mode,
+      });
+      if(error) throw error;
+      setResults(data || []);
       try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
     } catch(e){ setErr(String(e && e.message || e)); setResults(null); }
     finally { setLoading(false); }
@@ -27092,19 +27111,33 @@ const UpcomingSCsBox = () => {
   const pickMode = (m) => { if(m !== mode){ setSel(null); setResults(null); setErr(null); setMode(m); } };
   const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip, country)) runSearch(zip, r, country); };
 
-  // Optional client-side date filter applied on top of the radius results.
+  // Decorate each series with its per-occurrence local days, then apply the
+  // optional date filter. A series survives the filter if ANY of its dates lands
+  // on the chosen day, and the tile then leads with THAT date rather than the
+  // series' natural next one.
   const dateActive = dateOn && dateFrom;
-  const visible = (!results || !dateActive) ? results : results.filter(e => (e._day || "") === dateFrom);
+  const visible = useMemo(() => {
+    if(!results) return results;
+    const out = [];
+    for(const s of results){
+      const occ = (s.occurrences || []).map(o => ({...o, _day: scLocalDay(o.start_datetime, s.timezone)}));
+      const shown = dateActive ? occ.filter(o => o._day === dateFrom) : occ;
+      if(!shown.length) continue;
+      out.push({...s, _occ: occ, _shown: shown, _next: shown[0], _mi: s.distance_mi});
+    }
+    return out;
+  }, [results, dateActive, dateFrom]);
 
-  const isPinned = (id) => pinned.includes(id);
-  const togglePin = (id) => setPinned(p => p.includes(id) ? p.filter(x => x !== id) : [...p, id]);
-  // Pinned events float to the top (passed events are already excluded by the
-  // start_datetime >= today query, so a pin naturally "expires"). Ties keep the
-  // by-day / closest-first order.
+  const isPinned = (k) => pinned.includes(k);
+  const togglePin = (k) => setPinned(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
+  // Pinned series float to the top (past events never come back from the RPC, so
+  // a pin on a finished one-off naturally stops mattering). Ties keep the
+  // soonest-first / closest-first order.
   const visibleSorted = visible ? visible.slice().sort((a, b) => {
-    const pa = isPinned(a.event_id) ? 0 : 1, pb = isPinned(b.event_id) ? 0 : 1;
+    const pa = isPinned(a.series_key) ? 0 : 1, pb = isPinned(b.series_key) ? 0 : 1;
     if(pa !== pb) return pa - pb;
-    return (a._day || "").localeCompare(b._day || "") || a._mi - b._mi;
+    return String(a._next.start_datetime || "").localeCompare(String(b._next.start_datetime || ""))
+      || a._mi - b._mi;
   }) : visible;
   // Shareable link reproducing this exact view (NOT the pins — see above).
   const buildShareUrl = () => {
@@ -27202,59 +27235,94 @@ const UpcomingSCsBox = () => {
       ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class="sc-results">
         ${origin && html`<div class="sc-results-head">${visibleSorted.length}${dateActive?" on "+dateFrom:""} near ${origin.city}, ${origin.state}</div>`}
         <div class="sc-list">
-          ${visibleSorted.map(e => html`<div key=${e.event_id} class=${"sc-tile"+(isPinned(e.event_id)?" sc-tile-pinned":"")}>
-            <button class="sc-tile-main-btn" type="button" onClick=${()=>setSel(e)}>
+          ${visibleSorted.map(e => {
+            const next = e._next;
+            const more = e.occurrence_count > 1 && !dateActive;
+            // Under a date filter the series is pinned to that one day, so the
+            // recurrence line would be noise — show the plain date instead.
+            const cadence = more ? scCadence(e._occ) : null;
+            const isOpen = !!openSeries[e.series_key];
+            return html`<div key=${e.series_key} class=${"sc-tile"+(isPinned(e.series_key)?" sc-tile-pinned":"")}>
+            <div class="sc-tile-row">
+            <button class="sc-tile-main-btn" type="button" onClick=${()=>setSel({series: e, occ: next})}>
               <span class="sc-tile-date">
-                ${fmtSCDate(e.start_datetime, e.timezone)}
-                <span class="sc-tile-time">${fmtSCTime(e.start_datetime, e.timezone)}</span>
+                ${fmtSCDate(next.start_datetime, e.timezone)}
+                <span class="sc-tile-time">${fmtSCTime(next.start_datetime, e.timezone)}</span>
               </span>
               <span class="sc-tile-main">
                 <span class="sc-tile-store">${e.store_name}</span>
                 ${(() => {
-                  const n = (e.name || "").trim();
+                  const n = (next.name || e.name || "").trim();
                   const generic = `${(e.set_name||"").toLowerCase()} ${scKindLabel(e).toLowerCase()}`;
                   // Skip when the event name adds nothing (just the store name or the generic "<set> <kind>").
                   if(!n || n.toLowerCase() === (e.store_name||"").trim().toLowerCase() || n.toLowerCase() === generic) return null;
                   return html`<span class="sc-tile-evname">${n}</span>`;
                 })()}
+                ${more && html`<span class="sc-tile-cadence">
+                  ${cadence
+                    ? `${cadence} ${SC_DOW[e.dow] || ""} ${scLocalTime12(e.local_time)}`.trim()
+                    : `${e.occurrence_count} dates`}
+                </span>`}
                 <span class="sc-tile-loc">
-                  ${isAll && html`<span class=${"sc-tile-kind sc-tile-kind--"+(e._kind==="pre"?"pre":"sc")}>${e._kind==="pre"?"Prerelease":"Set Champ"}</span>`}
+                  ${isAll && html`<span class=${"sc-tile-kind sc-tile-kind--"+(SC_KIND_CLASS[e.kind]||"other")}>${SC_KIND_BADGE[e.kind]||"Event"}</span>`}
                   ${e.city}, ${e.state}
                 </span>
               </span>
               <span class="sc-tile-mi">${fmtSCMiles(e._mi)}</span>
             </button>
-            <button class=${"sc-tile-pin"+(isPinned(e.event_id)?" pinned":"")} type="button"
-              onClick=${()=>togglePin(e.event_id)}
-              aria-label=${isPinned(e.event_id)?"Unpin event":"Pin event to top"}
-              title=${isPinned(e.event_id)?"Unpin":"Pin to top"}>📌</button>
-          </div>`)}
+            <button class=${"sc-tile-pin"+(isPinned(e.series_key)?" pinned":"")} type="button"
+              onClick=${()=>togglePin(e.series_key)}
+              aria-label=${isPinned(e.series_key)?"Unpin event":"Pin event to top"}
+              title=${isPinned(e.series_key)?"Unpin":"Pin to top"}>📌</button>
+            </div>
+            ${more && html`<button class=${"sc-tile-more"+(isOpen?" open":"")} type="button"
+              aria-expanded=${isOpen}
+              onClick=${()=>setOpenSeries(o => ({...o, [e.series_key]: !o[e.series_key]}))}
+              title=${isOpen?"Hide dates":"Show all dates"}>
+              ${e.occurrence_count} upcoming <span class="sc-tile-more-caret" aria-hidden="true">▾</span>
+            </button>`}
+            ${more && isOpen && html`<div class="sc-tile-dates">
+              ${e._occ.map(o => html`<button key=${o.event_id} type="button" class="sc-tile-date-btn"
+                onClick=${()=>setSel({series: e, occ: o})}>
+                ${fmtSCDate(o.start_datetime, e.timezone)}
+                <span class="sc-tile-date-btn-time">${fmtSCTime(o.start_datetime, e.timezone)}</span>
+              </button>`)}
+              ${e.occurrence_count > e._occ.length && html`<span class="sc-tile-dates-more">
+                +${e.occurrence_count - e._occ.length} more</span>`}
+            </div>`}
+          </div>`;})}
         </div>
       </div>`}
       ${!loading && !results && !err && html`<div class="sc-msg muted">
-        Enter your ZIP to find ${isAll?"Set Championships & Prereleases":isPre?"set-launch Prereleases":"Set Championships"} near you.</div>`}
+        Enter your ZIP to find ${isAll?"locals, prereleases & Set Championships":isPre?"set-launch Prereleases":"Set Championships"} near you.</div>`}
     </div>`}
     ${sel && (() => {
-      const cost = fmtSCCost(sel.cost_cents, sel.currency);
-      const selLabel = scKindLabel(sel);
+      // The venue/format/geo live on the series; the date, price, capacity and
+      // registration link belong to the single occurrence the user picked.
+      const s = sel.series, o = sel.occ || {};
+      const cost = fmtSCCost(o.cost_cents, o.currency);
+      const selLabel = scKindLabel(s);
+      const evName = (o.name || s.name || "").trim();
+      const cadence = s.occurrence_count > 1 ? scCadence(s._occ) : null;
       return html`<div class="sc-modal-overlay" onClick=${()=>setSel(null)}>
         <div class="sc-modal" onClick=${e=>e.stopPropagation()} role="dialog" aria-modal="true">
           <button class="sc-modal-close" onClick=${()=>setSel(null)} aria-label="Close">×</button>
-          <div class="sc-modal-set">${sel.set_name} ${selLabel}</div>
-          <h3 class="sc-modal-store">${sel.store_name}</h3>
-          ${sel.name && sel.name.toLowerCase() !== `${(sel.set_name||"").toLowerCase()} ${selLabel.toLowerCase()}` && html`<div class="sc-modal-evname">${sel.name}</div>`}
-          <div class="sc-modal-when">${fmtSCDate(sel.start_datetime, sel.timezone)} · ${fmtSCTime(sel.start_datetime, sel.timezone)}</div>
+          <div class="sc-modal-set">${[s.set_name, selLabel].filter(Boolean).join(" ")}</div>
+          <h3 class="sc-modal-store">${s.store_name}</h3>
+          ${evName && evName.toLowerCase() !== `${(s.set_name||"").toLowerCase()} ${selLabel.toLowerCase()}` && html`<div class="sc-modal-evname">${evName}</div>`}
+          <div class="sc-modal-when">${fmtSCDate(o.start_datetime, s.timezone)} · ${fmtSCTime(o.start_datetime, s.timezone)}</div>
           <dl class="sc-modal-rows">
-            <div><dt>Where</dt><dd>${sel.full_address || `${sel.city}, ${sel.state}`}</dd></div>
-            <div><dt>Distance</dt><dd>${fmtSCMiles(sel._mi)}${origin?` from ${origin.zip}`:""}</dd></div>
-            ${sel.gameplay_format && html`<div><dt>Format</dt><dd>${sel.gameplay_format}</dd></div>`}
+            <div><dt>Where</dt><dd>${s.full_address || `${s.city}, ${s.state}`}</dd></div>
+            <div><dt>Distance</dt><dd>${fmtSCMiles(s.distance_mi)}${origin?` from ${origin.zip}`:""}</dd></div>
+            ${s.gameplay_format && html`<div><dt>Format</dt><dd>${s.gameplay_format}</dd></div>`}
             ${cost && html`<div><dt>Entry</dt><dd>${cost}</dd></div>`}
-            ${sel.capacity != null && html`<div><dt>Capacity</dt><dd>${sel.capacity} players</dd></div>`}
+            ${o.capacity != null && html`<div><dt>Capacity</dt><dd>${o.capacity} players</dd></div>`}
+            ${cadence && html`<div><dt>Runs</dt><dd>${`${cadence} ${SC_DOW[s.dow]||""} ${scLocalTime12(s.local_time)}`.trim()} · ${s.occurrence_count} upcoming</dd></div>`}
           </dl>
           <div class="sc-modal-actions">
-            ${safeHttpUrl(sel.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(sel.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>`}
-            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
-            ${safeHttpUrl(sel.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(sel.store_website)} target="_blank" rel="noopener noreferrer">Store website ↗</a>`}
+            ${safeHttpUrl(o.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(o.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>`}
+            <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${s.latitude},${s.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
+            ${safeHttpUrl(s.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(s.store_website)} target="_blank" rel="noopener noreferrer">Store website ↗</a>`}
           </div>
         </div>
       </div>`;
