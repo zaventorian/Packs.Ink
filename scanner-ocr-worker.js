@@ -38,6 +38,19 @@ var ORT_BASE = "/vendor/ort/";
 var DET_MEAN = [0.485, 0.456, 0.406];
 var DET_STD = [0.229, 0.224, 0.225];
 var DET_SIDE = 736; // limit_side_len, limit_type='min'
+// Hard ceiling on det input pixels. limit_type='min' only ever UPSCALES (ratio
+// is 1 whenever the short side already clears DET_SIDE), so a 1200x1680 rectify
+// fed the name region at 1184x1248 and readNumber's 5-6x upscaled strips reached
+// 3968x1248 = 4.95Mpx -> a 59MB Float32 tensor, copied into a WASM heap that can
+// only GROW. That ratcheted the process floor every read until iOS WebKit killed
+// the tab (field: an iPhone tester lost the page every ~6 snaps while an Android
+// tester on the same build went 396 snaps clean). The clamp is sized to leave the
+// name read and cn ROI-1 EXACTLY as they were (1.49 / 2.32Mpx, both under the
+// cap), the subtitle band at 0.89x — the band's ×2.5 upscale is load-bearing
+// (bench_band_scale_eval.py: natural scale, ~0.4x, loses 4/20 version corrects),
+// so it must not be cut hard — and only the pathological cn ROI-2 clamped, 0.69x,
+// where 72px digits were oversampled and 50px is PP-OCR's sweet spot.
+var DET_MAX_PX = 2.4e6;
 var DET_THRESH = 0.3; // DBPostProcess.thresh
 var DET_BOX_THRESH = 0.5; // DBPostProcess.box_thresh
 
@@ -89,6 +102,24 @@ function scratch(w, h) {
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = "high";
   return { c: c, ctx: ctx };
 }
+// Drop a scratch canvas's backing store NOW instead of waiting for GC. WebKit
+// keeps the pixels alive as long as the canvas object is reachable, and GC does
+// not run under allocation pressure from drawImage/getImageData — which is the
+// exact window these run in.
+function release(s) {
+  try { if (s && s.c) { s.c.width = 1; s.c.height = 1; } } catch (_e) {}
+}
+var CC = Object.create(null);
+function ccScratch(key, n) {
+  var b = CC[key];
+  if (!b || b.length < n) { b = new Uint8Array(n); CC[key] = b; }
+  return b;
+}
+function ccStack(n) {
+  var b = CC.stack;
+  if (!b || b.length < n) { b = new Int32Array(n); CC.stack = b; }
+  return b;
+}
 
 // det preprocessing: crop (sx,sy,sw,sh) of `srcCanvas`, resize to a /32 multiple
 // (limit_side_len), normalize (x/255-mean)/std -> NCHW Float32. Returns the tensor
@@ -97,11 +128,13 @@ function preprocDet(srcCanvas, sx, sy, sw, sh, limitType, side) {
   var ratio;
   if (limitType === "max") ratio = Math.max(sw, sh) > side ? side / Math.max(sw, sh) : 1;
   else ratio = Math.min(sw, sh) < side ? side / Math.min(sw, sh) : 1;
+  if (sw * sh * ratio * ratio > DET_MAX_PX) ratio = Math.sqrt(DET_MAX_PX / (sw * sh));
   var rw = Math.max(32, Math.round(sw * ratio / 32) * 32);
   var rh = Math.max(32, Math.round(sh * ratio / 32) * 32);
   var s = scratch(rw, rh);
   s.ctx.drawImage(srcCanvas, sx, sy, sw, sh, 0, 0, rw, rh);
   var data = s.ctx.getImageData(0, 0, rw, rh).data;
+  release(s);
   var n = rw * rh, f = new Float32Array(3 * n), p;
   for (var i = 0; i < n; i++) {
     p = i * 4;
@@ -117,20 +150,26 @@ function preprocDet(srcCanvas, sx, sy, sw, sh, limitType, side) {
 // (validated at name-parity with rapidocr in ppocr_web_sim.py). Returns boxes in
 // SOURCE-crop coords: [{x0,y0,x1,y1,h}].
 function ccBoxes(prob, W, H, ratioW, ratioH) {
-  // binary (prob > thresh) with a cheap forward 2x2 dilate (bridge 1px gaps)
-  var on = new Uint8Array(W * H), x, y, idx;
+  // Scratch buffers are REUSED across dets (grow-only). ccBoxes is fully
+  // synchronous and never re-entered, so sharing is safe — and it was allocating
+  // 10 bytes/px of fresh typed arrays on every read (20MB at the det ceiling),
+  // right next to the tensor allocation. `lab` only ever holds 0 or 1.
+  var N = W * H;
+  var on = ccScratch("on", N), dil = ccScratch("dil", N), lab = ccScratch("lab", N);
+  var stack = ccStack(N);
+  on.fill(0, 0, N); dil.fill(0, 0, N); lab.fill(0, 0, N);
+  var x, y, idx;
   for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
     idx = y * W + x;
     if (prob[idx] > DET_THRESH) on[idx] = 1;
   }
-  var dil = new Uint8Array(W * H);
   for (y = 0; y < H; y++) for (x = 0; x < W; x++) {
     idx = y * W + x;
     if (on[idx] || (x + 1 < W && on[idx + 1]) || (y + 1 < H && on[idx + W]) ||
         (x + 1 < W && y + 1 < H && on[idx + W + 1])) dil[idx] = 1;
   }
   // 8-connected components via an explicit stack flood fill
-  var lab = new Int32Array(W * H), stack = new Int32Array(W * H), boxes = [];
+  var boxes = [];
   var minSide = 3;
   for (var start = 0; start < W * H; start++) {
     if (!dil[start] || lab[start]) continue;
@@ -298,6 +337,7 @@ function handleOcr(d) {
         var us = scratch(Math.round(bw * 2.5), Math.round(bh * 2.5));
         us.ctx.drawImage(card, bx0, by0, bw, bh, 0, 0, us.c.width, us.c.height);
         return ocrRegion(us.c, 0, 0, us.c.width, us.c.height, "min", DET_SIDE).then(function (bl) {
+          release(us);
           bl.sort(function (a, b) { return a.y0 - b.y0 || a.x0 - b.x0; });
           for (var i = 0; i < bl.length && texts.length < 10; i++) {
             var t = bl[i].text;
@@ -316,10 +356,12 @@ function handleOcr(d) {
       // nameMs/cnMs: on-device per-region latency for the QA telemetry — the
       // field-latency profile can't be reproduced offline (WASM speed varies
       // 10-30x between phones and the headless preview).
+      release(s);
       self.postMessage({ type: "result", id: d.id, lines: namelines, cnNum: num.cnNum, cnSet: num.cnSet,
         nameMs: doName ? tName : 0, cnMs: doNumber ? (Date.now() - t1) : 0 });
     });
   }).catch(function (err) {
+    release(s);
     self.postMessage({ type: "result", id: d.id, lines: [], cnNum: null, cnSet: null, error: String(err && err.message || err) });
   });
 }
@@ -378,6 +420,7 @@ function readNumber(card, W, H) {
     var us = scratch(rw * up, rh * up);
     us.ctx.drawImage(card, rx, ry, rw, rh, 0, 0, rw * up, rh * up);
     return ocrRegion(us.c, 0, 0, rw * up, rh * up, "min", DET_SIDE).then(function (lines) {
+      release(us);
       lines.sort(function (a, b) { return a.x0 - b.x0; }); // left-to-right
       var txt = lines.map(function (l) { return l.text; }).join(" ");
       var cn = parseCN(txt);

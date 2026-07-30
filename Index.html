@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=290">
+<link rel="stylesheet" href="styles.css?v=299">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -240,7 +240,7 @@
 <!-- Scanner is admin-gated (~2 users); defer keeps it off every visitor's
      critical path. Both scripts only attach globals used when the scan modal
      opens, long after DOMContentLoaded. -->
-<script src="scanner.js?v=294" defer></script>
+<script src="scanner.js?v=299" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -9902,12 +9902,17 @@ const groupFromSimCard = (simCard, rawData) => {
 // match the clean, flat image — which is what makes real photos match. Falls
 // back to a guide-crop match if the worker/opencv is unavailable.
 const SCAN_THUMB = (id) => "https://cards.lorcast.io/card/digital/normal/" + id + ".avif";
+// 200w variant for the ~96px review-row thumbs, the alternate-pick chips and the
+// ~40px on-camera label art. These were all pulling the 400w "normal" render and
+// decoding it in full: two per QA row, un-virtualised, plus one live Image per
+// distinct card in the label cache. The display sizes never justified it.
+const SCAN_THUMB_SMALL = (id) => "https://cards.lorcast.io/card/digital/small/" + id + ".avif";
 const SCAN_WORKER_URL = "scanner-worker.js?v=274";
 // PP-OCRv3 text reader runs in its OWN worker (onnxruntime-web, WASM single-thread
 // + SIMD, NO WebGPU — WebGPU crashes iOS Safari) so a slow number read never
 // stalls the live hover loop. Replaces Tesseract.js: printed text reads the same
 // in a photo as in the DB, so the NAME is the primary, domain-gap-immune identity.
-const OCR_WORKER_URL = "scanner-ocr-worker.js?v=285";
+const OCR_WORKER_URL = "scanner-ocr-worker.js?v=299";
 // Reciprocal Rank Fusion: combine ranked lists by RANK (not score) so we never
 // reconcile a colour distance against a text score. Weighted per signal.
 function scanRRF(lists, weights, k){
@@ -9932,7 +9937,7 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v17";
+const SCANNER_BUILD = "v18";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -9982,7 +9987,12 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // scan_samples via labelSample).
     userEdits: 0, userConfirms: 0, userDeletes: 0, userFoilFlips: 0, flipAlls: 0, savedRows: 0, deckRows: 0 }, ocrMs: [], device: null });
   const filmRef = useRef({ frames: [], i: 0 });   // ring of last 6 small raw frames
-  const frameRingRef = useRef({ slots: [], i: 0 }); // 2×1600px pre-tap frames — the snap picks the sharpest vs live
+  // 2 pre-tap frames — the snap picks the sharpest vs live. 1200 not 1600: the
+  // rectify target is 1200 wide, so the extra pixels were only ever discarded,
+  // while the two canvases stay allocated for the whole session (18MB at 1600 on
+  // a portrait-reporting device, 10MB at 1200).
+  const RING_W = 1200;
+  const frameRingRef = useRef({ slots: [], i: 0 });
   const ocrThumbRef = useRef([]);                 // last 3 {t,src,thumb} ambient-OCR inputs
   const torchTrackRef = useRef(null);
 
@@ -10011,6 +10021,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaLookPendRef = useRef([]);               // looks deferred while snaps queue — drained at queue-idle, never dropped
   const pendingLabelRef = useRef(new Map());      // rid -> scan_samples label patch waiting for the upload's row id
   const [qaReview, setQaReview] = useState(false);    // full-screen review-&-save panel over the camera
+  const qaReviewRef = useRef(false);
+  // Drop every long-lived pixel buffer the live loop keeps warm. Called when the
+  // review panel opens and on pagehide/backgrounding: the review screen is the
+  // WORST place to be holding these, because it is also where the deferred looks
+  // finally get their idle window and run the (heaviest) collector-number read.
+  const releaseFrameBuffers = () => {
+    try { for(const sl of frameRingRef.current.slots) if(sl) dropCanvas(sl.c); } catch(_e){}
+    try { for(const f of filmRef.current.frames) if(f) dropCanvas(f.c); filmRef.current.frames = []; filmRef.current.i = 0; } catch(_e){}
+    try { if(ambCanvasRef.current) dropCanvas(ambCanvasRef.current); } catch(_e){}
+  };
   const [qaEditOpen, setQaEditOpen] = useState(null); // rid of the row with the inline editor open (one at a time)
   const [qaEditQ, setQaEditQ] = useState("");         // editor card-search query
   const [qaDeckBusy, setQaDeckBusy] = useState(false);
@@ -10088,7 +10108,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
 
   const lbl = (c) => (c.name || "") + (c.version ? " - " + c.version : "");
   const toDisp = (card) => ({ id: card.id, name: card.name, version: card.version,
-    rarity: card.rarity, art_key: card.art_key, thumb: SCAN_THUMB(card.id) });
+    rarity: card.rarity, art_key: card.art_key, thumb: SCAN_THUMB_SMALL(card.id) });
   // price lookup for a catalog group — canonical pick chain (Low / NM Market).
   const resolveGroup = (card) => {
     const row = raw && raw.find(x => x.card_id === card.id && x.tcgplayer_product_id);
@@ -10167,7 +10187,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: { ideal: "environment" },
-                   width: { ideal: 2560 }, height: { ideal: 1440 } },
+                   width: { ideal: 1920 }, height: { ideal: 1080 } },
           audio: false,
         });
         if(cancelled){ stream.getTracks().forEach(t => t.stop()); return; }
@@ -10485,7 +10505,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // ring reuse can't corrupt an in-flight snap.
       if(A.tick % 2 === 1){
         try {
-          const FR = frameRingRef.current, fw = Math.min(1600, v.videoWidth);
+          const FR = frameRingRef.current, fw = Math.min(RING_W, v.videoWidth);
           let sl = FR.slots[FR.i];
           if(!sl){ sl = { c: document.createElement("canvas"), t: 0 }; FR.slots[FR.i] = sl; }
           sl.c.width = fw; sl.c.height = Math.round(fw * v.videoHeight / v.videoWidth);
@@ -10530,6 +10550,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       A.jumpStreak = jumpedNow ? (A.jumpStreak || 0) + 1 : 0;
       A.wasJumped = jumpedNow;
       A.lastQuad = r.quad || A.lastQuad;
+      if(r.quad) A.lastLandscape = !!r.landscape;   // orientation for the guide-crop fallbacks
+      // mirror onto the stage so the aim box matches the card shape (direct
+      // classList, not React state — this can change every frame)
+      try { if(stageRef.current) stageRef.current.classList.toggle("landscape", !!A.lastLandscape); } catch(_e){}
       // how much of the frame the card fills (for "move closer" coaching)
       let areaFrac = 0;
       if(r.quad){ const xs = r.quad.map(p => p.x), ys = r.quad.map(p => p.y);
@@ -10709,6 +10733,26 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){} finally { ambBusyRef.current = false; }
   };
 
+  useEffect(() => {
+    qaReviewRef.current = qaReview;
+    if(qaReview) releaseFrameBuffers();
+  }, [qaReview]);
+  // A backgrounded iOS tab is exactly when WebKit decides whether to keep the
+  // page. There was no lifecycle handling at all, so a session's whole warm
+  // working set (ring + film canvases, queued snap JPEGs, pending looks) was
+  // still resident at the moment that decision got made.
+  useEffect(() => {
+    const shed = () => {
+      releaseFrameBuffers();
+      try { qaLookPendRef.current.length = 0; } catch(_e){}
+      try { for(const j of qaJobsRef.current.q){ j.capBlobP = null; j.stripBlobP = null; } } catch(_e){}
+    };
+    const onVis = () => { if(document.visibilityState === "hidden") shed(); };
+    window.addEventListener("pagehide", shed);
+    document.addEventListener("visibilitychange", onVis);
+    return () => { window.removeEventListener("pagehide", shed); document.removeEventListener("visibilitychange", onVis); };
+  }, []);
+
   // live loop — OpenCV runs in the worker (lesson: never on the main thread; loop
   // uses setTimeout, never rAF). Ambient = capture+match per frame; Single =
   // lightweight detect-only outline + tap-to-capture.
@@ -10718,7 +10762,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const tick = async () => {
       if(!running) return;
       const v = videoRef.current;
-      if(v && v.videoWidth && !result){
+      if(v && v.videoWidth && !result && !qaReviewRef.current){
         if(modeRef.current === "ambient"){
           // QA mode runs the full live-identify loop too (badge + text lock) so
           // the field-test exercises the real product behaviour — commits stay
@@ -10739,7 +10783,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           detectBusyRef.current = false;
         }
       }
-      if(running) loopTimerRef.current = setTimeout(tick, modeRef.current === "ambient" ? 150 : 130);
+      if(running) loopTimerRef.current = setTimeout(tick, qaReviewRef.current ? 600 : (modeRef.current === "ambient" ? 150 : 130));
     };
     tick();
     return () => { running = false; clearTimeout(loopTimerRef.current); };
@@ -10862,7 +10906,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       if(i >= 0){ const cp = prev.slice(); const row = { ...cp[i], qty: cp[i].qty + 1 }; cp.splice(i, 1); return [row, ...cp]; }
       return [{ eid, key, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(card)),
         rarity: card.rarity, low: p.low, mkt: p.mkt, qty: 1, art_key: card.art_key,
-        thumb: SCAN_THUMB(card.id), cands: (cands || []).slice(0, 4), expanded: false,
+        thumb: SCAN_THUMB_SMALL(card.id), cands: (cands || []).slice(0, 4), expanded: false,
         predicted: card.id, _blob: null,
         hasFoilPair: !!(prN && prF), prN, prF,
         pxN: g ? pxOf(g.normal) : null, pxF: g ? pxOf(g.foil) : null }, ...prev];
@@ -10935,7 +10979,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     if(old._blob) uploadSample(newCard.id, old.predicted || old.cardId, true, pr, old._blob);
     const p = priceOf(g);
     cp[i] = { ...old, key: newKey, cardId, printing: pr, name: (g && g["Product Name"]) || lbl(toDisp(newCard)),
-      rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB(newCard.id), expanded: false };
+      rarity: newCard.rarity, low: p.low, mkt: p.mkt, art_key: newCard.art_key, thumb: SCAN_THUMB_SMALL(newCard.id), expanded: false };
     return cp;
   };
   // user taps an alternate in a session row → correct it.
@@ -10971,7 +11015,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // crop. This is the escape hatch for a WRONG quad: when detection locks the
       // card's inner art frame, the rectify contains no text at all — alternating
       // to the raw scene gives the name a chance to read anyway.
-      if(!rect && allowGuideCrop){ rect = guideCropCanvas(); src = "guide"; }
+      if(!rect && allowGuideCrop){ rect = guideCropCanvas(ambientRef.current.lastLandscape); src = "guide"; }
       if(!rect) return;
       stashOcrThumb(rect, src);
       traceRef.current.n.ocrFires++;
@@ -11019,7 +11063,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // live badge's ≈ prefix (qaVerTied skips scene-noise + reprint entries).
       A.lockNames = (idr.names || []).slice(0, 4).map(n => ({ id: n.id, name: n.name, version: n.version, score: n.score }));
       A.lockVerBy = idr.verBy || null;
-      A.lockVerUnsure = (idr.verBy !== "body") && qaVerTied(A.lockNames);
+      A.lockVerUnsure = ((idr.verBy !== "body") && qaVerTied(A.lockNames)) || !!idr.printUnsure;
       traceRef.current.n.confirms++;
       trc("confirm", { top: chosen.id, try: A.ocrTries,
         ms: A.firstQuadAt ? Date.now() - A.firstQuadAt : null });   // ms = quad→confirmed (the felt "time to ping")
@@ -11096,7 +11140,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // fallback AND the flavor-attribution hijack. Slow (~9s on phone) but the
     // idle look has no cadence to protect.
     try {
-      const tied = (idr.verBy !== "body") && qaVerTied(idr.names);
+      const tied = ((idr.verBy !== "body") && qaVerTied(idr.names)) || !!idr.printUnsure;
       if(out.detected && (tied || idr.conf !== "high")){
         const num = await ocrCardRegions(rect, { doName: false, doNumber: true });
         if(num && num.cnNum){
@@ -11136,15 +11180,20 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     setTimeout(() => setSavedMsg(""), 2800);
   };
 
-  // guide-crop fallback canvas (main thread, no opencv) — what the user framed
-  const guideCropCanvas = () => {
+  // guide-crop fallback canvas (main thread, no opencv) — what the user framed.
+  // Locations are printed LANDSCAPE, so a fixed 5:7 window clips their left/right
+  // thirds — exactly where a Location's title starts. This crop is the alternate
+  // OCR source on every other ambient tick AND the whole fallback when detection
+  // misses, so a portrait-only window handicapped Locations on both paths.
+  const guideCropCanvas = (landscape) => {
     const v = videoRef.current, st = stageRef.current;
     if(!v || !st || !v.videoWidth) return null;
     const vw = v.videoWidth, vh = v.videoHeight, cw = st.clientWidth, ch = st.clientHeight;
     const scale = Math.max(cw / vw, ch / vh);
     const offX = (cw - vw * scale) / 2, offY = (ch - vh * scale) / 2;
-    let gH = ch * 0.82, gW = gH * 5 / 7;
-    if(gW > cw * 0.94){ gW = cw * 0.94; gH = gW * 7 / 5; }
+    const AR = landscape ? 7 / 5 : 5 / 7;   // width / height
+    let gH = ch * 0.82, gW = gH * AR;
+    if(gW > cw * 0.94){ gW = cw * 0.94; gH = gW / AR; }
     const gX = (cw - gW) / 2, gY = (ch - gH) / 2;
     const sx = (gX - offX) / scale, sy = (gY - offY) / scale, sw = gW / scale, sh = gH / scale;
     const c = document.createElement("canvas"); c.width = Math.round(sw); c.height = Math.round(sh);
@@ -11173,7 +11222,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           }
         } catch(e){}
       }
-      if(!rect) rect = guideCropCanvas();
+      if(!rect) rect = guideCropCanvas(ambientRef.current.lastLandscape);
       if(!rect){ setStatus("Couldn't read it — frame the card and tap again"); return; }
       rectRef.current = rect;   // for the data-flywheel log on confirm
 
@@ -11268,18 +11317,26 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // centre 5:7 crop of the FROZEN raw frame — the fallback when detection missed.
   // (guideCropCanvas reads the LIVE video, which by identify-time is already
   // pointing at the next card — the async flow must never touch it.)
-  const rawGuideCrop = (raw) => {
+  const rawGuideCrop = (raw, landscape) => {
     try {
-      const sh = raw.height * 0.92, sw = Math.min(raw.width * 0.92, sh * 5 / 7);
+      const AR = landscape ? 7 / 5 : 5 / 7;   // see guideCropCanvas — Locations are landscape
+      const sh = raw.height * 0.92, sw = Math.min(raw.width * 0.92, sh * AR);
       const c = document.createElement("canvas");
-      c.width = Math.round(sw); c.height = Math.round(Math.min(sh, sw * 7 / 5));
+      c.width = Math.round(sw); c.height = Math.round(Math.min(sh, sw / AR));
       c.getContext("2d").drawImage(raw, (raw.width - c.width) / 2, (raw.height - c.height) / 2, c.width, c.height, 0, 0, c.width, c.height);
       return c;
     } catch(_e){ return null; }
   };
+  // Release a canvas's backing store NOW. iOS keeps the pixels alive while the
+  // canvas object is reachable, and JSC will not run a full GC under the
+  // allocation pressure these very functions create — which is how ~40MB of
+  // per-snap temporaries piled up until WebKit killed the tab (an iPhone tester
+  // lost the page every ~6 snaps; an Android tester went 396 snaps clean).
+  const dropCanvas = (c) => { try { if(c){ c.width = 1; c.height = 1; } } catch(_e){} };
   const thumbOf = (src) => {
     try { const tc = document.createElement("canvas"); tc.width = 96; tc.height = Math.round(96 * src.height / src.width);
-      tc.getContext("2d").drawImage(src, 0, 0, tc.width, tc.height); return tc.toDataURL("image/jpeg", 0.7); } catch(_e){ return ""; }
+      tc.getContext("2d").drawImage(src, 0, 0, tc.width, tc.height);
+      const u = tc.toDataURL("image/jpeg", 0.7); dropCanvas(tc); return u; } catch(_e){ return ""; }
   };
   // queued snap frames live as JPEG blobs (memory) — decode on demand in the job
   const blobToCanvas = async (blob) => {
@@ -11309,6 +11366,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const c = await blobToCanvas(blob);
     if(!c) return null;
     try { return await createImageBitmap(c); } catch(_e){ return null; }
+    finally { dropCanvas(c); }
   };
   const qaLabelOf = (m) => m ? ((m.name || "?") + (m.version ? " - " + m.version : "")) : null;
   // catalog art + price for a resolved guess — the row shows the MATCHED card's
@@ -11433,11 +11491,25 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   }, [qaEditQ, qaSearchPool]);
   // loaded-or-loading catalog art for the on-camera label (canvas drawImage
   // needs a COMPLETE image — returns null until the fetch lands, then draws)
+  // LRU-bounded: this cache existed to draw a ~40px art chip on the overlay, but
+  // it held one live full-resolution Image per distinct card ever previewed, for
+  // the life of the modal (~1.3MB decoded each — 30 cards ≈ 40MB). Map preserves
+  // insertion order, so re-inserting on hit gives LRU for free.
+  const ART_CACHE_MAX = 12;
   const artImg = (url) => {
     if(!url) return null;
     const M = artImgsRef.current;
     let im = M.get(url);
-    if(!im){ im = new Image(); im.decoding = "async"; im.src = url; M.set(url, im); }
+    if(im){ M.delete(url); M.set(url, im); }
+    else {
+      im = new Image(); im.decoding = "async"; im.src = url; M.set(url, im);
+      while(M.size > ART_CACHE_MAX){
+        const oldest = M.keys().next().value;
+        const dead = M.get(oldest);
+        M.delete(oldest);
+        try { if(dead) dead.src = ""; } catch(_e){}   // let WebKit drop the decoded frame
+      }
+    }
     return (im.complete && im.naturalWidth) ? im : null;
   };
   // drain deferred second-looks — only while the snap queue is idle; a new tap
@@ -11474,6 +11546,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     const tRect = Date.now();
     try {
       const bmp = await blobToBitmap(await job.capBlobP);
+      // consumed — drop the reference so the deferred-look closure (which captures
+      // `job`) stops retaining this JPEG for the rest of the session
+      job.capBlobP = null;
+      if(bmp && !workerRef.current){ try { bmp.close && bmp.close(); } catch(_e){} }
       if(bmp && workerRef.current){
         const bmpW = bmp.width, bmpH = bmp.height;   // read BEFORE transfer neuters the bitmap
         const r = await post("capture", { bitmap: bmp, outW: 1200, outH: 1680 }, [bmp]);
@@ -11499,7 +11575,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     } catch(_e){}
     tmr.rectMs = Date.now() - tRect;
     if(!rect){
-      try { const rawC = await blobToCanvas(await job.rawBlobP); if(rawC) rect = rawGuideCrop(rawC); } catch(_e){}
+      try {
+        const rawC = await blobToCanvas(await job.rawBlobP);
+        if(rawC){ rect = rawGuideCrop(rawC, detLandscape); dropCanvas(rawC); }
+      } catch(_e){}
     }
     if(!rect){ updateQaRow(rid, { status: "done", conf: lock ? "lock" : "low" }); return; }
     const rectThumb = thumbOf(rect);
@@ -11583,6 +11662,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     let verUnsure = (lock && idr.source === "live-lock")
       ? (job.lockVerBy !== "body" && tied0(job.lockNames))
       : (idr.verBy !== "body" && tied0(idr.names));
+    // identify() flags an unresolvable same-(name,version) reprint pick (base vs
+    // its Enchanted/Epic/Promo twin) — text is identical between them, so the
+    // pick rests on colour or list order and must not read as certain.
+    if(idr.printUnsure) verUnsure = true;
     // NO-NAME REJECT: when OCR read no legible name (empty or pure garbage) and
     // the answer is a colour-only fusion/cn guess, DON'T present a confident
     // card. Colour-only is domain-gap unreliable and maps a foil-glare / bad-
@@ -11661,6 +11744,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           let rawBlob = null, stripBlob = null;
           try { rawBlob = await job.rawBlobP; } catch(_e){}
           try { stripBlob = await job.stripBlobP; } catch(_e){}
+          job.stripBlobP = null;   // consumed; stop the deferred-look closure retaining it
           // capture the pre-look predicted id NOW — `top` is reassigned by the
           // deferred looks below, and corrected-vs-truth must compare against
           // what this upload recorded as the prediction.
@@ -11686,7 +11770,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
               if(rc){ const ob = await ocrCardRegions(rc, { doName: true, doNumber: false, doBand: true });
                 extra = extra.concat((ob.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0)); } }
             const rawC = await blobToCanvas(await job.rawBlobP);
-            const altRect = rawC ? rawGuideCrop(rawC) : null;
+            const altRect = rawC ? rawGuideCrop(rawC, detLandscape) : null;
+            dropCanvas(rawC);
             if(altRect){ const o2 = await ocrCardRegions(altRect, { doName: true, doNumber: false, doBand: true });
               extra = extra.concat((o2.lines || []).filter(l => (ocrLines || []).indexOf(l) < 0 && extra.indexOf(l) < 0)); }
             if(!extra.length) return;
@@ -11703,7 +11788,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
               || idr2.source === "rescue";
             if(!accept) return;
             idr = idr2; ocrLines = merged; cands = candsOf(idr); top = cands[0] || top;
-            verUnsure = idr.verBy !== "body" && tied0(idr.names);
+            verUnsure = (idr.verBy !== "body" && tied0(idr.names)) || !!idr.printUnsure;
             updateQaRow(rid, { ...qaRowFields(top, cands), conf: idr.conf, ver: verUnsure,
               alts: (!verUnsure && idr.conf === "high") ? "" : cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") });
             traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
@@ -11726,8 +11811,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             if(!(idr2.verBy === "body" && idr2.conf === "high" && idr2.top3 && idr2.top3.length
                && charOf(idr2.top3[0]) === (lock.name || ""))) return;
             idr = idr2; ocrLines = lines2; cands = candsOf(idr); top = cands[0] || top;
-            verUnsure = false;
-            updateQaRow(rid, { ...qaRowFields(top, cands), conf: "high", ver: false, alts: "" });
+            verUnsure = !!idr2.printUnsure;   // a re-version can still land on a base-vs-chase pair
+            updateQaRow(rid, { ...qaRowFields(top, cands), conf: "high", ver: verUnsure,
+              alts: verUnsure ? cands.slice(1, 3).map(qaLabelOf).filter(Boolean).join(", ") : "" });
             traceRef.current.n.snapLooks = (traceRef.current.n.snapLooks || 0) + 1;
             trc("snap-look", { conf: idr.conf, top: idr.top3[0], flip: 0, vb: "body", n: lines2.length, lockVer: 1 });
           }
@@ -11738,7 +11824,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           // (batch 5: Reflecting/Power-Hamster/Ghostly-Tiger picks + 3 Dale
           // frames hijacked by "—Monterey Jack", all with legible collector
           // lines). Idle-only by construction (we're inside the deferred look).
-          const stillUnsure = (idr.verBy !== "body" && qaVerTied(idr.names)) || (idr.conf !== "high");
+          // printUnsure rows MUST reach here: a base-vs-chase reprint pick has no
+          // text signal at all, so the collector number is the only thing that can
+          // settle it (base #6 vs Epic #206) and turn the ≈ back into a ✓.
+          const stillUnsure = (idr.verBy !== "body" && qaVerTied(idr.names)) || (idr.conf !== "high") || !!idr.printUnsure;
           if(stillUnsure && detected && rectBlob){
             const rc3 = await blobToCanvas(rectBlob);
             if(rc3){
@@ -12132,7 +12221,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       const w = Math.min(maxW || 400, src.width), h = Math.round(w * src.height / src.width);
       const c = document.createElement("canvas"); c.width = w; c.height = h;
       c.getContext("2d").drawImage(src, 0, 0, w, h);
-      return new Promise(res => c.toBlob(res, "image/jpeg", 0.85));
+      return new Promise(res => c.toBlob(b => { dropCanvas(c); res(b); }, "image/jpeg", 0.85));
     } catch(_e){ return Promise.resolve(null); }
   };
   // single-mode flywheel (image = the last full-res rectified capture).
@@ -12237,7 +12326,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         ${others.length ? html`<div class="scanner-session-alts-lbl">Scanner's other guesses:</div>
         <div class="scanner-cand-row">
           ${others.map(c => html`<button key=${c.id} class="scanner-cand" onClick=${() => qaCorrectRow(x.id, { id: c.id, label: qaLabelOf(c), rarity: c.rarity }, "cand")}>
-            <img src=${SCAN_THUMB(c.id)} alt=${qaLabelOf(c)} loading="lazy"/>
+            <img src=${SCAN_THUMB_SMALL(c.id)} alt=${qaLabelOf(c)} loading="lazy"/>
             <span class="scanner-cand-name">${qaLabelOf(c)}</span>
           </button>`)}
         </div>` : null}
@@ -12371,7 +12460,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
                   ${x.cands && x.cands.length > 1 ? html`<div class="scanner-session-alts-lbl">Wrong card? Tap the right one:</div>
                   <div class="scanner-cand-row">
                     ${x.cands.map(cc => html`<button key=${cc.art_key} class=${"scanner-cand" + (cc.art_key === x.art_key ? " top" : "")} onClick=${() => correctEntry(x.eid, cc)}>
-                      <img src=${SCAN_THUMB(cc.id)} alt=${lbl(toDisp(cc))} loading="lazy"/>
+                      <img src=${SCAN_THUMB_SMALL(cc.id)} alt=${lbl(toDisp(cc))} loading="lazy"/>
                       <span class="scanner-cand-name">${lbl(toDisp(cc))}</span>
                     </button>`)}
                   </div>` : null}

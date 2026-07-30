@@ -24,13 +24,27 @@ const textRaw = fs.readFileSync(path.join(REPO, "scanner", "text.json"), "utf8")
 const byId = {};
 for (const c of JSON.parse(textRaw)) byId[c.id] = c;
 
+// The colour index too: baseGuard's sibling test asks whether the two reference
+// vectors are near-twins, so a replay without color.bin would take the "cannot
+// separate" branch for every pair and overstate the change.
+const idxRaw = fs.readFileSync(path.join(REPO, "scanner", "index.json"), "utf8");
+const colBin = fs.readFileSync(path.join(REPO, "scanner", "color.bin"));
+const dhBin = fs.readFileSync(path.join(REPO, "scanner", "dhash.bin"));
+const toAB = (b) => b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+
 function loadScanner(jsPath) {
   const src = fs.readFileSync(jsPath, "utf8");
   const ctxStub = () => ({ });
   const documentStub = { createElement: () => ({ getContext: ctxStub, width: 0, height: 0 }) };
   const win = {};
   // fresh JSON.parse per side â€” the new build SORTS text.cards in place
-  const fetchStub = () => Promise.resolve({ json: () => Promise.resolve(JSON.parse(textRaw)) });
+  const fetchStub = (u) => {
+    const url = String(u);
+    if (url.includes("index.json")) return Promise.resolve({ json: () => Promise.resolve(JSON.parse(idxRaw)) });
+    if (url.includes("color.bin")) return Promise.resolve({ arrayBuffer: () => Promise.resolve(toAB(colBin)) });
+    if (url.includes("dhash.bin")) return Promise.resolve({ arrayBuffer: () => Promise.resolve(toAB(dhBin)) });
+    return Promise.resolve({ json: () => Promise.resolve(JSON.parse(textRaw)) });
+  };
   new Function("window", "document", "fetch", src)(win, documentStub, fetchStub);
   return win.CardScanner;
 }
@@ -45,11 +59,13 @@ const disp = (id) => {
 async function runSide(jsPath) {
   const CS = loadScanner(jsPath);
   await CS.loadText();
+  try { await CS.load(); } catch (e) { console.error("colour index load failed:", e.message); }
   const out = {};
   for (const row of corpus) {
     if (!row.lines || !row.lines.length) continue;
-    const r = CS.identify({ lines: row.lines, cnNum: null, cnSet: null, colourRanked: [] });
-    out[row.id] = { top1: (r.top3 && r.top3[0]) || null, conf: r.conf, source: r.source, verBy: r.verBy || null };
+    const r = CS.identify({ lines: row.lines, cnNum: null, cnSet: null, colourRanked: row.colour || [] });
+    out[row.id] = { top1: (r.top3 && r.top3[0]) || null, conf: r.conf, source: r.source,
+                    verBy: r.verBy || null, printUnsure: !!r.printUnsure };
   }
   return out;
 }

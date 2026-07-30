@@ -19,7 +19,7 @@
   var GRID = 12;
   var DIMS = GRID * GRID * 3; // 432
   var BASE = "scanner/";
-  var IDXV = "?v=4"; // bump when color.bin/index.json content changes (v4 = Set 13 REAL Lorcast art 2026-07-19; v3 was prestaged art)
+  var IDXV = "?v=5"; // bump when color.bin/index.json content changes (v5 = Locations rotated upright + 3210 cards, 2026-07-29; v4 = Set 13 REAL Lorcast art)
   var TXTV = "?v=5"; // bump when text.json content/shape changes (v5 = +rarity code `r` for base-before-chase ordering, 2026-07-23)
 
   var state = {
@@ -312,7 +312,8 @@
       var c = cards[i], nm = c.n || "", ver = c.v || "", full = (nm + " " + ver).replace(/\s+/g," ").trim();
       var tok = nmTok(nm), tv = nmTok(ver), kk; for(kk in tv) tok[kk]=1;
       var cn = nmCanon(nm), cf = nmCanon(full);
-      var m = { id: c.id, name: nm, version: ver, set: c.s, r: c.r, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
+      var cv = nmCanon(ver);
+      var m = { id: c.id, name: nm, version: ver, set: c.s, r: c.r, nName: cn, nFull: cf, nSq: cn.replace(/ /g,""), nFullSq: cf.replace(/ /g,""), nVer: cv, nVerSq: cv.replace(/ /g,""), tok: tok, tri: nmTri(cf) };
       nameDB.meta[i] = m; nameDB.byId[c.id] = m;
       if(c.cn != null){ var num = String(c.cn).replace(/\D/g,""); if(num){
         (nameDB.cnLoose[num] = nameDB.cnLoose[num] || []).push(c.id);
@@ -339,6 +340,56 @@
     var L = Math.max(levSim(qn, m.nName), levSim(qn, m.nFull), levSim(qnSq, m.nSq), levSim(qnSq, m.nFullSq));
     return 0.42*L + 0.33*tokOverlap(qtok, m.tok) + 0.25*diceSet(qtri, m.tri);
   }
+  // Half-scores for the JOINT name+version pass (v18). textScore takes the max
+  // over lines, so a card whose NAME read on one line and whose VERSION subtitle
+  // read on another never combines the two — the card is judged on its single
+  // best line. That let three distinct field errors through at conf high:
+  //   "PETERPAN" + "Created by the Vine"  -> Hera - Created by the Vine
+  //   "JUMBO"    + "NinthWonderof theUnrverso" -> Jumbo Pop
+  //   "GENE"     + "OftheLomp"            -> Gene - Niceland Resident
+  // In all three the true card had BOTH halves present on separate lines while
+  // the winner had one half and a shorter string (levSim/tokOverlap both favour
+  // short names against a version-only line — "Hera" beats "Peter Pan" on the
+  // shared subtitle of a whole set-13 cycle).
+  //
+  // levSim early-returns 0 once the length difference exceeds 60%, so a half only
+  // scores against a line of comparable length — a long rules-text line cannot
+  // manufacture a version match. That length gate is what makes this safe.
+  // A half only counts when the line and the field are COMPARABLE IN LENGTH — a
+  // 40-char rules line is not a garbled read of a 19-char name. levSim's own guard
+  // normalises by the QUERY length, which is the wrong way round here: a long line
+  // against a short field passes it (|40-19| < 40*0.6) and returns a junk ~0.2.
+  // That is unfixable with a score floor, because a real garbled short read scores
+  // about the same (Bullseye read as "let sride" = 0.222 vs a rules line matching
+  // Jebidiah Farnsworth = 0.175) — the length ratio separates them cleanly where
+  // the score cannot. Not applied to levSim globally: textScore's conf thresholds
+  // are calibrated against its current behaviour.
+  function lenOk(a, b){
+    var la = a.length, lb = b.length;
+    if(!la || !lb) return false;
+    return (la < lb ? la / lb : lb / la) >= HALF_LEN_RATIO;
+  }
+  function nameHalf(qn, qnSq, m){
+    return Math.max(lenOk(qn, m.nName) ? levSim(qn, m.nName) : 0,
+                    lenOk(qnSq, m.nSq) ? levSim(qnSq, m.nSq) : 0);
+  }
+  function verHalf(qn, qnSq, m){
+    if(!m.nVer) return 0;
+    return Math.max(lenOk(qn, m.nVer) ? levSim(qn, m.nVer) : 0,
+                    lenOk(qnSq, m.nVerSq) ? levSim(qnSq, m.nVerSq) : 0);
+  }
+  var JOINT_NAME_W = 0.55;    // name half carries slightly more than the version half
+  var VER_HALF_FLOOR = 0.62;  // a version half below this is noise, not a subtitle read
+  // ...and the name half needs a floor too, or a card whose VERSION happens to
+  // equal a stray line rides in on that alone: a frame full of rules text
+  // containing "Cookie" scored Jebidiah Farnsworth - Cookie over a legitimate
+  // "TNKERBEL" read of Tinker Bell - Giant Fairy. Kept permissive because the
+  // real work there is done by the length gate in lenOk() — genuine reads of a
+  // short name garble hard ("BULLSEYE" -> "let sride" = 0.222) and a floor high
+  // enough to block the rules-text case would take them with it.
+  var NAME_HALF_FLOOR = 0.20;
+  var HALF_LEN_RATIO = 0.6;   // min(len)/max(len) for a half to be considered
+  var ATTRIB_PENALTY = 0.55;  // weight for a "—Character" flavour-attribution line
   // rank cards by (possibly garbled) OCR name candidates. `lines` = array of OCR
   // text strings (e.g. the tallest text lines from the name band). Scores each
   // card against the best line. Returns {top:[{id,name,version,score}], conf,
@@ -347,13 +398,63 @@
     buildNameDB(); if(!nameDB) return { top: [], conf: "low", score: 0, margin: 0, marginChar: 0 };
     k = k || 5;
     var queries = [], li;
-    for(li=0; li<lines.length; li++){ var qn = nmCanon(lines[li]); if(qn.length < 3) continue; queries.push({ qn: qn, qnSq: qn.replace(/ /g,""), qtok: nmTok(lines[li]), qtri: nmTri(qn) }); }
+    for(li=0; li<lines.length; li++){
+      var qn = nmCanon(lines[li]); if(qn.length < 3) continue;
+      // A line that STARTS with a dash is a flavour ATTRIBUTION ("—Huey"), never a
+      // card name. It reads as a near-exact match for a short character name while
+      // the real title, longer and garbled, scores lower — length-normalised
+      // similarity means a 4-char exact beats a 24-char 92% match. Field cost: a
+      // Junior Woodchuck Guidebook playset answered "Huey - Savvy Nephew" ×4 at
+      // conf high, with "IUNIORWOODCHUCKGUDEBOOK" sitting right there in line 0.
+      // Penalised rather than dropped: if the attribution is the ONLY thing that
+      // read, the card can still be found — just not confidently.
+      queries.push({ qn: qn, qnSq: qn.replace(/ /g,""), qtok: nmTok(lines[li]), qtri: nmTri(qn),
+                     w: /^\s*[-—–]\s*\S/.test(lines[li]) ? ATTRIB_PENALTY : 1 });
+    }
     if(!queries.length) return { top: [], conf: "low", score: 0, margin: 0, marginChar: 0 };
     var meta = nameDB.meta, best = new Float32Array(meta.length), i, qi;
-    for(i=0;i<meta.length;i++){ var s=0; for(qi=0;qi<queries.length;qi++){ var q=queries[qi]; var sc=textScore(q.qn, q.qnSq, q.qtok, q.qtri, meta[i]); if(sc>s) s=sc; } best[i]=s; }
+    for(i=0;i<meta.length;i++){ var s=0; for(qi=0;qi<queries.length;qi++){ var q=queries[qi]; var sc=textScore(q.qn, q.qnSq, q.qtok, q.qtri, meta[i]) * q.w; if(sc>s) s=sc; } best[i]=s; }
+    // JOINT re-score, TOP-N ONLY. Computing the two halves for all ~3.2k cards
+    // cost +61% on identify() (159→255ms in node, so ~0.5→0.8s on a phone) — and
+    // a nameMs blowup is what starved the OCR queue in the batch-6 field flow
+    // (rowMs p90 260s). The joint pass only ever RESCUES a card the base pass
+    // already scored respectably, so N=80 is far more than enough: a card ranked
+    // below 80 on text has no name evidence to combine. Safe to reorder within
+    // this window only — boosts can never raise a card from outside it into the
+    // final top-24, since every final score is >= its own base score.
+    var cand = topK(best, Math.min(meta.length, 80));
+    var hn = new Float32Array(queries.length), hv = new Float32Array(queries.length);
+    for(var ci=0; ci<cand.length; ci++){
+      var mi = cand[ci], m2 = meta[mi];
+      if(!m2.nVer || m2.nVerSq.length < 5) continue;   // no version, or too short to match on
+      for(qi=0;qi<queries.length;qi++){
+        var q2 = queries[qi];
+        hn[qi] = nameHalf(q2.qn, q2.qnSq, m2) * q2.w;
+        hv[qi] = verHalf(q2.qn, q2.qnSq, m2) * q2.w;
+      }
+      // The two halves MUST come from DIFFERENT lines. That is the entire premise
+      // ("the name read on one line, the subtitle on another"), and without it one
+      // garbled line double-counts against both fields and invents a score: a lone
+      // "DRSULA" scored Ursula - Deal Maker 0.558 over the correct Vanessa's 0.437,
+      // and 8 of the 8 replay regressions were this same self-pairing. The version
+      // half also has to be a CONVINCING read — a partial ~0.3 overlap with some
+      // other card's subtitle is noise, not evidence.
+      var bj = 0;
+      for(qi=0;qi<queries.length;qi++){
+        if(hn[qi] < NAME_HALF_FLOOR) continue;
+        for(var qj=0;qj<queries.length;qj++){
+          if(qj === qi || hv[qj] < VER_HALF_FLOOR) continue;
+          var j = JOINT_NAME_W * hn[qi] + (1 - JOINT_NAME_W) * hv[qj];
+          if(j > bj) bj = j;
+        }
+      }
+      // Both halves are <=1 so the joint stays on textScore's [0,1] scale and the
+      // calibrated conf thresholds below keep their meaning.
+      if(bj > best[mi]) best[mi] = bj;
+    }
     // look deep enough past k that a card with many printings (6+ Minnies) still
     // reaches the first DIFFERENT character for the margin computation.
-    var order = topK(best, Math.max(k, 24));
+    var order = cand.slice().sort(function(a, b){ return best[b] - best[a]; }).slice(0, Math.max(k, 24));
     var top = order.map(function(ri){ return { id: meta[ri].id, name: meta[ri].name, version: meta[ri].version, score: best[ri] }; });
     var s0 = top[0] ? top[0].score : 0, s1 = top[1] ? top[1].score : 0, margin = s0 - s1;
     // marginChar = gap to the best card of a DIFFERENT character name. The real
@@ -586,35 +687,100 @@
              score: Math.round(best * 1000) / 1000, margin: Math.round((best - own) * 1000) / 1000 };
   }
 
-  // Same-(name,version) reprint HEAD GUARD (v16). Text is IDENTICAL between a
-  // base printing and its Enchanted/Iconic/Epic/Promo reprints, so a chase card
-  // at the head of the candidate list can only be there via colour rank or list
-  // order — never via text evidence. Base printings outnumber chase pulls ~50:1
-  // in real scans (v15 field: 19 base cards mislabeled as their chase reprint,
-  // 1 the other way), so a chase/custom head must EARN the slot: an exact
-  // collector number (branch 1 returns before this) or a TOP-5 colour rank
-  // (a real Enchanted's full-art is visually distinctive). A weak or absent
-  // colour rank falls back to the base sibling; the chase stays in the
-  // alternates one tap away.
+  // Same-(name,version) reprint HEAD GUARD (v16, reworked v18). Text is IDENTICAL
+  // between a base printing and its Enchanted/Iconic/Epic/Promo reprints, so a
+  // chase card at the head of the candidate list can only be there via colour rank
+  // or list order — never via text evidence. Base printings outnumber chase pulls
+  // heavily in real scans, so a chase head must EARN the slot: an exact collector
+  // number (branch 1 returns before this) or a colour win over its OWN base sibling.
+  //
+  // v16 asked the wrong question. It granted the slot on a TOP-5 GLOBAL colour
+  // rank, on the theory that "a real Enchanted's full-art is visually distinctive".
+  // Measured over all 491 base<->chase pairs in the shipped index, that theory
+  // holds for Enchanted (median cosine to its own base 0.31) and Iconic (0.16) —
+  // and fails completely for Epic (0.850) and Promo (0.855), which are the SAME
+  // artwork re-framed. Random card pairs sit at 0.537 median / 0.822 at p99, so an
+  // Epic is closer to its base than 99% of random pairs: whichever wins is decided
+  // by noise, and the free pass then rubber-stamps it. 70% of Epic and 55% of Promo
+  // pairs are blind this way. Field cost (Aaron's 405-snap v16 batch): 9 of the 13
+  // confirmed silent-confident errors were a base card answered as its chase twin.
+  //
+  // So: measure the pair. If the two reference vectors are near-twins, colour
+  // cannot possibly be the evidence and the base wins outright. If they really are
+  // separable, colour keeps its say (a genuine Enchanted scan still resolves).
   var CHASE_RARITY = { E: 1, I: 1, X: 1, P: 1 };  // Enchanted / Iconic / Epic / Promo
+  var COLOUR_TWIN_COS = 0.80;  // above this, colour cannot separate the pair
   function reprintDemote(m){
     if(!m) return 0;
     return (CHASE_RARITY[m.r] ? 2 : 0) + (String(m.id).lastIndexOf("crd_custom_", 0) === 0 ? 1 : 0);
+  }
+  // cosine between two REFERENCE colour vectors (both unit-norm * a constant
+  // scale, so a plain dot product / scale^2 is the cosine). Index-only, no query
+  // involved — this is a property of the two printings' art, computed lazily and
+  // memoised. Returns null when either id is missing from the colour index.
+  var twinCosCache = Object.create(null);
+  function refColourCos(idA, idB){
+    if(!state.loaded || !state.color) return null;
+    var key = idA < idB ? idA + "|" + idB : idB + "|" + idA;
+    var hit = twinCosCache[key];
+    if(hit !== undefined) return hit;
+    if(!state.rowById){
+      state.rowById = Object.create(null);
+      for(var i=0;i<state.cards.length;i++) state.rowById[state.cards[i].id] = i;
+    }
+    var ra = state.rowById[idA], rb = state.rowById[idB], out = null;
+    if(ra != null && rb != null){
+      var dims = state.dims, col = state.color, ba = ra * dims, bb = rb * dims;
+      var dot = 0, na = 0, nb = 0, d, va, vb;
+      for(d=0;d<dims;d++){ va = col[ba+d]; vb = col[bb+d]; dot += va*vb; na += va*va; nb += vb*vb; }
+      out = (na && nb) ? dot / Math.sqrt(na * nb) : null;
+    }
+    twinCosCache[key] = out;
+    return out;
+  }
+  // Is `chaseId` distinguishable from `baseId` by colour at all?  Unknown (no
+  // vectors) counts as NOT separable: absence of evidence must not read as
+  // evidence for the rarer card.
+  function colourCanSeparate(chaseId, baseId){
+    var c = refColourCos(chaseId, baseId);
+    return c != null && c < COLOUR_TWIN_COS;
   }
   function baseGuard(ids, colour){
     if(!nameDB || !ids || ids.length < 2) return ids;
     var head = nameDB.byId[ids[0]];
     if(!head || !reprintDemote(head)) return ids;
-    var j;
-    for(j=0;j<(colour||[]).length && j<5;j++) if(colour[j] === ids[0]) return ids;
+    // find the head's best base sibling (same name+version, less demoted)
+    var j, sibAt = -1;
     for(j=1;j<ids.length;j++){
       var m = nameDB.byId[ids[j]];
-      if(m && m.nName === head.nName && (m.version || "") === (head.version || "") && reprintDemote(m) < reprintDemote(head)){
-        var out = ids.slice(); out.splice(j, 1); out.unshift(ids[j]);
-        return out;
-      }
+      if(m && m.nName === head.nName && (m.version || "") === (head.version || "") && reprintDemote(m) < reprintDemote(head)){ sibAt = j; break; }
     }
-    return ids;
+    if(sibAt < 0) return ids;   // nothing better to fall back to
+    // colour may only keep the chase at the head when it can actually TELL THE
+    // TWO APART, and then only on a top-5 rank.
+    if(colourCanSeparate(ids[0], ids[sibAt])){
+      for(j=0;j<(colour||[]).length && j<5;j++) if(colour[j] === ids[0]) return ids;
+    }
+    var out = ids.slice(); out.splice(sibAt, 1); out.unshift(ids[sibAt]);
+    return out;
+  }
+  // Are the top two candidates same-(name,version) printings?  Then the pick was
+  // NOT made on text — the text is byte-identical between a base printing and its
+  // reprint — so it rests on colour or list order, and the row must say so (amber
+  // ≈ + the sibling one tap away in the alternates) instead of showing a confident
+  // ✓. Unconditional on purpose: the v16 field batch had 185 labelled rows with
+  // ZERO Enchanted/Iconic/Epic truths and 9 confirmed base-answered-as-its-chase
+  // errors, i.e. the colour-promotion path produced no confirmed right answers and
+  // several confident wrong ones. It is kept alive (a real Enchanted scan has no
+  // other signal — its text is its base's text) but it no longer gets to look
+  // certain. The collector number is the only true discriminator here (base #6 vs
+  // Epic #206), and the idle cn finisher upgrades the row once it reads — which it
+  // now does more often, the cn det having gotten 2.1x cheaper.
+  function reprintUnsure(ids){
+    if(!nameDB || !ids || ids.length < 2) return false;
+    var a = nameDB.byId[ids[0]], b = nameDB.byId[ids[1]];
+    if(!a || !b) return false;
+    return a.nName === b.nName && (a.version || "") === (b.version || "");
   }
 
   // Reorder a candidate id list so the BODY-decided version of the top card's
@@ -640,7 +806,19 @@
   // are independent voters that order the narrowed field. Falls back to
   // name-primary, then colour, when the number doesn't read.
   // opts = { lines:[ocr strings], cnNum:"116"|null, cnSet:"12"|null, colourRanked:[ids] }.
+  //
+  // Wrapper: flags `printUnsure` when the answer is an unresolvable same-(name,
+  // version) reprint coin flip, so the row shows ≈ instead of a confident ✓.
+  // Single point on purpose — every branch returns through here, so a new branch
+  // can't silently ship a confident coin flip. Skipped for "cn+name": an exact
+  // collector number DID resolve the printing, which is the whole point of it.
   function identify(opts){
+    var r = identifyCore(opts);
+    if(r && r.source !== "cn+name" && r.top3 && r.top3.length > 1 &&
+       reprintUnsure(r.top3)) r.printUnsure = true;
+    return r;
+  }
+  function identifyCore(opts){
     buildNameDB();
     var nm = rankNames(opts.lines || [], 6);
     var colour = opts.colourRanked || [];

@@ -33,7 +33,7 @@ def pull_catalog() -> list[dict]:
     sb = Supabase()
     rows = sb.select(
         "cards",
-        columns="id,name,version,set_id,rarity,image_normal",
+        columns="id,name,version,set_id,rarity,card_type,image_normal",
         filters={"image_normal": "not.is.null"},
     )
     out = []
@@ -49,6 +49,10 @@ def pull_catalog() -> list[dict]:
             "version": r.get("version"),
             "set_id": r.get("set_id"),
             "rarity": r.get("rarity"),
+            # card_type drives the Location upright-rotation in build_index.py —
+            # Lorcast serves landscape Locations rotated 90° CCW into a portrait
+            # frame, so their descriptors were built sideways.
+            "card_type": r.get("card_type"),
             "url": url,
             "art_key": art_key,
         })

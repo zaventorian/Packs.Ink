@@ -58,7 +58,8 @@ def main():
         r = requests.get(f"{url}/rest/v1/scan_samples", params={
             "select": "id,card_id,predicted_card_id,reviewed,corrected,user_id,created_at,"
                       "lines:debug->ocrLines,build:debug->>build,kind:debug->>kind,"
-                      "source:debug->>source,conf:debug->>conf",
+                      "source:debug->>source,conf:debug->>conf,"
+                      "verUnsure:debug->>verUnsure,cands:debug->candidates",
             "debug->>kind": "eq.qa-snap",
             "order": "id.asc",
         }, headers={**H, "Range": f"{start}-{start + 999}"}, timeout=60)
@@ -83,11 +84,21 @@ def main():
             truth_nv = [c["name"], c.get("version") or ""]
         elif r["id"] in hist:
             truth_nv = list(hist[r["id"]])
+        # Reconstruct the live colour ranking from debug.candidates: the entries
+        # carrying a colourScore ARE the colour candidate list (the merged array
+        # is not stored in colour order, so sort it here). Lets the replay
+        # exercise the colour-dependent paths — baseGuard's sibling test and the
+        # reprint ≈ flag — instead of the no-colour fallback.
+        cands = r.get("cands") or []
+        col = sorted((c for c in cands if isinstance(c, dict) and c.get("colourScore") is not None),
+                     key=lambda c: -c["colourScore"])
         out.append({
             "id": r["id"], "build": r.get("build"), "user": (r.get("user_id") or "")[:8],
             "lines": r.get("lines") or [], "pred": r.get("predicted_card_id"),
             "reviewed": bool(r.get("reviewed")), "corrected": bool(r.get("corrected")),
             "source": r.get("source"), "conf": r.get("conf"),
+            "ver_unsure": (r.get("verUnsure") == "true"),
+            "colour": [c["id"] for c in col],
             "truth_id": truth_id, "truth_nv": truth_nv,
         })
     OUT.write_text(json.dumps(out, separators=(",", ":")), encoding="utf-8")
