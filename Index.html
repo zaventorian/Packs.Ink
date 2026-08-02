@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=301">
+<link rel="stylesheet" href="styles.css?v=302">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -24108,6 +24108,9 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
 // which already enforces the low_prev ≥ $5 floor and computes 1d/7d/30d Δ%.
 // We fetch enough to bucket client-side and take top 20 per bucket.
 const CHASE_RARS = new Set(["Enchanted","Iconic","Epic"]);
+// Rarity-toggle order for the Chase banner's per-rarity chips (pull-rate
+// ascending, matching how the rarity chips read elsewhere).
+const CHASE_RAR_ORDER = ["Epic","Enchanted","Iconic"];
 const RARELEG_RARS = new Set(["Rare","Super Rare","Legendary"]);
 const MOVER_FOIL_PRINTINGS = new Set(["Cold Foil","Holofoil","Foil"]);
 
@@ -26520,104 +26523,55 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
   </aside>`;
 };
 
-// Home-page tournament-results banner. Fetches recent tournaments + their
-// results (top 4 per tournament, newest tournaments first, max 16 decks
-// total). Renders as a grid below the Following feed. Deck clicks open the
-// deck via openDeckById; tournament-name clicks jump to that tournament's
-// detail page via openTournamentById.
-// Chase movers + tournament results paired in a 2-col layout on mobile/
-// tablet (≤1100px), stacked on desktop. Uses JS viewport detection
-// instead of CSS media queries so cache-stale styles.css can't break the
-// layout — the inline gridTemplateColumns is computed in React.
-const ChaseRowWithTourney = ({raw, chase, rareLeg, rareLegControls, winLabel, directionLabel, windowKey,
-                              visibleWindows, paused, showTournaments=true, openBannerInScreener, openCard,
-                              openDeckById, openTournamentById, openTournamentsList}) => {
-  const [isNarrow, setIsNarrow] = useState(() =>
+// Viewport-width hook. JS matchMedia rather than a CSS media query wherever
+// the breakpoint decides WHICH elements mount (not just how they look) — a
+// cache-stale styles.css can't then put a panel in the wrong place.
+const useMaxWidth = (px) => {
+  const query = `(max-width: ${px}px)`;
+  const [matches, setMatches] = useState(() =>
     typeof window !== "undefined" && window.matchMedia
-      ? window.matchMedia("(max-width: 1100px)").matches : false);
+      ? window.matchMedia(query).matches : false);
   useEffect(() => {
     if(typeof window === "undefined" || !window.matchMedia) return;
-    const mq = window.matchMedia("(max-width: 1100px)");
-    const onChange = (e) => setIsNarrow(e.matches);
+    const mq = window.matchMedia(query);
+    setMatches(mq.matches);
+    const onChange = (e) => setMatches(e.matches);
     if(mq.addEventListener) mq.addEventListener("change", onChange);
     else if(mq.addListener) mq.addListener(onChange);
     return () => {
       if(mq.removeEventListener) mq.removeEventListener("change", onChange);
       else if(mq.removeListener) mq.removeListener(onChange);
     };
-  }, []);
-  // Tournament is always shown in its "full" form (4 events × top 4 placings).
-  // On mobile it pairs with the Rare–Legendary row (chase movers sits full-
-  // width above); the tournament column auto-scrolls if the 16 rows exceed the
-  // rare-leg movers banner height.
-  const chaseBanner = html`<${MoversBanner}
-    title="Chase Movers"
-    subtitle=${`Epic · Enchanted · Iconic — top 20 by ${winLabel} ${directionLabel}`}
-    cards=${chase}
-    activeWindow=${windowKey}
-    visibleWindows=${visibleWindows}
-    paused=${paused}
-    onTitleClick=${()=>openBannerInScreener("chase")}
-    onTileClick=${openCard}/>`;
-  const rareLegBanner = html`<${MoversBanner}
-    title="Rare – Legendary Movers"
-    subtitle=${`Rare · Super Rare · Legendary — top 20 by ${winLabel} ${directionLabel}`}
-    controls=${rareLegControls}
-    cards=${rareLeg}
-    activeWindow=${windowKey}
-    visibleWindows=${visibleWindows}
-    paused=${paused}
-    onTitleClick=${()=>openBannerInScreener("rareLeg")}
-    onTileClick=${openCard}/>`;
-
-  // Desktop: tournament lives in the left column (rendered by HomeView); we
-  // just stack chase + rare-leg full-width here, same as before. Also the
-  // fallback when the user has hidden tournament results from the home page —
-  // no tournament column means no reason for the side-by-side grid.
-  if(!isNarrow || !showTournaments){
-    return html`<div>${chaseBanner}${rareLegBanner}</div>`;
-  }
-
-  // Single-row grid: chase movers (col 1) | tournament (col 2). Both stretch
-  // to the same height (chase movers' natural height). Tournament list scrolls
-  // internally on overflow. Rare-leg renders below at full width.
-  const gridStyle = {
-    display:"grid",
-    gridTemplateColumns:"minmax(0,1fr) minmax(150px, 32%)",
-    columnGap:8,
-    alignItems:"stretch",
-    marginBottom:8,
-    width:"100%", maxWidth:"100%", minWidth:0,
-    boxSizing:"border-box", overflow:"hidden"
-  };
-  const chaseColStyle = {minWidth:0, maxWidth:"100%", overflow:"hidden",
-    display:"flex", flexDirection:"column"};
-  const tourneyColStyle = {minWidth:0, maxWidth:"100%",
-    display:"flex", flexDirection:"column",
-    minHeight:0, overflow:"hidden"};
-
-  return html`<div>
-    ${chaseBanner}
-    <div style=${gridStyle}>
-      <div style=${chaseColStyle}>${rareLegBanner}</div>
-      <div data-debug="rareleg-row-tourney" style=${tourneyColStyle}>
-        <${TournamentResultsBanner} raw=${raw} openDeckById=${openDeckById}
-          openTournamentById=${openTournamentById}
-          openTournamentsList=${openTournamentsList}
-          chaseStyleTitle=${true}/>
-      </div>
-    </div>
-  </div>`;
+  }, [query]);
+  return matches;
 };
 
+// Home-page tournament-results banner. Fetches recent tournaments + their
+// results (top 8 per event, 4 most-recent non-empty events). Deck clicks open
+// the deck via openDeckById; tournament-name clicks jump to that tournament's
+// detail page via openTournamentById.
+//
+// Two placements: the desktop left column (>1100px, always expanded), and
+// below the last movers banner on mobile/tablet (≤1100px), where it's
+// collapsible — full-width under a tall stack of banners, a user who doesn't
+// follow tournaments should be able to fold it away for good.
 const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTournamentsList,
-                                  chaseStyleTitle}) => {
+                                  chaseStyleTitle, collapsible}) => {
   const [groups, setGroups] = useState(null);  // [{tournament, decks:[...]}]
   const [err, setErr] = useState(null);
-  // Always render full top-4 per event. The "Show more" toggle was removed
-  // since the chase-row column auto-scrolls on overflow and the desktop
-  // sidebar has the height budget for the full list.
+  // Always render full top-8 per event. The "Show more" toggle was removed
+  // since the list scrolls inside its own fixed-height box in both placements.
   const expanded = true;
+  // Collapse state is only wired up for the collapsible (mobile) placement,
+  // but it's persisted globally so folding it away sticks across visits.
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("packsink:home:tourneyCollapsed") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:tourneyCollapsed", collapsed ? "1" : "0"); } catch {}
+  }, [collapsed]);
+  const isCollapsed = collapsible && collapsed;
   useEffect(() => {
     let cancelled = false;
     const CACHE_KEY = "packsink:home:tourneys:v1";
@@ -26663,28 +26617,41 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
     return () => { cancelled = true; };
   }, []);
   // Section header — clicks the title to jump to Decks → Tournaments. In the
-  // mobile chase-row grid we restyle it to match the Cinzel accent label used
-  // by the MoversBanner titles, so "Tournament Results" reads as a peer of
-  // "Chase Movers" instead of a different design language.
+  // mobile placement we restyle it to match the Cinzel accent label used by
+  // the MoversBanner titles, so "Tournament Results" reads as a peer of the
+  // banners it now sits under instead of a different design language.
   const titleClass = chaseStyleTitle ? "home-feed-title home-feed-title--chase" : "home-feed-title";
   const titleEl = openTournamentsList
     ? html`<button class=${titleClass+" home-feed-title-link"}
         onClick=${openTournamentsList}
         title="See all tournaments">Tournament Results</button>`
     : html`<div class=${titleClass}>Tournament Results</div>`;
+  // Collapsible placement wraps the title in a flex row with the chevron; the
+  // always-expanded one keeps the bare title so desktop spacing is untouched.
+  const headEl = collapsible
+    ? html`<div class="home-feed-head">
+        ${titleEl}
+        <button class=${"home-feed-collapse-btn"+(isCollapsed?" is-collapsed":"")}
+          onClick=${()=>setCollapsed(v=>!v)}
+          aria-expanded=${!isCollapsed}
+          title=${isCollapsed ? "Show tournament results" : "Hide tournament results"}>
+          <span class="home-feed-chev" aria-hidden="true">▾</span>
+        </button>
+      </div>`
+    : titleEl;
   if(err) return null;
-  if(groups == null) return html`<aside class="home-feed">
-    ${titleEl}
-    <div class="home-feed-empty muted">Loading…</div>
+  if(groups == null) return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney-mobile":"")}>
+    ${headEl}
+    ${!isCollapsed && html`<div class="home-feed-empty muted">Loading…</div>`}
   </aside>`;
   if(groups.length === 0) return null;
-  // 4 most-recent events, top 8 decks each. The panel is a fixed-height scroll
-  // box (mobile: locked to the chase-movers banner height; desktop: max-height),
-  // so the rows scroll inside it instead of stretching the box taller.
+  // 4 most-recent events, top 8 decks each. The list is a fixed-height scroll
+  // box in both placements, so the rows scroll inside it instead of stretching
+  // the panel taller.
   const visibleGroups = groups.slice(0, 4);
-  return html`<aside class="home-feed">
-    ${titleEl}
-    <div class="home-tourney-list">
+  return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney-mobile":"")}>
+    ${headEl}
+    ${isCollapsed ? null : html`<div class="home-tourney-list">
       ${visibleGroups.map(({tournament: t, decks}) => html`<div key=${t.id} class="home-tourney-block">
         <button class="home-tourney-name"
           onClick=${()=>openTournamentById && openTournamentById(t.id)}
@@ -26730,7 +26697,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
           })}
         </ul>
       </div>`)}
-    </div>
+    </div>`}
   </aside>`;
 };
 
@@ -27531,7 +27498,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       minPrice: "5",
     };
     if(which === "chase"){
-      openScreenerWithFilter({...base, filterRarities: ["Enchanted","Iconic","Epic"]});
+      // Carry the banner's rarity chips so the jump lands on the same tiers.
+      openScreenerWithFilter({...base,
+        filterRarities: CHASE_RAR_ORDER.filter(r => chaseRars.includes(r))});
     } else if(which === "rareLeg"){
       // Carry the banner's printing selection into the Screener's Foil /
       // Non-Foil chips so the jump lands on the same slice of the market.
@@ -27554,6 +27523,10 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     }
   };
   const [state, setState] = useState({rows:null, loading:true, error:null});
+  // ≤1100px the tournament panel moves out of the left column and renders
+  // below the last movers banner (collapsible). Mount-site decision, so it's
+  // matchMedia rather than CSS — see useMaxWidth.
+  const isNarrow = useMaxWidth(1100);
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Tab hint threaded from graded mover tiles so the modal opens on its
   // Graded tab instead of the default Price History. null = let the modal
@@ -27594,6 +27567,23 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   useEffect(() => {
     try { localStorage.setItem("packsink:home:rlPrinting", rlPrinting); } catch {}
   }, [rlPrinting]);
+  // Chase banner rarity filter — Epic / Enchanted / Iconic toggle
+  // independently so you can look at one tier at a time. At least one stays
+  // on: turning the last one off would leave the banner permanently empty
+  // with no way back except the same chip.
+  const [chaseRars, setChaseRars] = useState(() => {
+    try {
+      const v = JSON.parse(localStorage.getItem("packsink:home:chaseRars") || "null");
+      const clean = Array.isArray(v) ? CHASE_RAR_ORDER.filter(r => v.includes(r)) : [];
+      return clean.length ? clean : CHASE_RAR_ORDER.slice();
+    } catch { return CHASE_RAR_ORDER.slice(); }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:chaseRars", JSON.stringify(chaseRars)); } catch {}
+  }, [chaseRars]);
+  const toggleChaseRar = (r) => setChaseRars(prev => prev.includes(r)
+    ? (prev.length > 1 ? prev.filter(x => x !== r) : prev)
+    : CHASE_RAR_ORDER.filter(x => x === r || prev.includes(x)));
 
   // Resolve a mover (carries card_id + tcgplayer_product_id) to the
   // CardDetailModal-shaped "group" via O(1) lookups instead of scanning
@@ -27754,12 +27744,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       const isFoil = MOVER_FOIL_PRINTINGS.has(r.printing);
       return rlPrinting === "foil" ? isFoil : !isFoil;
     });
+    // Rarity filter, chase only. Applied after sorting so the top 20 is taken
+    // from the selected tiers rather than from the full chase pool.
+    const chaseSel = new Set(chaseRars);
+    const chaseFiltered = chaseRars.length === CHASE_RAR_ORDER.length
+      ? chase : chase.filter(r => chaseSel.has(r.rarity));
     return {
-      chase:   enrich(chase  ).slice(0,20),
+      chase:   enrich(chaseFiltered).slice(0,20),
       rareLeg: enrich(rareLegFiltered).slice(0,20),
       promo:   enrich(promo  ).slice(0,20),
     };
-  }, [state.rows, windowKey, showUp, showDown, raw, rlPrinting]);
+  }, [state.rows, windowKey, showUp, showDown, raw, rlPrinting, chaseRars]);
 
   const directionLabel = (showUp && showDown) ? "|Δ%|"
                        : showUp ? "Δ% (gains)"
@@ -27876,6 +27871,21 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <button class=${valuableMode==="chase"?"active":""} onClick=${()=>setValuableMode("chase")} style=${{fontSize:11,padding:"3px 8px"}}>Chase</button>
   </div>`;
 
+  // Chase banner rarity chips. Multi-select (unlike the seg-grp elsewhere on
+  // this page, which are one-of-N) — each tier is independently on/off.
+  const chaseControls = html`<div class="seg-grp" role="group" aria-label="Chase rarities" style=${{padding:2}}>
+    ${CHASE_RAR_ORDER.map(r => {
+      const on = chaseRars.includes(r);
+      const isLast = on && chaseRars.length === 1;
+      return html`<button key=${r} class=${on?"active":""} aria-pressed=${on}
+        onClick=${()=>toggleChaseRar(r)}
+        title=${isLast ? `Showing ${r} only — turn another rarity on before hiding this one`
+                       : (on ? `Hide ${r} movers` : `Show ${r} movers`)}
+        style=${{fontSize:11,padding:"3px 8px"}}>${r}</button>`;
+    })}
+  </div>`;
+  const chaseLabel = CHASE_RAR_ORDER.filter(r => chaseRars.includes(r)).join(" · ");
+
   const rareLegControls = html`<div class="seg-grp" role="group" aria-label="Rare–Legendary printing" style=${{padding:2}}>
     ${[["all","Both","Show both non-foil and foil printings"],
        ["normal","Normal","Show only non-foil printings"],
@@ -27912,7 +27922,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>Browse the set →</div>
         </a>`}
         ${showFollowing && html`<${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`}
-        ${showTournaments && html`<div class="home-tourney-col home-tourney-col--desktop">
+        ${showTournaments && !isNarrow && html`<div class="home-tourney-col home-tourney-col--desktop">
           <${TournamentResultsBanner} raw=${raw} openDeckById=${openDeckById} openTournamentById=${openTournamentById}
             openTournamentsList=${openTournamentsList}/>
         </div>`}
@@ -27985,22 +27995,26 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     onTileClick=${openCard}/>`;
                   return html`<div>
                     ${newestSetIsHot && newestBanner}
-                    <${ChaseRowWithTourney}
-                      raw=${raw}
-                      chase=${chase}
-                      rareLeg=${rareLeg}
-                      rareLegControls=${rareLegControls}
-                      winLabel=${winLabel}
-                      directionLabel=${directionLabel}
-                      windowKey=${windowKey}
+                    <${MoversBanner}
+                      title="Chase Movers"
+                      subtitle=${`${chaseLabel || "Epic · Enchanted · Iconic"} — top 20 by ${winLabel} ${directionLabel}`}
+                      controls=${chaseControls}
+                      cards=${chase}
+                      activeWindow=${windowKey}
                       visibleWindows=${visibleWindows}
                       paused=${paused}
-                      showTournaments=${showTournaments}
-                      openBannerInScreener=${openBannerInScreener}
-                      openCard=${openCard}
-                      openDeckById=${openDeckById}
-                      openTournamentById=${openTournamentById}
-                      openTournamentsList=${openTournamentsList}/>
+                      onTitleClick=${()=>openBannerInScreener("chase")}
+                      onTileClick=${openCard}/>
+                    <${MoversBanner}
+                      title="Rare – Legendary Movers"
+                      subtitle=${`Rare · Super Rare · Legendary — top 20 by ${winLabel} ${directionLabel}`}
+                      controls=${rareLegControls}
+                      cards=${rareLeg}
+                      activeWindow=${windowKey}
+                      visibleWindows=${visibleWindows}
+                      paused=${paused}
+                      onTitleClick=${()=>openBannerInScreener("rareLeg")}
+                      onTileClick=${openCard}/>
                     <${MoversBanner}
                       title="Promo Movers"
                       subtitle=${`Promo printings — top 20 by ${winLabel} ${directionLabel}`}
@@ -28012,6 +28026,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       onTileClick=${openCard}/>
                     ${gradedPremium && html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>`}
                     ${!newestSetIsHot && newestBanner}
+                    ${isNarrow && showTournaments && html`<${TournamentResultsBanner}
+                      raw=${raw} openDeckById=${openDeckById}
+                      openTournamentById=${openTournamentById}
+                      openTournamentsList=${openTournamentsList}
+                      chaseStyleTitle=${true} collapsible=${true}/>`}
                   </div>`;
                 })()}
       </div>

@@ -797,7 +797,11 @@ Admin-gated bulk-upload. N player rows → N public decks linked to tournament. 
 - `decks.user_id` nullable (migration 37). "My decks" / "Following" / creator-profile queries filter on `user_id = X` and naturally exclude tournament decks.
 - Per-row inks computed client-side from `parseDeckText` + catalog meta, sent in row payload.
 - **Deck detail tournament badge**: `DeckEditor` accepts `tournamentContext` + `onOpenTournament`. Builds lookup once via `tournamentByDeckId = useMemo(... )`.
-- **Home Tournament Results banner** below Following. Top 8 decks for each of the 4 most-recent non-empty events, newest first. The panel is a fixed-height scroll box: on mobile (chase-row grid) it's height-locked to the movers column (the `.home-feed` is `position:absolute;inset:0` so it contributes zero intrinsic height to the grid row, then scrolls internally); on desktop `.home-tourney-col--desktop .home-tourney-list` caps at `max-height:560px` with internal scroll. Was top-4/16-cap with a mobile 2-deck CSS cap.
+- **Home Tournament Results banner.** Top 8 decks for each of the 4 most-recent non-empty events, newest first. **Two mount sites, picked in JS via `useMaxWidth(1100)` — only ONE is ever in the tree** (`isNarrow` gates both, so there's no hidden duplicate doing a second fetch):
+  - **>1100px**: `.home-tourney-col--desktop` inside `.home-left-col`, below Following. Always expanded. List caps at `max-height:560px` with internal scroll.
+  - **≤1100px**: last element in the movers stack, **after every banner** (Chase → Rare–Legendary → Promo → graded → Most Valuable), rendered with `collapsible` + `chaseStyleTitle`. List caps at 340px. The `home-feed-collapse-btn` chevron folds it to a 46px header-only bar; state persists in `packsink:home:tourneyCollapsed`. `collapsed` is only honored when `collapsible` is set, so the desktop placement ignores the flag.
+  - Breakpoint decides *what mounts*, not just how it looks — hence matchMedia over a CSS query (a cache-stale styles.css can't misplace the panel). `.home-tourney-col--desktop{display:none}` at ≤1100px survives only as a belt-and-suspenders.
+  - **Superseded 2026-08-02**: the old `ChaseRowWithTourney` component paired the panel side-by-side with Rare–Legendary in a 2-col mobile grid, height-locked via `[data-debug="rareleg-row-tourney"] > .home-feed{position:absolute;inset:0}`. Component and CSS block both deleted — don't resurrect the grid.
 
 ## Deck view / edit modes
 

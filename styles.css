@@ -2512,9 +2512,9 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   .home-feed-collapse-toggle--mobile-only{display:block;}
   /* Hide overflow items in Following feed until expanded. */
   .home-feed-list:not(.is-expanded) .home-feed-item.is-overflow{display:none;}
-  /* Collapsed Tournament Results shows top 2 per event (1st + 2nd) so the
-     column actually fills next to the chase-movers banner instead of leaving
-     a tall white gap. "Show more" reveals 3rd + 4th. */
+  /* Cap Tournament Results at top 2 per event when un-expanded. Inert today —
+     the panel always renders .is-expanded and scrolls its full top-8 list
+     inside a capped box — kept for a future per-event collapse. */
   .home-tourney-decks:not(.is-expanded) li:nth-child(n+3){display:none;}
   /* On mobile, omit the deck name from tournament tiles entirely — keep
      just the player name + ink shields. The full deck name is one tap
@@ -2524,9 +2524,9 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 }
 .home-feed-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);margin:2px 4px 4px;}
-/* Chase-row variant: matches the MoversBanner title styling (Cinzel, accent
-   color, no uppercase transform) so "Tournament Results" reads as a peer
-   of "Chase Movers" when they sit side by side in the mobile grid. */
+/* Banner variant: matches the MoversBanner title styling (Cinzel, accent
+   color, no uppercase transform) so "Tournament Results" reads as a peer of
+   the movers banners it sits under in the mobile placement. */
 .home-feed-title--chase{font-family:'Cinzel',serif;font-size:12px;font-weight:600;
   letter-spacing:0.3px;text-transform:none;color:var(--accent);margin:0 0 3px;}
 .home-feed-empty{font-size:12px;color:var(--text-dim);line-height:1.5;
@@ -2578,64 +2578,44 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-feed{grid-column:auto;}
 .home-left-col{grid-column:1;display:flex;flex-direction:column;gap:14px;min-width:0;}
 .home-left-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
-/* Tournament column: .home-tourney-col--desktop renders inside .home-left-col
-   (stacked below Following) and is hidden at ≤1100px, where the side-by-side
-   chase-row slot ([data-debug="rareleg-row-tourney"]) takes over instead. */
+/* Tournament panel has two mount sites, picked in JS (useMaxWidth(1100)):
+   .home-tourney-col--desktop inside .home-left-col above 1100px, and a
+   collapsible .home-feed--tourney-mobile below the last movers banner at or
+   under it. Only one is ever in the tree, so this rule just hides the desktop
+   column's leftover box if a stale stylesheet and fresh JS ever disagree. */
 .home-tourney-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
 @media (max-width:1100px){
   .home-tourney-col--desktop{display:none;}
 }
-@media (max-width:1100px){
-  /* Inside the mobile chase-row grid the tournament column is height-locked
-     to the chase movers banner (alignItems:stretch on the grid). The home-feed
-     fills the cell, and the .home-tourney-list inside is the scroll container
-     — every flex ancestor needs min-height:0 for the scroll to actually work
-     instead of overflowing. Rows are tightened so as many fit as possible
-     before the scrollbar kicks in. */
-  [data-debug="rareleg-row-tourney"]{display:flex;min-height:0;position:relative;}
-  /* Take the panel OUT of flow (absolute, inset:0) so the tournament column
-     contributes ZERO intrinsic height to the grid row — the row height is set
-     entirely by the chase-movers column, and this panel fills that height and
-     scrolls internally. Without this, once the content (4 events × top 8)
-     exceeds the movers column it STRETCHES the row (~626px) instead of
-     scrolling. */
-  /* display:flex + margin-bottom:0 need !important to beat the stacked-column
-     `.home-feed{display:block!important;margin-bottom:14px!important}` rule
-     (≤1100px) — our selector is more specific, so !important wins the tie. */
-  [data-debug="rareleg-row-tourney"] > .home-feed{margin-bottom:0 !important;padding:5px 7px;
-    max-height:none;position:absolute;inset:0;width:100%;min-height:0;
-    display:flex !important;flex-direction:column;box-sizing:border-box;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-list{gap:6px;flex:1;min-height:0;
-    overflow-y:auto;overflow-x:hidden;
-    /* Slim, theme-neutral scrollbar so it doesn't fight the gold accents. */
-    scrollbar-width:thin;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-list::-webkit-scrollbar{width:5px;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-list::-webkit-scrollbar-thumb{
-    background:var(--border);border-radius:3px;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-block{gap:2px;}
-  /* No per-event cap here: the panel is height-locked to the chase-movers
-     banner (flex:1 + overflow-y:auto on .home-tourney-list above), so all top-8
-     deck rows for the 4 recent events SCROLL inside the box instead of
-     stretching the row. (Previously capped to top 2 to keep the box near the
-     banner height — but that hid useful rows; scrolling a fixed box is better.) */
-  [data-debug="rareleg-row-tourney"] .home-tourney-name{font-size:10px;line-height:1.2;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-deck{padding:2px 4px;gap:4px;
-    grid-template-columns:16px 1fr auto;font-size:10px;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-deck .ht-place{font-size:9px;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-deck .ht-player{font-size:10px;}
-  [data-debug="rareleg-row-tourney"] .home-tourney-deck .ht-inks img{width:11px;height:11px;}
-  /* Hide the deck name (ink-color noise) on the narrow mobile column. */
-  [data-debug="rareleg-row-tourney"] .home-tourney-deck .ht-deck{display:none;}
-}
 .home-tourney-list{display:flex;flex-direction:column;gap:10px;}
-/* Desktop: cap the tournament panel and scroll inside it so 4 events × top 8
-   (up to ~32 rows) doesn't balloon the left column. Mobile handles its own
-   height/scroll in the chase-row block above. */
-.home-tourney-col--desktop .home-tourney-list{max-height:560px;overflow-y:auto;
+/* Both placements cap the list and scroll inside it so 4 events × top 8 (up to
+   ~32 rows) doesn't balloon the page. Mobile gets a shorter cap — it's a
+   full-width block at the end of a tall banner stack, not a sidebar. */
+.home-tourney-col--desktop .home-tourney-list{max-height:560px;}
+.home-feed--tourney-mobile .home-tourney-list{max-height:340px;}
+.home-tourney-col--desktop .home-tourney-list,
+.home-feed--tourney-mobile .home-tourney-list{overflow-y:auto;
   overflow-x:hidden;scrollbar-width:thin;}
-.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar{width:5px;}
-.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar-thumb{
+.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar,
+.home-feed--tourney-mobile .home-tourney-list::-webkit-scrollbar{width:5px;}
+.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar-thumb,
+.home-feed--tourney-mobile .home-tourney-list::-webkit-scrollbar-thumb{
   background:var(--border);border-radius:3px;}
+/* Collapsible panel header: title on the left, chevron button on the right.
+   The title is its own button (jumps to Decks → Tournaments), so the collapse
+   affordance has to be a sibling rather than wrapping the whole row. */
+.home-feed-head{display:flex;align-items:center;gap:8px;}
+.home-feed-head > .home-feed-title{flex:1;min-width:0;overflow:hidden;
+  text-overflow:ellipsis;white-space:nowrap;}
+.home-feed-collapse-btn{flex-shrink:0;width:32px;height:32px;padding:0;
+  display:flex;align-items:center;justify-content:center;
+  background:transparent;border:1px solid var(--border);border-radius:6px;
+  color:var(--text-muted);cursor:pointer;font-size:12px;line-height:1;}
+.home-feed-collapse-btn:hover{color:var(--accent);border-color:var(--accent);}
+.home-feed-chev{display:block;transition:transform 0.15s;}
+.home-feed-collapse-btn.is-collapsed .home-feed-chev{transform:rotate(-90deg);}
+/* Collapsed: the panel is just its header, so drop the body padding. */
+.home-feed--tourney-mobile:has(.home-feed-collapse-btn.is-collapsed){padding-bottom:6px;}
 .home-tourney-block{display:flex;flex-direction:column;gap:4px;}
 .home-tourney-name{font-family:'Cinzel',serif;font-weight:700;font-size:12px;
   color:var(--accent);background:none;border:none;padding:0;cursor:pointer;text-align:left;
