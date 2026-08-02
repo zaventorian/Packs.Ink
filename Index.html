@@ -24112,6 +24112,28 @@ const CHASE_RARS = new Set(["Enchanted","Iconic","Epic"]);
 // ascending, matching how the rarity chips read elsewhere).
 const CHASE_RAR_ORDER = ["Epic","Enchanted","Iconic"];
 const RARELEG_RARS = new Set(["Rare","Super Rare","Legendary"]);
+// Printing-toggle order for the Rare–Legendary banner. "Holofoil" is TCGCSV's
+// mislabel for the in-pack cold foil (see transformSupabaseData's holofoil
+// rule), so it buckets under foil rather than being a third state.
+const RL_PRINTING_ORDER = ["normal","foil"];
+const RL_PRINTING_LABELS = {normal:"Normal", foil:"Cold Foil"};
+// Toggle one key in a multi-select chip group, keeping `order` and never
+// emptying the selection — see MoverChipGroup for why the last one is sticky.
+const toggleChipKey = (order, selected, key) => selected.includes(key)
+  ? (selected.length > 1 ? selected.filter(k => k !== key) : selected)
+  : order.filter(k => k === key || selected.includes(k));
+// Read a persisted chip selection, normalized back into `order`. Falls back
+// when the key is absent, unparseable, or names nothing we still recognize —
+// so a renamed chip key degrades to the default instead of an empty banner.
+const readChipPref = (key, order, fallback) => {
+  const dflt = fallback === undefined ? order.slice() : fallback;
+  try {
+    const v = JSON.parse(localStorage.getItem(key) || "null");
+    if(!Array.isArray(v)) return dflt;
+    const clean = order.filter(k => v.includes(k));
+    return clean.length ? clean : dflt;
+  } catch { return dflt; }
+};
 const MOVER_FOIL_PRINTINGS = new Set(["Cold Foil","Holofoil","Foil"]);
 
 // Window definitions for the Home movers toolbar. Each window maps to a low
@@ -25194,6 +25216,27 @@ const AutoScrollStrip = ({items, renderItem, keyFor, wrapClass}) => {
     </div>
   </div>`;
 };
+
+// Multi-select chip row for a movers banner's `controls` slot (chase
+// rarities, rare–legendary printings). Looks like the one-of-N .seg-grp used
+// elsewhere on the page but every chip is independently on/off.
+//
+// The last active chip can't be turned off: an empty selection renders an
+// empty banner whose only way back is the very chip you just used to empty it.
+// `noun` fills the tooltips ("Hide Epic movers", "Show Cold Foil printings").
+const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
+  html`<div class="seg-grp" role="group" aria-label=${ariaLabel} style=${{padding:2}}>
+    ${order.map(k => {
+      const on = selected.includes(k);
+      const label = labels ? labels[k] : k;
+      return html`<button key=${k} class=${on?"active":""} aria-pressed=${on}
+        onClick=${()=>onToggle(k)}
+        title=${(on && selected.length === 1)
+          ? `Showing ${label} ${noun} only — turn another on before hiding this one`
+          : `${on?"Hide":"Show"} ${label} ${noun}`}
+        style=${{fontSize:11,padding:"3px 8px"}}>${label}</button>`;
+    })}
+  </div>`;
 
 const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick}) => {
   const wrapRef = useRef(null);
@@ -27505,7 +27548,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       // Carry the banner's printing selection into the Screener's Foil /
       // Non-Foil chips so the jump lands on the same slice of the market.
       openScreenerWithFilter({...base, filterRarities: ["Rare","Super Rare","Legendary"],
-        showFoil: rlPrinting !== "normal", showNonFoil: rlPrinting !== "foil"});
+        showFoil: rlPrintings.includes("foil"), showNonFoil: rlPrintings.includes("normal")});
     } else if(which === "promo"){
       openScreenerWithFilter({...base, filterRarities: ["Promo"]});
     } else if(which === "newest"){
@@ -27554,36 +27597,38 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   useEffect(() => {
     try { localStorage.setItem("packsink:home:valuableMode", valuableMode); } catch {}
   }, [valuableMode]);
-  // Rare–Legendary banner printing filter: "all" | "normal" | "foil".
-  // Those three rarities are the only movers bucket with a real foil/non-foil
-  // duality (chase + promo cards have a single printing each), so the toggle
-  // is scoped to that banner instead of the shared toolbar.
-  const [rlPrinting, setRlPrinting] = useState(() => {
-    try {
-      const v = localStorage.getItem("packsink:home:rlPrinting");
-      return (v === "normal" || v === "foil") ? v : "all";
-    } catch { return "all"; }
-  });
-  useEffect(() => {
-    try { localStorage.setItem("packsink:home:rlPrinting", rlPrinting); } catch {}
-  }, [rlPrinting]);
-  // Chase banner rarity filter — Epic / Enchanted / Iconic toggle
-  // independently so you can look at one tier at a time. At least one stays
-  // on: turning the last one off would leave the banner permanently empty
-  // with no way back except the same chip.
-  const [chaseRars, setChaseRars] = useState(() => {
-    try {
-      const v = JSON.parse(localStorage.getItem("packsink:home:chaseRars") || "null");
-      const clean = Array.isArray(v) ? CHASE_RAR_ORDER.filter(r => v.includes(r)) : [];
-      return clean.length ? clean : CHASE_RAR_ORDER.slice();
-    } catch { return CHASE_RAR_ORDER.slice(); }
-  });
+  // Per-banner chip filters. Both are multi-select and both persist per
+  // browser, so a user's picks survive reloads and are what they see next
+  // visit. (These live under packsink:home: but NOT packsink:home:tourneys:,
+  // the one prefix in AUX_EVICTABLE_PREFIXES — so the aux-cache wipe that
+  // fires on an AUX_CACHE_VERSION bump leaves them alone.)
+  //
+  // Chase banner: Epic / Enchanted / Iconic, so you can look at one tier at
+  // a time.
+  const [chaseRars, setChaseRars] = useState(() =>
+    readChipPref("packsink:home:chaseRars", CHASE_RAR_ORDER));
   useEffect(() => {
     try { localStorage.setItem("packsink:home:chaseRars", JSON.stringify(chaseRars)); } catch {}
   }, [chaseRars]);
-  const toggleChaseRar = (r) => setChaseRars(prev => prev.includes(r)
-    ? (prev.length > 1 ? prev.filter(x => x !== r) : prev)
-    : CHASE_RAR_ORDER.filter(x => x === r || prev.includes(x)));
+  const toggleChaseRar = (r) => setChaseRars(prev => toggleChipKey(CHASE_RAR_ORDER, prev, r));
+  // Rare–Legendary banner: Normal / Cold Foil. Those three rarities are the
+  // only movers bucket with a real foil/non-foil duality (chase + promo cards
+  // have a single printing each), so the toggle is scoped to that banner
+  // instead of the shared toolbar. Migrates the old one-of-N
+  // packsink:home:rlPrinting key ("all" | "normal" | "foil").
+  const [rlPrintings, setRlPrintings] = useState(() => {
+    const stored = readChipPref("packsink:home:rlPrintings", RL_PRINTING_ORDER, null);
+    if(stored) return stored;
+    try {
+      const legacy = localStorage.getItem("packsink:home:rlPrinting");
+      if(legacy === "normal" || legacy === "foil") return [legacy];
+    } catch {}
+    return RL_PRINTING_ORDER.slice();
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:rlPrintings", JSON.stringify(rlPrintings)); } catch {}
+  }, [rlPrintings]);
+  const toggleRlPrinting = (p) => setRlPrintings(prev => toggleChipKey(RL_PRINTING_ORDER, prev, p));
 
   // Resolve a mover (carries card_id + tcgplayer_product_id) to the
   // CardDetailModal-shaped "group" via O(1) lookups instead of scanning
@@ -27737,13 +27782,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       // Inject as image_normal so MoverTile's existing image_large → image_normal → image_small chain picks it up.
       return fb ? {...r, image_normal: fb} : r;
     });
-    // Printing filter, rare-leg only. "Holofoil" is TCGCSV's mislabel for the
-    // in-pack cold foil (see transformSupabaseData's holofoil rule), so it
-    // buckets with foil rather than being its own third state.
-    const rareLegFiltered = rlPrinting === "all" ? rareLeg : rareLeg.filter(r => {
-      const isFoil = MOVER_FOIL_PRINTINGS.has(r.printing);
-      return rlPrinting === "foil" ? isFoil : !isFoil;
-    });
+    // Printing filter, rare-leg only.
+    const rlSel = new Set(rlPrintings);
+    const rareLegFiltered = rlPrintings.length === RL_PRINTING_ORDER.length
+      ? rareLeg
+      : rareLeg.filter(r => rlSel.has(MOVER_FOIL_PRINTINGS.has(r.printing) ? "foil" : "normal"));
     // Rarity filter, chase only. Applied after sorting so the top 20 is taken
     // from the selected tiers rather than from the full chase pool.
     const chaseSel = new Set(chaseRars);
@@ -27754,7 +27797,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       rareLeg: enrich(rareLegFiltered).slice(0,20),
       promo:   enrich(promo  ).slice(0,20),
     };
-  }, [state.rows, windowKey, showUp, showDown, raw, rlPrinting, chaseRars]);
+  }, [state.rows, windowKey, showUp, showDown, raw, rlPrintings, chaseRars]);
 
   const directionLabel = (showUp && showDown) ? "|Δ%|"
                        : showUp ? "Δ% (gains)"
@@ -27871,28 +27914,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <button class=${valuableMode==="chase"?"active":""} onClick=${()=>setValuableMode("chase")} style=${{fontSize:11,padding:"3px 8px"}}>Chase</button>
   </div>`;
 
-  // Chase banner rarity chips. Multi-select (unlike the seg-grp elsewhere on
-  // this page, which are one-of-N) — each tier is independently on/off.
-  const chaseControls = html`<div class="seg-grp" role="group" aria-label="Chase rarities" style=${{padding:2}}>
-    ${CHASE_RAR_ORDER.map(r => {
-      const on = chaseRars.includes(r);
-      const isLast = on && chaseRars.length === 1;
-      return html`<button key=${r} class=${on?"active":""} aria-pressed=${on}
-        onClick=${()=>toggleChaseRar(r)}
-        title=${isLast ? `Showing ${r} only — turn another rarity on before hiding this one`
-                       : (on ? `Hide ${r} movers` : `Show ${r} movers`)}
-        style=${{fontSize:11,padding:"3px 8px"}}>${r}</button>`;
-    })}
-  </div>`;
+  const chaseControls = html`<${MoverChipGroup} ariaLabel="Chase rarities"
+    order=${CHASE_RAR_ORDER} selected=${chaseRars} onToggle=${toggleChaseRar} noun="movers"/>`;
   const chaseLabel = CHASE_RAR_ORDER.filter(r => chaseRars.includes(r)).join(" · ");
 
-  const rareLegControls = html`<div class="seg-grp" role="group" aria-label="Rare–Legendary printing" style=${{padding:2}}>
-    ${[["all","Both","Show both non-foil and foil printings"],
-       ["normal","Normal","Show only non-foil printings"],
-       ["foil","Cold Foil","Show only foil printings (Cold Foil / Holofoil)"]].map(([k,l,t]) => html`<button key=${k}
-      class=${rlPrinting===k?"active":""} onClick=${()=>setRlPrinting(k)}
-      title=${t} style=${{fontSize:11,padding:"3px 8px"}}>${l}</button>`)}
-  </div>`;
+  const rareLegControls = html`<${MoverChipGroup} ariaLabel="Rare–Legendary printing"
+    order=${RL_PRINTING_ORDER} labels=${RL_PRINTING_LABELS} selected=${rlPrintings}
+    onToggle=${toggleRlPrinting} noun="printings"/>`;
+  // Both printings on is the default, so only call it out when one is hidden.
+  const rareLegLabel = "Rare · Super Rare · Legendary"
+    + (rlPrintings.length === RL_PRINTING_ORDER.length ? ""
+       : ` · ${RL_PRINTING_LABELS[rlPrintings[0]]} only`);
 
   // "News" tile: the newest set while it's still pre-release (reveal season).
   // Counts distinct cards we have live for that set, updating as more arrive,
@@ -28007,7 +28039,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       onTileClick=${openCard}/>
                     <${MoversBanner}
                       title="Rare – Legendary Movers"
-                      subtitle=${`Rare · Super Rare · Legendary — top 20 by ${winLabel} ${directionLabel}`}
+                      subtitle=${`${rareLegLabel} — top 20 by ${winLabel} ${directionLabel}`}
                       controls=${rareLegControls}
                       cards=${rareLeg}
                       activeWindow=${windowKey}

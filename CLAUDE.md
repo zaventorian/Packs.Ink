@@ -926,6 +926,21 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 - **Your Top Movers tiles show a printing badge** when the moving row is the foil printing — class `.panel-movers-foil-tag`, accent-color chip with text "Foil" / "Cold Foil" / "Holo" (Holofoil shortens to "Holo" to fit the tight column). Logic: `row.tcg_printing && row.tcg_printing !== "Normal" && row.tcg_printing !== "Non-Foil"` → render. Lets users tell foil-vs-non-foil movers of the same card apart.
 - **Tournament Results panel: `.ht-place` is `white-space: nowrap`** and `.home-tourney-deck` grid is `auto minmax(0,1fr) auto` (was `28px 1fr auto`). The 28px column wasn't wide enough for `"Top 4"` / `"Top 8"` — the place text wrapped to two lines, doubling row height on the narrow signed-in mobile home grid. Auto-width + nowrap keeps each row on a single line; player column's `minmax(0,1fr)` still shrinks with ellipsis when needed.
 
+### Movers-banner chip filters (`MoverChipGroup`)
+
+Two banners carry a multi-select chip group in their `controls` slot. Both use the shared `MoverChipGroup` + `toggleChipKey` + `readChipPref` trio — **don't hand-roll a third one.**
+
+- **Chase Movers** — `CHASE_RAR_ORDER` (Epic / Enchanted / Iconic), persisted at `packsink:home:chaseRars`.
+- **Rare–Legendary Movers** — `RL_PRINTING_ORDER` (`normal` / `foil`, labelled Normal / Cold Foil), persisted at `packsink:home:rlPrintings`. Was a one-of-N `Both | Normal | Cold Foil` seg-grp keyed `packsink:home:rlPrinting` until 2026-08-02; the old key is still read once as a migration (`"all"` falls through to the default). `MOVER_FOIL_PRINTINGS` buckets Holofoil under foil, so there's no third state.
+
+Invariants:
+
+- **The last active chip can't be turned off.** An empty selection renders an empty banner whose only way back is the chip you just used to empty it. `toggleChipKey` returns `selected` unchanged in that case, and the chip's tooltip explains why.
+- **Filter AFTER sorting, before `.slice(0,20)`** — so the top 20 comes from the selected tiers, not from whatever survived a slice of the full pool.
+- **The banner subtitle and the title-click Screener jump both read the selection.** Chase passes `filterRarities`; rare–leg passes `showFoil` / `showNonFoil`. Both are in the buckets `useMemo` deps.
+- **These keys are preferences, not caches.** They live under `packsink:home:` but do NOT match any `AUX_EVICTABLE_PREFIXES` entry (`packsink:home:tourneys:` is the tournament *cache* — note the trailing colon, and that `packsink:home:tourneyCollapsed` deliberately doesn't match it). Don't add a bare `packsink:home:` prefix to that list or every home preference resets on the next `AUX_CACHE_VERSION` bump.
+- Persistence is **per browser (localStorage), not per account** — these aren't in the `user_metadata` prefs-sync effect, so picks don't follow a signed-in user across devices.
+
 ## Mobile top-nav
 
 Whole top bar is a single horizontal scroll container on phones (`overflow-x: auto`). Logo is `position: sticky; left: 0` so it stays pinned to the left edge. Tabs + username pill + theme toggle all scroll together → reclaims width that was previously fixed-right cluster space.
