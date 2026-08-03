@@ -6404,6 +6404,60 @@ const proxyImg = (url) => {
   return url;
 };
 
+// Poster export sizing. Discord's free-tier attachment cap is 10 MB; budget
+// under it with headroom. This matters because the poster's whole purpose is
+// being posted: a file that won't upload is a broken feature, not a big file.
+//
+// A Core deck is ~16-20 unique rows; a near-singleton Format Coconut deck is
+// ~57-60, and its PNG lands past the cap (reported from the wild 2026-08-02).
+// Measured reference point: a 60-card Core poster renders 2400x1970 (4.7 MP)
+// and encodes to a 5.4 MB PNG, so PNG size tracks poster height closely.
+//
+// The guarantee comes from the ENCODERS below, not from the render scale —
+// POSTER_TARGET_MP only clamps pathological heights and leaves ordinary posters
+// at full 2x.
+const POSTER_SIZE_BUDGET = 9.5 * 1048576;
+const POSTER_TARGET_MP = 7;
+const posterCanvasBlob = (canvas, type, quality) => new Promise((res, rej) =>
+  canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), type, quality));
+// Downscale an already-rendered canvas by a linear factor. Cheap — no second
+// html2canvas pass, which is the expensive part of an export.
+const rescalePosterCanvas = (canvas, f) => {
+  const c = document.createElement("canvas");
+  c.width  = Math.max(1, Math.round(canvas.width  * f));
+  c.height = Math.max(1, Math.round(canvas.height * f));
+  const ctx = c.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(canvas, 0, 0, c.width, c.height);
+  return c;
+};
+// Save path: PNG when it fits — lossless, and every normal deck is nowhere near
+// the cap. Only when it doesn't do we step JPEG quality down. Costs one
+// discarded PNG encode on oversized posters, which is the right trade: nobody
+// pays quality for a problem they don't have.
+const encodePosterBlob = async (canvas) => {
+  const png = await posterCanvasBlob(canvas, "image/png");
+  if(png.size <= POSTER_SIZE_BUDGET) return {blob: png, ext: "png"};
+  for(const q of [0.9, 0.82, 0.72, 0.62, 0.55]){
+    const jpg = await posterCanvasBlob(canvas, "image/jpeg", q);
+    if(jpg.size <= POSTER_SIZE_BUDGET) return {blob: jpg, ext: "jpg"};
+  }
+  return {blob: await posterCanvasBlob(canvas, "image/jpeg", 0.5), ext: "jpg"};
+};
+// Clipboard path: PNG is effectively mandatory (Chrome's async clipboard only
+// guarantees image/png and throws on image/jpeg), so the only lever left is
+// resolution. Trading pixels beats handing back something that won't upload.
+const encodePosterPngUnderBudget = async (canvas) => {
+  let png = await posterCanvasBlob(canvas, "image/png");
+  if(png.size <= POSTER_SIZE_BUDGET) return png;
+  for(const f of [0.85, 0.7, 0.55, 0.45]){
+    png = await posterCanvasBlob(rescalePosterCanvas(canvas, f), "image/png");
+    if(png.size <= POSTER_SIZE_BUDGET) return png;
+  }
+  return png;  // smallest we managed — caller reports the size
+};
+
 // Deck poster export — renders the full poster inline in the modal as a live
 // preview, then snapshots it via html2canvas for the Copy / Save buttons.
 // Lorcast images flow through the /img-proxy/* rewrite so the resulting canvas
@@ -6697,12 +6751,19 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     const prevHeight = wrap ? wrap.style.height : "";
     if(wrap){ wrap.style.transform = "none"; wrap.style.height = ""; }
     try {
-      return await h2c(posterRef.current, {
+      // Adaptive density — see POSTER_TARGET_MP. Short posters keep the full 2×
+      // for retina sharpness; tall ones render lower so the encode lands under
+      // the upload budget. This also keeps us clear of iOS Safari's ~16.78MP
+      // canvas ceiling, which a 60-card poster at a flat 2× was already close to
+      // (13.2MP) — the old "do NOT raise above 2" note was really a symptom of
+      // measuring density instead of total pixels.
+      const el = posterRef.current;
+      const naturalMP = ((el.scrollWidth || 1000) * (el.scrollHeight || 1000)) / 1e6;
+      const scale = Math.min(2, Math.max(1, Math.sqrt(POSTER_TARGET_MP / Math.max(0.1, naturalMP))));
+      return await h2c(el, {
         useCORS: true,
         backgroundColor: null,
-        scale: 2,                  // 2× for retina-quality output. Do NOT raise:
-                                   // a 60-card poster at scale 3-4 overflows iOS
-                                   // Safari's ~16.78MP canvas cap → blank export.
+        scale,
         // /large/ card art is a heavier fetch than the old /normal/; give it
         // headroom past html2canvas's 15s default so a slow proxy image doesn't
         // render as a blank card box.
@@ -6729,20 +6790,26 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       // clipboard.write itself awaits — keeps the call inside the user gesture
       // and immediately follows a window.focus() to recover focus if html2canvas
       // moved it (it briefly inserts an iframe to render into).
-      const blobPromise = snapshot().then(canvas => new Promise((res, rej) =>
-        canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png")));
+      // PNG, downscaled if needed to stay uploadable — see
+      // encodePosterPngUnderBudget. All of it happens inside the promise handed
+      // to ClipboardItem, so the sync-inside-user-gesture contract is unchanged.
+      let pngSize = 0;
+      const blobPromise = snapshot()
+        .then(encodePosterPngUnderBudget)
+        .then(b => { pngSize = b.size; return b; });
       try { window.focus(); } catch {}
       await navigator.clipboard.write([
         new ClipboardItem({"image/png": blobPromise}),
       ]);
-      showToast("Image copied to clipboard");
+      showToast(pngSize > POSTER_SIZE_BUDGET
+        ? `Copied, but it's ${(pngSize / 1048576).toFixed(1)} MB — too big for Discord. Use Save instead.`
+        : "Image copied to clipboard");
     } catch(e) {
       // Fallback for older Chromium/Firefox that doesn't accept a Promise in
       // ClipboardItem — resolve the blob first, then write.
       try {
         const canvas = await snapshot();
-        const blob = await new Promise((res, rej) =>
-          canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+        const blob = await encodePosterPngUnderBudget(canvas);
         try { window.focus(); } catch {}
         await new Promise(r => setTimeout(r, 0));
         await navigator.clipboard.write([new ClipboardItem({"image/png": blob})]);
@@ -6757,15 +6824,15 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     setError(null); setBusy("save");
     try {
       const canvas = await snapshot();
-      const blob = await new Promise((res, rej) => canvas.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+      const {blob, ext} = await encodePosterBlob(canvas);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
       const safe = (s) => String(s||"untitled-deck").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g,"");
-      a.download = `packsink-${safe(deck.name)}.png`;
+      a.download = `packsink-${safe(deck.name)}.${ext}`;
       document.body.appendChild(a); a.click(); a.remove();
       setTimeout(() => URL.revokeObjectURL(url), 2000);
-      showToast("Image saved");
+      showToast(`Image saved (${(blob.size / 1048576).toFixed(1)} MB)`);
     } catch(e) {
       setError(String(e?.message || e));
     } finally { setBusy(null); }
@@ -6796,8 +6863,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         if(cancelled) return;
         const canvas = await snapshot();
         if(cancelled) return;
-        const blob = await new Promise((res, rej) => canvas.toBlob(
-          b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+        // Same clipboard-PNG budget as copyImage — the deck-tile 🖼 button feeds
+        // this blob straight to ClipboardItem.
+        const blob = await encodePosterPngUnderBudget(canvas);
         if(!cancelled) onAutoCopyDone && onAutoCopyDone(true, blob);
       } catch(e) {
         if(!cancelled) onAutoCopyDone && onAutoCopyDone(false, e);
