@@ -29361,6 +29361,16 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Decks owned by someone else — fetched on demand from incomingDeckId or
   // a future "view this public deck" click. Shape: {deck, creator} | {error}.
   const [externalDeck, setExternalDeck] = useState(null);
+  // Mirrors for the popstate listener, which mounts once and can't close over
+  // the live values.
+  const externalDeckRef = useRef(null);
+  useEffect(() => { externalDeckRef.current = externalDeck; }, [externalDeck]);
+  const decksRef = useRef(null);
+  useEffect(() => { decksRef.current = decks; }, [decks]);
+  // creatorProfile + openCreatorProfile are declared further down; the popstate
+  // listener needs both, and a deps entry here would hit the const TDZ.
+  const creatorProfileRef = useRef(null);
+  const openCreatorProfileRef = useRef(null);
   // Which sub-section of the Decks tab is active. Default depends on
   // sign-in state: signed-in users land on "Your Decks" (the most-used
   // section for them); signed-out users land on "Discover" (browsing
@@ -29430,22 +29440,58 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       window.history.pushState({tourney: tid || null}, "", u.toString());
     } catch {}
   }, []);
-  // Browser back/forward sync — re-read ?deck= / ?tourney= and update
+  // Browser back/forward sync — re-read ?deck= / ?tourney= / ?user= and update
   // the corresponding state so popstate actually unwinds sub-pages.
+  //
+  // externalDeck MUST be cleared here alongside selectedDeckId: the render
+  // early-returns on `if(externalDeck)` before any other view, so a pop that
+  // only cleared selectedDeckId left someone else's deck on screen while the
+  // URL said /decks. Read via a ref — the listener is mounted once ([] deps).
+  //
+  // ?deck= is checked BEFORE ?tourney= because a deck opened from a tournament
+  // keeps both params; the deck is the deeper page and has to win.
   useEffect(() => {
     const onPop = () => {
       try {
         const u = new URL(window.location.href);
         const d = u.searchParams.get("deck");
         const t = u.searchParams.get("tourney");
-        if(t){ setSelectedTournamentId(t); setSelectedDeckId(null); setDeckSection("tournaments"); }
-        else if(d){ setSelectedDeckId(d); setSelectedTournamentId(null); }
-        else { setSelectedDeckId(null); setSelectedTournamentId(null); }
+        const usr = u.searchParams.get("user");
+        if(d){
+          setSelectedTournamentId(t || null);
+          setCreatorProfile(null);
+          if(externalDeckRef.current?.deck?.id === d){
+            // Already loaded (forward into, or back onto, a feed deck) — keep it.
+            setSelectedDeckId(null);
+          } else if((decksRef.current || []).some(x => x.id === d)){
+            setExternalDeck(null);
+            setSelectedDeckId(d);
+          } else {
+            // Not one of ours and not in memory — going Forward onto a deck we
+            // cleared on the way Back. selectedDeckId only resolves against the
+            // user's own decks, so it would render "Deck not found"; re-enter
+            // through the deep-link path that fetches it (token-gated for
+            // tournament / unlisted decks).
+            setSelectedDeckId(null);
+            setExternalDeck(null);
+            openDeckById && openDeckById(d, u.searchParams.get("token") || undefined);
+          }
+        } else if(t){
+          setSelectedDeckId(null); setExternalDeck(null); setCreatorProfile(null);
+          setSelectedTournamentId(t); setDeckSection("tournaments");
+        } else if(usr){
+          setSelectedDeckId(null); setSelectedTournamentId(null); setExternalDeck(null);
+          // Same refetch-on-forward story as the deck branch above.
+          if(creatorProfileRef.current?.creatorId !== usr) openCreatorProfileRef.current?.(usr);
+        } else {
+          setSelectedDeckId(null); setSelectedTournamentId(null);
+          setExternalDeck(null); setCreatorProfile(null);
+        }
       } catch {}
     };
     window.addEventListener("popstate", onPop);
     return () => window.removeEventListener("popstate", onPop);
-  }, []);
+  }, [openDeckById]);
   const refreshTournaments = useCallback(async () => {
     try {
       // Drop the home Tournament Results banner cache so deleted / edited
@@ -30087,6 +30133,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
   }, [hydrateDecksByIds, mergeFavoriteCounts]);
   const closeCreatorProfile = useCallback(() => setCreatorProfile(null), []);
+  useEffect(() => { creatorProfileRef.current = creatorProfile; }, [creatorProfile]);
+  useEffect(() => { openCreatorProfileRef.current = openCreatorProfile; }, [openCreatorProfile]);
 
   // Handle deep-linked deck arrival (?deck=<uuid>&token=<share_token>):
   // a non-owner viewing an unlisted deck must come through the token-gated
@@ -30193,11 +30241,23 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       if(own && own.visibility === "unlisted") token = own.share_token || null;
     }
     try {
+      const cur = new URL(window.location.href);
       const url = new URL(window.location.href);
       if(deckId)    url.searchParams.set("deck", deckId); else url.searchParams.delete("deck");
       if(token)     url.searchParams.set("token", token); else url.searchParams.delete("token");
       if(profileId) url.searchParams.set("user", profileId); else url.searchParams.delete("user");
-      window.history.replaceState({}, "", url);
+      if(url.toString() === cur.toString()) return;
+      // Entering a NEW sub-page gets its own history entry so Back unwinds to
+      // wherever you came from. openDeckInMode / openTournament already push
+      // for their own paths (and land here with the URL already matching, so
+      // they return above) — but openDeckById, which is how a tournament deck
+      // and every feed tile opens, pushes nothing. Replacing there overwrote
+      // the ?tourney= entry, so Back skipped the tournament detail entirely.
+      // Everything else (token refinement, leaving a sub-page) still replaces.
+      const enteringDeck    = deckId    && cur.searchParams.get("deck") !== deckId;
+      const enteringProfile = profileId && cur.searchParams.get("user") !== profileId;
+      if(enteringDeck || enteringProfile) window.history.pushState({deck: deckId || null}, "", url);
+      else                                window.history.replaceState({}, "", url);
     } catch {/* SSR / blocked storage / no-op */}
   }, [selectedDeckId, externalDeck, creatorProfile, decks]);
 
