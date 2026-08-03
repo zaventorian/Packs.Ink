@@ -4525,6 +4525,18 @@ const SORT_OPTIONS = [
   {key:"price-desc",label:"Price (high→low)"},
 ];
 
+// Coconut leaders are a colour set (3 per ink), not a catalog, and their beta
+// collector numbers are ink-scrambled (Amber is 2 / 17 / 4). Every normal sort
+// therefore interleaves the inks. Order them by ink, then name, so they read as
+// colour blocks. See the all-Coconut branch in CardBrowser's `grouped`.
+const coconutInkRank = (g) => {
+  const i = INKS.indexOf(g && g.ink);
+  return i === -1 ? INKS.length : i;
+};
+const coconutBrowseCmp = (a, b) =>
+  (coconutInkRank(a) - coconutInkRank(b))
+  || String(a["Product Name"] || "").localeCompare(String(b["Product Name"] || ""));
+
 // Unknown sets sort to the very end in both newest-first and oldest-first modes.
 const UNKNOWN_SET_RANK = 9999;
 const setRank = (g) => {
@@ -8105,6 +8117,24 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
     } else {
       const cmp = SORT_COMPARATORS[sortKey] || SORT_COMPARATORS["set-new"];
       result = groups.slice().sort(cmp);
+    }
+    // Re-order Coconut rows by ink → name (coconutBrowseCmp) IN PLACE: they keep
+    // whichever slots the active sort gave them and every other row is untouched.
+    //
+    // In-place rather than a partition or an all-Coconut gate, because the
+    // "Format Coconut" set is NOT purely synthetic — Lorcast carries a real
+    // promo in it (Ariel - Spectacular Singer #1). An all-Coconut gate would
+    // therefore never fire on the Set chip, and floating Coconut rows to the top
+    // would push the leader above the real card on a search like "ariel".
+    //
+    // Overrides the sort dropdown for these rows on purpose: they have null
+    // price, null cost and no set rank, so every other option is degenerate.
+    const cocoAt = [];
+    for(let i = 0; i < result.length; i++) if(result[i].isCoconut) cocoAt.push(i);
+    if(cocoAt.length > 1){
+      const ordered = cocoAt.map(i => result[i]).sort(coconutBrowseCmp);
+      result = result.slice();
+      cocoAt.forEach((slot, n) => { result[slot] = ordered[n]; });
     }
     // When filtered to a set, its promos (child-set promos + name-matched promos
     // from Promo Set N etc.) sink below the set's own cards. A stable partition,
@@ -27938,6 +27968,19 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   }, [raw, newsSet]);
   const showNews = newsCount > 0 && PRERELEASE_SETS.has(newsSet);
 
+  // "New Format" tile for the Format Coconut open beta → Cards filtered to the
+  // Coconut set. Counted off `raw` rather than COCONUT_CARDS.length so a client
+  // replaying a pre-v51 cache (no synthesized Coconut rows — see the CACHE_KEY
+  // note in the coconut build) hides the tile instead of linking to an empty
+  // filtered page. Ravensburger adds beta cards weekly, so the count is derived,
+  // never hardcoded.
+  const coconutCount = useMemo(() => {
+    const ids = new Set();
+    for(const r of (raw || [])){ if(r.isCoconut && r.card_id) ids.add(r.card_id); }
+    return ids.size;
+  }, [raw]);
+  const showCoconutNews = coconutCount > 0 && Date.now() < COCONUT_NEWS_UNTIL;
+
   return html`<div class="scr scr-home">
     <div class="home-page-title">
       <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
@@ -27952,6 +27995,16 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           <div style=${{fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--accent)", fontWeight:700, marginBottom:4}}>📣 News</div>
           <div class="home-news-title">${newsSet} — ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
           <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>Browse the set →</div>
+        </a>`}
+        ${showCoconutNews && html`<a class="home-news-tile home-news-clickable"
+          href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
+          onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
+          style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
+          <div style=${{fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--accent)", fontWeight:700, marginBottom:4}}>🥥 New Format</div>
+          <div class="home-news-title">${COCONUT_SET_NAME}</div>
+          <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>
+            Multiplayer, 3 inks, first to ${COCONUT_LORE_GOAL} lore. Browse all ${coconutCount} Coconut card${coconutCount===1?"":"s"} →
+          </div>
         </a>`}
         ${showFollowing && html`<${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`}
         ${showTournaments && !isNarrow && html`<div class="home-tourney-col home-tourney-col--desktop">
@@ -28202,6 +28255,11 @@ function computeCoreSets(){
 // WEEKLY during the beta: add an entry here, drop the render in the bucket.
 const COCONUT_LORE_GOAL = 25;
 const COCONUT_INK_LIMIT = 3;
+// The home "New Format" tile retires itself on this date — a banner that still
+// says NEW months into the beta is worse than no banner. Push it out (or delete
+// the tile in HomeView) whenever the beta stops being news. Open beta began
+// 2026-07-28.
+const COCONUT_NEWS_UNTIL = Date.parse("2026-10-31T23:59:59Z");
 const COCONUT_CARDS = [
   {slug:"ariel-spectacular-singer", cn:2, name:"Ariel", version:"Spectacular Singer",
    ink:"Amber", artist:"Alice Pisoni", associated:"Ariel - Spectacular Singer",
