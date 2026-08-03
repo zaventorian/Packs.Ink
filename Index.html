@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=302">
+<link rel="stylesheet" href="styles.css?v=305">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -408,6 +408,32 @@ async function encDeckCardRow(row){
   return o;
 }
 async function encDeckCardRows(rows){ return Promise.all((rows||[]).map(encDeckCardRow)); }
+// Fetch deck_cards for a batch of deck ids, paging past PostgREST's 1000-row
+// default. A multi-deck `.in("deck_id", ids)` blows through that fast — the
+// Discover feed pulls ~140 public decks (~2.5k rows), so an unpaged read
+// silently returned cards for only the first ~40 and every other deck
+// hydrated with `cards: []`. Empty decks then fail checkDeckLegality's
+// 60-card floor, land in format "invalid", and vanish from BOTH format
+// sub-tabs — which is how the tournament decks disappeared from Discover.
+// The explicit .order() is required: without it ranges can overlap/skip.
+async function fetchDeckCardsFor(ids, cols = "deck_id,card_id,printing,quantity"){
+  if(!ids || !ids.length) return [];
+  const out = [];
+  let from = 0;
+  while(true){
+    const {data, error} = await sbClient.from("deck_cards")
+      .select(cols)
+      .in("deck_id", ids)
+      .order("deck_id", {ascending:true})
+      .order("card_id", {ascending:true})
+      .range(from, from + 999);
+    if(error) throw error;
+    out.push(...(data||[]));
+    if((data||[]).length < 1000) break;
+    from += 1000;
+  }
+  return out;
+}
 // Encode a deck header patch ({name?, description?}) for writing.
 async function encDeckMetaPatch(patch){
   const o = {...patch};
@@ -26485,8 +26511,8 @@ const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
         const needCompute = decks.filter(d => !(d.inks && d.inks.length));
         const allFetchIds = decks.map(d => d.id);
         if(allFetchIds.length && cardMetaById.size){
-          const {data: dcRows} = await sbClient.from("deck_cards")
-            .select("deck_id,card_id,quantity").in("deck_id", allFetchIds);
+          const dcRows = await fetchDeckCardsFor(allFetchIds, "deck_id,card_id,quantity")
+            .catch(() => []);
           const seen = {};
           for(const dc of await decDeckCards(dcRows || [])){
             seen[dc.deck_id] = true;
@@ -28531,8 +28557,10 @@ function cheapestCardPrice(rowsForCardId){
 //   that drive the all-decks ink filter instead of plain decoration.
 // - `showEvent` + `event`: render the originating tournament name/date (used by
 //   the all-decks grid where tiles span multiple events).
-const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin,
-                             onOpenDeck, onCopyDeckLink, onCopyDecklist, onCopyDeckImage,
+// - `compact`: single-line row instead of a card. Same data, same actions
+//   (icon-only), sized so a few hundred decks stay scannable in one list.
+const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
+                             onOpenDeck, onCopyDeckLink, onCopyDecklist, onCopyDeckImage, onViewDeckImage,
                              onEditDeck, onDeleteDeck, onInkClick}) => {
   const tints = DARK_THEMES_GLOBAL.has(theme) ? INK_TINT_DARK : INK_TINT_LIGHT;
   // Capitalize "amber" → "Amber" to match the INK_ICONS keys.
@@ -28564,6 +28592,48 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin,
   const tileHref = hasDeck
     ? "/decks?deck=" + r.deck_id + (r.deck_share_token ? "&token=" + encodeURIComponent(r.deck_share_token) : "")
     : null;
+  const inkShields = (cls) => html`<div class=${cls}>
+    ${inks.map(ink => INK_ICONS[ink]
+      ? (onInkClick
+          ? html`<button key=${ink} type="button" class="deck-card-ink-btn"
+              title=${"Show all tournament decks in " + ink}
+              onClick=${e=>{e.stopPropagation(); e.preventDefault(); onInkClick(ink);}}>
+              <img src=${INK_ICONS[ink]} alt=${ink}/>
+            </button>`
+          : html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>`)
+      : null)}
+  </div>`;
+  if(compact){
+    return html`<a class="tdeck-compact"
+        href=${tileHref || "#"}
+        style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
+        onClickCapture=${navCapture}
+        onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
+      <span class="tdc-place" title=${"Placed " + (r.place || "—")}>🏆 ${r.place || "—"}</span>
+      ${inks.length > 0 && inkShields("tdc-inks")}
+      <span class="tdc-title">${titleText}</span>
+      ${showByline && html`<span class="tdc-by muted">${playerName}</span>`}
+      ${showEvent && event && html`<span class="tdc-event muted" title=${event.name}>${event.name}</span>`}
+      <span class="tdc-actions">
+        <button disabled=${!hasDeck} aria-label="Copy share link"
+          onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
+          title="Copy share link">🔗</button>
+        <button disabled=${!hasDeck} aria-label="Copy decklist as text"
+          onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
+          title="Copy decklist as text">📋</button>
+        ${onViewDeckImage && html`<button disabled=${!hasDeck} aria-label="Preview the deck poster"
+          onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
+          title="Preview the deck poster">👁</button>`}
+        <button disabled=${!hasDeck} aria-label="Copy deck poster image"
+          onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
+          title="Copy deck poster image">🖼</button>
+        ${isAdmin && html`<button aria-label="Edit this deck" title="Edit this deck"
+          onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>✎</button>`}
+        ${isAdmin && html`<button class="danger" aria-label="Remove this deck" title="Remove this deck from the tournament"
+          onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>🗑</button>`}
+      </span>
+    </a>`;
+  }
   return html`<a class="deck-card external tournament"
       href=${tileHref || "#"}
       style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
@@ -28579,17 +28649,7 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin,
       ${showByline && html`<span class="dct-name">by ${playerName}</span>`}
     </div>
     ${inks.length > 0 && html`<div class="deck-card-chips">
-      <div class="deck-card-inks">
-        ${inks.map(ink => INK_ICONS[ink]
-          ? (onInkClick
-              ? html`<button key=${ink} type="button" class="deck-card-ink-btn"
-                  title=${"Show all tournament decks in " + ink}
-                  onClick=${e=>{e.stopPropagation(); e.preventDefault(); onInkClick(ink);}}>
-                  <img src=${INK_ICONS[ink]} alt=${ink}/>
-                </button>`
-              : html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>`)
-          : null)}
-      </div>
+      ${inkShields("deck-card-inks")}
     </div>`}
     <div class="deck-card-actions">
       <button disabled=${!hasDeck}
@@ -28598,6 +28658,9 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin,
       <button disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
         title="Copy decklist as text">📋 Copy list</button>
+      ${onViewDeckImage && html`<button disabled=${!hasDeck}
+        onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
+        title="Preview the deck poster">👁 View image</button>`}
       <button disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
         title="Copy deck poster image">🖼 Copy image</button>
@@ -28610,7 +28673,7 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin,
 };
 
 const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin, onEdit, onDelete, onAddDeck, onEditDeck, onDeleteDeck,
-                               theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onInkClick}) => {
+                               theme, onCopyDecklist, onCopyDeckImage, onCopyDeckLink, onViewDeckImage, onInkClick}) => {
   if(!tournament) return html`<div class="muted">Tournament not found. <button onClick=${onBack}>Back</button></div>`;
   const sorted = (results || []).slice().sort((a,b) => {
     const ar = a.place_rank == null ? 9999 : a.place_rank;
@@ -28645,6 +28708,7 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
             r=${r} theme=${theme} isAdmin=${isAdmin}
             onOpenDeck=${onOpenDeck}
             onCopyDeckLink=${onCopyDeckLink} onCopyDecklist=${onCopyDecklist} onCopyDeckImage=${onCopyDeckImage}
+            onViewDeckImage=${onViewDeckImage}
             onEditDeck=${onEditDeck} onDeleteDeck=${onDeleteDeck}
             onInkClick=${onInkClick}/>`)}
         </div>`}
@@ -29039,11 +29103,13 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
       const deckIds = results.map(r => r.deck_id).filter(Boolean);
       let cardsByDeck = {};
       if(deckIds.length){
-        const {data, error: e} = await sbClient.from("deck_cards")
-          .select("deck_id,card_id,quantity")
-          .in("deck_id", deckIds);
+        let data;
+        try { data = await fetchDeckCardsFor(deckIds, "deck_id,card_id,quantity"); }
+        catch(e){
+          if(cancelled) return;
+          setError("Couldn't load deck cards: " + (e?.message || e)); setLoaded(true); return;
+        }
         if(cancelled) return;
-        if(e){ setError("Couldn't load deck cards: " + e.message); setLoaded(true); return; }
         for(const dc of await decDeckCards(data || [])){
           if(!cardsByDeck[dc.deck_id]) cardsByDeck[dc.deck_id] = [];
           cardsByDeck[dc.deck_id].push(dc);
@@ -29275,6 +29341,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // mounts in autoCopy mode and resolves a blob the parent passes to
   // navigator.clipboard.write — see copyDeckImageFromTile.
   const [posterAutoState, setPosterAutoState] = useState(null);
+  // Same modal, but VISIBLE — the tile-level "View image" button. Lets you eyeball
+  // a deck's poster while browsing without opening the deck first; the modal's own
+  // Copy / Save buttons still work from there. {deck, creatorName}.
+  const [posterViewState, setPosterViewState] = useState(null);
   // Push a history entry when entering a deck so browser back lands on the
   // grid instead of skipping past the sub-page. The existing URL-sync effect
   // below will then replaceState (no-op) to keep ?deck= aligned.
@@ -29333,6 +29403,15 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const [tourneyDeckView, setTourneyDeckView] = useState("events");
   const [tourneyFormat, setTourneyFormat] = useState("all"); // all | core | infinity
   const [tourneyEvent, setTourneyEvent] = useState("all");   // "all" | tournament id
+  // All-decks grid density. "cards" is the full tile; "compact" is a one-line
+  // row (place · name · inks · event) so a few hundred decks stay scannable.
+  const [tourneyDensity, setTourneyDensity] = useState(() => {
+    try { return localStorage.getItem("packsink:decks:tourneyDensity") === "compact" ? "compact" : "cards"; }
+    catch { return "cards"; }
+  });
+  useEffect(()=>{
+    try { localStorage.setItem("packsink:decks:tourneyDensity", tourneyDensity); } catch {}
+  }, [tourneyDensity]);
   const [bulkUploadOpen, setBulkUploadOpen] = useState(false);
   const [editTournamentId, setEditTournamentId] = useState(null);
   // Per-deck admin edit/add modal. `tournamentDeckEdit` is null when closed,
@@ -29660,18 +29739,16 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Favorites and Following Feed paths both reuse this.
   const hydrateDecksByIds = useCallback(async (ids) => {
     if(!ids.length) return [];
-    const [decksRes, cardsRes] = await Promise.all([
+    const [decksRes, cardRows] = await Promise.all([
       sbClient.from("decks")
         .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
         .in("id", ids),
-      sbClient.from("deck_cards")
-        .select("deck_id,card_id,printing,quantity")
-        .in("deck_id", ids),
+      fetchDeckCardsFor(ids),
     ]);
     if(decksRes.error) throw decksRes.error;
     const decksRows = decksRes.data || [];
     await Promise.all(decksRows.map(decDeckMeta));
-    const decodedCards = await decDeckCards(cardsRes.data || []);
+    const decodedCards = await decDeckCards(cardRows);
     const creatorIds = [...new Set(decksRows.map(d => d.user_id).filter(Boolean))];
     let creators = [];
     if(creatorIds.length){
@@ -30311,6 +30388,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     });
   }, []);
 
+  // Tile-level "View image" — no clipboard, no user-activation constraint, so
+  // this is just "mount the poster modal visibly".
+  const viewDeckImageFromTile = useCallback((d, creatorName) => {
+    if(!d || !(d.cards||[]).length){ flashToast("Deck has no cards yet"); return; }
+    setPosterViewState({deck: d, creatorName: creatorName || null});
+  }, []);
+
   // Tournament-detail tile copy buttons need a full deck (cards array) the
   // tournament_results_v feed doesn't carry. Lazy-fetch on click + cache in a
   // ref so subsequent clicks on the same deck don't refetch. Returns a deck
@@ -30410,6 +30494,21 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     })();
   }, [fetchTournamentDeckForCopy]);
 
+  // Tournament-tile "View image" — the tournament_results_v feed carries no
+  // cards, so fetch first (cached in tournamentDeckCache) then open the poster.
+  const viewDeckImageFromResult = useCallback(async (r) => {
+    if(!r?.deck_id){ flashToast("Deck not available"); return; }
+    flashToast("Building image…", 8000);
+    try {
+      const deck = await fetchTournamentDeckForCopy(r.deck_id, r.deck_share_token);
+      if(!(deck.cards||[]).length){ flashToast("Deck has no cards yet"); return; }
+      setPosterViewState({deck, creatorName: r.player_name || null});
+      flashToast("", 1);
+    } catch(e){
+      flashToast("Couldn't load that deck");
+    }
+  }, [fetchTournamentDeckForCopy]);
+
   // Card renderers — defined up here so the creator-profile early-return
   // and the list-view tabs can both use them.
   const renderOwnedCard = (d) => {
@@ -30435,6 +30534,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           title=${d.visibility === "private" ? "Private decks have no shareable link" : "Copy share link"}>🔗 Copy link</button>
         <button onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
           title="Copy decklist as text">📋 Copy list</button>
+        <button onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
+          title="Preview the deck poster">👁 View image</button>
         <button onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
           title="Copy deck poster image">🖼 Copy image</button>
         <button onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}>Rename</button>
@@ -30485,6 +30586,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           title="Copy share link">🔗 Copy link</button>
         <button onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
           title="Copy decklist as text">📋 Copy list</button>
+        <button onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
+          title="Preview the deck poster">👁 View image</button>
         <button onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
           title="Copy deck poster image">🖼 Copy image</button>
         <button onClick=${e=>{e.stopPropagation(); duplicateExternalDeck(d);}}>Duplicate</button>
@@ -31261,6 +31364,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             onCopyDecklist=${copyDeckListFromResult}
             onCopyDeckImage=${copyDeckImageFromResult}
             onCopyDeckLink=${copyDeckLinkFromResult}
+            onViewDeckImage=${viewDeckImageFromResult}
             onInkClick=${goAllDecksWithInk}/>`
         : tourneyDeckView === "alldecks"
           ? html`<div>
@@ -31278,9 +31382,25 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                     <option value="all">All events</option>
                     ${tournaments.map(t => html`<option key=${t.id} value=${t.id}>${t.name}</option>`)}
                   </select>
+                  <div class="seg-toggle tourney-density-seg" role="group" aria-label="Density">
+                    ${[["cards","▦ Cards"],["compact","☰ Compact"]].map(([k,l]) => html`<button key=${k}
+                      class=${tourneyDensity===k?"active":""}
+                      onClick=${()=>setTourneyDensity(k)}>${l}</button>`)}
+                  </div>
                   ${(inkFilter.size > 0 || tourneyFormat !== "all" || tourneyEvent !== "all") && html`<button class="deck-filter-clear"
                     onClick=${()=>{ setInkFilter(new Set()); setTourneyFormat("all"); setTourneyEvent("all"); }}>✕ Clear filters</button>`}
                 </div>
+              </div>
+              <div class="tournament-alldecks-inks deck-ink-filter" role="group" aria-label="Filter by ink">
+                ${INKS.map(ink => html`<button key=${ink}
+                  class=${"chip ink ink-icon-chip "+(inkFilter.has(ink)?"active":"")}
+                  style=${{background:INK_COLORS[ink]?.bg,borderColor:INK_COLORS[ink]?.border}}
+                  title=${ink} aria-label=${ink} aria-pressed=${inkFilter.has(ink)}
+                  onClick=${()=>toggleInkFilter(ink)}>
+                  <img src=${INK_ICONS[ink]} alt=${ink}/>
+                </button>`)}
+                ${inkFilter.size > 0 && html`<button class="deck-filter-clear"
+                  onClick=${()=>setInkFilter(new Set())}>✕ Clear inks</button>`}
               </div>
               <div class="muted" style=${{fontSize:12,margin:"2px 0 10px"}}>
                 ${visibleAllDecks.length} deck${visibleAllDecks.length===1?"":"s"}${allTournamentDecks.length !== visibleAllDecks.length ? ` of ${allTournamentDecks.length}` : ""}
@@ -31289,11 +31409,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                 ? html`<div class="muted" style=${{fontSize:13,padding:"24px 0",textAlign:"center"}}>
                     No tournament decks match the current filters.
                   </div>`
-                : html`<div class="deck-list">
+                : html`<div class=${tourneyDensity === "compact" ? "tdeck-compact-list" : "deck-list"}>
                     ${visibleAllDecks.map(r => html`<${TournamentDeckTile} key=${r.result_id}
                       r=${r} theme=${theme} event=${r._event} showEvent=${true}
+                      compact=${tourneyDensity === "compact"}
                       onOpenDeck=${(deckId, token)=>openDeckById && openDeckById(deckId, token)}
                       onCopyDeckLink=${copyDeckLinkFromResult} onCopyDecklist=${copyDeckListFromResult} onCopyDeckImage=${copyDeckImageFromResult}
+                      onViewDeckImage=${viewDeckImageFromResult}
                       onInkClick=${toggleInkFilter}/>`)}
                   </div>`}
             </div>`
@@ -31395,6 +31517,17 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       autoCopy=${true}
       onAutoCopyDone=${posterAutoState.onDone}
       onClose=${()=>setPosterAutoState(null)}/>`}
+
+    ${posterViewState && html`<${DeckPosterModal}
+      deck=${posterViewState.deck}
+      cardById=${cardById}
+      shareUrl=${buildShareUrlFor(posterViewState.deck)}
+      creatorName=${posterViewState.creatorName}
+      tournamentContext=${tournamentByDeckId[posterViewState.deck.id] || null}
+      visibility=${posterViewState.deck.visibility}
+      isOwner=${!!(user && posterViewState.deck.user_id === user.id)}
+      onChangeVisibility=${()=>{}}
+      onClose=${()=>setPosterViewState(null)}/>`}
 
     ${toastEl}
   </div>`;
