@@ -444,7 +444,7 @@ async function encDeckMetaPatch(patch){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v51";  // v51: [Format Coconut] leader rows are synthesized in transformSupabaseData, which only runs on a network fetch — a cache replay has no Coconut rows, so the Coconut type filter matched nothing. Cold-fetch required.
+const CACHE_KEY = "packsink:catalog:v52";  // v52: Lorcast started indexing the Coconut leaders for real, so the synthesized row and the catalog row rendered as two Ariel tiles. The merge/suppress happens in transformSupabaseData, which only runs on a network fetch. Cold-fetch required. (v51: Coconut leader rows synthesized at all.)
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -2155,9 +2155,37 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
   // dedupe by Product Name, and these names are all reprints of real cards, so
   // a bare name would let a Coconut row win the dedupe and become the click
   // target for the real card.
+  // Lorcast has started indexing the leaders for real (Ariel - Spectacular
+  // Singer landed first, as Format Coconut #1). Those rows are a strictly worse
+  // version of the synthetic one — typed "Character" so the Coconut chip misses
+  // them, no pid, no price, no isCoconut/coconutSlug — but they DO carry the
+  // official art, and they were rendering as a second, priceless Ariel tile
+  // next to ours. So: take Lorcast's image + text, drop its row, keep ours.
+  // Every remaining leader upgrades itself the same way as Lorcast catches up,
+  // instead of spawning another duplicate.
+  //
+  // Collect EVERY matching row, not one per name: a Lorcast card emits one row
+  // per printing, so keying a drop-set by name keeps only the last reference
+  // and leaves the other printing on screen as the duplicate we're removing.
+  const lorcastCoconut = new Map();   // name key -> row to borrow art/text from
+  const dropCoconutRows = new Set();  // every raw row to remove
+  const coconutNameKey = (n, v) => searchNorm(`${n||""} - ${v||""}`.toLowerCase().trim());
+  for(const r of rows){
+    if(r.Set !== COCONUT_SET_NAME || r.isCoconut) continue;
+    dropCoconutRows.add(r);
+    const k = searchNorm(String(r["Product Name"]||"").toLowerCase().trim());
+    if(!lorcastCoconut.has(k) || (!lorcastCoconut.get(k).img_normal && r.img_normal)){
+      lorcastCoconut.set(k, r);
+    }
+  }
+  if(dropCoconutRows.size){
+    for(let i = rows.length - 1; i >= 0; i--) if(dropCoconutRows.has(rows[i])) rows.splice(i, 1);
+  }
+
   for(const cc of (COCONUT_CARDS || [])){
     const displayName = `${cc.name} - ${cc.version} (Coconut)`;
-    const img = coconutArtUrl(cc.cn);
+    const official = lorcastCoconut.get(coconutNameKey(cc.name, cc.version));
+    const img = official?.img_normal || coconutArtUrl(cc.cn);
     rows.push({
       "Set":              COCONUT_SET_NAME,
       "set_id":           null,
@@ -2173,9 +2201,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       "TCGPlayer Market": null,
       "Market Price":     null,
       "Number":           String(cc.cn),
-      "img_small":        img,
+      "img_small":        official?.img_small  || img,
       "img_normal":       img,
-      "img_large":        img,
+      "img_large":        official?.img_large  || img,
       "ink":              cc.ink,
       "inks":             [cc.ink],
       "cost":             null,
@@ -2186,7 +2214,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       // Left null even though two entries carry an `artist`: populating this
       // would pull them into the Artist Alley poster, which is for real cards.
       "illustrators":     null,
-      "text":             cc.ability,
+      // Lorcast's text is the full printed box (reminder line + ability), so
+      // it searches better than our ability-only transcription.
+      "text":             official?.text || cc.ability,
       "variant_label":    "Format Coconut",
       "isCoconut":        true,
       "coconutSlug":      cc.slug,
