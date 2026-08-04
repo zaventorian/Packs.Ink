@@ -1,0 +1,20 @@
+# Cloudflare deployment for packs.ink.
+#
+# The site stays a zero-build static app: `node scripts/build_dist.mjs` only
+# copies an include-list of files into dist/, and worker/index.js handles the
+# routing Netlify's _redirects used to do (image proxies + SPA fallback).
+#
+# Set the build command to `node scripts/build_dist.mjs` in the Cloudflare
+# dashboard (Workers → Builds) so a git push deploys, the way Netlify did.
+name = "packs-ink"
+main = "worker/index.js"
+compatibility_date = "2026-08-01"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+# "none" makes ASSETS.fetch return a 404 for unknown paths instead of serving
+# its own fallback, which is what lets worker/index.js do the /Index.html
+# rewrite itself. Cloudflare's built-in SPA mode looks for a lowercase
+# index.html and would not find this site's capital-I Index.html.
+not_found_handling = "none"
