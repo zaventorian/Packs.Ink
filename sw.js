@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v308';
+const CACHE_VERSION = 'packsink-v309';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -17,7 +17,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=308',
+  '/styles.css?v=309',
   '/logo.js?v=253',
   // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
   // admin-gated to ~2 users — they runtime-cache on first use instead of
@@ -118,7 +118,14 @@ self.addEventListener('fetch', (event) => {
           }
           return res;
         })
-        .catch(() => caches.match('/Index.html'))
+        // Fall back to '/' when the '/Index.html' key is absent. On Cloudflare
+        // the asset layer 307s /Index.html -> /, so the CORE_ASSETS precache of
+        // it fails (cache.add rejects redirected responses) and this key only
+        // exists once an intercepted navigation has populated it above. '/' is
+        // precached successfully either way, so this closes the window between
+        // SW install and the first intercepted navigation, where an offline
+        // visitor would otherwise get nothing.
+        .catch(() => caches.match('/Index.html').then((r) => r || caches.match('/')))
     );
     return;
   }

@@ -1,8 +1,28 @@
 # Netlify → Cloudflare migration runbook
 
-**Status: NOT STARTED.** packs.ink is 100% Netlify. The code below is built and
-verified against a real `wrangler dev`, but nothing is deployed and no DNS has
-changed.
+**Status: PHASES 0 + 2 DONE (2026-08-04). DNS is on Cloudflare; hosting is still
+Netlify.**
+
+- ✅ Cloudflare zone active. NS = `dee.ns.cloudflare.com` / `glen.ns.cloudflare.com`.
+- ✅ Records: `A packs.ink → 75.2.60.5`, `A www → 75.2.60.5`, google-site-verification
+  TXT. **All grey-clouded (DNS only).** Verified live: apex 200, www 301→apex,
+  `/img-proxy/*` 200 image/avif, TXT intact, zero downtime.
+- ✅ Registrar moved Netlify → Name.com (free internal transfer). Netlify would NOT
+  set custom nameservers on a domain they reseller-registered; the transfer was the
+  only path. Transfer Lock ON, WHOIS Privacy ON, **no 60-day lock** (Name.com
+  explicitly disabled it), expiry 10 Apr 2027, renewal $65.99/yr.
+- ⚠️ **Name.com "Automatic Renewal — Action required"** (needs a payment method).
+  Deferred by Zaven 2026-08-04. Don't let this slide past ~Feb 2027.
+
+**⚠️ We currently get almost NONE of the Cloudflare benefits.** Grey cloud = DNS
+only: traffic still goes straight to Netlify, so bandwidth, deploy credits, DDoS
+and WAF are all unchanged. Every remaining benefit is gated behind Phase 1 + 3
+(deploy the Worker, then orange-cloud). **Do NOT orange-cloud while the records
+still point at Netlify** — that is the configuration that breaks Netlify's
+Let's Encrypt renewal.
+
+Remaining: **Phase 1** (deploy to `*.workers.dev` + test) → **Phase 3** (cutover +
+`sw.js` fix) → **Phase 4** (rate-limit rule, decommission Netlify, relax push policy).
 
 **Why:** Netlify builds + bandwidth are metered on limited credits — that is the
 entire reason for the commit-only push policy. Cloudflare is free and unlimited,
