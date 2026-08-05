@@ -1,7 +1,36 @@
 # Netlify → Cloudflare migration runbook
 
-**Status: PHASES 0 + 2 DONE (2026-08-04). DNS is on Cloudflare; hosting is still
-Netlify.**
+# ✅ CUTOVER COMPLETE — packs.ink is served by the Cloudflare Worker (2026-08-04)
+
+Verified live: `Server: cloudflare` + `CF-RAY` present, `x-nf-request-id` GONE,
+SW `packsink-v309` and `styles.css?v=309` being served, `/privacy` is the real
+static file, `/decks` deep link 200, both image proxies 200 with `ACAO:*` + 30d
+immutable, security headers incl. `camera=(self)`, `www` 301 → apex.
+**The include-list also killed the old file exposure** — `wrangler.toml`,
+`worker/index.js`, `package.json`, `native/sync.mjs` and `capacitor.config.json`
+now return the SPA shell instead of their contents.
+
+**ROLLBACK: grey-cloud `A packs.ink → 75.2.60.5` in the Cloudflare DNS panel.**
+Instant, no redeploy. Netlify is still live and still holds the site.
+
+## ⚠️ DO NOT DECOMMISSION NETLIFY YET
+
+`www.packs.ink` is still grey-clouded at 75.2.60.5 and **Netlify is what serves
+its 301 → apex**. The worker has no www redirect of its own. Add a Cloudflare
+redirect rule (or a worker route for www) BEFORE turning Netlify off, or www
+breaks.
+
+Remaining: www redirect rule → decommission Netlify → rate-limit rule on the two
+proxy prefixes → relax the push policy in CLAUDE.md. Still deferred: Name.com
+auto-renew vs. Cloudflare Registrar (pick one before ~Feb 2027), and Bot Fight
+Mode stays OFF (free tier can't exempt `/img-proxy/*`; it would break native card
+art).
+
+---
+
+## History
+
+**PHASES 0 + 2 (2026-08-04). DNS onto Cloudflare; hosting still Netlify at this point.**
 
 - ✅ Cloudflare zone active. NS = `dee.ns.cloudflare.com` / `glen.ns.cloudflare.com`.
 - ✅ Records: `A packs.ink → 75.2.60.5`, `A www → 75.2.60.5`, google-site-verification

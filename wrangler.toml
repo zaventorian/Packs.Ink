@@ -10,6 +10,27 @@ name = "packs-ink"
 main = "worker/index.js"
 compatibility_date = "2026-08-01"
 
+# Apex only. `www` deliberately still points at Netlify's load balancer
+# (75.2.60.5, grey-clouded) because that is what serves its 301 → apex; the
+# worker has no www redirect of its own. BEFORE decommissioning Netlify, add a
+# Cloudflare redirect rule for www → apex, or www breaks.
+#
+# A ROUTE, not a custom domain. custom_domain = true refuses to coexist with the
+# existing A record ("Hostname already has externally managed DNS records") and
+# would require deleting it first — leaving the apex with NO record mid-cutover.
+# A route attaches to the record we already have, so there is never a DNS gap.
+#
+# The route is inert while the record is grey-clouded (routes only see proxied
+# traffic), so it is safe to deploy BEFORE flipping the cloud. Orange-clouding
+# the record is what actually cuts traffic over, and the worker answers every
+# request, so Netlify is never reached behind it.
+#
+# Rollback: grey-cloud `A packs.ink → 75.2.60.5` in the dashboard. Instant, and
+# no redeploy needed.
+routes = [
+  { pattern = "packs.ink/*", zone_name = "packs.ink" }
+]
+
 [assets]
 directory = "./dist"
 binding = "ASSETS"
