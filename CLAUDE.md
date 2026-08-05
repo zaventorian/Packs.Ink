@@ -38,14 +38,57 @@ Android/iOS shell around the SAME zero-build web app. **Read `native/README.md` 
 - **Never register the service worker in native builds** — registration is guarded AND sw.js is excluded from the bundle.
 - `node_modules/` + `native/www/` gitignored; the `android/` project IS committed. Icons/splashes regenerate via `npm run app:assets` from `native/assets/logo.png`.
 
+## Card scanner — PUBLIC BETA 2026-08-04
+
+Camera → identify → review → save. **Identification is 100% on-device**: `scanner.js` + `scanner-cv.js` (OpenCV in `scanner-worker.js`) + PP-OCRv3 ONNX in `scanner-ocr-worker.js`, matched against index files the browser downloads once. No frame is ever sent anywhere to be read — say this plainly in any user-facing copy, it's the feature's best property and it's true.
+
+Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives in the **`project-scanner-spec` memory** — read its NEW-SESSION HANDOFF before touching the matcher. This section is only the shipping/consent surface.
+
+### Gating
+
+- **`canScan = true`** in App — everyone gets the 📷 button. It was `isGradedAdmin || isScannerTester`; the client-side `is_scanner_tester()` probe is GONE (it fired on every sign-in to answer a question no longer asked).
+- **`scanner_testers` + `is_scanner_tester()` are NOT dead code.** Migration 98's `scan_samples` RLS still uses them server-side to decide who may read OTHER people's samples. Don't drop them as orphans.
+- **`SCANNER_QA_ONLY` stays `true`.** The name reads like a testing switch but review-before-save is the shipping UX. Flipping it to the auto-add flow needs ✓-row precision honestly measured against the ≥95% bar first — and per round 11 you **cannot** get that from labelled rows (testers only touch rows they must fix, so the corrected-rate over reviewed ✓ rows is meaningless). Photo-verify a random sample of *unreviewed* shown-✓ rows.
+
+### Consent + the upload opt-out (migration 114)
+
+- **`scanner_consents(user_id pk, version, accepted_at, uploads_enabled, updated_at)`** — owner-only RLS on select/insert/update, no admin read branch. One row per user, updated in place: we need the CURRENT preference on every scan, not an audit trail.
+- **`SCAN_BETA_VERSION`** (next to `SCANNER_BUILD`) is the accepted-notice version. **Bump ONLY when the substance changes** — what's uploaded, why, retention, who sees it. It re-prompts everyone; re-prompting for typo fixes trains users to click through the one screen that has to be read.
+- **The gate blocks the camera, not just the view.** The `// mount: index + camera + worker` effect early-returns on `!consentOk` and its deps are `[consentOk]`, so `getUserMedia` cannot fire before acceptance. Verified: no `<video>` in the DOM pre-accept. Don't "simplify" this into a render-only overlay.
+- **The opt-out reads `uploadsOnRef`, never the state.** `uploadSample`, `labelSample`, and the end-of-session telemetry insert all run from queue tails and deferred looks holding pre-toggle closures. All three bail when off — including the photoless session row, deliberately: "I turned that off" has to mean all of it.
+- Reachable twice: the first-run notice, and a checkbox in the review screen (`.scanner-qa-privacy`).
+
+### Retention — a promise with a cron behind it
+
+`scripts/cleanup_scan_samples.py`, wired into etl.yml's **selfheal** job with `if: always()`. The beta notice and privacy.html both promise deletion after 12 months; this script is the only thing making that true, so it exits non-zero rather than shrugging.
+
+- **Storage first, rows second.** The row is the only index of where the photos live — drop it first and a failed storage call strands JPEGs nothing points at.
+- **Three objects per sample**, not one: the rectified card (`image_path`), `_raw` (the full camera frame) and `_strip` (the approach filmstrip). The last two are in `debug.rawPath` / `debug.stripPath`. Miss them and you delete the crop while keeping the wider shot — backwards, privacy-wise.
+- `--user <uuid>` is the erasure path (account deletion, or "delete my photos but keep the feature"). Also sweeps the account's storage folder for orphans — an upload whose row insert failed, the class migration 105 fixed.
+
+### Storage cost + the abuse cap (migration 115)
+
+**Every scan is ~400 KB** — three storage objects at ~149 KB each. Four allowlisted testers put **500 MB** in the bucket before launch. Budget for public traffic accordingly; this is the scanner's main running cost, and the 12-month retention job is what stops it compounding.
+
+- **1000 rows / user / rolling 24h**, enforced by TWO triggers on `scan_samples`. The BEFORE ROW one is the cheap common path; the AFTER STATEMENT one is the backstop, because rows from the same command aren't visible to a BEFORE trigger and PostgREST accepts bulk array bodies — without it, one `insert … select generate_series` walks straight through.
+- Chosen against real data: the largest genuine session on record is **343** scans, so the cap is ~3x that. Don't tighten it below ~500 without checking `scan_samples` daily maxima first — throttling a tester running physical binders is the exact behaviour we want.
+- Hitting it is invisible to the user: `uploadSample` swallows insert errors, identification is local, and the collection-save path never touches `scan_samples`. Under abuse the flywheel is the right thing to shed.
+- **If storage becomes the problem**, the lever is the `_raw` frame + `_strip` filmstrip — they're 2/3 of the objects and only the rectified crop is needed for matcher replay. But raw frames are what detection tuning runs on (the #1 remaining accuracy lever), so sample them, don't drop them.
+
+### Where the user-facing copy lives
+
+Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
+
 ## Top-level nav
 
 **Two-row icon nav** (restructured 2026-05-25). Row 1 = "my stuff", Row 2 = "market intel". Home tab removed — the logo IS the home click target.
 
-- **Row 1**: Collection · Cards · Decks
+- **Row 1**: Collection · Cards · Decks · Scan
 - **Row 2**: Screener · Price Graphing · Analytics · Help
 
 Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-style line glyphs), `stroke="currentColor"` so they inherit theme color. To add/swap an icon: edit the `path` for that key in NAV_ICONS, no asset file needed.
+
+- **Scan** (added 2026-08-04, gated on `canScan`) is the one tab rendered as a `<button>`, not an `<a href>` — the scanner is a modal with no route, so there's no URL for a modifier-click to open. Everything else in the nav must stay an `<a>` (see "SPA navigation"). It went in **row 1, not row 2**: both rows are 217px wide at the mobile sizing, so a 4th chip on row 2's longer labels (PRICE GRAPHING / ANALYTICS) is what pushed ANALYTICS off the edge on ≤420px phones before. The top-bar 📷 bubble is kept as a second entry point.
 
 - **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + graded data.
 - **Price Graphing** = per-card history + multi-card Compare (handoff from Screener batch action).
@@ -59,6 +102,7 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
   - **Row 2**: help bubble (?) + theme toggle bubble (🌙/☀)
 - The install bubble lives in row 1 next to the profile because it **disappears** once the user installs the PWA (`isStandalone` flips true). Having it pair with the profile avatar means row 1 naturally collapses to just-the-avatar post-install, no layout shift. Putting install in row 2 (its old location) pushed row 2 to 3 bubbles wide (~116px) and tipped `ANALYTICS` off the right edge of the scrolling tabs container on phones ≤420px.
 - **Help is a bubble in the right cluster's bubble row** (as of 2026-05-26), NOT a peer chip in tabs row 2. The previous "Help chip inside the tabs row" layout collided with the sign-in pill / profile chip on phones — the chip sat at the right edge of the scrolling tabs row and overlapped the anchored right cluster. Moving Help to `.top-nav-right-row--bubbles` puts it in the same flex container as install + theme, where it can't bump into the sign-in pill above it. Implemented as `<button class="theme-toggle theme-toggle--help">` (inherits bubble shape; `.active` paints accent when view=faq).
+- **Gear badge on the avatar** (`.profile-gear-badge`, added 2026-08-04): a 13px gear pinned to the top-right of the profile button's avatar, so the button reads as "account **and** settings" rather than just "me" — theme, home layout, offline images and sign-out all live behind it and people weren't finding them. Purely decorative; `.profile-btn > *{pointer-events:none}` already makes the button the sole click target. Lights accent on hover and while `aria-expanded="true"`.
 - Every container in the right cluster has `background: var(--bg)` explicitly so the sticky header paints opaquely over scrolled content.
 - **Mobile tap-target floor: 36px** on every top-nav control (`.signin-btn`, `.profile-btn`, `.theme-toggle`, `.theme-toggle--help`). Apple HIG recommends 44pt; 36px is the compromise that keeps the two-row nav from growing too tall. Was 26–28px before 2026-05-25 and the profile pill was nearly impossible to hit on iPhone — don't shrink back below 36px.
 
@@ -223,6 +267,10 @@ Audit scripts: `audit_holofoils.py`, `audit_connecting_foils.py`, `audit_missing
 - **`matchMode: "any" | "all"`** — `emptyFilter()` carries `filter.matchMode` persisted to `localStorage["packsink:cardBrowser:matchMode"]` (default `"any"`). FilterDrawer top section "Match terms" radio chips flip it. CardsView's parsed useMemo writes `parsed.matchMode = filter.matchMode || "any"`; `matchesCardFilter` reads it for three things: (a) the `parsed.filters.classifications` array — any-mode `some`, all-mode `every`; (b) `parsed.filters.keywords` array — same; (c) the `parsed.name` haystack token fallback — `tokens.some` vs `tokens.every`. **Back-compat default**: other consumers of parseSearchQuery (deck builder picker, Compare, Price Graphing) pass `parsed` without matchMode, and the matcher defaults to `"all"` when `parsed.matchMode` is undefined — preserves their existing token-AND behavior so only CardsView changes default.
 - **Multi-chip classifications + keywords** — CardsView's chip merge pushes characteristic chips into `parsed.filters.classifications: string[]` and keyword chips into `parsed.filters.keywords: string[]` (was overwriting per chip — "princess + queen" silently dropped princess pre-fix). parseSearchQuery's singletons `parsed.filters.classification` / `parsed.filters.ability_keyword` get promoted into the same arrays at merge time so the matcher only walks one path. matchesCardFilter checks the array first; falls back to the singleton for non-CardsView callers.
 - **Enter on the smart-search input auto-picks `suggestions[0]`.** Pre-fix Enter no-op'd unless the user had arrow-keyed onto a suggestion first. Suggestions are dimension-aware first (color / rarity / characteristic / etc.) with `contains: <text>` as the always-present fallback, so Enter picks the most specific interpretation. Empty input still falls through to "close dropdown + blur".
+- **`smartSplitSuggestion` — the name-plus-dimension row (2026-08-04).** Every other suggestion matches only the LAST token, so the dropdown's only whole-input option was `contains:` — and `contains:` searches the haystack (name + type + body text + classifications), which a rarity/ink/set word is never in. So `rapunzel promo` + Enter returned **zero cards**, which is exactly how most people type. `smartSplitSuggestion(raw)` runs `parseSearchQuery` over the whole input and, when it splits into ≥1 dimension plus leftover name text, is unshifted to the FRONT of the list and becomes Enter's default (after `exactDim`, before `contains`). Applying it commits the dimension chips **and** a `contains:` chip for the residual name in one go.
+  - **It only triggers on `_SPLIT_TRIGGER_DIMS` = ink / rarity / set / legality / inkable** — the dimensions that live in columns and therefore can't be in the haystack. Classification / keyword / card-type words CAN appear there (and `matchesCardFilter` already soft-matches them against name+type when `parsed.name` is set), so `elsa spirit` keeps its working `contains:` behaviour. Widening the trigger set breaks that.
+  - Bails entirely if the parse produced a filter with **no chip equivalent** (`strength` / `willpower` / `lore` / price, or a non-`=` cost operator) — better to leave the query alone than to silently drop half of it on commit.
+- **`cardVersionTerms(row)` puts version labels in the haystack (2026-08-04).** `Prize Wall` / `Top Prize` (C1) and `variant_label` values (`Two Swords Variant`, `Text Error`, `Japanese Exclusive`, `Format Coconut`, …) are printed on the tile but live nowhere in `Product Name`, so `cinderella prize wall` matched nothing. Added to BOTH haystacks in `matchesCardFilter` (the `parsed.name` fallback and the `parsed.contains` phrase check). **Finish words are deliberately excluded** — putting `foil` / `cold foil` / `holofoil` in there would make a search for "foil" match half the catalog. C1 rows resolve foil-vs-not from `row.foil` on a group or `row.Printing` on a flat row.
 - **`name:` pill renamed to `contains:`.** `summarizeParsedQuery` was labeling free-text + contains-chip merged text as `name:` while the matcher actually walked name + body text + classifications + card_type via the haystack fallback. The label was lying about the behavior — fixed by renaming to `contains:`. CardsView's parsedSummary also suppresses the duplicate pill when a `contains:` chip is the only contains source (the chip strip already renders it).
 - **`SET_NICKNAMES` deliberately does NOT include single-token character names** ("ursula", "jafar") even though the sets are "Ursula's Return" and "Reign of Jafar". Those tokens are character names too — typing `ursula` in the deck builder should search for the *card*, not promote to the whole set. The longer/unambiguous forms still work (`ursulas`, `ursulas return`, `reign`, `reign of jafar`). Set suggestion dropdown still surfaces the set via prefix match, so users can click through if they meant the set.
 - Catalog must have `cards.strength / willpower / lore / move_cost` columns (migration 43). Cold load probes for `lore`; silently omits all four from `CARDS_COLS` if missing.
@@ -797,11 +845,9 @@ Admin-gated bulk-upload. N player rows → N public decks linked to tournament. 
 - `decks.user_id` nullable (migration 37). "My decks" / "Following" / creator-profile queries filter on `user_id = X` and naturally exclude tournament decks.
 - Per-row inks computed client-side from `parseDeckText` + catalog meta, sent in row payload.
 - **Deck detail tournament badge**: `DeckEditor` accepts `tournamentContext` + `onOpenTournament`. Builds lookup once via `tournamentByDeckId = useMemo(... )`.
-- **Home Tournament Results banner.** Top 8 decks for each of the 4 most-recent non-empty events, newest first. **Two mount sites, picked in JS via `useMaxWidth(1100)` — only ONE is ever in the tree** (`isNarrow` gates both, so there's no hidden duplicate doing a second fetch):
-  - **>1100px**: `.home-tourney-col--desktop` inside `.home-left-col`, below Following. Always expanded. List caps at `max-height:560px` with internal scroll.
-  - **≤1100px**: last element in the movers stack, **after every banner** (Chase → Rare–Legendary → Promo → graded → Most Valuable), rendered with `collapsible` + `chaseStyleTitle`. List caps at 340px. The `home-feed-collapse-btn` chevron folds it to a 46px header-only bar; state persists in `packsink:home:tourneyCollapsed`. `collapsed` is only honored when `collapsible` is set, so the desktop placement ignores the flag.
-  - Breakpoint decides *what mounts*, not just how it looks — hence matchMedia over a CSS query (a cache-stale styles.css can't misplace the panel). `.home-tourney-col--desktop{display:none}` at ≤1100px survives only as a belt-and-suspenders.
-  - **Superseded 2026-08-02**: the old `ChaseRowWithTourney` component paired the panel side-by-side with Rare–Legendary in a 2-col mobile grid, height-locked via `[data-debug="rareleg-row-tourney"] > .home-feed{position:absolute;inset:0}`. Component and CSS block both deleted — don't resurrect the grid.
+- **Home Tournament Results banner.** Top 8 decks for each of the 4 most-recent non-empty events, newest first. **ONE mount site as of 2026-08-04** — it's a configurable home panel (`tournaments`, default column `left`) like every other, so there is no breakpoint-dependent mount and no `useMaxWidth` / `isNarrow` gate any more. Always rendered `collapsible`, so the `home-feed-collapse-btn` chevron works on desktop too; state persists in `packsink:home:tourneyCollapsed`. List caps at `max-height:560px`, dropping to 340px at ≤1100px where the panel is half a column wide.
+  - The dead `.home-tourney-col` / `.home-tourney-col--desktop` wrapper classes and the `chaseStyleTitle` mobile styling are gone; the modifier class is now `.home-feed--tourney` (was `--tourney-mobile`, which stopped being true once the desktop mount used it too).
+  - **Two earlier side-by-side attempts were ripped out** (`ChaseRowWithTourney`, pairing it with Rare–Legendary in a 2-col mobile grid height-locked via `position:absolute;inset:0`). The current pairing is NOT that: it's a plain `grid-template-columns:repeat(2,minmax(0,1fr))` with `align-items:start` on `.home-left-col` at ≤1100px, so Following and Tournament Results sit at their natural heights with nothing absolutely positioned. Falls back to one panel per row at ≤360px. If you touch it, keep it height-lock-free — that's what broke both predecessors.
 
 ## Deck view / edit modes
 
@@ -925,6 +971,17 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 - **No "Lorcana Market" h1 or "Click a card for details" subtitle** — both removed 2026-05-26. The search bar sits directly under the top nav. The logo IS the home click target (the title was redundant).
 - **Your Top Movers tiles show a printing badge** when the moving row is the foil printing — class `.panel-movers-foil-tag`, accent-color chip with text "Foil" / "Cold Foil" / "Holo" (Holofoil shortens to "Holo" to fit the tight column). Logic: `row.tcg_printing && row.tcg_printing !== "Normal" && row.tcg_printing !== "Non-Foil"` → render. Lets users tell foil-vs-non-foil movers of the same card apart.
 - **Tournament Results panel: `.ht-place` is `white-space: nowrap`** and `.home-tourney-deck` grid is `auto minmax(0,1fr) auto` (was `28px 1fr auto`). The 28px column wasn't wide enough for `"Top 4"` / `"Top 8"` — the place text wrapped to two lines, doubling row height on the narrow signed-in mobile home grid. Auto-width + nowrap keeps each row on a single line; player column's `minmax(0,1fr)` still shrinks with ellipsis when needed.
+
+### Configurable layout (2026-08-04)
+
+Every home section except the movers stack is a **user-arrangeable panel**: show/hide, move between columns, reorder within a column. Edited from the settings popover ("Home page layout"), persisted to `localStorage["packsink:homeLayout"]` as an ordered `[{key, col, on}]`.
+
+- **`HOME_PANELS`** declares the panels + their default column; **`HOME_COLUMNS`** the four targets: `announce` (full-width strip under the search box) · `left` · `main` · `right`. **`normalizeHomeLayout(val)`** is the only way state enters — it drops unknown keys, appends missing ones at their default column, resets bad column names, and never throws. Both App (on load) and HomeView (on render) run it, so a hand-edited or half-migrated value can't render a broken page.
+- **Migration**: the old visibility-only `packsink:homePanels` map is read once on first load and folded into the new shape. Both keys are `localStorage`-only — deliberately NOT in the `user_metadata` prefs-sync effect, since a phone and a desktop wanting different arrangements is normal, not drift to reconcile.
+- **Announcements** (`news` panel) bundles the pre-release News tile, the Format Coconut tile, and any live `EVENT_TILES` convention tile into one keyed fragment. It defaults to the `announce` strip — full width, directly under the search box, above the movers. Tiles cap at 420px each (`repeat(auto-fit,minmax(260px,420px))` + `justify-content:start`) so a lone announcement is a card, not a stretched band.
+- **Empty side columns are omitted from the tree**, and `.home-grid` gets `hg-no-left` / `hg-no-right` which narrow `grid-template-columns` to match — otherwise hiding everything on the left left a 240px hole. Columns are **auto-placed in DOM order**; don't reintroduce `grid-column:1` on `.home-left-col` or the omission breaks.
+- `moveHomePanel` swaps with the nearest neighbour that is **both in the same column AND visible**. Plain index±1 would swap past a panel in another column (or a hidden one) and read as a dead button.
+- Panels are keyed on the component (`key="following"` etc.), not wrapped in a div — several CSS rules are `.home-left-col > .home-feed` child selectors that a wrapper would break.
 
 ### Movers-banner chip filters (`MoverChipGroup`)
 
@@ -1154,7 +1211,7 @@ Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. D
 **Top of the list:**
 
 - **Domain transfer Netlify → Name.com → (optional) Cloudflare** for WAF + Bot Fight Mode in front of Netlify. Blocked until **2026-06-08** (ICANN lock). Netlify only transfers to Name.com per their partnership.
-- **Card scanner (phone)** — vision-based identification. Scan → identify → price + history.
+- **Card scanner** — SHIPPED as a public beta 2026-08-04 (see "Card scanner" above). Remaining: measure ✓-row precision against the 95% bar on real public traffic, then decide on `SCANNER_QA_ONLY`; on-device detection tuning; foil/glare reads.
 
 **Nice to have:**
 

@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=305">
+<link rel="stylesheet" href="styles.css?v=308">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -237,9 +237,11 @@
 </script>
 <script src="/vendor/supabase.js?v=254"></script>
 <script src="logo.js?v=253"></script>
-<!-- Scanner is admin-gated (~2 users); defer keeps it off every visitor's
-     critical path. Both scripts only attach globals used when the scan modal
-     opens, long after DOMContentLoaded. -->
+<!-- Scanner is a PUBLIC beta now, so defer matters MORE than it did when this
+     was admin-gated: every visitor pays for these, and almost none of them open
+     the scanner on any given visit. Both scripts only attach globals used when
+     the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
+     the ONNX OCR models) load later still, inside the workers. -->
 <script src="scanner.js?v=299" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
@@ -3794,6 +3796,45 @@ const SUGGEST_KIND_LABEL = {
   card_type: "type", keyword: "keyword", cost: "cost",
   inkable: "inkable", legality: "legality", illustrator: "artist", contains: "contains",
 };
+// Split a multi-word query into dimension chips + leftover name text, the way a
+// person reads it: "rapunzel promo" is a name AND a rarity, not a phrase. Every
+// other suggestion matches only the LAST token, so the dropdown's only
+// whole-input option was `contains:` — a haystack search that can never match a
+// rarity/ink/set word (those live in columns, not in the card's text), which is
+// why type-and-Enter returned nothing.
+//
+// Only offered when one of those "invisible to the haystack" dimensions is
+// present. Classification / keyword / type words DO appear in the haystack
+// (and matchesCardFilter already soft-matches them against the name), so
+// "elsa spirit" keeps its working contains: behaviour. Bail entirely if the
+// parse produced a filter with no chip equivalent (strength/willpower/lore) —
+// better to leave the query alone than to silently drop half of it.
+const _SPLIT_TRIGGER_DIMS = ["ink", "rarity", "set", "legality", "inkable"];
+const _SPLIT_CHIPPABLE = [
+  ["ink","ink"], ["rarity","rarity"], ["set","set"], ["card_type","card_type"],
+  ["classification","classification"], ["ability_keyword","keyword"],
+  ["legality","legality"], ["inkable","inkable"], ["illustrator","illustrator"],
+  ["cost","cost"],
+];
+const _UNCHIPPABLE_FILTERS = ["strength","willpower","lore","priceMin","priceMax"];
+const smartSplitSuggestion = (raw) => {
+  if(!raw || !raw.includes(" ")) return null;
+  const p = parseSearchQuery(raw);
+  const f = p.filters || {};
+  if(!p.name) return null;
+  if(_UNCHIPPABLE_FILTERS.some(k => f[k] != null)) return null;
+  if(f.costOp && f.costOp !== "=") return null;
+  if(!_SPLIT_TRIGGER_DIMS.some(k => f[k] != null)) return null;
+  const chips = [];
+  for(const [fk, kind] of _SPLIT_CHIPPABLE){
+    if(f[fk] != null) chips.push({kind, value:f[fk]});
+  }
+  if(!chips.length) return null;
+  const dims = chips.map(c => (SUGGEST_KIND_LABEL[c.kind]||c.kind)+": "+String(c.value).toLowerCase());
+  return {kind:"split", value:raw, label:[p.name, ...dims].join("  ·  "),
+    chips, name:p.name, replace:raw};
+};
+
 const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   const out = [];
   const raw = (input || "").trim();
@@ -3900,6 +3941,10 @@ const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   // `contains` fallback so it can't be sliced off the bottom when the list
   // fills up (it's the universal "just search this text" escape hatch).
   const capped = out.slice(0, 7);
+  // Whole-input name+dimension split goes FIRST — it's the reading most people
+  // intend when they type two words, and it's what Enter defaults to.
+  const split = smartSplitSuggestion(raw);
+  if(split) capped.unshift(split);
   capped.push({kind:"contains", value:raw, label:`contains: ${raw}`, replace:raw, isFallback:true});
   return capped;
 };
@@ -3976,6 +4021,23 @@ const _cardPriceRange = (g) => {
   pick(g.normal); pick(g.foil);
   if(!vals.length) pick(g);
   return vals.length ? {min: Math.min(...vals), max: Math.max(...vals)} : null;
+};
+// Searchable version words for a row or group. These are labels the UI prints
+// on the tile — "Prize Wall" / "Top Prize" for Challenge Promo C1, "Deep
+// Trouble", "Two Swords", "Japanese Exclusive" — that live nowhere in Product
+// Name, so "cinderella prize wall" used to return nothing. Finish words (Foil /
+// Cold Foil / Holofoil) are deliberately NOT included: "foil" would otherwise
+// match half the catalog through the free-text haystack.
+const cardVersionTerms = (row) => {
+  const terms = [];
+  if(row.variant_label) terms.push(row.variant_label);
+  if(typeof SPLIT_BY_PRINTING_SETS_GLOBAL !== "undefined" && SPLIT_BY_PRINTING_SETS_GLOBAL.has(row.Set)){
+    // Group objects carry {normal, foil}; flat catalog rows carry Printing.
+    const isFoil = row.isSplitPrinting ? !!row.foil
+      : (row.Printing || row.tcg_printing || "Normal") !== "Normal";
+    terms.push(isFoil ? "top prize prize foil" : "prize wall");
+  }
+  return terms.length ? terms.join("  ").toLowerCase() : "";
 };
 const matchesCardFilter = (row, f, parsed) => {
   // A card's full ink list. Dual-ink cards carry two colors (e.g.
@@ -4094,8 +4156,9 @@ const matchesCardFilter = (row, f, parsed) => {
           (row["Product Name"]||"").toLowerCase(),
           (row.card_type||"").toLowerCase(),
           (row.text||"").toLowerCase(),
+          cardVersionTerms(row),
           ...cls
-        ].join("  ");
+        ].join("  ");
         // Name-token AND/OR is driven by `nameMatchMode` (set by smartCardFilter's
         // two-pass), falling back to matchMode then "all". The two-pass tries AND
         // first (every token must appear → "elsa ice" = the Elsa-Ice cards, not
@@ -4116,6 +4179,7 @@ const matchesCardFilter = (row, f, parsed) => {
         (row["Product Name"]||"").toLowerCase(),
         (row.card_type||"").toLowerCase(),
         (row.text||"").toLowerCase(),
+        cardVersionTerms(row),
         ...((row.classifications||[]).map(c => (c||"").toLowerCase()))
       ].join("  "));
       for(const phrase of parsed.contains){
@@ -8388,7 +8452,12 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
   const suggestions = useMemo(()=>buildSearchSuggestions(filter.search||"", allIllustrators, cardNameIndex), [filter.search, allIllustrators, cardNameIndex]);
   const applySuggestion = useCallback((sug) => {
     if(!sug) return;
-    if(sug.kind === "contains" || sug.kind === "name"){
+    if(sug.kind === "split"){
+      // "rapunzel promo" → a rarity chip AND a contains chip, in one commit.
+      for(const c of sug.chips) addSmartChip(c);
+      if(sug.name) addSmartChip({kind:"contains", value:sug.name});
+      setFilter(f=>({...f, search:""}));
+    } else if(sug.kind === "contains" || sug.kind === "name"){
       // "contains:" and a picked card name both commit as a name-search chip
       // (a card name is just a precise contains phrase). Both clear the input.
       addSmartChip({kind:"contains", value:sug.value});
@@ -8456,8 +8525,12 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
               const rawLow = (filter.search||"").trim().toLowerCase();
               const DIM_KINDS = new Set(["ink","rarity","set","card_type","classification","keyword","legality"]);
               const exactDim = suggestions.find(s => DIM_KINDS.has(s.kind) && String(s.value).toLowerCase() === rawLow);
+              // …and when the input splits cleanly into name + a dimension the
+              // haystack can't see ("rapunzel promo"), commit that split rather
+              // than a `contains:` phrase that provably matches nothing.
+              const split = suggestions.find(s => s.kind === "split");
               const pick = suggestIdx >= 0 ? suggestions[suggestIdx]
-                : (exactDim || suggestions.find(s => s.kind === "contains") || suggestions[0]);
+                : (exactDim || split || suggestions.find(s => s.kind === "contains") || suggestions[0]);
               if(pick) applySuggestion(pick);
               else { setSuggestOpen(false); e.target.blur(); }
             }
@@ -9824,21 +9897,35 @@ function scanRRF(lists, weights, k){
   return Array.from(score.entries()).sort((a, b) => b[1] - a[1]).map(e => ({ id: e[0], score: e[1] }));
 }
 
-// While the scanner is still in testing, lock it to QA-ONLY: every tap
-// captures a photo + the scanner's guess/reasoning and uploads it for later
-// review. Testers can fix/confirm rows (each fix writes a ground-truth label
-// back onto the uploaded sample — free QA), toggle foil, and use the
-// review-&-save screen's EXPLICIT buttons to add to collection / a new deck —
-// those two buttons are the only write paths (stage → review → save, the
-// post-incident invariant; nothing else can touch a collection).
-// Flip to false to bring back the Stack-scan / Single collection workflow.
+// The scanner's shipping flow while it's in beta: every tap captures a photo +
+// the scanner's guess/reasoning and (unless the user opted out) uploads it for
+// later review. Users fix/confirm rows — each fix writes a ground-truth label
+// back onto the uploaded sample, which is how the accuracy work gets its hard
+// negatives — toggle foil, and use the review-&-save screen's EXPLICIT buttons
+// to add to collection / a new deck. Those two buttons are the only write paths
+// (stage → review → save, the post-incident invariant; nothing else can touch a
+// collection).
+//
+// STAYS TRUE for the public beta (2026-08-04), deliberately. This name is now
+// misleading — it reads like a testing switch, but review-before-save is exactly
+// the right UX for a scanner that still misreads cards, and it's the only flow
+// with field miles on it. Flipping it to false brings back the Stack-scan /
+// Single auto-add workflow, which should not happen until ✓-row precision is
+// HONESTLY measured against the ≥95% bar (photo-verify a random sample of
+// UNREVIEWED shown-✓ rows — the labelled rows can't tell you, see round 11).
 const SCANNER_QA_ONLY = true;
 // Visible build stamp — shown in the scanner title + stamped into every QA
 // upload so a test session is provably on the intended build (two field
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v18";
+const SCANNER_BUILD = "v19";
+// Version of the beta notice the user agreed to (scanner_consents.version,
+// migration 114). Bump ONLY when the notice's substance changes — what we
+// upload, why, how long we keep it, who sees it — which re-prompts everyone.
+// Wording/typo fixes don't count; re-prompting for those trains people to
+// click through the one screen that has to actually be read.
+const SCAN_BETA_VERSION = "2026-08-04";
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -10029,8 +10116,69 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     catch(e){ pendingRef.current.delete(id); resolve(null); }
   });
 
+  // Public-beta consent. The camera is not allowed to start until the user has
+  // accepted the CURRENT notice, because that notice is the only place they're
+  // told the photo leaves the device — showing it after the stream is live would
+  // make it decoration. localStorage is the fast path (and the only path on the
+  // localhost preview); scanner_consents (migration 114) is the durable record
+  // and carries the upload preference across devices.
+  const [consentOk, setConsentOk] = useState(false);
+  const [consentLoaded, setConsentLoaded] = useState(false);
+  const [uploadsOn, setUploadsOn] = useState(true);
+  // uploadSample runs from queue tails and deferred looks that captured an old
+  // closure — it must read the LIVE preference, so the ref is the source of
+  // truth there and the state is only for rendering.
+  const uploadsOnRef = useRef(true);
+  useEffect(() => { uploadsOnRef.current = uploadsOn; }, [uploadsOn]);
+  useEffect(() => {
+    let local = false, localUp = null;
+    try { local = localStorage.getItem("packsink:scanBeta") === SCAN_BETA_VERSION; } catch {}
+    try { const u = localStorage.getItem("packsink:scanUploads"); if(u != null) localUp = (u === "1"); } catch {}
+    if(localUp != null){ setUploadsOn(localUp); uploadsOnRef.current = localUp; }
+    if(local) setConsentOk(true);
+    if(!user || !sbClient){ setConsentLoaded(true); return; }
+    let cancelled = false;
+    sbClient.from("scanner_consents").select("version,uploads_enabled").eq("user_id", user.id).maybeSingle()
+      .then(({data, error}) => {
+        if(cancelled) return;
+        setConsentLoaded(true);
+        // A failed read (offline, pre-migration) must not silently re-prompt a
+        // user who already accepted — fall back to what localStorage said.
+        if(error) return;
+        const ok = !!data && data.version === SCAN_BETA_VERSION;
+        setConsentOk(ok);
+        try { ok ? localStorage.setItem("packsink:scanBeta", SCAN_BETA_VERSION)
+                 : localStorage.removeItem("packsink:scanBeta"); } catch {}
+        if(data && typeof data.uploads_enabled === "boolean"){
+          setUploadsOn(data.uploads_enabled);
+          uploadsOnRef.current = data.uploads_enabled;
+          try { localStorage.setItem("packsink:scanUploads", data.uploads_enabled ? "1" : "0"); } catch {}
+        }
+      }, () => { if(!cancelled) setConsentLoaded(true); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const writeConsent = (patch) => {
+    if(!user || !sbClient) return;
+    sbClient.from("scanner_consents")
+      .upsert({ user_id: user.id, version: SCAN_BETA_VERSION, ...patch }, { onConflict: "user_id" })
+      .then(()=>{}, ()=>{});
+  };
+  const acceptConsent = () => {
+    try { localStorage.setItem("packsink:scanBeta", SCAN_BETA_VERSION); } catch {}
+    setConsentOk(true);
+    writeConsent({ accepted_at: new Date().toISOString(), uploads_enabled: uploadsOnRef.current });
+  };
+  const setUploadPref = (on) => {
+    setUploadsOn(on);
+    uploadsOnRef.current = on;
+    try { localStorage.setItem("packsink:scanUploads", on ? "1" : "0"); } catch {}
+    writeConsent({ uploads_enabled: on });
+  };
+
   // mount: index + camera + worker
   useEffect(() => {
+    if(!consentOk) return;
     let cancelled = false;
     try {
       const w = new Worker(SCAN_WORKER_URL);
@@ -10075,7 +10223,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       ocrWorkerRef.current = ow;
     } catch(e){ /* no OCR worker → colour-only still works */ }
     // dev/e2e escape hatch: lets a devtools session (or the headless e2e) read
-    // the live trace + ambient state without auth. Modal is admin-gated anyway.
+    // the live trace + ambient state without auth. Public since the beta opened,
+    // which is fine — it only ever holds this browser's own in-flight scan state.
     try { window.__scanQA = { trace: traceRef.current, amb: ambientRef.current, opened: openedAtRef.current }; } catch(_e){}
     (async () => {
       if(!window.CardScanner){ setPhase("noindex"); setErr("scanner module not loaded"); return; }
@@ -10133,7 +10282,9 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       // it, but every snap already embedded its own trace.
       try {
         const T = traceRef.current, u = userRef.current;
-        if(u && sbClient && T.ev.length > 6){
+        // Opted out of contributing data → no session telemetry either. It
+        // carries no photo, but "I turned that off" has to mean all of it.
+        if(u && sbClient && uploadsOnRef.current && T.ev.length > 6){
           const ms = T.ocrMs.slice().sort((a, b) => a - b);
           const q = (p) => ms.length ? ms[Math.min(ms.length - 1, Math.floor(p * ms.length))] : null;
           sbClient.from("scan_samples").insert({
@@ -10145,7 +10296,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         }
       } catch(_e){}
     };
-  }, []);
+  }, [consentOk]);
 
   // post the rectified card to the OCR worker (promise-by-id). Transfers the pixel
   // buffer so there's no copy; resolves null if the worker isn't up.
@@ -11326,6 +11477,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const labelSample = (row, patch) => {
     try {
       if(!sbClient || !user) return;
+      if(!uploadsOnRef.current) return;   // opted out → there's no sample to label
       if(row.sampleId == null){
         const P = pendingLabelRef.current;
         P.set(row.id, { ...(P.get(row.id) || {}), ...patch });
@@ -12074,6 +12226,14 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const uploadSample = async (cardId, predictedId, corrected, printing, blob, debug, rawBlob, stripBlob) => {
     try {
       if(!user || !blob || !sbClient) return;
+      // Opt-out (scanner_consents.uploads_enabled): the scanner still works
+      // fully — identification is local — we just never send the photo. Checked
+      // via the ref because callers here are queue tails and deferred looks
+      // holding closures from before the toggle was flipped. Returning null
+      // leaves row.sampleId null; labelSample bails on the same flag so
+      // corrections don't pile up in pendingLabelRef waiting for an id that is
+      // never coming. Storage + scan_samples have no other writer here.
+      if(!uploadsOnRef.current) return null;
       const uid = (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : (Date.now() + "-" + Math.random().toString(36).slice(2));
       const path = user.id + "/" + uid + ".jpg";
       const up = await sbClient.storage.from("scan-samples").upload(path, blob, { contentType: "image/jpeg", upsert: false });
@@ -12394,6 +12554,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("N")}>All Non-Foil</button>
       <button class="scanner-qa-flipall" onClick=${() => qaFlipAll("F")}>All Foil</button>
     </div>` : null}
+    <label class="scanner-qa-privacy">
+      <input type="checkbox" checked=${uploadsOn} onChange=${e => setUploadPref(e.target.checked)}/>
+      <span>Upload my scan photos to help improve the scanner${uploadsOn ? "" : " — off, your scans stay on this device"}</span>
+    </label>
     ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
     ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
     <div class="scanner-session-list scanner-qa-review-list">
@@ -12418,16 +12582,57 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   // scanner "auto-snapping" on its own). Signed-out taps still route to sign-in.
   const stageTap = SCANNER_QA_ONLY ? (user ? null : (onSignIn || null))
     : ((mode === "ambient" && !result && user) ? tapCommit : null);
+
+  // Beta notice — the gate, not a banner. Everything the user needs to decide
+  // is on this one screen; the privacy page is the long form, not the disclosure.
+  const consentPanel = html`<div class="scanner-consent">
+    <h3 class="scanner-consent-title title-font">Card scanner <span class="scanner-consent-beta">beta</span></h3>
+    <p class="scanner-consent-lead">
+      Identification happens <b>entirely on your phone</b> — your camera is matched
+      against a card index your browser already downloaded. No photo is sent anywhere
+      to be read.
+    </p>
+    <p class="scanner-consent-lead">
+      While the scanner is in beta, we also <b>upload a photo of each scan</b> so we
+      can see where it gets cards wrong and fix them.
+    </p>
+    <ul class="scanner-consent-list">
+      <li>It's the <b>whole camera frame</b>, not a crop of the card — whatever else is in shot goes with it.</li>
+      <li>Stored privately against your account. Nobody but us can open it.</li>
+      <li>Used only to develop and improve the scanner. Never sold, shared, or published.</li>
+      <li>No face detection or recognition is ever run on it, and no location data is attached.</li>
+      <li>Deleted after 12 months — or sooner, any time you ask.</li>
+    </ul>
+    <label class="scanner-consent-toggle">
+      <input type="checkbox" checked=${uploadsOn} onChange=${e => setUploadPref(e.target.checked)}/>
+      <span>Upload my scans to help improve the scanner.
+        <b>You can switch this off and still use the scanner</b> — it identifies cards exactly the same either way.</span>
+    </label>
+    <p class="scanner-consent-note">
+      It's a beta: it <i>will</i> misread cards, so check the list before you save anything.
+      Details on our <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.
+    </p>
+    <div class="scanner-consent-actions">
+      <button class="scanner-btn" onClick=${onClose}>Not now</button>
+      ${user
+        ? html`<button class="scanner-btn primary" onClick=${acceptConsent}>Got it — start scanning</button>`
+        : html`<button class="scanner-btn primary" onClick=${() => onSignIn && onSignIn()}>Sign in to scan</button>`}
+    </div>
+  </div>`;
+  const gated = !consentOk;
+
   return html`<div class="scanner-overlay" role="dialog" aria-label="Card scanner">
     <div class="scanner-head">
-      <span class="scanner-title">${SCANNER_QA_ONLY ? "Scan a card · QA test · " + SCANNER_BUILD : "Scan a card"}</span>
+      <span class="scanner-title">${SCANNER_QA_ONLY ? "Scan a card · Beta · " + SCANNER_BUILD : "Scan a card"}</span>
       ${phase === "scanning" && !SCANNER_QA_ONLY ? html`<div class="scanner-mode-seg" role="tablist">
         <button class=${"scanner-mode-btn" + (mode === "ambient" ? " active" : "")} onClick=${() => switchMode("ambient")}>Stack scan</button>
         <button class=${"scanner-mode-btn" + (mode === "single" ? " active" : "")} onClick=${() => switchMode("single")}>Single</button>
       </div>` : null}
       <button class="scanner-close" onClick=${onClose} aria-label="Close scanner">×</button>
     </div>
-    <div class="scanner-stage" ref=${stageRef} onClick=${stageTap} style=${qaReviewing ? { display: "none" } : null}>
+    ${gated ? (consentLoaded ? consentPanel
+      : html`<div class="scanner-consent scanner-consent-wait">Checking your settings…</div>`) : null}
+    ${gated ? null : html`<div class="scanner-stage" ref=${stageRef} onClick=${stageTap} style=${qaReviewing ? { display: "none" } : null}>
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
@@ -12436,8 +12641,8 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
       ${phase === "starting" ? html`<div class="scanner-starting">Starting camera…</div>` : null}
-    </div>
-    ${qaReviewing ? qaReviewPanel : below}
+    </div>`}
+    ${gated ? null : (qaReviewing ? qaReviewPanel : below)}
   </div>`;
 }
 
@@ -21591,6 +21796,13 @@ function FAQView({onStartTour, onStartSectionTour, user}){
     <p><strong>Phantom-spike smoothing.</strong> TCGplayer's <strong>Low</strong> is the lowest active listing, not the lowest sale — sometimes a single mispriced listing pins Low at $200 or $2,000 for a few days while nothing actually trades at that number. Without intervention, that single bad listing would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
 
+    <h2>Card scanner (beta)</h2>
+    <p>The 📷 button in the top bar points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. Sign-in required.</p>
+    <p><strong>It runs on your phone.</strong> Your browser downloads a card index once, and the matching happens locally — no photo is sent anywhere to be identified, and the scanner works offline.</p>
+    <p><strong>It's a beta, so it will get cards wrong.</strong> Rows it isn't sure about are marked ≈ or ?, and every row has a ✎ button to correct it. Check the list before you save — nothing touches your collection until you press the button.</p>
+    <p><strong>About the photos.</strong> While it's in beta we upload a photo of each scan so we can find the cards it misreads and fix them. It's the whole camera frame, not a crop; it's stored privately against your account, never sold or shared, never analyzed for faces, and deleted after 12 months. <strong>You can switch the upload off</strong> — on the notice the first time you open the scanner, or from the scanner's review screen — and it identifies cards exactly the same either way. Full details are on the <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.</p>
+    <p>Tips for a good read: one card, flat, plain background, decent light, and fill the frame. Sleeves and top-loaders are fine. Japanese and other non-English cards aren't supported yet — it will tell you rather than guess.</p>
+
     <h2>Building decks</h2>
     <p>Open the <strong>Decks</strong> tab and hit <em>New deck</em>. Add cards from the side panel (works with smart search), and the editor automatically computes <strong>ink legality</strong>, <strong>card count</strong>, <strong>format</strong> (Core Constructed vs Infinity), and the cost-curve / colors / inkable splits.</p>
     <p>Each deck has a <strong>visibility</strong> setting:</p>
@@ -22446,6 +22658,55 @@ function screenerSoldAge(dateStr){
   return { days, short };
 }
 
+// Sold-date filter for the graded screener. graded_sales_rollup.last_sold_date
+// is a plain YYYY-MM-DD, so string compares are already chronological — no
+// Date.parse, no timezone math, no off-by-one at the day boundary. "any" is the
+// off switch; every other mode requires a known sale date, so rows with no
+// recorded sale drop out rather than silently passing.
+const SOLD_FILTER_OFF = {mode: "any", days: "7", from: "", to: ""};
+// The modes the Custom popover owns; the rest are one-tap chips.
+const SOLD_CUSTOM_MODES = new Set(["on", "before", "after", "between"]);
+
+function screenerTodayISO(){
+  const n = new Date();
+  return new Date(n.getTime() - n.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+}
+
+function soldFilterPasses(dateStr, f){
+  if(!f || !f.mode || f.mode === "any") return true;
+  // An incomplete range is inert, not exclusive. Clearing the date input should
+  // fall back to "no filter", not blank the table with nothing explaining why.
+  if((f.mode === "on" || f.mode === "before" || f.mode === "after") && !f.from) return true;
+  if(f.mode === "between" && !f.from && !f.to) return true;
+  if(f.mode === "days" && !(parseInt(f.days, 10) > 0)) return true;
+  const d = dateStr ? String(dateStr).slice(0, 10) : "";
+  if(!d) return false;
+  if(f.mode === "today")  return d === screenerTodayISO();
+  if(f.mode === "days")   { const a = screenerSoldAge(d); return a != null && a.days <= parseInt(f.days, 10); }
+  if(f.mode === "on")     return d === f.from;
+  if(f.mode === "before") return d <  f.from;
+  if(f.mode === "after")  return d >  f.from;
+  if(f.mode === "between"){
+    if(f.from && d < f.from) return false;
+    if(f.to   && d > f.to)   return false;
+    return true;
+  }
+  return true;
+}
+
+// Short label so an active custom range is never invisible state.
+function soldFilterLabel(f){
+  if(!f || f.mode === "any") return "";
+  const md = (s) => s ? s.slice(5).replace("-", "/") : "…";
+  if(f.mode === "today")   return "today";
+  if(f.mode === "days")    return "≤" + f.days + "d";
+  if(f.mode === "on")      return "on " + md(f.from);
+  if(f.mode === "before")  return "before " + md(f.from);
+  if(f.mode === "after")   return "after " + md(f.from);
+  if(f.mode === "between") return md(f.from) + "–" + md(f.to);
+  return "";
+}
+
 function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView}){
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
@@ -22453,6 +22714,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // moved most today regardless of direction.
   const [sortKey, setSortKey] = useState("abs_pct_1d");
   const [sortDesc, setSortDesc] = useState(true);
+  // Optional tiebreaker applied within equal primary values — shift-click a
+  // header to set it. The motivating case is graded: sort by Sold (newest
+  // first), then by price, to read "most expensive sold today, then yesterday…".
+  // null = no tiebreaker (original row order wins, as before).
+  const [sortKey2, setSortKey2] = useState(null);
+  const [sortDesc2, setSortDesc2] = useState(true);
   const [priceMode, setPriceMode] = useState("low");
   // Multi-select set names (was a single-value <select> "All sets" dropdown).
   const [filterSet, setFilterSet] = useState(() => new Set());
@@ -22572,26 +22839,40 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:filterGraders", JSON.stringify(Array.from(filterGraders))); } catch{} }, [filterGraders]);
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:filterGrades",  JSON.stringify(Array.from(filterGrades)));  } catch{} }, [filterGrades]);
-  // Graded "last sold within N days" recency filter ("" = any). Applies only in
-  // the per-sale graded view (premiumGraded — now open to all via the graded ToS,
-  // no longer an allowlist); last_sold_date lives solely on graded_sales_rollup.
-  const [soldWithin, setSoldWithin] = useState(() => {
-    try { return localStorage.getItem("packsink:screener:soldWithin") || ""; } catch { return ""; }
+  // Graded sold-date filter. Quick chips write {mode:"today"|"days"}; the Custom
+  // popover writes on / before / after / between. Applies only in the per-sale
+  // graded view (premiumGraded — now open to all via the graded ToS, no longer an
+  // allowlist); last_sold_date lives solely on graded_sales_rollup. The legacy
+  // packsink:screener:soldWithin (a bare day count) migrates once on first read.
+  const [soldFilter, setSoldFilter] = useState(() => {
+    try {
+      const rawPref = localStorage.getItem("packsink:screener:soldFilter:v1");
+      if(rawPref) return {...SOLD_FILTER_OFF, ...JSON.parse(rawPref)};
+      const legacy = localStorage.getItem("packsink:screener:soldWithin");
+      if(legacy) return {...SOLD_FILTER_OFF, mode: "days", days: legacy};
+    } catch {}
+    return SOLD_FILTER_OFF;
   });
-  useEffect(()=>{ try { localStorage.setItem("packsink:screener:soldWithin", soldWithin); } catch{} }, [soldWithin]);
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:soldFilter:v1", JSON.stringify(soldFilter)); } catch{} }, [soldFilter]);
   const [graderOpen, setGraderOpen] = useState(false);
   const [gradeOpen, setGradeOpen] = useState(false);
+  const [soldMenuOpen, setSoldMenuOpen] = useState(false);
+  const [sortMenuOpen, setSortMenuOpen] = useState(false);
   const graderRef = useRef(null);
   const gradeRef = useRef(null);
+  const soldRef = useRef(null);
+  const sortRef = useRef(null);
   useEffect(() => {
-    if(!graderOpen && !gradeOpen) return;
+    if(!graderOpen && !gradeOpen && !soldMenuOpen && !sortMenuOpen) return;
     const onDoc = (e) => {
       if(graderOpen && graderRef.current && !graderRef.current.contains(e.target)) setGraderOpen(false);
       if(gradeOpen  && gradeRef.current  && !gradeRef.current.contains(e.target))  setGradeOpen(false);
+      if(soldMenuOpen && soldRef.current && !soldRef.current.contains(e.target))   setSoldMenuOpen(false);
+      if(sortMenuOpen && sortRef.current && !sortRef.current.contains(e.target))   setSortMenuOpen(false);
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
-  }, [graderOpen, gradeOpen]);
+  }, [graderOpen, gradeOpen, soldMenuOpen, sortMenuOpen]);
   // Graded preset → choose a sane default sort each time you switch presets.
   // Climbers / Droppers / Movers ride the moverWin window picker so the user
   // can pick 1W / 1M / 3M / 6M / 1Y — same UX pattern as raw's Gainers/Losers.
@@ -22627,9 +22908,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       // Going back to raw: clear graded-specific filters.
       setFilterGraders(new Set());
       setFilterGrades(new Set());
-      setSoldWithin("");
+      setSoldFilter(SOLD_FILTER_OFF);
       setMinPrice("5");
       setFilterRarities(new Set());
+      // Sold / Sales are graded-only columns; carrying them out of graded mode
+      // leaves the sort chip advertising a column raw mode doesn't render, and
+      // sorting on an all-null key. Fall back to raw's default.
+      const gradedOnlySort = (k) => k === "last_sold_date" || k === "sale_count";
+      if(gradedOnlySort(sortKey)){ setSortKey("abs_pct_1d"); setSortDesc(true); }
+      if(gradedOnlySort(sortKey2)) setSortKey2(null);
     }
   }, [showGraded]);
   // Collection-status filter (audit #3) — "all" | "owned" | "missing".
@@ -22748,7 +23035,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       collFilter, sigFilter: Array.from(sigFilter),
       minPrice, maxPrice, minPct, maxPct, pctWin,
       showAllWins, density, showGraded,
-      sortKey, sortDesc,
+      sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
       showFoil, showNonFoil,
       filterCosts: Array.from(filterCosts),
       filterCardTypes: Array.from(filterCardTypes),
@@ -22788,6 +23075,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setShowGraded(!!v.showGraded);
     setSortKey(v.sortKey || "abs_pct_1d");
     setSortDesc(v.sortDesc !== false);
+    setSortKey2(v.sortKey2 || null);
+    setSortDesc2(v.sortDesc2 !== false);
+    setSoldFilter(v.soldFilter ? {...SOLD_FILTER_OFF, ...v.soldFilter}
+      : (v.soldWithin ? {...SOLD_FILTER_OFF, mode:"days", days:v.soldWithin} : SOLD_FILTER_OFF));
     setShowFoil(v.showFoil !== false);
     setShowNonFoil(v.showNonFoil !== false);
     setFilterCosts(new Set(v.filterCosts || []));
@@ -23380,13 +23671,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         // Grader / grade filters (multi-select).
         if(filterGraders.size > 0 && !filterGraders.has(r.grader)) return false;
         if(filterGrades.size  > 0 && !filterGrades.has(r.grade))   return false;
-        // Recency filter — per-sale graded view only (premiumGraded; ToS-gated but
-        // open to all now), where last_sold_date lives on the rollup rows.
-        if(premiumGraded && soldWithin){
-          const cutoff = Date.now() - (parseInt(soldWithin, 10) * 86400000);
-          const d = r.last_sold_date ? Date.parse(r.last_sold_date + "T00:00:00") : NaN;
-          if(isNaN(d) || d < cutoff) return false;
-        }
+        // Sold-date filter — per-sale graded view only (premiumGraded; ToS-gated
+        // but open to all now), where last_sold_date lives on the rollup rows.
+        if(premiumGraded && !soldFilterPasses(r.last_sold_date, soldFilter)) return false;
         if(preset === "top" && !(r.low_today != null && r.low_today >= 100)) return false;
         // Δ%-window presets — work for both legacy and premium graded (the rollup
         // now carries windowed pct, migration 75). Graded has no 1D, so a 1D
@@ -23410,6 +23697,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // instead of overriding here, so subsequent column clicks work.
     const sk = sortKey;
     const sd = sortDesc;
+    const sk2 = sortKey2;
+    const sd2 = sortDesc2;
     // When sorting by set in graded mode, use the set's position in
     // MAINLINE_RELEASE_ORDER so "newest first" naturally falls out. Sets
     // not in mainline (promos) sink to the bottom.
@@ -23441,23 +23730,83 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       if(k === "price")  return priceMode === "market" ? r.market_today : r.low_today;
       return r[k];
     };
-    out.sort((a, b) => {
-      const av = getVal(a, sk);
-      const bv = getVal(b, sk);
-      if(sk === "name") return sd ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv));
+    const cmp = (a, b, k, desc) => {
+      const av = getVal(a, k);
+      const bv = getVal(b, k);
+      if(k === "name") return desc ? String(bv).localeCompare(String(av)) : String(av).localeCompare(String(bv));
       if(av == null && bv == null) return 0;
+      // Nulls always sink, in both directions — a missing price shouldn't win
+      // the top of an ascending sort.
       if(av == null) return 1;
       if(bv == null) return -1;
-      return sd ? bv - av : av - bv;
+      return desc ? bv - av : av - bv;
+    };
+    out.sort((a, b) => {
+      const c = cmp(a, b, sk, sd);
+      if(c !== 0) return c;
+      if(sk2 && sk2 !== sk) return cmp(a, b, sk2, sd2);
+      return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldWithin, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
 
-  const onSort = (k) => {
+  // Plain click sets the primary sort; shift-click sets the tiebreaker applied
+  // within equal primary values. A column can't be both, so promoting the
+  // current secondary to primary clears the secondary rather than leaving a
+  // no-op duplicate in the chain.
+  const onSort = (k, e) => {
+    if(e && e.shiftKey){
+      if(k === sortKey) return;
+      if(sortKey2 === k) setSortDesc2((d) => !d);
+      else { setSortKey2(k); setSortDesc2(true); }
+      return;
+    }
     if(sortKey === k) setSortDesc((d) => !d);
-    else { setSortKey(k); setSortDesc(true); }
+    else {
+      setSortKey(k);
+      setSortDesc(true);
+      if(sortKey2 === k) setSortKey2(null);
+    }
   };
-  const arrow = (k) => sortKey === k ? (sortDesc ? " ▼" : " ▲") : "";
+  const clearSecondarySort = () => setSortKey2(null);
+  // Columns worth breaking a tie on. Plain array (not useMemo) so it can't
+  // affect hook order relative to the loading-state early return.
+  const secondarySortOptions = premiumGraded
+    ? [["last_sold_date","Sold"], ["low","Last Sold"], ["market","Avg Last 5"],
+       ["sale_count","Sales"], ["name","Name"], ["set_rank","Set"]]
+    : [["low","Low"], ["market","NM Market"], ["name","Name"], ["set_rank","Set"]];
+  // Opening Custom while a chip mode is active seeds it to "on <today>" so the
+  // popover means something the moment it appears instead of sitting inert.
+  const toggleSoldMenu = () => {
+    if(!soldMenuOpen && !SOLD_CUSTOM_MODES.has(soldFilter.mode)){
+      const t = screenerTodayISO();
+      setSoldFilter(f => ({...f, mode:"on", from: f.from || t, to: f.to || t}));
+    }
+    setSoldMenuOpen(o => !o);
+  };
+  // Primary shows a bare arrow; the tiebreaker shows a dimmed "2" so a two-key
+  // sort is readable straight off the header row.
+  const arrow = (k) => {
+    if(sortKey === k) return sortDesc ? " ▼" : " ▲";
+    if(sortKey2 === k) return html`<span class="price-db-sort2">${sortDesc2 ? " ▼" : " ▲"}2</span>`;
+    return "";
+  };
+  // Human name for a sort key, for the "Sort:" chip. The two price columns are
+  // relabelled in graded mode, so read the same labels the headers use.
+  const sortKeyLabel = (k) => {
+    if(!k) return "";
+    if(k === "low")    return premiumGraded ? "Last Sold" : "Low";
+    if(k === "market") return premiumGraded ? "Avg Last 5" : "NM Market";
+    const fixed = {name:"Name", sale_count:"Sales", last_sold_date:"Sold",
+      set_rank:"Set", raw_low:"Raw Low", raw_market:"Raw Mkt", price:"Price"};
+    if(fixed[k]) return fixed[k];
+    const m = /^(?:abs_pct_|mkt_pct_|pct_)(.+)$/.exec(k);
+    if(m){
+      const wins = {"1d":"1D","7d":"1W","30d":"1M","90d":"3M","180d":"6M","365d":"1Y","1095d":"3Y","rel":"Rel"};
+      return (wins[m[1]] || m[1]) + " Δ%";
+    }
+    return k;
+  };
 
   // Order rarities from most rare → least rare (Iconic at top, Common at
   // bottom). CARDS_RARITIES is common → rare; reverse for the screener.
@@ -23513,7 +23862,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       setFilterRarities(preset === "all" ? new Set(["Enchanted"]) : new Set());
       setFilterGraders(new Set());
       setFilterGrades(new Set());
-      setSoldWithin("");
+      setSoldFilter(SOLD_FILTER_OFF);
       setMinPrice("");
       setMaxPrice("");
     } else {
@@ -23560,8 +23909,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // CSV export of the current filtered view (audit #5). Power-user feature
   // for slicing further in a spreadsheet. Honors current filters + sort.
   const exportCsv = () => {
+    // Graded rows carry grader/grade/sale metadata the raw columns can't show;
+    // without them an export of a sold-date-filtered view loses the very field
+    // it was filtered on.
     const headers = ["Name", "Set", "Rarity", "Ink", "Printing", "Collector #",
-      "Low", "NM Market", "1D Δ%", "1W Δ%", "1M Δ%", "3M Δ%", "6M Δ%", "1Y Δ%",
+      ...(premiumGraded ? ["Grader", "Grade", "Last Sold Date", "Sales"] : []),
+      premiumGraded ? "Last Sold" : "Low",
+      premiumGraded ? "Avg Last 5" : "NM Market",
+      "1D Δ%", "1W Δ%", "1M Δ%", "3M Δ%", "6M Δ%", "1Y Δ%",
       "TCGPlayer URL"];
     const esc = (v) => {
       const s = v == null ? "" : String(v);
@@ -23574,6 +23929,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       lines.push([
         fullName, setName, rarityLabel(r.rarity), r.ink || "",
         r.printing || "", r.collector_number || "",
+        ...(premiumGraded ? [r.grader || "", r.grade || "", r.last_sold_date || "",
+          r.sale_count != null ? r.sale_count : ""] : []),
         r.low_today, r.market_today,
         r.pct_1d, r.pct_7d, r.pct_30d, r.pct_90d, r.pct_180d, r.pct_365d,
         tcgUrl(r.tcgplayer_product_id, r.printing) || "",
@@ -23631,7 +23988,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const colModeKey = premiumGraded ? "pgraded" : showGraded ? "graded" : showSealed ? "sealed" : "raw";
   const colDefs = (() => {
     const setCol = {key:"set", label:"Set",
-      th:()=>html`<th key="set" class="th-set">Set</th>`,
+      th:()=>html`<th key="set" class="sortable th-set" title="Sort by set release order (newest first) — shift-click to use as a tiebreaker" onClick=${(e)=>onSort("set_rank", e)}>Set${arrow("set_rank")}</th>`,
       td:(r)=>html`<td key="set" class="td-set" title=${setNameById[r.set_id]||""}>${setNameById[r.set_id]||"—"}</td>`};
     const rarLbl = showSealed ? "Type" : "Rarity";
     const rarityCol = {key:"rarity", label:rarLbl,
@@ -23641,16 +23998,16 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ? html`<span class="price-db-sealed-type">${r.display_type || "Sealed"}</span>`
           : html`<${RarityTag} rarity=${rarityLabel(r.rarity)} hideText=${true}/>`}</td>`};
     const money = (key,label,sortK,field,title,muted,defaultHidden)=>({key,label,defaultHidden,
-      th:()=>html`<th key=${key} class="sortable th-num" title=${title} onClick=${()=>onSort(sortK)}>${label}${arrow(sortK)}</th>`,
+      th:()=>html`<th key=${key} class="sortable th-num" title=${title} onClick=${(e)=>onSort(sortK, e)}>${label}${arrow(sortK)}</th>`,
       td:(r)=>html`<td key=${key} class=${"td-num"+(muted?" muted":"")}>${fmtMoney(r[field])}</td>`});
     const salesCol = {key:"sales", label:"Sales", defaultHidden:true,
-      th:()=>html`<th key="sales" class="sortable th-num" onClick=${()=>onSort("sale_count")}>Sales${arrow("sale_count")}</th>`,
+      th:()=>html`<th key="sales" class="sortable th-num" title="Number of recorded eBay sales — shift-click to use as a tiebreaker" onClick=${(e)=>onSort("sale_count", e)}>Sales${arrow("sale_count")}</th>`,
       td:(r)=>html`<td key="sales" class="td-num" title=${r.last_sold_date?"Last sold "+r.last_sold_date:""}>${r.sale_count!=null?r.sale_count:"—"}</td>`};
     // How recently this grader/grade last sold on eBay. Value + sort key already
     // live on the row (last_sold_date, from graded_sales_rollup). Recent sales
     // (<=14d) render in accent so fresh comps pop; >90d dims to muted.
     const soldCol = {key:"sold", label:"Sold",
-      th:()=>html`<th key="sold" class="sortable th-num" title="How recently this grader/grade last sold on eBay — click to sort by recency" onClick=${()=>onSort("last_sold_date")}>Sold${arrow("last_sold_date")}</th>`,
+      th:()=>html`<th key="sold" class="sortable th-num" title="How recently this grader/grade last sold on eBay — click to sort by recency, shift-click another column to break ties within a day" onClick=${(e)=>onSort("last_sold_date", e)}>Sold${arrow("last_sold_date")}</th>`,
       td:(r)=>{ const a=screenerSoldAge(r.last_sold_date);
         return html`<td key="sold" class=${"td-num"+(a&&a.days>90?" muted":"")}
           title=${r.last_sold_date||""}
@@ -23672,7 +24029,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       key:"d_"+lk, label: gearLbl || (lbl+" Δ%"), defaultHidden: !DEFAULT_WIN.has(lk),
       th:()=>{ const k=priceMode==="market"?mk:lk; return html`<th key=${"d_"+lk}
           class=${"sortable th-num"+(isSortCol(k)?" sort-active":"")}
-          title=${tip || ("Δ% over "+lbl+(premiumGraded?"":" ("+(priceMode==="market"?"NM Market":"Low")+")"))} onClick=${()=>onSort(k)}>${lbl}${arrow(k)}</th>`; },
+          title=${tip || ("Δ% over "+lbl+(premiumGraded?"":" ("+(priceMode==="market"?"NM Market":"Low")+")"))} onClick=${(e)=>onSort(k, e)}>${lbl}${arrow(k)}</th>`; },
       td:(r)=>{ const k=priceMode==="market"?mk:lk; const v=priceMode==="market"?r[mk]:r[lk];
         return html`<td key=${"d_"+lk} class=${"td-num "+pctCls(v)+(isSortCol(k)?" sort-active":"")}>${fmtPct(v)}</td>`; },
     }));
@@ -23881,11 +24238,72 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </div>`}
       ${premiumGraded && html`<div class="price-db-presets" style=${{display:"inline-flex",gap:4,alignItems:"center"}}>
         <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginLeft:4}}>Sold</span>
-        ${[["","Any"],["7","≤7d"],["30","≤30d"],["90","≤90d"]].map(([v,l])=>html`<button key=${v||"any"}
-          class=${"price-db-preset" + (soldWithin===v ? " active" : "")}
-          title=${v ? "Only cards with a recorded eBay sale in the last "+v+" days" : "No recency filter"}
-          onClick=${()=>setSoldWithin(v)}>${l}</button>`)}
+        ${[["any","","Any","No sold-date filter"],
+           ["today","","Today","Only cards whose most recent recorded sale happened today"],
+           ["days","7","≤7d","Only cards with a recorded eBay sale in the last 7 days"],
+           ["days","30","≤30d","Only cards with a recorded eBay sale in the last 30 days"],
+           ["days","90","≤90d","Only cards with a recorded eBay sale in the last 90 days"]
+          ].map(([mode,days,label,tip])=>{
+          const active = soldFilter.mode === mode && (mode !== "days" || String(soldFilter.days) === days);
+          return html`<button key=${mode+days}
+            class=${"price-db-preset" + (active ? " active" : "")} title=${tip}
+            onClick=${()=>setSoldFilter(mode === "days"
+              ? {...SOLD_FILTER_OFF, mode:"days", days}
+              : {...SOLD_FILTER_OFF, mode})}>${label}</button>`;
+        })}
+        <div ref=${soldRef} style=${{position:"relative",display:"inline-flex"}}>
+          <button class=${"price-db-preset" + (SOLD_CUSTOM_MODES.has(soldFilter.mode) ? " active" : "")}
+            title="Filter by an exact date, or a date range (on / before / after / between)"
+            onClick=${toggleSoldMenu}>
+            ${SOLD_CUSTOM_MODES.has(soldFilter.mode) ? soldFilterLabel(soldFilter) : "Custom"} ▾
+          </button>
+          ${soldMenuOpen && html`<div class="price-db-multimenu price-db-soldmenu">
+            <label class="price-db-soldrow">
+              <span>Sold</span>
+              <select value=${SOLD_CUSTOM_MODES.has(soldFilter.mode) ? soldFilter.mode : "on"}
+                onChange=${e=>setSoldFilter(f=>({...f, mode:e.target.value}))}>
+                <option value="on">on</option>
+                <option value="before">before</option>
+                <option value="after">after</option>
+                <option value="between">between</option>
+              </select>
+            </label>
+            <label class="price-db-soldrow">
+              <span>${soldFilter.mode === "between" ? "From" : "Date"}</span>
+              <input type="date" value=${soldFilter.from || ""} max=${screenerTodayISO()}
+                onChange=${e=>setSoldFilter(f=>({...f, from:e.target.value}))}/>
+            </label>
+            ${soldFilter.mode === "between" && html`<label class="price-db-soldrow">
+              <span>To</span>
+              <input type="date" value=${soldFilter.to || ""} max=${screenerTodayISO()}
+                onChange=${e=>setSoldFilter(f=>({...f, to:e.target.value}))}/>
+            </label>`}
+            <div class="price-db-soldhint muted">Matches each row's most recent recorded eBay sale. Rows with no recorded sale are hidden.</div>
+            <button class="price-db-multiclear"
+              onClick=${()=>{ setSoldFilter(SOLD_FILTER_OFF); setSoldMenuOpen(false); }}>Clear date filter</button>
+          </div>`}
+        </div>
       </div>`}
+      <div ref=${sortRef} class="price-db-sortchip-wrap">
+        <button class="price-db-sortchip" onClick=${()=>setSortMenuOpen(o=>!o)}
+          title="Sorting. Pick a tiebreaker to break ties within the primary sort — or shift-click any column header.">
+          <span class="muted">Sort</span>
+          <b>${sortKeyLabel(sortKey)}${sortDesc ? " ▼" : " ▲"}</b>
+          ${sortKey2 && sortKey2 !== sortKey
+            ? html`<span class="muted">then</span><b>${sortKeyLabel(sortKey2)}${sortDesc2 ? " ▼" : " ▲"}</b>`
+            : null} ▾
+        </button>
+        ${sortMenuOpen && html`<div class="price-db-multimenu price-db-sortmenu">
+          <div class="price-db-soldhint muted">Then sort by (breaks ties within ${sortKeyLabel(sortKey)}):</div>
+          ${secondarySortOptions.filter(([k])=>k !== sortKey).map(([k,label])=>html`<button key=${k}
+            class=${"price-db-multiitem" + (sortKey2 === k ? " active" : "")}
+            onClick=${()=>{ if(sortKey2 === k) setSortDesc2(d=>!d); else { setSortKey2(k); setSortDesc2(true); } }}>
+            ${label}${sortKey2 === k ? (sortDesc2 ? " ▼" : " ▲") : ""}
+          </button>`)}
+          ${sortKey2 && html`<button class="price-db-multiclear"
+            onClick=${()=>{ clearSecondarySort(); setSortMenuOpen(false); }}>Clear tiebreaker</button>`}
+        </div>`}
+      </div>
       <button class="price-db-advbtn" onClick=${clearUserFilters}
         title="Clear filters you've added on top of the active preset. Preset-baked defaults stay (e.g. All in graded mode keeps the Enchanted default).">
         ✕ Clear filters
@@ -24096,7 +24514,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <thead><tr>
           <th class="th-check"></th>
           <th></th>
-          <th class="sortable th-name" onClick=${() => onSort("name")}>Name${arrow("name")}</th>
+          <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
           ${orderedCols.map(c => c.th())}
         </tr></thead>
         <tbody>
@@ -25567,18 +25985,54 @@ const COLLECTION_RANGES = [
 
 // Eye / eye-off glyphs (Lucide-style line icons) used by the collection
 // panel's "hide my value" privacy toggle.
+// Tiny gear stamped on the top-right of the top-bar avatar so the profile
+// button reads as "account AND settings", not just "me".
+const GEAR_BADGE_ICON = html`<svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg>`;
 const EYE_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>`;
 const EYE_OFF_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.88 9.88a3 3 0 1 0 4.24 4.24"/><path d="M10.73 5.08A10.43 10.43 0 0 1 12 5c6.5 0 10 7 10 7a13.16 13.16 0 0 1-1.67 2.68"/><path d="M6.61 6.61A13.526 13.526 0 0 0 2 12s3.5 7 10 7a9.77 9.77 0 0 0 5.39-1.61"/><line x1="2" x2="22" y1="2" y2="22"/></svg>`;
 
-// Home-page sections the user can hide from the settings popover. `key` is
-// the localStorage-persisted visibility flag; each defaults to visible.
-const HOME_PANELS = [
-  {key:"following",   label:"Following feed"},
-  {key:"tournaments", label:"Tournament results"},
-  {key:"setChamps",   label:"Set Championships"},
-  {key:"setEv",       label:"Set EV"},
-  {key:"collection",  label:"Your Collection value"},
+// Home-page sections the user can show/hide, reorder, and move between columns
+// from the settings popover. `col` is the DEFAULT column; the movers stack is
+// not listed because it's the page's reason to exist and always occupies main.
+//   announce = full-width strip directly under the search box, above everything
+//   left / main / right = the three columns of .home-grid
+// On phones the grid collapses to one column (main → right → left) and the
+// left column pairs its panels two-up — see the .home-left-col mobile rule.
+const HOME_COLUMNS = [
+  {key:"announce", label:"Top"},
+  {key:"left",     label:"Left"},
+  {key:"main",     label:"Main"},
+  {key:"right",    label:"Right"},
 ];
+const HOME_PANELS = [
+  {key:"news",        label:"Announcements",        col:"announce"},
+  {key:"following",   label:"Following feed",       col:"left"},
+  {key:"tournaments", label:"Tournament results",   col:"left"},
+  {key:"setChamps",   label:"Upcoming events",      col:"right"},
+  {key:"setEv",       label:"Set EV",               col:"right"},
+  {key:"collection",  label:"Your Collection value",col:"right"},
+];
+const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
+const HOME_LAYOUT_KEY = "packsink:homeLayout";
+const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
+// Coerce whatever is in storage (or user_metadata) into a complete, valid
+// layout: unknown keys dropped, missing keys appended at their default column,
+// bad column names reset. Never throws — a corrupt value falls back to default.
+const normalizeHomeLayout = (val) => {
+  const cols = new Set(HOME_COLUMNS.map(c => c.key));
+  const byKey = new Map(HOME_PANELS.map(p => [p.key, p]));
+  const out = [], seen = new Set();
+  if(Array.isArray(val)){
+    for(const it of val){
+      const k = it && it.key;
+      if(!byKey.has(k) || seen.has(k)) continue;
+      seen.add(k);
+      out.push({key:k, col: cols.has(it.col) ? it.col : byKey.get(k).col, on: it.on !== false});
+    }
+  }
+  for(const p of HOME_PANELS) if(!seen.has(p.key)) out.push({key:p.key, col:p.col, on:true});
+  return out;
+};
 
 // Right-side panel on Home: current collection value, line chart over a
 // user-selected range, and a tiny "top movers in your collection" list.
@@ -26837,7 +27291,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
       </div>`
     : titleEl;
   if(err) return null;
-  if(groups == null) return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney-mobile":"")}>
+  if(groups == null) return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney":"")}>
     ${headEl}
     ${!isCollapsed && html`<div class="home-feed-empty muted">Loading…</div>`}
   </aside>`;
@@ -26846,7 +27300,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
   // box in both placements, so the rows scroll inside it instead of stretching
   // the panel taller.
   const visibleGroups = groups.slice(0, 4);
-  return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney-mobile":"")}>
+  return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney":"")}>
     ${headEl}
     ${isCollapsed ? null : html`<div class="home-tourney-list">
       ${visibleGroups.map(({tournament: t, decks}) => html`<div key=${t.id} class="home-tourney-block">
@@ -27163,20 +27617,32 @@ const SC_KIND_CLASS = {sc: "sc", prerelease: "pre", other: "other"};
 // Captured at module load (before any App URL-cleanup effect): did this visit
 // arrive on an event deep link? Forces the box to render even when the user has
 // hidden the home panel — otherwise shared links dead-end.
-const SC_DEEP_LINKED = (() => {
+const SC_DEEP_PARAMS = ["sczip","scc","scdist","scdate","scmode"];
+let SC_DEEP_SEED = (() => {
   try {
     const p = new URLSearchParams(window.location.search);
-    return ["sczip","scc","scdist","scdate","scmode"].some(k => p.has(k));
-  } catch { return false; }
+    if(!SC_DEEP_PARAMS.some(k => p.has(k))) return null;
+    return {zip: p.get("sczip"), ctry: p.get("scc"), dist: p.get("scdist"),
+            date: p.get("scdate"), mode: p.get("scmode")};
+  } catch { return null; }
 })();
+const SC_DEEP_LINKED = !!SC_DEEP_SEED;
+// The seed is an inbound link, not live state: App strips the params from the
+// URL on the first view sync, so the box reads this instead. It stays alive
+// through the boot re-mounts of the home panel, and dies the moment the visit
+// stops being "the one that arrived on the link" — the user closed the
+// full-screen view, or navigated to another tab. Re-mounting the box after
+// that (home → Cards → home) must NOT re-open it.
+const clearScSeed = () => { SC_DEEP_SEED = null; };
 
 const UpcomingSCsBox = () => {
   // Deep-link seed: ?sczip / scc / scdist / scdate let a shared link reproduce
-  // a specific view. Read once in the state initializers (which run before any
-  // App URL-cleanup effect) so the link wins over localStorage on a fresh open.
+  // a specific view. Taken from the module-load capture (not live URL) so it
+  // wins over localStorage no matter when the box mounts, and so the first
+  // mount is the only one that gets it.
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
-  const scParams = (() => { try { return new URLSearchParams(window.location.search); } catch { return new URLSearchParams(); } })();
-  const pZip = scParams.get("sczip"), pCtry = scParams.get("scc"), pDist = scParams.get("scdist"), pDate = scParams.get("scdate"), pMode = scParams.get("scmode");
+  const [scSeed] = useState(() => SC_DEEP_SEED || {});
+  const pZip = scSeed.zip, pCtry = scSeed.ctry, pDist = scSeed.dist, pDate = scSeed.date, pMode = scSeed.mode;
   // Which event type the box shows: "all" (EVERY Lorcana event RPH lists near
   // you — locals, league nights, drafts, prereleases and Set Championships),
   // "sc" (competitive Set Championships only), or "prerelease" (a set's
@@ -27210,6 +27676,9 @@ const UpcomingSCsBox = () => {
   const [openSeries, setOpenSeries] = useState({}); // series_key -> showing its full date list
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("packsink:scCollapsed") === "1"; } catch { return false; } });
   const [expanded, setExpanded] = useState(() => !!pZip);  // a deep-link opens straight into the full-screen view
+  // Closing it retires the deep link too, so a later re-mount of the box opens
+  // the ordinary home panel instead of re-staging the shared view.
+  const closeExpanded = useCallback(() => { clearScSeed(); setExpanded(false); }, []);
   const [copied, setCopied] = useState(false);
   const [pinned, setPinned] = useState(() => { try { const p = JSON.parse(localStorage.getItem("packsink:scPinned") || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } });
   const [dateOn, setDateOn] = useState(() => { try { return pDate ? true : localStorage.getItem("packsink:scDateOn") === "1"; } catch { return !!pDate; } });
@@ -27225,7 +27694,7 @@ const UpcomingSCsBox = () => {
   // Esc exits the full-screen view; lock body scroll while it's open.
   useEffect(() => {
     if(!expanded) return;
-    const onKey = (e) => { if(e.key === "Escape") setExpanded(false); };
+    const onKey = (e) => { if(e.key === "Escape") closeExpanded(); };
     document.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -27324,7 +27793,7 @@ const UpcomingSCsBox = () => {
   const scBox = html`<section class=${"sc-box"+(collapsed&&!expanded?" sc-collapsed":"")+(expanded?" sc-box--expanded":"")}
     onClick=${expanded ? (e=>e.stopPropagation()) : undefined}>
     <div class="sc-box-head">
-      <button class="sc-box-title sc-box-title-btn" type="button" onClick=${()=>setExpanded(x=>!x)}
+      <button class="sc-box-title sc-box-title-btn" type="button" onClick=${()=>expanded?closeExpanded():setExpanded(true)}
         title=${expanded?"Exit full screen":"Expand to full screen"}>
         Upcoming ${KIND_PLURAL} Near Me
         <span class="sc-title-expand-hint" aria-hidden="true">${expanded?"✕":"⤢"}</span>
@@ -27336,7 +27805,7 @@ const UpcomingSCsBox = () => {
           ${copied ? "✓ Copied" : "🔗 Copy link"}
         </button>
         ${expanded
-          ? html`<button class="sc-collapse-btn" type="button" onClick=${()=>setExpanded(false)}
+          ? html`<button class="sc-collapse-btn" type="button" onClick=${closeExpanded}
               aria-label="Exit full screen" title="Exit full screen">✕</button>`
           : html`<button class="sc-collapse-btn" type="button" onClick=${()=>setCollapsed(c=>!c)}
               aria-expanded=${!collapsed} aria-label=${collapsed?"Expand":"Collapse"} title=${collapsed?"Expand":"Collapse"}>
@@ -27495,7 +27964,7 @@ const UpcomingSCsBox = () => {
   // Expanded = a solid box floating over a dimmed backdrop; clicking the
   // backdrop (away) or the ✕ / Esc closes it back to the home page.
   return expanded
-    ? html`<div class="sc-expanded-backdrop" onClick=${()=>setExpanded(false)}>${scBox}</div>`
+    ? html`<div class="sc-expanded-backdrop" onClick=${closeExpanded}>${scBox}</div>`
     : scBox;
 };
 
@@ -27652,15 +28121,18 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   </section>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, onEventArtistClick, sections}) => {
-  // Home-page section visibility (set in App from the settings popover).
-  // Absent prop or absent key = visible.
-  const sec = sections || {};
-  const showFollowing   = sec.following   !== false;
-  const showTournaments = sec.tournaments !== false;
-  const showSetChamps   = sec.setChamps   !== false || SC_DEEP_LINKED;
-  const showSetEv       = sec.setEv       !== false;
-  const showCollection  = sec.collection  !== false;
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, onEventArtistClick, layout}) => {
+  // Resolved home layout (set in App from the settings popover): which panels
+  // are on, which column each sits in, and their order within that column.
+  const homeLayout = useMemo(() => normalizeHomeLayout(layout), [layout]);
+  const panelCol = useMemo(() => {
+    const m = {};
+    for(const p of homeLayout) m[p.key] = p.on ? p.col : null;
+    // A ?sczip/&scmode deep link has to render the events box wherever it
+    // lives, even for someone who hid it — the link is meaningless otherwise.
+    if(!m.setChamps && SC_DEEP_LINKED) m.setChamps = "right";
+    return m;
+  }, [homeLayout]);
   const gradedPremium = useContext(GradedPremiumContext);
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
@@ -27720,10 +28192,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     }
   };
   const [state, setState] = useState({rows:null, loading:true, error:null});
-  // ≤1100px the tournament panel moves out of the left column and renders
-  // below the last movers banner (collapsible). Mount-site decision, so it's
-  // matchMedia rather than CSS — see useMaxWidth.
-  const isNarrow = useMaxWidth(1100);
   const [selectedGroup, setSelectedGroup] = useState(null);
   // Tab hint threaded from graded mover tiles so the modal opens on its
   // Graded tab instead of the default Price History. null = let the modal
@@ -28105,22 +28573,20 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   }, [raw]);
   const showCoconutNews = coconutCount > 0 && Date.now() < COCONUT_NEWS_UNTIL;
 
-  return html`<div class="scr scr-home">
-    <div class="home-page-title">
-      <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
-    </div>
-
-    <div class="home-grid">
-      <div class="home-left-col">
-        ${showNews && html`<a class="home-news-tile home-news-clickable"
+  // Announcement tiles — the pre-release "News" card, the Format Coconut card,
+  // and any live convention tile. Collected into one list so they can ride the
+  // full-width strip under the search box (the `announce` column) rather than
+  // being buried at the top of the left rail where most people never scrolled.
+  const newsTiles = [];
+  if(showNews) newsTiles.push(html`<a key="news" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(newsSet)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(newsSet))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
           <div style=${{fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--accent)", fontWeight:700, marginBottom:4}}>📣 News</div>
           <div class="home-news-title">${newsSet} — ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
           <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>Browse the set →</div>
-        </a>`}
-        ${showCoconutNews && html`<a class="home-news-tile home-news-clickable"
+        </a>`);
+  if(showCoconutNews) newsTiles.push(html`<a key="coconut" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
@@ -28129,13 +28595,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>
             Multiplayer, 3 inks, first to ${COCONUT_LORE_GOAL} lore. Browse all ${coconutCount} Coconut card${coconutCount===1?"":"s"} →
           </div>
-        </a>`}
-        ${showFollowing && html`<${FollowingFeed} user=${user} onSignIn=${onSignIn} raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`}
-        ${showTournaments && !isNarrow && html`<div class="home-tourney-col home-tourney-col--desktop">
-          <${TournamentResultsBanner} raw=${raw} openDeckById=${openDeckById} openTournamentById=${openTournamentById}
-            openTournamentsList=${openTournamentsList}/>
-        </div>`}
-        ${activeEvents.map(ev => html`<div key=${ev.id} class="home-news-tile">
+        </a>`);
+  for(const ev of activeEvents) newsTiles.push(html`<div key=${"ev-"+ev.id} class="home-news-tile">
           <div class="home-news-title">${ev.title}</div>
           ${(ev.dateLabel || ev.eventUrl) && html`<a class="home-news-event-link"
             href=${ev.eventUrl || "#"}
@@ -28154,8 +28615,55 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               </button>
             </li>`)}
           </ul>
-        </div>`)}
-      </div>
+        </div>`);
+
+  // One node per configurable panel. `null` means "nothing to draw" — either
+  // the panel is switched off (panelCol is null) or it has no content.
+  const panelNode = (key) => {
+    switch(key){
+      // Keyed fragment, not a bare array: a nested unkeyed array would fall
+      // back to index keys and remount the tiles whenever another panel is
+      // toggled on or off around it.
+      case "news":       return newsTiles.length
+        ? html`<${React.Fragment} key="news">${newsTiles}</${React.Fragment}>` : null;
+      case "following":  return html`<${FollowingFeed} key="following" user=${user} onSignIn=${onSignIn}
+        raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`;
+      case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
+        openDeckById=${openDeckById} openTournamentById=${openTournamentById}
+        openTournamentsList=${openTournamentsList} collapsible=${true}/>`;
+      case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
+      case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
+        sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`;
+      case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
+        collection=${collection} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
+        sealedPrices=${sealedPrices} collectionLoading=${collectionLoading} setsMeta=${setsMeta}
+        moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
+        onTitleClick=${goCollection}/>`;
+      default: return null;
+    }
+  };
+  const columnNodes = (col) => homeLayout
+    .filter(p => panelCol[p.key] === col)
+    .map(p => panelNode(p.key))
+    .filter(Boolean);
+  const announceNodes = columnNodes("announce");
+  const leftNodes     = columnNodes("left");
+  const mainNodes     = columnNodes("main");
+  const rightNodes    = columnNodes("right");
+  // Empty side columns are omitted entirely and the grid template narrows to
+  // match, so hiding everything on the left doesn't leave a 240px hole.
+  const gridClass = "home-grid"
+    + (leftNodes.length  ? "" : " hg-no-left")
+    + (rightNodes.length ? "" : " hg-no-right");
+
+  return html`<div class="scr scr-home">
+    <div class="home-page-title">
+      <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
+    </div>
+    ${announceNodes.length > 0 && html`<div class="home-announce">${announceNodes}</div>`}
+
+    <div class=${gridClass}>
+      ${leftNodes.length > 0 && html`<div class="home-left-col">${leftNodes}</div>`}
       <div class="home-grid-main">
         <div class="home-toolbar">
           <div class="seg-grp" role="group" aria-label="Time window">
@@ -28235,23 +28743,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       onTileClick=${openCard}/>
                     ${gradedPremium && html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>`}
                     ${!newestSetIsHot && newestBanner}
-                    ${isNarrow && showTournaments && html`<${TournamentResultsBanner}
-                      raw=${raw} openDeckById=${openDeckById}
-                      openTournamentById=${openTournamentById}
-                      openTournamentsList=${openTournamentsList}
-                      chaseStyleTitle=${true} collapsible=${true}/>`}
                   </div>`;
                 })()}
+        ${mainNodes}
       </div>
-      <div class="home-grid-right">
-        ${showSetChamps && html`<${UpcomingSCsBox}/>`}
-        ${showSetEv && html`<${HomeEvStrip} sets=${sets} avgs=${avgs} sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`}
-        ${showCollection && html`<${CollectionPanel} raw=${raw} user=${user} collection=${collection}
-          sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}} sealedPrices=${sealedPrices}
-          collectionLoading=${collectionLoading} setsMeta=${setsMeta}
-          moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
-          onTitleClick=${goCollection}/>`}
-      </div>
+      ${rightNodes.length > 0 && html`<div class="home-grid-right">${rightNodes}</div>`}
     </div>
 
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
@@ -33995,13 +34491,17 @@ function App(){
   // Collection → Home doesn't leave a stale `?collection=…` on the URL.
   // Each sub-view's own URL-sync effect re-adds the param when needed.
   useEffect(() => {
+    // Leaving home retires the ?sczip deep link: coming back must land on the
+    // ordinary home page, not re-stage the shared event view.
+    if(view !== "home") clearScSeed();
     try {
       const target = VIEW_PATHS[view] || "/";
       const current = window.location.pathname.replace(/\/$/, "") || "/";
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "q","ink","rarity","cost","type","inkable","legal","owned"];
+                           "q","ink","rarity","cost","type","inkable","legal","owned",
+                           ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
       // click new-tab opens hold their query even though the view didn't
@@ -34019,7 +34519,11 @@ function App(){
       if(current === normalizedTarget && !hadStaleParam) return;
       for(const p of stripList) url.searchParams.delete(p);
       url.pathname = target;
-      window.history.pushState({view}, "", url.toString());
+      // Same page, just a param cleanup → replace. Pushing would leave a
+      // history entry whose only difference is the params we just consumed,
+      // so Back would land on the dirty URL and appear to do nothing.
+      const method = current === normalizedTarget ? "replaceState" : "pushState";
+      window.history[method]({view}, "", url.toString());
     } catch {/* SSR / blocked storage / no-op */}
   }, [view]);
   // Per-view <title> + canonical. The static head tags carry the home values
@@ -34425,22 +34929,46 @@ function App(){
   useEffect(() => {
     try { localStorage.setItem("packsink:showTopBarTheme", showTopBarTheme ? "1" : "0"); } catch {}
   }, [showTopBarTheme]);
-  // Preference: which Home-page sections are visible. Stored as a map of
-  // {panelKey: false} for the ones the user has hidden (absent/true = shown).
-  // localStorage-only (like showTopBarTheme) — not synced to user_metadata.
-  const [homePanelVis, setHomePanelVis] = useState(() => {
-    try { const v = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}"); return (v && typeof v === "object") ? v : {}; }
-    catch { return {}; }
+  // Preference: Home-page layout — an ordered list of {key, col, on}, one entry
+  // per HOME_PANELS row. localStorage-only (like showTopBarTheme), not synced to
+  // user_metadata: it's a per-screen arrangement, and a phone and a desktop
+  // wanting different orders is normal rather than a bug to reconcile.
+  // Migrates the older `packsink:homePanels` visibility-only map on first read.
+  const [homeLayout, setHomeLayout] = useState(() => {
+    try {
+      const stored = localStorage.getItem(HOME_LAYOUT_KEY);
+      if(stored) return normalizeHomeLayout(JSON.parse(stored));
+      const legacy = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}");
+      if(legacy && typeof legacy === "object"){
+        return defaultHomeLayout().map(p => ({...p, on: legacy[p.key] !== false}));
+      }
+    } catch {}
+    return defaultHomeLayout();
   });
   useEffect(() => {
-    try { localStorage.setItem("packsink:homePanels", JSON.stringify(homePanelVis)); } catch {}
-  }, [homePanelVis]);
-  const homeSections = useMemo(() => {
-    const out = {};
-    for(const p of HOME_PANELS) out[p.key] = homePanelVis[p.key] !== false;
-    return out;
-  }, [homePanelVis]);
-  const toggleHomePanel = (key) => setHomePanelVis(m => ({...m, [key]: m[key] === false ? true : false}));
+    try { localStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify(homeLayout)); } catch {}
+  }, [homeLayout]);
+  const toggleHomePanel = (key) =>
+    setHomeLayout(l => l.map(p => p.key === key ? {...p, on: !p.on} : p));
+  const setHomePanelCol = (key, col) =>
+    setHomeLayout(l => l.map(p => p.key === key ? {...p, col} : p));
+  // Move a panel one slot within its own column. Order is stored as a single
+  // flat array, so "up" means swapping with the nearest previous entry that is
+  // both in the same column AND visible — not simply index-1, which would swap
+  // past a neighbour in another column (or a hidden one) and appear to do
+  // nothing at all.
+  const moveHomePanel = (key, dir) => setHomeLayout(l => {
+    const i = l.findIndex(p => p.key === key);
+    if(i < 0) return l;
+    const step = dir < 0 ? -1 : 1;
+    let j = i + step;
+    while(j >= 0 && j < l.length && !(l[j].col === l[i].col && l[j].on)) j += step;
+    if(j < 0 || j >= l.length) return l;
+    const next = l.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    return next;
+  });
+  const resetHomeLayout = () => setHomeLayout(defaultHomeLayout());
   const [user,setUser]=useState(null);
   // Map of `${card_id}:${tcg_printing}` -> quantity owned. Stored locally for
   // fast lookup; mirrors the user's rows in collection_items (NM only for v1).
@@ -34571,19 +35099,17 @@ function App(){
     return () => { cancelled = true; };
   }, [user]);
 
-  // QA camera-scanner allowlist (migration 96) — SEPARATE from graded-admin.
-  // These testers get the camera (QA-only mode) but no graded-curation powers.
-  const [isScannerTester, setIsScannerTester] = useState(false);
-  useEffect(()=>{
-    if(!user){ setIsScannerTester(false); return; }
-    let cancelled = false;
-    sbClient.rpc("is_scanner_tester")
-      .then(({data}) => { if(!cancelled) setIsScannerTester(!!data); })
-      .catch(() => { if(!cancelled) setIsScannerTester(false); });
-    return () => { cancelled = true; };
-  }, [user]);
-  // Anyone who may open the camera scanner: graded admins OR QA testers.
-  const canScan = isGradedAdmin || isScannerTester;
+  // The scanner is a PUBLIC beta (2026-08-04) — everyone gets the button. The
+  // modal's own consent gate does the rest: explains that scan photos are
+  // uploaded, records the accept, and shows a sign-in CTA to signed-out
+  // visitors (uploads + save-to-collection both need an account).
+  //
+  // The client-side is_scanner_tester() probe that used to gate this is gone
+  // (it fired on every sign-in to decide something no longer in question). The
+  // scanner_testers table + function REMAIN and are still enforced server-side:
+  // migration 98's scan_samples RLS uses them for who may read OTHER people's
+  // samples. Don't drop them thinking they're orphaned.
+  const canScan = true;
 
   // Public profile state — display name + avatar URL the rest of the world
   // sees on your shared decks. Distinct from auth.users metadata (which is
@@ -35515,15 +36041,31 @@ function App(){
   // Two-row tab layout: "my stuff" on top (Collection / Cards / Decks),
   // "market intel" on bottom (Screener / Price Graphing / Analytics). Home
   // tab removed — the logo on the left is the home click target.
-  const TABS_TOP    = [["collection","Collection"],["cards","Cards"],["decks","Decks"]];
+  // "Scan" rides in row 1 (my stuff) rather than row 2 — row 2's labels are the
+  // long ones (PRICE GRAPHING, ANALYTICS) and a 4th chip there already pushed
+  // ANALYTICS off the right edge on ≤420px phones once before.
+  const TABS_TOP    = canScan
+    ? [["collection","Collection"],["cards","Cards"],["decks","Decks"],["scan","Scan"]]
+    : [["collection","Collection"],["cards","Cards"],["decks","Decks"]];
   const TABS_BOTTOM = [["screener","Screener"],["history","Price Graphing"],["market","Analytics"]];
-  const renderTab = ([v,l]) => html`<a key=${v} class=${"nav-tab"+(view===v?" active":"")}
-    href=${VIEW_PATHS[v] || "/"}
-    onClick=${navHandler(()=>onTabClick(v))}
-    title=${l} aria-label=${l}>
-    <span class="nav-tab-icon">${NAV_ICONS[v]}</span>
-    <span class="nav-tab-label">${l}</span>
-  </a>`;
+  const renderTab = ([v,l]) => {
+    // The scanner is a modal, not a routed view — there's no URL to hand a
+    // modifier-click, so it's an honest <button> instead of an <a href>.
+    if(v === "scan") return html`<button key=${v}
+      class=${"nav-tab"+(scanOpen?" active":"")} type="button"
+      onClick=${()=>setScanOpen(true)}
+      title="Scan a card with your camera (beta)" aria-label="Scan a card">
+      <span class="nav-tab-icon">${NAV_ICONS.scan}</span>
+      <span class="nav-tab-label">${l}</span>
+    </button>`;
+    return html`<a key=${v} class=${"nav-tab"+(view===v?" active":"")}
+      href=${VIEW_PATHS[v] || "/"}
+      onClick=${navHandler(()=>onTabClick(v))}
+      title=${l} aria-label=${l}>
+      <span class="nav-tab-icon">${NAV_ICONS[v]}</span>
+      <span class="nav-tab-label">${l}</span>
+    </a>`;
+  };
 
   // Render the app shell immediately. Empty views just render blank tables
   // while data is in flight; cache hits make this instantaneous after the
@@ -35588,10 +36130,13 @@ function App(){
           ${user
             ? html`<button class="profile-btn" onClick=${()=>setSettingsOpen(o=>!o)}
                 title="Account & settings" aria-expanded=${settingsOpen}>
-                ${avatarSrc
-                  ? html`<img src=${avatarSrc} alt="" onError=${()=>setGoogleAvatarOk(false)}
-                      style=${{width:20,height:20,borderRadius:"50%",objectFit:"cover",objectPosition:"top",background:"var(--bg-surface)"}}/>`
-                  : html`<span style=${{width:20,height:20,borderRadius:"50%",background:"var(--accent-glow)",color:"var(--accent)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>${avatarInitial}</span>`}
+                <span class="profile-avatar-wrap">
+                  ${avatarSrc
+                    ? html`<img src=${avatarSrc} alt="" onError=${()=>setGoogleAvatarOk(false)}
+                        style=${{width:20,height:20,borderRadius:"50%",objectFit:"cover",objectPosition:"top",background:"var(--bg-surface)"}}/>`
+                    : html`<span style=${{width:20,height:20,borderRadius:"50%",background:"var(--accent-glow)",color:"var(--accent)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>${avatarInitial}</span>`}
+                  <span class="profile-gear-badge" aria-hidden="true">${GEAR_BADGE_ICON}</span>
+                </span>
                 <span class="profile-btn-name">${profile?.display_name || "you"}</span>
               </button>`
             : html`<button class="signin-btn" onClick=${()=>setSettingsOpen(o=>!o)}
@@ -35684,15 +36229,41 @@ function App(){
               <span>Theme button in top bar</span>
             </label>
             <div class="settings-row settings-row--block">
-              <span class="settings-row-label">Home page sections</span>
+              <span class="settings-row-label">Home page layout</span>
+              <div class="settings-home-hint">Show or hide each section, move it to another
+                column, and reorder it. On phones the columns stack (main, then right,
+                then left) and left-column panels sit two across.</div>
               <div class="settings-home-panels">
-                ${HOME_PANELS.map(p => html`<label key=${p.key} class="settings-row"
-                  title=${"Show the “"+p.label+"” section on the home page"}>
-                  <input type="checkbox" checked=${homeSections[p.key]}
-                    onChange=${()=>toggleHomePanel(p.key)}/>
-                  <span>${p.label}</span>
-                </label>`)}
+                ${homeLayout.map((p) => {
+                  const meta = HOME_PANELS.find(h => h.key === p.key);
+                  if(!meta) return null;
+                  const sameCol = homeLayout.filter(q => q.col === p.col && q.on);
+                  const posInCol = sameCol.findIndex(q => q.key === p.key);
+                  return html`<div key=${p.key} class=${"home-panel-row"+(p.on?"":" is-off")}>
+                    <label class="home-panel-name" title=${"Show “"+meta.label+"” on the home page"}>
+                      <input type="checkbox" checked=${p.on}
+                        onChange=${()=>toggleHomePanel(p.key)}/>
+                      <span>${meta.label}</span>
+                    </label>
+                    <select class="home-panel-col" value=${p.col}
+                      disabled=${!p.on}
+                      aria-label=${meta.label+" column"}
+                      title="Which column this section sits in"
+                      onChange=${e=>setHomePanelCol(p.key, e.target.value)}>
+                      ${HOME_COLUMNS.map(c => html`<option key=${c.key} value=${c.key}>${c.label}</option>`)}
+                    </select>
+                    <div class="home-panel-move">
+                      <button type="button" disabled=${!p.on || posInCol <= 0}
+                        onClick=${()=>moveHomePanel(p.key, -1)}
+                        title="Move up within this column" aria-label=${"Move "+meta.label+" up"}>▲</button>
+                      <button type="button" disabled=${!p.on || posInCol < 0 || posInCol >= sameCol.length-1}
+                        onClick=${()=>moveHomePanel(p.key, 1)}
+                        title="Move down within this column" aria-label=${"Move "+meta.label+" down"}>▼</button>
+                    </div>
+                  </div>`;
+                })}
               </div>
+              <button class="settings-action link" onClick=${resetHomeLayout}>Reset home layout</button>
             </div>
             <${OfflineImagesPanel} raw=${raw} collection=${collection} user=${user}/>
             <div class="settings-divider"></div>
@@ -35706,7 +36277,7 @@ function App(){
         <div class="top-nav-right-row top-nav-right-row--bubbles">
           ${canScan && html`<button class="theme-toggle theme-toggle--scan"
             onClick=${()=>setScanOpen(true)}
-            title="Scan a card with your camera (QA testing)" aria-label="Scan a card">${NAV_ICONS.scan}</button>`}
+            title="Scan a card with your camera (beta)" aria-label="Scan a card">${NAV_ICONS.scan}</button>`}
           <button class=${"theme-toggle theme-toggle--help"+(view==="faq"?" active":"")}
             onClick=${()=>onTabClick("faq")}
             title="How it works" aria-label="How it works">${NAV_ICONS.faq}</button>
@@ -35790,7 +36361,7 @@ function App(){
       openCardsWithSearch=${openCardsWithSearch}
       openCardsFilteredBySet=${openCardsFilteredBySet}
       openScreenerWithFilter=${openScreenerWithFilter}
-      sections=${homeSections}
+      layout=${homeLayout}
       onEventArtistClick=${setIndyArtistPick}/>`}
     ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}

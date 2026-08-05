@@ -856,6 +856,34 @@ html[data-mode="dark"] .price-db-sig.sig-trend{ color:#93c5fd;}
 .price-db-multiclear{margin-top:4px;padding:5px 10px;font-size:11px;font-weight:600;
   cursor:pointer;background:transparent;border:none;color:var(--accent);text-align:left;}
 .price-db-multiclear:hover{background:var(--accent-glow);border-radius:4px;}
+/* .price-db-multiitem is also used as a <button> in the sort-tiebreaker menu. */
+button.price-db-multiitem{width:100%;background:transparent;border:none;
+  font-family:inherit;font-weight:600;text-align:left;}
+button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accent);}
+
+/* Sold-date filter popover (graded screener). */
+.price-db-soldmenu{min-width:216px;padding:8px;gap:7px;}
+.price-db-soldrow{display:flex;align-items:center;justify-content:space-between;
+  gap:8px;font-size:12px;font-weight:600;color:var(--text);}
+.price-db-soldrow span{flex:0 0 auto;}
+.price-db-soldrow select,.price-db-soldrow input{flex:1 1 auto;min-width:0;
+  padding:5px 7px;font-size:12px;font-family:inherit;color:var(--text);
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:5px;}
+.price-db-soldrow select:focus,.price-db-soldrow input:focus{outline:none;border-color:var(--accent);}
+.price-db-soldhint{font-size:10.5px;line-height:1.35;padding:2px 1px;}
+
+/* "Sort: X ▼ then Y ▼" chip + its tiebreaker menu. */
+.price-db-sortchip-wrap{position:relative;display:inline-flex;}
+.price-db-sortchip{display:inline-flex;align-items:center;gap:5px;
+  padding:5px 11px;font-size:12px;font-weight:600;cursor:pointer;
+  color:var(--text);background:var(--bg-card);
+  border:1px solid var(--border);border-radius:999px;font-family:inherit;}
+.price-db-sortchip:hover{border-color:var(--accent);}
+.price-db-sortchip .muted{font-size:10px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase;}
+.price-db-sortchip b{font-weight:800;white-space:nowrap;}
+.price-db-sortmenu{min-width:190px;left:auto;right:0;}
+/* Secondary-sort marker on a column header — present but subordinate. */
+.price-db-sort2{opacity:0.6;font-size:0.82em;margin-left:2px;}
 
 /* Window-picker chips shown only for Gainers / Losers presets. */
 .price-db-winrow{display:flex;flex-wrap:wrap;align-items:center;gap:5px;}
@@ -1637,6 +1665,28 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    the "Home page sections" block label. */
 .settings-home-panels{display:flex;flex-direction:column;}
 .settings-home-panels .settings-row{padding:3px 0;font-size:12.5px;}
+/* One row per configurable home panel: checkbox + name (flexes), column
+   picker, and a pair of reorder arrows. Arrows rather than drag-and-drop —
+   this lives inside a popover that a touch-drag would scroll instead. */
+.settings-home-hint{font-size:11px;line-height:1.35;color:var(--muted);
+  margin:-1px 0 4px;}
+.home-panel-row{display:flex;align-items:center;gap:6px;padding:3px 0;}
+.home-panel-row.is-off{opacity:0.55;}
+.home-panel-name{display:flex;align-items:center;gap:6px;flex:1;min-width:0;
+  font-size:12.5px;color:var(--text);cursor:pointer;}
+.home-panel-name > span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.home-panel-name input{flex-shrink:0;margin:0;}
+.home-panel-col{flex-shrink:0;font-size:11px;padding:2px 4px;border-radius:5px;
+  background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
+  cursor:pointer;max-width:76px;}
+.home-panel-col:disabled{cursor:default;opacity:0.6;}
+.home-panel-move{display:flex;gap:2px;flex-shrink:0;}
+.home-panel-move button{width:22px;height:22px;padding:0;font-size:9px;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--bg-surface);color:var(--muted);border:1px solid var(--border);
+  border-radius:5px;cursor:pointer;}
+.home-panel-move button:hover:not(:disabled){color:var(--accent);border-color:var(--accent);}
+.home-panel-move button:disabled{opacity:0.35;cursor:default;}
 /* Theme picker — grid of named swatch + label buttons. 2 columns to keep
    the popover narrow; visual swatch shows the canvas color outer + the
    card color inner so users see both at a glance. Section labels group
@@ -2182,6 +2232,18 @@ button.graded-home-title{cursor:pointer;}
    bubble up. Disable pointer events on children so the click target is the
    button itself, end of story. */
 .profile-btn > *{pointer-events:none;}
+/* Gear badge pinned to the avatar's top-right corner. The avatar on its own
+   read as "my profile"; the gear is what tells people that settings (theme,
+   home layout, offline images, sign-out) live behind the same button. Purely
+   decorative — the button is still the only click target. */
+.profile-avatar-wrap{position:relative;display:inline-flex;flex-shrink:0;}
+.profile-gear-badge{position:absolute;top:-4px;right:-5px;
+  width:13px;height:13px;border-radius:50%;box-sizing:border-box;
+  background:var(--bg-surface);border:1px solid var(--border);color:var(--muted);
+  display:flex;align-items:center;justify-content:center;}
+.profile-gear-badge svg{display:block;}
+.profile-btn:hover .profile-gear-badge,
+.profile-btn[aria-expanded="true"] .profile-gear-badge{color:var(--accent);border-color:var(--accent);}
 /* Signed-out CTA: replaces the old gear-only button. Reads as a clear action
    instead of a settings affordance, since the popover's primary purpose for
    signed-out users is auth. Theme controls inside the popover let them tweak
@@ -2572,34 +2634,37 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .panel-eye-btn svg{display:block;}
 .collection-panel.is-min{padding-bottom:12px;}
 
+/* Announcement strip: full width, directly under the search box and above the
+   movers. Auto-fit so one tile spans the page and three sit side by side,
+   rather than a fixed column count that leaves a lone tile stretched thin. */
+.home-announce{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,420px));
+  gap:12px;align-items:start;justify-content:start;margin-bottom:14px;}
+.home-announce > .home-news-tile{margin:0;}
+
+/* Columns are auto-placed in DOM order (left, main, right) rather than pinned
+   with grid-column, so an empty side column can be omitted from the tree
+   entirely and the template narrows to match — no 240px hole. Which panels
+   land where is user-configurable (HOME_PANELS / packsink:homeLayout). */
 .home-grid{display:grid;grid-template-columns:240px minmax(0,1fr) 360px;gap:18px;
   align-items:start;margin-bottom:14px;}
+.home-grid.hg-no-left{grid-template-columns:minmax(0,1fr) 360px;}
+.home-grid.hg-no-right{grid-template-columns:240px minmax(0,1fr);}
+.home-grid.hg-no-left.hg-no-right{grid-template-columns:minmax(0,1fr);}
 .home-grid-main{min-width:0;}
-.home-feed{grid-column:auto;}
-.home-left-col{grid-column:1;display:flex;flex-direction:column;gap:14px;min-width:0;}
-.home-left-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
-/* Tournament panel has two mount sites, picked in JS (useMaxWidth(1100)):
-   .home-tourney-col--desktop inside .home-left-col above 1100px, and a
-   collapsible .home-feed--tourney-mobile below the last movers banner at or
-   under it. Only one is ever in the tree, so this rule just hides the desktop
-   column's leftover box if a stale stylesheet and fresh JS ever disagree. */
-.home-tourney-col > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
-@media (max-width:1100px){
-  .home-tourney-col--desktop{display:none;}
-}
+.home-left-col{display:flex;flex-direction:column;gap:14px;min-width:0;}
+.home-left-col > .home-feed,
+.home-left-col > .home-news-tile{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
 .home-tourney-list{display:flex;flex-direction:column;gap:10px;}
-/* Both placements cap the list and scroll inside it so 4 events × top 8 (up to
-   ~32 rows) doesn't balloon the page. Mobile gets a shorter cap — it's a
-   full-width block at the end of a tall banner stack, not a sidebar. */
-.home-tourney-col--desktop .home-tourney-list{max-height:560px;}
-.home-feed--tourney-mobile .home-tourney-list{max-height:340px;}
-.home-tourney-col--desktop .home-tourney-list,
-.home-feed--tourney-mobile .home-tourney-list{overflow-y:auto;
+/* Cap the list and scroll inside it so 4 events × top 8 (up to ~32 rows)
+   doesn't balloon the panel. Shorter cap once the column goes two-up on
+   phones, where the panel is half as wide and every row wraps taller. */
+.home-feed--tourney .home-tourney-list{max-height:560px;overflow-y:auto;
   overflow-x:hidden;scrollbar-width:thin;}
-.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar,
-.home-feed--tourney-mobile .home-tourney-list::-webkit-scrollbar{width:5px;}
-.home-tourney-col--desktop .home-tourney-list::-webkit-scrollbar-thumb,
-.home-feed--tourney-mobile .home-tourney-list::-webkit-scrollbar-thumb{
+@media (max-width:1100px){
+  .home-feed--tourney .home-tourney-list{max-height:340px;}
+}
+.home-feed--tourney .home-tourney-list::-webkit-scrollbar{width:5px;}
+.home-feed--tourney .home-tourney-list::-webkit-scrollbar-thumb{
   background:var(--border);border-radius:3px;}
 /* Collapsible panel header: title on the left, chevron button on the right.
    The title is its own button (jumps to Decks → Tournaments), so the collapse
@@ -2615,7 +2680,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-feed-chev{display:block;transition:transform 0.15s;}
 .home-feed-collapse-btn.is-collapsed .home-feed-chev{transform:rotate(-90deg);}
 /* Collapsed: the panel is just its header, so drop the body padding. */
-.home-feed--tourney-mobile:has(.home-feed-collapse-btn.is-collapsed){padding-bottom:6px;}
+.home-feed--tourney:has(.home-feed-collapse-btn.is-collapsed){padding-bottom:6px;}
 .home-tourney-block{display:flex;flex-direction:column;gap:4px;}
 .home-tourney-name{font-family:'Cinzel',serif;font-weight:700;font-size:12px;
   color:var(--accent);background:none;border:none;padding:0;cursor:pointer;text-align:left;
@@ -2653,7 +2718,17 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
      backgrounds, so the visual is a ghost-overlap of Following's "FOLLOWING"
      header rendering over CollectionPanel's "Your Top Movers" rows. */
   .home-grid-right{order:2;position:static;top:auto;}
-  .home-left-col{order:3;}
+  /* Two-up: the left column's panels (Following, Tournament Results, event
+     tiles) pair side by side instead of running full width, so the tournament
+     box takes half the screen with Following beside it rather than adding
+     another full-height block to an already long scroll. A plain 2-col grid
+     with align-items:start — each box keeps its natural height; nothing is
+     absolutely positioned or height-locked (the reason the previous
+     side-by-side tournament layout was ripped out). */
+  .home-left-col{order:3;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));
+    gap:12px;align-items:start;}
+  .home-left-col > *{min-width:0;}
+  .home-left-col > .home-feed{margin-bottom:0 !important;}
 }
 @media (max-width:1100px){
   /* Stretch the panel full-width inside the stacked column — desktop's
@@ -2662,6 +2737,22 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
      so no `position` override is needed here anymore. */
   .home-feed{align-self:stretch !important;width:100% !important;
     display:block !important;margin-bottom:14px !important;}
+}
+@media (max-width:700px){
+  /* Paired panels are ~half a phone wide, so the tournament rows have to give
+     up their desktop breathing room to keep place + player + ink shields on
+     one line. The player name already clamps to two lines. */
+  .home-left-col{gap:10px;}
+  .home-left-col .home-feed{padding:6px 6px 8px;}
+  .home-left-col .home-tourney-deck{gap:3px;padding:3px 3px;font-size:10px;}
+  .home-left-col .home-tourney-deck .ht-place{font-size:9px;padding-right:2px;}
+  .home-left-col .home-tourney-deck .ht-inks img{width:11px;height:11px;}
+  .home-left-col .home-tourney-name{font-size:11px;}
+}
+@media (max-width:360px){
+  /* Below ~360px half a column can't hold a tournament row at any font size —
+     back to one panel per row. */
+  .home-left-col{grid-template-columns:minmax(0,1fr);}
 }
 @media (max-width:640px){
   /* Tighten the page header so it doesn't eat 25% of the viewport. */
@@ -6262,6 +6353,35 @@ html[data-mode="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .scanner-qa-review-actions{display:flex;gap:8px;flex:0 0 auto;padding-top:8px;}
 .scanner-qa-review-actions .scanner-btn{flex:1 1 auto;}
 .scanner-qa-review .scanner-qa-note{margin-top:0;flex:0 0 auto;}
+/* public-beta consent gate — replaces the camera stage until accepted */
+.scanner-consent{flex:1 1 auto;overflow-y:auto;padding:18px 18px calc(20px + env(safe-area-inset-bottom));
+  background:linear-gradient(0deg,#13111d,#0b0a12);color:rgba(255,255,255,0.86);
+  display:flex;flex-direction:column;gap:11px;}
+.scanner-consent-wait{align-items:center;justify-content:center;font-size:14px;
+  color:rgba(255,255,255,0.6);}
+.scanner-consent-title{margin:0;font-size:21px;color:#fff;display:flex;align-items:center;gap:9px;}
+.scanner-consent-beta{font-family:inherit;font-size:10px;font-weight:800;letter-spacing:0.08em;
+  text-transform:uppercase;color:#1a1205;background:var(--accent,#e8c850);
+  border-radius:5px;padding:3px 7px;}
+.scanner-consent-lead{margin:0;font-size:14px;line-height:1.55;}
+.scanner-consent-lead b{color:#fff;}
+.scanner-consent-list{margin:0;padding-left:19px;display:flex;flex-direction:column;gap:6px;
+  font-size:13px;line-height:1.5;color:rgba(255,255,255,0.75);}
+.scanner-consent-list b{color:#fff;}
+.scanner-consent-toggle{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.5;
+  background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.14);
+  border-radius:10px;padding:11px 12px;cursor:pointer;}
+.scanner-consent-toggle input{margin-top:2px;flex:0 0 auto;width:17px;height:17px;
+  accent-color:var(--accent,#e8c850);cursor:pointer;}
+.scanner-consent-note{margin:0;font-size:12px;line-height:1.5;color:rgba(255,255,255,0.55);}
+.scanner-consent-note a{color:var(--accent,#e8c850);}
+.scanner-consent-actions{display:flex;gap:9px;margin-top:2px;}
+.scanner-consent-actions .scanner-btn{flex:1 1 auto;}
+/* same toggle, reachable again from the review screen */
+.scanner-qa-privacy{display:flex;gap:8px;align-items:flex-start;flex:0 0 auto;
+  font-size:11px;line-height:1.45;color:rgba(255,255,255,0.6);cursor:pointer;padding:2px 0;}
+.scanner-qa-privacy input{margin:0;flex:0 0 auto;width:14px;height:14px;
+  accent-color:var(--accent,#e8c850);cursor:pointer;}
 .scanner-shutter.locked{box-shadow:0 0 0 3px rgba(110,240,140,0.55),0 0 14px rgba(110,240,140,0.45);}
 .scanner-amb-auto{justify-self:end;display:flex;align-items:center;gap:5px;font-size:11px;
   color:rgba(255,255,255,0.72);cursor:pointer;white-space:nowrap;}

@@ -306,3 +306,15 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: python scripts/matview_self_heal.py
+      # The scanner's beta notice promises scan photos are deleted after 12
+      # months. This is the only thing that makes that true, so it runs on the
+      # daily housekeeping job and is NOT allowed to fail quietly — a red run
+      # here means we're holding photos we told users we'd deleted.
+      - name: Enforce scan-sample retention (12 months)
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          pip install --quiet requests python-dotenv
+          python scripts/cleanup_scan_samples.py
