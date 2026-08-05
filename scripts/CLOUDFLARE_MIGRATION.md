@@ -21,8 +21,32 @@ and WAF are all unchanged. Every remaining benefit is gated behind Phase 1 + 3
 still point at Netlify** — that is the configuration that breaks Netlify's
 Let's Encrypt renewal.
 
-Remaining: **Phase 1** (deploy to `*.workers.dev` + test) → **Phase 3** (cutover +
-`sw.js` fix) → **Phase 4** (rate-limit rule, decommission Netlify, relax push policy).
+✅ **PHASE 1 DONE + VERIFIED** — Worker live at
+`https://packs-ink.packs-ink-app.workers.dev` (account `packs-ink-app`).
+Verified in-browser: app boots clean (no console errors, 7 nav tabs), Cards grid
+renders 150 tiles all routed via `/img-proxy`, both proxies 200 with `ACAO:*` +
+30d immutable, `/privacy` serves the REAL static file, `/scripts/*.py` → SPA
+shell, open-proxy guard 400, proxy HEAD 200 / POST 405, `_headers` and
+`_redirects` are consumed (not served as files), missing assets → SPA shell.
+
+**`_headers` IS applied by Workers Static Assets** — confirmed live on the
+deployed Worker: Referrer-Policy, X-Frame-Options, nosniff, HSTS, CSP,
+CSP-Report-Only, and **`Permissions-Policy: geolocation=(), microphone=(),
+camera=(self)`** (the scanner's camera grant) all present.
+
+Cutover prep is committed as **`fc27496` (NOT pushed)** — sw.js offline fallback
++ CACHE_VERSION 309 + `styles.css?v=309`. **Ship it via `wrangler deploy` at
+cutover, never a git push** (a push deploys v309 to Netlify and forces every user
+to re-download the shell for a fix that is a no-op there). If it does get pushed
+by a concurrent session, bump to v310 at cutover.
+
+Remaining: **Phase 3** (cutover) → **Phase 4** (rate-limit rule, decommission
+Netlify, relax push policy).
+
+Two testing gotchas: the sandbox cannot reach `*.workers.dev` over TLS (Windows
+schannel) though packs.ink works — verify via browser, not curl. And Chrome
+defers every `loading=lazy` tile image while the pane is hidden, so "0 images
+loaded" is an artifact — force one eager load to confirm.
 
 **Why:** Netlify builds + bandwidth are metered on limited credits — that is the
 entire reason for the commit-only push policy. Cloudflare is free and unlimited,
