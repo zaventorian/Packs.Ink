@@ -19,14 +19,29 @@ permissions:
 #     GH cron firing the same job back-to-back is harmless.
 #   - "TCGCSV hasn't published yet" exits 0 (not failure), so we don't email
 #     on every miss before 20:00 UTC.
+#   - CONCURRENT runs are NOT harmless: two runs refreshing matviews at once
+#     lose the REFRESH ... CONCURRENTLY lock race and fail with 55P03
+#     (canceling statement due to lock timeout). The `concurrency` group below
+#     serializes runs. This is load-bearing — a GH `schedule:` cron delayed by
+#     hours (the delay that made cron-job.org primary in the first place) can
+#     land on top of any cron-job.org ping, so offsetting the crons is not
+#     sufficient on its own. 2026-08-07: the 21:00 Lorcast cron fired at 01:00
+#     and collided with the 01:00 prices ping this way.
+concurrency:
+  group: etl
+  cancel-in-progress: false
+
 on:
   schedule:
-    # Safety-net ETL fallback (cron-job.org is primary). 01:00 UTC = 8 PM CDT
+    # Safety-net ETL fallback (cron-job.org is primary). 01:30 UTC = 8:30 PM CDT
     # — late enough in the day that if cron-job.org missed every earlier slot,
-    # this still catches today's TCGCSV snapshot before midnight UTC.
-    - cron: "0 1 * * *"
-    # Safety-net matview selfheal fallback. 06:00 UTC = 1 AM CDT.
-    - cron: "0 6 * * *"
+    # this still catches today's TCGCSV snapshot before midnight UTC. Offset 30
+    # min off cron-job.org's 01:00 ping so the two don't queue behind each other
+    # daily when GH cron happens to be on time.
+    - cron: "30 1 * * *"
+    # Safety-net matview selfheal fallback. 06:30 UTC = 1:30 AM CDT — likewise
+    # offset from cron-job.org's 06:00 selfheal ping.
+    - cron: "30 6 * * *"
     # Daily Lorcast metadata refresh (was weekly Sun 22:00). 21:00 UTC is just
     # after TCGCSV's ~20:00 daily publish, so a set in its pre-order window fills
     # in within a day of each spoiler instead of waiting for Sunday. Idempotent —
@@ -52,7 +67,7 @@ jobs:
     # Fires on the daily safety-net cron OR manual dispatch (which is also how
     # cron-job.org triggers us — every external ping is a workflow_dispatch).
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+      (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
       (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
     steps:
       - uses: actions/checkout@v5
@@ -88,7 +103,7 @@ jobs:
     # when nothing has changed.
     if: |
       always() && needs.prices.result == 'success' && (
-        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
       )
     steps:
@@ -126,7 +141,7 @@ jobs:
     # Idempotent full upsert — a no-op once every current sealed SKU is loaded.
     if: |
       always() && needs.prices.result == 'success' && (
-        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
       )
     steps:
@@ -160,7 +175,7 @@ jobs:
     # Discord ping. Cheap (~19 TCGCSV calls); runs on the daily prices trigger.
     if: |
       always() && needs.prices.result == 'success' && (
-        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
       )
     steps:
@@ -198,7 +213,7 @@ jobs:
     # Idempotent: a no-op once every revealed card is linked.
     if: |
       always() && needs.prices.result == 'success' && (
-        (github.event_name == 'schedule' && github.event.schedule == '0 1 * * *') ||
+        (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
         (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
       )
     steps:
@@ -293,7 +308,7 @@ jobs:
     # is current; calls refresh_* when prices_daily has newer rows than
     # card_prices_latest. No external API calls.
     if: |
-      (github.event_name == 'schedule' && github.event.schedule == '0 6 * * *') ||
+      (github.event_name == 'schedule' && github.event.schedule == '30 6 * * *') ||
       (github.event_name == 'workflow_dispatch' && inputs.job == 'selfheal')
     steps:
       - uses: actions/checkout@v5
