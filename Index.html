@@ -6578,6 +6578,19 @@ const encodePosterPngUnderBudget = async (canvas) => {
   return png;  // smallest we managed — caller reports the size
 };
 
+// Tournament decks are allowed to have no name (migration 116) — the uploader
+// blanked it, or it predates 117 and got nulled by the cleanup. Fall back to
+// the event and placement rather than inventing "<Player>'s deck".
+const deckDisplayTitle = (deck, tournamentContext) => {
+  const named = (deck?.name || "").trim();
+  if(named) return named;
+  if(tournamentContext?.tournament_name){
+    return tournamentContext.tournament_name
+      + (tournamentContext.place ? ` — ${tournamentContext.place}` : "");
+  }
+  return "Untitled deck";
+};
+
 // Deck poster export — renders the full poster inline in the modal as a live
 // preview, then snapshots it via html2canvas for the Copy / Save buttons.
 // Lorcast images flow through the /img-proxy/* rewrite so the resulting canvas
@@ -7090,7 +7103,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       color:textColor,position:"relative",zIndex:1}}>
       <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
         <div style=${{minWidth:260,flex:"1 1 320px"}}>
-          <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:32,lineHeight:1,letterSpacing:"-0.3px"}}>${deck.name || "Untitled deck"}</div>
+          <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:32,lineHeight:1,letterSpacing:"-0.3px"}}>${deckDisplayTitle(deck, tournamentContext)}</div>
           ${tournamentContext
             ? html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:600,fontSize:14,lineHeight:1.2,marginTop:6,color:subColor,letterSpacing:"0.2px"}}>
                 🏆 ${tournamentContext.tournament_name}${tournamentContext.place ? ` · ${tournamentContext.place}` : ""}${tournamentContext.num_players ? ` · ${tournamentContext.num_players} players` : ""}
@@ -7213,7 +7226,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       <div class="modal-header">
         <h2 class="title-font" style=${{margin:0,fontSize:18}}>
           Export Deck Image
-          <span class="muted" style=${{fontSize:12,fontWeight:400,marginLeft:8}}>— ${deck.name || "Untitled deck"}</span>
+          <span class="muted" style=${{fontSize:12,fontWeight:400,marginLeft:8}}>— ${deckDisplayTitle(deck, tournamentContext)}</span>
         </h2>
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
@@ -27327,7 +27340,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
             const isInkOnlyName = rawName && nameTokens.length > 0
               && nameTokens.every(t => inkTokens.includes(t))
               && nameTokens.length === inkTokens.length;
-            const shownDeckName = isInkOnlyName ? "" : (rawName || "Untitled");
+            const shownDeckName = isInkOnlyName ? "" : rawName;
             return html`<li key=${r.result_id} class=${idx===0?"is-winner":"is-runnerup"}>
             <button class="home-tourney-deck"
               disabled=${!r.deck_id}
@@ -29111,8 +29124,10 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     && nameTokens.every(t => inkTokens.includes(t))
     && nameTokens.length === inkTokens.length;
   const playerName = r.player_name || "Unknown player";
-  const titleText = (isInkOnlyName || !rawName) ? playerName : rawName;
-  const showByline = !(isInkOnlyName || !rawName);
+  // A nameless deck renders with no title at all — the placement badge plus
+  // "by <player>" carries the tile. isInkOnlyName still matters for rows
+  // uploaded before migration 117 nulled those autofilled names out.
+  const titleText = (isInkOnlyName || !rawName) ? null : rawName;
   const bg = buildBg(inks);
   const hasDeck = !!r.deck_id;
   const tileHref = hasDeck
@@ -29137,8 +29152,8 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
         onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
       <span class="tdc-place" title=${"Placed " + (r.place || "—")}>🏆 ${r.place || "—"}</span>
       ${inks.length > 0 && inkShields("tdc-inks")}
-      <span class="tdc-title">${titleText}</span>
-      ${showByline && html`<span class="tdc-by muted">${playerName}</span>`}
+      ${titleText && html`<span class="tdc-title">${titleText}</span>`}
+      <span class="tdc-by muted">${playerName}</span>
       ${showEvent && event && html`<span class="tdc-event muted" title=${event.name}>${event.name}</span>`}
       <span class="tdc-actions">
         <button disabled=${!hasDeck} aria-label="Copy share link"
@@ -29165,14 +29180,14 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
       style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
       onClickCapture=${navCapture}
       onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
-    <div class="deck-card-name">${titleText}</div>
+    ${titleText && html`<div class="deck-card-name">${titleText}</div>`}
     ${showEvent && event && html`<div class="deck-card-event" title=${event.name}>
       ${event.name}${event.event_date ? " · " + fmtIsoDate(event.event_date) : ""}
     </div>`}
     <div class="deck-card-tourney" title=${"Placed " + (r.place || "—")}>
       <span class="dct-trophy">🏆</span>
       <span class="dct-place">${r.place || "—"}</span>
-      ${showByline && html`<span class="dct-name">by ${playerName}</span>`}
+      <span class="dct-name">by ${playerName}</span>
     </div>
     ${inks.length > 0 && html`<div class="deck-card-chips">
       ${inkShields("deck-card-inks")}
@@ -29303,16 +29318,14 @@ const TournamentBulkUploadModal = ({raw, user, onClose, onUploaded}) => {
       const rowsPayload = liveRows.map(r => {
         const {entries} = r.deck_text.trim() ? parseDeckText(r.deck_text, raw) : {entries:[]};
         const inks = inksForEntries(entries);
-        // Deck-name fallback chain: explicit name -> "Amber/Steel" -> player's deck -> Untitled.
-        const fallbackName = (
-          inks.length ? inks.join("/")
-          : (r.player_name.trim() ? `${r.player_name.trim()}'s deck` : null)
-        );
+        // A blank deck name stays blank. Substituting the ink combo or
+        // "<Player>'s deck" persisted a value the uploader never typed, which
+        // then couldn't be cleared from the edit modal.
         return {
           place: r.place.trim() || null,
           place_rank: parsePlaceRank(r.place),
           player_name: r.player_name.trim() || null,
-          deck_name: r.deck_name.trim() || fallbackName || null,
+          deck_name: r.deck_name.trim() || null,
           entries,
           inks,
         };
@@ -29484,8 +29497,8 @@ const TournamentDeckEditModal = ({tournament, result, raw, onClose, onSaved}) =>
         }
       }
       const inks = inksForEntries(entries);
-      const fallbackName = inks.length ? inks.join("/") : (playerName.trim() ? `${playerName.trim()}'s deck` : null);
-      const effectiveDeckName = deckName.trim() || fallbackName || "Untitled deck";
+      // Blank stays blank — see the bulk-upload note above.
+      const effectiveDeckName = deckName.trim() || null;
       if(isEdit){
         // Two RPCs: meta (admin_update_tournament_deck) + cards (admin_replace_tournament_deck_cards).
         const metaRes = await sbClient.rpc("admin_update_tournament_deck", {
@@ -29725,8 +29738,8 @@ const TournamentBulkEditModal = ({tournament, results, raw, onClose, onSaved}) =
 
       for(const {row: r, entries} of parsed){
         const inks = inksForEntries(entries);
-        const fallbackName = inks.length ? inks.join("/") : (r.player_name.trim() ? `${r.player_name.trim()}'s deck` : null);
-        const effectiveDeckName = r.deck_name.trim() || fallbackName || "Untitled deck";
+        // Blank stays blank — see the bulk-upload note above.
+        const effectiveDeckName = r.deck_name.trim() || null;
         const cardsPayload = entries.map(e => ({card_id: e.card_id, quantity: e.quantity}));
 
         if(!r.result_id){
@@ -31109,7 +31122,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         onClickCapture=${navCapture}
         onClick=${navHandler(()=>openDeckInMode(d.id, "view"))}>
       <div class="deck-card-header">
-        <div class="deck-card-name">${d.name}</div>
+        <div class="deck-card-name">${d.name || "Untitled deck"}</div>
         ${visibilityPill(d.visibility)}
       </div>
       <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>
@@ -31155,7 +31168,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         style=${bg ? {background: bg} : null}
         onClickCapture=${navCapture}
         onClick=${navHandler(()=>openExternalDeckEntry(entry))}>
-      <div class="deck-card-name">${d.name}</div>
+      ${/* A nameless tournament deck drops the title row entirely — the
+            tournament line and the "by <player>" byline below already say
+            everything a generated name used to. */""}
+      ${d.name && html`<div class="deck-card-name">${d.name}</div>`}
       ${isTourneyDeck
         ? html`<div class="deck-card-tourney" title="From this tournament">
             <span class="dct-trophy">🏆</span>
@@ -32048,7 +32064,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
                       const isInkOnlyName = rawName && nameTokens.length > 0
                         && nameTokens.every(tok => inkTokens.includes(tok))
                         && nameTokens.length === inkTokens.length;
-                      const shownDeckName = isInkOnlyName ? "" : (rawName || "Untitled");
+                      const shownDeckName = isInkOnlyName ? "" : rawName;
                       return html`<li key=${r.result_id} class="tc-top8-row">
                         <span class="tc-top8-place">${r.place || "—"}</span>
                         <span class="tc-top8-player">${r.player_name || "—"}</span>
@@ -32370,11 +32386,11 @@ function pieSlicePath(cx, cy, r, startAngle, endAngle){
 
 // Click-to-edit deck name. Click → input + auto-focus + select-all. Enter
 // or blur saves; Escape cancels. onSave returns truthy on success.
-const EditableDeckName = ({name, onSave}) => {
+const EditableDeckName = ({name, placeholder, onSave}) => {
   const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(name);
+  const [value, setValue] = useState(name || "");
   const inputRef = useRef(null);
-  useEffect(() => { setValue(name); }, [name]);
+  useEffect(() => { setValue(name || ""); }, [name]);
   useEffect(() => {
     if(editing && inputRef.current){
       inputRef.current.focus();
@@ -32384,12 +32400,12 @@ const EditableDeckName = ({name, onSave}) => {
   const commit = async () => {
     if(!editing) return;
     const trimmed = (value || "").trim();
-    if(!trimmed || trimmed === name){ setEditing(false); setValue(name); return; }
+    if(!trimmed || trimmed === name){ setEditing(false); setValue(name || ""); return; }
     const ok = await onSave(trimmed);
     setEditing(false);
-    if(!ok) setValue(name);
+    if(!ok) setValue(name || "");
   };
-  const cancel = () => { setValue(name); setEditing(false); };
+  const cancel = () => { setValue(name || ""); setEditing(false); };
   if(editing){
     return html`<input ref=${inputRef} class="deck-name-input" value=${value}
       onInput=${e=>setValue(e.target.value)}
@@ -32400,7 +32416,8 @@ const EditableDeckName = ({name, onSave}) => {
       }}/>`;
   }
   return html`<h2 class="title-font deck-name-display" title="Click to rename"
-    onClick=${()=>setEditing(true)}>${name}</h2>`;
+    onClick=${()=>setEditing(true)}>${name
+      || html`<span class="muted">${placeholder || "Untitled deck"}</span>`}</h2>`;
 };
 
 // Card-type pie palette — anchored on the site's gold accent for the dominant
@@ -33309,8 +33326,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     <div style=${{display:"flex",alignItems:"center",gap:10,marginBottom:14,flexWrap:"wrap"}}>
       <button onClick=${onBack} style=${{fontSize:12,padding:"5px 10px"}}>← Back to Decks</button>
       ${readOnly
-        ? html`<h2 class="title-font deck-name-display" style=${{cursor:"default"}}>${deck.name}</h2>`
-        : html`<${EditableDeckName} name=${deck.name} onSave=${onRename}/>`}
+        ? html`<h2 class="title-font deck-name-display" style=${{cursor:"default"}}>${deckDisplayTitle(deck, tournamentContext)}</h2>`
+        : html`<${EditableDeckName} name=${deck.name}
+            placeholder=${deckDisplayTitle(deck, tournamentContext)} onSave=${onRename}/>`}
       <span class="muted" style=${{fontSize:11}}>${inkColorsInDeck.join(" · ")}</span>
       ${/* Coconut keeps its badge even when the deck breaks the rules — the
             format is declared, not inferred, so it stays "Coconut" and just
