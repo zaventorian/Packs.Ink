@@ -28113,8 +28113,11 @@ const GRADED_HOME_GRADES = ["10","9.5","9","8.5","8","7"];
 const GRADED_HOME_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
 const isFoilPrinting = (p) => !!p && p !== "Non-Foil" && p !== "Normal";
 const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
-  const [tab, setTab] = useState("movers");   // "movers" | "sales"
-  const [win, setWin] = useState("1m");
+  // Defaults are Top Sales / 1D: a realized sale from the last day is the
+  // freshest honest signal we have, where a Δ% needs a settled rollup to mean
+  // anything. Volume supports it — a 1D window clears the 20-tile cap.
+  const [tab, setTab] = useState("sales");   // "movers" | "sales"
+  const [win, setWin] = useState("1d");
   const [graderF, setGraderF] = useState(() => new Set());  // empty = all
   const [gradeF, setGradeF] = useState(() => new Set());
   const [rollup, setRollup] = useState(null);
@@ -28132,13 +28135,20 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
     (!graderF.size || graderF.has((grader||"").toUpperCase())) && (!gradeF.size || gradeF.has(grade));
   const toggle = (setter) => (v) => setter(s => { const n = new Set(s); n.has(v) ? n.delete(v) : n.add(v); return n; });
 
+  // Deferred until the Movers tab is actually opened — the rollup is a full
+  // paginated table read, and Top Sales is the default view, so fetching it on
+  // every home load would be for a tab most visitors never open. Ref-gated so
+  // toggling tabs doesn't refetch.
+  const rollupRequested = useRef(false);
   useEffect(() => {
+    if(tab !== "movers" || rollupRequested.current) return;
+    rollupRequested.current = true;
     let cancelled = false;
     sbFetchAll("graded_sales_rollup", {
       select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d,pct_90d", order: "card_id.asc",
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(() => { if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
-  }, []);
+  }, [tab]);
 
   useEffect(() => {
     if(tab !== "sales"){ return; }
