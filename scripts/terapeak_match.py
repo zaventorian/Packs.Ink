@@ -186,13 +186,38 @@ def strong_collectors(title: str):
     grade subgrade like '10/10/9.5'. The '#' form takes digits only, so the set
     code in '#D23' isn't read as collector 23."""
     nums = set()
-    for m in re.finditer(r"(?<![\d./])(\d{1,3})\s*/\s*(\d{1,3}|[A-Za-z]\d+)", title):
+    for m in re.finditer(r"(?<![\d./])(\d{1,3}[A-Za-z]?)\s*/\s*(\d{1,3}|[A-Za-z]\d+)", title):
         num, den = m.group(1), m.group(2)
         if den[0].isalpha() or int(den) >= 100:
             nums.add(norm_cn(num))
-    for m in re.finditer(r"#\s*(\d{1,3})\b", title):
-        nums.add(norm_cn(m.group(1)))
+            if num[-1].isalpha():
+                nums.add(norm_cn(num[:-1]))
+    for m in re.finditer(r"#\s*(\d{1,3}[A-Za-z]?)\b", title):
+        tok = m.group(1)
+        nums.add(norm_cn(tok))
+        if tok[-1].isalpha():
+            nums.add(norm_cn(tok[:-1]))
     return {n for n in nums if n}
+
+
+def suffixed_collectors(title: str):
+    """Collector#s the title writes WITH a letter suffix ('#24B' -> {'24B'}).
+
+    PSA prints the suffix when two cards share a number, and it is often the
+    only thing telling them apart: P2 #24A is the bordered Set Championship
+    promo (PSA 10 ~$90) while #24B is the Enchanted (PSA 10 ~$1,100). The old
+    '#\\s*(\\d{1,3})\\b' could not match '#24B' at all -- there is no word
+    boundary between '4' and 'B' -- so those titles yielded NO collector# and
+    fell back to name tokens, landing every printing on one card. Same for the
+    five Dalmatian Puppy variants (#4a-#4e)."""
+    out = set()
+    for m in re.finditer(r"(?<![\d./])(\d{1,3}[A-Za-z])\s*/\s*(\d{1,3}|[A-Za-z]\d+)", title):
+        den = m.group(2)
+        if den[0].isalpha() or int(den) >= 100:
+            out.add(norm_cn(m.group(1)))
+    for m in re.finditer(r"#\s*(\d{1,3}[A-Za-z])\b", title):
+        out.add(norm_cn(m.group(1)))
+    return {n for n in out if n}
 
 
 def collectors(title: str):
@@ -256,6 +281,7 @@ def best_match(title, by_cn, inv):
     ttok = toks(title)
     hint = set_hint(title)
     cns = collectors(title)
+    xcns = suffixed_collectors(title)
     tl = title.lower()
     d23_2022 = bool(re.search(r"\bd23\b", tl)) and not (
         "collection" in tl or re.search(r"\b202[45]\b", tl))
@@ -267,6 +293,10 @@ def best_match(title, by_cn, inv):
     for tk in ttok:
         for c in inv.get(tk, []):
             cand[id(c)] = c
+    # Does any candidate actually OWN the suffixed number the title wrote? If
+    # none does, the suffix is noise (a seller's "#10A" for a card catalogued
+    # as plain 10) and must not perturb the ordinary match.
+    any_exact = bool(xcns) and any(c["_cn"] in xcns for c in cand.values())
     scored = []
     for c in cand.values():
         if not c["_tok"]:
@@ -309,22 +339,32 @@ def best_match(title, by_cn, inv):
         else:
             rarity_ok = (crar not in CHASE_RARITIES)
             rarity_pref = 0.0 if rarity_ok else -0.5
+        # A printed suffixed collector# is the most specific evidence a title
+        # carries — it outranks name overlap and the rarity keyword (same
+        # reasoning as the cn_hit rarity exception above). Prefer the card that
+        # owns it and push away the sibling matching only the stripped base,
+        # which is otherwise identical in name, version, set and overlap.
+        cn_exact = c["_cn"] in xcns
+        exact_pref = (0.8 if cn_exact else -0.5) if any_exact else 0.0
         sc = ov + (0.4 if cn_hit else 0.0) + (0.4 if set_hit else 0.0) \
-            + (0.6 if d23_pref else 0.0) + rarity_pref + reg_pref
+            + (0.6 if d23_pref else 0.0) + rarity_pref + reg_pref + exact_pref
         if set_miss and ov < 0.9:
             sc -= 0.3
-        scored.append((c, ov, cn_hit, set_hit, sc, nmatch, d23_pref, rarity_ok))
+        scored.append((c, ov, cn_hit, set_hit, sc, nmatch, d23_pref, rarity_ok, cn_exact))
     if not scored:
         return None, 0.0, 0.0, False, False
     # Tier 1: the title contains the card's FULL name+version (>=0.85 overlap, >=2
     # tokens). rarity match > d23-2022 pref > collector# > set hint > overlap
     # break ties in the full-name tier.
+    # cn_exact leads the tiebreak: #24A and #24B share name, version, set and a
+    # 1.0 overlap, so every other key ties and the winner was whichever card the
+    # candidate dict happened to yield first.
     strong = [s for s in scored if s[1] >= 0.85 and s[5] >= 2]
     if strong:
-        c, ov, cn_hit, set_hit = max(strong, key=lambda s: (s[7], s[6], s[2], s[3], s[1]))[:4]
+        c, ov, cn_hit, set_hit = max(strong, key=lambda s: (s[8], s[7], s[6], s[2], s[3], s[1]))[:4]
         sc = next(s[4] for s in strong if s[0] is c)
     else:
-        c, ov, cn_hit, set_hit, sc, _, _, _ = max(scored, key=lambda s: s[4])
+        c, ov, cn_hit, set_hit, sc = max(scored, key=lambda s: s[4])[:5]
     return c, sc, ov, cn_hit, set_hit
 
 
