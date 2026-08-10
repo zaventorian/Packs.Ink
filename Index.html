@@ -17717,15 +17717,34 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const tileDeltasByKey = useMemo(() => {
     if(!rollup) return null;
     const m = new Map();
-    const PR = ["Normal", "Holofoil", "Cold Foil", "Foil"];
-    for(const r of rollup){
+    const PR = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+    // Same two-pass shape as priceByKey below, and for the same reason: writing
+    // every rollup row under every printing key makes the LAST row win, which
+    // on a Challenge Promo (one card_id, two very different markets) prices a
+    // Prize Wall slab at the Top Prize's number — Cinderella - Stouthearted
+    // PSA 10 read $3,265 (Foil) on a ~$460 Non-Foil copy.
+    const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+    const deltaOf = (r, meta) => ({tcgplayer_product_id: meta.tcgplayer_product_id,
+      grader: (r.grader||"").toLowerCase(), grade: r.grade,
+      low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
+      pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
+    // Pass 1: non-split ("") and split-but-unclassified ("Unknown") rows under
+    // every key — a foil-only chase card's slot is stamped "Normal" by the
+    // migration-50 backfill, so a strict match would drop it entirely.
+    for(const r of (rollup||[])){
+      if(r.printing && r.printing !== "Unknown") continue;
       const meta = cardById.get(r.card_id);
       if(!meta || !meta.tcgplayer_product_id) continue;
-      const grader = (r.grader||"").toLowerCase();
-      const d = {tcgplayer_product_id: meta.tcgplayer_product_id, grader, grade: r.grade,
-        low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
-        pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d};
-      for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${grader}|${r.grade}`, d);
+      const d = deltaOf(r, meta);
+      for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
+    }
+    // Pass 2: rows that name a printing override just their own slot keys.
+    for(const r of (rollup||[])){
+      if(!r.printing || r.printing === "Unknown") continue;
+      const meta = cardById.get(r.card_id);
+      if(!meta || !meta.tcgplayer_product_id) continue;
+      const d = deltaOf(r, meta);
+      for(const pr of (SYN[r.printing] || [r.printing])) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
     }
     return m;
   }, [rollup, cardById]);
