@@ -20,6 +20,17 @@
 # clean for a week or two:
 #   1. Add any origin that reported a legitimate violation to the lists.
 #   2. Rename the header to `Content-Security-Policy` to enforce.
+#
+# STILL REPORT-ONLY as of 2026-08-10. Sentry review that day found two real
+# gaps, both fixed below — supabase card art in img-src (3,053 reports / 183
+# users, i.e. blank pre-staged art for everyone had this been enforced) and the
+# Cloudflare beacon in script-/connect-src (201 reports / 52 users, new since
+# the cutover). DON'T enforce on the strength of that fix alone: two reporters
+# also logged img-src/connect-src blocks against packs.ink ITSELF under 'self'
+# (Sentry JAVASCRIPT-12/-13), on documents carrying a `?scrlybrkr=` param this
+# app never generates — almost certainly a browser extension or filtering proxy
+# rewriting URLs, but unexplained. Give it another week of report-only and
+# confirm those two stay flat before renaming the header.
 # The _headers file does NOT take effect on the local dev server — verify on a
 # Netlify Deploy Preview or prod.
 # Origins below were enumerated from Index.html + sw.js (2026-06-27 audit):
@@ -27,9 +38,16 @@
 #            bundle the loader pulls (browser.sentry-cdn.com) + cdnjs (artist-
 #            poster html2canvas) + jsdelivr (scanner workers importScripts
 #            opencv.js + onnxruntime) + 'wasm-unsafe-eval' (scanner WASM)
+#            + static.cloudflareinsights.com — Cloudflare injects its Web
+#            Analytics beacon into every response since the 2026-08-04 cutover,
+#            so it is ours by deployment even though no repo file references it.
+#            Drop it here if Web Analytics is ever turned off in the dashboard.
 #   style:   self + Google Fonts CSS;  font: self + gstatic
 #   img:     self + data:/blob: (LOGO_B64, canvas exports) + lorcast/tcgplayer/
-#            qrserver/ravensburger.cloud/ebay/google-photo CDNs
+#            qrserver/ravensburger.cloud/ebay/google-photo CDNs + the supabase
+#            host: /storage/v1/object/public/card-art/* serves PRE-STAGED card
+#            art and pack arts as plain <img> src, which is an img-src load, not
+#            the connect-src one PostgREST makes. Both directives need the host.
 #   connect: self + data: + supabase (https+wss) + zippopotam + ravensburgerplay
 #            + sentry ingest/CDN + Google Fonts (googleapis+gstatic) + the cross-
 #            origin IMAGE CDNs. The image/font/sentry-cdn HOSTS appear here (not
@@ -52,7 +70,7 @@
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'none'
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.sentry-cdn.com https://browser.sentry-cdn.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; connect-src 'self' data: https://umwqowkiatjjltologrd.supabase.co wss://umwqowkiatjjltologrd.supabase.co https://api.zippopotam.us https://tcg.ravensburgerplay.com https://api.ravensburgerplay.com https://tcgcsv.com https://cdn.jsdelivr.net https://js.sentry-cdn.com https://browser.sentry-cdn.com https://*.ingest.sentry.io https://*.sentry.io https://fonts.googleapis.com https://fonts.gstatic.com https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; frame-src https://www.youtube.com https://youtu.be; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; report-uri https://o4511390961303552.ingest.us.sentry.io/api/4511390972444672/security/?sentry_key=8eb7cada506131426389fd7506a0288e
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.sentry-cdn.com https://browser.sentry-cdn.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://umwqowkiatjjltologrd.supabase.co https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; connect-src 'self' data: https://umwqowkiatjjltologrd.supabase.co wss://umwqowkiatjjltologrd.supabase.co https://static.cloudflareinsights.com https://api.zippopotam.us https://tcg.ravensburgerplay.com https://api.ravensburgerplay.com https://tcgcsv.com https://cdn.jsdelivr.net https://js.sentry-cdn.com https://browser.sentry-cdn.com https://*.ingest.sentry.io https://*.sentry.io https://fonts.googleapis.com https://fonts.gstatic.com https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; frame-src https://www.youtube.com https://youtu.be; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; report-uri https://o4511390961303552.ingest.us.sentry.io/api/4511390972444672/security/?sentry_key=8eb7cada506131426389fd7506a0288e
   Permissions-Policy: geolocation=(), microphone=(), camera=(self)
   Strict-Transport-Security: max-age=31536000; includeSubDomains
 
