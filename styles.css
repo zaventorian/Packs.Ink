@@ -399,6 +399,16 @@ input[type="checkbox"]{accent-color:var(--accent);}
 .nav-tab-icon{display:inline-flex;align-items:center;justify-content:center;
   width:20px;height:20px;line-height:0;}
 .nav-tab-icon svg{display:block;}
+/* BETA flag on the Scan tab. Absolutely positioned over the icon so it adds
+   no layout width: .tabs is a horizontal scroller on mobile, where an inline
+   badge would widen the row. It also has to stay INSIDE the chip — setting
+   overflow-x:auto forces the cross axis to clip too, so anything hanging past
+   the chip edge would be cut off rather than drawn. */
+.nav-tab--scan .nav-tab-icon{position:relative;}
+.nav-tab-beta{position:absolute;top:-6px;right:-12px;
+  font-family:'Cinzel',serif;font-size:7px;font-weight:700;letter-spacing:0.3px;
+  line-height:1;padding:1px 3px;border-radius:3px;
+  background:var(--accent);color:var(--bg-solid);pointer-events:none;}
 .nav-tab-label{font-size:10px;line-height:1.1;white-space:nowrap;text-transform:uppercase;
   /* text-align:center: when the label wraps to two lines on mobile (e.g. Price /
      Graphing), the wrapped words should stack centered under the icon rather
@@ -477,9 +487,17 @@ input[type="checkbox"]{accent-color:var(--accent);}
   .tabs{flex:1 1 0;min-width:0;overflow-x:auto;overflow-y:visible;
     -webkit-overflow-scrolling:touch;scrollbar-width:none;}
   .tabs::-webkit-scrollbar{display:none;}
-  .tabs-grid{align-items:stretch;}
+  /* Trailing gutter so the last chip in a row (Scan, Analytics) isn't flush
+     against the scroller's right edge and reads as clipped once scrolled all
+     the way over. It goes on .tabs-grid, not .tabs: padding on the scroll
+     CONTAINER is dropped at the end of the scroll range in several engines,
+     whereas padding on the sole scrolled CHILD is part of scrollWidth and is
+     honored everywhere. */
+  .tabs-grid{align-items:stretch;padding-right:8px;}
   .tabs-row{flex-wrap:nowrap;}
   .tabs-row > .nav-tab{flex-shrink:0;}
+  /* Keep the BETA flag clear of the chip edge at the tighter mobile padding. */
+  .nav-tab-beta{top:-5px;right:-9px;font-size:6.5px;padding:1px 2px;}
   /* Compact icon tabs on mobile. Tight padding + narrow gaps + WRAPPABLE
      labels with an explicit max-width so the two-word "Price Graphing"
      actually breaks to two lines instead of pushing Analytics off the right
@@ -2833,8 +2851,16 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .collection-panel .panel-movers-foil-tag{display:block;font-size:8.5px;font-weight:700;
   letter-spacing:0.5px;text-transform:uppercase;color:var(--accent);
   line-height:1;margin-top:2px;}
-.collection-panel .panel-movers-price{text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim);width:50px;}
-.collection-panel .panel-movers-pct{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;width:54px;}
+/* table-layout is fixed, so an over-wide number does not widen its column —
+   it spills into the neighbour. A four-figure graded slab ("$3,265.91") did
+   exactly that and collided with the Δ% next to it. 66px fits that at 11px
+   tabular-nums; the nowrap+ellipsis guard means anything larger clips rather
+   than overlapping again. The extra width comes out of the name column,
+   which already ellipsizes. */
+.collection-panel .panel-movers-price{text-align:right;font-variant-numeric:tabular-nums;color:var(--text-dim);
+  width:66px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.collection-panel .panel-movers-pct{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;
+  width:54px;white-space:nowrap;overflow:hidden;}
 
 /* Home toolbar (window picker + direction toggles) */
 .home-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:8px 0 14px;}
@@ -6211,7 +6237,6 @@ html[data-mode="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .scanner-msg{text-align:center;}
 .scanner-msg-title{font-weight:700;font-size:18px;margin-bottom:6px;}
 .scanner-msg-body{font-size:14px;color:rgba(255,255,255,0.7);max-width:420px;margin:0 auto 14px;line-height:1.5;}
-.theme-toggle--scan.active{color:var(--accent);}
 
 /* scanner v3: "locked on" ready state + confidence */
 .scanner-hint.ready{color:#6ef08c;font-weight:700;}

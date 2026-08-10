@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=309">
+<link rel="stylesheet" href="styles.css?v=314">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -21933,7 +21933,7 @@ function FAQView({onStartTour, onStartSectionTour, user}){
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
 
     <h2>Card scanner (beta)</h2>
-    <p>The 📷 button in the top bar points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. Sign-in required.</p>
+    <p>The <strong>Scan</strong> tab in the top nav points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. Sign-in required.</p>
     <p><strong>It runs on your phone.</strong> Your browser downloads a card index once, and the matching happens locally — no photo is sent anywhere to be identified, and the scanner works offline.</p>
     <p><strong>It's a beta, so it will get cards wrong.</strong> Rows it isn't sure about are marked ≈ or ?, and every row has a ✎ button to correct it. Check the list before you save — nothing touches your collection until you press the button.</p>
     <p><strong>About the photos.</strong> While it's in beta we upload a photo of each scan so we can find the cards it misreads and fix them. It's the whole camera frame, not a crop; it's stored privately against your account, never sold or shared, never analyzed for faces, and deleted after 12 months. <strong>You can switch the upload off</strong> — on the notice the first time you open the scanner, or from the scanner's review screen — and it identifies cards exactly the same either way. Full details are on the <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.</p>
@@ -26631,15 +26631,33 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       if(!gradedSalesRows) return [];
       const SALEWIN = {"1d":"pct_1w","1w":"pct_1w","1m":"pct_1m","3m":"pct_3m","6m":"pct_6m","1y":"pct_1y"};
       const wk = SALEWIN[moversWindow] || "pct_1w";
+      // Printing is part of the slot key, same rule as makeGradedSlotSeries:
+      // a Challenge Promo shares one card_id across Top Prize foil and Prize
+      // Wall non-foil, which are different markets. Keyed without it, the most
+      // recent sale from either side becomes "the" price — Cinderella -
+      // Stouthearted PSA 10 read $3,265.91 / +402% on a ~$460 Prize Wall copy.
+      // Only enforce the split where the card really has two labelled
+      // printings; with one or none, every sale prices the slot, because a
+      // foil-only chase card's slot is stamped "Normal" by the migration-50
+      // backfill and a strict match would silently drop it.
+      const bucketsByCard = new Map();
+      for(const r of gradedSalesRows){
+        const b = gradedSlotBucket(r.printing);
+        if(!b) continue;
+        let s = bucketsByCard.get(r.card_id); if(!s){ s = new Set(); bucketsByCard.set(r.card_id, s); } s.add(b);
+      }
+      const isSplit = (cid) => (bucketsByCard.get(cid)?.size || 0) > 1;
+      const slotKey = (cid, printing, grader, grade) =>
+        `${cid}|${isSplit(cid) ? (gradedSlotBucket(printing) || "?") : ""}|${(grader||"").toLowerCase()}|${grade}`;
       const bySlot = new Map();
       for(const r of gradedSalesRows){
         if(r.sale_price == null || !r.sold_date) continue;
-        const k = `${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`;
+        const k = slotKey(r.card_id, r.printing, r.grader, r.grade);
         let arr = bySlot.get(k); if(!arr){ arr = []; bySlot.set(k, arr); } arr.push(r);
       }
       for(const slot of gradedSlots){
         if((slot.qty||0) <= 0) continue;
-        const w = computeGradedSaleWindows(bySlot.get(`${slot.card_id}|${(slot.grader||"").toLowerCase()}|${slot.grade}`));
+        const w = computeGradedSaleWindows(bySlot.get(slotKey(slot.card_id, slot.printing, slot.grader, slot.grade)));
         if(!w) continue;
         const pct = w[wk];
         if(pct == null || pct === 0) continue;
@@ -26821,7 +26839,15 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
                 // Grader/grade pill replaces the Foil tag for graded rows.
                 // Uppercased so "PSA 10" reads at a glance in the narrow
                 // sub-line beneath the card name.
-                const slotLabel = `${(slot.grader||"").toUpperCase()} ${slot.grade}`.trim();
+                // Append the printing on split cards (C1 → Top Prize / Prize
+                // Wall) so two slabs sharing a card_id are tellable apart —
+                // without it the row just said "PSA 10" twice.
+                // Version only (C1 Top Prize / Prize Wall, Two Swords, Text
+                // Error) — never the bare finish, which would tag nearly every
+                // row and is what the foil badge is for (see variantBadge).
+                const variant = gradedVariantLabel(gradedSlotBucket(slot.printing), row.Set);
+                const slotLabel = `${(slot.grader||"").toUpperCase()} ${slot.grade}`.trim()
+                  + ((variant && variant !== "Foil" && variant !== "Non-Foil") ? ` · ${variant}` : "");
                 return html`<tr key=${`g:${slot.pid}|${slot.printing}|${slot.grader}|${slot.grade}`}
                   onClick=${()=>onTileClick && onTileClick({
                     card_id: row.card_id,
@@ -36222,10 +36248,10 @@ function App(){
     // The scanner is a modal, not a routed view — there's no URL to hand a
     // modifier-click, so it's an honest <button> instead of an <a href>.
     if(v === "scan") return html`<button key=${v}
-      class=${"nav-tab"+(scanOpen?" active":"")} type="button"
+      class=${"nav-tab nav-tab--scan"+(scanOpen?" active":"")} type="button"
       onClick=${()=>setScanOpen(true)}
-      title="Scan a card with your camera (beta)" aria-label="Scan a card">
-      <span class="nav-tab-icon">${NAV_ICONS.scan}</span>
+      title="Scan a card with your camera (beta)" aria-label="Scan a card (beta)">
+      <span class="nav-tab-icon">${NAV_ICONS.scan}<span class="nav-tab-beta" aria-hidden="true">BETA</span></span>
       <span class="nav-tab-label">${l}</span>
     </button>`;
     return html`<a key=${v} class=${"nav-tab"+(view===v?" active":"")}
@@ -36445,9 +36471,6 @@ function App(){
           </div>`}
         </div>
         <div class="top-nav-right-row top-nav-right-row--bubbles">
-          ${canScan && html`<button class="theme-toggle theme-toggle--scan"
-            onClick=${()=>setScanOpen(true)}
-            title="Scan a card with your camera (beta)" aria-label="Scan a card">${NAV_ICONS.scan}</button>`}
           <button class=${"theme-toggle theme-toggle--help"+(view==="faq"?" active":"")}
             onClick=${()=>onTabClick("faq")}
             title="How it works" aria-label="How it works">${NAV_ICONS.faq}</button>
