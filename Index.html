@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=316">
+<link rel="stylesheet" href="styles.css?v=318">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -26191,11 +26191,11 @@ const EYE_OFF_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="
 //   left / main / right = the three columns of .home-grid
 // On phones the grid collapses to one column (main → right → left) and the
 // left column pairs its panels two-up — see the .home-left-col mobile rule.
-// A `pinned` panel has a fixed mount (the string names it in the settings
-// editor) — only its on/off toggle applies; its stored `col` is ignored and it
-// never counts as a reorder neighbour. The news feed is pinned beside the
-// Rare–Legendary movers banner so it works as a narrow side column at every
-// width (the old full-width announce tiles ate half a phone screen).
+// The news feed renders ONE tile list into TWO CSS-gated mounts: the column
+// panel below (>1100px, default = top of the left rail) and a narrow column
+// riding the Rare–Legendary movers banner (≤1100px, where the rail columns
+// sink below the movers and announcements would never be seen). The column
+// picker therefore only governs the desktop copy.
 const HOME_COLUMNS = [
   {key:"announce", label:"Top"},
   {key:"left",     label:"Left"},
@@ -26203,7 +26203,7 @@ const HOME_COLUMNS = [
   {key:"right",    label:"Right"},
 ];
 const HOME_PANELS = [
-  {key:"news",        label:"News feed",            col:"announce", pinned:"Beside the movers"},
+  {key:"news",        label:"News feed",            col:"left"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
   {key:"setChamps",   label:"Upcoming events",      col:"right"},
@@ -26211,7 +26211,6 @@ const HOME_PANELS = [
   {key:"collection",  label:"Your Collection value",col:"right"},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
-const HOME_PANELS_PINNED = new Set(HOME_PANELS.filter(p => p.pinned).map(p => p.key));
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
 const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
@@ -28881,22 +28880,25 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             Multiplayer, 3 inks, first to ${COCONUT_LORE_GOAL} lore. Browse all ${coconutCount} Coconut card${coconutCount===1?"":"s"} →
           </div>
         </a>`);
-  // Pinned mount (see HOME_PANELS): the settings toggle is the only layout
-  // control that applies. Rendered beside the Rare–Legendary banner in the
-  // movers stack; in the movers loading/error states it renders full-width so
-  // announcements never disappear behind a data hiccup.
-  const newsFeed = (panelCol["news"] != null && newsTiles.length > 0)
-    ? html`<aside class="home-feed home-news-feed" aria-label="News">
+  // One tile list, two CSS-gated mounts (see the HOME_PANELS note):
+  // panelNode("news") renders the `--rail` copy into whatever column the user
+  // picked (>1100px), and `newsFeedRl` rides the Rare–Legendary banner at
+  // ≤1100px, where the rail columns sink below the movers. In the movers
+  // loading/error states the rl copy renders full-width so announcements
+  // never disappear behind a data hiccup on phones.
+  const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
+    ? html`<aside key=${"news-"+variant} class=${"home-feed home-news-feed home-news-feed--"+variant} aria-label="News">
         <div class="home-feed-title--chase">News</div>
         <div class="home-news-feed-list">${newsTiles}</div>
       </aside>`
     : null;
+  const newsFeedRl = newsFeedAside("rl");
 
   // One node per configurable panel. `null` means "nothing to draw" — either
   // the panel is switched off (panelCol is null) or it has no content.
-  // "news" is deliberately absent: it has a pinned mount beside the movers.
   const panelNode = (key) => {
     switch(key){
+      case "news":       return newsFeedAside("rail");
       case "following":  return html`<${FollowingFeed} key="following" user=${user} onSignIn=${onSignIn}
         raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`;
       case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
@@ -28964,11 +28966,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           </span>
         </div>
         ${state.loading
-          ? html`<div>${newsFeed}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
+          ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
           : state.error
-            ? html`<div>${newsFeed}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
+            ? html`<div>${newsFeedRl}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
             : (!showUp && !showDown)
-              ? html`<div>${newsFeed}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
+              ? html`<div>${newsFeedRl}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
                   Toggle on at least one direction (Gainers or Droppers) to see movers.</div></div>`
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
@@ -28981,10 +28983,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     paused=${paused}
                     onTitleClick=${()=>openBannerInScreener("newest")}
                     onTileClick=${openCard}/>`;
-                  // The news feed rides shotgun on the Rare–Legendary banner —
-                  // a narrow right-hand column (same shape the tournament
-                  // panel used pre-2026-08). Natural heights only; the pair's
-                  // two height-locked predecessors both broke (see CLAUDE.md).
+                  // ≤1100px the news feed rides shotgun on the Rare–Legendary
+                  // banner — a narrow right-hand column (same shape the
+                  // tournament panel used pre-2026-08); wider than that the
+                  // rl copy is display:none and the rail copy in the columns
+                  // is the live one. Natural heights only; the pair's two
+                  // height-locked predecessors both broke (see CLAUDE.md).
                   const rareLegBanner = html`<${MoversBanner}
                       title="Rare – Legendary Movers"
                       subtitle=${`${rareLegLabel} — top 20 by ${winLabel} ${directionLabel}`}
@@ -29007,10 +29011,10 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("chase")}
                       onTileClick=${openCard}/>
-                    ${newsFeed
+                    ${newsFeedRl
                       ? html`<div class="rl-news-row">
                           <div class="rl-news-main">${rareLegBanner}</div>
-                          ${newsFeed}
+                          ${newsFeedRl}
                         </div>`
                       : rareLegBanner}
                     <${MoversBanner}
@@ -35242,14 +35246,13 @@ function App(){
   // flat array, so "up" means swapping with the nearest previous entry that is
   // both in the same column AND visible — not simply index-1, which would swap
   // past a neighbour in another column (or a hidden one) and appear to do
-  // nothing at all. Pinned panels (news feed) keep a col value nobody renders,
-  // so they're skipped as swap targets for the same dead-button reason.
+  // nothing at all.
   const moveHomePanel = (key, dir) => setHomeLayout(l => {
     const i = l.findIndex(p => p.key === key);
     if(i < 0) return l;
     const step = dir < 0 ? -1 : 1;
     let j = i + step;
-    while(j >= 0 && j < l.length && !(l[j].col === l[i].col && l[j].on && !HOME_PANELS_PINNED.has(l[j].key))) j += step;
+    while(j >= 0 && j < l.length && !(l[j].col === l[i].col && l[j].on)) j += step;
     if(j < 0 || j >= l.length) return l;
     const next = l.slice();
     [next[i], next[j]] = [next[j], next[i]];
@@ -36519,23 +36522,13 @@ function App(){
               <span class="settings-row-label">Home page layout</span>
               <div class="settings-home-hint">Show or hide each section, move it to another
                 column, and reorder it. On phones the columns stack (main, then right,
-                then left) and left-column panels sit two across.</div>
+                then left) and left-column panels sit two across — except the News feed,
+                which docks beside the Rare – Legendary movers there.</div>
               <div class="settings-home-panels">
                 ${homeLayout.map((p) => {
                   const meta = HOME_PANELS.find(h => h.key === p.key);
                   if(!meta) return null;
-                  // Pinned panels (the news feed) have a fixed mount — only the
-                  // on/off toggle applies, and they never count as a reorder
-                  // neighbour for the panels that DO live in columns.
-                  if(meta.pinned) return html`<div key=${p.key} class=${"home-panel-row"+(p.on?"":" is-off")}>
-                    <label class="home-panel-name" title=${"Show “"+meta.label+"” on the home page"}>
-                      <input type="checkbox" checked=${p.on}
-                        onChange=${()=>toggleHomePanel(p.key)}/>
-                      <span>${meta.label}</span>
-                    </label>
-                    <span class="home-panel-pinned" title="This section has a fixed spot next to the Rare – Legendary movers.">${meta.pinned}</span>
-                  </div>`;
-                  const sameCol = homeLayout.filter(q => q.col === p.col && q.on && !HOME_PANELS_PINNED.has(q.key));
+                  const sameCol = homeLayout.filter(q => q.col === p.col && q.on);
                   const posInCol = sameCol.findIndex(q => q.key === p.key);
                   return html`<div key=${p.key} class=${"home-panel-row"+(p.on?"":" is-off")}>
                     <label class="home-panel-name" title=${"Show “"+meta.label+"” on the home page"}>

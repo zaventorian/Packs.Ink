@@ -1698,8 +1698,6 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   background:var(--bg-surface);color:var(--text);border:1px solid var(--border);
   cursor:pointer;max-width:76px;}
 .home-panel-col:disabled{cursor:default;opacity:0.6;}
-.home-panel-pinned{flex-shrink:0;font-size:10.5px;color:var(--text-muted);
-  border:1px solid var(--border);border-radius:5px;padding:2px 6px;line-height:1.4;}
 .home-panel-move{display:flex;gap:2px;flex-shrink:0;}
 .home-panel-move button{width:22px;height:22px;padding:0;font-size:9px;line-height:1;
   display:flex;align-items:center;justify-content:center;
@@ -2585,28 +2583,39 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   transition:transform 0.12s,color 0.12s;}
 .home-news-link:hover .home-news-link-chev{color:var(--accent);transform:translateX(2px);}
 
-/* News feed — pinned column beside the Rare–Legendary movers banner at every
-   width (mobile: ~1/3 of the screen, same shape the tournament column used).
+/* News feed — one tile list, two CSS-gated mounts. Desktop (>1100px): the
+   `--rail` copy lives in a home-grid column (default = top of the left rail)
+   and the `--rl` copy is hidden. ≤1100px, where the rail columns sink below
+   the movers, the roles flip: the rl copy docks beside the Rare–Legendary
+   banner as a ~1/3-width column (same shape the tournament column used).
    The pair is a plain 2-col grid with natural heights (align-items:start) —
    do NOT height-lock the cells; that's what killed both ChaseRowWithTourney
    predecessors. The list scrolls internally past its cap instead. */
-.rl-news-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,32%);
-  column-gap:8px;align-items:start;}
-.rl-news-main{min-width:0;}
 .home-news-feed{margin:0 0 10px;min-width:0;padding:6px 10px 4px;}
-.home-news-feed .home-news-feed-list{max-height:360px;overflow-y:auto;
+.home-news-feed--rl{display:none;}
+.home-news-feed .home-news-feed-list{max-height:560px;overflow-y:auto;
   overflow-x:hidden;scrollbar-width:thin;}
 .home-news-feed .home-news-feed-list::-webkit-scrollbar{width:5px;}
 .home-news-feed .home-news-feed-list::-webkit-scrollbar-thumb{
   background:var(--border);border-radius:3px;}
-/* Compact metrics — the feed is a narrow column even on desktop (~32% of the
-   movers area), so every entry tightens vs the old full-width announce tiles. */
+/* Compact metrics — the feed is a narrow column in both mounts, so every
+   entry tightens vs the old full-width announce tiles. */
 .home-news-feed .home-news-title{font-size:11.5px;}
 .home-news-feed .home-news-link{padding:5px 6px;gap:5px;}
 .home-news-feed .home-news-link-name{font-size:12px;}
+@media (max-width:1100px){
+  /* Two classes + !important: the stacked-column stretch rule further down
+     (`.home-feed{display:block !important}` ≤1100px) would otherwise resurrect
+     the rail copy on phones. */
+  .home-feed.home-news-feed--rail{display:none !important;}
+  .home-news-feed--rl{display:block;}
+  .rl-news-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,32%);
+    column-gap:8px;align-items:start;}
+  .rl-news-main{min-width:0;}
+  .home-news-feed .home-news-feed-list{max-height:340px;}
+}
 @media (max-width:700px){
   .home-news-feed{padding:5px 7px 3px;}
-  .home-news-feed .home-news-feed-list{max-height:340px;}
   .home-news-feed .home-news-title{font-size:10.5px;}
   .home-news-feed .home-news-link{padding:4px 4px;}
   .home-news-feed .home-news-link-name{font-size:11px;}
