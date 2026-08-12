@@ -28,10 +28,12 @@ const code = [
   grab("const GRADED_FOIL_PRINTINGS", "// Screener badge label"),
   grab("function makeGradedSlotSeries", "\n// Roll up individual graded sales"),
   grab("function computeSalesValueHistory(sales", "\n// Avg-of-last-5 variant"),
+  grab("function makeGradedRollupValue", "\n// Fold slabs the per-sale window MISSED"),
+  grab("function addUnsoldSlabsToSeries", "\n// Range start / today"),
 ].join("\n");
 
-const mod = new Function(code + "\nreturn {gradedSlotBucket, makeGradedSlotSeries, computeSalesValueHistory};")();
-const { gradedSlotBucket, makeGradedSlotSeries, computeSalesValueHistory } = mod;
+const mod = new Function(code + "\nreturn {gradedSlotBucket, makeGradedSlotSeries, gradedKnownBuckets, computeSalesValueHistory, makeGradedRollupValue, addUnsoldSlabsToSeries};")();
+const { gradedSlotBucket, makeGradedSlotSeries, gradedKnownBuckets, computeSalesValueHistory, makeGradedRollupValue, addUnsoldSlabsToSeries } = mod;
 
 let fails = 0;
 const eq = (name, got, want) => {
@@ -98,6 +100,44 @@ const q = computeSalesValueHistory(
     acquired_date:"2026-07-08"}]);
 eq("acquired_date gates the earlier date", q.find(p=>p.date==="2026-07-01").value, 0);
 eq("qty multiplies after acquisition",  q.find(p=>p.date==="2026-07-08").value, 300);
+
+// ── today-anchoring: every range's series ends on the same date ──
+const todayYMD = new Date().toISOString().slice(0,10);
+eq("series is anchored at today", hist[hist.length-1].date, todayYMD);
+eq("today's value = last sale forward-filled", hist[hist.length-1].value, 452.5);
+
+// ── range-independence: split knowledge comes from the rollup, not the window ──
+// The regression: a 1M fetch that caught only the foil side of a split card
+// read as "one printing", so a non-foil slab was valued at the foil price —
+// and the portfolio headline changed whenever the chart range changed.
+const kbRollup = [
+  {card_id:"b", grader:"PSA", grade:"10", printing:"Foil",     last_sold_price: 33493.66, last_sold_date:"2026-07-17"},
+  {card_id:"b", grader:"PSA", grade:"10", printing:"Non-Foil", last_sold_price: 452.50,   last_sold_date:"2026-07-19"},
+];
+const kb = gradedKnownBuckets(kbRollup);
+const foilOnlyWindow = [S("b", "Foil", 33493.66, "2026-07-17")];
+eq("foil-only window + rollup buckets: non-foil slot is NOT valued off the foil sale",
+   makeGradedSlotSeries(foilOnlyWindow, kb)(nonFoilSlot), null);
+eq("without rollup buckets the same window mis-values it (the pre-fix behavior)",
+   makeGradedSlotSeries(foilOnlyWindow)(nonFoilSlot).map(r => r.price), [33493.66]);
+eq("unclassified rollup rows add no bucket",
+   gradedKnownBuckets([{card_id:"z", grader:"PSA", grade:"10", printing:""}]).size, 0);
+
+const valueOf = makeGradedRollupValue(kbRollup);
+eq("rollup prices the non-foil slab at its own printing", valueOf(nonFoilSlot), 452.5);
+eq("rollup prices the foil slab at the foil sale", valueOf(foilSlot), 33493.66);
+
+// Headline = last point of the series. Must be identical whether the fetch
+// window caught one sale or every sale.
+const endpoint = (sales) => {
+  const s = addUnsoldSlabsToSeries(
+    computeSalesValueHistory(sales, [nonFoilSlot, foilSlot], kb),
+    sales, [nonFoilSlot, foilSlot], valueOf,
+    ["2026-06-19", todayYMD], kb);
+  return s[s.length - 1].value;
+};
+eq("headline (endpoint) is identical for the short and the full window",
+   endpoint(foilOnlyWindow), endpoint(baymax));
 
 console.log(fails ? `\n${fails} FAILURE(S)` : "\nall assertions pass");
 process.exit(fails ? 1 : 0);

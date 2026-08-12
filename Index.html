@@ -2523,7 +2523,15 @@ async function fetchGradedRollupFor(slots){
 // lookupGradedPx does, and for the same reason: foil-only chase cards
 // (Enchanted / Iconic / Epic) have owned slots stamped printing='Normal' by the
 // migration-50 backfill, and a strict match would silently drop them to $0.
-function makeGradedSlotSeries(sales){
+//
+// knownBuckets (optional Map<"card|grader|grade", Set<bucket>>, from
+// gradedKnownBuckets over the range-independent rollup) supplies ALL-TIME
+// printing knowledge. Without it, "does this card have two printings?" is
+// answered from only the fetched window — a C1 card whose last month saw only
+// Top Prize foil sales read as one-printing at 1M (valuing a Prize Wall slab at
+// the foil price) and as split at 1Y, which made the portfolio headline change
+// whenever the chart range changed.
+function makeGradedSlotSeries(sales, knownBuckets){
   const byCard = new Map();
   for(const r of (sales || [])){
     if(r.grade == null || r.sale_price == null) continue;
@@ -2548,7 +2556,10 @@ function makeGradedSlotSeries(sales){
       // 2+ labelled printings = a genuinely split card (C1 Top Prize vs Prize
       // Wall, Genie Two Swords vs Normal). Only this printing's own sales count;
       // unclassified rows are dropped rather than guessed.
-      const rows = g.buckets.size >= 2
+      const known = knownBuckets ? knownBuckets.get(ck) : null;
+      let bucketCount = g.buckets.size;
+      if(known) bucketCount = new Set([...g.buckets, ...known]).size;
+      const rows = bucketCount >= 2
         ? g.rows.filter(r => r.bucket === want)
         : g.rows;
       if(rows.length) series = rows;
@@ -2558,6 +2569,23 @@ function makeGradedSlotSeries(sales){
   };
 }
 
+// All-time printing buckets per (card, grader, grade) from graded_sales_rollup
+// rows — the knownBuckets input above. The rollup carries one row per printing
+// regardless of how far back the chart window reaches, so the split decision
+// stays the same at every range.
+function gradedKnownBuckets(rows){
+  const m = new Map();
+  for(const r of (rows || [])){
+    if(r.grade == null) continue;
+    const b = gradedSlotBucket(r.printing);
+    if(!b) continue;
+    const ck = `${r.card_id}|${(r.grader||"").toLowerCase()}|${r.grade}`;
+    let s = m.get(ck); if(!s){ s = new Set(); m.set(ck, s); }
+    s.add(b);
+  }
+  return m;
+}
+
 // Roll up individual graded sales into a {date, value} series for the premium
 // portfolio chart. Mirrors computeGradedValueHistory (forward-fill, backward-
 // fill seed, acquired-date gating) but driven by per-sale prices and keyed on
@@ -2565,12 +2593,18 @@ function makeGradedSlotSeries(sales){
 // optional, see that function. grader matched case-insensitively (sales store
 // UPPERCASE, owned slots lowercase).
 // ownedSlots: [{card_id, printing, grader, grade, qty, acquired_date}].
-function computeSalesValueHistory(sales, ownedSlots){
-  const seriesFor = makeGradedSlotSeries(sales);
+function computeSalesValueHistory(sales, ownedSlots, knownBuckets){
+  const seriesFor = makeGradedSlotSeries(sales, knownBuckets);
   const dateSet = new Set();
   for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
   const dates = Array.from(dateSet).sort();
   if(!dates.length) return [];
+  // Anchor the axis at today so every range's series ends on the SAME date,
+  // valued by forward-fill from each slot's last known sale. Without this the
+  // endpoint lands on whatever the window's last sale date happens to be, and
+  // acquired-date gating against that shifting date can move the headline.
+  const today = new Date().toISOString().slice(0,10);
+  if(dates[dates.length-1] < today) dates.push(today);
   const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
   for(const s of ownedSlots){
     const series = seriesFor(s);
@@ -2589,12 +2623,14 @@ function computeSalesValueHistory(sales, ownedSlots){
 // Avg-of-last-5 variant of computeSalesValueHistory: at each date a slot is
 // valued at the mean of its most recent ≤5 sales (rolling window) instead of the
 // single last sale. Same forward/backward-fill + acquired-date gating.
-function computeSalesValueHistoryAvg5(sales, ownedSlots){
-  const seriesFor = makeGradedSlotSeries(sales);
+function computeSalesValueHistoryAvg5(sales, ownedSlots, knownBuckets){
+  const seriesFor = makeGradedSlotSeries(sales, knownBuckets);
   const dateSet = new Set();
   for(const s of ownedSlots){ const ser = seriesFor(s); if(ser) for(const r of ser) dateSet.add(r.date); }
   const dates = Array.from(dateSet).sort();
   if(!dates.length) return [];
+  const today = new Date().toISOString().slice(0,10);
+  if(dates[dates.length-1] < today) dates.push(today);
   const valueByDate = Object.fromEntries(dates.map(d=>[d,0]));
   for(const s of ownedSlots){
     const series = seriesFor(s);
@@ -2670,9 +2706,12 @@ function makeGradedRollupValue(rows){
 // range (1M → 1Y), which reads as the collection gaining value when nothing
 // moved. `valueOf(slot)` supplies the rollup price; `fallbackDates` anchors a
 // flat line when the window turned up no sales at all.
-function addUnsoldSlabsToSeries(series, sales, slots, valueOf, fallbackDates){
+function addUnsoldSlabsToSeries(series, sales, slots, valueOf, fallbackDates, knownBuckets){
   if(!series || !valueOf) return series;
-  const seriesFor = makeGradedSlotSeries(sales || []);
+  // Same knownBuckets as the base-series computation, so both agree on which
+  // slots the window "missed" — a slot whose only in-window sales belong to the
+  // OTHER printing must count as missing here, not as covered.
+  const seriesFor = makeGradedSlotSeries(sales || [], knownBuckets);
   const missing = [];
   for(const s of (slots || [])){
     if(!s.qty || seriesFor(s)) continue;
@@ -16824,7 +16863,7 @@ const GRADED_RARITY_OPTIONS = ["Common","Uncommon","Rare","Super Rare","Legendar
 // Portfolio-value chart for the Graded tab. Mirrors the raw-collection
 // chart on the Home panel but pulls from graded_prices_daily and keys
 // per (tcgplayer_product_id, grader, grade) slot instead of (pid, printing).
-const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, premium, basis}) => {
+const GradedValueChart = ({items, cardById, priceByKey, knownBuckets, rangeKey, setRangeKey, premium, basis}) => {
   const [historyRows, setHistoryRows] = useState(null);
   const [state, setState] = useState({loading: false, error: null});
   // Which lines to draw. Premium has both Last-sold and Avg-of-5 histories; show
@@ -16888,13 +16927,13 @@ const GradedValueChart = ({items, cardById, priceByKey, rangeKey, setRangeKey, p
   const fallbackDates = useMemo(() => portfolioFallbackDates(rangeDays), [rangeDays]);
 
   const lastSeries = useMemo(() => historyRows
-    ? addUnsoldSlabsToSeries(computeSalesValueHistory(historyRows, slots),
-        historyRows, slots, slotRollupValue && slotRollupValue("last"), fallbackDates)
-    : null, [historyRows, slots, slotRollupValue, fallbackDates]);
+    ? addUnsoldSlabsToSeries(computeSalesValueHistory(historyRows, slots, knownBuckets),
+        historyRows, slots, slotRollupValue && slotRollupValue("last"), fallbackDates, knownBuckets)
+    : null, [historyRows, slots, slotRollupValue, fallbackDates, knownBuckets]);
   const avgSeries = useMemo(() => historyRows
-    ? addUnsoldSlabsToSeries(computeSalesValueHistoryAvg5(historyRows, slots),
-        historyRows, slots, slotRollupValue && slotRollupValue("avg5"), fallbackDates)
-    : null, [historyRows, slots, slotRollupValue, fallbackDates]);
+    ? addUnsoldSlabsToSeries(computeSalesValueHistoryAvg5(historyRows, slots, knownBuckets),
+        historyRows, slots, slotRollupValue && slotRollupValue("avg5"), fallbackDates, knownBuckets)
+    : null, [historyRows, slots, slotRollupValue, fallbackDates, knownBuckets]);
   const toXY = (s) => s.map(p => ({x: new Date(p.date+"T00:00:00Z").getTime(), y: p.value}));
   const chartSeries = useMemo(() => {
     const out = [];
@@ -17684,6 +17723,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
     }).then(rows => { if(!cancelled) setRollup(rows || []); }).catch(()=>{ if(!cancelled) setRollup([]); });
     return () => { cancelled = true; };
   }, [gradedPremium]);
+
+  // All-time printing buckets for the value chart's split decisions — see
+  // gradedKnownBuckets. Built from the same rollup rows priceByKey uses.
+  const gradedKnownBucketsMap = useMemo(() =>
+    rollup ? gradedKnownBuckets(rollup) : null, [rollup]);
 
   // Index raw by card_id for metadata join (we need name/set/image/rarity).
   const cardById = useMemo(() => {
@@ -18514,7 +18558,8 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       </div>
     </div>
     ${!readOnly && html`<${GradedValueChart} items=${items} cardById=${cardById}
-      priceByKey=${priceByKey} premium=${gradedPremium} basis=${valueBasis}
+      priceByKey=${priceByKey} knownBuckets=${gradedKnownBucketsMap}
+      premium=${gradedPremium} basis=${valueBasis}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
     <div class="graded-collection-body">
       <div class="graded-collection-main">
@@ -26492,13 +26537,17 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   }, [gradedSlotsKey, gradedPremium]);
   const gradedRollupValue = useMemo(() =>
     gradedRollupRows ? makeGradedRollupValue(gradedRollupRows) : null, [gradedRollupRows]);
+  // All-time printing buckets, so the foil/non-foil split decision (and with it
+  // the headline value) doesn't depend on which sales the range window caught.
+  const gradedKnownBucketsMap = useMemo(() =>
+    gradedRollupRows ? gradedKnownBuckets(gradedRollupRows) : null, [gradedRollupRows]);
   const gradedValueSeries = useMemo(() => {
     if(!gradedSalesRows) return null;
     return addUnsoldSlabsToSeries(
-      computeSalesValueHistory(gradedSalesRows, gradedSlots),
+      computeSalesValueHistory(gradedSalesRows, gradedSlots, gradedKnownBucketsMap),
       gradedSalesRows, gradedSlots, gradedRollupValue,
-      portfolioFallbackDates(gradedRangeDays));
-  }, [gradedSalesRows, gradedSlots, gradedRollupValue, gradedRangeDays]);
+      portfolioFallbackDates(gradedRangeDays), gradedKnownBucketsMap);
+  }, [gradedSalesRows, gradedSlots, gradedRollupValue, gradedRangeDays, gradedKnownBucketsMap]);
   const gradedLatestValue = useMemo(() => (gradedValueSeries && gradedValueSeries.length) ? gradedValueSeries[gradedValueSeries.length-1].value : 0, [gradedValueSeries]);
 
   // Multi-series chart. Each {date,value} series → one line. Toggled-off
@@ -26646,6 +26695,13 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
         if(!b) continue;
         let s = bucketsByCard.get(r.card_id); if(!s){ s = new Set(); bucketsByCard.set(r.card_id, s); } s.add(b);
       }
+      // Rollup rows extend the same map so the split decision doesn't depend on
+      // the fetched window — same range-independence rule as the value chart.
+      for(const r of (gradedRollupRows || [])){
+        const b = gradedSlotBucket(r.printing);
+        if(!b) continue;
+        let s = bucketsByCard.get(r.card_id); if(!s){ s = new Set(); bucketsByCard.set(r.card_id, s); } s.add(b);
+      }
       const isSplit = (cid) => (bucketsByCard.get(cid)?.size || 0) > 1;
       const slotKey = (cid, printing, grader, grade) =>
         `${cid}|${isSplit(cid) ? (gradedSlotBucket(printing) || "?") : ""}|${(grader||"").toLowerCase()}|${grade}`;
@@ -26674,7 +26730,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     const cmpAsc  = (a,b) => a.pct - b.pct;
     out.sort((moversUp && moversDown) ? cmpAbs : moversUp ? cmpDesc : moversDown ? cmpAsc : cmpAbs);
     return out.slice(0, 10);
-  }, [moversMode, user, gradedSalesRows, rowByPid, moversWindow, moversUp, moversDown, gradedSlots]);
+  }, [moversMode, user, gradedSalesRows, gradedRollupRows, rowByPid, moversWindow, moversUp, moversDown, gradedSlots]);
 
   if(!user) return html`<aside class="collection-panel">
     <div class="panel-header">
