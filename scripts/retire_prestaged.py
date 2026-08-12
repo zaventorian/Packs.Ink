@@ -8,6 +8,27 @@ inserts the genuine row for that (set_id, collector_number) — a NON-prestage i
 the stand-in is a duplicate and must go, or the catalog shows two tiles for the
 same card.
 
+Two supersession keys, both exact:
+  1. (set_id, collector_number) — the normal case: Lorcast lands the card in
+     the same set we prestaged it into.
+  2. shared tcgplayer_product_id — promo prestage rows (set_<slug>_promos, e.g.
+     the AotV prerelease-box promos) get their Lorcast twin in Lorcast's OWN
+     promo set (PD1), so key 1 never matches. Both twins carry the same pid via
+     patch_pid_overrides' name|cn OVERRIDES, and a pid IS product identity.
+     This is what retired the six crd_prestage_avp_* rows on 2026-08-12.
+Name/version-based matching is deliberately NOT a key: the same name+version+cn
+exists as genuinely different products across sets (Maleficent - Monstrous
+Dragon is cn 5 in both Promo Set 1 and Promo Set 3, different pids).
+
+Only `crd_prestage_*` ids are ever retired. The hand-minted `crd_custom_*` /
+`crd_avp_*` / `crd_cc1_*` rows from patch_pid_overrides are excluded on
+purpose: that script re-upserts them every run, so auto-deleting one here would
+churn (delete nightly, re-mint next patch run) — and Piglet - Pooh Pirate
+Captain (crd_custom_544487) shares (set, cn 223) with Yen Sid in Ursula's
+Return, so key 1 would even mis-fire. When Lorcast starts indexing one of
+those, do what supabase/107 did for P3 #52-55: move the pid into OVERRIDES,
+delete the mint entry, and clean the row by hand.
+
 BEFORE deleting a stand-in, any user data that references its card_id (deck
 cards, collection items, graded items) is RE-POINTED to the real Lorcast card_id
 for the same (set, collector number). Without this, a user who added a pre-staged
@@ -102,17 +123,24 @@ def main():
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     sb = Supabase()
 
-    rows = sb.select("cards", columns="id,set_id,collector_number")
+    rows = sb.select("cards", columns="id,set_id,collector_number,tcgplayer_product_id")
     real_by_key = {}
+    real_by_pid = {}
     prestage = []
     for r in rows:
         key = (r.get("set_id"), _norm_cn(r.get("collector_number")))
         if str(r.get("id", "")).startswith("crd_prestage_"):
-            prestage.append((r["id"], key))
+            prestage.append((r["id"], key, r.get("tcgplayer_product_id")))
         else:
             real_by_key[key] = r["id"]
+            if r.get("tcgplayer_product_id") is not None:
+                real_by_pid[r["tcgplayer_product_id"]] = r["id"]
 
-    superseded = [(pid, real_by_key[key]) for pid, key in prestage if key in real_by_key]
+    superseded = []
+    for pid, key, tpid in prestage:
+        real = real_by_key.get(key) or (real_by_pid.get(tpid) if tpid is not None else None)
+        if real:
+            superseded.append((pid, real))
     print(f"{len(prestage)} prestage row(s); {len(superseded)} superseded by a real Lorcast card.")
     if not superseded:
         print("Nothing to retire.")

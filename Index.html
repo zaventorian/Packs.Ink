@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=314">
+<link rel="stylesheet" href="styles.css?v=316">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -446,7 +446,7 @@ async function encDeckMetaPatch(patch){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v52";  // v52: Lorcast started indexing the Coconut leaders for real, so the synthesized row and the catalog row rendered as two Ariel tiles. The merge/suppress happens in transformSupabaseData, which only runs on a network fetch. Cold-fetch required. (v51: Coconut leader rows synthesized at all.)
+const CACHE_KEY = "packsink:catalog:v53";  // v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. (v52: Coconut leader merge/suppress.)
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -1255,6 +1255,9 @@ const TCG_PID_OVERRIDES = {
   "Woody - Jungle Guide|53": 692485,                  // SC Participant (Normal)
   "Woody - Jungle Guide|54": 692486,                  // SC Championship (Holofoil)
   "Violet Parr - Learning New Powers|55": 692487,
+  // Promo Set 3 #57 — Lorcast indexes it now (pid null); the old crd_custom_
+  // reprint row was retired 2026-08-12 (same dance as #52-55 / supabase 107).
+  "Buzz Lightyear - Space Ranger|57": 692489,
   // Attack of the Vine! prerelease-box promos (set_aotv_promos) — pid parity
   // with patch_pid_overrides so the DB and client agree.
   "Pocahontas - Guiding the Tribe|3": 705068,
@@ -26179,6 +26182,11 @@ const EYE_OFF_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="
 //   left / main / right = the three columns of .home-grid
 // On phones the grid collapses to one column (main → right → left) and the
 // left column pairs its panels two-up — see the .home-left-col mobile rule.
+// A `pinned` panel has a fixed mount (the string names it in the settings
+// editor) — only its on/off toggle applies; its stored `col` is ignored and it
+// never counts as a reorder neighbour. The news feed is pinned beside the
+// Rare–Legendary movers banner so it works as a narrow side column at every
+// width (the old full-width announce tiles ate half a phone screen).
 const HOME_COLUMNS = [
   {key:"announce", label:"Top"},
   {key:"left",     label:"Left"},
@@ -26186,7 +26194,7 @@ const HOME_COLUMNS = [
   {key:"right",    label:"Right"},
 ];
 const HOME_PANELS = [
-  {key:"news",        label:"Announcements",        col:"announce"},
+  {key:"news",        label:"News feed",            col:"announce", pinned:"Beside the movers"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
   {key:"setChamps",   label:"Upcoming events",      col:"right"},
@@ -26194,6 +26202,7 @@ const HOME_PANELS = [
   {key:"collection",  label:"Your Collection value",col:"right"},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
+const HOME_PANELS_PINNED = new Set(HOME_PANELS.filter(p => p.pinned).map(p => p.key));
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
 const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
@@ -28820,28 +28829,20 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   }, [raw]);
   const showCoconutNews = coconutCount > 0 && Date.now() < COCONUT_NEWS_UNTIL;
 
-  // Announcement tiles — the pre-release "News" card, the Format Coconut card,
-  // and any live convention tile. Collected into one list so they can ride the
-  // full-width strip under the search box (the `announce` column) rather than
-  // being buried at the top of the left rail where most people never scrolled.
+  // News-feed tiles — the pre-release "News" card, any live convention tile
+  // (Artist Alley), and the Format Coconut card, in that order (announcements
+  // with a hard end-date read top-down; Coconut is the standing one, so it
+  // sits at the bottom). Rendered as a single pinned `.home-news-feed` column
+  // beside the Rare–Legendary movers banner — NOT as full-width announce
+  // tiles, which ate half a phone screen when two conventions ran at once.
   const newsTiles = [];
   if(showNews) newsTiles.push(html`<a key="news" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(newsSet)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(newsSet))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
-          <div style=${{fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--accent)", fontWeight:700, marginBottom:4}}>📣 News</div>
+          <div class="home-news-kicker">📣 News</div>
           <div class="home-news-title">${newsSet} — ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
-          <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>Browse the set →</div>
-        </a>`);
-  if(showCoconutNews) newsTiles.push(html`<a key="coconut" class="home-news-tile home-news-clickable"
-          href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
-          onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
-          style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
-          <div style=${{fontSize:10, letterSpacing:"0.08em", textTransform:"uppercase", color:"var(--accent)", fontWeight:700, marginBottom:4}}>🥥 New Format</div>
-          <div class="home-news-title">${COCONUT_SET_NAME}</div>
-          <div style=${{fontSize:11, color:"var(--muted)", marginTop:4}}>
-            Multiplayer, 3 inks, first to ${COCONUT_LORE_GOAL} lore. Browse all ${coconutCount} Coconut card${coconutCount===1?"":"s"} →
-          </div>
+          <div class="home-news-sub">Browse the set →</div>
         </a>`);
   for(const ev of activeEvents) newsTiles.push(html`<div key=${"ev-"+ev.id} class="home-news-tile">
           <div class="home-news-title">${ev.title}</div>
@@ -28863,16 +28864,32 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             </li>`)}
           </ul>
         </div>`);
+  if(showCoconutNews) newsTiles.push(html`<a key="coconut" class="home-news-tile home-news-clickable"
+          href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
+          onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
+          style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
+          <div class="home-news-kicker">🥥 New Format</div>
+          <div class="home-news-title">${COCONUT_SET_NAME}</div>
+          <div class="home-news-sub">
+            Multiplayer, 3 inks, first to ${COCONUT_LORE_GOAL} lore. Browse all ${coconutCount} Coconut card${coconutCount===1?"":"s"} →
+          </div>
+        </a>`);
+  // Pinned mount (see HOME_PANELS): the settings toggle is the only layout
+  // control that applies. Rendered beside the Rare–Legendary banner in the
+  // movers stack; in the movers loading/error states it renders full-width so
+  // announcements never disappear behind a data hiccup.
+  const newsFeed = (panelCol["news"] != null && newsTiles.length > 0)
+    ? html`<aside class="home-feed home-news-feed" aria-label="News">
+        <div class="home-feed-title--chase">News</div>
+        <div class="home-news-feed-list">${newsTiles}</div>
+      </aside>`
+    : null;
 
   // One node per configurable panel. `null` means "nothing to draw" — either
   // the panel is switched off (panelCol is null) or it has no content.
+  // "news" is deliberately absent: it has a pinned mount beside the movers.
   const panelNode = (key) => {
     switch(key){
-      // Keyed fragment, not a bare array: a nested unkeyed array would fall
-      // back to index keys and remount the tiles whenever another panel is
-      // toggled on or off around it.
-      case "news":       return newsTiles.length
-        ? html`<${React.Fragment} key="news">${newsTiles}</${React.Fragment}>` : null;
       case "following":  return html`<${FollowingFeed} key="following" user=${user} onSignIn=${onSignIn}
         raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`;
       case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
@@ -28940,12 +28957,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           </span>
         </div>
         ${state.loading
-          ? html`<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div>`
+          ? html`<div>${newsFeed}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>Loading movers…</div></div>`
           : state.error
-            ? html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div>`
+            ? html`<div>${newsFeed}<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:13}}>${state.error}</div></div>`
             : (!showUp && !showDown)
-              ? html`<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
-                  Toggle on at least one direction (Gainers or Droppers) to see movers.</div>`
+              ? html`<div>${newsFeed}<div class="muted" style=${{padding:"40px 0",textAlign:"center"}}>
+                  Toggle on at least one direction (Gainers or Droppers) to see movers.</div></div>`
               : (() => {
                   const newestBanner = NEWEST_SET && html`<${MoversBanner}
                     title=${`${NEWEST_SET.toUpperCase()} · MOST VALUABLE`}
@@ -28957,6 +28974,20 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     paused=${paused}
                     onTitleClick=${()=>openBannerInScreener("newest")}
                     onTileClick=${openCard}/>`;
+                  // The news feed rides shotgun on the Rare–Legendary banner —
+                  // a narrow right-hand column (same shape the tournament
+                  // panel used pre-2026-08). Natural heights only; the pair's
+                  // two height-locked predecessors both broke (see CLAUDE.md).
+                  const rareLegBanner = html`<${MoversBanner}
+                      title="Rare – Legendary Movers"
+                      subtitle=${`${rareLegLabel} — top 20 by ${winLabel} ${directionLabel}`}
+                      controls=${rareLegControls}
+                      cards=${rareLeg}
+                      activeWindow=${windowKey}
+                      visibleWindows=${visibleWindows}
+                      paused=${paused}
+                      onTitleClick=${()=>openBannerInScreener("rareLeg")}
+                      onTileClick=${openCard}/>`;
                   return html`<div>
                     ${newestSetIsHot && newestBanner}
                     <${MoversBanner}
@@ -28969,16 +29000,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("chase")}
                       onTileClick=${openCard}/>
-                    <${MoversBanner}
-                      title="Rare – Legendary Movers"
-                      subtitle=${`${rareLegLabel} — top 20 by ${winLabel} ${directionLabel}`}
-                      controls=${rareLegControls}
-                      cards=${rareLeg}
-                      activeWindow=${windowKey}
-                      visibleWindows=${visibleWindows}
-                      paused=${paused}
-                      onTitleClick=${()=>openBannerInScreener("rareLeg")}
-                      onTileClick=${openCard}/>
+                    ${newsFeed
+                      ? html`<div class="rl-news-row">
+                          <div class="rl-news-main">${rareLegBanner}</div>
+                          ${newsFeed}
+                        </div>`
+                      : rareLegBanner}
                     <${MoversBanner}
                       title="Promo Movers"
                       subtitle=${`Promo printings — top 20 by ${winLabel} ${directionLabel}`}
@@ -35208,13 +35235,14 @@ function App(){
   // flat array, so "up" means swapping with the nearest previous entry that is
   // both in the same column AND visible — not simply index-1, which would swap
   // past a neighbour in another column (or a hidden one) and appear to do
-  // nothing at all.
+  // nothing at all. Pinned panels (news feed) keep a col value nobody renders,
+  // so they're skipped as swap targets for the same dead-button reason.
   const moveHomePanel = (key, dir) => setHomeLayout(l => {
     const i = l.findIndex(p => p.key === key);
     if(i < 0) return l;
     const step = dir < 0 ? -1 : 1;
     let j = i + step;
-    while(j >= 0 && j < l.length && !(l[j].col === l[i].col && l[j].on)) j += step;
+    while(j >= 0 && j < l.length && !(l[j].col === l[i].col && l[j].on && !HOME_PANELS_PINNED.has(l[j].key))) j += step;
     if(j < 0 || j >= l.length) return l;
     const next = l.slice();
     [next[i], next[j]] = [next[j], next[i]];
@@ -36489,7 +36517,18 @@ function App(){
                 ${homeLayout.map((p) => {
                   const meta = HOME_PANELS.find(h => h.key === p.key);
                   if(!meta) return null;
-                  const sameCol = homeLayout.filter(q => q.col === p.col && q.on);
+                  // Pinned panels (the news feed) have a fixed mount — only the
+                  // on/off toggle applies, and they never count as a reorder
+                  // neighbour for the panels that DO live in columns.
+                  if(meta.pinned) return html`<div key=${p.key} class=${"home-panel-row"+(p.on?"":" is-off")}>
+                    <label class="home-panel-name" title=${"Show “"+meta.label+"” on the home page"}>
+                      <input type="checkbox" checked=${p.on}
+                        onChange=${()=>toggleHomePanel(p.key)}/>
+                      <span>${meta.label}</span>
+                    </label>
+                    <span class="home-panel-pinned" title="This section has a fixed spot next to the Rare – Legendary movers.">${meta.pinned}</span>
+                  </div>`;
+                  const sameCol = homeLayout.filter(q => q.col === p.col && q.on && !HOME_PANELS_PINNED.has(q.key));
                   const posInCol = sameCol.findIndex(q => q.key === p.key);
                   return html`<div key=${p.key} class=${"home-panel-row"+(p.on?"":" is-off")}>
                     <label class="home-panel-name" title=${"Show “"+meta.label+"” on the home page"}>

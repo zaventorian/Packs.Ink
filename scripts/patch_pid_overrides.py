@@ -56,6 +56,10 @@ OVERRIDES = {
     "Woody - Jungle Guide|53": 692485,          # SC Participant (Normal)
     "Woody - Jungle Guide|54": 692486,          # SC Championship (Holofoil)
     "Violet Parr - Learning New Powers|55": 692487,
+    # Promo Set 3 #57 — Lorcast indexes it now (pid null). Was a REPRINT_PROMOS
+    # crd_custom_ row; that duplicate was retired 2026-08-12 (same dance as
+    # supabase/107 for #52-55).
+    "Buzz Lightyear - Space Ranger|57": 692489,
     # Attack of the Vine! prerelease-box promos (set_aotv_promos). Prestaged as
     # image+name; TCGplayer has now assigned pids, so link them for prices.
     "Pocahontas - Guiding the Tribe|3": 705068,
@@ -174,11 +178,12 @@ def main() -> None:
         # supabase/82_quest_card_piglet.sql follow-up; EXTRAS_MAP renders them via
         # the real Lorcast card_id now.
         # --- Promo Set 3 #56: Buzz Lightyear - On the Way. Lorcast does NOT
-        # index it (its P3 feed stops at #55), so it stays a synthetic row.
-        # #52-55 used to live here too, but Lorcast now indexes those, so they
-        # moved to OVERRIDES above (pid applied to the Lorcast row) and the old
-        # crd_custom_ rows were removed in supabase/107 to kill the duplicate
-        # tiles. #57 (Buzz - Space Ranger) is built via REPRINT_PROMOS below.
+        # index it (its P3 feed stops just short of it), so it stays a
+        # synthetic row. #52-55 used to live here too, and #57 in
+        # REPRINT_PROMOS below — Lorcast now indexes those, so their pids
+        # moved to OVERRIDES above (applied to the Lorcast row) and the old
+        # crd_custom_ rows were deleted to kill the duplicate tiles (#52-55 in
+        # supabase/107, #57 on 2026-08-12).
         {  # Buzz Lightyear - On the Way — P3 #56 (Holofoil promo)
             "id": "crd_custom_692488_buzz_on_the_way",
             "set_id": "set_1e6669367c7a4a208ce51fd8bd7d2c41",
@@ -280,7 +285,6 @@ def main() -> None:
     #   (base_pid, set_id, collector_number, new_id, promo_pid)
     AVP_SET = "set_aotv_promos"        # Attack of the Vine! Promos (folds under Set 13)
     CC1_SET = "set_curators_cc1"       # Curator's Collection: Heroines
-    P3_SET  = "set_1e6669367c7a4a208ce51fd8bd7d2c41"
     REPRINT_PROMOS = [
         (702677, AVP_SET, "9",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo
         (702660, AVP_SET, "10", "crd_avp_10_tigger_hunny_barbarian",  705083),  # buy-a-box promo
@@ -290,7 +294,6 @@ def main() -> None:
         (544494, CC1_SET, "4",  "crd_cc1_4_mulan_elite_archer",       702520),
         (631455, CC1_SET, "5",  "crd_cc1_5_anna_trusting_sister",     702521),
         (503357, CC1_SET, "6",  "crd_cc1_6_tinker_bell_giant_fairy",  702603),
-        (692164, P3_SET,  "57", "crd_custom_692489_buzz_space_ranger",692489),  # Promo Set 3 tail
     ]
     print("\nBuilding promo-reprint rows (clone base, carry promo pid + set/cn)...")
     try:
