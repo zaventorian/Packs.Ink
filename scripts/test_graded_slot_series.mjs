@@ -139,5 +139,33 @@ const endpoint = (sales) => {
 eq("headline (endpoint) is identical for the short and the full window",
    endpoint(foilOnlyWindow), endpoint(baymax));
 
+// ── stray labels must not split a single-market card when kb is authoritative ──
+// Sellers write "foil" on cards that are ALL foil (Enchanteds, promos). With the
+// rollup loaded (printing='' → no labelled buckets), those labels are ignored;
+// this exact shape valued 2x Elsa SoW Enchanted PSA 10 at $89.10 against a
+// ~$3,000 market whenever the range reached the mislabelled rows.
+const strayRollup = [{card_id:"m", grader:"PSA", grade:"10", printing:"", last_sold_price: 719.99, last_sold_date:"2026-08-09"}];
+const strayKb = gradedKnownBuckets(strayRollup);
+const straySales = [
+  S("m", "Non-Foil", 44.55,  "2023-09-01"),   // ancient mislabel
+  S("m", null,       700,    "2026-07-01"),
+  S("m", "Foil",     405,    "2026-07-27"),   // seller wrote "foil" on an all-foil card
+  S("m", null,       719.99, "2026-08-09"),
+];
+const straySlot = {card_id:"m", printing:"Holofoil", grader:"psa", grade:"10", qty:1};
+eq("single-market card: stray labels don't split it (kb authoritative)",
+   makeGradedSlotSeries(straySales, strayKb)(straySlot).map(r => r.price), [44.55, 700, 405, 719.99]);
+eq("without kb the stray labels still split it (legacy window heuristic)",
+   makeGradedSlotSeries(straySales)(straySlot).map(r => r.price), [405]);
+
+// ── same-day ties resolve by scraped_at, matching the rollup's rn=1 ordering ──
+const tieSales = [
+  {...S("t", null, 36.04, "2026-07-11"), scraped_at: "2026-07-11T01:00:00Z"},
+  {...S("t", null, 16.01, "2026-07-11"), scraped_at: "2026-07-12T09:00:00Z"},
+];
+const tieSlot = {card_id:"t", printing:"Normal", grader:"psa", grade:"10", qty:1};
+const tieSeries = makeGradedSlotSeries(tieSales)(tieSlot);
+eq("same-day tie: later-scraped sale is the last", tieSeries[tieSeries.length-1].price, 16.01);
+
 console.log(fails ? `\n${fails} FAILURE(S)` : "\nall assertions pass");
 process.exit(fails ? 1 : 0);

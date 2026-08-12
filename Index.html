@@ -2482,7 +2482,7 @@ async function fetchGradedSalesFor(slots, sinceDate){
   const batches = [];
   for(let i=0;i<cardIds.length;i+=BATCH) batches.push(cardIds.slice(i, i+BATCH));
   const results = await Promise.all(batches.map(b => sbFetchAll("graded_sales", {
-    select: "card_id,grader,grade,printing,sale_price,sold_date",
+    select: "card_id,grader,grade,printing,sale_price,sold_date,scraped_at",
     card_id: "in.(" + b.join(",") + ")",
     sold_date: "gte." + sinceDate,
     excluded: "is.false",
@@ -2528,12 +2528,19 @@ async function fetchGradedRollupFor(slots){
 // migration-50 backfill, and a strict match would silently drop them to $0.
 //
 // knownBuckets (optional Map<"card|grader|grade", Set<bucket>>, from
-// gradedKnownBuckets over the range-independent rollup) supplies ALL-TIME
-// printing knowledge. Without it, "does this card have two printings?" is
-// answered from only the fetched window — a C1 card whose last month saw only
-// Top Prize foil sales read as one-printing at 1M (valuing a Prize Wall slab at
-// the foil price) and as split at 1Y, which made the portfolio headline change
-// whenever the chart range changed.
+// gradedKnownBuckets over the range-independent rollup) is AUTHORITATIVE when
+// present: the rollup's printing column encodes the curated per-card flags
+// (cards.split_printing / foil_split via graded_sale_pkey), and deciding the
+// split from sale labels instead fails in both directions —
+//   * window too short: a C1 card whose last month saw only Top Prize foil
+//     sales read as one-printing at 1M (valuing a Prize Wall slab at the foil
+//     price) and as split at 1Y, so the headline moved with the chart range;
+//   * window too long: sellers write "foil" on cards that are ALL foil, so one
+//     stray labelled sale among hundreds split a single-market card and valued
+//     it off the mislabelled handful (2x Elsa SoW Enchanted PSA 10 read $89.10
+//     at "All" against a ~$3,000 market).
+// Only when knownBuckets is unavailable (rollup not loaded) do the window's
+// own labels decide, as before.
 function makeGradedSlotSeries(sales, knownBuckets){
   const byCard = new Map();
   for(const r of (sales || [])){
@@ -2543,10 +2550,14 @@ function makeGradedSlotSeries(sales, knownBuckets){
     if(!g){ g = {buckets:new Set(), rows:[]}; byCard.set(ck, g); }
     const b = gradedSlotBucket(r.printing);
     if(b) g.buckets.add(b);
-    g.rows.push({date: r.sold_date, price: Number(r.sale_price), bucket: b});
+    g.rows.push({date: r.sold_date, price: Number(r.sale_price), bucket: b, scraped: r.scraped_at || ""});
   }
+  // Same-day ties resolve by scraped_at, mirroring the rollup's rn=1 ordering
+  // (sold_date desc, scraped_at desc) — otherwise "last sale" flips between
+  // the in-window path and the rollup path depending on the range.
   for(const g of byCard.values())
-    g.rows.sort((a,b) => String(a.date).localeCompare(String(b.date)));
+    g.rows.sort((a,b) => String(a.date).localeCompare(String(b.date))
+      || String(a.scraped).localeCompare(String(b.scraped)));
   const cache = new Map();
   return (slot) => {
     const ck = `${slot.card_id}|${(slot.grader||"").toLowerCase()}|${slot.grade}`;
@@ -2559,12 +2570,10 @@ function makeGradedSlotSeries(sales, knownBuckets){
       // 2+ labelled printings = a genuinely split card (C1 Top Prize vs Prize
       // Wall, Genie Two Swords vs Normal). Only this printing's own sales count;
       // unclassified rows are dropped rather than guessed.
-      const known = knownBuckets ? knownBuckets.get(ck) : null;
-      let bucketCount = g.buckets.size;
-      if(known) bucketCount = new Set([...g.buckets, ...known]).size;
-      const rows = bucketCount >= 2
-        ? g.rows.filter(r => r.bucket === want)
-        : g.rows;
+      const split = knownBuckets
+        ? ((knownBuckets.get(ck)?.size || 0) >= 2)
+        : g.buckets.size >= 2;
+      const rows = split ? g.rows.filter(r => r.bucket === want) : g.rows;
       if(rows.length) series = rows;
     }
     cache.set(key, series);
@@ -26698,15 +26707,13 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
       // printings; with one or none, every sale prices the slot, because a
       // foil-only chase card's slot is stamped "Normal" by the migration-50
       // backfill and a strict match would silently drop it.
+      // Split decision comes from the rollup when loaded (its printing column
+      // encodes the curated split_printing/foil_split flags — authoritative and
+      // range-independent), falling back to the window's own labels before it
+      // lands. Sale labels alone both miss splits (short window) and invent
+      // them (stray "foil" on an all-foil card) — see makeGradedSlotSeries.
       const bucketsByCard = new Map();
-      for(const r of gradedSalesRows){
-        const b = gradedSlotBucket(r.printing);
-        if(!b) continue;
-        let s = bucketsByCard.get(r.card_id); if(!s){ s = new Set(); bucketsByCard.set(r.card_id, s); } s.add(b);
-      }
-      // Rollup rows extend the same map so the split decision doesn't depend on
-      // the fetched window — same range-independence rule as the value chart.
-      for(const r of (gradedRollupRows || [])){
+      for(const r of ((gradedRollupRows && gradedRollupRows.length) ? gradedRollupRows : gradedSalesRows)){
         const b = gradedSlotBucket(r.printing);
         if(!b) continue;
         let s = bucketsByCard.get(r.card_id); if(!s){ s = new Set(); bucketsByCard.set(r.card_id, s); } s.add(b);
