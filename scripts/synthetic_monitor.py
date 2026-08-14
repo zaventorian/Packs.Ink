@@ -57,14 +57,17 @@ import requests
 # ETL cycle crosses 30h a few hours after the last retry cron and alerts.
 STALE_GRACE_HOURS = 30
 
-# Minimum plausible row count for the price_movers matview. price_movers is NOT
-# one-row-per-catalog-card: its WHERE clause keeps only cards with a >= $5 window
-# price (low_prev/7d/30d/90d/180d/365d), i.e. the "movers" worth surfacing. That
-# population is structurally ~450-550 (445 in Dec 2025 → 548 in Jun 2026) and has
-# never approached the catalog size. The floor here only needs to catch a matview
-# that emptied or never refreshed — which crashes to ~0 — so 300 sits well below
-# the real count while still separating healthy (~500+) from broken (~0).
-MIN_MOVERS_ROWS = 300
+# Minimum plausible row count for the price_movers matview. Since migration 120
+# it IS ~one row per (card, printing) with a price: the old ">= $5 in some
+# window" gate is gone, because it was silently hiding 89% of the catalog from
+# the Screener (every Common, among others). Population went 622 -> ~5,800 and
+# now tracks the catalog, so the floor moves with it.
+#
+# 3000 is roughly half the expected count: high enough to catch a refresh that
+# truncated or half-populated, low enough that it can't false-alarm on ordinary
+# catalog churn. The old 300 would have sat below even the pre-120 population
+# and would no longer notice anything short of a total wipe.
+MIN_MOVERS_ROWS = 3000
 
 # Production URL for the deploy-health check.
 SITE_URL = "https://packs.ink/"

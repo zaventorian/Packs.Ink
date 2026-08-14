@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=318">
+<link rel="stylesheet" href="styles.css?v=319">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -454,7 +454,7 @@ const CACHE_KEY = "packsink:catalog:v53";  // v53: retired the 6 crd_prestage_av
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-07-29-legacy-graded-feed-removed";
+const AUX_CACHE_VERSION = "2026-08-14-price-movers-full-catalog";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -23399,7 +23399,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     }
     sbClient.from("price_movers")
       .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
-      .limit(10000)
+      // Explicit order + headroom on the limit. An unordered .limit() that the
+      // row count later grows past truncates arbitrarily — which is one way a
+      // whole set could silently vanish from the Screener. ~5,800 rows since
+      // migration 120 (was ~620).
+      .order("card_id")
+      .limit(20000)
       .then(({data, error}) => {
         if(cancelled) return;
         if(error){
@@ -24060,10 +24065,64 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       setMaxPrice("");
     } else {
       setFilterRarities(new Set());
-      setMinPrice("5");
+      // "Clear filters" has to actually clear the price floor. It used to
+      // re-apply the $5 default, so the one button a stuck user reaches for
+      // left in place the filter most likely to be emptying their table.
+      setMinPrice("");
       setMaxPrice("");
     }
   }, [showGraded, preset]);
+
+  // Everything that narrows the table from INSIDE the collapsed "Filter"
+  // panel, flattened into one always-visible line.
+  //
+  // The toolbar filters (preset, rarity, set, ownership, signals, foil) light
+  // up where you set them, so you can see them working. The panel ones are
+  // invisible once it's closed — and one of them, the $5 minimum price, is on
+  // by DEFAULT. Filtering to "commons only" therefore produced an empty table
+  // with nothing on screen to explain it (reported 2026-08-14). Each entry
+  // clears itself; the empty state below reuses the same list to say why.
+  const hiddenFilterChips = useMemo(() => {
+    const out = [];
+    const push = (key, label, clear) => out.push({key, label, clear});
+    const money = (v) => "$" + String(v).replace(/^\$/, "");
+    const priceLbl = priceMode === "market" ? "NM Market" : "Low";
+    if(minPrice !== "") push("minPrice", `${priceLbl} ≥ ${money(minPrice)}`, () => setMinPrice(""));
+    if(maxPrice !== "") push("maxPrice", `${priceLbl} ≤ ${money(maxPrice)}`, () => setMaxPrice(""));
+    const winLbl = (PRICE_DB_WIN.find(w => w[0] === pctWin) || [,,pctWin])[2];
+    if(minPct !== "") push("minPct", `${winLbl} Δ% ≥ ${minPct}%`, () => setMinPct(""));
+    if(maxPct !== "") push("maxPct", `${winLbl} Δ% ≤ ${maxPct}%`, () => setMaxPct(""));
+    // Sealed rows aren't catalog cards: that branch of the filter pipeline
+    // short-circuits before chipFilter, so ink / cost / type / stats / keywords
+    // / classifications / artist genuinely do nothing there. Listing them would
+    // be the same lie this strip exists to stop telling. Price + Δ% bounds DO
+    // apply to sealed, and so does Set — those stay.
+    if(showSealed) return out;
+    const fromSet = (key, label, set, setter) => {
+      if(set && set.size) push(key, `${label}: ${Array.from(set).join(", ")}`, () => setter(new Set()));
+    };
+    fromSet("inks",  "Ink",        filterInks,       setFilterInks);
+    fromSet("costs", "Cost",       filterCosts,      setFilterCosts);
+    fromSet("types", "Type",       filterCardTypes,  setFilterCardTypes);
+    fromSet("str",   "Strength",   filterStrengths,  setFilterStrengths);
+    fromSet("wil",   "Willpower",  filterWillpowers, setFilterWillpowers);
+    fromSet("lore",  "Lore",       filterLores,      setFilterLores);
+    if(filterInkable !== null)
+      push("inkable", filterInkable ? "Inkable" : "Uninkable", () => setFilterInkable(null));
+    if(filterLegality)
+      push("legality", filterLegality === "core" ? "Core" : filterLegality === "japan" ? "Japan Core" : "Infinity",
+        () => setFilterLegality(""));
+    fromSet("kw",  "Keyword",        filterKeywords,        setFilterKeywords);
+    fromSet("cls", "Classification", filterClassifications, setFilterClassifications);
+    fromSet("art", "Artist",         filterIllustrators,    setFilterIllustrators);
+    return out;
+  }, [showSealed, priceMode, minPrice, maxPrice, pctWin, minPct, maxPct, filterInks, filterCosts,
+      filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable,
+      filterLegality, filterKeywords, filterClassifications, filterIllustrators]);
+
+  const clearHiddenFilters = useCallback(() => {
+    for(const c of hiddenFilterChips) c.clear();
+  }, [hiddenFilterChips]);
 
   // Customizable-columns state (hooks — must be before the early returns).
   const [colPrefs, setColPrefs] = useState(()=>{ try { return JSON.parse(localStorage.getItem("packsink:screener:colprefs:v1")||"{}"); } catch { return {}; } });
@@ -24373,9 +24432,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </div>`}
     </div>
     <div class="price-db-filters price-db-filters-secondary">
-      <button class="price-db-advbtn" onClick=${() => setAdvOpen(o => !o)}
-        title="Filters: price / Δ% bounds, ink, type, cost, stats, keywords, classifications…">
+      <button class=${"price-db-advbtn"+(hiddenFilterChips.length ? " has-active" : "")}
+        onClick=${() => setAdvOpen(o => !o)}
+        title="Filters: set, price / Δ% bounds, ink, type, cost, stats, keywords, classifications…">
         ${advOpen ? "Filter ▴" : "Filter ▾"}
+        ${hiddenFilterChips.length > 0 && html`<span class="price-db-advcount">${hiddenFilterChips.length}</span>`}
       </button>
       <div ref=${colsRef} style=${{position:"relative",display:"inline-flex"}}>
         <button class="price-db-advbtn" onClick=${()=>setColsMenuOpen(o=>!o)}
@@ -24512,7 +24573,25 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <button class=${priceMode === "market" ? "active" : ""} onClick=${() => setPriceMode("market")}>Use NM Market</button>
       </div>`}
     </div>
+    ${hiddenFilterChips.length > 0 && html`<div class="price-db-hiddenfilters">
+      <span class="price-db-hiddenfilters-lbl">Also filtering</span>
+      ${hiddenFilterChips.map(c => html`<button key=${c.key} class="price-db-hiddenchip"
+        title=${`Remove this filter (${c.label})`} onClick=${c.clear}>${c.label} <span aria-hidden="true">✕</span></button>`)}
+      ${hiddenFilterChips.length > 1 && html`<button class="price-db-hiddenchip price-db-hiddenchip-all"
+        title="Remove every filter in the Filter panel" onClick=${clearHiddenFilters}>Clear all</button>`}
+    </div>`}
     ${advOpen && html`<div class="price-db-adv">
+      <div class="price-db-adv-row">
+        <label>Set</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:4}}>
+          <button class=${"chip "+(filterSet.size===0?"active":"")}
+            title="No set filter — show every set"
+            onClick=${()=>setFilterSet(new Set())}>All sets</button>
+          ${setOptions.slice().reverse().map(s => html`<button key=${s}
+            class=${"chip "+(filterSet.has(s)?"active":"")}
+            onClick=${()=>setFilterSet(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; })}>${s}</button>`)}
+        </div>
+      </div>
       ${!showSealed && html`<div class="price-db-adv-row">
         <label>Ink</label>
         <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
@@ -24700,7 +24779,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       : html`<${React.Fragment}>
     <div class="price-db-count muted">${filtered.length} cards${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
     ${filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
-      No cards match the current filters — try clearing a chip or two, or switch the preset back to "All".
+      <div>No cards match the current filters — try clearing a chip or two, or switch the preset back to "All".</div>
+      ${hiddenFilterChips.length > 0 && html`<div style=${{marginTop:10}}>
+        The Filter panel is also narrowing this view: <b>${hiddenFilterChips.map(c=>c.label).join(" · ")}</b>.
+        <div style=${{marginTop:8}}>
+          <button class="price-db-advbtn" onClick=${clearHiddenFilters}>Clear those filters</button>
+        </div>
+      </div>`}
     </div>`}
     <div class="price-db-tablewrap">
       <table class="price-db-table">
@@ -28559,7 +28644,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     sbClient.from("price_movers")
       .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
       .order("abs_pct_1d", {ascending:false, nullsFirst:false})
-      .limit(5000)
+      // Migration 120 grew price_movers from ~620 rows to ~5,800 (it no longer
+      // drops everything under a $5 baseline). At the old 5000 the tail would
+      // be cut off — and the tail is where the null-abs_pct_1d rows sort, which
+      // still carry valid 1W / 1M / 1Y moves for the other window buttons.
+      .limit(20000)
       .then(({data, error}) => {
         if(cancelled) return;
         if(error){
