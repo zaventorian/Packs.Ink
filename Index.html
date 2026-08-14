@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=319">
+<link rel="stylesheet" href="styles.css?v=320">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -454,7 +454,7 @@ const CACHE_KEY = "packsink:catalog:v53";  // v53: retired the 6 crd_prestage_av
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-08-14-price-movers-full-catalog";
+const AUX_CACHE_VERSION = "2026-08-14-price-movers-paginated";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -23397,14 +23397,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       if(!cached.stale) return () => { cancelled = true; };
       // Fall through and background-refresh.
     }
-    sbClient.from("price_movers")
-      .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
-      // Explicit order + headroom on the limit. An unordered .limit() that the
-      // row count later grows past truncates arbitrarily — which is one way a
-      // whole set could silently vanish from the Screener. ~5,800 rows since
-      // migration 120 (was ~620).
-      .order("card_id")
-      .limit(20000)
+    sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "card_id.asc"})
+      // MUST paginate. PostgREST caps a response at 1000 rows no matter what
+      // .limit() says, so a bare .limit(N) silently truncates — invisible while
+      // price_movers held 622 rows, a 5x cut the moment migration 120 grew it
+      // to ~5,800 (the Screener showed 21 of Attack of the Vine!'s 144 commons).
+      // sbFetchAll range-paginates in parallel and needs the explicit order=,
+      // or the ranges overlap and rows duplicate.
+      .then(data => ({data, error: null}), error => ({data: null, error}))
       .then(({data, error}) => {
         if(cancelled) return;
         if(error){
@@ -28641,14 +28641,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       if(!cached.stale) return ()=>{ cancelled = true; };
       // Fall through and background-refresh.
     }
-    sbClient.from("price_movers")
-      .select("card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d")
-      .order("abs_pct_1d", {ascending:false, nullsFirst:false})
-      // Migration 120 grew price_movers from ~620 rows to ~5,800 (it no longer
-      // drops everything under a $5 baseline). At the old 5000 the tail would
-      // be cut off — and the tail is where the null-abs_pct_1d rows sort, which
+    sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "abs_pct_1d.desc.nullslast"})
+      // MUST paginate — see the Screener fetch above. PostgREST's 1000-row cap
+      // ignores .limit(), and since migration 120 that would drop ~4,800 of
+      // ~5,800 rows: the tail is where null-abs_pct_1d sorts, and those rows
       // still carry valid 1W / 1M / 1Y moves for the other window buttons.
-      .limit(20000)
+      .then(data => ({data, error: null}), error => ({data: null, error}))
       .then(({data, error}) => {
         if(cancelled) return;
         if(error){
