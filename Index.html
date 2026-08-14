@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=320">
+<link rel="stylesheet" href="styles.css?v=321">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -28468,6 +28468,40 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   </section>`;
 };
 
+// News feed — the tile list scrolls internally once it outgrows its cap, but a
+// clipped list reads as "cut off" rather than "scrollable" on phones, which
+// hide their scrollbars until you're already scrolling. `edge` tracks which
+// ends have content past the fold so the fade + the ⌄ chip appear only when
+// there really is more to see.
+const NewsFeed = ({variant, tiles}) => {
+  const listRef = useRef(null);
+  const [edge, setEdge] = useState("");
+  const sync = useCallback(() => {
+    const el = listRef.current; if(!el) return;
+    const below = el.scrollHeight - el.clientHeight - el.scrollTop > 4;
+    const above = el.scrollTop > 4;
+    setEdge(above && below ? "both" : below ? "bot" : above ? "top" : "");
+  }, []);
+  useEffect(() => {
+    const el = listRef.current; if(!el) return;
+    sync();
+    // The cap is vh-based and tiles come and go as events go live, so the
+    // overflow state changes without a scroll — watch the box itself too.
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : null;
+    if(ro) ro.observe(el);
+    window.addEventListener("resize", sync);
+    return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
+  }, [sync, tiles.length]);
+  return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant+(edge?" news-edge-"+edge:"")} aria-label="News">
+    <div class="home-feed-title--chase">News</div>
+    <div class="home-news-feed-scroll">
+      <div class="home-news-feed-list" ref=${listRef} onScroll=${sync}>${tiles}</div>
+      <button class="home-news-feed-more" tabIndex=${-1} aria-hidden="true"
+        onClick=${() => { const el = listRef.current; if(el) el.scrollBy({top: Math.round(el.clientHeight * 0.75), behavior: "smooth"}); }}>⌄</button>
+    </div>
+  </aside>`;
+};
+
 const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, onEventArtistClick, layout}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -28974,10 +29008,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // loading/error states the rl copy renders full-width so announcements
   // never disappear behind a data hiccup on phones.
   const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
-    ? html`<aside key=${"news-"+variant} class=${"home-feed home-news-feed home-news-feed--"+variant} aria-label="News">
-        <div class="home-feed-title--chase">News</div>
-        <div class="home-news-feed-list">${newsTiles}</div>
-      </aside>`
+    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}/>`
     : null;
   const newsFeedRl = newsFeedAside("rl");
 
