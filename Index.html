@@ -26297,6 +26297,9 @@ const HOME_PANELS = [
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
+// One-shot migration stamp: see the news-feed fix in App's homeLayout init.
+const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
+const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
 const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
 // layout: unknown keys dropped, missing keys appended at their default column,
@@ -35311,10 +35314,28 @@ function App(){
   // user_metadata: it's a per-screen arrangement, and a phone and a desktop
   // wanting different orders is normal rather than a bug to reconcile.
   // Migrates the older `packsink:homePanels` visibility-only map on first read.
+  // One-shot: the news feed defaulted to the full-width `announce` strip until
+  // 2026-08-12, and the layout above is persisted on EVERY page load, so every
+  // browser that visited in that window has news pinned there for good —
+  // normalizeHomeLayout keeps any stored column that is still a valid column
+  // name, so the new default never reaches them. Nothing defaults to `announce`
+  // any more, so move news to the rail once. Stamped rather than coerced, so a
+  // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
+    let fixNews = false;
+    try {
+      fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
+      if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
+    } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
-      if(stored) return normalizeHomeLayout(JSON.parse(stored));
+      if(stored){
+        const list = normalizeHomeLayout(JSON.parse(stored));
+        return fixNews
+          ? list.map(p => p.key === "news" && p.col === "announce"
+              ? {...p, col: NEWS_DEFAULT_COL} : p)
+          : list;
+      }
       const legacy = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}");
       if(legacy && typeof legacy === "object"){
         return defaultHomeLayout().map(p => ({...p, on: legacy[p.key] !== false}));
