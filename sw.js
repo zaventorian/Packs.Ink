@@ -17,7 +17,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=320',
+  '/styles.css?v=321',
   '/logo.js?v=253',
   // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
   // admin-gated to ~2 users — they runtime-cache on first use instead of
