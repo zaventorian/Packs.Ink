@@ -2659,11 +2659,39 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    predecessors. The list scrolls internally past its cap instead. */
 .home-news-feed{margin:0 0 10px;min-width:0;padding:6px 10px 4px;}
 .home-news-feed--rl{display:none;}
-.home-news-feed .home-news-feed-list{max-height:560px;overflow-y:auto;
+.home-news-feed-scroll{position:relative;}
+/* Viewport-relative cap: a flat pixel cap clipped the list well short of the
+   room the row actually had on tall phones. */
+.home-news-feed .home-news-feed-list{max-height:min(70vh,560px);overflow-y:auto;
   overflow-x:hidden;scrollbar-width:thin;}
 .home-news-feed .home-news-feed-list::-webkit-scrollbar{width:5px;}
 .home-news-feed .home-news-feed-list::-webkit-scrollbar-thumb{
   background:var(--border);border-radius:3px;}
+/* Fade the clipped edge so a half-cut tile reads as "there's more below"
+   instead of as a broken box. mask-image rather than a gradient overlay
+   because four themes hold a gradient in --bg, which can't be a colour stop —
+   and the mask is safe here only because these tiles are text-only (a mask
+   over child <img>s forces offscreen compositing and softens them). */
+.home-news-feed.news-edge-bot .home-news-feed-list{
+  -webkit-mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent);
+  mask-image:linear-gradient(to bottom,#000 calc(100% - 36px),transparent);}
+.home-news-feed.news-edge-top .home-news-feed-list{
+  -webkit-mask-image:linear-gradient(to bottom,transparent,#000 26px);
+  mask-image:linear-gradient(to bottom,transparent,#000 26px);}
+.home-news-feed.news-edge-both .home-news-feed-list{
+  -webkit-mask-image:linear-gradient(to bottom,transparent,#000 26px,#000 calc(100% - 36px),transparent);
+  mask-image:linear-gradient(to bottom,transparent,#000 26px,#000 calc(100% - 36px),transparent);}
+/* Redundant pointer affordance over the fade (aria-hidden — the list itself is
+   already reachable and scrollable by keyboard and screen reader). Sits right,
+   where a scrollbar would be; centred it landed mid-title. */
+.home-news-feed-more{position:absolute;right:4px;bottom:3px;display:none;
+  align-items:center;justify-content:center;width:30px;height:19px;
+  padding:0;border-radius:10px;border:1px solid var(--border);
+  background:var(--bg-modal);color:var(--text-dim);font-size:13px;line-height:1;
+  cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.18);}
+.home-news-feed.news-edge-bot .home-news-feed-more,
+.home-news-feed.news-edge-both .home-news-feed-more{display:flex;}
+.home-news-feed-more:hover{color:var(--accent);border-color:var(--accent);}
 /* Compact metrics — the feed is a narrow column in both mounts, so every
    entry tightens vs the old full-width announce tiles. */
 .home-news-feed .home-news-title{font-size:11.5px;}
@@ -2678,7 +2706,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   .rl-news-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(150px,32%);
     column-gap:8px;align-items:start;}
   .rl-news-main{min-width:0;}
-  .home-news-feed .home-news-feed-list{max-height:340px;}
+  .home-news-feed .home-news-feed-list{max-height:min(66vh,520px);}
 }
 @media (max-width:700px){
   .home-news-feed{padding:5px 7px 3px;}
@@ -2997,6 +3025,15 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .filter-count-badge{display:inline-block;background:var(--accent);color:#fff;border-radius:10px;padding:1px 6px;font-size:10px;font-weight:700;margin-left:4px;}
 .drawer-divider{height:1px;background:var(--border);margin:10px 0 8px;}
 .chip.promo{opacity:0.85;font-style:italic;}
+/* Price section: free-form min/max under the preset band chips. */
+.drawer-price-range{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;}
+.drawer-price-range label{display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-muted);font-weight:600;}
+.drawer-price-range input{width:76px;padding:4px 6px;font-size:12px;border:1px solid var(--btn-border);border-radius:5px;
+  background:var(--bg-solid);color:var(--text);font-family:'Nunito Sans',sans-serif;font-variant-numeric:tabular-nums;}
+.drawer-price-range input:disabled{opacity:0.45;cursor:not-allowed;}
+.drawer-price-clear{padding:3px 9px;font-size:11px;border:1px solid var(--btn-border);border-radius:5px;
+  background:transparent;color:var(--text-muted);cursor:pointer;}
+.drawer-price-clear:hover{color:var(--text);border-color:var(--border-accent);}
 /* Card detail modal ---------------------------------------------------- */
 .card-detail-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:100;display:flex;align-items:center;justify-content:center;padding:20px;animation:fadeIn 0.15s ease;}
 
@@ -3752,6 +3789,10 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .setdet-search{flex:1;min-width:160px;padding:5px 9px;border:1px solid var(--btn-border);border-radius:5px;background:var(--bg-solid);color:var(--text);font-size:12px;font-family:'Nunito Sans',sans-serif;}
 .setdet-search:focus{outline:none;border-color:var(--accent);}
 .setdet-sort{padding:4px 8px;font-size:12px;border:1px solid var(--btn-border);border-radius:5px;background:var(--bg-solid);color:var(--text);margin-left:auto;}
+/* Per-set price band picker. Lights the accent border when narrowed so it
+   reads as an active filter alongside the ink/rarity chips, not just a sort. */
+.setdet-price-band{padding:4px 8px;font-size:12px;border:1px solid var(--btn-border);border-radius:5px;background:var(--bg-solid);color:var(--text);}
+.setdet-price-band.active{border-color:var(--accent);color:var(--accent);font-weight:700;}
 .setdet-value-stats{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;}
 .setdet-stat{background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:10px 14px;}
 .setdet-stat-lbl{font-size:10px;text-transform:uppercase;letter-spacing:0.6px;color:var(--text-muted);font-weight:700;}

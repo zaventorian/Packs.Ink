@@ -3936,6 +3936,7 @@ const SUGGEST_KIND_LABEL = {
   ink: "color", rarity: "rarity", set: "set", classification: "characteristic",
   card_type: "type", keyword: "keyword", cost: "cost",
   inkable: "inkable", legality: "legality", illustrator: "artist", contains: "contains",
+  price: "price",
 };
 // Split a multi-word query into dimension chips + leftover name text, the way a
 // person reads it: "rapunzel promo" is a name AND a rarity, not a phrase. Every
@@ -3957,22 +3958,30 @@ const _SPLIT_CHIPPABLE = [
   ["legality","legality"], ["inkable","inkable"], ["illustrator","illustrator"],
   ["cost","cost"],
 ];
-const _UNCHIPPABLE_FILTERS = ["strength","willpower","lore","priceMin","priceMax"];
+const _UNCHIPPABLE_FILTERS = ["strength","willpower","lore"];
 const smartSplitSuggestion = (raw) => {
   if(!raw || !raw.includes(" ")) return null;
   const p = parseSearchQuery(raw);
   const f = p.filters || {};
-  if(!p.name) return null;
+  // Price is a trigger dimension in its own right: "elsa under $5" is a name
+  // AND a price, and a price lives in a column the haystack can't see — so
+  // without this the Enter default committed `contains: elsa under $5`, which
+  // matches nothing. A priced query is ALSO offered when nothing is left over
+  // as a name ("amber over $200" is all dimensions), because the price words
+  // themselves are what the `contains:` fallback would otherwise search for.
+  const hasPrice = f.priceMin != null || f.priceMax != null;
+  if(!p.name && !hasPrice) return null;
   if(_UNCHIPPABLE_FILTERS.some(k => f[k] != null)) return null;
   if(f.costOp && f.costOp !== "=") return null;
-  if(!_SPLIT_TRIGGER_DIMS.some(k => f[k] != null)) return null;
+  if(!hasPrice && !_SPLIT_TRIGGER_DIMS.some(k => f[k] != null)) return null;
   const chips = [];
   for(const [fk, kind] of _SPLIT_CHIPPABLE){
     if(f[fk] != null) chips.push({kind, value:f[fk]});
   }
+  if(hasPrice) chips.push(priceSmartChip(f.priceMin, f.priceMax));
   if(!chips.length) return null;
   const dims = chips.map(c => (SUGGEST_KIND_LABEL[c.kind]||c.kind)+": "+String(c.value).toLowerCase());
-  return {kind:"split", value:raw, label:[p.name, ...dims].join("  ·  "),
+  return {kind:"split", value:raw, label:[p.name, ...dims].filter(Boolean).join("  ·  "),
     chips, name:p.name, replace:raw};
 };
 
@@ -4114,6 +4123,9 @@ const summarizeParsedQuery = (parsed) => {
   if(parsed.filters.legality === "core")     parts.push("Core Constructed");
   if(parsed.filters.legality === "infinity") parts.push("Infinity");
   if(parsed.filters.legality === "japan")    parts.push("Japan Core");
+  if(parsed.filters.priceMin != null || parsed.filters.priceMax != null){
+    parts.push(priceRangeLabel(parsed.filters.priceMin, parsed.filters.priceMax));
+  }
   for(const r of parsed.excludeRarities) parts.push("not "+r);
   // Leftover free text + any `contains:` chip both feed parsed.name (they end
   // up the same broad-haystack search internally), so the honest label is
@@ -4154,15 +4166,54 @@ const groupSetsForFilter = (rawRows) => {
   promo.sort((a,b) => a.localeCompare(b));
   return {normal, promo};
 };
-// Min/max price across a card's printings (Low → Market). Works on a group
-// ({normal,foil} sub-rows) or a flat catalog row. null when wholly unpriced.
-const _cardPriceRange = (g) => {
+// Min/max price across a card's printings. Works on a group ({normal,foil}
+// sub-rows) or a flat catalog row. null when wholly unpriced.
+//
+// `basis` picks which number a printing contributes: "low" = TCGCSV's lowest
+// active listing (any condition), "market" = NM Market, "any"/undefined =
+// Low ?? Market (the widest net — a card priced on only one side still
+// counts). Callers that omit it keep the original Low→Market behaviour.
+const _cardPriceRange = (g, basis) => {
   const vals = [];
-  const pick = o => { if(!o) return; const v = o["Low Price"] ?? o["TCGPlayer Market"] ?? o["Market Price"]; if(v != null) vals.push(+v); };
+  const pick = o => {
+    if(!o) return;
+    const low = o["Low Price"];
+    const mkt = o["TCGPlayer Market"] ?? o["Market Price"];
+    const v = basis === "low" ? low : basis === "market" ? mkt : (low ?? mkt);
+    if(v != null) vals.push(+v);
+  };
   pick(g.normal); pick(g.foil);
   if(!vals.length) pick(g);
   return vals.length ? {min: Math.min(...vals), max: Math.max(...vals)} : null;
 };
+const _priceNum = (n) => "$" + (Number.isInteger(n) ? n : (+n).toFixed(2));
+// Human label for a min/max pair. Used by the smart-search price chip, the
+// parsed-query summary pills and the collection shop-missing byline.
+const priceRangeLabel = (min, max) => {
+  if(min != null && max != null) return _priceNum(min) + "–" + _priceNum(max);
+  if(max != null) return "under " + _priceNum(max);
+  if(min != null) return "over " + _priceNum(min);
+  return "";
+};
+// Shared price bands — the Cards/Collection filter drawer renders these as
+// chips, the collection set-detail toolbar as a <select>. Kept in one place so
+// the two surfaces can't drift into different buckets.
+const PRICE_BANDS = [
+  {key:"u1",     label:"Under $1",   min:null, max:1},
+  {key:"1-5",    label:"$1–$5",      min:1,    max:5},
+  {key:"5-20",   label:"$5–$20",     min:5,    max:20},
+  {key:"20-50",  label:"$20–$50",    min:20,   max:50},
+  {key:"50-100", label:"$50–$100",   min:50,   max:100},
+  {key:"100+",   label:"$100+",      min:100,  max:null},
+];
+const PRICE_BASIS_OPTS = [
+  ["any",    "Either",     "Match on whichever of Low / NM Market the printing has (Low preferred). Widest net."],
+  ["low",    "Low",        "Match on Low only — the cheapest active listing in any condition."],
+  ["market", "NM Market",  "Match on NM Market only — the near-mint reference price."],
+];
+// A price chip for the smart-search strip. `value` doubles as the chip's label
+// and its dedupe key, so it has to be stable for a given min/max pair.
+const priceSmartChip = (min, max) => ({kind:"price", value: priceRangeLabel(min, max), priceMin: min ?? null, priceMax: max ?? null});
 // Searchable version words for a row or group. These are labels the UI prints
 // on the tile — "Prize Wall" / "Top Prize" for Challenge Promo C1, "Deep
 // Trouble", "Two Swords", "Japanese Exclusive" — that live nowhere in Product
@@ -4277,8 +4328,10 @@ const matchesCardFilter = (row, f, parsed) => {
       if((row.classifications||[]).some(c => parsed.excludeClassifications.has((c||"").toLowerCase()))) return false;
     }
     // Price intent. "under $5" → cheapest printing ≤ 5; "over $20" → dearest ≥ 20.
+    // Basis comes from the chip state (drawer) so a typed "$5" respects the
+    // Low / NM Market pick rather than silently using a different number.
     if(parsed.filters.priceMin != null || parsed.filters.priceMax != null){
-      const pr = _cardPriceRange(row);
+      const pr = _cardPriceRange(row, f && f.priceBasis);
       if(!pr) return false;  // unpriced cards can't satisfy a price filter
       if(parsed.filters.priceMax != null && pr.min > parsed.filters.priceMax) return false;
       if(parsed.filters.priceMin != null && pr.max < parsed.filters.priceMin) return false;
@@ -4399,6 +4452,20 @@ const matchesCardFilter = (row, f, parsed) => {
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
   if(f.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
+  // Chip-state price. Same semantics as the typed form: a max is satisfied by
+  // the CHEAPEST printing, a min by the DEAREST — so "under $5" keeps a card
+  // whose non-foil is $2 even though its foil is $40, and "over $20" keeps it
+  // too. `unpricedOnly` is the inverse lens (cards with no price at all on the
+  // chosen basis: regional exclusives, unlisted variants, brand-new spoilers)
+  // and wins over any bound, which the drawer also enforces by clearing them.
+  if(f.unpricedOnly){
+    if(_cardPriceRange(row, f.priceBasis)) return false;
+  } else if(f.priceMin != null || f.priceMax != null){
+    const pr = _cardPriceRange(row, f.priceBasis);
+    if(!pr) return false;
+    if(f.priceMax != null && pr.min > f.priceMax) return false;
+    if(f.priceMin != null && pr.max < f.priceMin) return false;
+  }
   return true;
 };
 
@@ -6424,6 +6491,42 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         </div>
       </div>
       <div class="drawer-section">
+        <div class="drawer-section-head" title="Filter by what a card sells for. A band matches if ANY printing of the card lands in it — so 'Under $1' keeps a card whose non-foil is $0.40 even when its foil is $30.">Price</div>
+        <div class="cards-chipgroup" role="radiogroup" aria-label="Price basis">
+          ${PRICE_BASIS_OPTS.map(([k,l,t]) => html`<button key=${k}
+            class=${"chip "+((filter.priceBasis||"any")===k?"active":"")}
+            title=${t} role="radio" aria-checked=${(filter.priceBasis||"any")===k}
+            onClick=${()=>setFilter(f=>({...f, priceBasis:k}))}>${l}</button>`)}
+        </div>
+        <div class="drawer-divider"></div>
+        <div class="cards-chipgroup">
+          ${PRICE_BANDS.map(b => {
+            const on = filter.priceMin === b.min && filter.priceMax === b.max && !filter.unpricedOnly;
+            return html`<button key=${b.key} class=${"chip "+(on?"active":"")}
+              onClick=${()=>setFilter(f=> on
+                ? {...f, priceMin:null, priceMax:null}
+                : {...f, priceMin:b.min, priceMax:b.max, unpricedOnly:false})}>${b.label}</button>`;
+          })}
+          <button class=${"chip "+(filter.unpricedOnly?"active":"")}
+            title="Cards with no price at all on the chosen basis — regional exclusives, unlisted variants, freshly spoiled cards."
+            onClick=${()=>setFilter(f=> f.unpricedOnly
+              ? {...f, unpricedOnly:false}
+              : {...f, unpricedOnly:true, priceMin:null, priceMax:null})}>No price data</button>
+        </div>
+        <div class="drawer-price-range">
+          <label>Min $<input type="number" min="0" step="0.01" inputMode="decimal" placeholder="—"
+            disabled=${!!filter.unpricedOnly} value=${filter.priceMin ?? ""}
+            onInput=${e=>{ const v = parseFloat(e.target.value);
+              setFilter(f=>({...f, priceMin: Number.isFinite(v) ? v : null, unpricedOnly:false})); }}/></label>
+          <label>Max $<input type="number" min="0" step="0.01" inputMode="decimal" placeholder="—"
+            disabled=${!!filter.unpricedOnly} value=${filter.priceMax ?? ""}
+            onInput=${e=>{ const v = parseFloat(e.target.value);
+              setFilter(f=>({...f, priceMax: Number.isFinite(v) ? v : null, unpricedOnly:false})); }}/></label>
+          ${(filter.priceMin!=null||filter.priceMax!=null||filter.unpricedOnly) && html`<button class="drawer-price-clear"
+            onClick=${()=>setFilter(f=>({...f, priceMin:null, priceMax:null, unpricedOnly:false}))}>Clear</button>`}
+        </div>
+      </div>
+      <div class="drawer-section">
         <div class="drawer-section-head">Colors</div>
         <div class="cards-chipgroup">
           ${INKS.map(ink => html`<button key=${ink}
@@ -6570,7 +6673,10 @@ const countActiveFilters = (f) =>
   + (f.inkable!==null?1:0)
   + (f.classifications?.size||0) + (f.keywords?.size||0) + (f.illustrators?.size||0)
   + (f.strengths?.size||0) + (f.willpowers?.size||0) + (f.lores?.size||0)
-  + (f.legality?1:0) + (f.onlyOwned?1:0);
+  + (f.legality?1:0) + (f.onlyOwned?1:0)
+  // A price bound counts once whether one or both ends are set; the basis is a
+  // modifier on that bound, not a filter of its own, so it never counts alone.
+  + ((f.priceMin!=null||f.priceMax!=null)?1:0) + (f.unpricedOnly?1:0);
 
 const emptyFilter = () => ({
   search:"", inks:new Set(), costs:new Set(), rarities:new Set(),
@@ -6578,6 +6684,10 @@ const emptyFilter = () => ({
   classifications:new Set(), keywords:new Set(), illustrators:new Set(),
   strengths:new Set(), willpowers:new Set(), lores:new Set(),
   legality:null, onlyOwned:false,
+  // $ filters. priceMin/priceMax are inclusive bounds in dollars (null = open
+  // end); priceBasis ∈ any|low|market picks which printing price is compared;
+  // unpricedOnly inverts to "cards with no price data".
+  priceMin:null, priceMax:null, priceBasis:"any", unpricedOnly:false,
   // "any" → multiple characteristic chips OR multi-word free text matches
   //         a card if ANY of the terms hits. (default — most useful for
   //         broad-cast searches like "woody jessie" or "princess queen".)
@@ -6596,7 +6706,7 @@ const emptyFilter = () => ({
 // can be shared/bookmarked. Advanced text-multi filters (classifications /
 // keywords / illustrators / stats) aren't URL-backed yet — they reset on reload.
 const CARD_URL_SETFIELDS = [["set","sets"],["ink","inks"],["rarity","rarities"],["cost","costs"],["type","cardTypes"]];
-const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned"];
+const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","pmin","pmax","pbasis","unpriced"];
 const cardFilterToParams = (f) => {
   const p = new URLSearchParams();
   if(f.search && f.search.trim()) p.set("q", f.search.trim());
@@ -6607,6 +6717,10 @@ const cardFilterToParams = (f) => {
   else if(f.inkable === false) p.set("inkable","0");
   if(f.legality) p.set("legal", f.legality);
   if(f.onlyOwned) p.set("owned","1");
+  if(f.priceMin != null) p.set("pmin", String(f.priceMin));
+  if(f.priceMax != null) p.set("pmax", String(f.priceMax));
+  if(f.priceBasis && f.priceBasis !== "any") p.set("pbasis", f.priceBasis);
+  if(f.unpricedOnly) p.set("unpriced","1");
   return p;
 };
 const cardParamsPresent = (search) => {
@@ -6628,6 +6742,10 @@ const cardParamsToFilter = (search) => {
   if(inkable === "1") f.inkable = true; else if(inkable === "0") f.inkable = false;
   const legal = p.get("legal"); if(legal) f.legality = legal;
   if(p.get("owned") === "1") f.onlyOwned = true;
+  const _px = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
+  f.priceMin = _px("pmin"); f.priceMax = _px("pmax");
+  const pbasis = p.get("pbasis"); if(pbasis === "low" || pbasis === "market") f.priceBasis = pbasis;
+  if(p.get("unpriced") === "1") f.unpricedOnly = true;
   return f;
 };
 
@@ -8385,6 +8503,10 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       else if(chip.kind === "cost")      p.filters.cost = chip.value;
       else if(chip.kind === "legality")  p.filters.legality = chip.value;
       else if(chip.kind === "illustrator") p.filters.illustrator = chip.value;
+      else if(chip.kind === "price"){
+        if(chip.priceMin != null) p.filters.priceMin = chip.priceMin;
+        if(chip.priceMax != null) p.filters.priceMax = chip.priceMax;
+      }
       else if(chip.kind === "contains")  containsTokens.push(chip.value);
     }
     // Promote any singleton classification / keyword that parseSearchQuery
@@ -13249,7 +13371,7 @@ const SetDetailCardTile = ({group, normalQty, foilQty, onNormal, onFoil, onOpen,
 };
 
 // Build a small "from this view" suffix describing which filters are active.
-const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
+const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter, priceBand) => {
   const parts = [];
   if(foilMode === "normal") parts.push("non-foil");
   if(foilMode === "foil")   parts.push("foil");
@@ -13258,6 +13380,8 @@ const searchOrFilterLabel = (inkF, rarF, search, foilMode, statusFilter) => {
   else if(inkF.size > 1) parts.push(inkF.size+" inks");
   if(rarF.size === 1) parts.push([...rarF][0]);
   else if(rarF.size > 1) parts.push(rarF.size+" rarities");
+  const band = priceBand ? PRICE_BANDS.find(b => b.key === priceBand) : null;
+  if(band) parts.push(band.label);
   if(search) parts.push(`"${search.trim().slice(0,20)}"`);
   if(parts.length === 0) return " from this set";
   return " · " + parts.join(" · ");
@@ -13431,6 +13555,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   const [rarityFilter, setRarityFilter] = useState(()=>{ try { return allMode ? new Set(JSON.parse(localStorage.getItem("packsink:allCards:rarities")||"[]")) : new Set(); } catch { return new Set(); } });
   // "all" | "complete" | "incomplete" | "extras" — applied vs current foil mode
   const [statusFilter, setStatusFilter] = useState(()=>{ try { return allMode ? (localStorage.getItem("packsink:allCards:status")||"all") : "all"; } catch { return "all"; } });
+  // Per-set price band (PRICE_BANDS key, "" = any). Only the per-set view uses
+  // it — All Cards gets the full price section in the Filters drawer instead.
+  // It feeds visibleGroups, so the completion stats and the "Shop N missing
+  // cards" bulk-buy link narrow with it: "what's still missing under $1".
+  const [priceBand, setPriceBand] = useState("");
   // Extras & Oddities cards are all foil-only by design (Holofoil starter-
   // deck variants, etc.), so the foil-mode toggle is hidden in that view
   // and the state is locked to "foil".
@@ -13550,7 +13679,11 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
     // run the canonical matchesCardFilter so every dimension behaves identically.
     const parsed = parseSearchQuery((allMode ? (drawerFilter.search||"") : search) || "");
     if(allMode) parsed.matchMode = drawerFilter.matchMode || "any";
-    const chipFilter = allMode ? drawerFilter : {inks: inkFilter, rarities: rarityFilter};
+    const band = PRICE_BANDS.find(b => b.key === priceBand);
+    const chipFilter = allMode ? drawerFilter : {
+      inks: inkFilter, rarities: rarityFilter,
+      priceMin: band ? band.min : null, priceMax: band ? band.max : null,
+    };
     const predicate = (g, p) => {
       if(!matchesCompare(g)) return false;
       if(!matchesCardFilter(g, chipFilter, p)) return false;
@@ -13598,7 +13731,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       return groups.filter(g => predicate(g, {...parsed, nameMatchMode:"any"}));
     }
     return groups.filter(g => predicate(g, parsed));
-  }, [groups, inkFilter, rarityFilter, search, statusFilter, foilMode, goal, goalN, goalF, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
+  }, [groups, inkFilter, rarityFilter, priceBand, search, statusFilter, foilMode, goal, goalN, goalF, collection, readOnly, compareMode, viewerOwnCollection, allMode, drawerFilter, slotCover, slotMark]);
 
   // Filter-aware "missing" summary — for each visible printing, counts the
   // copies the user is SHORT of the goal (goalN non-foil, goalF foil). Value
@@ -13743,6 +13876,12 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
               ${RARITY_ICONS[r] && html`<img class="chip-rarity-icon" src=${RARITY_ICONS[r]} alt=${r} onError=${e=>{ e.target.style.display="none"; }}/>`}
             </button>`)}
           </div>
+          <select class=${"setdet-price-band"+(priceBand?" active":"")} value=${priceBand}
+            onChange=${e=>setPriceBand(e.target.value)}
+            title="Only show cards in this price band. A card qualifies if any of its printings lands in the band — the owned/missing totals and the bulk-buy link follow the filter.">
+            <option value="">$ Any price</option>
+            ${PRICE_BANDS.map(b => html`<option key=${b.key} value=${b.key}>${b.label}</option>`)}
+          </select>
         </span>`}
       <div class="setdet-toolbar-goalgroup" style=${{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
         ${setGoal && !readOnly && html`<${GoalControl} goal=${goal} setGoal=${setGoal} setFoilMode=${isExtrasView ? null : setFoilMode}/>`}
@@ -13815,7 +13954,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
 
     ${!allMode && visibleMissing.count > 0 && html`<a class="setdet-buy-missing"
       href=${missingMassEntryUrl || tcgSetSearchUrl(setName)} target="_blank" rel="noopener nofollow sponsored">
-      <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter)}</span>
+      <span class="setdet-buy-missing-text">Shop ${visibleMissing.count} missing card${visibleMissing.count===1?'':'s'}${searchOrFilterLabel(inkFilter,rarityFilter,search,foilMode,statusFilter,priceBand)}</span>
       <span class="setdet-buy-missing-price">${fmt(visibleMissing.value)}<span class="setdet-buy-missing-cta">Buy bulk on TCGplayer</span><span class="setdet-buy-missing-arrow">↗</span></span>
     </a>`}
 
@@ -26404,6 +26543,9 @@ const HOME_PANELS = [
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
+// One-shot migration stamp: see the news-feed fix in App's homeLayout init.
+const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
+const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
 const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
 // layout: unknown keys dropped, missing keys appended at their default column,
@@ -28575,6 +28717,40 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   </section>`;
 };
 
+// News feed — the tile list scrolls internally once it outgrows its cap, but a
+// clipped list reads as "cut off" rather than "scrollable" on phones, which
+// hide their scrollbars until you're already scrolling. `edge` tracks which
+// ends have content past the fold so the fade + the ⌄ chip appear only when
+// there really is more to see.
+const NewsFeed = ({variant, tiles}) => {
+  const listRef = useRef(null);
+  const [edge, setEdge] = useState("");
+  const sync = useCallback(() => {
+    const el = listRef.current; if(!el) return;
+    const below = el.scrollHeight - el.clientHeight - el.scrollTop > 4;
+    const above = el.scrollTop > 4;
+    setEdge(above && below ? "both" : below ? "bot" : above ? "top" : "");
+  }, []);
+  useEffect(() => {
+    const el = listRef.current; if(!el) return;
+    sync();
+    // The cap is vh-based and tiles come and go as events go live, so the
+    // overflow state changes without a scroll — watch the box itself too.
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(sync) : null;
+    if(ro) ro.observe(el);
+    window.addEventListener("resize", sync);
+    return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
+  }, [sync, tiles.length]);
+  return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant+(edge?" news-edge-"+edge:"")} aria-label="News">
+    <div class="home-feed-title--chase">News</div>
+    <div class="home-news-feed-scroll">
+      <div class="home-news-feed-list" ref=${listRef} onScroll=${sync}>${tiles}</div>
+      <button class="home-news-feed-more" tabIndex=${-1} aria-hidden="true"
+        onClick=${() => { const el = listRef.current; if(el) el.scrollBy({top: Math.round(el.clientHeight * 0.75), behavior: "smooth"}); }}>⌄</button>
+    </div>
+  </aside>`;
+};
+
 const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, onEventArtistClick, layout}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -29081,10 +29257,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // loading/error states the rl copy renders full-width so announcements
   // never disappear behind a data hiccup on phones.
   const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
-    ? html`<aside key=${"news-"+variant} class=${"home-feed home-news-feed home-news-feed--"+variant} aria-label="News">
-        <div class="home-feed-title--chase">News</div>
-        <div class="home-news-feed-list">${newsTiles}</div>
-      </aside>`
+    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}/>`
     : null;
   const newsFeedRl = newsFeedAside("rl");
 
@@ -35418,10 +35591,28 @@ function App(){
   // user_metadata: it's a per-screen arrangement, and a phone and a desktop
   // wanting different orders is normal rather than a bug to reconcile.
   // Migrates the older `packsink:homePanels` visibility-only map on first read.
+  // One-shot: the news feed defaulted to the full-width `announce` strip until
+  // 2026-08-12, and the layout above is persisted on EVERY page load, so every
+  // browser that visited in that window has news pinned there for good —
+  // normalizeHomeLayout keeps any stored column that is still a valid column
+  // name, so the new default never reaches them. Nothing defaults to `announce`
+  // any more, so move news to the rail once. Stamped rather than coerced, so a
+  // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
+    let fixNews = false;
+    try {
+      fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
+      if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
+    } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
-      if(stored) return normalizeHomeLayout(JSON.parse(stored));
+      if(stored){
+        const list = normalizeHomeLayout(JSON.parse(stored));
+        return fixNews
+          ? list.map(p => p.key === "news" && p.col === "announce"
+              ? {...p, col: NEWS_DEFAULT_COL} : p)
+          : list;
+      }
       const legacy = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}");
       if(legacy && typeof legacy === "object"){
         return defaultHomeLayout().map(p => ({...p, on: legacy[p.key] !== false}));

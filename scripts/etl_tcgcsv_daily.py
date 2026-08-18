@@ -31,6 +31,22 @@ from tcgcsv_common import (
 
 USER_AGENT = "PacksInk/1.0 (+https://packs.ink) python-requests"
 
+# TCGCSV publishes their daily file ~20:00 UTC. A run before that sees
+# yesterday's file, so the row it writes under today's date holds the
+# PREVIOUS evening's snapshot.
+PUBLISH_CUTOFF_UTC = (20, 15)
+
+
+def _parse_ts(val: str | None) -> datetime | None:
+    """Parse a PostgREST timestamptz. Returns None if absent/unparseable."""
+    if not val:
+        return None
+    try:
+        ts = datetime.fromisoformat(val.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return ts if ts.tzinfo else ts.replace(tzinfo=timezone.utc)
+
 
 def get_json(url: str) -> Any:
     last_err: Exception | None = None
@@ -201,27 +217,67 @@ def main() -> None:
 
     print(f"Snapshot date: {snapshot}")
 
-    # Idempotency check: if today's prices_daily rows already exist (a prior
-    # run today already wrote them), skip the whole fetch. Lets us schedule
-    # multiple cron triggers per day without re-fetching gigabytes of price
-    # data on every retry. Still refresh matviews — they may have failed on
-    # the run that wrote prices_daily, so a later retry can recover them.
+    # Idempotency check: skip the fetch when this date's rows are already the
+    # best data available, so the several cron retries per day don't re-fetch
+    # gigabytes. Still refresh matviews — they may have failed on the run that
+    # wrote prices_daily, so a later retry can recover them.
+    #
+    # But "rows exist" alone is NOT enough. Rows written before TCGCSV's
+    # ~20:00 UTC drop hold the PREVIOUS evening's snapshot, and a bare
+    # exists-check lets them lock out the post-publish run. That is exactly
+    # what regressed on 2026-07-26: a TCGCSV outage left that date empty, the
+    # 01:00 UTC retry then claimed each following date first, and every 20:30
+    # UTC run became a no-op — so the freshest publish was discarded daily and
+    # the whole series ran a day behind.
+    #
+    # So skip only if the stored rows were written AFTER today's publish
+    # window. Earlier ones get re-fetched and overwritten once it opens. If
+    # that re-fetch is byte-identical to the prior day (TCGCSV published
+    # late), the duplicate-snapshot guard below returns without writing,
+    # leaving inserted_at pre-cutoff so the next cron firing tries again.
+    publish_cutoff = datetime(
+        snapshot.year,
+        snapshot.month,
+        snapshot.day,
+        PUBLISH_CUTOFF_UTC[0],
+        PUBLISH_CUTOFF_UTC[1],
+        tzinfo=timezone.utc,
+    )
     if not args.force:
         try:
             existing = sb.select(
                 "prices_daily",
-                columns="tcgplayer_product_id",
+                columns="inserted_at",
                 limit=1,
                 filters={
                     "date": f"eq.{snapshot.isoformat()}",
                     "source": "eq.tcgcsv",
                     "grade": "eq.raw",
                 },
+                order="inserted_at.desc",
             )
             if existing:
-                print(f"Today's snapshot ({snapshot}) is already loaded. Skipping fetch.")
-                _refresh_matviews(sb)
-                return
+                written = _parse_ts(existing[0].get("inserted_at"))
+                now = datetime.now(timezone.utc)
+                # Only ever re-fetch the CURRENT UTC date. TCGCSV serves only
+                # today's prices, so re-fetching an explicit --date backfill
+                # would overwrite that day's history with today's numbers.
+                stale_claim = (
+                    snapshot == now.date()
+                    and now >= publish_cutoff
+                    and (written is None or written < publish_cutoff)
+                )
+                if stale_claim:
+                    seen = f"{written:%Y-%m-%d %H:%M}" if written else "unknown time"
+                    print(
+                        f"Snapshot {snapshot} exists but was written {seen} UTC, "
+                        f"before the {publish_cutoff:%H:%M} UTC publish window "
+                        "— re-fetching to pick up today's file."
+                    )
+                else:
+                    print(f"Today's snapshot ({snapshot}) is already loaded. Skipping fetch.")
+                    _refresh_matviews(sb)
+                    return
         except Exception as e:
             print(f"  (idempotency probe failed, continuing with fetch: {e})")
 
@@ -260,6 +316,13 @@ def main() -> None:
             "~20:00 UTC). This is normal — a later cron firing will pick it up."
         )
         return
+
+    # Stamp write time explicitly: ON CONFLICT DO UPDATE won't touch the
+    # column default, so without this an overwrite keeps the original
+    # inserted_at and the publish-window check above can never clear.
+    written_at = datetime.now(timezone.utc).isoformat()
+    for r in all_rows:
+        r["inserted_at"] = written_at
 
     sb.upsert(
         "prices_daily",
