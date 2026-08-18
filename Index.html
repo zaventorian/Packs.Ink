@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=322">
+<link rel="stylesheet" href="styles.css?v=323">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -7585,6 +7585,494 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         </div>
         </div>
         <div class="deck-poster-preview">${posterDom}</div>
+        </div>
+      </div>
+    </div>
+  </div>`;
+};
+
+// ── Print proxies ──────────────────────────────────────────────────────────
+// Turns a deck into a print-ready PDF: 9 cards per page at true card size
+// (63x88mm), colour or black & white, with a PROXY watermark baked into the
+// pixels. The PDF is written by hand below rather than through a library.
+// Each card is rendered onto a canvas and encoded as JPEG, then dropped into
+// the file as a /DCTDecode image XObject — which means the JPEG bytes pass
+// through verbatim, so the whole writer is ~100 lines and there's no ~350KB
+// dependency to vendor, lazy-load, and have a stale service worker serve.
+// Identical copies of a card share ONE embedded image, so a 60-card deck
+// carries ~20 images, not 60.
+
+const PDF_PT_PER_MM   = 2.834645669;
+const PROXY_CARD_MM   = {w: 63, h: 88};      // standard TCG card, trimmed size
+const PROXY_MARK_MM   = 4;                   // crop-mark length outside the grid
+const PROXY_COLS      = 3;
+const PROXY_ROWS      = 3;
+const PROXY_PER_PAGE  = PROXY_COLS * PROXY_ROWS;
+// 63mm at 300dpi. Lorcast's /large/ art is 734px wide, so this is a ~1%
+// upscale — effectively native resolution, and genuinely 300dpi on paper.
+const PROXY_RENDER_PX = 744;
+const PROXY_PAPERS = {
+  letter: {label: "US Letter", w: 612,    h: 792},
+  a4:     {label: "A4",        w: 595.28, h: 841.89},
+};
+
+const pdfNum = (n) => {
+  const v = Math.round(n * 1000) / 1000;
+  return String(Object.is(v, -0) ? 0 : v);
+};
+// Helvetica/WinAnsi can't hold anything past latin-1, and unescaped parens
+// terminate a PDF string early — a deck named "Ruby/Sapphire (v2)" would
+// corrupt the file.
+const pdfText = (s) => String(s == null ? "" : s)
+  .replace(/[‘’]/g, "'").replace(/[“”]/g, '"')
+  .replace(/[–—]/g, "-").replace(/·/g, "-")
+  .replace(/[^\x20-\x7E\xA0-\xFF]/g, "")
+  .replace(/([\\()])/g, "\\$1");
+
+// Byte sink. Strings go in latin-1 (every PDF token we emit is ASCII), image
+// streams go in raw, and `offset` is the running byte count the xref needs.
+const pdfWriter = () => {
+  const parts = [];
+  let len = 0;
+  const bytes = (u8) => { parts.push(u8); len += u8.length; };
+  const str = (s) => {
+    const u8 = new Uint8Array(s.length);
+    for(let i = 0; i < s.length; i++) u8[i] = s.charCodeAt(i) & 0xff;
+    bytes(u8);
+  };
+  return {str, bytes, offset: () => len, blob: () => new Blob(parts, {type: "application/pdf"})};
+};
+
+// pages: [{slots:[{img, x, y, w, h}], guides:[[x1,y1,x2,y2]], footer}]
+// imgs:  [{data: Uint8Array (JPEG), w, h}]
+const buildProxyPdfBlob = ({imgs, pages, pageW, pageH, title}) => {
+  const W = pdfWriter();
+  const offsets = [];
+  const IMG0  = 5;                       // 1 catalog, 2 pages, 3 info, 4 font
+  const PAGE0 = IMG0 + imgs.length;
+  // Highest object NUMBER, not a count: page i owns PAGE0+2i and PAGE0+2i+1,
+  // so the last one is PAGE0 + 2(n-1) + 1.
+  const objCount = PAGE0 + pages.length * 2 - 1;
+
+  const begin = (n) => { offsets[n] = W.offset(); W.str(n + " 0 obj\n"); };
+  const end   = () => W.str("endobj\n");
+
+  W.str("%PDF-1.4\n%\xE2\xE3\xCF\xD3\n");
+
+  begin(1); W.str("<< /Type /Catalog /Pages 2 0 R >>\n"); end();
+  begin(2);
+  W.str("<< /Type /Pages /Count " + pages.length + " /Kids ["
+    + pages.map((_, i) => (PAGE0 + i * 2) + " 0 R").join(" ") + "] >>\n");
+  end();
+  begin(3);
+  W.str("<< /Title (" + pdfText(title) + ") /Creator (Packs.Ink) /Producer (Packs.Ink proxy sheets) >>\n");
+  end();
+  begin(4);
+  W.str("<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\n");
+  end();
+
+  imgs.forEach((im, i) => {
+    begin(IMG0 + i);
+    W.str("<< /Type /XObject /Subtype /Image /Width " + im.w + " /Height " + im.h
+      + " /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length "
+      + im.data.length + " >>\nstream\n");
+    W.bytes(im.data);
+    W.str("\nendstream\n");
+    end();
+  });
+
+  pages.forEach((pg, i) => {
+    const pageNum = PAGE0 + i * 2, contentNum = pageNum + 1;
+    const used = Array.from(new Set(pg.slots.map(s => s.img)));
+    begin(pageNum);
+    W.str("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 " + pdfNum(pageW) + " " + pdfNum(pageH) + "]"
+      + " /Resources << /ProcSet [/PDF /Text /ImageC] /XObject << "
+      + used.map(ix => "/Im" + ix + " " + (IMG0 + ix) + " 0 R").join(" ")
+      + " >> /Font << /F1 4 0 R >> >> /Contents " + contentNum + " 0 R >>\n");
+    end();
+
+    const ops = [];
+    for(const s of pg.slots){
+      ops.push("q " + pdfNum(s.w) + " 0 0 " + pdfNum(s.h) + " " + pdfNum(s.x) + " " + pdfNum(s.y)
+        + " cm /Im" + s.img + " Do Q");
+    }
+    if(pg.guides && pg.guides.length){
+      ops.push("q 0.4 w 0.55 G");
+      for(const g of pg.guides){
+        ops.push(pdfNum(g[0]) + " " + pdfNum(g[1]) + " m " + pdfNum(g[2]) + " " + pdfNum(g[3]) + " l S");
+      }
+      ops.push("Q");
+    }
+    if(pg.footer){
+      ops.push("BT /F1 6.5 Tf 0.45 g " + pdfNum(pg.footerX) + " " + pdfNum(pg.footerY)
+        + " Td (" + pdfText(pg.footer) + ") Tj ET");
+    }
+    const content = ops.join("\n") + "\n";
+    begin(contentNum);
+    W.str("<< /Length " + content.length + " >>\nstream\n");
+    W.str(content);
+    W.str("endstream\n");
+    end();
+  });
+
+  const xrefOff = W.offset();
+  W.str("xref\n0 " + (objCount + 1) + "\n0000000000 65535 f \n");
+  for(let n = 1; n <= objCount; n++){
+    W.str(String(offsets[n] || 0).padStart(10, "0") + " 00000 n \n");
+  }
+  W.str("trailer\n<< /Size " + (objCount + 1) + " /Root 1 0 R /Info 3 0 R >>\nstartxref\n"
+    + xrefOff + "\n%%EOF\n");
+  return W.blob();
+};
+
+// The watermark is painted into the card's pixels, not laid over the page, so
+// it survives whatever the user does with the PDF afterwards.
+const drawProxyWatermark = (ctx, w, h, mode) => {
+  if(mode === "none") return;
+  if(mode === "bold"){
+    ctx.save();
+    ctx.globalAlpha = 0.24;
+    ctx.fillStyle = "#000";
+    ctx.strokeStyle = "#fff";
+    ctx.lineWidth = Math.max(1, w * 0.007);
+    ctx.font = '700 ' + Math.round(w * 0.155) + 'px Helvetica, Arial, sans-serif';
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.translate(w / 2, h / 2);
+    ctx.rotate(-Math.PI / 5);
+    const step = Math.round(h * 0.27);
+    for(let y = -h; y <= h; y += step){ ctx.strokeText("PROXY", 0, y); ctx.fillText("PROXY", 0, y); }
+    ctx.restore();
+  }
+  // Corner tag — the always-legible mark, on both subtle and bold.
+  ctx.save();
+  const tagH = Math.round(h * 0.036);
+  const fs = Math.round(tagH * 0.62);
+  ctx.font = '700 ' + fs + 'px Helvetica, Arial, sans-serif';
+  const label = "PROXY";
+  const tagW = Math.round(ctx.measureText(label).width + tagH * 1.2);
+  const x = Math.round((w - tagW) / 2), y = Math.round(h - tagH * 2.1);
+  ctx.globalAlpha = 0.8;
+  ctx.fillStyle = "#000";
+  roundRectPath(ctx, x, y, tagW, tagH, tagH / 2);
+  ctx.fill();
+  ctx.globalAlpha = 1;
+  ctx.fillStyle = "#fff";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, x + tagW / 2, y + tagH / 2 + fs * 0.06);
+  ctx.restore();
+};
+
+// One card → JPEG bytes. White ground first: Lorcast art is transparent
+// outside the rounded corners and JPEG has no alpha, so an unpainted canvas
+// would print four black corners on every card.
+const renderProxyCardJpeg = async (card, {bw, lighten, watermark}) => {
+  const w = PROXY_RENDER_PX;
+  const h = Math.round(w * PROXY_CARD_MM.h / PROXY_CARD_MM.w);
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d", {willReadFrequently: true});
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, w, h);
+
+  const img = card.img ? await loadPosterImage(card.img) : null;
+  if(img){
+    drawImageCover(ctx, img, 0, 0, w, h);
+  } else {
+    // No art (offline, or a catalog row with no image): print a cuttable
+    // name card rather than dropping the slot and shifting the whole sheet.
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = Math.max(2, w * 0.008);
+    roundRectPath(ctx, ctx.lineWidth, ctx.lineWidth, w - ctx.lineWidth * 2, h - ctx.lineWidth * 2, w * 0.05);
+    ctx.stroke();
+    ctx.fillStyle = "#111";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = '700 ' + Math.round(w * 0.075) + 'px Helvetica, Arial, sans-serif';
+    const lines = wrapPosterText(ctx, card.name || "Unknown card", w * 0.82, 5);
+    const lh = Math.round(w * 0.095);
+    lines.forEach((ln, i) => ctx.fillText(ln, w / 2, h / 2 - ((lines.length - 1) * lh) / 2 + i * lh));
+  }
+
+  if(bw){
+    const d = ctx.getImageData(0, 0, w, h);
+    const p = d.data;
+    for(let i = 0; i < p.length; i += 4){
+      const g = p[i] * 0.299 + p[i + 1] * 0.587 + p[i + 2] * 0.114;
+      // Gamma < 1 lifts the mids: a full-bleed dark Lorcana frame otherwise
+      // prints as a toner-soaked black rectangle with unreadable rules text.
+      const v = lighten ? 255 * Math.pow(g / 255, 0.58) : g;
+      p[i] = p[i + 1] = p[i + 2] = v;
+    }
+    ctx.putImageData(d, 0, 0);
+  }
+  drawProxyWatermark(ctx, w, h, watermark);
+
+  const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
+  if(!blob) throw new Error("card render failed");
+  const buf = await blob.arrayBuffer();
+  // Free the backing store now — a 60-card sheet holds ~20 of these alive.
+  cv.width = cv.height = 1;
+  return {data: new Uint8Array(buf), w, h};
+};
+
+// Slot geometry for one sheet: a centred COLS x ROWS block of true-size cards
+// with crop marks in the margins. Cards butt against each other so a single
+// straight cut separates two neighbours.
+const proxySheetGeometry = (paper) => {
+  const page = PROXY_PAPERS[paper] || PROXY_PAPERS.letter;
+  const cw = PROXY_CARD_MM.w * PDF_PT_PER_MM;
+  const ch = PROXY_CARD_MM.h * PDF_PT_PER_MM;
+  const gw = cw * PROXY_COLS, gh = ch * PROXY_ROWS;
+  const x0 = (page.w - gw) / 2, y0 = (page.h - gh) / 2;
+  const mark = PROXY_MARK_MM * PDF_PT_PER_MM;
+  const guides = [];
+  for(let c = 0; c <= PROXY_COLS; c++){
+    const x = x0 + c * cw;
+    guides.push([x, y0 - mark, x, y0], [x, y0 + gh, x, y0 + gh + mark]);
+  }
+  for(let r = 0; r <= PROXY_ROWS; r++){
+    const y = y0 + r * ch;
+    guides.push([x0 - mark, y, x0, y], [x0 + gw, y, x0 + gw + mark, y]);
+  }
+  const slotAt = (i) => {
+    const col = i % PROXY_COLS, row = Math.floor(i / PROXY_COLS);
+    return {x: x0 + col * cw, y: y0 + gh - (row + 1) * ch, w: cw, h: ch};
+  };
+  return {page, guides, slotAt, footerX: x0, footerY: Math.max(10, y0 - mark - 9)};
+};
+
+const PROXY_PREFS_KEY = "packsink:proxyPrint:v1";
+const readProxyPrefs = () => {
+  try { return JSON.parse(localStorage.getItem(PROXY_PREFS_KEY)) || {}; } catch { return {}; }
+};
+
+const ProxyPrintModal = ({deck, cardById, onClose}) => {
+  useEscToClose(onClose);
+  const saved = useMemo(readProxyPrefs, []);
+  const [ink, setInk]             = useState(saved.ink === "bw" ? "bw" : "color");
+  const [lighten, setLighten]     = useState(saved.lighten !== false);
+  const [watermark, setWatermark] = useState(["subtle","bold","none"].includes(saved.watermark) ? saved.watermark : "subtle");
+  const [paper, setPaper]         = useState(PROXY_PAPERS[saved.paper] ? saved.paper : "letter");
+  const [guides, setGuides]       = useState(saved.guides !== false);
+  const [scope, setScope]         = useState(saved.scope === "one" ? "one" : "all");
+  const [busy, setBusy]           = useState(false);
+  const [progress, setProgress]   = useState(null);
+  const [result, setResult]       = useState(null);
+  const [error, setError]         = useState(null);
+  const cancelled = useRef(false);
+  const resultRef = useRef(null);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, scope}));
+    } catch {}
+  }, [ink, lighten, watermark, paper, guides, scope]);
+
+  // Revoke the blob URL on unmount only — regeneration revokes its own
+  // predecessor, so tying this to `result` would pull the URL out from under
+  // a Save click that happened in the same tick.
+  useEffect(() => () => {
+    cancelled.current = true;
+    if(resultRef.current) URL.revokeObjectURL(resultRef.current.url);
+  }, []);
+
+  // One entry per card_id, in the same section/cost order the deck poster and
+  // the printed decklist use — so a cut stack comes out already sorted.
+  const cards = useMemo(() => {
+    const seen = new Map();
+    for(const c of (deck.cards || [])){
+      if(!c.card_id) continue;
+      if(seen.has(c.card_id)){ seen.get(c.card_id).quantity += c.quantity; continue; }
+      const meta = (cardById[c.card_id] || [])[0];
+      if(!meta) continue;
+      const raw = meta.img_large || meta.img_normal || meta.img_small;
+      let img = raw ? proxyImg(raw).replace("/normal/", "/large/").replace("/small/", "/large/") : null;
+      if(img && PROXY_ORIGIN && img.startsWith("/")) img = PROXY_ORIGIN + img;
+      seen.set(c.card_id, {
+        card_id: c.card_id,
+        quantity: c.quantity,
+        name: meta["Product Name"] || "",
+        cost: meta.cost ?? 99,
+        type: meta.card_type || "",
+        img,
+      });
+    }
+    const ORDER = ["Character", "Action", "Song", "Item", "Location"];
+    const rank = (t) => { const i = ORDER.indexOf(t === "Action - Song" ? "Song" : t); return i < 0 ? 99 : i; };
+    return Array.from(seen.values()).sort((a, b) =>
+      rank(a.type) - rank(b.type) || a.cost - b.cost || a.name.localeCompare(b.name));
+  }, [deck.cards, cardById]);
+
+  const totalCards = scope === "one"
+    ? cards.length
+    : cards.reduce((s, c) => s + Math.max(0, c.quantity), 0);
+  const pageCount = Math.ceil(totalCards / PROXY_PER_PAGE) || 0;
+  const missingArt = cards.filter(c => !c.img).length;
+
+  const generate = async () => {
+    if(busy || !cards.length) return;
+    cancelled.current = false;
+    setBusy(true); setError(null);
+    setProgress({done: 0, total: cards.length});
+    try {
+      const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark};
+      const imgs = [];
+      const indexOf = new Map();
+      for(let i = 0; i < cards.length; i++){
+        if(cancelled.current) return;
+        indexOf.set(cards[i].card_id, imgs.length);
+        imgs.push(await renderProxyCardJpeg(cards[i], opts));
+        setProgress({done: i + 1, total: cards.length});
+        // Yield so the progress bar actually paints between cards.
+        await new Promise(r => setTimeout(r, 0));
+      }
+      if(cancelled.current) return;
+
+      const seq = [];
+      for(const c of cards){
+        const n = scope === "one" ? 1 : Math.max(0, c.quantity);
+        for(let k = 0; k < n; k++) seq.push(indexOf.get(c.card_id));
+      }
+      const geo = proxySheetGeometry(paper);
+      const pages = [];
+      const stamp = new Date().toLocaleDateString();
+      for(let p = 0; p * PROXY_PER_PAGE < seq.length; p++){
+        const chunk = seq.slice(p * PROXY_PER_PAGE, (p + 1) * PROXY_PER_PAGE);
+        pages.push({
+          slots: chunk.map((imgIx, i) => ({img: imgIx, ...geo.slotAt(i)})),
+          guides: guides ? geo.guides : null,
+          footer: (deck.name || "Deck") + "  -  proxies, not for sale or tournament play  -  packs.ink  -  "
+            + stamp + "  -  page " + (p + 1) + "/" + Math.ceil(seq.length / PROXY_PER_PAGE),
+          footerX: geo.footerX,
+          footerY: geo.footerY,
+        });
+      }
+
+      const blob = buildProxyPdfBlob({
+        imgs, pages, pageW: geo.page.w, pageH: geo.page.h,
+        title: (deck.name || "Deck") + " - proxies",
+      });
+      if(cancelled.current) return;
+      if(resultRef.current) URL.revokeObjectURL(resultRef.current.url);
+      const next = {
+        url: URL.createObjectURL(blob), blob,
+        pages: pages.length, cards: seq.length, bytes: blob.size,
+        name: (deck.name || "deck").replace(/[^\w\- ]+/g, "").trim().replace(/\s+/g, "-").slice(0, 48) || "deck",
+      };
+      resultRef.current = next;
+      setResult(next);
+    } catch(err){
+      console.error("[proxy-print] build failed:", err);
+      setError("Couldn't build the PDF. If you're offline, card art may not be available yet.");
+    } finally {
+      if(!cancelled.current){ setBusy(false); setProgress(null); }
+    }
+  };
+
+  const seg = (val, cur, set, label, title) => html`<button type="button"
+    class=${"chip" + (cur === val ? " active" : "")}
+    title=${title || null}
+    onClick=${() => { set(val); setResult(null); }}>${label}</button>`;
+
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal proxy-modal" onClick=${e => e.stopPropagation()}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin: 0, fontSize: 18}}>🖨 Print proxies</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
+      </div>
+      <div class="modal-body proxy-body">
+        <p class="proxy-lede">
+          Builds a PDF of this deck at true card size — ${PROXY_PER_PAGE} per page, ready to print and cut.
+          Every card is stamped <strong>PROXY</strong>. For playtesting only: proxies aren't
+          legal in sanctioned play and must never be sold or passed off as real cards.
+        </p>
+
+        <div class="proxy-opt">
+          <div class="proxy-opt-lbl">Ink</div>
+          <div class="proxy-opt-row">
+            ${seg("color", ink, setInk, "Colour")}
+            ${seg("bw", ink, setInk, "Black & white")}
+          </div>
+        </div>
+        ${ink === "bw" && html`<label class="proxy-check">
+          <input type="checkbox" checked=${lighten}
+            onChange=${e => { setLighten(e.target.checked); setResult(null); }}/>
+          <span>Lighten for laser/inkjet <span class="muted">— keeps rules text readable and uses far less toner on dark cards</span></span>
+        </label>`}
+
+        <div class="proxy-opt">
+          <div class="proxy-opt-lbl">Watermark</div>
+          <div class="proxy-opt-row">
+            ${seg("subtle", watermark, setWatermark, "Corner tag", "A small PROXY tag at the bottom of each card")}
+            ${seg("bold", watermark, setWatermark, "Across the card", "Repeated diagonal PROXY over the whole card")}
+            ${seg("none", watermark, setWatermark, "None", "No watermark — do not use these anywhere they could be mistaken for real cards")}
+          </div>
+        </div>
+
+        <div class="proxy-opt">
+          <div class="proxy-opt-lbl">Paper</div>
+          <div class="proxy-opt-row">
+            ${seg("letter", paper, setPaper, PROXY_PAPERS.letter.label)}
+            ${seg("a4", paper, setPaper, PROXY_PAPERS.a4.label)}
+          </div>
+        </div>
+
+        <div class="proxy-opt">
+          <div class="proxy-opt-lbl">Cards</div>
+          <div class="proxy-opt-row">
+            ${seg("all", scope, setScope, "Every copy", "All 4 copies of a 4-of, ready to sleeve")}
+            ${seg("one", scope, setScope, "One of each", "A single copy of each card")}
+          </div>
+        </div>
+
+        <label class="proxy-check">
+          <input type="checkbox" checked=${guides}
+            onChange=${e => { setGuides(e.target.checked); setResult(null); }}/>
+          <span>Cut marks in the margins <span class="muted">— line a ruler up across the page to cut</span></span>
+        </label>
+
+        <div class="proxy-summary">
+          ${cards.length
+            ? html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${cards.length} unique`
+            : html`<span class="muted">This deck has no cards yet.</span>`}
+          ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no art available — they print as a name card.</div>`}
+        </div>
+
+        <div class="proxy-print-note">
+          ⚠ When printing, set <strong>Scale: 100%</strong> (or “Actual size”) — “Fit to page”
+          shrinks the cards and they won't match real ones.
+        </div>
+
+        ${error && html`<div class="proxy-error">${error}</div>`}
+
+        ${busy && progress && html`<div class="proxy-progress">
+          <div class="proxy-progress-bar"><span style=${{width: (progress.total ? (progress.done / progress.total) * 100 : 0) + "%"}}></span></div>
+          <div class="proxy-progress-lbl">Rendering ${progress.done} / ${progress.total} cards…</div>
+        </div>`}
+
+        <div class="proxy-actions">
+          ${!result
+            ? html`<button class="active proxy-go" disabled=${busy || !cards.length} onClick=${generate}>
+                ${busy ? "Building PDF…" : "Build PDF"}
+              </button>`
+            : html`<${React.Fragment}>
+                <button class="active proxy-go" onClick=${() => {
+                  const a = document.createElement("a");
+                  a.href = result.url; a.download = "packsink-proxies-" + result.name + ".pdf";
+                  document.body.appendChild(a); a.click(); a.remove();
+                  flashToast("Proxy PDF saved");
+                }}>⤓ Save PDF</button>
+                <button onClick=${() => {
+                  const w = window.open(result.url, "_blank");
+                  if(!w) flashToast("Pop-up blocked — use Save PDF instead");
+                }}>🖨 Open & print</button>
+                <button onClick=${generate} disabled=${busy}>Rebuild</button>
+                <span class="proxy-done muted">
+                  ${result.pages} page${result.pages === 1 ? "" : "s"} · ${(result.bytes / 1048576).toFixed(1)} MB
+                </span>
+              </>`}
         </div>
       </div>
     </div>
@@ -33378,6 +33866,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // an update on every keystroke; debounced commit on blur or popover close.
   const [mulliganOpen, setMulliganOpen] = useState(false);
   const [posterOpen, setPosterOpen] = useState(false);
+  const [proxyOpen, setProxyOpen] = useState(false);
   const [notesOpen, setNotesOpen] = useState(false);
   const notesRef = useRef(null);
   const [notesDraft, setNotesDraft] = useState(deck.description || "");
@@ -34002,6 +34491,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           title="Simulate drawing your opening hand and mulliganing">🎴 Mulligan</button>
         <button onClick=${()=>setPosterOpen(true)} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}}
           title="Open a printable image of this deck (Save as PDF / screenshot)">🖼 Export Image</button>
+        <button onClick=${()=>setProxyOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
+          title="Build a print-and-cut PDF of this deck at true card size">🖨 Print Proxies</button>
         ${!readOnly && html`<button onClick=${handleImport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
         <button onClick=${handleExport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export Decklist Text</button>
         ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
@@ -34428,6 +34919,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     </div>`}
     ${mulliganOpen && html`<${MulliganSimulator} deck=${deck} cardById=${cardById}
       onClose=${()=>setMulliganOpen(false)}/>`}
+    ${proxyOpen && html`<${ProxyPrintModal} deck=${deck} cardById=${cardById}
+      onClose=${()=>setProxyOpen(false)}/>`}
     ${posterOpen && html`<${DeckPosterModal} deck=${deck} cardById=${cardById}
       shareUrl=${deck.visibility && deck.visibility !== "private" ? shareUrl : null}
       creatorName=${ownerDisplayName || null}
