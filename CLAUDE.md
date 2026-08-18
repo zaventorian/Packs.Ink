@@ -947,6 +947,25 @@ Highest wins, tiebreak by iteration order.
 - **Options grouped**: Layout (Background + Columns), Show (Stats + Cost curve), Costs (Non-Foil/Foil/Max Rarity $), Share (QR + URL footer; locked + click-to-make-unlisted when deck is Private and viewer is owner).
 - **Bottom row**: `packs.ink · <date>` (left) + URL (right).
 
+## Print proxies (deck → print-and-cut PDF)
+
+`ProxyPrintModal` (Index.html, just after `DeckPosterModal`). DeckEditor toolbar → **🖨 Print Proxies**. Renders each card to a canvas, encodes JPEG, and writes a PDF: 9 cards per page at true card size (63×88mm), colour or B&W, PROXY watermark, crop marks, Save / Open-and-print.
+
+**The PDF writer is hand-rolled — deliberately.** `buildProxyPdfBlob` emits raw PDF syntax and embeds each JPEG as a `/DCTDecode` image XObject, which means the JPEG bytes pass through verbatim and the whole writer is ~100 lines. The alternative was vendoring jsPDF (~350KB) into `/vendor/` and lazy-loading it, which buys nothing here: the only PDF feature used is "place image at rect". Same reasoning as the canvas card posters — it ships inside Index.html (network-first) so a stale service worker can't break it.
+
+- **The watermark is painted into the card's PIXELS, not laid over the page.** It survives whatever the user does with the PDF afterwards. `drawProxyWatermark` — `subtle` = a corner tag, `bold` = tag + repeated diagonal, `none`. The corner tag renders in all modes except `none`.
+- **White ground before drawing art.** Lorcast art is transparent outside the rounded corners and JPEG has no alpha — skip the `fillRect` and every card prints four black corners.
+- **Identical copies share ONE embedded image.** A 60-card deck carries ~20 XObjects, not 60. `indexOf` maps card_id → image index; the page slots reference it repeatedly. Dropping this multiplies file size ~3x.
+- **B&W applies a gamma lift** (`pow(g/255, 0.58)`, the "Lighten" checkbox). A straight luminance conversion turns a full-bleed dark Lorcana frame into a toner-soaked black rectangle with unreadable rules text.
+- **Cards butt together (no gutter); crop marks live in the MARGINS only.** One straight cut separates two neighbours, and no ink lands on a card face. Marks are 4mm — the Letter vertical margin is only ~7.7mm, so longer marks would fall in the printer's unprintable band.
+- **`PROXY_RENDER_PX = 744`** = 63mm at 300dpi. Lorcast `/large/` art is 734px wide, so this is a ~1% upscale — effectively native, and genuinely 300dpi on paper. Don't raise it; you'd be inventing pixels and tripling the file.
+- **The "Scale: 100%" note in the modal is load-bearing.** Browsers default print dialogs to "Fit to page", which shrinks the cards so they don't match real ones — the single most likely way a user gets a bad result.
+- Options persist to `localStorage["packsink:proxyPrint:v1"]`. The blob URL is revoked on unmount and on rebuild, never in a `result`-keyed effect (that would pull the URL out from under a Save click in the same tick).
+
+**Guarded by `node scripts/test_proxy_pdf.mjs`**, which extracts the real writer out of Index.html. The two ways this breaks are silent and total — a wrong xref byte offset or a wrong stream `/Length` makes the file unopenable in every reader with no clue why — and both are arithmetic that shifts the moment anyone edits what the writer emits. It caught an off-by-one in `objCount` that emitted a phantom xref row. Verified end-to-end in Chromium's PDFium viewer, and the embedded streams check out as baseline (SOF0) 3-component JPEGs at the declared dimensions.
+
+**htm fragments are `` html`<${React.Fragment}>…</>` ``, never `` html`<>…</>` ``.** htm compiles a bare `<>` to `h("", …)` and `React.createElement("")` throws. Cost a debugging cycle here; the rest of the file already uses the `React.Fragment` form.
+
 ## Artist Alley poster
 
 `window.open` opens a self-contained poster in a new tab. Plain `<img>` tags + same-origin `/img-proxy/*` for Lorcast art (canvas exports work cleanly).
