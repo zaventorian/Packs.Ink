@@ -53,6 +53,7 @@ Usage
     python scripts/reconcile_catalog.py --audit-promo-singles   # deep periodic audit
     python scripts/reconcile_catalog.py --fail-on-card-orphans
     python scripts/reconcile_catalog.py --json out.json  # machine-readable dump
+    python scripts/reconcile_catalog.py --pid 711071     # "do we have THIS product?"
 """
 from __future__ import annotations
 
@@ -239,10 +240,21 @@ def main() -> int:
                          "(periodic deep audit; off for the daily watchdog).")
     ap.add_argument("--json", dest="json_path", default=None,
                     help="Write the full structured report to this path.")
+    ap.add_argument("--pid", action="append", default=None, metavar="ID",
+                    help="Probe specific TCGPlayer product id(s) instead of running the sweep. "
+                         "Repeatable, and accepts a comma-separated list. Exits 1 if any probed "
+                         "product is in neither cards nor sealed_products.")
     args = ap.parse_args()
 
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     sb = Supabase()
+
+    if args.pid:
+        pids = []
+        for chunk in args.pid:
+            for tok in str(chunk).replace(",", " ").split():
+                pids.append(int(tok))
+        return _probe_pids(sb, pids, args.days)
 
     print(f"Computing orphans (priced in last {args.days}d, not in cards or sealed_products)…")
     priced = recent_priced_pids(sb, args.days)
@@ -296,6 +308,85 @@ def main() -> int:
         print(f"\n--fail-on-card-orphans: {len(cards_bucket)} missing single(s) → exiting 1")
         return 1
     return 0
+
+
+def _probe_pids(sb: Supabase, pids: list[int], days: int) -> int:
+    """Answer "do we have this TCGPlayer product?" for specific pids.
+
+    The sweep only sees pids priced in the last `days` and only reports the
+    ones missing everywhere. This reports every probed pid either way, so a
+    TCGPlayer link someone pastes can be checked in one command — including a
+    brand-new SKU that has no price row yet, which the sweep can't see at all.
+    """
+    in_list = "in.(" + ",".join(str(p) for p in pids) + ")"
+    by_card = {
+        r["tcgplayer_product_id"]: r
+        for r in sb.select("cards",
+                           columns="id,name,version,collector_number,set_id,tcgplayer_product_id",
+                           filters={"tcgplayer_product_id": in_list},
+                           order="tcgplayer_product_id.asc")
+    }
+    by_sealed = {
+        r["tcgplayer_product_id"]: r
+        for r in sb.select("sealed_products",
+                           columns="tcgplayer_product_id,name,product_type,set_id",
+                           filters={"tcgplayer_product_id": in_list},
+                           order="tcgplayer_product_id.asc")
+    }
+    meta = build_tcgcsv_index(set(pids))
+    prices = latest_prices(sb, set(pids), days)
+
+    missing = 0
+    for pid in pids:
+        m = meta.get(pid)
+        pr = prices.get(pid) or {}
+        card = by_card.get(pid)
+        sealed = by_sealed.get(pid)
+        print(f"\n{'='*70}\npid {pid}\n{'='*70}")
+        if m:
+            num = f"  #{m['number']}" if m.get("number") else ""
+            print(f"  TCGCSV    {m['name']}{num}   [group: {m['group']}]")
+            if m.get("url"):
+                print(f"            {m['url']}")
+        else:
+            print("  TCGCSV    NOT in the Lorcana catalog (delisted, or a different category)")
+
+        if card:
+            disp = card["name"] + (f" - {card['version']}" if card.get("version") else "")
+            print(f"  cards     ✅ {disp}  #{card.get('collector_number')}  set={card.get('set_id')}")
+        else:
+            print("  cards     —")
+
+        if sealed:
+            print(f"  sealed    ✅ [{sealed.get('product_type')}] {sealed.get('name')}  "
+                  f"set={sealed.get('set_id') or 'NULL'}")
+            if not sealed.get("set_id"):
+                print("            ⚠ set_id NULL — the TCGCSV group didn't match a sets.name. "
+                      "Add it to TCGCSV_GROUP_SET_ALIASES in scripts/tcgcsv_common.py.")
+        else:
+            print("  sealed    —")
+
+        if pr:
+            print(f"  prices    ✅ {pr.get('date')}  low={fmt_money(pr.get('low'))}  "
+                  f"market={fmt_money(pr.get('market'))}  printings={sorted(pr.get('printings', set()))}")
+        else:
+            print(f"  prices    — nothing in prices_daily in the last {days}d")
+
+        if card or sealed:
+            print("  VERDICT   we have it.")
+        else:
+            missing += 1
+            if not m:
+                hint = "TCGCSV doesn't list it either — nothing to import"
+            elif looks_sealed(m["name"]):
+                hint = "run `python scripts/load_sealed_products.py --skip-promo-singles`"
+            else:
+                hint = ("it's a single — see reconcile's MISSING SINGLES flow "
+                        "(load_lorcast / link_preorder_pids / patch_pid_overrides)")
+            print(f"  VERDICT   ❌ MISSING from both cards and sealed_products → {hint}")
+
+    print(f"\nProbed {len(pids)} product(s); {missing} missing.")
+    return 1 if missing else 0
 
 
 def _print_report(cards: list[dict], sealed: list[dict], days: int) -> None:

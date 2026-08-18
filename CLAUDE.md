@@ -711,6 +711,8 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 - **`SET_ORDER`** = `[EXTRAS_SET_NAME, "Promo Set 1/2/3", ...MAINLINE_SETS]`. `reverse()` puts mainlines on top.
 - **`MAINLINE_RELEASE_ORDER`** = `MAINLINE_SETS` minus unreleased. Drives Core Constructed rotation.
 - Decks pick up format automatically (`checkDeckLegality`): core-legal sets → "Core Constructed"; structurally legal → "Infinity"; otherwise → "Invalid Deck".
+- **`TCGCSV_GROUP_SET_ALIASES` (`scripts/tcgcsv_common.py`) is how a TCGplayer group binds to a Lorcast set when their names don't match.** Both `etl_tcgcsv_daily.update_set_group_mapping` (writes `sets.tcgplayer_group_id`) and `load_sealed_products.build_group_to_setid` (writes `sealed_products.set_id`) resolve through `group_name_candidates()`, which tries the alias, then the literal group name, then the post-colon form ("Disney Lorcana: Fabled" → "Fabled"). An unmatched group is quietly expensive: `link_preorder_pids.py` only walks sets that HAVE a `tcgplayer_group_id`, so that set's new cards never get a pid linked and stay priceless/invisible until Lorcast fills `tcgplayer_id` itself. Seeded with `"d23 promos" → "D23 Collection"` — TCGplayer files every D23 drop (2024 #1-9, 2026 #10-15, both years' sealed collection SKUs) under one "D23 Promos" group. Add an entry whenever a new promo group appears under a name that isn't the set's.
+- **Check one product with `python scripts/reconcile_catalog.py --pid <id>`** — reports it across TCGCSV / `cards` / `sealed_products` / `prices_daily` and exits 1 if it's in neither catalog table. The daily sweep can't answer this for a brand-new SKU (it only looks at pids priced in the last 14 days).
 
 ## Inks & dual-ink cards
 

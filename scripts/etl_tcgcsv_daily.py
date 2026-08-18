@@ -25,6 +25,7 @@ from supabase_client import Supabase
 from tcgcsv_common import (
     LORCANA_CATEGORY_ID,
     TCGCSV_BASE,
+    group_name_candidates,
     transform_price_rows,
 )
 
@@ -70,13 +71,8 @@ def update_set_group_mapping(sb: Supabase, groups: list[dict]) -> None:
     updates: list[dict] = []
     for g in groups:
         gname = (g.get("name") or "").strip()
-        # TCGCSV uses names like "Disney Lorcana: The First Chapter".
-        # Lorcast uses just "The First Chapter".
-        candidates = {gname.lower()}
-        if ":" in gname:
-            candidates.add(gname.split(":", 1)[1].strip().lower())
         match = None
-        for c in candidates:
+        for c in group_name_candidates(gname):
             if c in by_name:
                 match = by_name[c]
                 break

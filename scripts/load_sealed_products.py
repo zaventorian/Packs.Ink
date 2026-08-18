@@ -43,7 +43,7 @@ import requests
 from dotenv import load_dotenv
 
 from supabase_client import Supabase
-from tcgcsv_common import LORCANA_CATEGORY_ID, TCGCSV_BASE
+from tcgcsv_common import LORCANA_CATEGORY_ID, TCGCSV_BASE, group_name_candidates
 
 
 USER_AGENT = "PacksInk/1.0 (+https://packs.ink) python-requests sealed-loader"
@@ -148,10 +148,7 @@ def build_group_to_setid(sb: Supabase, groups: list[dict]) -> dict[int, str]:
         gname = (g.get("name") or "").strip()
         if not gid or not gname:
             continue
-        candidates = {gname.lower()}
-        if ":" in gname:
-            candidates.add(gname.split(":", 1)[1].strip().lower())
-        for c in candidates:
+        for c in group_name_candidates(gname):
             row = by_name.get(c)
             if row:
                 out[gid] = row["id"]
