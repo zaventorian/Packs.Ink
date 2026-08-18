@@ -1,0 +1,155 @@
+# Manual production deploy to the Cloudflare Worker.
+#
+# Deliberately workflow_dispatch ONLY — never `on: push`. A git push has never
+# shipped this site (every deployment in the Worker's history is a manual
+# Wrangler run), and that is the intended behaviour, not an oversight: deploys
+# are batched and chosen, not a side effect of merging. This workflow exists so
+# a deploy can be run without a laptop, not so it happens on its own.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   CLOUDFLARE_API_TOKEN   — token with, at minimum:
+#                              Account · Workers Scripts · Edit
+#                              Account · Account Settings · Read
+#                              Zone    · Cache Purge · Purge      (for the purge step)
+#   CLOUDFLARE_ACCOUNT_ID  — Cloudflare dashboard → Workers & Pages → Account ID
+#   CLOUDFLARE_ZONE_ID     — the packs.ink zone's Overview page → Zone ID
+#
+# The token is scoped to Workers + cache purge on purpose: it cannot touch DNS,
+# so it can never perform the grey-cloud rollback, and it cannot read Supabase.
+#
+# Rollback is unchanged and still a dashboard action: grey-cloud
+# `A packs.ink → 75.2.60.5`. Instant, no redeploy.
+
+name: Deploy to Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm. Anything else aborts before touching production.'
+        required: true
+        default: ''
+      dry_run:
+        description: 'Build and validate only — no deploy, no purge.'
+        type: boolean
+        default: false
+      purge:
+        description: 'Purge the Cloudflare cache after deploying. Leave on; the HTML stays stale without it.'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Two overlapping deploys would race to publish different dist/ trees.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and deploy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the confirmation word
+        if: inputs.confirm != 'deploy'
+        run: |
+          echo "::error::Aborted — the confirm box must say exactly 'deploy' (got '${{ inputs.confirm }}')."
+          exit 1
+
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      # No `npm ci`: build_dist.mjs is dependency-free, and package.json's
+      # Capacitor tree is for the native shell, which does not ship here.
+      - name: Build dist/
+        run: node scripts/build_dist.mjs
+
+      # The three things CLAUDE.md requires to move in lockstep. A half-bumped
+      # deploy is silent and nasty — the SW precaches a styles.css?v= that no
+      # document ever asks for, so every visitor pairs fresh HTML with a stale
+      # stylesheet. Warn rather than block: this is a convention, and a deploy
+      # should never be held hostage to it at 11pm.
+      - name: Check the asset-version lockstep
+        run: |
+          set -euo pipefail
+          html_v=$(grep -o 'styles\.css?v=[0-9]*' dist/index.html | head -1 | grep -o '[0-9]*')
+          sw_v=$(grep -o "/styles\.css?v=[0-9]*" dist/sw.js | head -1 | grep -o '[0-9]*')
+          cache_v=$(grep -o "packsink-v[0-9]*" dist/sw.js | head -1 | grep -o '[0-9]*')
+          echo "Index.html styles.css?v=$html_v · sw.js CORE_ASSETS ?v=$sw_v · sw.js CACHE_VERSION packsink-v$cache_v"
+          if [ "$html_v" != "$sw_v" ]; then
+            echo "::warning::Index.html asks for styles.css?v=$html_v but sw.js precaches ?v=$sw_v — the SW will cache a URL nobody requests."
+          fi
+          if [ "$cache_v" != "$html_v" ]; then
+            echo "::warning::CACHE_VERSION is packsink-v$cache_v but styles.css is ?v=$html_v — conventionally these match."
+          fi
+          echo "SHIP_VERSION=$html_v" >> "$GITHUB_ENV"
+
+      - name: Deploy the Worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ "${{ inputs.dry_run }}" = "true" ]; then
+            npx --yes wrangler@4 deploy --dry-run
+          else
+            npx --yes wrangler@4 deploy
+          fi
+
+      # Without this the edge keeps serving the previous document. The SPA
+      # fallback means every route and query-string variant caches its own copy
+      # of the HTML, so a by-URL purge misses most of them. Traffic is
+      # ~0.1 req/sec, so purging everything costs nothing.
+      - name: Purge the Cloudflare cache
+        if: ${{ inputs.dry_run != true && inputs.purge }}
+        env:
+          CF_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CF_ZONE: ${{ secrets.CLOUDFLARE_ZONE_ID }}
+        run: |
+          set -euo pipefail
+          out=$(curl -sS -X POST "https://api.cloudflare.com/client/v4/zones/$CF_ZONE/purge_cache" \
+            -H "Authorization: Bearer $CF_TOKEN" \
+            -H "Content-Type: application/json" \
+            --data '{"purge_everything":true}')
+          echo "$out"
+          echo "$out" | grep -q '"success":true' || { echo "::error::Cache purge failed."; exit 1; }
+
+      # Curl a path that cannot be cached: it hits the SPA fallback, so it shows
+      # what the Worker is really serving rather than what the edge remembers.
+      # This is what separates "deployed but stale at the edge" from "deployed".
+      - name: Verify what the edge is serving
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -uo pipefail
+          for attempt in 1 2 3 4 5; do
+            served=$(curl -s --max-time 20 "https://packs.ink/__deploy-check-$RANDOM$RANDOM" \
+              | grep -o 'styles\.css?v=[0-9]*' | head -1 | grep -o '[0-9]*' || true)
+            echo "attempt $attempt: edge is serving styles.css?v=${served:-<none>} (expected $SHIP_VERSION)"
+            if [ "$served" = "$SHIP_VERSION" ]; then
+              echo "VERIFIED=yes" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::After 5 attempts the edge is still not serving v$SHIP_VERSION. The deploy may have succeeded but the cache did not clear — purge manually (Caching → Configuration → Purge Everything)."
+          exit 1
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Deploy"
+            echo ""
+            if [ "${{ inputs.dry_run }}" = "true" ]; then
+              echo "Dry run — built and validated, nothing published."
+            else
+              echo "- Shipped asset version: **v${SHIP_VERSION:-unknown}**"
+              echo "- Cache purged: **${{ inputs.purge }}**"
+              echo "- Edge verified: **${VERIFIED:-no}**"
+              echo ""
+              echo "Rollback if needed: grey-cloud \`A packs.ink → 75.2.60.5\` in the Cloudflare dashboard. Instant, no redeploy."
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
