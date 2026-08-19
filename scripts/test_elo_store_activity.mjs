@@ -42,7 +42,7 @@ const code = [
   grab("const eloEventSeats = (e) =>", "e.rated_players : 0);"),
   grab("function eloCanonicalIdMap(aliasMap){", "\n}"),
   grab("function eloSeasonForDate(iso, seasons){", "\n}"),
-  grab("function buildEloStoreActivity(events, matches, aliasMap, seasons){", "\n  return {seasons: seasonList, stores};\n}"),
+  grab("function buildEloStoreActivity(events, matches, aliasMap, seasons, trackedIds){", "\n  return {seasons: seasonList, stores};\n}"),
   grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
   grab("const RPH_ENTRY = {", "};"),
   grab("const RPH_PRORATED = {", "};"),
@@ -76,8 +76,10 @@ const seasons = [                      // newest-first, as the fetch sorts them
   {name: WILDS,  released_at: "2026-05-15"},
   {name: WINTER, released_at: "2026-01-01"},
 ];
+const SID = {"Collectors Lounge": 1, "Top Choice Gaming": 2};
 const ev = (event_id, store_name, start, seats, extra = {}) =>
-  ({event_id, store_name, start_datetime: start + "T18:00:00+00:00",
+  ({event_id, store_name, store_id: SID[store_name] ?? null,
+    start_datetime: start + "T18:00:00+00:00",
     registered_user_count: seats, kind: "other", set_name: null, ...extra});
 const events = [
   // Named set, inside Wilds Unknown.
@@ -112,7 +114,7 @@ const matches = [
 ];
 const aliasMap = new Map([[1, [{player_id: 901, display_name: "zaven", platform: "melee"}]]]);
 
-const out = build(events, matches, aliasMap, seasons);
+const out = build(events, matches, aliasMap, seasons, new Set([1, 2]));
 const byName = Object.fromEntries(out.stores.map((s) => [s.store, s]));
 
 console.log("date bucketing (not set_name)");
@@ -139,6 +141,17 @@ eq("a set the store never ran contributes nothing",
    totals(cl, ["Nonexistent 2099"]), {events: 0, attendance: 0, players: 0, pre: 0, avg: 0});
 
 console.log("exclusions");
+// lorcana_events_history carries every store the global feed listed, so an
+// untracked store must not appear at all.
+const untracked = build(
+  events.concat([{event_id: 90, store_name: "Some Shop In Berlin", store_id: 77,
+                  start_datetime: "2026-06-05T18:00:00+00:00",
+                  registered_user_count: 40, kind: "other", set_name: null}]),
+  matches, aliasMap, seasons, new Set([1, 2]));
+eq("an untracked store is dropped entirely",
+   untracked.stores.some((x) => x.store === "Some Shop In Berlin"), false);
+eq("an empty tracked set means no filter, not no stores",
+   build(events, matches, aliasMap, seasons, new Set()).stores.length, 2);
 eq("storeless events make no store row",
    out.stores.map((x) => x.store).sort(), ["Collectors Lounge", "Top Choice Gaming"]);
 eq("matches on events absent from history are dropped",

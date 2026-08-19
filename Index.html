@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=328">
+<link rel="stylesheet" href="styles.css?v=329">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -22469,7 +22469,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
 // anon's 3s statement timeout that is a fine way to make a signed-out visitor's
 // tab fail. elo_matches is an indexed straight read, and carries two players per
 // row, so it is both cheaper and smaller. Cached 12h either way.
-const ELO_STORES_CACHE = "packsink:elo:stores:v3";   // v3: sourced from lorcana_events_history
+const ELO_STORES_CACHE = "packsink:elo:stores:v4";   // v4: scoped to tracked stores
 const ELO_STORES_TTL = 12 * 3600 * 1000;
 const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
 const ELO_RECENT_SETS = 4;
@@ -22503,7 +22503,7 @@ async function fetchEloStoreActivity(aliasMap){
   // along because seasons have to be assigned by DATE (see eloSeasonForDate).
   // elo_matches still supplies the head count; elo_events.event_id and
   // lorcana_events_history.event_id are both the RPH event id, so they join.
-  const [events, matches, sets] = await Promise.all([
+  const [events, matches, sets, tracked] = await Promise.all([
     sbFetchAll("lorcana_events_history", {
       select: "event_id,store_id,store_name,kind,set_name,start_datetime,registered_user_count",
       order: "event_id.asc",
@@ -22513,11 +22513,15 @@ async function fetchEloStoreActivity(aliasMap){
       order: "match_id.asc",
     }, null),
     sbFetchAll("sets", {select: "name,released_at", order: "released_at.desc"}, null),
+    // lorcana_events_history holds every store the global upcoming feed ever
+    // listed — ~3,000 shops worldwide. Without this the tab lists all of them.
+    sbFetchAll("elo_tracked_stores", {select: "store_id", order: "store_id.asc"}, null),
   ]);
   const seasons = (sets || [])
     .filter(x => x.released_at && MAINLINE_SETS.includes(x.name))
     .sort((a, b) => a.released_at < b.released_at ? 1 : a.released_at > b.released_at ? -1 : 0);
-  return buildEloStoreActivity(events, matches, aliasMap, seasons);
+  const trackedIds = new Set((tracked || []).map(t => t.store_id).filter(x => x != null));
+  return buildEloStoreActivity(events, matches, aliasMap, seasons, trackedIds);
 }
 
 // Which set season an event falls in, by DATE. Bucketing by the event's own
@@ -22538,7 +22542,7 @@ function eloSeasonForDate(iso, seasons){
 // Player ids are kept PER SEASON rather than pre-counted per store, because the
 // set filter has to be able to re-answer "how many distinct people" for any
 // window — and that is a union, never a sum.
-function buildEloStoreActivity(events, matches, aliasMap, seasons){
+function buildEloStoreActivity(events, matches, aliasMap, seasons, trackedIds){
   const canonical = eloCanonicalIdMap(aliasMap);
   const byStore = new Map();
   const evAt = new Map();                 // event_id → {store, season}, for the match pass
@@ -22547,6 +22551,9 @@ function buildEloStoreActivity(events, matches, aliasMap, seasons){
   for(const e of events){
     const store = e.store_name;
     if(!store) continue;                  // storeless / online events aren't a venue
+    // Scope to the stores this scene actually tracks. An empty/absent set means
+    // "no filter" so the pivot stays usable against fixtures.
+    if(trackedIds && trackedIds.size && !trackedIds.has(e.store_id)) continue;
     const key = eloSeasonForDate(e.start_datetime, seasons);
     evAt.set(e.event_id, {store, season: key});
     let st = byStore.get(store);
