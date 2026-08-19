@@ -36,7 +36,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from discover_wu_scs import SUPABASE_URL, SERVICE_KEY  # noqa: E402
+from discover_wu_scs import SUPABASE_URL, SERVICE_KEY, FALLBACK_SETS  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -58,13 +58,21 @@ def _get(path: str):
 
 
 def window_start(n_sets: int) -> tuple[str, list[str]]:
-    """Release date of the Nth-most-recent already-released set."""
+    """Release date of the Nth-most-recent already-released MAINLINE set.
+
+    The `sets` table also holds promo and special sets — "Format Coconut",
+    "PD1", "Attack of the Vine! Promos" — which are not set seasons. Taking the
+    newest N rows unfiltered collapsed the window from ~a year to ~a month and
+    made every store look like it had failed. RPH's "four most recent set
+    seasons" means the mainline releases, so filter to those.
+    """
     today = datetime.date.today().isoformat()
     rows = _get(f"sets?select=name,released_at&released_at=lte.{today}"
-                f"&order=released_at.desc&limit={n_sets}")
-    if not rows:
-        raise SystemExit("couldn't read released sets from the `sets` table")
-    return rows[-1]["released_at"], [r["name"] for r in rows]
+                f"&order=released_at.desc&limit=200")
+    mainline = [r for r in rows if r.get("name") in set(FALLBACK_SETS)][:n_sets]
+    if not mainline:
+        raise SystemExit("couldn't read released mainline sets from the `sets` table")
+    return mainline[-1]["released_at"], [r["name"] for r in mainline]
 
 
 def tracked_store_ids() -> set[int]:
