@@ -49,6 +49,11 @@ on:
         required: false
         default: "false"
         type: string
+      scrape_attendance:
+        description: "Scrape who PLAYED per past event: true for all (~10min), or a number to cap it"
+        required: false
+        default: "false"
+        type: string
 
 jobs:
   discover:
@@ -116,6 +121,21 @@ jobs:
         run: python scripts/elo/scrape_store_history.py
 
       # Read-only: prints the tier metrics per store to the run log.
+      # Who actually PLAYED, per past event — the real source for RPH's Event
+      # Tickets and Unique Fans. ~4,200 events at one request each on a first
+      # full run, so it's by-hand only; a numeric value caps it for slicing.
+      - name: Scrape past-event attendance
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.scrape_attendance != '' && inputs.scrape_attendance != 'false' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "${{ inputs.scrape_attendance }}" = "true" ]; then
+            python scripts/elo/scrape_event_attendance.py
+          else
+            python scripts/elo/scrape_event_attendance.py --limit "${{ inputs.scrape_attendance }}"
+          fi
+
       - name: Report store tier metrics
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.tier_report == 'true' }}
         env:
