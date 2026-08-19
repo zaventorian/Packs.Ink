@@ -41,7 +41,8 @@ const code = [
   grab("function eloSeasonSetLabel(season){", "\n}"),
   grab("const eloEventSeats = (e) =>", "e.rated_players : 0);"),
   grab("function eloCanonicalIdMap(aliasMap){", "\n}"),
-  grab("function buildEloStoreActivity(events, matches, aliasMap){", "\n  return {seasons, stores};\n}"),
+  grab("function eloSeasonForDate(iso, seasons){", "\n}"),
+  grab("function buildEloStoreActivity(events, matches, aliasMap, seasons){", "\n  return {seasons: seasonList, stores};\n}"),
   grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
   grab("const RPH_TIERS = [", "];"),
   grab("function rphShortfall(t){", "\n}"),
@@ -62,91 +63,94 @@ const eq = (label, got, want) => {
 };
 
 // ── Fixture ────────────────────────────────────────────────────────────────
-// Two stores across two seasons, plus the three edge cases above.
-const WINTER = "Winterspell Winter 2026";
-const WILDS = "Wilds Unknown Summer 2026";
+// Shaped like lorcana_events_history rows. The critical property under test is
+// that seasons come from the event DATE, not from set_name: most real events
+// carry no set_name (a league night belongs to no set) and those are exactly
+// the events RPH tiers reward, so name-bucketing would drop ~80% of activity.
+const WINTER = "Winterspell";
+const WILDS = "Wilds Unknown";
+const seasons = [                      // newest-first, as the fetch sorts them
+  {name: WILDS,  released_at: "2026-05-15"},
+  {name: WINTER, released_at: "2026-01-01"},
+];
+const ev = (event_id, store_name, start, seats, extra = {}) =>
+  ({event_id, store_name, start_datetime: start + "T18:00:00+00:00",
+    registered_user_count: seats, kind: "other", set_name: null, ...extra});
 const events = [
-  // Winterspell came first chronologically but is listed second, so column
-  // ordering has to come from the dates, not from row order.
-  {event_id: 10, store: "Collectors Lounge", season: WILDS,  event_date: "2026-06-01", num_players: 12, rated_players: 11},
-  {event_id: 11, store: "Collectors Lounge", season: WILDS,  event_date: "2026-06-08", num_players: 8,  rated_players: 8},
-  {event_id: 12, store: "Collectors Lounge", season: WINTER, event_date: "2026-01-10", num_players: 20, rated_players: 19},
-  {event_id: 13, store: "Top Choice Gaming", season: WINTER, event_date: "2026-01-11", num_players: null, rated_players: 7},
-  // No store: an online / unattributed event is not a venue.
-  {event_id: 14, store: null,                season: WINTER, event_date: "2026-01-12", num_players: 30, rated_players: 30},
-  // No headcount at all — contributes an event but zero seats.
-  {event_id: 15, store: "Top Choice Gaming", season: WILDS,  event_date: "2026-06-09", num_players: null, rated_players: null},
+  // Named set, inside Wilds Unknown.
+  ev(10, "Collectors Lounge", "2026-06-01", 12, {kind: "sc", set_name: WILDS}),
+  // NO set_name — must still land in Wilds Unknown from its date alone.
+  ev(11, "Collectors Lounge", "2026-06-08", 8),
+  // Winterspell by date, and again unnamed.
+  ev(12, "Collectors Lounge", "2026-01-10", 20),
+  // A prerelease, and a second for the same set — Pre counts SETS, not events.
+  ev(13, "Collectors Lounge", "2026-05-16", 9, {kind: "prerelease", set_name: WILDS}),
+  ev(14, "Collectors Lounge", "2026-05-17", 7, {kind: "prerelease", set_name: WILDS}),
+  // Null headcount contributes an event and zero tickets.
+  ev(15, "Top Choice Gaming", "2026-01-11", null),
+  ev(16, "Top Choice Gaming", "2026-06-09", 5),
+  // Predates every tracked set — buckets into the oldest rather than vanishing.
+  ev(17, "Top Choice Gaming", "2024-03-03", 4),
+  // Storeless: not a venue.
+  ev(18, null, "2026-06-02", 30),
 ];
 const matches = [
-  // Player 1 plays both seasons at Collectors Lounge — one person, not two.
   {event_id: 10, player1_id: 1, player2_id: 2},
   {event_id: 12, player1_id: 1, player2_id: 3},
-  // 901 is player 1's merged melee handle: still one person.
-  // player2_id null is a bye — no phantom player from it.
-  {event_id: 11, player1_id: 901, player2_id: null},
-  // event 99 is is_ignored (absent from `events`) — must not invent a store.
-  {event_id: 99, player1_id: 4, player2_id: 8},
-  // event 14 has no store — must not invent one either.
-  {event_id: 14, player1_id: 5, player2_id: 9},
-  {event_id: 13, player1_id: 6, player2_id: 7},
+  {event_id: 11, player1_id: 901, player2_id: null},   // 901 merges into 1; bye
+  {event_id: 99, player1_id: 4, player2_id: 8},        // event not in history
+  {event_id: 18, player1_id: 5, player2_id: 9},        // storeless event
+  {event_id: 15, player1_id: 6, player2_id: 7},
 ];
-// aliasMap shape as EloView builds it: canonical_id → [alias rows]
 const aliasMap = new Map([[1, [{player_id: 901, display_name: "zaven", platform: "melee"}]]]);
 
-const out = build(events, matches, aliasMap);
+const out = build(events, matches, aliasMap, seasons);
 const byName = Object.fromEntries(out.stores.map((s) => [s.store, s]));
 
-console.log("season columns");
-eq("NEWEST first, labelled with the set half",
-   out.seasons, [{key: WILDS, label: "Wilds Unknown"}, {key: WINTER, label: "Winterspell"}]);
+console.log("date bucketing (not set_name)");
+eq("newest season first", out.seasons.map((x) => x.key), [WILDS, WINTER]);
+const cl = byName["Collectors Lounge"];
+eq("an event with NO set_name still lands in the right season by date",
+   cl.per[WILDS].events, 4);                       // ids 10, 11, 13, 14
+eq("Winterspell picks up the unnamed January event", cl.per[WINTER].events, 1);
+eq("tickets sum RPH's registered_user_count", cl.per[WINTER].attendance, 20);
+eq("an event predating every set buckets into the oldest, not dropped",
+   byName["Top Choice Gaming"].per[WINTER].events, 2);
+eq("null headcount = event counted, zero tickets",
+   byName["Top Choice Gaming"].per[WINTER].attendance, 4);
 
-console.log("per-season pivot");
-const cell = (s, k) => ({events: byName[s].per[k].events, attendance: byName[s].per[k].attendance});
-eq("Collectors Lounge Winterspell", cell("Collectors Lounge", WINTER), {events: 1, attendance: 20});
-eq("Collectors Lounge Wilds Unknown", cell("Collectors Lounge", WILDS), {events: 2, attendance: 20});
-eq("attendance falls back to rated_players", cell("Top Choice Gaming", WINTER), {events: 1, attendance: 7});
-eq("no headcount at all counts the event, zero seats", cell("Top Choice Gaming", WILDS), {events: 1, attendance: 0});
-eq("date span", [byName["Collectors Lounge"].first_date, byName["Collectors Lounge"].last_date], ["2026-01-10", "2026-06-08"]);
-
-// This is what the set filter calls on every render.
 console.log("scoped rollup");
 const all = [WILDS, WINTER];
-eq("both sets: events + tickets are sums", (({events, attendance}) => ({events, attendance}))(totals(byName["Collectors Lounge"], all)),
-   {events: 3, attendance: 40});
-eq("both sets: players is a UNION, not a sum (1/901, 2, 3 → 3)", totals(byName["Collectors Lounge"], all).players, 3);
-eq("avg seats per event", totals(byName["Collectors Lounge"], all).avg, 13.3);
-eq("Top Choice Gaming players", totals(byName["Top Choice Gaming"], all).players, 2);
-
-// Narrowing the window has to re-answer every number, not slice a pre-baked one.
-eq("Wilds only: events + tickets", (({events, attendance}) => ({events, attendance}))(totals(byName["Collectors Lounge"], [WILDS])),
-   {events: 2, attendance: 20});
-eq("Wilds only: player 1 and their merged 901 handle are one person", totals(byName["Collectors Lounge"], [WILDS]).players, 2);
-eq("Winterspell only: players", totals(byName["Collectors Lounge"], [WINTER]).players, 2);
-eq("a set the store never ran contributes nothing", totals(byName["Collectors Lounge"], ["Nonexistent Set 2099"]),
-   {events: 0, attendance: 0, players: 0, avg: 0});
+const t = totals(cl, all);
+eq("events + tickets are sums", [t.events, t.attendance], [5, 56]);
+eq("players is a UNION, and 901 merges into 1", t.players, 3);
+eq("Pre counts distinct SETS, not prerelease events", t.pre, 1);
+eq("narrowing re-answers the head count", totals(cl, [WINTER]).players, 2);
+eq("a set the store never ran contributes nothing",
+   totals(cl, ["Nonexistent 2099"]), {events: 0, attendance: 0, players: 0, pre: 0, avg: 0});
 
 console.log("exclusions");
-eq("storeless events make no store row", out.stores.map((s) => s.store).sort(), ["Collectors Lounge", "Top Choice Gaming"]);
-eq("players on ignored / storeless events are dropped",
-   out.stores.reduce((n, s) => n + totals(s, all).players, 0), 5);
+eq("storeless events make no store row",
+   out.stores.map((x) => x.store).sort(), ["Collectors Lounge", "Top Choice Gaming"]);
+eq("matches on events absent from history are dropped",
+   out.stores.reduce((n, x) => n + totals(x, all).players, 0), 5);
 
-// RPH's published thresholds over the 4 most recent set seasons. Getting these
-// wrong tells a store owner they qualify for an allocation they don't.
 console.log("RPH tiers");
 const T = (events, players, attendance) => ({events, players, attendance});
 eq("clears Legendary exactly at the bar", tierFor(T(50, 50, 500))?.key, "legendary");
 eq("one ticket short of Legendary -> Standard", tierFor(T(50, 50, 499))?.key, "standard");
-eq("one fan short of Legendary -> Standard", tierFor(T(50, 49, 500))?.key, "standard");
 eq("one event short of Legendary -> Standard", tierFor(T(49, 50, 500))?.key, "standard");
 eq("clears Standard exactly at the bar", tierFor(T(25, 25, 250))?.key, "standard");
 eq("one short of Standard -> no tier (Welcome)", tierFor(T(25, 25, 249)), null);
-eq("plenty of events but too few people -> no tier", tierFor(T(80, 12, 900)), null);
-eq("busy singles scene, thin attendance -> no tier", tierFor(T(60, 60, 100)), null);
+// Unique Fans is a floor from partial data, so it must NOT gate the verdict —
+// requiring it would show stores failing a bar they actually clear.
+eq("a low fan floor does NOT block the verdict", tierFor(T(80, 2, 900))?.key, "legendary");
+eq("busy but thin attendance -> no tier", tierFor(T(60, 60, 100)), null);
 eq("nothing at all -> no tier", tierFor(T(0, 0, 0)), null);
 
 console.log("shortfall wording");
 eq("names every missing metric", shortfall(T(20, 20, 200)),
-   "Short of Standard by 5 more events, 5 more unique fans, 50 more tickets");
+   "Short of Standard by 5 more events, 50 more tickets");
 eq("names only what's missing", shortfall(T(30, 30, 200)),
    "Short of Standard by 50 more tickets");
 

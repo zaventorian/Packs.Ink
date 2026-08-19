@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=326">
+<link rel="stylesheet" href="styles.css?v=327">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -22469,7 +22469,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
 // anon's 3s statement timeout that is a fine way to make a signed-out visitor's
 // tab fail. elo_matches is an indexed straight read, and carries two players per
 // row, so it is both cheaper and smaller. Cached 12h either way.
-const ELO_STORES_CACHE = "packsink:elo:stores:v2";   // v2: per-season player ids
+const ELO_STORES_CACHE = "packsink:elo:stores:v3";   // v3: sourced from lorcana_events_history
 const ELO_STORES_TTL = 12 * 3600 * 1000;
 const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
 const ELO_RECENT_SETS = 4;
@@ -22498,19 +22498,38 @@ function eloCanonicalIdMap(aliasMap){
 }
 
 async function fetchEloStoreActivity(aliasMap){
-  // Both selects carry an explicit unique order — sbFetchAll pages by range in
-  // parallel, and without a total ordering the ranges overlap and rows dupe.
-  const [events, matches] = await Promise.all([
-    sbFetchAll("elo_event_summary_v", {
-      select: "event_id,store,season,event_date,num_players,rated_players",
+  // lorcana_events_history is EVERY event a store has run — SCs, prereleases,
+  // locals, league nights — not the SC-shaped Elo ingest. Set release dates come
+  // along because seasons have to be assigned by DATE (see eloSeasonForDate).
+  // elo_matches still supplies the head count; elo_events.event_id and
+  // lorcana_events_history.event_id are both the RPH event id, so they join.
+  const [events, matches, sets] = await Promise.all([
+    sbFetchAll("lorcana_events_history", {
+      select: "event_id,store_id,store_name,kind,set_name,start_datetime,registered_user_count",
       order: "event_id.asc",
     }, null),
     sbFetchAll("elo_matches", {
       select: "event_id,player1_id,player2_id",
       order: "match_id.asc",
     }, null),
+    sbFetchAll("sets", {select: "name,released_at", order: "released_at.desc"}, null),
   ]);
-  return buildEloStoreActivity(events, matches, aliasMap);
+  const seasons = (sets || [])
+    .filter(x => x.released_at && MAINLINE_SETS.includes(x.name))
+    .sort((a, b) => a.released_at < b.released_at ? 1 : a.released_at > b.released_at ? -1 : 0);
+  return buildEloStoreActivity(events, matches, aliasMap, seasons);
+}
+
+// Which set season an event falls in, by DATE. Bucketing by the event's own
+// set_name would be wrong AND lossy: most events carry no set_name at all — a
+// Tuesday league night belongs to no set — and those are exactly the events RPH
+// tiers reward. `seasons` is newest-first, so the first release on or before the
+// event date wins.
+function eloSeasonForDate(iso, seasons){
+  if(!iso || !seasons || !seasons.length) return "";
+  const d = String(iso).slice(0, 10);
+  for(const s of seasons) if(s.released_at <= d) return s.name;
+  return seasons[seasons.length - 1].name;   // predates every tracked set
 }
 
 // Pure pivot, split out from the fetch so it can be tested against fixtures.
@@ -22519,57 +22538,63 @@ async function fetchEloStoreActivity(aliasMap){
 // Player ids are kept PER SEASON rather than pre-counted per store, because the
 // set filter has to be able to re-answer "how many distinct people" for any
 // window — and that is a union, never a sum.
-function buildEloStoreActivity(events, matches, aliasMap){
+function buildEloStoreActivity(events, matches, aliasMap, seasons){
   const canonical = eloCanonicalIdMap(aliasMap);
-  const seasonFirst = new Map();          // season → earliest event_date, for column order
   const byStore = new Map();
-  const evAt = new Map();                 // event_id → {store, season}, for the seat pass
+  const evAt = new Map();                 // event_id → {store, season}, for the match pass
+  const used = new Map();                 // season → earliest date seen, for column order
 
   for(const e of events){
-    if(!e.store) continue;                // storeless / online events aren't a venue
-    const key = e.season || "";
-    evAt.set(e.event_id, {store: e.store, season: key});
-    let s = byStore.get(e.store);
-    if(!s){ s = {store: e.store, per: new Map(), first_date: null, last_date: null}; byStore.set(e.store, s); }
-    let cell = s.per.get(key);
-    if(!cell){ cell = {events: 0, attendance: 0, players: new Set()}; s.per.set(key, cell); }
-    cell.events++; cell.attendance += eloEventSeats(e);
-    if(e.event_date){
-      if(!s.first_date || e.event_date < s.first_date) s.first_date = e.event_date;
-      if(!s.last_date  || e.event_date > s.last_date)  s.last_date  = e.event_date;
-      const f = seasonFirst.get(key);
-      if(f == null || e.event_date < f) seasonFirst.set(key, e.event_date);
-    } else if(!seasonFirst.has(key)) seasonFirst.set(key, null);
+    const store = e.store_name;
+    if(!store) continue;                  // storeless / online events aren't a venue
+    const key = eloSeasonForDate(e.start_datetime, seasons);
+    evAt.set(e.event_id, {store, season: key});
+    let st = byStore.get(store);
+    if(!st){ st = {store: store, per: new Map(), first_date: null, last_date: null}; byStore.set(store, st); }
+    let cell = st.per.get(key);
+    if(!cell){ cell = {events: 0, attendance: 0, players: new Set(), pre: new Set()}; st.per.set(key, cell); }
+    cell.events++;
+    // registered_user_count is RPH's own Event Tickets figure, frozen at the last
+    // pull that saw the event listed — a floor, not a final count.
+    cell.attendance += (e.registered_user_count || 0);
+    if(e.kind === "prerelease") cell.pre.add(e.set_name || key || "?");
+    const d = e.start_datetime ? String(e.start_datetime).slice(0, 10) : null;
+    if(d){
+      if(!st.first_date || d < st.first_date) st.first_date = d;
+      if(!st.last_date  || d > st.last_date)  st.last_date  = d;
+      const f = used.get(key);
+      if(f == null || d < f) used.set(key, d);
+    } else if(!used.has(key)) used.set(key, null);
   }
 
-  // elo_matches has no is_ignored / storeless filter of its own, so a player
-  // only counts when their match's event survived the pass above. player2_id is
-  // null on a bye.
+  // Head count. Only events the Elo pipeline ingested have matches, so this is a
+  // FLOOR on RPH's Unique Fans — the UI marks it as such rather than pretending
+  // it's the metric. player2_id is null on a bye.
   for(const m of matches){
     const at = evAt.get(m.event_id);
     if(!at) continue;
     const cell = byStore.get(at.store).per.get(at.season);
+    if(!cell) continue;
     if(m.player1_id != null) cell.players.add(canonical.get(m.player1_id) || m.player1_id);
     if(m.player2_id != null) cell.players.add(canonical.get(m.player2_id) || m.player2_id);
   }
 
-  // NEWEST SET FIRST. The recent sets are the ones anyone is actually reading,
-  // and they're what the default window takes the first N of.
-  const seasons = Array.from(seasonFirst.keys())
+  // Newest set first, ordered by the season's own release date where we have it.
+  const relOf = new Map((seasons || []).map(s => [s.name, s.released_at]));
+  const seasonList = Array.from(used.keys())
     .sort((a, b) => {
-      const fa = seasonFirst.get(a), fb = seasonFirst.get(b);
-      if(fa && fb) return fa < fb ? 1 : fa > fb ? -1 : 0;
-      if(fa) return -1; if(fb) return 1;
-      return String(b).localeCompare(String(a));
+      const ra = relOf.get(a) || used.get(a) || "", rb = relOf.get(b) || used.get(b) || "";
+      return ra < rb ? 1 : ra > rb ? -1 : String(b).localeCompare(String(a));
     })
     .map(key => ({key, label: key ? eloSeasonSetLabel(key) : "Unsorted"}));
 
-  const stores = Array.from(byStore.values()).map(s => {
+  const stores = Array.from(byStore.values()).map(st => {
     const per = {};
-    for(const [k, c] of s.per) per[k] = {events: c.events, attendance: c.attendance, players: Array.from(c.players)};
-    return {store: s.store, per, first_date: s.first_date, last_date: s.last_date};
+    for(const [k, c] of st.per) per[k] = {events: c.events, attendance: c.attendance,
+                                         players: Array.from(c.players), pre: Array.from(c.pre)};
+    return {store: st.store, per, first_date: st.first_date, last_date: st.last_date};
   });
-  return {seasons, stores};
+  return {seasons: seasonList, stores};
 }
 
 // ── Ravensburger Play Hub store tiers ──────────────────────────────────────
@@ -22599,16 +22624,20 @@ function rphShortfall(t){
   const s = RPH_TIERS[1];
   const gaps = [];
   if(t.events < s.events)        gaps.push(`${s.events - t.events} more events`);
-  if(t.players < s.players)      gaps.push(`${s.players - t.players} more unique fans`);
   if(t.attendance < s.tickets)   gaps.push(`${s.tickets - t.attendance} more tickets`);
   return gaps.length ? "Short of Standard by " + gaps.join(", ") : "Meets Standard";
 }
 
 // Highest tier whose every numeric bar is cleared. Welcome is the floor — it
 // asks only for RPH membership, which we can't see and don't need to.
+// Events and Tickets come from the full RPH history and are solid. Unique Fans
+// is only a FLOOR — it counts players in events the Elo pipeline ingested, which
+// is a fraction of what a store runs — so requiring it here would show stores
+// failing a bar they actually clear. The verdict is events+tickets; the UI marks
+// it provisional and the Fans column carries a ≥.
 function rphTierFor(t){
   for(const tier of RPH_TIERS){
-    if(t.events >= tier.events && t.players >= tier.players && t.attendance >= tier.tickets) return tier;
+    if(t.events >= tier.events && t.attendance >= tier.tickets) return tier;
   }
   return null;
 }
@@ -22618,13 +22647,15 @@ function rphTierFor(t){
 function eloStoreTotals(store, seasonKeys){
   let events = 0, attendance = 0;
   const players = new Set();
+  const pre = new Set();
   for(const k of seasonKeys){
     const c = store.per[k];
     if(!c) continue;
     events += c.events; attendance += c.attendance;
     for(const id of c.players) players.add(id);
+    for(const p of (c.pre || [])) pre.add(p);
   }
-  return {events, attendance, players: players.size,
+  return {events, attendance, players: players.size, pre: pre.size,
           avg: events ? Math.round((attendance / events) * 10) / 10 : 0};
 }
 
@@ -22761,18 +22792,20 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
 
   const totalsHead = html`<${React.Fragment}>
     <${EloSortTh} label="Events"  col="events"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
-    <${EloSortTh} label="Players" col="players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
     <${EloSortTh} label="Tickets" col="attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+    <${EloSortTh} label="Fans ≥"  col="players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+    <${EloSortTh} label="Pre"     col="pre"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
     <${EloSortTh} label="Avg"     col="avg"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
     <${EloSortTh} label="RPH tier" col="tier"       sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-tier-th" numeric=${true}/>
   </${React.Fragment}>`;
 
   return html`<div class="elo-stores">
-    <p class="elo-stores-intro">Every event we've ingested for a store — Set Championships, locals, league nights, all of it —
-      grouped by the shop that ran it. <strong>Players</strong> counts distinct people across the sets you've picked, so it's
-      smaller than those sets added together: a regular is one player, not four. <strong>Tickets</strong> is total seats —
-      one per player per event — using the reported headcount, or the number of players we rated when the organiser never
-      published one.</p>
+    <p class="elo-stores-intro">Every event a store has run on Ravensburger Play — Set Championships, prereleases, locals,
+      league nights — grouped by the shop and bucketed into set seasons by date. <strong>Tickets</strong> is RPH's own
+      registered-player count, frozen at the last listing before each event ran, so treat it as a floor.
+      <strong>Fans ≥</strong> is a floor too, and a much rougher one: it counts distinct people only across the events our
+      Elo pipeline ingested, so a store's real Unique Fans is higher. <strong>Pre</strong> is how many sets the store ran a
+      prerelease for. The RPH tier verdict uses events and tickets only — see the column note.</p>
 
     <div class="elo-stores-setbar">
       <span class="elo-stores-setlbl">Sets</span>
@@ -22805,7 +22838,7 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
             <tr>
               <${EloSortTh} label="Store" col="store" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort}
                 className="elo-stores-name" numeric=${false} rowspan=${2}/>
-              <th colspan=${4} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
+              <th colspan=${5} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
               ${cols.map(s => html`<th key=${s.key} colspan=${2} class="elo-stores-grp">${s.label}</th>`)}
             </tr>
             <tr>
@@ -22828,13 +22861,15 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
                   title=${r.store} onClick=${() => onStoreClick && onStoreClick(r.store)}>${r.store}</${EloLink}>`
               : html`<span class="elo-stores-nametxt" title=${r.store}>${r.store}</span>`}</td>
             <td class="num elo-stores-tot">${num(r.t.events)}</td>
-            <td class="num elo-stores-tot">${num(r.t.players)}</td>
             <td class="num elo-stores-tot"><strong>${num(r.t.attendance)}</strong></td>
+            <td class="num elo-stores-tot muted" title="Floor only: counts players in events the Elo pipeline ingested, which is a fraction of what this store runs. RPH's Unique Fans needs a roster per event.">${num(r.t.players)}</td>
+            <td class="num elo-stores-tot">${r.t.pre || 0}</td>
             <td class="num elo-stores-tot">${r.t.avg}</td>
             <td class="elo-stores-tiercell">${!tierWindow
               ? html`<span class="muted" title="RPH scores tiers over the 4 most recent set seasons. Switch the set chips back to Last ${ELO_RECENT_SETS} for a verdict.">—</span>`
               : r.tier
-                ? html`<span class=${"elo-tier elo-tier--" + r.tier.key}>${r.tier.label}</span>`
+                ? html`<span class=${"elo-tier elo-tier--" + r.tier.key}
+                    title="Events and tickets clear the ${r.tier.label} bar. Unique Fans and the Prerelease requirement aren't verified here, so this is provisional.">${r.tier.label}*</span>`
                 : html`<span class="elo-tier elo-tier--welcome" title=${rphShortfall(r.t)}>Welcome</span>`}</td>
             ${cols.map(s => {
               const c = r.per[s.key];
@@ -22849,8 +22884,9 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
           <tr>
             <td class="elo-stores-name"><span class="elo-stores-nametxt">${rows.length === data.stores.length ? "All stores" : "Shown stores"}</span></td>
             <td class="num elo-stores-tot">${num(totals.events)}</td>
-            <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
             <td class="num elo-stores-tot">${num(totals.attendance)}</td>
+            <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
+            <td class="num elo-stores-tot"></td>
             <td class="num elo-stores-tot">${totals.events ? Math.round((totals.attendance / totals.events) * 10) / 10 : 0}</td>
             <td class="elo-stores-tiercell"></td>
             ${cols.map(s => {
