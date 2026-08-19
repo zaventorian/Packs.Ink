@@ -20,15 +20,19 @@ RPH scores tiers over "the four (4) most recent set seasons":
     The window runs from the release date of the 4th-most-recent set to now, and
     every event inside it counts regardless of what set it names.
 
-⚠️  Unique Fans is NOT computed here. It needs a per-event roster (distinct
-    registrants), and we only scrape rosters for upcoming tracked SCs. Reporting
-    a partial count as if it were the metric would show stores failing a bar they
-    actually clear, so it prints n/a. `registered_user_count` gives Event Tickets
-    honestly; Unique Fans needs the roster backfill.
+Event Tickets and Unique Fans both come from public.rph_event_attendance
+(scrape_event_attendance.py) — one row per person per event — filtered to people
+who actually PLAYED, since both of RPH's metrics are about players. Tickets is
+that row count; Fans is the distinct people behind it, so a regular who turns up
+weekly is many tickets and one fan.
 
-⚠️  Event Tickets is a FLOOR. registered_user_count is frozen at the last time
-    the upcoming feed listed the event — roughly the day before it ran — so
-    day-of signups are missing.
+⚠️  registered_user_count is deliberately NOT used. It is pre-registration,
+    frozen at the last time the upcoming feed listed the event, so it misses
+    walk-ins and counts no-shows.
+
+⚠️  Events whose roster hasn't been scraped yet are reported in a "gap" column
+    rather than counted as zero-attendance. A store with a large gap is
+    under-reported, not quiet.
 """
 from __future__ import annotations
 import argparse, datetime, json, sys, urllib.request
@@ -94,13 +98,44 @@ def fetch_events(since: str) -> list[dict]:
     out, offset = [], 0
     while True:
         page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,city,state,kind,"
-                    f"set_name,start_datetime,registered_user_count"
+                    f"set_name,start_datetime"
                     f"&start_datetime=gte.{quote(since)}"
                     f"&order=event_id.asc&limit=1000&offset={offset}")
         out.extend(page)
         if len(page) < 1000:
             return out
         offset += 1000
+
+
+# Who sat down, as opposed to who registered. Kept identical to the client's
+# RPH_PLAYED_FILTER and to played() in scrape_event_attendance.py.
+PLAYED = ("or=(final_place_in_standings.not.is.null,matches_won.gt.0,"
+          "matches_lost.gt.0,matches_drawn.gt.0)")
+
+
+def _page_all(path: str) -> list[dict]:
+    out, offset = [], 0
+    while True:
+        page = _get(f"{path}&limit=1000&offset={offset}")
+        out.extend(page)
+        if len(page) < 1000:
+            return out
+        offset += 1000
+
+
+def fetch_attendance() -> tuple[list[dict], set[int]]:
+    played = _page_all(f"rph_event_attendance?select=event_id,rph_user_id,best_identifier"
+                       f"&{PLAYED}&order=event_id.asc,best_identifier.asc")
+    scans = _page_all("rph_event_attendance_scans?select=event_id&order=event_id.asc")
+    return played, {r["event_id"] for r in scans}
+
+
+def person_key(a: dict) -> str:
+    """rph_user_id is the stable account id and the right thing to count on;
+    guests come through without one, so the display name stands in."""
+    if a.get("rph_user_id") is not None:
+        return "u:%s" % a["rph_user_id"]
+    return "n:" + (a.get("best_identifier") or "").strip().lower()
 
 
 def main() -> None:
@@ -119,10 +154,12 @@ def main() -> None:
     print(f"Window: {since} → today  ({args.sets} most recent sets: {', '.join(set_names)})\n")
 
     evs = fetch_events(since)
+    played, scanned = fetch_attendance()
     tracked = None if args.all_stores else tracked_store_ids()
     if tracked is not None:
         print(f"Scoped to {len(tracked)} tracked stores (--all-stores for everything)\n")
     stores: dict[int, dict] = {}
+    at_store: dict[int, dict] = {}      # event_id → its store bucket
     for e in evs:
         sid = e.get("store_id")
         if sid is None:
@@ -134,43 +171,58 @@ def main() -> None:
         label = e.get("store_name") or f"store {sid}"
         loc = ", ".join(x for x in (e.get("city"), e.get("state")) if x)
         s = stores.setdefault(sid, {"name": f"{label} ({loc})" if loc else label,
-                                    "events": 0, "tickets": 0, "pre": set(), "kinds": {}})
+                                    "events": 0, "tickets": 0, "gap": 0,
+                                    "fans": set(), "pre": set(), "kinds": {}})
         s["events"] += 1
-        s["tickets"] += e.get("registered_user_count") or 0
+        if e["event_id"] not in scanned:
+            s["gap"] += 1
+        at_store[e["event_id"]] = s
         s["kinds"][e.get("kind")] = s["kinds"].get(e.get("kind"), 0) + 1
         if e.get("kind") == "prerelease":
             s["pre"].add(e.get("set_name") or "?")
 
+    # One pass for both metrics: each row is one person at one event, so it is a
+    # ticket, and its person key joins the store's fan set.
+    for a in played:
+        s = at_store.get(a["event_id"])
+        if s is None:
+            continue
+        s["tickets"] += 1
+        s["fans"].add(person_key(a))
+
     def tier(s):
-        for label, ev, _fans, tk in TIERS:
-            # Unique Fans is unavailable, so this is an EVENTS+TICKETS verdict
-            # only — flagged in the header so nobody reads it as the full bar.
-            if s["events"] >= ev and s["tickets"] >= tk:
+        for label, ev, fans, tk in TIERS:
+            if s["events"] >= ev and len(s["fans"]) >= fans and s["tickets"] >= tk:
                 return label
         return "Welcome"
 
     rows = sorted(stores.values(), key=lambda s: (-s["events"], -s["tickets"]))
     if args.csv:
-        print("store,events,tickets,prerelease_sets,tier_partial")
+        print("store,events,tickets,unique_fans,unscraped_events,prerelease_sets,tier_partial")
         for s in rows:
-            print(f'"{s["name"]}",{s["events"]},{s["tickets"]},{len(s["pre"])},{tier(s)}')
+            print(f'"{s["name"]}",{s["events"]},{s["tickets"]},{len(s["fans"])},'
+                  f'{s["gap"]},{len(s["pre"])},{tier(s)}')
     else:
-        print(f"{'Store':<44}{'Events':>7}{'Tickets':>9}{'Fans':>7}{'Pre':>5}  Tier*")
-        print("-" * 82)
+        print(f"{'Store':<44}{'Events':>7}{'Tickets':>9}{'Fans':>7}{'Gap':>5}{'Pre':>5}  Tier*")
+        print("-" * 87)
         for s in rows:
             print(f"{s['name'][:43]:<44}{s['events']:>7}{s['tickets']:>9}"
-                  f"{'n/a':>7}{len(s['pre']):>5}  {tier(s)}")
-        print("-" * 82)
+                  f"{len(s['fans']):>7}{s['gap']:>5}{len(s['pre']):>5}  {tier(s)}")
+        print("-" * 87)
         tot_e = sum(s["events"] for s in rows)
         tot_t = sum(s["tickets"] for s in rows)
-        print(f"{len(rows)} stores{'':<36}{tot_e:>7}{tot_t:>9}")
+        tot_g = sum(s["gap"] for s in rows)
+        print(f"{len(rows)} stores{'':<36}{tot_e:>7}{tot_t:>9}{'':>7}{tot_g:>5}")
         counts = {}
         for s in rows:
             counts[tier(s)] = counts.get(tier(s), 0) + 1
-        print(f"\n  Tier* spread (events+tickets only): {counts}")
-        print("  * Unique Fans is NOT in this verdict — see the module docstring.")
-        print("    A store shown Legendary here still has to clear 50 unique fans")
-        print("    and every available Prerelease.")
+        print(f"\n  Tier* spread: {counts}")
+        print("  * Events, Fans and Tickets are all scored. The Prerelease requirement")
+        print("    is not — Pre counts sets this store ran one for, but not which sets")
+        print("    RPH considered available to it.")
+        if tot_g:
+            print(f"  Gap = events with no roster scraped yet ({tot_g} of {tot_e}); their")
+            print("    players are missing from Tickets and Fans.")
 
 
 if __name__ == "__main__":
