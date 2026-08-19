@@ -43,11 +43,14 @@ const code = [
   grab("function eloCanonicalIdMap(aliasMap){", "\n}"),
   grab("function buildEloStoreActivity(events, matches, aliasMap){", "\n  return {seasons, stores};\n}"),
   grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
+  grab("const RPH_TIERS = [", "];"),
+  grab("function rphShortfall(t){", "\n}"),
+  grab("function rphTierFor(t){", "\n}"),
 ].join("\n\n");
 
-const [build, totals] = new Function(
+const [build, totals, tierFor, shortfall] = new Function(
   "MAINLINE_SETS",
-  code + "\nreturn [buildEloStoreActivity, eloStoreTotals];",
+  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall];",
 )(MAINLINE_SETS);
 
 let failures = 0;
@@ -126,6 +129,26 @@ console.log("exclusions");
 eq("storeless events make no store row", out.stores.map((s) => s.store).sort(), ["Collectors Lounge", "Top Choice Gaming"]);
 eq("players on ignored / storeless events are dropped",
    out.stores.reduce((n, s) => n + totals(s, all).players, 0), 5);
+
+// RPH's published thresholds over the 4 most recent set seasons. Getting these
+// wrong tells a store owner they qualify for an allocation they don't.
+console.log("RPH tiers");
+const T = (events, players, attendance) => ({events, players, attendance});
+eq("clears Legendary exactly at the bar", tierFor(T(50, 50, 500))?.key, "legendary");
+eq("one ticket short of Legendary -> Standard", tierFor(T(50, 50, 499))?.key, "standard");
+eq("one fan short of Legendary -> Standard", tierFor(T(50, 49, 500))?.key, "standard");
+eq("one event short of Legendary -> Standard", tierFor(T(49, 50, 500))?.key, "standard");
+eq("clears Standard exactly at the bar", tierFor(T(25, 25, 250))?.key, "standard");
+eq("one short of Standard -> no tier (Welcome)", tierFor(T(25, 25, 249)), null);
+eq("plenty of events but too few people -> no tier", tierFor(T(80, 12, 900)), null);
+eq("busy singles scene, thin attendance -> no tier", tierFor(T(60, 60, 100)), null);
+eq("nothing at all -> no tier", tierFor(T(0, 0, 0)), null);
+
+console.log("shortfall wording");
+eq("names every missing metric", shortfall(T(20, 20, 200)),
+   "Short of Standard by 5 more events, 5 more unique fans, 50 more tickets");
+eq("names only what's missing", shortfall(T(30, 30, 200)),
+   "Short of Standard by 50 more tickets");
 
 console.log("season labels");
 const label = new Function("MAINLINE_SETS", grab("function eloSeasonSetLabel(season){", "\n}") + "\nreturn eloSeasonSetLabel;")(MAINLINE_SETS);

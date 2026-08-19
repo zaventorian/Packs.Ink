@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=325">
+<link rel="stylesheet" href="styles.css?v=326">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -22572,6 +22572,47 @@ function buildEloStoreActivity(events, matches, aliasMap){
   return {seasons, stores};
 }
 
+// ── Ravensburger Play Hub store tiers ──────────────────────────────────────
+// Thresholds are RPH's, verbatim, and are scored over "the four (4) most recent
+// set seasons" — which is exactly what this tab's default window is, and the
+// reason it defaults there. Any OTHER selection makes a tier verdict meaningless
+// (three sets can't clear a four-set bar, ten sets clears it trivially), so the
+// column reports "—" unless the window is the real one. Better a blank than a
+// number someone quotes at a store owner.
+//
+// The fourth requirement — a Prerelease for every available set — is NOT scored
+// here. It needs kind='prerelease' per store, which lives in lorcana_events, not
+// in the Elo ingest this tab reads. A store can therefore show as clearing
+// Legendary here and still miss it on prereleases, so the UI says so rather than
+// implying a verdict it can't reach.
+const RPH_TIERS = [
+  {key: "legendary", label: "Legendary", events: 50, players: 50, tickets: 500},
+  {key: "standard",  label: "Standard",  events: 25, players: 25, tickets: 250},
+];
+// Sept 1 – Nov 1 2026 only: 1/6 of Legendary, to "kickstart" tiering this year.
+const RPH_PRORATED = {key: "prorated", label: "Legendary (pro-rated)",
+                      events: 8, players: 8, tickets: 80};
+
+// What a Welcome-tier store still needs for Standard, so the badge explains
+// itself instead of just reading as a failure.
+function rphShortfall(t){
+  const s = RPH_TIERS[1];
+  const gaps = [];
+  if(t.events < s.events)        gaps.push(`${s.events - t.events} more events`);
+  if(t.players < s.players)      gaps.push(`${s.players - t.players} more unique fans`);
+  if(t.attendance < s.tickets)   gaps.push(`${s.tickets - t.attendance} more tickets`);
+  return gaps.length ? "Short of Standard by " + gaps.join(", ") : "Meets Standard";
+}
+
+// Highest tier whose every numeric bar is cleared. Welcome is the floor — it
+// asks only for RPH membership, which we can't see and don't need to.
+function rphTierFor(t){
+  for(const tier of RPH_TIERS){
+    if(t.events >= tier.events && t.players >= tier.players && t.attendance >= tier.tickets) return tier;
+  }
+  return null;
+}
+
 // Roll one store up over the selected sets. Players is a UNION across those
 // sets, never a sum — a regular who plays all four is one person.
 function eloStoreTotals(store, seasonKeys){
@@ -22659,7 +22700,11 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
     if(!data) return null;
     const q = search.trim().toLowerCase();
     const out = data.stores
-      .map(s => ({...s, t: eloStoreTotals(s, selectedKeys)}))
+      .map(s => {
+        const t = eloStoreTotals(s, selectedKeys);
+        const tier = rphTierFor(t);
+        return {...s, t, tier, tierRank: tier ? (tier.key === "legendary" ? 2 : 1) : 0};
+      })
       // A store that ran nothing in the chosen window isn't in the window.
       .filter(s => s.t.events > 0)
       .filter(s => !q || s.store.toLowerCase().includes(q));
@@ -22667,7 +22712,11 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
     // either the store name or a field on the rolled-up totals.
     const valOf = (r) => {
       const i = sortCol.indexOf(":");
-      if(i < 0) return sortCol === "store" ? r.store : r.t[sortCol];
+      if(i < 0){
+        if(sortCol === "store") return r.store;
+        if(sortCol === "tier") return r.tierRank;
+        return r.t[sortCol];
+      }
       const cell = r.per[sortCol.slice(i + 1)];
       return cell ? cell[sortCol.slice(0, i) === "ev" ? "events" : "attendance"] : 0;
     };
@@ -22699,6 +22748,11 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
 
   const num = (n) => (n || 0).toLocaleString();
   const cols = breakdown ? seasons.filter(s => selected.has(s.key)) : [];
+  // Tier verdicts are only defined over RPH's own window: the 4 most recent set
+  // seasons. Narrow or widen the selection and the thresholds stop meaning
+  // anything, so the column blanks rather than reporting a number out of context.
+  const tierWindow = selectedKeys.length === Math.min(ELO_RECENT_SETS, seasons.length)
+    && selectedKeys.every((k, i) => seasons[i] && seasons[i].key === k);
   const scopeLabel = selectedKeys.length === seasons.length ? "all sets"
     : selectedKeys.length === 1 ? (seasons.find(s => s.key === selectedKeys[0]) || {}).label
     : selectedKeys.length + " sets";
@@ -22710,6 +22764,7 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
     <${EloSortTh} label="Players" col="players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
     <${EloSortTh} label="Tickets" col="attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
     <${EloSortTh} label="Avg"     col="avg"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+    <${EloSortTh} label="RPH tier" col="tier"       sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="elo-stores-tier-th" numeric=${true}/>
   </${React.Fragment}>`;
 
   return html`<div class="elo-stores">
@@ -22776,6 +22831,11 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
             <td class="num elo-stores-tot">${num(r.t.players)}</td>
             <td class="num elo-stores-tot"><strong>${num(r.t.attendance)}</strong></td>
             <td class="num elo-stores-tot">${r.t.avg}</td>
+            <td class="elo-stores-tiercell">${!tierWindow
+              ? html`<span class="muted" title="RPH scores tiers over the 4 most recent set seasons. Switch the set chips back to Last ${ELO_RECENT_SETS} for a verdict.">—</span>`
+              : r.tier
+                ? html`<span class=${"elo-tier elo-tier--" + r.tier.key}>${r.tier.label}</span>`
+                : html`<span class="elo-tier elo-tier--welcome" title=${rphShortfall(r.t)}>Welcome</span>`}</td>
             ${cols.map(s => {
               const c = r.per[s.key];
               return html`<${React.Fragment} key=${s.key}>
@@ -22792,6 +22852,7 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
             <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
             <td class="num elo-stores-tot">${num(totals.attendance)}</td>
             <td class="num elo-stores-tot">${totals.events ? Math.round((totals.attendance / totals.events) * 10) / 10 : 0}</td>
+            <td class="elo-stores-tiercell"></td>
             ${cols.map(s => {
               const c = totals.per[s.key];
               return html`<${React.Fragment} key=${s.key}>
