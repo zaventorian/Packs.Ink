@@ -9,7 +9,10 @@
 //
 //   1. Distinct players CANNOT be summed across seasons. A regular who plays
 //      every set is one player, not four — if this breaks, every store's head
-//      count inflates to roughly its attendance and nobody notices.
+//      count inflates to roughly its attendance and nobody notices. The set
+//      filter makes this load-bearing: the head count is re-unioned for
+//      whatever window is selected, so the per-season player ids have to
+//      survive the pivot.
 //   2. elo_matches carries no is_ignored / storeless filter, so a player only
 //      counts once their match's event survived the summary-view pass.
 //   3. Merged cross-platform identities (melee handle → RPH player) must fold
@@ -39,11 +42,12 @@ const code = [
   grab("const eloEventSeats = (e) =>", "e.rated_players : 0);"),
   grab("function eloCanonicalIdMap(aliasMap){", "\n}"),
   grab("function buildEloStoreActivity(events, matches, aliasMap){", "\n  return {seasons, stores};\n}"),
+  grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
 ].join("\n\n");
 
-const build = new Function(
+const [build, totals] = new Function(
   "MAINLINE_SETS",
-  code + "\nreturn buildEloStoreActivity;",
+  code + "\nreturn [buildEloStoreActivity, eloStoreTotals];",
 )(MAINLINE_SETS);
 
 let failures = 0;
@@ -90,28 +94,38 @@ const out = build(events, matches, aliasMap);
 const byName = Object.fromEntries(out.stores.map((s) => [s.store, s]));
 
 console.log("season columns");
-eq("ordered by first event date, labelled with the set half",
-   out.seasons, [{key: WINTER, label: "Winterspell"}, {key: WILDS, label: "Wilds Unknown"}]);
+eq("NEWEST first, labelled with the set half",
+   out.seasons, [{key: WILDS, label: "Wilds Unknown"}, {key: WINTER, label: "Winterspell"}]);
 
 console.log("per-season pivot");
-eq("Collectors Lounge Winterspell", byName["Collectors Lounge"].per[WINTER], {events: 1, attendance: 20});
-eq("Collectors Lounge Wilds Unknown", byName["Collectors Lounge"].per[WILDS], {events: 2, attendance: 20});
-eq("attendance falls back to rated_players", byName["Top Choice Gaming"].per[WINTER], {events: 1, attendance: 7});
-eq("no headcount at all counts the event, zero seats", byName["Top Choice Gaming"].per[WILDS], {events: 1, attendance: 0});
-
-console.log("store totals");
-eq("totals are the sum of the seasons", [byName["Collectors Lounge"].events, byName["Collectors Lounge"].attendance], [3, 40]);
-eq("avg seats per event", byName["Collectors Lounge"].avg, 13.3);
+const cell = (s, k) => ({events: byName[s].per[k].events, attendance: byName[s].per[k].attendance});
+eq("Collectors Lounge Winterspell", cell("Collectors Lounge", WINTER), {events: 1, attendance: 20});
+eq("Collectors Lounge Wilds Unknown", cell("Collectors Lounge", WILDS), {events: 2, attendance: 20});
+eq("attendance falls back to rated_players", cell("Top Choice Gaming", WINTER), {events: 1, attendance: 7});
+eq("no headcount at all counts the event, zero seats", cell("Top Choice Gaming", WILDS), {events: 1, attendance: 0});
 eq("date span", [byName["Collectors Lounge"].first_date, byName["Collectors Lounge"].last_date], ["2026-01-10", "2026-06-08"]);
 
-console.log("head count");
-eq("distinct across seasons + merged aliases (1/901, 2, 3 → 3)", byName["Collectors Lounge"].players, 3);
-eq("Top Choice Gaming", byName["Top Choice Gaming"].players, 2);
+// This is what the set filter calls on every render.
+console.log("scoped rollup");
+const all = [WILDS, WINTER];
+eq("both sets: events + tickets are sums", (({events, attendance}) => ({events, attendance}))(totals(byName["Collectors Lounge"], all)),
+   {events: 3, attendance: 40});
+eq("both sets: players is a UNION, not a sum (1/901, 2, 3 → 3)", totals(byName["Collectors Lounge"], all).players, 3);
+eq("avg seats per event", totals(byName["Collectors Lounge"], all).avg, 13.3);
+eq("Top Choice Gaming players", totals(byName["Top Choice Gaming"], all).players, 2);
+
+// Narrowing the window has to re-answer every number, not slice a pre-baked one.
+eq("Wilds only: events + tickets", (({events, attendance}) => ({events, attendance}))(totals(byName["Collectors Lounge"], [WILDS])),
+   {events: 2, attendance: 20});
+eq("Wilds only: player 1 and their merged 901 handle are one person", totals(byName["Collectors Lounge"], [WILDS]).players, 2);
+eq("Winterspell only: players", totals(byName["Collectors Lounge"], [WINTER]).players, 2);
+eq("a set the store never ran contributes nothing", totals(byName["Collectors Lounge"], ["Nonexistent Set 2099"]),
+   {events: 0, attendance: 0, players: 0, avg: 0});
 
 console.log("exclusions");
 eq("storeless events make no store row", out.stores.map((s) => s.store).sort(), ["Collectors Lounge", "Top Choice Gaming"]);
 eq("players on ignored / storeless events are dropped",
-   out.stores.reduce((n, s) => n + s.players, 0), 5);
+   out.stores.reduce((n, s) => n + totals(s, all).players, 0), 5);
 
 console.log("season labels");
 const label = new Function("MAINLINE_SETS", grab("function eloSeasonSetLabel(season){", "\n}") + "\nreturn eloSeasonSetLabel;")(MAINLINE_SETS);

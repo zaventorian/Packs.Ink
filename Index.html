@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=324">
+<link rel="stylesheet" href="styles.css?v=325">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -22448,16 +22448,20 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
 }
 
 // ── Stores tab ─────────────────────────────────────────────────────────────
-// Per-store activity, pivoted by season: events + attendance for each set,
-// plus store-wide totals and a head count of distinct players.
+// Per-store activity across EVERY event we've ingested for that store — Set
+// Championships, but also locals, league nights, drafts, anything that came
+// through the results feed. This is deliberately NOT an SC-only view.
 //
-// Every number here is CALCULATED from two public, anon-readable sources —
-// nothing store-level is stored anywhere:
+// Default answer, for the 4 most recent sets: how many events did this store
+// run, how many distinct players came through the door, and how many tickets
+// (seats) did that add up to. The set chips move that window and every number
+// follows them; "Per-set breakdown" splits the window into per-set columns.
+//
+// Every number is CALCULATED from two public, anon-readable sources — nothing
+// store-level is stored anywhere:
 //   • elo_event_summary_v  → one row per event (is_ignored already filtered),
 //     carrying store, season and the attendance figures.
-//   • elo_matches          → who actually played where. Needed because a store's
-//     player count is NOT the sum of its per-season counts — a regular who shows
-//     up for all four sets is one player, not four.
+//   • elo_matches          → who actually played where.
 //
 // The seat source is the raw matches table rather than elo_player_events_v,
 // which would read better: that view GROUP BYs the whole ratings table, and
@@ -22465,8 +22469,10 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
 // anon's 3s statement timeout that is a fine way to make a signed-out visitor's
 // tab fail. elo_matches is an indexed straight read, and carries two players per
 // row, so it is both cheaper and smaller. Cached 12h either way.
-const ELO_STORES_CACHE = "packsink:elo:stores:v1";
+const ELO_STORES_CACHE = "packsink:elo:stores:v2";   // v2: per-season player ids
 const ELO_STORES_TTL = 12 * 3600 * 1000;
+const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
+const ELO_RECENT_SETS = 4;
 
 // "Wilds Unknown Summer 2026" → "Wilds Unknown". Season labels are
 // "<set> <tag> <year>" (see SEASON_REVIEWS); the set half is the column header.
@@ -22509,23 +22515,25 @@ async function fetchEloStoreActivity(aliasMap){
 
 // Pure pivot, split out from the fetch so it can be tested against fixtures.
 // Guarded by scripts/test_elo_store_activity.mjs.
+//
+// Player ids are kept PER SEASON rather than pre-counted per store, because the
+// set filter has to be able to re-answer "how many distinct people" for any
+// window — and that is a union, never a sum.
 function buildEloStoreActivity(events, matches, aliasMap){
   const canonical = eloCanonicalIdMap(aliasMap);
   const seasonFirst = new Map();          // season → earliest event_date, for column order
   const byStore = new Map();
-  const evStore = new Map();              // event_id → store, for the seat pass
+  const evAt = new Map();                 // event_id → {store, season}, for the seat pass
 
   for(const e of events){
     if(!e.store) continue;                // storeless / online events aren't a venue
-    evStore.set(e.event_id, e.store);
-    let s = byStore.get(e.store);
-    if(!s){ s = {store: e.store, events: 0, attendance: 0, per: {}, players: new Set(),
-                 first_date: null, last_date: null}; byStore.set(e.store, s); }
     const key = e.season || "";
-    let cell = s.per[key];
-    if(!cell) cell = s.per[key] = {events: 0, attendance: 0};
+    evAt.set(e.event_id, {store: e.store, season: key});
+    let s = byStore.get(e.store);
+    if(!s){ s = {store: e.store, per: new Map(), first_date: null, last_date: null}; byStore.set(e.store, s); }
+    let cell = s.per.get(key);
+    if(!cell){ cell = {events: 0, attendance: 0, players: new Set()}; s.per.set(key, cell); }
     cell.events++; cell.attendance += eloEventSeats(e);
-    s.events++;    s.attendance    += eloEventSeats(e);
     if(e.event_date){
       if(!s.first_date || e.event_date < s.first_date) s.first_date = e.event_date;
       if(!s.last_date  || e.event_date > s.last_date)  s.last_date  = e.event_date;
@@ -22538,39 +22546,65 @@ function buildEloStoreActivity(events, matches, aliasMap){
   // only counts when their match's event survived the pass above. player2_id is
   // null on a bye.
   for(const m of matches){
-    const store = evStore.get(m.event_id);
-    if(!store) continue;
-    const seen = byStore.get(store).players;
-    if(m.player1_id != null) seen.add(canonical.get(m.player1_id) || m.player1_id);
-    if(m.player2_id != null) seen.add(canonical.get(m.player2_id) || m.player2_id);
+    const at = evAt.get(m.event_id);
+    if(!at) continue;
+    const cell = byStore.get(at.store).per.get(at.season);
+    if(m.player1_id != null) cell.players.add(canonical.get(m.player1_id) || m.player1_id);
+    if(m.player2_id != null) cell.players.add(canonical.get(m.player2_id) || m.player2_id);
   }
 
+  // NEWEST SET FIRST. The recent sets are the ones anyone is actually reading,
+  // and they're what the default window takes the first N of.
   const seasons = Array.from(seasonFirst.keys())
     .sort((a, b) => {
       const fa = seasonFirst.get(a), fb = seasonFirst.get(b);
-      if(fa && fb) return fa < fb ? -1 : fa > fb ? 1 : 0;
+      if(fa && fb) return fa < fb ? 1 : fa > fb ? -1 : 0;
       if(fa) return -1; if(fb) return 1;
-      return a.localeCompare(b);
+      return String(b).localeCompare(String(a));
     })
     .map(key => ({key, label: key ? eloSeasonSetLabel(key) : "Unsorted"}));
 
-  const stores = Array.from(byStore.values()).map(s => ({
-    store: s.store, events: s.events, attendance: s.attendance,
-    players: s.players.size,
-    avg: s.events ? Math.round((s.attendance / s.events) * 10) / 10 : 0,
-    first_date: s.first_date, last_date: s.last_date, per: s.per,
-  }));
+  const stores = Array.from(byStore.values()).map(s => {
+    const per = {};
+    for(const [k, c] of s.per) per[k] = {events: c.events, attendance: c.attendance, players: Array.from(c.players)};
+    return {store: s.store, per, first_date: s.first_date, last_date: s.last_date};
+  });
   return {seasons, stores};
+}
+
+// Roll one store up over the selected sets. Players is a UNION across those
+// sets, never a sum — a regular who plays all four is one person.
+function eloStoreTotals(store, seasonKeys){
+  let events = 0, attendance = 0;
+  const players = new Set();
+  for(const k of seasonKeys){
+    const c = store.per[k];
+    if(!c) continue;
+    events += c.events; attendance += c.attendance;
+    for(const id of c.players) players.add(id);
+  }
+  return {events, attendance, players: players.size,
+          avg: events ? Math.round((attendance / events) * 10) / 10 : 0};
 }
 
 function EloStores({aliasMap, canViewStore, onStoreClick}){
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [search, setSearch] = useState("");
-  const [breakdown, setBreakdown] = useState(true);
+  const prefs0 = useMemo(() => { try { return JSON.parse(localStorage.getItem(ELO_STORES_PREFS) || "null") || {}; } catch { return {}; } }, []);
+  // "recent" follows the newest N sets as new ones land; "custom" pins an
+  // explicit pick. Storing the mode rather than only the keys is what makes a
+  // saved "last 4" still mean last 4 after the next set releases.
+  const [scopeMode, setScopeMode] = useState(prefs0.mode === "all" || prefs0.mode === "custom" ? prefs0.mode : "recent");
+  const [customKeys, setCustomKeys] = useState(Array.isArray(prefs0.keys) ? prefs0.keys : []);
+  const [breakdown, setBreakdown] = useState(!!prefs0.breakdown);
   const [sortCol, setSortCol] = useState("attendance");
   const [sortDir, setSortDir] = useState("desc");
   const setSort = (col, dir) => { setSortCol(col); setSortDir(dir); };
+
+  useEffect(() => {
+    try { localStorage.setItem(ELO_STORES_PREFS, JSON.stringify({mode: scopeMode, keys: customKeys, breakdown})); } catch {}
+  }, [scopeMode, customKeys, breakdown]);
 
   // Waits on aliasMap: building the head count before the merge table lands
   // would count a player's melee and RPH handles as two people, and the
@@ -22597,15 +22631,43 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
   }, [aliasMap]);
 
   const seasons = data ? data.seasons : [];
+  // seasons is newest-first, so "recent" is just the head of it.
+  const selectedKeys = useMemo(() => {
+    if(!seasons.length) return [];
+    if(scopeMode === "all") return seasons.map(s => s.key);
+    if(scopeMode === "custom"){
+      const want = new Set(customKeys);
+      const hit = seasons.filter(s => want.has(s.key)).map(s => s.key);
+      if(hit.length) return hit;                       // a pinned set that no longer exists just drops out
+    }
+    return seasons.slice(0, ELO_RECENT_SETS).map(s => s.key);
+  }, [seasons, scopeMode, customKeys]);
+  const selected = useMemo(() => new Set(selectedKeys), [selectedKeys]);
+
+  const toggleSeason = (key) => {
+    const next = new Set(selectedKeys);
+    // Same invariant as the home movers' chip groups: the last active chip
+    // can't be switched off, or the only way back is the chip you just used
+    // to empty the table.
+    if(next.has(key)){ if(next.size === 1) return; next.delete(key); }
+    else next.add(key);
+    setScopeMode("custom");
+    setCustomKeys(seasons.filter(s => next.has(s.key)).map(s => s.key));
+  };
+
   const rows = useMemo(() => {
     if(!data) return null;
     const q = search.trim().toLowerCase();
-    const out = data.stores.filter(s => !q || s.store.toLowerCase().includes(q));
-    // Per-season columns sort under a "<metric>:<season>" key; everything else
-    // is a plain field on the row.
+    const out = data.stores
+      .map(s => ({...s, t: eloStoreTotals(s, selectedKeys)}))
+      // A store that ran nothing in the chosen window isn't in the window.
+      .filter(s => s.t.events > 0)
+      .filter(s => !q || s.store.toLowerCase().includes(q));
+    // Per-set columns sort under a "<metric>:<season>" key; everything else is
+    // either the store name or a field on the rolled-up totals.
     const valOf = (r) => {
       const i = sortCol.indexOf(":");
-      if(i < 0) return r[sortCol];
+      if(i < 0) return sortCol === "store" ? r.store : r.t[sortCol];
       const cell = r.per[sortCol.slice(i + 1)];
       return cell ? cell[sortCol.slice(0, i) === "ev" ? "events" : "attendance"] : 0;
     };
@@ -22615,34 +22677,63 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
       if(typeof av === "string" || typeof bv === "string") return String(av || "").localeCompare(String(bv || "")) * dir;
       return ((av || 0) - (bv || 0)) * dir;
     });
-  }, [data, search, sortCol, sortDir]);
+  }, [data, search, sortCol, sortDir, selectedKeys]);
 
   const totals = useMemo(() => {
     if(!rows) return null;
     const t = {events: 0, attendance: 0, per: {}};
     for(const r of rows){
-      t.events += r.events; t.attendance += r.attendance;
-      for(const [k, c] of Object.entries(r.per)){
+      t.events += r.t.events; t.attendance += r.t.attendance;
+      for(const k of selectedKeys){
+        const c = r.per[k];
+        if(!c) continue;
         const cell = t.per[k] || (t.per[k] = {events: 0, attendance: 0});
         cell.events += c.events; cell.attendance += c.attendance;
       }
     }
     return t;
-  }, [rows]);
+  }, [rows, selectedKeys]);
 
   if(err) return html`<div class="elo-stores"><div class="elo-empty">Couldn't load store activity: ${err}</div></div>`;
   if(!rows) return html`<div class="elo-stores"><div class="elo-loading">Crunching store activity…</div></div>`;
 
   const num = (n) => (n || 0).toLocaleString();
-  const cols = breakdown ? seasons : [];
+  const cols = breakdown ? seasons.filter(s => selected.has(s.key)) : [];
+  const scopeLabel = selectedKeys.length === seasons.length ? "all sets"
+    : selectedKeys.length === 1 ? (seasons.find(s => s.key === selectedKeys[0]) || {}).label
+    : selectedKeys.length + " sets";
+  // Only a genuinely huge table needs the height cap — see the CSS note.
+  const wide = cols.length > ELO_RECENT_SETS;
+
+  const totalsHead = html`<${React.Fragment}>
+    <${EloSortTh} label="Events"  col="events"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+    <${EloSortTh} label="Players" col="players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+    <${EloSortTh} label="Tickets" col="attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+    <${EloSortTh} label="Avg"     col="avg"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
+  </${React.Fragment}>`;
 
   return html`<div class="elo-stores">
-    <p class="elo-stores-intro">Every tracked event, grouped by the store that ran it. <strong>Attendance</strong> is the reported
-      player count (falling back to the number of players we rated). <strong>Players</strong> counts distinct people across
-      all seasons, so it is deliberately smaller than the seasons added together — a regular is one player, not four.</p>
+    <p class="elo-stores-intro">Every event we've ingested for a store — Set Championships, locals, league nights, all of it —
+      grouped by the shop that ran it. <strong>Players</strong> counts distinct people across the sets you've picked, so it's
+      smaller than those sets added together: a regular is one player, not four. <strong>Tickets</strong> is total seats —
+      one per player per event — using the reported headcount, or the number of players we rated when the organiser never
+      published one.</p>
+
+    <div class="elo-stores-setbar">
+      <span class="elo-stores-setlbl">Sets</span>
+      <button class="elo-chip ${scopeMode==="recent"?"active":""}" onClick=${()=>setScopeMode("recent")}
+        title="The ${ELO_RECENT_SETS} most recent sets — follows along as new sets release.">Last ${ELO_RECENT_SETS}</button>
+      <button class="elo-chip ${scopeMode==="all"?"active":""}" onClick=${()=>setScopeMode("all")}>All</button>
+      <span class="elo-stores-setdiv"></span>
+      ${seasons.map(s => html`<button key=${s.key} class="elo-chip elo-chip--set ${selected.has(s.key)?"active":""}"
+        title=${s.key || "Events with no set recorded"}
+        onClick=${()=>toggleSeason(s.key)}>${s.label}</button>`)}
+    </div>
+
     <div class="elo-toolbar">
-      <label class="elo-stores-toggle">
-        <input type="checkbox" checked=${breakdown} onChange=${e => setBreakdown(e.target.checked)}/>
+      <label class="elo-stores-toggle" title=${selectedKeys.length < 2 ? "Pick more than one set to break it down." : ""}>
+        <input type="checkbox" checked=${breakdown} disabled=${selectedKeys.length < 2}
+               onChange=${e => setBreakdown(e.target.checked)}/>
         Per-set breakdown
       </label>
       <div class="elo-toolbar-right">
@@ -22650,27 +22741,30 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
                value=${search} onInput=${e => setSearch(e.target.value)}/>
       </div>
     </div>
-    <div class="elo-count">${rows.length} of ${data.stores.length} stores · ${num(totals.events)} events · ${num(totals.attendance)} seats</div>
-    ${rows.length === 0 ? html`<div class="elo-empty">No stores match.</div>` : html`
-    <div class="elo-table-wrap elo-stores-wrap">
+    <div class="elo-count">${rows.length} stores · ${scopeLabel} · ${num(totals.events)} events · ${num(totals.attendance)} tickets</div>
+    ${rows.length === 0 ? html`<div class="elo-empty">No stores ran anything in the sets you've picked.</div>` : html`
+    <div class="elo-table-wrap elo-stores-wrap ${wide?"elo-stores-wrap--wide":""}">
       <table class="elo-table elo-stores-table">
         <thead>
-          <tr>
+          ${breakdown ? html`<${React.Fragment}>
+            <tr>
+              <${EloSortTh} label="Store" col="store" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort}
+                className="elo-stores-name" numeric=${false} rowspan=${2}/>
+              <th colspan=${4} class="elo-stores-grp elo-stores-grp--tot">${scopeLabel}</th>
+              ${cols.map(s => html`<th key=${s.key} colspan=${2} class="elo-stores-grp">${s.label}</th>`)}
+            </tr>
+            <tr>
+              ${totalsHead}
+              ${cols.map(s => html`<${React.Fragment} key=${s.key}>
+                <${EloSortTh} label="Events"  col=${"ev:" + s.key} sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
+                <${EloSortTh} label="Tickets" col=${"at:" + s.key} sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
+              </${React.Fragment}>`)}
+            </tr>
+          </${React.Fragment}>` : html`<tr>
             <${EloSortTh} label="Store" col="store" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort}
-              className="elo-stores-name elo-stores-grp-th" numeric=${false} rowspan=${2}/>
-            ${cols.map(s => html`<th key=${s.key} colspan=${2} class="elo-stores-grp">${s.label}</th>`)}
-            <th colspan=${4} class="elo-stores-grp elo-stores-grp--tot">All seasons</th>
-          </tr>
-          <tr>
-            ${cols.map(s => html`<${React.Fragment} key=${s.key}>
-              <${EloSortTh} label="Events" col=${"ev:" + s.key} sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
-              <${EloSortTh} label="Att."   col=${"at:" + s.key} sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num" numeric=${true}/>
-            </${React.Fragment}>`)}
-            <${EloSortTh} label="Events"     col="events"     sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
-            <${EloSortTh} label="Attendance" col="attendance" sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
-            <${EloSortTh} label="Avg"        col="avg"        sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
-            <${EloSortTh} label="Players"    col="players"    sortCol=${sortCol} sortDir=${sortDir} setSort=${setSort} className="num elo-stores-tot" numeric=${true}/>
-          </tr>
+              className="elo-stores-name" numeric=${false}/>
+            ${totalsHead}
+          </tr>`}
         </thead>
         <tbody>
           ${rows.map(r => html`<tr key=${r.store}>
@@ -22678,6 +22772,10 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
               ? html`<${EloLink} to=${{tab:"store", store:r.store}} className="elo-name-btn elo-stores-nametxt"
                   title=${r.store} onClick=${() => onStoreClick && onStoreClick(r.store)}>${r.store}</${EloLink}>`
               : html`<span class="elo-stores-nametxt" title=${r.store}>${r.store}</span>`}</td>
+            <td class="num elo-stores-tot">${num(r.t.events)}</td>
+            <td class="num elo-stores-tot">${num(r.t.players)}</td>
+            <td class="num elo-stores-tot"><strong>${num(r.t.attendance)}</strong></td>
+            <td class="num elo-stores-tot">${r.t.avg}</td>
             ${cols.map(s => {
               const c = r.per[s.key];
               return html`<${React.Fragment} key=${s.key}>
@@ -22685,15 +22783,15 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
                 <td class="num">${c ? num(c.attendance) : html`<span class="muted">—</span>`}</td>
               </${React.Fragment}>`;
             })}
-            <td class="num elo-stores-tot">${num(r.events)}</td>
-            <td class="num elo-stores-tot"><strong>${num(r.attendance)}</strong></td>
-            <td class="num elo-stores-tot">${r.avg}</td>
-            <td class="num elo-stores-tot">${num(r.players)}</td>
           </tr>`)}
         </tbody>
         <tfoot>
           <tr>
             <td class="elo-stores-name"><span class="elo-stores-nametxt">${rows.length === data.stores.length ? "All stores" : "Shown stores"}</span></td>
+            <td class="num elo-stores-tot">${num(totals.events)}</td>
+            <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
+            <td class="num elo-stores-tot">${num(totals.attendance)}</td>
+            <td class="num elo-stores-tot">${totals.events ? Math.round((totals.attendance / totals.events) * 10) / 10 : 0}</td>
             ${cols.map(s => {
               const c = totals.per[s.key];
               return html`<${React.Fragment} key=${s.key}>
@@ -22701,10 +22799,6 @@ function EloStores({aliasMap, canViewStore, onStoreClick}){
                 <td class="num">${c ? num(c.attendance) : "—"}</td>
               </${React.Fragment}>`;
             })}
-            <td class="num elo-stores-tot">${num(totals.events)}</td>
-            <td class="num elo-stores-tot">${num(totals.attendance)}</td>
-            <td class="num elo-stores-tot">${totals.events ? Math.round((totals.attendance / totals.events) * 10) / 10 : 0}</td>
-            <td class="num elo-stores-tot"><span class="muted" title="Distinct players can't be summed across stores — the same person plays at several.">—</span></td>
           </tr>
         </tfoot>
       </table>
