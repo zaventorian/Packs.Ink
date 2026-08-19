@@ -44,6 +44,11 @@ on:
         required: false
         default: "false"
         type: string
+      tier_report:
+        description: "Print RPH tier metrics per store to the log (read-only)"
+        required: false
+        default: "false"
+        type: string
 
 jobs:
   discover:
@@ -109,6 +114,14 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/elo/scrape_store_history.py
+
+      # Read-only: prints the tier metrics per store to the run log.
+      - name: Report store tier metrics
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.tier_report == 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/report_store_tiers.py
 
       - name: Scrape tracked-SC rosters
         env:
