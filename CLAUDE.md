@@ -1206,6 +1206,22 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. Disney Lorcana TCG is a trademark of Disney; the game is operated by Ravensburger. This site is not affiliated with, endorsed by, or sponsored by Disney or Ravensburger."
 
+## Chicagoland Elo — Stores tab (2026-08-19)
+
+`EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views). Adding a tab means touching four places: `applyUrlToState`, the state→URL effect, the `.elo-innertabs` nav, and the render list. `eloUrlFor` also has to know the target or `EloLink`'s href points at the wrong view on a middle-click — it deletes `store` along with `p`/`e`/`sub` for exactly that reason.
+
+**Stores** is a per-store activity table pivoted by season: Events + Attendance per set, then all-season Events / Attendance / Avg / Players. Every number is derived at render time — there is no per-store table anywhere.
+
+- **Sources**: `elo_event_summary_v` (one row per event, `is_ignored` already filtered) for the pivot, and **`elo_matches`** for the head count. The obvious choice for the second one is `elo_player_events_v`, which already reads one-row-per-(player, event) — **don't**. That view `GROUP BY`s the whole ratings table, and `sbFetchAll` re-runs it once per 1000-row page plus a `count=exact`; anon's statement timeout is 3s, so a signed-out visitor is the one who pays. `elo_matches` is an indexed straight read and carries two players per row.
+- **Attendance = `num_players ?? rated_players ?? 0`.** RPH doesn't always publish a headcount; the rated count is the honest fallback and both columns are already on the summary view.
+- **Players is NOT the sum of the per-season players** — a regular who plays all four sets is one person. It's a `Set` per store, keyed on `coalesce(merged_into_id, player_id)` so a merged melee handle doesn't count twice. The tfoot deliberately shows `—` there: distinct players can't be summed across stores either.
+- **`elo_matches` has no `is_ignored` / storeless filter of its own**, so a player only counts once their match's event survived the summary-view pass. `player2_id` is null on a bye.
+- **Season columns are derived, not hardcoded** — ordered by each season's earliest event date, labelled with the set half of the season string (`"Wilds Unknown Summer 2026"` → `Wilds Unknown`) via longest-prefix match against `MAINLINE_SETS`. A new set adds a column pair on its own. "Per-set breakdown" collapses them to totals.
+- **Cached 12h at `packsink:elo:stores:v1`** (the matches fetch is the whole table). Build waits on `aliasMap` — computing the head count before the merge table lands would bake double-counted regulars into that cache.
+- **The sticky store column must use `--bg-modal`.** `--bg-card` is translucent in the dark themes and `--btn-bg` is transparent in *every* theme, so either lets the scrolling season columns show straight through the pinned cell. Same rule as the Screener's sticky NAME column. The name clamp lives on an inner `.elo-stores-nametxt` block, not the `<td>` — `table-layout:auto` treats a cell `max-width` as a hint.
+- Store names link to the gated store report only when `can_view_store_report()` passes; everyone else sees plain text. The tab itself is public — it aggregates data the Tournaments tab already lists per-event.
+- **Guarded by `node scripts/test_elo_store_activity.mjs`**, which extracts `buildEloStoreActivity` out of Index.html so it can't drift. Run it after touching the pivot.
+
 ## Upcoming-events finder (home "Upcoming near me" box)
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.
