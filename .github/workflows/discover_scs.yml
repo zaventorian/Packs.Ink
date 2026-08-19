@@ -89,6 +89,16 @@ jobs:
       # Supabase elo_events (no local DB needed), so it runs fine here. Must come
       # AFTER discover (needs the fresh set_championships) and BEFORE scrape (which
       # reads elo_upcoming_scs = set_championships ⋈ elo_tracked_stores).
+      - name: Sync ELO tracked stores
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/sync_elo_tracked_stores.py
+
+      # Scrape signed-up rosters for the tracked upcoming SCs, right after the SC
+      # list + tracked stores refresh (rosters read elo_upcoming_scs, so the fresh
+      # rows must land first — hence chained steps in the same job, not parallel).
+      # Fails soft per-event; idempotent (REPLACE members + upsert header).
       # Backfill: every PAST event our tracked stores have run. Only reachable
       # by hand (backfill_stores=true) — it walks ~30 stores' full history, which
       # the nightly job has no reason to redo. Once it has run, the archive step
@@ -100,16 +110,6 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/elo/scrape_store_history.py
 
-      - name: Sync ELO tracked stores
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python scripts/elo/sync_elo_tracked_stores.py
-
-      # Scrape signed-up rosters for the tracked upcoming SCs, right after the SC
-      # list + tracked stores refresh (rosters read elo_upcoming_scs, so the fresh
-      # rows must land first — hence chained steps in the same job, not parallel).
-      # Fails soft per-event; idempotent (REPLACE members + upsert header).
       - name: Scrape tracked-SC rosters
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
