@@ -108,8 +108,11 @@ def fetch_events(since: str) -> list[dict]:
 
 
 # Who sat down, as opposed to who registered. Kept identical to the client's
-# RPH_PLAYED_FILTER and to played() in scrape_event_attendance.py.
-PLAYED = ("or=(final_place_in_standings.not.is.null,matches_won.gt.0,"
+# RPH_PLAYED_FILTER and to played() in scrape_event_attendance.py. The standing
+# test is gte.0 rather than a not-null because PostgREST spells negation inside
+# an or() group as a `not.` prefix on the column — a standing is a positive
+# integer or absent, so this is the same set with no syntax to get wrong.
+PLAYED = ("or=(final_place_in_standings.gte.0,matches_won.gt.0,"
           "matches_lost.gt.0,matches_drawn.gt.0)")
 
 

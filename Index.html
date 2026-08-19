@@ -22493,7 +22493,13 @@ function eloSeasonSetLabel(season){
 // phone is never shipped the no-shows; mirrors played() in
 // scripts/elo/scrape_event_attendance.py. registration_status is deliberately
 // not part of it — that is about the registration, not the attendance.
-const RPH_PLAYED_FILTER = "(final_place_in_standings.not.is.null,matches_won.gt.0,matches_lost.gt.0,matches_drawn.gt.0)";
+//
+// The standing test is written `gte.0` rather than a not-null: PostgREST spells
+// negation inside an or() group as a `not.` PREFIX on the column, which reads
+// nothing like the standalone form and is easy to get subtly wrong. A standing
+// is a positive integer or absent, so `gte.0` is the same set with no syntax to
+// get wrong. Keep it identical to PLAYED in scripts/elo/report_store_tiers.py.
+const RPH_PLAYED_FILTER = "(final_place_in_standings.gte.0,matches_won.gt.0,matches_lost.gt.0,matches_drawn.gt.0)";
 
 // Distinct-person key. rph_user_id is the stable account id and the right thing
 // to count on; guests come through without one, so the display name stands in.
