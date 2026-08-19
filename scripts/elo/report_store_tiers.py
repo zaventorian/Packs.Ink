@@ -67,6 +67,15 @@ def window_start(n_sets: int) -> tuple[str, list[str]]:
     return rows[-1]["released_at"], [r["name"] for r in rows]
 
 
+def tracked_store_ids() -> set[int]:
+    """The stores we actually track. lorcana_events_history also holds every
+    store worldwide (the archive step keeps whatever the global upcoming feed
+    listed), so without this the report answers for ~3,000 shops instead of the
+    ~100 in this scene."""
+    rows = _get("elo_tracked_stores?select=store_id")
+    return {r["store_id"] for r in rows if r.get("store_id") is not None}
+
+
 def fetch_events(since: str) -> list[dict]:
     out, offset = [], 0
     while True:
@@ -84,6 +93,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sets", type=int, default=4, help="how many recent set seasons (default 4)")
     ap.add_argument("--csv", action="store_true", help="emit CSV instead of a table")
+    ap.add_argument("--all-stores", action="store_true",
+                    help="every store in the archive, not just tracked ones (~3k rows)")
     args = ap.parse_args()
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
@@ -92,10 +103,15 @@ def main() -> None:
     print(f"Window: {since} → today  ({args.sets} most recent sets: {', '.join(set_names)})\n")
 
     evs = fetch_events(since)
+    tracked = None if args.all_stores else tracked_store_ids()
+    if tracked is not None:
+        print(f"Scoped to {len(tracked)} tracked stores (--all-stores for everything)\n")
     stores: dict[int, dict] = {}
     for e in evs:
         sid = e.get("store_id")
         if sid is None:
+            continue
+        if tracked is not None and sid not in tracked:
             continue
         s = stores.setdefault(sid, {"name": e.get("store_name") or f"store {sid}",
                                     "events": 0, "tickets": 0, "pre": set(), "kinds": {}})
