@@ -22,8 +22,10 @@ probe_rph_history.py). Each row carries the user, their final standing and their
 match record — enough to tell a registrant from someone who actually sat down.
 
 Scope: events in lorcana_events_history belonging to elo_tracked_stores. ~4,200
-events at one request each, so a first full run is ~10 minutes; after that
---limit / the scans table make it incremental.
+events at one request each; writes are batched FLUSH_EVERY events, so a first
+full run is bounded by the RPH fetches (~25-40 min). After that --limit / the
+scans table make it incremental, and an interrupted run resumes where it
+stopped rather than starting over.
 
 Idempotent: upserts on (event_id, best_identifier), and skips events already in
 rph_event_attendance_scans unless --refresh. An event that genuinely had nobody
@@ -44,6 +46,7 @@ except Exception:
 
 REG = "https://api.ravensburgerplay.com/api/v2/events/{eid}/registrations/"
 PAGE = 100
+FLUSH_EVERY = 50        # events per write batch — see flush() in main()
 
 
 def _hdr(extra: dict | None = None) -> dict:
@@ -187,21 +190,38 @@ def main() -> None:
         return
 
     total_rows = total_played = 0
+    pend_rows: list[dict] = []
+    pend_scans: list[dict] = []
+
+    def flush() -> None:
+        """Rows BEFORE scans, always. The scan row is what makes a re-run skip an
+        event, so recording it first would let an interrupted flush mark an
+        event done whose attendance never landed — invisible, and only fixable
+        with --refresh over everything."""
+        if args.dry_run:
+            pend_rows.clear(); pend_scans.clear(); return
+        _post("rph_event_attendance", pend_rows, "event_id,best_identifier")
+        _post("rph_event_attendance_scans", pend_scans, "event_id")
+        pend_rows.clear(); pend_scans.clear()
+
     for n, ev in enumerate(events, 1):
         eid = ev["event_id"]
         rows = scrape_one(eid)
         n_played = sum(1 for r in rows if played(r))
         total_rows += len(rows); total_played += n_played
-        if not args.dry_run:
-            _post("rph_event_attendance", rows, "event_id,best_identifier")
-            _post("rph_event_attendance_scans",
-                  [{"event_id": eid, "player_count": n_played, "row_count": len(rows)}],
-                  "event_id")
+        pend_rows.extend(rows)
+        pend_scans.append({"event_id": eid, "player_count": n_played, "row_count": len(rows)})
+        # Batched because two writes per event made the upserts, not the RPH
+        # fetch, the long pole — a full run was overrunning the job timeout. A
+        # flush costs at most FLUSH_EVERY events of rework if the run dies.
+        if len(pend_scans) >= FLUSH_EVERY:
+            flush()
         if n % 50 == 0 or n == len(events):
             sys.stdout.write(f"\r  {n}/{len(events)} events · {total_rows} registrations · "
                              f"{total_played} played")
             sys.stdout.flush()
-        time.sleep(0.08)
+        time.sleep(0.05)
+    flush()
     print()
     print(f"\n  {total_rows} registrations, {total_played} of them played "
           f"({total_rows - total_played} registered without playing)")
