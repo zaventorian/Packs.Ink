@@ -39,6 +39,11 @@ on:
         required: false
         default: ""
         type: string
+      backfill_stores:
+        description: "Also backfill every PAST event for tracked stores (slow; needs migration 121)"
+        required: false
+        default: "false"
+        type: string
 
 jobs:
   discover:
@@ -84,6 +89,17 @@ jobs:
       # Supabase elo_events (no local DB needed), so it runs fine here. Must come
       # AFTER discover (needs the fresh set_championships) and BEFORE scrape (which
       # reads elo_upcoming_scs = set_championships ⋈ elo_tracked_stores).
+      # Backfill: every PAST event our tracked stores have run. Only reachable
+      # by hand (backfill_stores=true) — it walks ~30 stores' full history, which
+      # the nightly job has no reason to redo. Once it has run, the archive step
+      # in discover_events.py keeps history current from there.
+      - name: Backfill store event history
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stores == 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/scrape_store_history.py
+
       - name: Sync ELO tracked stores
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
