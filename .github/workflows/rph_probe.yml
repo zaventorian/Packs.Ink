@@ -1,0 +1,37 @@
+name: Probe RPH event history
+
+# READ-ONLY reconnaissance. Runs scripts/elo/probe_rph_history.py and prints the
+# answers to the run log. No database credentials, no writes, no schedule —
+# workflow_dispatch only.
+#
+# Why a workflow: the probe has to reach api.ravensburgerplay.com, which agent
+# sessions and some dev machines can't. CI can, and it needs nothing installed.
+#
+# What it answers: whether RPH will serve PAST events at all (every discovery
+# script we have pins display_statuses=upcoming, so we've never asked), whether
+# the index can be filtered by store or date, how deep pagination goes, and
+# whether a past event's registrations are readable. Those decide whether a
+# backfill scraper is ~30 per-store queries, a date-sharded crawl, or impossible.
+#
+# Deliberately has no `env:` block — this job must not be able to write anything.
+
+permissions:
+  contents: read
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  probe:
+    name: Probe RPH for past events
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # stdlib only — no pip install step needed.
+      - name: Probe
+        run: python scripts/elo/probe_rph_history.py

@@ -61,6 +61,45 @@ print("=" * 72)
 print("RPH past-events probe")
 print("=" * 72)
 
+# 0 ─ Is `past` even a real display_statuses value? Everything downstream keys
+#     off BASE, so if this filter is silently IGNORED rather than honoured, the
+#     counts below describe the whole index and every conclusion is wrong. The
+#     only way to tell is to compare against an unfiltered baseline: a filter
+#     that works moves the count, one that's ignored doesn't.
+print("\n[0] Which display_statuses values does the API honour?")
+base_url = API + "?" + urlencode({"game_slug": "disney-lorcana", "page_size": 1})
+d0, st0, _ = get(base_url)
+unfiltered = (d0 or {}).get("count")
+print(f"    (no display_statuses) -> status={st0} count={unfiltered!r}")
+d1, _, _ = get(API + "?" + urlencode(
+    {"game_slug": "disney-lorcana", "display_statuses": "upcoming", "page_size": 1}))
+upcoming_n = (d1 or {}).get("count")
+print(f"    upcoming              -> count={upcoming_n!r}   (the value every script uses today)")
+findings["unfiltered"] = unfiltered
+findings["upcoming"] = upcoming_n
+for val in ("past", "ended", "completed", "finished", "archived", "cancelled"):
+    d, st, _ = get(API + "?" + urlencode(
+        {"game_slug": "disney-lorcana", "display_statuses": val, "page_size": 1}))
+    c = (d or {}).get("count")
+    if d is None:
+        verdict = f"HTTP {st}  (rejected)"
+    elif c == unfiltered and c != upcoming_n:
+        verdict = f"count={c!r}  IGNORED — same as unfiltered"
+    elif isinstance(c, int) and c > 0:
+        verdict = f"count={c:,}  *** HONOURED ***"
+        findings.setdefault("past_status", val)
+    else:
+        verdict = f"count={c!r}  (empty — accepted but nothing matches)"
+    print(f"    {val:21} -> {verdict}")
+    time.sleep(0.15)
+if not findings.get("past_status"):
+    print("\n    !! No display_statuses value exposes past events.")
+    print("       If `unfiltered` above is much larger than `upcoming`, history IS")
+    print("       in the index and we filter by date locally instead — see [4].")
+else:
+    BASE["display_statuses"] = findings["past_status"]
+    print(f"\n    Using display_statuses={findings['past_status']} for the rest of this probe.")
+
 # 1 ─ Does the bare past index answer at all, and how big is it?
 print("\n[1] Bare past index (no name filter)")
 d, st, el = get(q(page_size=1))
@@ -180,7 +219,9 @@ else:
     if findings.get("page_cap"):
         print(f"  ...and pagination stops at page {findings['page_cap']}, so a bare sweep")
         print("  CANNOT reach all of it. Needs another axis (ordering flips, name nets).")
-print(f"\n  List rows carry store.id: {findings.get('row_has_store')}")
+print(f"\n  display_statuses value for history: {findings.get('past_status') or 'NONE FOUND'}")
+print(f"  index size — unfiltered {findings.get('unfiltered')!r} vs upcoming {findings.get('upcoming')!r}")
+print(f"  List rows carry store.id: {findings.get('row_has_store')}")
 print(f"  List rows carry headcount: {findings.get('row_has_count')}   "
       "(Event Tickets without a per-event fetch)")
 print(f"  Past-event registrations readable: {findings.get('registrations_ok', False)}   "
