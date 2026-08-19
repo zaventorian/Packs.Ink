@@ -54,6 +54,11 @@ on:
         required: false
         default: "false"
         type: string
+      skip_discover:
+        description: "Skip the ~20min upcoming scan. For attendance/backfill-only runs."
+        required: false
+        default: "false"
+        type: string
 
 jobs:
   discover:
@@ -77,7 +82,11 @@ jobs:
       # near me" box reads) + public.set_championships (the SC subset, unchanged,
       # because the whole Elo pipeline binds to that table). A manual dispatch
       # with a set_name instead re-pulls just that set's SCs the old way.
+      # The scan is the long pole (~20 min). An attendance or backfill run has no
+      # need of it, and re-running it there is what pushes the job into its
+      # timeout before the step you actually dispatched for gets to run.
       - name: Discover & upsert Lorcana events
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -100,6 +109,7 @@ jobs:
       # AFTER discover (needs the fresh set_championships) and BEFORE scrape (which
       # reads elo_upcoming_scs = set_championships ⋈ elo_tracked_stores).
       - name: Sync ELO tracked stores
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -144,6 +154,7 @@ jobs:
         run: python scripts/elo/report_store_tiers.py
 
       - name: Scrape tracked-SC rosters
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
