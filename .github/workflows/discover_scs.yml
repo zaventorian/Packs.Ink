@@ -55,22 +55,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # TEMPORARY — remove once the RPH history question is answered.
-      # Read-only reconnaissance, no credentials, continue-on-error so it can
-      # never affect the discovery below. It lives here rather than in its own
-      # workflow because workflow_dispatch only reaches files that exist on the
-      # DEFAULT branch, and .github/workflows/rph_probe.yml is branch-only —
-      # dispatching THIS workflow with ref=<branch> runs the branch's copy.
-      - name: Probe RPH past-event coverage (temporary)
-        continue-on-error: true
-        run: python scripts/elo/probe_rph_history.py
-
-      # scrape_rosters.py imports scripts/supabase_client.py, which needs
-      # `requests`. The discover/sync steps are stdlib-only, so this workflow
-      # shipped without an install step and the roster scrape died on
-      # ModuleNotFoundError in 0s on every run from 2026-06-15 to 2026-07-08.
-      # Installing just the two runtime deps (not scripts/requirements.txt,
-      # which drags in playwright) keeps the job fast.
       - name: Install Python deps
         run: pip install requests python-dotenv
 
