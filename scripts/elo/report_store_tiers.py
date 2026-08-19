@@ -126,11 +126,18 @@ def _page_all(path: str) -> list[dict]:
         offset += 1000
 
 
-def fetch_attendance() -> tuple[list[dict], set[int]]:
+def fetch_attendance() -> tuple[list[dict], set[int], dict[int, tuple[int, int]]]:
     played = _page_all(f"rph_event_attendance?select=event_id,rph_user_id,best_identifier"
                        f"&{PLAYED}&order=event_id.asc,best_identifier.asc")
-    scans = _page_all("rph_event_attendance_scans?select=event_id&order=event_id.asc")
-    return played, {r["event_id"] for r in scans}
+    scans = _page_all("rph_event_attendance_scans?select=event_id,row_count,player_count"
+                      "&order=event_id.asc")
+    # row_count = everyone who registered; player_count = those with a result.
+    # An event with registrations and no results at all is one the store never
+    # ran through RPH's pairing system, which is NOT the same as a quiet night —
+    # see the Dark column.
+    counts = {r["event_id"]: (r.get("row_count") or 0, r.get("player_count") or 0)
+              for r in scans}
+    return played, set(counts), counts
 
 
 def person_key(a: dict) -> str:
@@ -157,7 +164,7 @@ def main() -> None:
     print(f"Window: {since} → today  ({args.sets} most recent sets: {', '.join(set_names)})\n")
 
     evs = fetch_events(since)
-    played, scanned = fetch_attendance()
+    played, scanned, counts = fetch_attendance()
     tracked = None if args.all_stores else tracked_store_ids()
     if tracked is not None:
         print(f"Scoped to {len(tracked)} tracked stores (--all-stores for everything)\n")
@@ -175,10 +182,15 @@ def main() -> None:
         loc = ", ".join(x for x in (e.get("city"), e.get("state")) if x)
         s = stores.setdefault(sid, {"name": f"{label} ({loc})" if loc else label,
                                     "events": 0, "tickets": 0, "gap": 0,
+                                    "regs": 0, "dark": 0,
                                     "fans": set(), "pre": set(), "kinds": {}})
         s["events"] += 1
         if e["event_id"] not in scanned:
             s["gap"] += 1
+        n_reg, n_res = counts.get(e["event_id"], (0, 0))
+        s["regs"] += n_reg
+        if n_reg and not n_res:
+            s["dark"] += 1
         at_store[e["event_id"]] = s
         s["kinds"][e.get("kind")] = s["kinds"].get(e.get("kind"), 0) + 1
         if e.get("kind") == "prerelease":
@@ -201,21 +213,33 @@ def main() -> None:
 
     rows = sorted(stores.values(), key=lambda s: (-s["events"], -s["tickets"]))
     if args.csv:
-        print("store,events,tickets,unique_fans,unscraped_events,prerelease_sets,tier_partial")
+        print("store,events,tickets,unique_fans,registrations,dark_events,"
+              "unscraped_events,prerelease_sets,tier_partial")
         for s in rows:
             print(f'"{s["name"]}",{s["events"]},{s["tickets"]},{len(s["fans"])},'
-                  f'{s["gap"]},{len(s["pre"])},{tier(s)}')
+                  f'{s["regs"]},{s["dark"]},{s["gap"]},{len(s["pre"])},{tier(s)}')
     else:
-        print(f"{'Store':<44}{'Events':>7}{'Tickets':>9}{'Fans':>7}{'Gap':>5}{'Pre':>5}  Tier*")
-        print("-" * 87)
+        print(f"{'Store':<44}{'Events':>7}{'Tickets':>9}{'Fans':>7}"
+              f"{'Reg':>7}{'Dark':>6}{'Gap':>5}{'Pre':>5}  Tier*")
+        print("-" * 98)
         for s in rows:
             print(f"{s['name'][:43]:<44}{s['events']:>7}{s['tickets']:>9}"
-                  f"{len(s['fans']):>7}{s['gap']:>5}{len(s['pre']):>5}  {tier(s)}")
-        print("-" * 87)
+                  f"{len(s['fans']):>7}{s['regs']:>7}{s['dark']:>6}"
+                  f"{s['gap']:>5}{len(s['pre']):>5}  {tier(s)}")
+        print("-" * 98)
         tot_e = sum(s["events"] for s in rows)
         tot_t = sum(s["tickets"] for s in rows)
+        tot_r = sum(s["regs"] for s in rows)
+        tot_d = sum(s["dark"] for s in rows)
         tot_g = sum(s["gap"] for s in rows)
-        print(f"{len(rows)} stores{'':<36}{tot_e:>7}{tot_t:>9}{'':>7}{tot_g:>5}")
+        print(f"{len(rows)} stores{'':<36}{tot_e:>7}{tot_t:>9}{'':>7}"
+              f"{tot_r:>7}{tot_d:>6}{tot_g:>5}")
+        print(f"\n  Reg  = everyone who registered. Tickets counts only those with a")
+        print( "         recorded result, so Reg - Tickets is no-shows PLUS players at")
+        print( "         events the store never ran through RPH's pairing system.")
+        print(f"  Dark = events with registrations but NO results at all "
+              f"({tot_d} of {tot_e}). A store with a high Dark count is")
+        print( "         under-reported by Tickets/Fans, not quiet.")
         counts = {}
         for s in rows:
             counts[tier(s)] = counts.get(tier(s), 0) + 1
