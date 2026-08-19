@@ -46,15 +46,14 @@ const code = [
   grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
   grab("const RPH_ENTRY = {", "};"),
   grab("const RPH_PRORATED = {", "};"),
-  grab("const RPH_PRORATED_WINDOW = {", "};"),
   grab("const RPH_TIERS = [", "];"),
   grab("function rphShortfall(t){", "\n}"),
   grab("function rphTierFor(t){", "\n}"),
 ].join("\n\n");
 
-const [build, totals, tierFor, shortfall, RPH_PRORATED] = new Function(
+const [build, totals, tierFor, shortfall] = new Function(
   "MAINLINE_SETS",
-  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall, RPH_PRORATED];",
+  code + "\nreturn [buildEloStoreActivity, eloStoreTotals, rphTierFor, rphShortfall];",
 )(MAINLINE_SETS);
 
 let failures = 0;
@@ -98,11 +97,14 @@ const events = [
   ev(17, "Top Choice Gaming", "2024-03-03", 4),
   // Storeless: not a venue.
   ev(18, null, "2026-06-02", 30),
-  // Pro-rating window is Sept 1 → Nov 1 2026. Start is inclusive, end exclusive.
-  ev(20, "Collectors Lounge", "2026-08-31", 5),                              // day before: out
-  ev(21, "Collectors Lounge", "2026-09-01", 6),                              // first day: in
-  ev(22, "Collectors Lounge", "2026-10-31", 7, {kind: "prerelease", set_name: "Hyperia City"}),
-  ev(23, "Collectors Lounge", "2026-11-01", 8),                              // last day: OUT
+  // Two branches of one chain: same NAME, different store_id. They must stay
+  // separate stores — merging them reports one location's numbers as both.
+  {event_id: 30, store_name: "Fair Game", store_id: 5, city: "Geneva", state: "IL",
+   start_datetime: "2026-06-10T18:00:00+00:00", registered_user_count: 11,
+   kind: "other", set_name: null},
+  {event_id: 31, store_name: "Fair Game", store_id: 6, city: "La Grange", state: "IL",
+   start_datetime: "2026-06-11T18:00:00+00:00", registered_user_count: 4,
+   kind: "other", set_name: null},
 ];
 const matches = [
   {event_id: 10, player1_id: 1, player2_id: 2},
@@ -114,15 +116,14 @@ const matches = [
 ];
 const aliasMap = new Map([[1, [{player_id: 901, display_name: "zaven", platform: "melee"}]]]);
 
-const out = build(events, matches, aliasMap, seasons, new Set([1, 2]));
-const byName = Object.fromEntries(out.stores.map((s) => [s.store, s]));
+const out = build(events, matches, aliasMap, seasons, new Set([1, 2, 5, 6]));
+const byName = Object.fromEntries(out.stores.map((s) => [s.store + (s.city ? " " + s.city : ""), s]));
 
 console.log("date bucketing (not set_name)");
 eq("newest season first", out.seasons.map((x) => x.key), [WILDS, WINTER]);
 const cl = byName["Collectors Lounge"];
 eq("an event with NO set_name still lands in the right season by date",
-   cl.per[WILDS].events, 8);       // 10, 11, 13, 14 + the four pro-window ones,
-                                   // which are all after Wilds Unknown released
+   cl.per[WILDS].events, 4);       // ids 10, 11, 13, 14
 eq("Winterspell picks up the unnamed January event", cl.per[WINTER].events, 1);
 eq("tickets sum RPH's registered_user_count", cl.per[WINTER].attendance, 20);
 eq("an event predating every set buckets into the oldest, not dropped",
@@ -133,9 +134,9 @@ eq("null headcount = event counted, zero tickets",
 console.log("scoped rollup");
 const all = [WILDS, WINTER];
 const t = totals(cl, all);
-eq("events + tickets are sums", [t.events, t.attendance], [9, 82]);
+eq("events + tickets are sums", [t.events, t.attendance], [5, 56]);
 eq("players is a UNION, and 901 merges into 1", t.players, 3);
-eq("Pre counts distinct SETS, not prerelease events", t.pre, 2);  // Wilds Unknown + Hyperia City
+eq("Pre counts distinct SETS, not prerelease events", t.pre, 1);
 eq("narrowing re-answers the head count", totals(cl, [WINTER]).players, 2);
 eq("a set the store never ran contributes nothing",
    totals(cl, ["Nonexistent 2099"]), {events: 0, attendance: 0, players: 0, pre: 0, avg: 0});
@@ -151,24 +152,22 @@ const untracked = build(
 eq("an untracked store is dropped entirely",
    untracked.stores.some((x) => x.store === "Some Shop In Berlin"), false);
 eq("an empty tracked set means no filter, not no stores",
-   build(events, matches, aliasMap, seasons, new Set()).stores.length, 2);
+   build(events, matches, aliasMap, seasons, new Set()).stores.length, 4);
 eq("storeless events make no store row",
-   out.stores.map((x) => x.store).sort(), ["Collectors Lounge", "Top Choice Gaming"]);
+   out.stores.map((x) => x.store).sort(),
+   ["Collectors Lounge", "Fair Game", "Fair Game", "Top Choice Gaming"]);
 eq("matches on events absent from history are dropped",
    out.stores.reduce((n, x) => n + totals(x, all).players, 0), 5);
 
 // The memo's one-off Sept 1 – Nov 1 2026 offer. Boundary handling matters: a
 // store credited for a November 1st event would be told it qualified when it
 // didn't.
-console.log("pro-rating window");
-eq("window bars are the memo's 1/6 of Legendary",
-   [RPH_PRORATED.events, RPH_PRORATED.players, RPH_PRORATED.tickets], [8, 8, 80]);
-eq("only in-window events count (Sep 1 and Oct 31, not Aug 31 or Nov 1)",
-   cl.pro.events, 2);
-eq("tickets likewise", cl.pro.attendance, 13);
-eq("the Hyperia City prerelease is detected", cl.pro.hyperia, true);
-eq("a store with no in-window prerelease doesn't claim one",
-   byName["Top Choice Gaming"].pro.hyperia, false);
+console.log("stores are keyed by location, not name");
+const fg = out.stores.filter((x) => x.store === "Fair Game");
+eq("two branches of one chain stay separate", fg.length, 2);
+eq("...with their own numbers", fg.map((x) => x.per[WILDS].attendance).sort((a, b) => a - b), [4, 11]);
+eq("...and carry their location", fg.map((x) => x.city).sort(), ["Geneva", "La Grange"]);
+eq("each gets a distinct row key", new Set(fg.map((x) => x.key)).size, 2);
 
 console.log("RPH tiers");
 const T = (events, players, attendance) => ({events, players, attendance});

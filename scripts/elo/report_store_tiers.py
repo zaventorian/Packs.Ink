@@ -87,7 +87,7 @@ def tracked_store_ids() -> set[int]:
 def fetch_events(since: str) -> list[dict]:
     out, offset = [], 0
     while True:
-        page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,kind,"
+        page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,city,state,kind,"
                     f"set_name,start_datetime,registered_user_count"
                     f"&start_datetime=gte.{quote(since)}"
                     f"&order=event_id.asc&limit=1000&offset={offset}")
@@ -121,7 +121,11 @@ def main() -> None:
             continue
         if tracked is not None and sid not in tracked:
             continue
-        s = stores.setdefault(sid, {"name": e.get("store_name") or f"store {sid}",
+        # Keyed on store_id: branches of a chain share a name and are separate
+        # stores for tiering, so the location is part of the identity.
+        label = e.get("store_name") or f"store {sid}"
+        loc = ", ".join(x for x in (e.get("city"), e.get("state")) if x)
+        s = stores.setdefault(sid, {"name": f"{label} ({loc})" if loc else label,
                                     "events": 0, "tickets": 0, "pre": set(), "kinds": {}})
         s["events"] += 1
         s["tickets"] += e.get("registered_user_count") or 0
