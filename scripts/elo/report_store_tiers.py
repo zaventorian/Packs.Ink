@@ -57,7 +57,7 @@ def _get(path: str):
         return json.loads(r.read().decode("utf-8", "ignore") or "[]")
 
 
-def window_start(n_sets: int) -> tuple[str, list[str]]:
+def window_start(n_sets: int, skip_current: bool = True) -> tuple[str, list[str]]:
     """Release date of the Nth-most-recent already-released MAINLINE set.
 
     The `sets` table also holds promo and special sets — "Format Coconut",
@@ -69,7 +69,13 @@ def window_start(n_sets: int) -> tuple[str, list[str]]:
     today = datetime.date.today().isoformat()
     rows = _get(f"sets?select=name,released_at&released_at=lte.{today}"
                 f"&order=released_at.desc&limit=200")
-    mainline = [r for r in rows if r.get("name") in set(FALLBACK_SETS)][:n_sets]
+    mainline = [r for r in rows if r.get("name") in set(FALLBACK_SETS)]
+    # Skip the set currently running unless asked not to: its season is still
+    # filling up, so counting it drags every store down against bars written for
+    # finished seasons. Matches the Stores tab's default window.
+    if skip_current and len(mainline) > n_sets:
+        mainline = mainline[1:]
+    mainline = mainline[:n_sets]
     if not mainline:
         raise SystemExit("couldn't read released mainline sets from the `sets` table")
     return mainline[-1]["released_at"], [r["name"] for r in mainline]
@@ -101,13 +107,15 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sets", type=int, default=4, help="how many recent set seasons (default 4)")
     ap.add_argument("--csv", action="store_true", help="emit CSV instead of a table")
+    ap.add_argument("--include-current", action="store_true",
+                    help="also count the set currently running (its season is incomplete)")
     ap.add_argument("--all-stores", action="store_true",
                     help="every store in the archive, not just tracked ones (~3k rows)")
     args = ap.parse_args()
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
 
-    since, set_names = window_start(args.sets)
+    since, set_names = window_start(args.sets, not args.include_current)
     print(f"Window: {since} → today  ({args.sets} most recent sets: {', '.join(set_names)})\n")
 
     evs = fetch_events(since)
