@@ -18,7 +18,7 @@ Prints the same person key the client uses (rphPersonKey), so what you see here
 is what the tab counts.
 """
 from __future__ import annotations
-import argparse, json, sys, urllib.request
+import argparse, json, sys, urllib.error, urllib.request
 from collections import Counter, defaultdict
 from pathlib import Path
 from urllib.parse import quote
@@ -26,6 +26,7 @@ from urllib.parse import quote
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_wu_scs import SUPABASE_URL, SERVICE_KEY, FALLBACK_SETS  # noqa: E402
 from report_store_tiers import window_start, PLAYED  # noqa: E402
+from scrape_event_attendance import REG  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -52,6 +53,25 @@ def _page(path: str):
         off += 1000
 
 
+def probe_event(eid: int) -> str:
+    """Live RPH read for one event, reporting what actually came back. The
+    scraper collapses every failure to an empty list, so this is the only way to
+    tell an event nobody registered for from one whose roster we could not
+    read — they are the same row in the scans table."""
+    url = REG.format(eid=eid) + "?page_size=100&page=1"
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0",
+                                                   "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=45) as r:
+            d = json.loads(r.read().decode("utf-8", "ignore"))
+        n = len(d.get("results") or [])
+        return f"HTTP 200, {n} registration(s){' MORE PAGES' if d.get('next') else ''}"
+    except urllib.error.HTTPError as e:
+        return f"HTTP {e.code} <- NOT readable"
+    except Exception as e:
+        return f"{type(e).__name__}: {e} <- NOT readable"
+
+
 def person_key(a: dict) -> str:
     if a.get("rph_user_id") is not None:
         return "u:%s" % a["rph_user_id"]
@@ -64,6 +84,9 @@ def main() -> None:
     ap.add_argument("--sets", type=int, default=4)
     ap.add_argument("--list", type=int, default=25, help="how many fans to print")
     ap.add_argument("--include-current", action="store_true")
+    ap.add_argument("--probe", action="store_true",
+                    help="re-fetch each event's roster from RPH and print the HTTP status, "
+                         "to tell 'genuinely empty' from 'we could not read it'")
     args = ap.parse_args()
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
@@ -123,6 +146,21 @@ def main() -> None:
         dupes = {n: ks for n, ks in norm.items() if len(ks) > 1}
         print(f"  display names mapping to >1 person key: {len(dupes)}"
               + (f"  e.g. {list(dupes)[:5]}" if dupes else ""))
+
+        if args.probe:
+            scans = {}
+            for i in range(0, len(idlist), 150):
+                chunk = ",".join(str(x) for x in idlist[i:i + 150])
+                for r in _page(f"rph_event_attendance_scans?select=event_id,row_count,player_count"
+                               f"&event_id=in.({chunk})&order=event_id.asc"):
+                    scans[r["event_id"]] = r
+            print(f"\n  per-event probe (stored scan vs a live RPH read):")
+            for e in sorted(rows, key=lambda x: x.get("start_datetime") or ""):
+                sc = scans.get(e["event_id"])
+                stored = (f"reg={sc['row_count']} played={sc['player_count']}"
+                          if sc else "NEVER SCANNED")
+                print(f"    {str(e.get('start_datetime') or '')[:10]}  {e['event_id']:>8}  "
+                      f"{(e.get('kind') or '?'):<11} stored[{stored:<22}]  live[{probe_event(e['event_id'])}]")
 
         print(f"\n  top {args.list} by events played:")
         for k, c in keys.most_common(args.list):
