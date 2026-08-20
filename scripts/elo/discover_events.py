@@ -28,7 +28,11 @@ demo days, convention side events). RPH's own event_type cannot do this job: it
 reads "LOCALS" for ~99% of events (measured 2026-07-30, 1972 of the soonest 1991).
 
 PRUNING (new — the subset tables never did this). Every upserted row stamps
-last_seen_at. After a pull that passes a completeness guard, upcoming rows that
+last_seen_at. Events that have already happened are copied into
+public.lorcana_events_history before the sweep removes them from the live feed,
+so "every event this store has run" stays answerable (RPH store tiers score
+Total Events / Unique Fans / Event Tickets across ALL event types). After a pull
+that passes a completeness guard, upcoming rows that
 this run did NOT see are deleted: RPH events get cancelled and locals churn far
 more than SCs did, so "never prune" would leave dead weeklies on the map forever.
 Long-past rows are swept too so the table stays bounded. The guard refuses to
@@ -160,6 +164,83 @@ def _delete(where: str) -> int:
         return 0
 
 
+# Columns are copied straight through, so this list must match
+# supabase/121_lorcana_events_history.sql. Anything added to lorcana_events and
+# not added here is silently dropped from the archive.
+HISTORY_COLS = (
+    "event_id,name,kind,set_name,store_id,store_name,store_website,"
+    "start_datetime,end_datetime,timezone,full_address,city,state,country,"
+    "latitude,longitude,registered_user_count,capacity,cost_cents,currency,"
+    "gameplay_format,display_status,url,last_seen_at"
+)
+
+
+def _select_past(cutoff_iso: str, limit: int, offset: int) -> list[dict]:
+    """One page of already-happened rows, oldest first so paging is stable."""
+    url = (f"{SUPABASE_URL}/rest/v1/lorcana_events?select={HISTORY_COLS}"
+           f"&start_datetime=lt.{quote(cutoff_iso)}"
+           f"&order=start_datetime.asc,event_id.asc&limit={limit}&offset={offset}")
+    req = urllib.request.Request(url, headers=_sb_headers())
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read().decode("utf-8", "ignore") or "[]")
+
+
+def archive_past_events() -> bool:
+    """Copy every event that has already happened into lorcana_events_history.
+
+    Runs BEFORE the sweep, and the sweep is skipped unless this returns True —
+    delete-then-archive would strand the rows permanently, and this table is the
+    only record that a store ran a Tuesday league night at all. RPH's upcoming
+    feed stops listing an event once it starts, so a row's values are frozen at
+    the last pull that saw it; re-archiving is an idempotent upsert on event_id.
+
+    Returns False on any failure, including the archive table not existing yet
+    (PGRST205 / 42P01 before migration 121 is applied). That's deliberate: until
+    there is somewhere to put them, past rows accumulate in lorcana_events rather
+    than being thrown away.
+    """
+    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    endpoint = f"{SUPABASE_URL}/rest/v1/lorcana_events_history"
+    headers = _sb_headers({"Prefer": "resolution=merge-duplicates,return=minimal"})
+    moved = 0
+    offset = 0
+    page = 500
+    while True:
+        try:
+            batch = _select_past(now_iso, page, offset)
+        except Exception as e:
+            print(f"  ! archive READ failed ({e}) — sweep will be skipped")
+            return False
+        if not batch:
+            break
+        try:
+            req = urllib.request.Request(
+                endpoint, data=json.dumps(batch).encode(), headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=120) as r:
+                _ = r.read()
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "ignore")[:300]
+            if e.code in (404, 400) and ("lorcana_events_history" in detail or "PGRST205" in detail):
+                print("  ! lorcana_events_history missing — apply supabase/121_"
+                      "lorcana_events_history.sql. Sweep skipped; nothing deleted.")
+            else:
+                print(f"  ! archive WRITE failed [{e.code}]: {detail} — sweep will be skipped")
+            return False
+        except Exception as e:
+            print(f"  ! archive WRITE failed ({e}) — sweep will be skipped")
+            return False
+        moved += len(batch)
+        # Rows stay in lorcana_events until the sweep, so the window doesn't
+        # shift under us — keep paging rather than re-reading from 0.
+        offset += len(batch)
+        sys.stdout.write(f"\r  archived {moved} past events")
+        sys.stdout.flush()
+    if moved:
+        print()
+    print(f"  archived {moved} past events into lorcana_events_history")
+    return True
+
+
 def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> None:
     """Delete upcoming rows this run didn't see (cancelled/removed on RPH) plus
     long-past rows. Guarded: a partial pull must never mass-delete live events."""
@@ -176,9 +257,14 @@ def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> None:
                    f"&start_datetime=gte.{quote(now.isoformat())}")
     print(f"  pruned {gone} upcoming events no longer listed on RPH")
 
+    # Archive first. The sweep is the only thing that deletes history, so it
+    # must not run unless the rows are safely copied.
+    if not archive_past_events():
+        print("  ! past-event sweep SKIPPED — archive did not succeed")
+        return
     cutoff = (now - datetime.timedelta(days=KEEP_PAST_DAYS)).isoformat()
     old = _delete(f"start_datetime=lt.{quote(cutoff)}")
-    print(f"  swept {old} events older than {KEEP_PAST_DAYS} days")
+    print(f"  swept {old} events older than {KEEP_PAST_DAYS} days (kept in lorcana_events_history)")
 
 
 def main() -> None:
