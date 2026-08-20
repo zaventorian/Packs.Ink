@@ -59,6 +59,11 @@ on:
         required: false
         default: "false"
         type: string
+      diagnose_store:
+        description: "Read-only: show who the Fans count is counting for one store (substring of its name)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   discover:
@@ -145,6 +150,16 @@ jobs:
           else
             python scripts/elo/scrape_event_attendance.py --limit "${{ inputs.scrape_attendance }}"
           fi
+
+      # Read-only: breaks one store's Fans number down into account-keyed vs
+      # name-keyed people, one-and-done vs regulars, and any display names that
+      # map to more than one person — i.e. every way the count could be inflated.
+      - name: Diagnose one store's Fans count
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_store != '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/diagnose_store_fans.py --store "${{ inputs.diagnose_store }}"
 
       - name: Report store tier metrics
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.tier_report == 'true' }}
