@@ -61,14 +61,21 @@ def _get(path: str):
         return json.loads(r.read().decode("utf-8", "ignore") or "[]")
 
 
-def window_start(n_sets: int, skip_current: bool = True) -> tuple[str, list[str]]:
-    """Release date of the Nth-most-recent already-released MAINLINE set.
+def window_start(n_sets: int, skip_current: bool = True) -> tuple[str, str | None, list[str]]:
+    """The window for N set seasons: (start, end-exclusive, set names).
 
     The `sets` table also holds promo and special sets — "Format Coconut",
     "PD1", "Attack of the Vine! Promos" — which are not set seasons. Taking the
     newest N rows unfiltered collapsed the window from ~a year to ~a month and
     made every store look like it had failed. RPH's "four most recent set
     seasons" means the mainline releases, so filter to those.
+
+    ⚠️ Skipping the current set has to move BOTH ends. Returning only a start
+    and letting the query run to today counted the four complete seasons PLUS
+    however much of the in-progress one has happened — so this report read 104
+    fans for a store the tab showed 92 for, with both claiming the same window.
+    The end bound is the skipped set's release date, which is exactly where the
+    tab's season bucketing cuts.
     """
     today = datetime.date.today().isoformat()
     rows = _get(f"sets?select=name,released_at&released_at=lte.{today}"
@@ -77,12 +84,14 @@ def window_start(n_sets: int, skip_current: bool = True) -> tuple[str, list[str]
     # Skip the set currently running unless asked not to: its season is still
     # filling up, so counting it drags every store down against bars written for
     # finished seasons. Matches the Stores tab's default window.
+    until = None
     if skip_current and len(mainline) > n_sets:
+        until = mainline[0]["released_at"]
         mainline = mainline[1:]
     mainline = mainline[:n_sets]
     if not mainline:
         raise SystemExit("couldn't read released mainline sets from the `sets` table")
-    return mainline[-1]["released_at"], [r["name"] for r in mainline]
+    return mainline[-1]["released_at"], until, [r["name"] for r in mainline]
 
 
 def tracked_store_ids() -> set[int]:
@@ -94,12 +103,13 @@ def tracked_store_ids() -> set[int]:
     return {r["store_id"] for r in rows if r.get("store_id") is not None}
 
 
-def fetch_events(since: str) -> list[dict]:
+def fetch_events(since: str, until: str | None = None) -> list[dict]:
+    end = f"&start_datetime=lt.{quote(until)}" if until else ""
     out, offset = [], 0
     while True:
         page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,city,state,kind,"
                     f"set_name,start_datetime"
-                    f"&start_datetime=gte.{quote(since)}"
+                    f"&start_datetime=gte.{quote(since)}{end}"
                     f"&order=event_id.asc&limit=1000&offset={offset}")
         out.extend(page)
         if len(page) < 1000:
@@ -160,10 +170,11 @@ def main() -> None:
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
 
-    since, set_names = window_start(args.sets, not args.include_current)
-    print(f"Window: {since} → today  ({args.sets} most recent sets: {', '.join(set_names)})\n")
+    since, until, set_names = window_start(args.sets, not args.include_current)
+    print(f"Window: {since} → {until or 'today'}  "
+          f"({args.sets} most recent sets: {', '.join(set_names)})\n")
 
-    evs = fetch_events(since)
+    evs = fetch_events(since, until)
     played, scanned, counts = fetch_attendance()
     tracked = None if args.all_stores else tracked_store_ids()
     if tracked is not None:

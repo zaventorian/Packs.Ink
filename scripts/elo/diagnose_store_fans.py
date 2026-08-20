@@ -68,11 +68,12 @@ def main() -> None:
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
 
-    since, set_names = window_start(args.sets, not args.include_current)
-    print(f"Window: {since} -> today  ({', '.join(set_names)})\n")
+    since, until, set_names = window_start(args.sets, not args.include_current)
+    print(f"Window: {since} -> {until or 'today'}  ({', '.join(set_names)})\n")
 
+    end = f"&start_datetime=lt.{quote(until)}" if until else ""
     evs = _page(f"lorcana_events_history?select=event_id,store_id,store_name,kind,start_datetime"
-                f"&start_datetime=gte.{quote(since)}&order=event_id.asc")
+                f"&start_datetime=gte.{quote(since)}{end}&order=event_id.asc")
     want = args.store.lower()
     mine = [e for e in evs if want in (e.get("store_name") or "").lower()]
     if not mine:
