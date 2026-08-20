@@ -88,16 +88,48 @@ jobs:
           fi
           echo "SHIP_VERSION=$html_v" >> "$GITHUB_ENV"
 
+      # wrangler uploads the script FIRST, then reconciles the zone's worker
+      # routes from wrangler.toml. That second call needs Zone -> Workers Routes
+      # -> Edit, which CLOUDFLARE_API_TOKEN is not scoped for, so it 403s with
+      # "Authentication error [code: 10000]" AFTER a successful upload — and a
+      # bare non-zero exit there skips the purge and the verify, leaving the new
+      # code live behind a stale edge cache. That is precisely the "deployed but
+      # nobody sees it" failure this workflow exists to catch, arriving through
+      # the workflow itself.
+      #
+      # The route (packs.ink/*) has been live since the 2026-08-04 cutover and
+      # never changes, so failing to re-assert it is not a failed deploy. This
+      # swallows ONLY that exact case — upload succeeded AND the failure names
+      # workers/routes — and the verify step below is what actually decides
+      # whether the deploy worked. Grant the token Zone -> Workers Routes -> Edit
+      # to make this branch stop firing.
       - name: Deploy the Worker
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          set -uo pipefail
           if [ "${{ inputs.dry_run }}" = "true" ]; then
             npx --yes wrangler@4 deploy --dry-run
-          else
-            npx --yes wrangler@4 deploy
+            exit $?
           fi
+          set +e
+          out=$(npx --yes wrangler@4 deploy 2>&1)
+          code=$?
+          set -e
+          printf '%s\n' "$out"
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          fi
+          if printf '%s' "$out" | grep -q 'Uploaded packs-ink' \
+             && printf '%s' "$out" | grep -q 'workers/routes'; then
+            echo "::warning::Worker uploaded, but wrangler could not reconcile the zone route \
+          (CLOUDFLARE_API_TOKEN lacks Zone -> Workers Routes -> Edit). The existing route is \
+          unchanged; continuing to purge and verify, which is what proves the deploy."
+            exit 0
+          fi
+          echo "::error::wrangler deploy failed (exit $code) for a reason other than route reconciliation."
+          exit "$code"
 
       # Without this the edge keeps serving the previous document. The SPA
       # fallback means every route and query-string variant caches its own copy
