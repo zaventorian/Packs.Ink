@@ -131,12 +131,21 @@ def target_events(refresh: bool, limit: int | None) -> list[dict]:
     return out[:limit] if limit else out
 
 
-def scrape_one(eid: int) -> list[dict]:
+def scrape_one(eid: int) -> list[dict] | None:
+    """Every registration for one event, or None if we could not read it.
+
+    None and [] MUST stay distinct. Collapsing a failed read into an empty list
+    writes a scan row saying "looked, nobody there" — so a store whose rosters
+    404 reads as a store nobody attended, and the Gap column that exists to
+    catch exactly that reports 0 because a scan row exists. A partial read (page
+    2 fails after page 1 succeeded) is also None: half a roster is a wrong
+    number, not a small one.
+    """
     rows, page = [], 1
     while True:
         d = http_json(REG.format(eid=eid) + "?" + urlencode({"page_size": PAGE, "page": page}))
-        if not d:
-            break
+        if d is None:
+            return None
         for reg in (d.get("results") or []):
             ident = reg.get("best_identifier")
             if not ident:
@@ -190,6 +199,7 @@ def main() -> None:
         return
 
     total_rows = total_played = 0
+    unreadable: list[int] = []
     pend_rows: list[dict] = []
     pend_scans: list[dict] = []
 
@@ -207,6 +217,12 @@ def main() -> None:
     for n, ev in enumerate(events, 1):
         eid = ev["event_id"]
         rows = scrape_one(eid)
+        if rows is None:
+            # No scan row: the event stays "not yet scraped", so it shows up in
+            # the Gap column and a later run retries it, instead of being
+            # silently booked as an event nobody came to.
+            unreadable.append(eid)
+            continue
         n_played = sum(1 for r in rows if played(r))
         total_rows += len(rows); total_played += n_played
         pend_rows.extend(rows)
@@ -225,6 +241,11 @@ def main() -> None:
     print()
     print(f"\n  {total_rows} registrations, {total_played} of them played "
           f"({total_rows - total_played} registered without playing)")
+    if unreadable:
+        print(f"  {len(unreadable)} event(s) could NOT be read and were left unscanned "
+              f"(they stay in the Gap column for a later run): "
+              f"{', '.join(str(e) for e in unreadable[:20])}"
+              + (" ..." if len(unreadable) > 20 else ""))
     if args.dry_run:
         print("  --dry-run: nothing written")
 

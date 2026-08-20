@@ -136,6 +136,26 @@ def _page_all(path: str) -> list[dict]:
         offset += 1000
 
 
+def fetch_fallback(event_ids: list[int]) -> list[dict]:
+    """Every stored registration for events with no recorded result. Not every
+    store runs pairings through RPH — Seven Out Cards took 19 registrations
+    across 5 events and entered results for none — and the strict rule scores
+    those shops 0 for a season they demonstrably ran. Kept identical to the
+    client's second pass in fetchEloStoreActivity."""
+    out: list[dict] = []
+    for i in range(0, len(event_ids), 150):
+        chunk = ",".join(str(x) for x in event_ids[i:i + 150])
+        out += _page_all(f"rph_event_attendance?select=event_id,rph_user_id,best_identifier,"
+                         f"registration_status&event_id=in.({chunk})"
+                         f"&order=event_id.asc,best_identifier.asc")
+    return out
+
+
+def complete_reg(a: dict) -> bool:
+    st = (a.get("registration_status") or "").upper()
+    return not st or st == "COMPLETE"
+
+
 def fetch_attendance() -> tuple[list[dict], set[int], dict[int, tuple[int, int]]]:
     played = _page_all(f"rph_event_attendance?select=event_id,rph_user_id,best_identifier"
                        f"&{PLAYED}&order=event_id.asc,best_identifier.asc")
@@ -192,7 +212,7 @@ def main() -> None:
         label = e.get("store_name") or f"store {sid}"
         loc = ", ".join(x for x in (e.get("city"), e.get("state")) if x)
         s = stores.setdefault(sid, {"name": f"{label} ({loc})" if loc else label,
-                                    "events": 0, "tickets": 0, "gap": 0,
+                                    "events": 0, "tickets": 0, "gap": 0, "unrecorded": 0,
                                     "regs": 0, "dark": 0,
                                     "fans": set(), "pre": set(), "kinds": {}})
         s["events"] += 1
@@ -209,11 +229,26 @@ def main() -> None:
 
     # One pass for both metrics: each row is one person at one event, so it is a
     # ticket, and its person key joins the store's fan set.
+    with_play = set()
     for a in played:
+        with_play.add(a["event_id"])
         s = at_store.get(a["event_id"])
         if s is None:
             continue
         s["tickets"] += 1
+        s["fans"].add(person_key(a))
+
+    # Events with no result at all fall back to their registrations, guarded on
+    # with_play so a row can never be counted by both passes.
+    no_result = [eid for eid in at_store if eid in scanned and eid not in with_play]
+    for a in fetch_fallback(no_result):
+        if a["event_id"] in with_play or not complete_reg(a):
+            continue
+        s = at_store.get(a["event_id"])
+        if s is None:
+            continue
+        s["tickets"] += 1
+        s["unrecorded"] += 1
         s["fans"].add(person_key(a))
 
     def tier(s):
@@ -249,8 +284,12 @@ def main() -> None:
         print( "         recorded result, so Reg - Tickets is no-shows PLUS players at")
         print( "         events the store never ran through RPH's pairing system.")
         print(f"  Dark = events with registrations but NO results at all "
-              f"({tot_d} of {tot_e}). A store with a high Dark count is")
-        print( "         under-reported by Tickets/Fans, not quiet.")
+              f"({tot_d} of {tot_e}). Those events' registrations ARE")
+        print( "         counted toward Tickets and Fans, since the store never recorded who")
+        print( "         played and a real event is not an empty one — so they include no-shows.")
+        tot_u = sum(s["unrecorded"] for s in rows)
+        if tot_u:
+            print(f"  {tot_u} of {tot_t} tickets came in that way.")
         counts = {}
         for s in rows:
             counts[tier(s)] = counts.get(tier(s), 0) + 1

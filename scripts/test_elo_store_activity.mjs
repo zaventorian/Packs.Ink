@@ -45,8 +45,9 @@ const MAINLINE_SETS = JSON.parse(
 const code = [
   grab("function eloSeasonSetLabel(season){", "\n}"),
   grab("const rphPersonKey = (a) =>", '.toLowerCase();'),
+  grab("const rphCompleteReg = (a) => {", "\n};"),
   grab("function eloSeasonForDate(iso, seasons){", "\n}"),
-  grab("function buildEloStoreActivity(events, played, scanned, seasons, trackedIds){",
+  grab("function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds){",
        "\n  return {seasons: seasonList, stores};\n}"),
   grab("function eloStoreTotals(store, seasonKeys){", "\n}"),
   grab("const RPH_ENTRY = {", "};"),
@@ -134,7 +135,21 @@ const played = [
 const scanned = new Set(events.map((e) => e.event_id).filter((id) => id !== 16));
 const TRACKED = new Set([1, 2, 5, 6]);
 
-const out = build(events, played, scanned, seasons, TRACKED);
+// Registrations for events with NO recorded result. Event 14 is a real
+// prerelease the store never entered pairings for — the Seven Out case, where
+// the strict rule scored a shop 0 for a season it demonstrably ran. Event 10
+// rows are here too and must be IGNORED, because event 10 does have results:
+// counting both passes would double every player at every normal event.
+const reg = (event_id, rph_user_id, best_identifier = "p" + rph_user_id,
+             registration_status = "COMPLETE") =>
+  ({event_id, rph_user_id, best_identifier, registration_status});
+const fallback = [
+  reg(14, 1), reg(14, 7), reg(14, 8),
+  reg(14, 9, "p9", "CANCELLED"),   // not a ticket: never completed registration
+  reg(10, 1), reg(10, 2),          // event 10 HAS results — must not double-count
+];
+
+const out = build(events, played, fallback, scanned, seasons, TRACKED);
 const byName = Object.fromEntries(out.stores.map((s) => [s.store + (s.city ? " " + s.city : ""), s]));
 
 console.log("date bucketing (not set_name)");
@@ -147,27 +162,40 @@ eq("an event predating every set buckets into the oldest, not dropped",
    byName["Top Choice Gaming"].per[WINTER].events, 2);
 
 console.log("tickets are people who played, not registrations");
-eq("Wilds tickets = one per person per event", cl.per[WILDS].attendance, 8);
+eq("Wilds tickets = one per person per event", cl.per[WILDS].attendance, 11);
 eq("Winter tickets ignore registered_user_count (20)", cl.per[WINTER].attendance, 2);
 eq("an event with no roster contributes zero tickets",
    byName["Top Choice Gaming"].per[WILDS].attendance, 0);
 eq("...and is reported as uncovered", byName["Top Choice Gaming"].per[WILDS].unscanned, 1);
 eq("a covered season reports no gap", cl.per[WILDS].unscanned, 0);
 eq("passing null scanned skips coverage tracking",
-   build(events, played, null, seasons, TRACKED).stores
+   build(events, played, fallback, null, seasons, TRACKED).stores
      .find((x) => x.store === "Top Choice Gaming").per[WILDS].unscanned, 0);
+
+console.log("events with no recorded result fall back to registrations");
+// Event 14: 3 COMPLETE registrations, 1 cancelled, and no results at all.
+eq("a result-less event contributes its registrations", cl.per[WILDS].unrecorded, 3);
+eq("a cancelled registration is not a ticket",
+   cl.per[WILDS].attendance, 11);        // 8 played + 3, not 4
+eq("its registrants join the fan set too", totals(cl, [WILDS]).players, 8);  // was 6, +7 and +8
+eq("registrations for an event that HAS results are ignored (no double count)",
+   build(events, played, fallback.concat([reg(10, 55), reg(11, 56)]), scanned, seasons, TRACKED)
+     .stores.find((x) => x.store === "Collectors Lounge").per[WILDS].attendance, 11);
+eq("no fallback rows at all is the strict rule",
+   build(events, played, [], scanned, seasons, TRACKED)
+     .stores.find((x) => x.store === "Collectors Lounge").per[WILDS].attendance, 8);
 
 console.log("scoped rollup");
 const all = [WILDS, WINTER];
 const t = totals(cl, all);
-eq("events + tickets are sums", [t.events, t.attendance], [5, 10]);
-eq("fans is a UNION across seasons, not a sum (would be 8)", t.players, 6);
-eq("a guest folds by name, case-insensitively", totals(cl, [WILDS]).players, 6);
+eq("events + tickets are sums", [t.events, t.attendance], [5, 13]);
+eq("fans is a UNION across seasons, not a sum", t.players, 8);
+eq("a guest folds by name, case-insensitively", totals(cl, [WILDS]).players, 8);
 eq("Pre counts distinct SETS, not prerelease events", t.pre, 1);
 eq("narrowing re-answers the head count", totals(cl, [WINTER]).players, 2);
 eq("a set the store never ran contributes nothing",
    totals(cl, ["Nonexistent 2099"]),
-   {events: 0, attendance: 0, players: 0, pre: 0, unscanned: 0, avg: 0});
+   {events: 0, attendance: 0, players: 0, pre: 0, unscanned: 0, unrecorded: 0, avg: 0});
 
 console.log("exclusions");
 // lorcana_events_history carries every store the global feed listed, so an
@@ -176,16 +204,16 @@ const untracked = build(
   events.concat([{event_id: 90, store_name: "Some Shop In Berlin", store_id: 77,
                   start_datetime: "2026-06-05T18:00:00+00:00",
                   registered_user_count: 40, kind: "other", set_name: null}]),
-  played, scanned, seasons, new Set([1, 2]));
+  played, fallback, scanned, seasons, new Set([1, 2]));
 eq("an untracked store is dropped entirely",
    untracked.stores.some((x) => x.store === "Some Shop In Berlin"), false);
 eq("an empty tracked set means no filter, not no stores",
-   build(events, played, scanned, seasons, new Set()).stores.length, 4);
+   build(events, played, fallback, scanned, seasons, new Set()).stores.length, 4);
 eq("storeless events make no store row",
    out.stores.map((x) => x.store).sort(),
    ["Collectors Lounge", "Fair Game", "Fair Game", "Top Choice Gaming"]);
 eq("attendance on events absent from history is dropped",
-   out.stores.reduce((n, x) => n + totals(x, all).attendance, 0), 15);
+   out.stores.reduce((n, x) => n + totals(x, all).attendance, 0), 18);
 
 console.log("stores are keyed by location, not name");
 const fg = out.stores.filter((x) => x.store === "Fair Game");

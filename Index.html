@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=331">
+<link rel="stylesheet" href="styles.css?v=332">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -22501,6 +22501,30 @@ function eloSeasonSetLabel(season){
 // get wrong. Keep it identical to PLAYED in scripts/elo/report_store_tiers.py.
 const RPH_PLAYED_FILTER = "(final_place_in_standings.gte.0,matches_won.gt.0,matches_lost.gt.0,matches_drawn.gt.0)";
 
+// ── Events where nobody has a recorded result ───────────────────────────────
+// Not every store runs its pairings through RPH. Seven Out Cards took 19
+// registrations across 5 events — 4 locals and a Set Championship — and entered
+// results for none of them, so the played rule scored the shop 0 tickets and 0
+// fans for a season it demonstrably ran. Verified against RPH directly: all 5
+// rosters read HTTP 200 with their registrations intact.
+//
+// The site-wide averages hide this completely (93% of registrations carry a
+// result), because the failure is CONCENTRATED: nearly every store records
+// results, and the few that don't are zeroed outright. A per-store metric has
+// to be judged per store.
+//
+// So the rule is per EVENT, using the best evidence that event has: if anyone
+// in it has a result, only people with results count — that is the honest
+// reading, and it drops no-shows. If NOBODY does, the store never recorded
+// them, and the registrations are all we know; counting them beats calling a
+// real event empty. This does admit no-shows for those events, which is the
+// lesser error: a wrong number by a few is recoverable, a zero reads as "this
+// shop is dead" to anyone comparing it against a tier bar.
+const rphCompleteReg = (a) => {
+  const st = (a.registration_status || "").toUpperCase();
+  return !st || st === "COMPLETE";
+};
+
 // Distinct-person key. rph_user_id is the stable account id and the right thing
 // to count on; guests come through without one, so the display name stands in.
 const rphPersonKey = (a) => a.rph_user_id != null
@@ -22535,7 +22559,34 @@ async function fetchEloStoreActivity(){
     .sort((a, b) => a.released_at < b.released_at ? 1 : a.released_at > b.released_at ? -1 : 0);
   const trackedIds = new Set((tracked || []).map(t => t.store_id).filter(x => x != null));
   const scanned = new Set((scans || []).map(x => x.event_id));
-  return buildEloStoreActivity(events, played, scanned, seasons, trackedIds);
+  // Second pass for the events nobody has a result in — see rphCompleteReg.
+  // Derived from the played rows we just fetched rather than from the scans
+  // table's own player_count, so the client's rule stays the only rule: an
+  // event with zero played rows is one the store never recorded, and its
+  // registrations are the best evidence it has. Usually a few hundred events,
+  // so this is a small tail fetch, not a second full one.
+  const withPlay = new Set((played || []).map(a => a.event_id));
+  const noResult = Array.from(scanned).filter(id => !withPlay.has(id));
+  const fallback = await fetchEloAttendanceFor(noResult);
+  return buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds);
+}
+
+// Every stored registration for the given events, in URL-sized chunks. A bare
+// in.(...) of a few hundred ids is fine; a few thousand would exceed what the
+// proxy will accept as a query string, and this list grows with the archive.
+async function fetchEloAttendanceFor(eventIds){
+  if(!eventIds || !eventIds.length) return [];
+  const out = [];
+  for(let i = 0; i < eventIds.length; i += 200){
+    const chunk = eventIds.slice(i, i + 200);
+    const rows = await sbFetchAll("rph_event_attendance", {
+      select: "event_id,rph_user_id,best_identifier,registration_status",
+      event_id: "in.(" + chunk.join(",") + ")",
+      order: "event_id.asc,best_identifier.asc",
+    }, null);
+    out.push(...rows);
+  }
+  return out;
 }
 
 // Which set season an event falls in, by DATE. Bucketing by the event's own
@@ -22558,9 +22609,11 @@ function eloSeasonForDate(iso, seasons){
 // window — and that is a union, never a sum.
 //
 // `played` is one row per person per event, already filtered to people who
-// actually played. `scanned` is the set of event ids attendance has been pulled
-// for; pass null to skip coverage tracking (fixtures).
-function buildEloStoreActivity(events, played, scanned, seasons, trackedIds){
+// actually played. `fallback` is every stored registration for the events that
+// have NO played rows at all — stores that never recorded results — and is used
+// only for those (see rphCompleteReg). `scanned` is the set of event ids
+// attendance has been pulled for; pass null to skip coverage tracking.
+function buildEloStoreActivity(events, played, fallback, scanned, seasons, trackedIds){
   const byStore = new Map();
   const evAt = new Map();                 // event_id → {store, season}, for the match pass
   const used = new Map();                 // season → earliest date seen, for column order
@@ -22583,7 +22636,8 @@ function buildEloStoreActivity(events, played, scanned, seasons, trackedIds){
                    per: new Map(), first_date: null, last_date: null};
              byStore.set(skey, st); }
     let cell = st.per.get(key);
-    if(!cell){ cell = {events: 0, attendance: 0, players: new Set(), pre: new Set(), unscanned: 0}; st.per.set(key, cell); }
+    if(!cell){ cell = {events: 0, attendance: 0, players: new Set(), pre: new Set(),
+                       unscanned: 0, unrecorded: 0}; st.per.set(key, cell); }
     cell.events++;
     if(scanned && !scanned.has(e.event_id)) cell.unscanned++;
     if(e.kind === "prerelease") cell.pre.add(e.set_name || key || "?");
@@ -22599,7 +22653,9 @@ function buildEloStoreActivity(events, played, scanned, seasons, trackedIds){
   // Tickets and fans in one pass: every row here is one person who played one
   // event, so it is a ticket, and its person key joins the season's fan set.
   // A regular who plays every week is many tickets and one fan.
+  const withPlay = new Set();
   for(const a of played){
+    withPlay.add(a.event_id);
     const at = evAt.get(a.event_id);
     if(!at) continue;
     const st = byStore.get(at.skey);
@@ -22607,6 +22663,23 @@ function buildEloStoreActivity(events, played, scanned, seasons, trackedIds){
     if(!cell) continue;
     cell.attendance++;
     cell.players.add(rphPersonKey(a));
+  }
+
+  // Events nobody has a result in fall back to their registrations. Guarded on
+  // withPlay so a stray fallback row can never double-count someone who already
+  // counted through the played pass — the two sets are meant to be disjoint,
+  // and this makes that true rather than assumed.
+  for(const a of (fallback || [])){
+    if(withPlay.has(a.event_id)) continue;
+    if(!rphCompleteReg(a)) continue;
+    const at = evAt.get(a.event_id);
+    if(!at) continue;
+    const st = byStore.get(at.skey);
+    const cell = st && st.per.get(at.season);
+    if(!cell) continue;
+    cell.attendance++;
+    cell.players.add(rphPersonKey(a));
+    cell.unrecorded++;
   }
 
   // Newest set first, ordered by the season's own release date where we have it.
@@ -22622,7 +22695,7 @@ function buildEloStoreActivity(events, played, scanned, seasons, trackedIds){
     const per = {};
     for(const [k, c] of st.per) per[k] = {events: c.events, attendance: c.attendance,
                                          players: Array.from(c.players), pre: Array.from(c.pre),
-                                         unscanned: c.unscanned};
+                                         unscanned: c.unscanned, unrecorded: c.unrecorded};
     return {key: st.key, store: st.store, store_id: st.store_id,
             city: st.city, state: st.state, per,
             first_date: st.first_date, last_date: st.last_date};
@@ -22702,15 +22775,16 @@ function eloStoreTotals(store, seasonKeys){
   let events = 0, attendance = 0;
   const players = new Set();
   const pre = new Set();
-  let unscanned = 0;
+  let unscanned = 0, unrecorded = 0;
   for(const k of seasonKeys){
     const c = store.per[k];
     if(!c) continue;
-    events += c.events; attendance += c.attendance; unscanned += (c.unscanned || 0);
+    events += c.events; attendance += c.attendance;
+    unscanned += (c.unscanned || 0); unrecorded += (c.unrecorded || 0);
     for(const id of c.players) players.add(id);
     for(const p of (c.pre || [])) pre.add(p);
   }
-  return {events, attendance, players: players.size, pre: pre.size, unscanned,
+  return {events, attendance, players: players.size, pre: pre.size, unscanned, unrecorded,
           avg: events ? Math.round((attendance / events) * 10) / 10 : 0};
 }
 
@@ -22889,9 +22963,11 @@ function EloStores({canViewStore, onStoreClick}){
     <p class="elo-stores-intro">Every event a store has run on Ravensburger Play — Set Championships, prereleases, locals,
       league nights — grouped by the shop and bucketed into set seasons by date. <strong>Tickets</strong> counts everyone who
       actually played, one per person per event, so a regular who shows up weekly is a ticket each week.
-      <strong>Fans</strong> is how many distinct people that was. Both come from each event's own roster rather than its
-      pre-registration count, which misses walk-ins and counts no-shows. <strong>Pre</strong> is how many sets the store ran a
-      prerelease for. The tier verdict scores events, fans and tickets; prereleases carry the asterisk.</p>
+      <strong>Fans</strong> is how many distinct people that was. Both come from each event's own roster. Where a store
+      entered results, only people with a result count; where it never did, everyone who registered counts instead —
+      marked <span class="elo-stores-gap">~</span> — because a shop that runs events without recording pairings is not a
+      shop nobody attended. <strong>Pre</strong> is how many sets the store ran a prerelease for. The tier verdict scores
+      events, fans and tickets; prereleases carry the asterisk.</p>
 
     <div class="elo-stores-req">
       ${proBars ? html`<${React.Fragment}><strong>Pro-rated bars</strong> — the memo's one-off 1/6 offer:
@@ -22974,7 +23050,8 @@ function EloStores({canViewStore, onStoreClick}){
               ${(r.city || r.state) ? html`<span class="elo-stores-loc">${[r.city, r.state].filter(Boolean).join(", ")}</span>` : ""}</td>
             <td class="num elo-stores-tot">${prog(r.t.events, barFor(r) && barFor(r).events)}${r.t.unscanned
               ? html`<span class="elo-stores-gap" title=${r.t.unscanned + " of these events have no roster pulled yet, so nobody from them is counted in Tickets or Fans."}>†</span>` : ""}</td>
-            <td class="num elo-stores-tot"><strong>${prog(r.t.attendance, barFor(r) && barFor(r).tickets)}</strong></td>
+            <td class="num elo-stores-tot"><strong>${prog(r.t.attendance, barFor(r) && barFor(r).tickets)}</strong>${r.t.unrecorded
+              ? html`<span class="elo-stores-gap" title=${r.t.unrecorded + " of these came from events where the store took registrations but never entered results, so they are counted as registered rather than confirmed played."}>~</span>` : ""}</td>
             <td class="num elo-stores-tot" title="Distinct people who played at this store across the selected sets — a union, so a regular counts once no matter how many events they played.">${prog(r.t.players, barFor(r) && barFor(r).players)}</td>
             <td class="num elo-stores-tot" title="Distinct sets this store ran a prerelease for. RPH wants one per available set; pro-rated Legendary wants Hyperia City specifically.">${r.t.pre || 0}</td>
             <td class="num elo-stores-tot">${r.t.avg}</td>
