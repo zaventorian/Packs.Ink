@@ -10,6 +10,18 @@ The classifier reinforces this: even with `Bash(git push:*)` in `.claude/setting
 
 Exception: explicit user instruction in the current turn ("push it", "ship this", "deploy now"). Anything less = commit only and report what's staged for the next push.
 
+### "Push" means SHIP, end to end (standing instruction, 2026-08-20)
+
+Zaven: *"whenever I say push please do everything such that it'll be live."* So the word is not a request for `git push` — it authorizes the whole chain, and stopping halfway leaves prod stale while the work reads as done:
+
+1. Push the branch.
+2. Merge its PR to `main` (squash — main carries ~one commit per PR).
+3. **Run the deploy** — Actions -> *Deploy to Cloudflare* -> `confirm: deploy`, `purge: true`. A merge ships nothing on its own; see "Deploying" below.
+4. **Verify the edge**, don't assume it. The workflow's verify step does this; if you deployed by hand, `curl -s https://packs.ink/__nope-$RANDOM | grep -o 'styles.css?v=[0-9]*'` hits the SPA fallback on an uncacheable path and shows what the Worker is really serving.
+5. Report the version actually live.
+
+This does NOT weaken the rule above: without the word, still commit and stop. It only settles what the word means once it is said.
+
 ## Stack
 
 - **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
