@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=324">
+<link rel="stylesheet" href="styles.css?v=325">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -8212,8 +8212,12 @@ const Coachmark = ({title, steps: allSteps, onClose, onAbort}) => {
     const el0 = find();
     if(el0 && el0.scrollIntoView){ try { el0.scrollIntoView({block:"center", inline:"nearest", behavior:"smooth"}); } catch {} }
     measure();
-    const iv = setInterval(measure, 150);
-    const stopT = setTimeout(() => { stopped = true; clearInterval(iv); }, 1100);
+    // Fast polling while the smooth scroll-into-view settles, then a slow
+    // keepalive for the step's whole life — async data (price tables, images)
+    // can reflow the page long after mount with no scroll/resize event, and
+    // a one-shot measure window left the spotlight stranded on stale coords.
+    let iv = setInterval(measure, 150);
+    const slowT = setTimeout(() => { clearInterval(iv); iv = setInterval(measure, 400); }, 1100);
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
     const onKey = (e) => {
@@ -8222,7 +8226,7 @@ const Coachmark = ({title, steps: allSteps, onClose, onAbort}) => {
       else if(e.key === "ArrowLeft" && i > 0) setI(i-1);
     };
     window.addEventListener("keydown", onKey);
-    return () => { stopped = true; clearInterval(iv); clearTimeout(stopT); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true); window.removeEventListener("keydown", onKey); };
+    return () => { stopped = true; clearInterval(iv); clearTimeout(slowT); window.removeEventListener("resize", measure); window.removeEventListener("scroll", measure, true); window.removeEventListener("keydown", onKey); };
   }, [i, step.sel]);
   if(empty) return null;
   const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
@@ -13375,7 +13379,7 @@ const CardGrid=({cards,showImages,theme,onCardClick})=>html`<div style=${{displa
     </div>`;
   })}</div>`;
 
-function PackSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet}){
+function PackSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet,onSetChange}){
   const [s,setS]=useState(()=>presetSet&&sets.includes(presetSet)?presetSet:"");const [pack,setPack]=useState(null);const [hist,setHist]=useState([]);const [showImg,setShowImg]=useState(true);
   const [selectedGroup,setSelectedGroup]=useState(null);
   const pools=useMemo(()=>s?buildPools(rawData,s):null,[rawData,s]);
@@ -13385,7 +13389,7 @@ function PackSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSe
   const onCardClick = (c) => { const g = groupFromSimCard(c, rawData); if(g) setSelectedGroup(g); };
   return html`<div>
     <div class="row">
-      <${SetSel} val=${s} onChange=${v=>{setS(v);setPack(null);setHist([]);}} placeholder="Select a set..." sets=${sets}/>
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setPack(null);setHist([]);onSetChange&&onSetChange(v);}} placeholder="Select a set..." sets=${sets}/>
       <button onClick=${open} disabled=${!s} class=${s?"active":""}>${hist.length===0?"Open pack":"Open another"}</button>
       ${hist.length>0&&html`<button onClick=${()=>{setPack(null);setHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
       <label style=${{display:"flex",alignItems:"center",gap:5,fontSize:12,cursor:"pointer",color:"var(--text-dim)",marginLeft:6}}><input type="checkbox" checked=${showImg} onChange=${e=>setShowImg(e.target.checked)}/> Show images</label>
@@ -13419,7 +13423,7 @@ function Histogram({data}){
     <div class="muted" style=${{fontSize:11,marginTop:4}}>Dark = near mean (${fmt(data.mean)}). ${((data.totals.filter(t=>t>=100).length/data.n)*100).toFixed(1)}% of boxes hit $100+.</div></div>`;
 }
 
-function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet,onOpenOdds}){
+function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet,onSetChange,onOpenOdds}){
   const [s,setS]=useState(()=>presetSet&&sets.includes(presetSet)?presetSet:"");const [res,setRes]=useState(null);const [boxHist,setBoxHist]=useState([]);
   const [selectedGroup,setSelectedGroup]=useState(null);
   const openBestPull = () => { if(!res?.best) return; const g = groupFromSimCard(res.best, rawData); if(g) setSelectedGroup(g); };
@@ -13437,7 +13441,7 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
   };
   return html`<div>
     <div class="row">
-      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);}} placeholder="Select a set..." sets=${sets}/>
+      <${SetSel} val=${s} onChange=${v=>{setS(v);setRes(null);setBoxHist([]);onSetChange&&onSetChange(v);}} placeholder="Select a set..." sets=${sets}/>
       <button onClick=${openBox} disabled=${!s} class=${s?"active":""}>${boxHist.length===0?"Open a box":"Open another"}</button>
       ${boxHist.length>0&&html`<button onClick=${()=>{setRes(null);setBoxHist([]);}} style=${{color:"var(--text-muted)",border:"1px solid var(--border)"}}>Reset</button>`}
     </div>
@@ -22666,7 +22670,7 @@ function MarketExplainer({id, children}){
 
 // Monte Carlo box simulator — the Simulator's "Odds" mode. Runs N box
 // openings and renders the EV distribution histogram plus summary stats.
-function MonteCarloView({rawData, sets, theme, presetSet}){
+function MonteCarloView({rawData, sets, theme, presetSet, onSetChange}){
   const [s, setS] = useState(()=>presetSet&&sets.includes(presetSet)?presetSet:"");
   const [n, setN] = useState(1000);
   const [running, setRunning] = useState(false);
@@ -22701,7 +22705,7 @@ function MonteCarloView({rawData, sets, theme, presetSet}){
       <strong>What this does:</strong> simulates opening thousands of booster boxes in seconds — drawing each card with realistic pull rates — and plots the distribution of total box EV. Reading the histogram: the dark bar is near the mean; the tail shows how often a box prints money (and how often it bricks).
     <//>
     <div class="row">
-      <${SetSel} val=${s} onChange=${v=>{ setS(v); setDist(null); }} placeholder="Select a set..." sets=${sets}/>
+      <${SetSel} val=${s} onChange=${v=>{ setS(v); setDist(null); onSetChange&&onSetChange(v); }} placeholder="Select a set..." sets=${sets}/>
       <select value=${n} onChange=${e=>setN(+e.target.value)} style=${{width:160}}>
         ${[100,500,1000,5000].map(v=>html`<option key=${v} value=${v}>${v.toLocaleString()} boxes</option>`)}
       </select>
@@ -25299,7 +25303,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
                     excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
                     user, collection, updateQty, onSignIn, openSetHistory, sealedPrices,
                     incomingTradeToken, incomingTradeBlob, sub, setSub,
-                    eloPinned, setEloPinned}){
+                    eloPinned, setEloPinned, openScreenerSealed}){
   // When the user has pinned the Chicagoland Lorcana Elo leaderboard, show it
   // as the rightmost sub-tab. Stays hidden for everyone else (but the
   // ?a=elo deep link still works via MARKET_SUBS).
@@ -25329,10 +25333,13 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     catch { return "avg"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:market:avgMetric", avgMetric); } catch {} }, [avgMetric]);
-  // EV row → Simulator handoff: preselect the clicked set and land on Box mode.
-  const [simPreset, setSimPreset] = useState(null);
+  // One shared set selection across the Simulator's three modes — switching
+  // Pack ↔ Box ↔ Odds remounts the mode component, which re-reads this in
+  // its useState initializer, so the picked set survives the switch. Also the
+  // EV row → Simulator handoff target (preselect the set, land on Box mode).
+  const [simSet, setSimSet] = useState(null);
   const simulateSet = useCallback((setName)=>{
-    setSimPreset(setName);
+    setSimSet(setName);
     setSimKind("box");
     setSub("sim");
   }, [setSub]);
@@ -25360,6 +25367,9 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         class=${"market-subtab"+(sub===k?" active":"")}
         href=${"/analytics"+(k==="ev"?"":"?a="+k)}
         onClick=${navHandler(()=>setSub(k))}>${l}</a>`)}
+      ${openScreenerSealed && html`<a class="market-subtab market-subtab-ext" href="/screener"
+        title="Sealed product pricing lives in the Screener's Sealed mode now"
+        onClick=${navHandler(openScreenerSealed)}>Sealed ↗</a>`}
     </div>
     ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
@@ -25390,13 +25400,13 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         </div>
       <//>
       ${simKind==="pack" && html`<${PackSim} rawData=${raw} sets=${setsNewest} theme=${theme}
-        presetSet=${simPreset}
+        presetSet=${simSet} onSetChange=${setSimSet}
         user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
       ${simKind==="box"  && html`<${BoxSim} rawData=${raw} sets=${setsNewest} theme=${theme}
-        presetSet=${simPreset} onOpenOdds=${()=>setSimKind("bulk")}
+        presetSet=${simSet} onSetChange=${setSimSet} onOpenOdds=${()=>setSimKind("bulk")}
         user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
       ${simKind==="bulk" && html`<${MonteCarloView} rawData=${raw} sets=${setsNewest} theme=${theme}
-        presetSet=${simPreset}/>`}
+        presetSet=${simSet} onSetChange=${setSimSet}/>`}
     <//>`}
   </div>`;
 }
@@ -35366,17 +35376,23 @@ function App(){
     } catch {}
     return "ev";
   });
-  // Analytics' Sealed tab retired 2026-08-20 — the Screener's Sealed mode is
-  // its successor. Old /analytics?a=sealed links land there with the mode on.
-  useEffect(() => {
-    // Runs once; `view` here is the first-render value, so this only fires
-    // when the ?a=sealed link actually pointed at Analytics.
-    if(initialUrlParams.a !== "sealed" || view !== "market") return;
+  // Sealed pricing's canonical home is the Screener's Sealed mode (the
+  // Analytics Sealed tab retired 2026-08-20). Flips the mode flags before the
+  // Screener mounts, so its useState initializers pick them up. Used by the
+  // ?a=sealed redirect below and Analytics' "Sealed ↗" pointer chip.
+  const openScreenerSealed = useCallback(() => {
     try {
       localStorage.setItem("packsink:screener:showSealed", "1");
       localStorage.setItem("packsink:screener:showGraded", "0");
     } catch {}
     setView("screener");
+  }, []);
+  // Old /analytics?a=sealed links land on the Screener with the mode on.
+  useEffect(() => {
+    // Runs once; `view` here is the first-render value, so this only fires
+    // when the ?a=sealed link actually pointed at Analytics.
+    if(initialUrlParams.a !== "sealed" || view !== "market") return;
+    openScreenerSealed();
   }, []);
   const marketSubSynced = useRef(false);
   // Keep the URL pathname in sync with `view` so back/forward + reload +
@@ -35579,6 +35595,13 @@ function App(){
   const closeSectionTour = useCallback(() => {
     setActiveTour(v => { try { if(v) localStorage.setItem("packsink:sectionTourSeen:"+v, "1"); } catch {} return null; });
   }, []);
+  // A tour left open across a top-nav switch used to follow the user into the
+  // next view, where its selectors match nothing — spotlight gone, just a
+  // context-free floating card. Navigating away dismisses it WITHOUT marking
+  // the section seen, so it can still offer itself later.
+  useEffect(() => {
+    setActiveTour(v => (v && v !== view) ? null : v);
+  }, [view]);
   useEffect(() => {
     const onKey = (e) => {
       if(e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
@@ -37340,7 +37363,7 @@ function App(){
       incomingTradeToken=${initialUrlParams.tradeToken} incomingTradeBlob=${initialUrlParams.trade}
       sub=${marketSub} setSub=${setMarketSub}
       eloPinned=${eloPinned} setEloPinned=${setEloPinned}
-      openSetHistory=${openSetHistory}/>`}
+      openSetHistory=${openSetHistory} openScreenerSealed=${openScreenerSealed}/>`}
     ${viewsReady&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       onCompareCards=${startCompareCards}
