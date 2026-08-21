@@ -1390,11 +1390,12 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   prices change once a day (TCGCSV ~20:00 UTC, ETL 20:30, retries 22:30/01:00), so outside the
   window the page sleeps until 20:45 UTC, then re-checks every 30 min through 03:00 UTC to catch
   late publishes. Don't "simplify" it back to setInterval.
-- **The "powered by packs.ink" strip is REQUIRED** — a slim bottom row under the movers (22% of
-  `--tkt`, the total bar height; the movers row gets the rest as `--tkh`), always rendered, no
+- **The "powered by packs.ink" credit is REQUIRED** — flush bottom-RIGHT on the bar (a 22%-of-
+  `--tkt` bottom row with NO band or border, right padding `min(24px, 30% of --tkt)` so it hugs
+  the corner at any bar height; the movers row gets the rest as `--tkh`), always rendered, no
   param, no checkbox; the left cap (PACKS.INK stacked over the logo) is the optional one
   (`brand=0`). That attribution is the price of a free overlay riding our data — keep it. In
-  transparent mode the strip's band disappears and the credit sits in its own scrim pill.
+  transparent mode the credit sits in its own scrim pill.
 - **Double-clicking ticker.html from disk works** — that's how Zaven first tested it. Asset URLs
   are RELATIVE (file sits at site root, so they resolve the same at `/ticker` and on `file://`);
   on file:, card art hotlinks cards.lorcast.io directly (no /img-proxy route exists), the Copy URL
@@ -1412,15 +1413,18 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   seqWidth / speed so `speed` is true px/s at any bar height. Thumbnails get explicit
   `aspect-ratio:5/7` + height so layout doesn't shift as images load (the measured width feeds the
   animation). Re-measures on resize and `document.fonts.ready`.
-- Items render via `createElement` + `textContent` (card names are DB text — no innerHTML).
-  **Every foil printing badges as "COLD FOIL" below the name — never "Holofoil"/"Holo"**: TCGCSV's
-  Holofoil label covers what are physically cold-foil printings (see the holofoil-mislabel rule),
-  and Zaven explicitly wants the term gone from this surface. `bg=transparent` keeps a translucent
-  scrim on the brand cap and section headers so they stay readable over gameplay.
+- Items render via `createElement` + `textContent` (card names are DB text — no innerHTML), as a
+  3-line stack — name / version / rarity pill — with the price and its Δ%+arrow stacked to the
+  right. **The rarity pill says "· Foil" ONLY for base-rarity foil variants** (`tickerRarityLine`
+  owns the rule): chase rarities (Enchanted/Epic/Iconic/Promo) are inherently foil and never say
+  it, and "Holofoil"/"Holo" never appear on this surface (TCGCSV's Holofoil label covers what are
+  physically cold-foil printings — the holofoil-mislabel rule). `bg=transparent` keeps a
+  translucent scrim on the brand cap and section headers so they stay readable over gameplay.
 - **Guarded by `node scripts/test_ticker_query.mjs`** (extracts `parseTickerCfg` +
-  `buildTickerPlan` out of ticker.html, house pattern): section ordering + header text, window/
-  metric → real matview column names, group rarity filters, foil-toggle bypass shapes, both-mode
-  split, min=0 not-null guard, clamps. Run it after touching the config layer.
+  `buildTickerPlan` + `tickerRarityLine` out of ticker.html, house pattern): section ordering +
+  header text, window/metric → real matview column names, group rarity filters, foil-toggle
+  bypass shapes, the rarity-line foil rule, both-mode split, min=0 not-null guard, clamps. Run it
+  after touching the config layer.
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
   the bar, a nav/Toolbox entry (needs an Index.html touch — do it with a regular cache-bump batch).
 

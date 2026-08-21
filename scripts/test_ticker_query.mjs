@@ -16,8 +16,8 @@ if (start < 0 || end < 0) {
   process.exit(1);
 }
 const src = html.slice(start, end);
-const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs } = new Function(
-  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs};"
+const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine } = new Function(
+  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine};"
 )();
 
 let failures = 0;
@@ -108,6 +108,19 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("transparent bg", parseTickerCfg("?bg=transparent").transparent, true);
   const q = qs(buildTickerPlan(parseTickerCfg("?w=1w&g=all&min=0"))[0].requests[0]);
   check("min=0: not-null guard", q.market_today, "not.is.null");
+}
+
+// The rarity line says "· Foil" only for base-rarity foil variants — chase
+// rarities are inherently foil and must never say it.
+{
+  check("enchanted never says foil", tickerRarityLine("Enchanted", "Holofoil"), "Enchanted");
+  check("epic never says foil", tickerRarityLine("Epic", "Cold Foil"), "Epic");
+  check("promo never says foil", tickerRarityLine("Promo", "Holofoil"), "Promo");
+  check("super rare foil variant", tickerRarityLine("Super Rare", "Cold Foil"), "Super Rare · Foil");
+  check("legendary holofoil variant", tickerRarityLine("Legendary", "Holofoil"), "Legendary · Foil");
+  check("rare normal printing", tickerRarityLine("Rare", "Normal"), "Rare");
+  check("missing rarity, foil row", tickerRarityLine(null, "Cold Foil"), "Foil");
+  check("missing rarity, normal row", tickerRarityLine(null, "Normal"), "");
 }
 
 // Refresh scheduling follows the ETL clock: 30-min checks through the publish

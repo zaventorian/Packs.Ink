@@ -151,29 +151,33 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
 .tk-art{height:calc(var(--tkh)*0.72);aspect-ratio:5/7;width:auto;object-fit:cover;
   border-radius:calc(var(--tkh)*0.07);display:block;background:rgba(255,255,255,0.06);}
 .tk-stack{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
-  gap:calc(var(--tkh)*0.055);}
-.tk-name{font-weight:700;font-size:calc(var(--tkh)*0.28);white-space:nowrap;line-height:1;}
-.tk-ver{font-weight:400;opacity:0.62;}
-/* COLD FOIL badge sits BELOW the name (never "Holofoil" — TCGCSV's label for
-   what are physically cold-foil printings; see the holofoil-mislabel rule). */
-.tk-foil{font-size:calc(var(--tkh)*0.125);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;
+  gap:calc(var(--tkh)*0.05);}
+.tk-name{font-weight:700;font-size:calc(var(--tkh)*0.24);white-space:nowrap;line-height:1;}
+.tk-ver{font-weight:400;font-size:calc(var(--tkh)*0.16);opacity:0.62;white-space:nowrap;line-height:1;}
+/* Rarity pill, third line of the stack. "· Foil" suffix ONLY on base-rarity
+   foil variants — chase rarities (Enchanted / Epic / Iconic / Promo) are
+   inherently foil and never say it (tickerRarityLine owns the rule). */
+.tk-rar{font-size:calc(var(--tkh)*0.115);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;
   color:#d9b96c;border:1px solid rgba(217,185,108,0.55);border-radius:999px;
   padding:calc(var(--tkh)*0.022) calc(var(--tkh)*0.10);white-space:nowrap;line-height:1.25;}
-.tk-px{font-weight:700;font-size:calc(var(--tkh)*0.28);white-space:nowrap;line-height:1;opacity:0.94;}
-.tk-pct{font-weight:700;font-size:calc(var(--tkh)*0.25);white-space:nowrap;line-height:1;}
+/* Price with the Δ% stacked beneath it. */
+.tk-val{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
+  gap:calc(var(--tkh)*0.07);}
+.tk-px{font-weight:700;font-size:calc(var(--tkh)*0.25);white-space:nowrap;line-height:1;opacity:0.94;}
+.tk-pct{font-weight:700;font-size:calc(var(--tkh)*0.21);white-space:nowrap;line-height:1;}
 .tk-pct.up{color:#3fd68c;}
 .tk-pct.down{color:#ff5f6e;}
 .tk-dot{flex:0 0 auto;font-size:calc(var(--tkh)*0.14);opacity:0.28;line-height:1;}
-/* Bottom attribution row, below the movers. ALWAYS rendered — no param, no
-   checkbox: the left cap is optional, this strip is the required credit. */
-.tk-powrow{flex:0 0 calc(var(--tkt)*0.22);display:flex;align-items:center;justify-content:center;
-  position:relative;z-index:2;background:rgba(0,0,0,0.28);border-top:1px solid rgba(255,255,255,0.10);}
+/* Bottom attribution row, flush on the bar (no band — deliberate) and pinned
+   bottom-right. ALWAYS rendered — no param, no checkbox: the left cap is
+   optional, this credit is the required one. */
+.tk-powrow{flex:0 0 calc(var(--tkt)*0.22);display:flex;align-items:center;justify-content:flex-end;
+  padding:0 min(24px, calc(var(--tkt)*0.30));position:relative;z-index:2;}
 .tk-pow-inner{display:inline-flex;align-items:center;gap:max(4px,calc(var(--tkt)*0.05));
   font-size:max(8px,calc(var(--tkt)*0.105));font-weight:700;letter-spacing:0.16em;
   text-transform:uppercase;opacity:0.9;white-space:nowrap;line-height:1;}
 .tk-pow-inner b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.10em;font-weight:700;}
 .tk-pow-inner img{height:max(11px,calc(var(--tkt)*0.15));width:auto;display:block;}
-.tk-bar[data-transparent="1"] .tk-powrow{background:transparent;border-top:none;}
 .tk-bar[data-transparent="1"] .tk-pow-inner{background:rgba(13,10,26,0.82);border-radius:999px;
   padding:calc(var(--tkt)*0.025) calc(var(--tkt)*0.10);}
 .tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -444,6 +448,17 @@ function buildTickerPlan(cfg){
   return sections;
 }
 
+/* The item's third line: rarity, with a "· Foil" suffix ONLY when a
+   base-rarity card's row is the foil printing. Chase rarities (Enchanted /
+   Epic / Iconic / Promo) are inherently foil and never say it — Zaven's
+   explicit call after COLD FOIL badges showed up under Enchanteds. */
+function tickerRarityLine(rarity, printing){
+  const isFoil = !!printing && !TK_NONFOIL_PRINTINGS.includes(printing);
+  const sayFoil = isFoil && !TK_FOIL_BYPASS.includes(rarity);
+  if(!rarity) return sayFoil ? "Foil" : "";
+  return rarity + (sayFoil ? " · Foil" : "");
+}
+
 /* Prices change ONCE a day: TCGCSV publishes ~20:00 UTC and the ETL loads it
    at 20:30 UTC (~3:30 PM Central), with retry crons at 22:30 and 01:00. So
    instead of a dumb fixed interval, sleep until just after the daily load,
@@ -486,8 +501,6 @@ const fmtPct = (p) => {
   if(a >= 1000) return (p > 0 ? "+" : "") + Math.round(p / 100) + "x";
   return (p > 0 ? "+" : "") + p.toFixed(a >= 100 ? 0 : 1) + "%";
 };
-const isFoilPrinting = (printing) => !!printing && !TK_NONFOIL_PRINTINGS.includes(printing);
-
 let cfg = parseTickerCfg(location.search);
 let sections = [];
 let fetchSeq = 0;
@@ -502,6 +515,7 @@ function fetchRows(r){
   }).then(list => list.map(row => ({
     name: row.name,
     version: row.version,
+    rarity: row.rarity,
     printing: row.printing,
     img: lorcastToProxy(row.image_small),
     px: row[r.priceCol],
@@ -558,28 +572,32 @@ function itemEl(r){
   const nm = document.createElement("span");
   nm.className = "tk-name";
   nm.textContent = r.name || "";
+  stack.appendChild(nm);
   if(r.version){
     const v = document.createElement("span");
     v.className = "tk-ver";
-    v.textContent = " — " + r.version;
-    nm.appendChild(v);
+    v.textContent = r.version;
+    stack.appendChild(v);
   }
-  stack.appendChild(nm);
-  if(isFoilPrinting(r.printing)){
+  const rarLine = tickerRarityLine(r.rarity, r.printing);
+  if(rarLine){
     const f = document.createElement("span");
-    f.className = "tk-foil";
-    f.textContent = "Cold Foil";
+    f.className = "tk-rar";
+    f.textContent = rarLine;
     stack.appendChild(f);
   }
   item.appendChild(stack);
+  const val = document.createElement("span");
+  val.className = "tk-val";
   const px = document.createElement("span");
   px.className = "tk-px";
   px.textContent = fmtPx(r.px);
-  item.appendChild(px);
+  val.appendChild(px);
   const pc = document.createElement("span");
   pc.className = "tk-pct " + (r.pct >= 0 ? "up" : "down");
   pc.textContent = (r.pct >= 0 ? "▲ " : "▼ ") + fmtPct(r.pct).replace(/^[+-]/, "");
-  item.appendChild(pc);
+  val.appendChild(pc);
+  item.appendChild(val);
   const dot = document.createElement("span");
   dot.className = "tk-dot";
   dot.textContent = "◆";
