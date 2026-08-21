@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="aurora" data-mode="dark">
+<head>
+<script>
+/* Pre-paint theme boot — copied verbatim from Index.html so this standalone
+   page resolves the SAME saved theme and can't flash the wrong palette. */
+(function(){
+  try{
+    var LIGHT=["parchment","sunrise","watercolor","daydream"], DARK=["velvet","aurora","black"];
+    var mode=localStorage.getItem("packsink:themeMode");
+    var lt=localStorage.getItem("packsink:lightTheme"); if(LIGHT.indexOf(lt)<0) lt="parchment";
+    var dt=localStorage.getItem("packsink:darkTheme");  if(DARK.indexOf(dt)<0)  dt="aurora";
+    if(LIGHT.indexOf(mode)>=0) mode="light";
+    else if(DARK.indexOf(mode)>=0) mode="dark";
+    else if(mode!=="light"&&mode!=="dark"&&mode!=="system") mode="dark";
+    var resolved = mode==="light" ? lt : mode==="dark" ? dt
+      : ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? dt : lt);
+    var el=document.documentElement;
+    el.setAttribute("data-theme", resolved);
+    el.setAttribute("data-mode", DARK.indexOf(resolved)>=0 ? "dark" : "light");
+  }catch(e){}
+  /* Bar mode — ?bar=1 is the OBS Browser Source form: nothing but the ticker
+     strip, transparent page, every size keyed off the viewport height so the
+     streamer controls scale purely by sizing the source. The param is NOT
+     stripped: the URL is the configuration and must stay stable in OBS. */
+  try{
+    if(new URLSearchParams(location.search).get("bar")==="1"){
+      document.documentElement.setAttribute("data-bar","1");
+    }
+  }catch(e){}
+})();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Stream Ticker — Packs.Ink</title>
+<!-- Asset URLs are RELATIVE (not root-absolute) on purpose: ticker.html sits at
+     the repo/site root, so they resolve identically at /ticker AND when the
+     file is double-clicked from disk (file://) — which otherwise loses the
+     stylesheet and every logo. -->
+<link rel="icon" href="favicon-32.png?v=4">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+/* Configurator chrome uses styles.css tokens (tk- prefixed, scoped) so all
+   seven themes work. The BAR itself deliberately does NOT use tokens — it's a
+   stream overlay whose palette is param-driven and must look identical no
+   matter whose browser profile loads it. */
+.tk-app{max-width:1100px;margin:0 auto;}
+.tk-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+.tk-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
+.tk-brand img{height:34px;width:auto;display:block;}
+.tk-spacer{flex:1;min-width:0;}
+.tk-flag{font-family:'Cinzel',serif;font-size:9px;letter-spacing:1.2px;text-transform:uppercase;
+  border:1px solid var(--border-accent);color:var(--accent);border-radius:999px;padding:3px 9px;white-space:nowrap;}
+.tk-h1{font-family:'Cinzel',serif;font-size:1.25rem;font-weight:600;margin:0;letter-spacing:0.3px;}
+.tk-sub{color:var(--text-dim);font-size:12px;margin:2px 0 0;}
+
+.tk-layout{display:grid;grid-template-columns:340px minmax(0,1fr);gap:16px;align-items:start;margin-top:14px;}
+@media(max-width:900px){.tk-layout{grid-template-columns:minmax(0,1fr);}}
+.tk-card{background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:14px;}
+.tk-card h2{font-family:'Cinzel',serif;font-size:0.82rem;font-weight:600;text-transform:uppercase;
+  letter-spacing:1px;color:var(--text-dim);margin:0 0 12px;}
+.tk-field{margin-bottom:11px;}
+.tk-field > label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:0.6px;
+  color:var(--text-muted);margin-bottom:4px;font-weight:600;}
+.tk-field input[type=number],.tk-field input[type=text]{
+  width:100%;box-sizing:border-box;border:1px solid var(--btn-border);border-radius:6px;
+  padding:7px 9px;font-size:13px;background:var(--bg-solid);color:var(--text);
+  font-family:'Nunito Sans',sans-serif;}
+.tk-hint{font-size:10.5px;color:var(--text-muted);margin-top:3px;line-height:1.4;}
+.tk-row{display:flex;gap:8px;}
+.tk-row > *{flex:1;min-width:0;}
+.tk-seg{display:flex;border:1px solid var(--btn-border);border-radius:6px;overflow:hidden;}
+.tk-seg button{flex:1;border:none;border-radius:0;font-size:11.5px;padding:6px 4px;}
+.tk-seg button + button{border-left:1px solid var(--btn-border);}
+.tk-chips{display:flex;flex-wrap:wrap;gap:5px;}
+.tk-chips button{font-size:11px;padding:5px 10px;}
+/* Selected-state must be unmistakable — and hold up even with styles.css
+   missing (the page double-clicked from disk), so every rule carries a hard
+   fallback and out-!importants the site's .chip styling. */
+.tk-chips button,.tk-seg button{cursor:pointer;font-family:'Nunito Sans',sans-serif;}
+.tk-chips button{border:1px solid var(--btn-border,#8a8a8a);border-radius:999px;
+  background:var(--btn-bg,transparent);color:inherit;}
+.tk-chips button:not(.active),.tk-seg button:not(.active){opacity:0.5;font-weight:400;}
+.tk-chips button:not(.active):hover,.tk-seg button:not(.active):hover{opacity:0.85;}
+.tk-chips button.active,.tk-seg button.active{
+  background:var(--btn-active-bg,#31284d) !important;
+  color:var(--btn-active-text,#fff) !important;
+  border-color:var(--btn-active-border,#d9b96c) !important;
+  box-shadow:inset 0 0 0 1px var(--btn-active-border,#d9b96c);
+  opacity:1;font-weight:700;}
+.tk-chips button.active::before{content:"✓ ";}
+.tk-check{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-dim);margin-bottom:8px;cursor:pointer;}
+.tk-check input{accent-color:var(--accent);}
+.tk-colorrow{display:flex;align-items:center;gap:8px;}
+.tk-colorrow input[type=color]{width:42px;height:28px;padding:1px;border:1px solid var(--btn-border);
+  border-radius:6px;background:var(--bg-solid);}
+.tk-urlrow{display:flex;gap:8px;}
+.tk-urlrow input{flex:1;min-width:0;border:1px solid var(--btn-border);border-radius:6px;
+  padding:8px 9px;font-size:11.5px;background:var(--bg-solid);color:var(--text-dim);font-family:monospace;}
+.tk-copy{font-family:'Cinzel',serif;font-size:12px;font-weight:600;letter-spacing:0.4px;padding:8px 16px;
+  background:var(--btn-active-bg);color:var(--btn-active-text);border-color:var(--btn-active-border);white-space:nowrap;}
+.tk-copy:hover{filter:brightness(1.08);}
+.tk-steps{margin:0;padding-left:18px;font-size:12.5px;color:var(--text-dim);line-height:1.7;}
+.tk-steps b{color:var(--text);font-weight:600;}
+.tk-note{margin-top:10px;padding-top:9px;border-top:1px solid var(--border);
+  font-size:10.5px;color:var(--text-muted);line-height:1.5;}
+.tk-count{font-size:11px;color:var(--text-muted);margin-top:6px;}
+
+/* ───────── The bar (shared by preview + OBS mode) ───────── */
+/* --tkt is the TOTAL bar height (what the OBS source sets); the movers row
+   gets --tkh = 78% of it and the required powered-by strip the rest. Every
+   inner dimension keys off those, so the 72px preview and a 100vh OBS source
+   render identically. */
+.tk-barwrap{border-radius:10px;overflow:hidden;border:1px solid var(--border);}
+.tk-bar{--tkt:72px;--tkh:calc(var(--tkt)*0.78);height:var(--tkt);position:relative;overflow:hidden;
+  display:flex;flex-direction:column;
+  font-family:'Nunito Sans',sans-serif;background:var(--tk-bg,#171226);color:var(--tk-fg,#f2eefc);}
+.tk-main{flex:1;min-height:0;display:flex;align-items:stretch;}
+/* Left cap: PACKS.INK with the logo stacked under it. */
+.tk-cap{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:calc(var(--tkh)*0.07);padding:0 calc(var(--tkh)*0.26);position:relative;z-index:2;
+  background:var(--tk-bg,#171226);border-right:1px solid rgba(255,255,255,0.12);}
+.tk-bar[data-transparent="1"] .tk-cap{background:rgba(13,10,26,0.82);}
+.tk-cap img{height:calc(var(--tkh)*0.42);width:auto;display:block;}
+.tk-cap-name{font-family:'Cinzel',serif;font-weight:700;font-size:calc(var(--tkh)*0.195);
+  letter-spacing:0.08em;color:#d9b96c;line-height:1;white-space:nowrap;}
+.tk-scroll{flex:1;min-width:0;overflow:hidden;display:flex;align-items:stretch;}
+.tk-rail{display:flex;align-items:center;height:100%;width:max-content;
+  animation:tkscroll var(--tk-dur,80s) linear infinite;}
+@keyframes tkscroll{to{transform:translateX(var(--tk-shift,-2000px));}}
+/* Hover-pause is a configurator affordance only — OBS never hovers. */
+html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
+.tk-seq{display:flex;align-items:center;height:100%;flex:0 0 auto;}
+/* In-reel section header: "1D Risers" with the rarity group under it. */
+.tk-sec{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;flex:0 0 auto;
+  gap:calc(var(--tkh)*0.06);margin:0 calc(var(--tkh)*0.10) 0 calc(var(--tkh)*0.26);
+  padding:calc(var(--tkh)*0.08) calc(var(--tkh)*0.24);
+  border-left:calc(var(--tkh)*0.045) solid #d9b96c;}
+.tk-bar[data-transparent="1"] .tk-sec{background:rgba(13,10,26,0.82);
+  border-radius:0 calc(var(--tkh)*0.10) calc(var(--tkh)*0.10) 0;}
+.tk-sec-title{font-family:'Cinzel',serif;font-weight:700;font-size:calc(var(--tkh)*0.235);
+  color:#d9b96c;letter-spacing:0.08em;text-transform:uppercase;line-height:1.05;white-space:nowrap;}
+.tk-sec-sub{font-size:calc(var(--tkh)*0.16);font-weight:700;letter-spacing:0.14em;
+  text-transform:uppercase;opacity:0.68;line-height:1.05;white-space:nowrap;}
+.tk-item{display:flex;align-items:center;gap:calc(var(--tkh)*0.14);flex:0 0 auto;
+  padding:0 calc(var(--tkh)*0.22);}
+.tk-art{height:calc(var(--tkh)*0.72);aspect-ratio:5/7;width:auto;object-fit:cover;
+  border-radius:calc(var(--tkh)*0.07);display:block;background:rgba(255,255,255,0.06);}
+.tk-stack{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
+  gap:calc(var(--tkh)*0.05);}
+.tk-name{font-weight:700;font-size:calc(var(--tkh)*0.24);white-space:nowrap;line-height:1;}
+.tk-ver{font-weight:400;font-size:calc(var(--tkh)*0.16);opacity:0.62;white-space:nowrap;line-height:1;}
+/* Rarity pill, third line of the stack. "· Foil" suffix ONLY on base-rarity
+   foil variants — chase rarities (Enchanted / Epic / Iconic / Promo) are
+   inherently foil and never say it (tickerRarityLine owns the rule). */
+.tk-rar{font-size:calc(var(--tkh)*0.115);font-weight:700;letter-spacing:0.1em;text-transform:uppercase;
+  color:#d9b96c;border:1px solid rgba(217,185,108,0.55);border-radius:999px;
+  padding:calc(var(--tkh)*0.022) calc(var(--tkh)*0.10);white-space:nowrap;line-height:1.25;}
+/* Price with the Δ% stacked beneath it. */
+.tk-val{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
+  gap:calc(var(--tkh)*0.07);}
+.tk-px{font-weight:700;font-size:calc(var(--tkh)*0.25);white-space:nowrap;line-height:1;opacity:0.94;}
+.tk-pct{font-weight:700;font-size:calc(var(--tkh)*0.21);white-space:nowrap;line-height:1;}
+.tk-pct.up{color:#3fd68c;}
+.tk-pct.down{color:#ff5f6e;}
+.tk-dot{flex:0 0 auto;font-size:calc(var(--tkh)*0.14);opacity:0.28;line-height:1;}
+/* Bottom attribution row, flush on the bar (no band — deliberate) and pinned
+   bottom-right. ALWAYS rendered — no param, no checkbox: the left cap is
+   optional, this credit is the required one. */
+.tk-powrow{flex:0 0 calc(var(--tkt)*0.22);display:flex;align-items:center;justify-content:flex-end;
+  padding:0 min(24px, calc(var(--tkt)*0.30));position:relative;z-index:2;}
+.tk-pow-inner{display:inline-flex;align-items:center;gap:max(4px,calc(var(--tkt)*0.05));
+  font-size:max(8px,calc(var(--tkt)*0.105));font-weight:700;letter-spacing:0.16em;
+  text-transform:uppercase;opacity:0.9;white-space:nowrap;line-height:1;}
+.tk-pow-inner b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.10em;font-weight:700;}
+.tk-pow-inner img{height:max(11px,calc(var(--tkt)*0.15));width:auto;display:block;}
+.tk-bar[data-transparent="1"] .tk-pow-inner{background:rgba(13,10,26,0.82);border-radius:999px;
+  padding:calc(var(--tkt)*0.025) calc(var(--tkt)*0.10);}
+.tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  font-size:calc(var(--tkh)*0.24);opacity:0.55;z-index:1;}
+
+/* ───────── OBS bar mode ───────── */
+/* styles.css paints the page for the configurator; in bar mode every page-level
+   surface goes transparent so an oversized OBS source shows the stream, not a
+   colored rectangle, and the bar fills whatever box the source gives it. */
+html[data-bar="1"], html[data-bar="1"] body{background:transparent !important;}
+html[data-bar="1"] body{max-width:none;padding:0;margin:0;min-height:0;}
+html[data-bar="1"] body::before{display:none !important;}
+html[data-bar="1"] .tk-app > :not(.tk-barwrap){display:none;}
+html[data-bar="1"] .tk-app{max-width:none;margin:0;}
+html[data-bar="1"] .tk-barwrap{border:none;border-radius:0;overflow:visible;}
+html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
+</style>
+</head>
+<body>
+<div class="tk-app">
+
+<div class="tk-top">
+  <a class="tk-brand" href="https://packs.ink/" title="Back to Packs.Ink">
+    <img src="Logos/packs-ink-logo.png" alt="Packs.Ink">
+  </a>
+  <div>
+    <h1 class="tk-h1">Stream Ticker</h1>
+    <p class="tk-sub">Top movers as a scrolling overlay bar for OBS / streams</p>
+  </div>
+  <div class="tk-spacer"></div>
+  <span class="tk-flag">Stream overlay</span>
+</div>
+
+<div class="tk-barwrap">
+  <div class="tk-bar" id="bar">
+    <div class="tk-main">
+      <div class="tk-cap" id="cap">
+        <span class="tk-cap-name">packs.ink</span>
+        <img src="Logos/logo%20transparent.png" alt="">
+      </div>
+      <div class="tk-scroll"><div class="tk-rail" id="rail"></div></div>
+    </div>
+    <div class="tk-powrow" title="Live Lorcana prices — packs.ink">
+      <span class="tk-pow-inner"><span>powered by</span><b>packs.ink</b><img src="Logos/logo%20transparent.png" alt=""></span>
+    </div>
+    <div class="tk-msg" id="msg">loading movers…</div>
+  </div>
+</div>
+<div class="tk-count" id="rowCount"></div>
+
+<div class="tk-layout">
+
+  <aside>
+    <div class="tk-card">
+      <h2>What's in the reel</h2>
+
+      <div class="tk-field">
+        <label>Time frames — cycles in this order</label>
+        <div class="tk-chips" id="chipsWin"></div>
+        <div class="tk-hint">Each frame gets its own section in the reel, introduced by a "1D Risers"-style header.</div>
+      </div>
+
+      <div class="tk-field">
+        <label>Rarity groups — one section each</label>
+        <div class="tk-chips" id="chipsGrp"></div>
+      </div>
+
+      <div class="tk-field">
+        <label>Printings</label>
+        <div class="tk-chips" id="chipsFoil"></div>
+        <div class="tk-hint">Chase rarities (Enchanted / Epic / Iconic / Promo) only exist one way, so they ignore this — same rule as the Screener.</div>
+      </div>
+
+      <div class="tk-field">
+        <label>Direction</label>
+        <div class="tk-seg" id="segDir"></div>
+      </div>
+
+      <div class="tk-field">
+        <label>Price basis</label>
+        <div class="tk-seg" id="segMetric"></div>
+        <div class="tk-hint">NM Market is the honest read for short windows — Low is the cheapest active listing and can sit frozen for weeks.</div>
+      </div>
+
+      <div class="tk-row">
+        <div class="tk-field">
+          <label>Cards per section</label>
+          <input type="number" id="inCount" min="3" max="60" step="1">
+        </div>
+        <div class="tk-field">
+          <label>Min price $</label>
+          <input type="number" id="inMin" min="0" max="500" step="0.5">
+        </div>
+      </div>
+      <div class="tk-hint" style="margin-top:-6px;margin-bottom:11px;">A price floor keeps 10¢ cards' +300% "moves" out of the bar.</div>
+    </div>
+
+    <div class="tk-card">
+      <h2>Look &amp; motion</h2>
+      <div class="tk-field">
+        <label>Scroll speed <span id="speedVal" style="text-transform:none;letter-spacing:0;"></span></label>
+        <input type="range" id="inSpeed" min="15" max="200" step="5" style="width:100%;">
+      </div>
+      <label class="tk-check"><input type="checkbox" id="ckImg"> Card art thumbnails</label>
+      <label class="tk-check"><input type="checkbox" id="ckBrand"> packs.ink cap on the left</label>
+      <label class="tk-check"><input type="checkbox" id="ckTransparent"> Transparent bar (stream shows through)</label>
+      <div class="tk-row" style="margin-top:4px;">
+        <div class="tk-field">
+          <label>Bar color</label>
+          <div class="tk-colorrow"><input type="color" id="inBg"></div>
+        </div>
+        <div class="tk-field">
+          <label>Text color</label>
+          <div class="tk-colorrow"><input type="color" id="inFg"></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main>
+    <div class="tk-card">
+      <h2>Your overlay URL</h2>
+      <div class="tk-urlrow">
+        <input type="text" id="urlOut" readonly spellcheck="false">
+        <button class="tk-copy" id="btnCopy">Copy URL</button>
+      </div>
+      <div class="tk-hint" style="margin-top:8px;">The URL carries every setting above — paste it into OBS once and it's set. Prices update once a day (~3:30 PM Chicago); the bar re-checks once daily at 5:00 PM Chicago, so a long stream picks the new numbers up automatically.</div>
+    </div>
+
+    <div class="tk-card">
+      <h2>Add it to OBS</h2>
+      <ol class="tk-steps">
+        <li>In OBS: <b>Sources → + → Browser</b>.</li>
+        <li>Paste the URL above. Set <b>Width 1920</b>, <b>Height 80</b> (any height works — the bar scales to fit; taller = bigger text).</li>
+        <li>Drag it to the bottom of your scene. Done — it scrolls and refreshes on its own.</li>
+      </ol>
+      <div class="tk-note">Works in Streamlabs and any browser-source overlay the same way. Tip: turn on "Transparent bar" above if you want your gameplay showing through behind the text.</div>
+    </div>
+
+    <div class="tk-card">
+      <h2>Where the numbers come from</h2>
+      <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:0;">
+        Same data as the Packs.Ink Screener: TCGplayer prices for every Lorcana card, updated daily.
+        The reel cycles through your selected time frames, and within each, your rarity groups —
+        every section ranked biggest % move first. "NM Market" is TCGplayer's Near-Mint market
+        price; "Low" is the lowest active listing in any condition.
+      </p>
+    </div>
+  </main>
+
+</div>
+</div>
+
+<script>
+"use strict";
+
+/* ─────────────────────────── pure config layer ───────────────────────────
+   parseTickerCfg + buildTickerPlan are extracted verbatim by
+   scripts/test_ticker_query.mjs — keep them dependency-free and side-effect
+   free, and keep the end marker below. */
+
+const TK_WINDOWS = [
+  {key:"1d", label:"1D", col:"_1d"},
+  {key:"1w", label:"1W", col:"_7d"},
+  {key:"1m", label:"1M", col:"_30d"},
+  {key:"3m", label:"3M", col:"_90d"},
+  {key:"6m", label:"6M", col:"_180d"},
+  {key:"1y", label:"1Y", col:"_365d"},
+];
+/* Mirrors the home movers banners: Chase, Rare–Legendary, Promos. */
+const TK_GROUPS = [
+  {key:"chase",   label:"Chase",            detail:"Enchanted · Epic · Iconic",     rarities:["Enchanted","Epic","Iconic"]},
+  {key:"rareleg", label:"Rare – Legendary", detail:"Rare · Super Rare · Legendary", rarities:["Rare","Super Rare","Legendary"]},
+  {key:"promo",   label:"Promos",           detail:"Promo rarity",                  rarities:["Promo"]},
+  {key:"all",     label:"All Rarities",     detail:"Every rarity",                  rarities:null},
+];
+const TK_FOIL_PRINTINGS = ["Cold Foil","Holofoil","Foil"];
+const TK_NONFOIL_PRINTINGS = ["Normal","Non-Foil"];
+/* Single-printing rarities bypass the foil filter — same rule as the Screener,
+   otherwise "non-foil only" silently empties every chase section. */
+const TK_FOIL_BYPASS = ["Enchanted","Epic","Iconic","Promo"];
+const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"mkt", dir:"up", count:15,
+  min:5, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
+  transparent:false};
+
+function parseTickerCfg(search){
+  const q = new URLSearchParams(search || "");
+  const cfg = Object.assign({}, TK_DEFAULTS, {wins: TK_DEFAULTS.wins.slice(), groups: TK_DEFAULTS.groups.slice()});
+  const csv = (key) => (q.get(key) || "").split(",").map(s => s.trim().toLowerCase()).filter(Boolean);
+  // Selections keep CANONICAL order (1D before 1W, chase before rare–leg)
+  // regardless of param order — the reel cycle is predictable, the param a set.
+  const wins = csv("w");
+  const wsel = TK_WINDOWS.map(w => w.key).filter(k => wins.includes(k));
+  if(wsel.length) cfg.wins = wsel;
+  const groups = csv("g");
+  const gsel = TK_GROUPS.map(g => g.key).filter(k => groups.includes(k));
+  if(gsel.length) cfg.groups = gsel;
+  const m = (q.get("m") || "").toLowerCase();
+  if(m === "low" || m === "mkt") cfg.metric = m;
+  const dir = (q.get("dir") || "").toLowerCase();
+  if(dir === "up" || dir === "down" || dir === "both") cfg.dir = dir;
+  const n = parseInt(q.get("n"), 10);
+  if(Number.isFinite(n)) cfg.count = Math.max(3, Math.min(60, n));
+  const min = parseFloat(q.get("min"));
+  if(Number.isFinite(min)) cfg.min = Math.max(0, Math.min(500, min));
+  if(q.get("foil") === "0") cfg.foil = false;
+  if(q.get("nf") === "0") cfg.nonfoil = false;
+  if(!cfg.foil && !cfg.nonfoil){ cfg.foil = true; cfg.nonfoil = true; }
+  if(q.get("img") === "0") cfg.img = false;
+  if(q.get("brand") === "0") cfg.brand = false;
+  const sp = parseFloat(q.get("speed"));
+  if(Number.isFinite(sp)) cfg.speed = Math.max(15, Math.min(200, sp));
+  const hex = /^[0-9a-f]{6}$/i;
+  if(q.get("bg") === "transparent") cfg.transparent = true;
+  else if(hex.test(q.get("bg") || "")) cfg.bg = "#" + q.get("bg").toLowerCase();
+  if(hex.test(q.get("fg") || "")) cfg.fg = "#" + q.get("fg").toLowerCase();
+  return cfg;
+}
+
+/* The printing filter for one group, honoring the chase bypass. Returns a
+   {key, val} query pair or null when no filter applies. */
+function tickerPrintingFilter(group, cfg){
+  if(cfg.foil === cfg.nonfoil) return null;
+  const keep = cfg.foil ? TK_FOIL_PRINTINGS : TK_NONFOIL_PRINTINGS;
+  const inList = (arr) => 'in.(' + arr.map(v => '"' + v + '"').join(",") + ')';
+  const bypass = group.rarities
+    ? group.rarities.filter(r => TK_FOIL_BYPASS.includes(r))
+    : TK_FOIL_BYPASS.slice();
+  if(group.rarities && bypass.length === group.rarities.length) return null;
+  if(!bypass.length) return {key: "printing", val: inList(keep)};
+  return {key: "or", val: "(printing." + inList(keep) + ",rarity." + inList(bypass) + ")"};
+}
+
+/* The reel plan: one section per (window × group), each with one PostgREST
+   query per direction — sorted and limited server-side so the page never pulls
+   the full 5.8k-row matview onto a stream machine. */
+function buildTickerPlan(cfg){
+  const dirs = cfg.dir === "both" ? ["up", "down"] : [cfg.dir];
+  const per = cfg.dir === "both" ? Math.max(3, Math.ceil(cfg.count / 2)) : cfg.count;
+  const pcPrefix = cfg.metric === "low" ? "pct" : "mkt_pct";
+  const priceCol = cfg.metric === "low" ? "low_today" : "market_today";
+  const dirWord = cfg.dir === "up" ? "Risers" : cfg.dir === "down" ? "Fallers" : "Movers";
+  const sections = [];
+  for(const win of TK_WINDOWS.filter(w => cfg.wins.includes(w.key))){
+    const pctCol = pcPrefix + win.col;
+    for(const group of TK_GROUPS.filter(g => cfg.groups.includes(g.key))){
+      const requests = dirs.map(dir => {
+        const q = new URLSearchParams();
+        q.set("select", "card_id,name,version,rarity,printing,image_small," + priceCol + "," + pctCol);
+        q.set(pctCol, dir === "up" ? "gt.0" : "lt.0");
+        if(cfg.min > 0) q.set(priceCol, "gte." + cfg.min);
+        else q.set(priceCol, "not.is.null");
+        if(group.rarities){
+          q.set("rarity", group.rarities.length === 1
+            ? "eq." + group.rarities[0]
+            : "in.(" + group.rarities.map(r => '"' + r + '"').join(",") + ")");
+        }
+        const pf = tickerPrintingFilter(group, cfg);
+        if(pf) q.set(pf.key, pf.val);
+        q.set("order", pctCol + (dir === "up" ? ".desc" : ".asc"));
+        q.set("limit", String(per));
+        return {dir, pctCol, priceCol, qs: q.toString()};
+      });
+      sections.push({win: win.key, title: win.label + " " + dirWord,
+        group: group.key, sub: group.label, detail: group.detail, requests});
+    }
+  }
+  return sections;
+}
+
+/* The item's third line: rarity, with a "· Foil" suffix ONLY when a
+   base-rarity card's row is the foil printing. Chase rarities (Enchanted /
+   Epic / Iconic / Promo) are inherently foil and never say it — Zaven's
+   explicit call after COLD FOIL badges showed up under Enchanteds. */
+function tickerRarityLine(rarity, printing){
+  const isFoil = !!printing && !TK_NONFOIL_PRINTINGS.includes(printing);
+  const sayFoil = isFoil && !TK_FOIL_BYPASS.includes(rarity);
+  if(!rarity) return sayFoil ? "Foil" : "";
+  return rarity + (sayFoil ? " · Foil" : "");
+}
+
+/* Prices change ONCE a day (ETL 20:30 UTC ≈ 3:30 PM Chicago), so the bar
+   re-checks exactly once daily at 5:00 PM America/Chicago — safely after the
+   load, per Zaven. Intl supplies Chicago's wall clock so DST is handled; the
+   wall-clock delta is applied as real seconds, which is only off across the
+   two 2 AM transition nights a year, and the next wake self-corrects. The
+   page still fetches immediately on open — this governs re-checks only. */
+function nextTickerRefreshMs(now){
+  const parts = new Intl.DateTimeFormat("en-US", {timeZone: "America/Chicago",
+    hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit"}).formatToParts(now);
+  const get = (t) => +parts.find(p => p.type === t).value;
+  const sinceMidnight = (get("hour") % 24) * 3600 + get("minute") * 60 + get("second");
+  let wait = 17 * 3600 - sinceMidnight;
+  if(wait <= 0) wait += 24 * 3600;
+  return Math.max(60, wait) * 1000;
+}
+/* ── end pure config layer ── */
+
+const SB_URL = "https://umwqowkiatjjltologrd.supabase.co";
+const SB_KEY = "sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0";
+const RETRY_MS = 60 * 1000;
+
+const $ = (id) => document.getElementById(id);
+const BAR_MODE = document.documentElement.getAttribute("data-bar") === "1";
+const IS_FILE = location.protocol === "file:";
+// Copied overlay URLs must always say packs.ink when the page itself was
+// opened from disk — a file:/// URL pasted into OBS breaks for anyone else.
+const TICKER_URL_BASE = IS_FILE ? "https://packs.ink/ticker" : location.origin + location.pathname;
+const lorcastToProxy = (url) => {
+  if(typeof url !== "string") return url;
+  // From disk there is no /img-proxy route — hotlink the CDN directly.
+  if(IS_FILE) return url;
+  if(url.startsWith("https://cards.lorcast.io/")) return "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
+  return url;
+};
+const fmtPx = (v) => {
+  if(v == null) return "—";
+  if(v >= 1000) return "$" + Math.round(v).toLocaleString("en-US");
+  return "$" + v.toFixed(2);
+};
+const fmtPct = (p) => {
+  if(p == null) return "—";
+  const a = Math.abs(p);
+  if(a >= 1000) return (p > 0 ? "+" : "") + Math.round(p / 100) + "x";
+  return (p > 0 ? "+" : "") + p.toFixed(a >= 100 ? 0 : 1) + "%";
+};
+let cfg = parseTickerCfg(location.search);
+let sections = [];
+let fetchSeq = 0;
+
+/* ───────── data ───────── */
+function fetchRows(r){
+  return fetch(SB_URL + "/rest/v1/price_movers?" + r.qs, {
+    headers: {apikey: SB_KEY, Authorization: "Bearer " + SB_KEY},
+  }).then(res => {
+    if(!res.ok) throw new Error("HTTP " + res.status);
+    return res.json();
+  }).then(list => list.map(row => ({
+    name: row.name,
+    version: row.version,
+    rarity: row.rarity,
+    printing: row.printing,
+    img: lorcastToProxy(row.image_small),
+    px: row[r.priceCol],
+    pct: row[r.pctCol],
+  })));
+}
+
+async function loadData(){
+  const seq = ++fetchSeq;
+  const plan = buildTickerPlan(cfg);
+  // Per-section settle: one failed query drops that section this round instead
+  // of blanking a bar that's live on someone's stream.
+  const results = await Promise.all(plan.map(sec =>
+    Promise.all(sec.requests.map(fetchRows))
+      .then(lists => ({sec, rows: lists.flat(), ok: true}))
+      .catch(() => ({sec, rows: [], ok: false}))
+  ));
+  if(seq !== fetchSeq) return;
+  const anyFail = results.some(r => !r.ok);
+  const filled = results.filter(r => r.rows.length)
+    .map(r => Object.assign({}, r.sec, {rows: r.rows}));
+  if(filled.length){
+    sections = filled;
+    renderStrip();
+  }else if(!sections.length){
+    $("msg").style.display = "";
+    $("msg").textContent = anyFail ? "couldn't load prices — retrying…" : "no movers match these filters";
+    $("rowCount").textContent = "";
+  }
+  if(anyFail) setTimeout(() => { if(seq === fetchSeq) loadData(); }, RETRY_MS);
+}
+let refreshT = null;
+function scheduleRefresh(){
+  clearTimeout(refreshT);
+  refreshT = setTimeout(() => { loadData(); scheduleRefresh(); }, nextTickerRefreshMs(new Date()));
+}
+scheduleRefresh();
+
+/* ───────── strip ───────── */
+function itemEl(r){
+  const item = document.createElement("span");
+  item.className = "tk-item";
+  if(cfg.img && r.img){
+    const im = document.createElement("img");
+    im.className = "tk-art";
+    im.src = r.img;
+    im.alt = "";
+    im.loading = "eager";
+    im.decoding = "async";
+    item.appendChild(im);
+  }
+  const stack = document.createElement("span");
+  stack.className = "tk-stack";
+  const nm = document.createElement("span");
+  nm.className = "tk-name";
+  nm.textContent = r.name || "";
+  stack.appendChild(nm);
+  if(r.version){
+    const v = document.createElement("span");
+    v.className = "tk-ver";
+    v.textContent = r.version;
+    stack.appendChild(v);
+  }
+  const rarLine = tickerRarityLine(r.rarity, r.printing);
+  if(rarLine){
+    const f = document.createElement("span");
+    f.className = "tk-rar";
+    f.textContent = rarLine;
+    stack.appendChild(f);
+  }
+  item.appendChild(stack);
+  const val = document.createElement("span");
+  val.className = "tk-val";
+  const px = document.createElement("span");
+  px.className = "tk-px";
+  px.textContent = fmtPx(r.px);
+  val.appendChild(px);
+  const pc = document.createElement("span");
+  pc.className = "tk-pct " + (r.pct >= 0 ? "up" : "down");
+  pc.textContent = (r.pct >= 0 ? "▲ " : "▼ ") + fmtPct(r.pct).replace(/^[+-]/, "");
+  val.appendChild(pc);
+  item.appendChild(val);
+  const dot = document.createElement("span");
+  dot.className = "tk-dot";
+  dot.textContent = "◆";
+  item.appendChild(dot);
+  return item;
+}
+
+function sectionHeaderEl(sec){
+  const h = document.createElement("span");
+  h.className = "tk-sec";
+  h.title = sec.detail;
+  const t = document.createElement("span");
+  t.className = "tk-sec-title";
+  t.textContent = sec.title;
+  h.appendChild(t);
+  const s = document.createElement("span");
+  s.className = "tk-sec-sub";
+  s.textContent = sec.sub;
+  h.appendChild(s);
+  return h;
+}
+
+function renderStrip(){
+  const rail = $("rail");
+  rail.innerHTML = "";
+  if(!sections.length){
+    $("msg").style.display = "";
+    $("msg").textContent = "no movers match these filters";
+    $("rowCount").textContent = "";
+    return;
+  }
+  $("msg").style.display = "none";
+  const seqEl = document.createElement("div");
+  seqEl.className = "tk-seq";
+  let total = 0;
+  sections.forEach(sec => {
+    seqEl.appendChild(sectionHeaderEl(sec));
+    sec.rows.forEach(r => { seqEl.appendChild(itemEl(r)); total++; });
+  });
+  rail.appendChild(seqEl);
+  $("rowCount").textContent = total + " cards · " + sections.length +
+    " section" + (sections.length === 1 ? "" : "s") + " in the loop · preview pauses on hover";
+  layoutStrip();
+}
+
+/* Duplicate the sequence until it spans ≥ 2 viewports, then translate by
+   exactly one sequence width — that's what makes the loop seamless. Duration
+   derives from width / speed so "speed" is real px/s at any bar height. */
+function layoutStrip(){
+  const rail = $("rail");
+  const first = rail.firstChild;
+  if(!first) return;
+  const w = first.getBoundingClientRect().width;
+  const vw = $("bar").clientWidth || 1;
+  if(!w) return;
+  const need = Math.max(2, Math.ceil((vw * 2) / w) + 1);
+  while(rail.children.length > need) rail.removeChild(rail.lastChild);
+  while(rail.children.length < need) rail.appendChild(first.cloneNode(true));
+  rail.style.setProperty("--tk-shift", (-w) + "px");
+  rail.style.setProperty("--tk-dur", (w / cfg.speed) + "s");
+  rail.style.animation = "none";
+  void rail.offsetWidth;
+  rail.style.animation = "";
+}
+
+let resizeT = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeT);
+  resizeT = setTimeout(layoutStrip, 200);
+});
+if(document.fonts && document.fonts.ready) document.fonts.ready.then(() => layoutStrip());
+
+/* ───────── bar cosmetics from cfg ───────── */
+function applyBarLook(){
+  const bar = $("bar");
+  bar.style.setProperty("--tk-bg", cfg.transparent ? "transparent" : cfg.bg);
+  bar.style.setProperty("--tk-fg", cfg.fg);
+  bar.dataset.transparent = cfg.transparent ? "1" : "0";
+  $("cap").style.display = cfg.brand ? "" : "none";
+}
+
+/* ═════════════ configurator (skipped entirely in bar mode) ═════════════ */
+function cfgToParams(c){
+  const q = new URLSearchParams();
+  if(c.wins.join(",") !== TK_DEFAULTS.wins.join(",")) q.set("w", c.wins.join(","));
+  if(c.groups.join(",") !== TK_DEFAULTS.groups.join(",")) q.set("g", c.groups.join(","));
+  if(!c.foil) q.set("foil", "0");
+  if(!c.nonfoil) q.set("nf", "0");
+  if(c.dir !== TK_DEFAULTS.dir) q.set("dir", c.dir);
+  if(c.metric !== TK_DEFAULTS.metric) q.set("m", c.metric);
+  if(c.count !== TK_DEFAULTS.count) q.set("n", String(c.count));
+  if(c.min !== TK_DEFAULTS.min) q.set("min", String(c.min));
+  if(!c.img) q.set("img", "0");
+  if(!c.brand) q.set("brand", "0");
+  if(c.speed !== TK_DEFAULTS.speed) q.set("speed", String(c.speed));
+  if(c.transparent) q.set("bg", "transparent");
+  else if(c.bg !== TK_DEFAULTS.bg) q.set("bg", c.bg.slice(1));
+  if(c.fg !== TK_DEFAULTS.fg) q.set("fg", c.fg.slice(1));
+  return q;
+}
+
+function initConfigUI(){
+  // Multi-select chip group where the LAST active chip can't turn off — an
+  // empty selection renders an empty reel whose only way back is the chip you
+  // just used to empty it (same invariant as the home movers banners).
+  const chipGroup = (host, options, isOn, toggle) => {
+    host.innerHTML = "";
+    options.forEach(o => {
+      const b = document.createElement("button");
+      b.textContent = o.label;
+      if(o.title) b.title = o.title;
+      b.className = "chip" + (isOn(o.value) ? " active" : "");
+      b.addEventListener("click", () => { toggle(o.value); syncUI(); onCfgChange(true); });
+      host.appendChild(b);
+    });
+  };
+  const toggleKey = (arr, key, canon) => {
+    if(arr.includes(key)) return arr.length > 1 ? arr.filter(k => k !== key) : arr;
+    return canon.filter(k => arr.includes(k) || k === key);
+  };
+  const seg = (host, options, get, set) => {
+    host.innerHTML = "";
+    options.forEach(o => {
+      const b = document.createElement("button");
+      b.textContent = o.label;
+      b.className = get() === o.value ? "active" : "";
+      b.addEventListener("click", () => { set(o.value); syncUI(); onCfgChange(true); });
+      host.appendChild(b);
+    });
+  };
+  function syncUI(){
+    chipGroup($("chipsWin"), TK_WINDOWS.map(w => ({label: w.label, value: w.key})),
+      v => cfg.wins.includes(v),
+      v => cfg.wins = toggleKey(cfg.wins, v, TK_WINDOWS.map(w => w.key)));
+    chipGroup($("chipsGrp"), TK_GROUPS.map(g => ({label: g.label, value: g.key, title: g.detail})),
+      v => cfg.groups.includes(v),
+      v => cfg.groups = toggleKey(cfg.groups, v, TK_GROUPS.map(g => g.key)));
+    chipGroup($("chipsFoil"), [{label:"Non-Foil",value:"nonfoil"},{label:"Cold Foil",value:"foil"}],
+      v => cfg[v],
+      v => { const other = v === "foil" ? "nonfoil" : "foil";
+             if(cfg[v] && !cfg[other]) return; cfg[v] = !cfg[v]; });
+    seg($("segDir"), [{label:"Risers",value:"up"},{label:"Fallers",value:"down"},{label:"Both",value:"both"}], () => cfg.dir, v => cfg.dir = v);
+    seg($("segMetric"), [{label:"NM Market",value:"mkt"},{label:"Low",value:"low"}], () => cfg.metric, v => cfg.metric = v);
+    $("inCount").value = cfg.count;
+    $("inMin").value = cfg.min;
+    $("inSpeed").value = cfg.speed;
+    $("speedVal").textContent = "· " + cfg.speed + " px/s";
+    $("ckImg").checked = cfg.img;
+    $("ckBrand").checked = cfg.brand;
+    $("ckTransparent").checked = cfg.transparent;
+    $("inBg").value = cfg.bg;
+    $("inBg").disabled = cfg.transparent;
+    $("inFg").value = cfg.fg;
+  }
+  $("inCount").addEventListener("change", () => {
+    cfg.count = Math.max(3, Math.min(60, parseInt($("inCount").value, 10) || TK_DEFAULTS.count));
+    syncUI(); onCfgChange(true);
+  });
+  $("inMin").addEventListener("change", () => {
+    cfg.min = Math.max(0, Math.min(500, parseFloat($("inMin").value) || 0));
+    syncUI(); onCfgChange(true);
+  });
+  $("inSpeed").addEventListener("input", () => {
+    cfg.speed = parseInt($("inSpeed").value, 10) || TK_DEFAULTS.speed;
+    $("speedVal").textContent = "· " + cfg.speed + " px/s";
+    onCfgChange(false);
+    layoutStrip();
+  });
+  $("ckImg").addEventListener("change", () => { cfg.img = $("ckImg").checked; onCfgChange(false); renderStrip(); });
+  $("ckBrand").addEventListener("change", () => { cfg.brand = $("ckBrand").checked; onCfgChange(false); applyBarLook(); layoutStrip(); });
+  $("ckTransparent").addEventListener("change", () => { cfg.transparent = $("ckTransparent").checked; syncUI(); onCfgChange(false); applyBarLook(); });
+  $("inBg").addEventListener("input", () => { cfg.bg = $("inBg").value; onCfgChange(false); applyBarLook(); });
+  $("inFg").addEventListener("input", () => { cfg.fg = $("inFg").value; onCfgChange(false); applyBarLook(); });
+  syncUI();
+}
+
+/* refetch=true when the change alters the queries (windows/groups/printings/
+   direction/basis/count/min); cosmetic changes just rebuild the strip locally. */
+let fetchT = null;
+function onCfgChange(refetch){
+  const params = cfgToParams(cfg);
+  const rest = params.toString();
+  // replaceState can throw on file:// in some browsers — the URL sync is a
+  // nicety, never worth breaking the controls over.
+  try{ history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "")); }catch(e){}
+  params.set("bar", "1");
+  $("urlOut").value = TICKER_URL_BASE + "?" + params.toString();
+  applyBarLook();
+  if(refetch){
+    clearTimeout(fetchT);
+    fetchT = setTimeout(loadData, 250);
+  }
+}
+
+if(!BAR_MODE){
+  initConfigUI();
+  onCfgChange(false);
+  $("btnCopy").addEventListener("click", () => {
+    const btn = $("btnCopy");
+    navigator.clipboard.writeText($("urlOut").value)
+      .then(() => { btn.textContent = "Copied ✓"; setTimeout(() => btn.textContent = "Copy URL", 1600); })
+      .catch(() => { $("urlOut").select(); btn.textContent = "Press Ctrl+C"; setTimeout(() => btn.textContent = "Copy URL", 1600); });
+  });
+}
+
+applyBarLook();
+loadData();
+</script>
+</body>
+</html>

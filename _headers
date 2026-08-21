@@ -64,15 +64,36 @@
 #            browser-extension-injected scripts, NOT this app — no repo code uses
 #            eval/new Function. Do NOT add 'unsafe-eval' to accommodate them; the
 #            scanner/ONNX + exports only need 'wasm-unsafe-eval' (already set).
-#   frame:   youtube embeds;  worker: self + blob: (scanner + canvas workers)
+#   frame:   'self' (the Analytics » Swiss Odds tab iframes /swiss?embed=1 —
+#            without it, enforcing would re-break the embed from the parent
+#            side, and report-only logs a violation on every Swiss tab view)
+#            + youtube embeds;  worker: self + blob: (scanner + canvas workers)
 /*
   Referrer-Policy: strict-origin-when-cross-origin
   X-Frame-Options: DENY
   X-Content-Type-Options: nosniff
   Content-Security-Policy: frame-ancestors 'none'; object-src 'none'; base-uri 'none'
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.sentry-cdn.com https://browser.sentry-cdn.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://umwqowkiatjjltologrd.supabase.co https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; connect-src 'self' data: https://umwqowkiatjjltologrd.supabase.co wss://umwqowkiatjjltologrd.supabase.co https://static.cloudflareinsights.com https://api.zippopotam.us https://tcg.ravensburgerplay.com https://api.ravensburgerplay.com https://tcgcsv.com https://cdn.jsdelivr.net https://js.sentry-cdn.com https://browser.sentry-cdn.com https://*.ingest.sentry.io https://*.sentry.io https://fonts.googleapis.com https://fonts.gstatic.com https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; frame-src https://www.youtube.com https://youtu.be; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; report-uri https://o4511390961303552.ingest.us.sentry.io/api/4511390972444672/security/?sentry_key=8eb7cada506131426389fd7506a0288e
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://js.sentry-cdn.com https://browser.sentry-cdn.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://static.cloudflareinsights.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https://umwqowkiatjjltologrd.supabase.co https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; connect-src 'self' data: https://umwqowkiatjjltologrd.supabase.co wss://umwqowkiatjjltologrd.supabase.co https://static.cloudflareinsights.com https://api.zippopotam.us https://tcg.ravensburgerplay.com https://api.ravensburgerplay.com https://tcgcsv.com https://cdn.jsdelivr.net https://js.sentry-cdn.com https://browser.sentry-cdn.com https://*.ingest.sentry.io https://*.sentry.io https://fonts.googleapis.com https://fonts.gstatic.com https://cards.lorcast.io https://tcgplayer-cdn.tcgplayer.com https://api.qrserver.com https://ravensburger.cloud https://*.ebayimg.com https://lh3.googleusercontent.com; frame-src 'self' https://www.youtube.com https://youtu.be; worker-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; report-uri https://o4511390961303552.ingest.us.sentry.io/api/4511390972444672/security/?sentry_key=8eb7cada506131426389fd7506a0288e
   Permissions-Policy: geolocation=(), microphone=(), camera=(self)
   Strict-Transport-Security: max-age=31536000; includeSubDomains
+
+# The Analytics » Swiss Odds tab embeds the sim same-origin:
+# <iframe src="/swiss?embed=1"> in Index.html. The site-wide clickjacking
+# block above (X-Frame-Options: DENY + frame-ancestors 'none') refuses
+# framing even from packs.ink itself, so the embed rendered as the browser's
+# gray broken-page icon on prod (found live 2026-08-21; invisible in local
+# dev, which doesn't apply this file). SAMEORIGIN / 'self' keeps hostile-site
+# framing blocked while letting the app frame its own page. The Report-Only
+# policy needs no override — frame-ancestors is ignored in report-only mode
+# per the CSP spec (not monitored, no reports).
+# ⚠️ When the report-only policy above is promoted to enforced, mirror the
+# full policy here with frame-ancestors 'self', or this detach leaves /swiss
+# with only the lite policy.
+/swiss
+  ! X-Frame-Options
+  X-Frame-Options: SAMEORIGIN
+  ! Content-Security-Policy
+  Content-Security-Policy: frame-ancestors 'self'; object-src 'none'; base-uri 'none'
 
 # Long-cache + permissive CORS on proxied Lorcast art.
 #

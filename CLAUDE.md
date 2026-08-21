@@ -700,7 +700,7 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 
 `MARKET_SUBS` = ev / trade / avg ("Set Breakdown") / setval / sim / swiss (+ elo, hidden unless pinned). The consolidation:
 
-- **Swiss Odds (`swiss`, added 2026-08-20)** embeds the standalone `swiss.html` page as `<iframe src="/swiss?embed=1">` (canonical path is `/swiss` — Workers Assets pretty-URL handling 307s `/swiss.html` and the worker's legacy `/lab/swiss` route to it, DROPPING the query, so never point the iframe at `/lab/swiss`) — the sim stays a separate file on purpose (its Monte Carlo engine is a hot loop ordinary visitors shouldn't download inside Index.html; see the commit that added it). `?embed=1` sets `data-embed` on the page root pre-paint, hiding its own brand/flag/theme chrome, then strips the param via replaceState so the page's Copy-link never leaks `embed=1`. The header carries an "Open full page ↗" escape hatch to `/swiss`. swiss.html links `/styles.css` UNVERSIONED (network-first SW keeps it fresh; a `?v=` there would drift from the bump-cache lockstep, which doesn't know about this file).
+- **Swiss Odds (`swiss`, added 2026-08-20)** embeds the standalone `swiss.html` page as `<iframe src="/swiss?embed=1">` (canonical path is `/swiss` — Workers Assets pretty-URL handling 307s `/swiss.html` and the worker's legacy `/lab/swiss` route to it, DROPPING the query, so never point the iframe at `/lab/swiss`) — the sim stays a separate file on purpose (its Monte Carlo engine is a hot loop ordinary visitors shouldn't download inside Index.html; see the commit that added it). `?embed=1` sets `data-embed` on the page root pre-paint, hiding its own brand/flag/theme chrome, then strips the param via replaceState so the page's Copy-link never leaks `embed=1`. The header's "Open full page ↗" escape hatch was removed 2026-08-21 (user call — redundant once the embed worked; `/swiss` stays reachable by URL and the embed's own Copy-link shares it). swiss.html links `/styles.css` UNVERSIONED (network-first SW keeps it fresh; a `?v=` there would drift from the bump-cache lockstep, which doesn't know about this file).
 
 - **Set Breakdown (`avg`) = Card Averages + Heatmap merged.** One rarity×set table with a metric toggle (`packsink:market:avgMetric`): `$ per card` averages, or `% of box EV` with the old heatmap's cell shading. **The share lens uses per-set `getPull(set)` — the deleted `HeatmapView` used the flat v1 `PULL` for every set, which was simply wrong for Wilds Unknown onward** (6 Legendaries not 4, 2.5 Epics not 1.5, 0.333 Enchanted not 0.25). Default selection = 4 newest sets (all-sets was a 1,655px-wide table); the `All` chip restores everything; exactly 2 selected still reveals the Diff column (pp units in share mode). The per-rarity "Pull rate" column is gone — rates differ per set now, so each cell's `title` tooltip carries its set's exact rate.
 - **Simulator (`sim`) = Pack + Box + Monte Carlo merged.** Mode lives in `packsink:market:simkind` (`pack | box | bulk`); "Odds" (bulk) is the old `MonteCarloView`, mounted as a mode. The `sim-kind-bar` `<select>` is gone — a `.market-sim-kind` segmented control sits in the shared header.
@@ -1294,6 +1294,14 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
   `scripts/dev_server.py` (local). Listed in `build_dist.mjs`, `Disallow`d in robots.txt, `noindex`
   in the head. "Hidden" here means undiscoverable, **not access-controlled** — anyone with the URL
   can load it. Don't put anything sensitive on it.
+- **The Analytics embed only works because `_headers` carries a `/swiss` rule** detaching the
+  site-wide `X-Frame-Options: DENY` + enforced `frame-ancestors 'none'` and re-setting them to
+  SAMEORIGIN / `'self'` — the `/*` block refuses framing even from packs.ink itself, which
+  rendered the iframe as the gray broken-page icon on prod until 2026-08-21. Local dev never
+  shows this (dev_server.py doesn't apply `_headers`) — verify framing changes with
+  `npx wrangler@4 dev`, which applies the file like prod. Any NEW same-origin iframe surface
+  needs the same carve-out, and the parent side needs `frame-src 'self'` (already in the
+  report-only policy) or enforcement will block it from the other end.
 - **The engine is one self-contained `swissEngine()`** stringified into a Blob worker, so the
   worker and the main-thread fallback literally run the same text and can't drift. Flat typed
   arrays, not an object per player; counting sort into point brackets; the intentional-draw
@@ -1349,6 +1357,77 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
 - Every match is 50/50 — this measures bracket structure, not decks. Say so in any UI copy.
 - Not built: PlayHub standings import. It needs a server-side fetch (PlayHub is CORS-blocked); the
   Cloudflare worker is the natural place, mirroring the existing `/img-proxy` pattern.
+
+## Stream ticker (`/ticker`) — OBS overlay, added 2026-08-21
+
+Built for streamers (vVonderland's Discord ask): a scrolling bottom-of-stream bar of the top
+%-movers. **Standalone `ticker.html`, NOT part of the SPA** — same reasoning as swiss.html, plus
+an OBS Browser Source should not boot the whole app. `?bar=1` renders ONLY the bar (transparent
+page, every size keyed off `--tkh` = bar height, so the streamer scales it purely by sizing the
+OBS source); without it the page is a configurator with live preview + "Copy overlay URL".
+
+- **Route: `/ticker` has NO worker route on purpose.** Workers Assets' pretty-URL handling serves
+  `ticker.html` for it through the asset fall-through with the query intact. Do NOT add a worker
+  route that fetches `/ticker.html` — the assets layer 307s that to `/ticker` and DROPS the query
+  string, and `?bar=1&…` IS the overlay's configuration (this is the same 307 that moved swiss to
+  `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`; robots-disallowed + noindex
+  (shared by link, not nav-linked). No sw.js involvement — the page never registers it and OBS's
+  browser profile never visits the SPA.
+- **The reel is SECTIONS, cycling (windows × rarity groups)** — reworked same day on Zaven's
+  feedback. `buildTickerPlan(cfg)` emits one section per (time frame × group) in window-major
+  canonical order, each introduced by an IN-REEL header ("1D Risers" over the group name) — the
+  brand cap is just logo + "packs.ink", no window label. Groups mirror the home movers banners:
+  Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities. Defaults: 1D + 1W ×
+  Chase + Rare–Legendary, risers, **NM Market basis** (Low sits frozen for weeks and would lie on
+  short windows), 15 cards/section, **$5 floor** (user-settable; keeps 10-cent cards' +300% "moves"
+  out — matches the Screener's default).
+- **Data**: one PostgREST query per (section × direction) against `price_movers`, server-side
+  `order={pct_col}.desc&limit=n` — never the full 5.8k-row matview on a stream machine. Params:
+  `w`/`g` (csv, canonical-order sets), `foil=0`/`nf=0`, `m/dir/n/min/img/brand/speed/bg/fg` — the
+  URL is the whole config, so a pasted OBS URL is set-and-forget. A failed query drops only its
+  own section for the round and retries in 60s — an already-rendered strip is never blanked.
+- **Refresh = once a day at 5:00 PM America/Chicago** (`nextTickerRefreshMs`, pure layer):
+  prices change once daily (ETL 20:30 UTC ≈ 3:30 PM Chicago), and Zaven wants exactly one safe
+  post-ETL check, not polling. Intl supplies Chicago's wall clock so DST is handled (CDT/CST both
+  covered in the guard test); the initial page load still fetches immediately, and failed fetches
+  retry in 60s. Don't turn it back into an interval.
+- **The "powered by packs.ink" credit is REQUIRED** — flush bottom-RIGHT on the bar (a 22%-of-
+  `--tkt` bottom row with NO band or border, right padding `min(24px, 30% of --tkt)` so it hugs
+  the corner at any bar height; the movers row gets the rest as `--tkh`), always rendered, no
+  param, no checkbox; the left cap (PACKS.INK stacked over the logo) is the optional one
+  (`brand=0`). That attribution is the price of a free overlay riding our data — keep it. In
+  transparent mode the credit sits in its own scrim pill.
+- **Double-clicking ticker.html from disk works** — that's how Zaven first tested it. Asset URLs
+  are RELATIVE (file sits at site root, so they resolve the same at `/ticker` and on `file://`);
+  on file:, card art hotlinks cards.lorcast.io directly (no /img-proxy route exists), the Copy URL
+  is forced to `https://packs.ink/ticker` (a file:/// URL pasted into OBS breaks for anyone else),
+  and `history.replaceState` is try/catch-guarded. Chip active-state styling carries hard token
+  fallbacks + `!important` so toggles stay legible even with styles.css missing. No theme-toggle
+  button (removed as confusing — the page follows the saved/system theme via the boot script).
+- **Foil/Non-Foil toggles carry the Screener's chase bypass**: single-printing rarities
+  (Enchanted/Epic/Iconic/Promo) ignore the printing filter — enforced server-side via
+  `or=(printing.in.(…),rarity.in.(bypass))` on mixed groups, and by skipping the filter entirely on
+  all-chase groups, else "non-foil only" silently empties every chase section. Verified live: the
+  quoted in-lists inside `or=()` are valid PostgREST.
+- **Marquee**: one `.tk-seq` duplicated until it spans ≥2 viewports, then `translateX` by exactly
+  one sequence width, linear infinite — that equality is what makes the loop seamless. Duration =
+  seqWidth / speed so `speed` is true px/s at any bar height. Thumbnails get explicit
+  `aspect-ratio:5/7` + height so layout doesn't shift as images load (the measured width feeds the
+  animation). Re-measures on resize and `document.fonts.ready`.
+- Items render via `createElement` + `textContent` (card names are DB text — no innerHTML), as a
+  3-line stack — name / version / rarity pill — with the price and its Δ%+arrow stacked to the
+  right. **The rarity pill says "· Foil" ONLY for base-rarity foil variants** (`tickerRarityLine`
+  owns the rule): chase rarities (Enchanted/Epic/Iconic/Promo) are inherently foil and never say
+  it, and "Holofoil"/"Holo" never appear on this surface (TCGCSV's Holofoil label covers what are
+  physically cold-foil printings — the holofoil-mislabel rule). `bg=transparent` keeps a
+  translucent scrim on the brand cap and section headers so they stay readable over gameplay.
+- **Guarded by `node scripts/test_ticker_query.mjs`** (extracts `parseTickerCfg` +
+  `buildTickerPlan` + `tickerRarityLine` out of ticker.html, house pattern): section ordering +
+  header text, window/metric → real matview column names, group rarity filters, foil-toggle
+  bypass shapes, the rarity-line foil rule, both-mode split, min=0 not-null guard, clamps. Run it
+  after touching the config layer.
+- Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
+  the bar, a nav/Toolbox entry (needs an Index.html touch — do it with a regular cache-bump batch).
 
 ## Brand assets
 
