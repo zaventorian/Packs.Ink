@@ -1294,6 +1294,14 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
   `scripts/dev_server.py` (local). Listed in `build_dist.mjs`, `Disallow`d in robots.txt, `noindex`
   in the head. "Hidden" here means undiscoverable, **not access-controlled** — anyone with the URL
   can load it. Don't put anything sensitive on it.
+- **The Analytics embed only works because `_headers` carries a `/swiss` rule** detaching the
+  site-wide `X-Frame-Options: DENY` + enforced `frame-ancestors 'none'` and re-setting them to
+  SAMEORIGIN / `'self'` — the `/*` block refuses framing even from packs.ink itself, which
+  rendered the iframe as the gray broken-page icon on prod until 2026-08-21. Local dev never
+  shows this (dev_server.py doesn't apply `_headers`) — verify framing changes with
+  `npx wrangler@4 dev`, which applies the file like prod. Any NEW same-origin iframe surface
+  needs the same carve-out, and the parent side needs `frame-src 'self'` (already in the
+  report-only policy) or enforcement will block it from the other end.
 - **The engine is one self-contained `swissEngine()`** stringified into a Blob worker, so the
   worker and the main-thread fallback literally run the same text and can't drift. Flat typed
   arrays, not an object per player; counting sort into point brackets; the intentional-draw
