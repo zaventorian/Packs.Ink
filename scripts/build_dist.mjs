@@ -39,8 +39,11 @@ const FILES = [
   "scanner-ocr-worker.js",
   "manifest.json",
   "privacy.html",
-  // Swiss simulator at /lab/swiss (worker/index.js routes it). Also embedded
-  // by the Analytics "Swiss Odds" tab as an iframe at /lab/swiss?embed=1.
+  // Swiss simulator at /swiss (Workers Assets pretty-URL; /lab/swiss legacy
+  // route in worker/index.js 307s to it). Also embedded by the Analytics
+  // "Swiss Odds" tab as an iframe at /swiss?embed=1 — which is why _headers
+  // carries a /swiss rule relaxing X-Frame-Options/frame-ancestors to
+  // same-origin.
   "swiss.html",
   // Stream ticker overlay at /ticker (Workers Assets pretty-URL serves it;
   // no worker route so ?bar=1 survives) — OBS Browser Source bar + configurator.
