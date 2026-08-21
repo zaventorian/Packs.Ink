@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=325">
+<link rel="stylesheet" href="styles.css?v=326">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -3491,6 +3491,13 @@ const STAT_KEYWORDS = {
   willpower: ["willpower","wil","will","wp"],
   lore:      ["lore"],
 };
+// Colon-syntax labels (see the pre-pass in parseSearchQuery). Drop labels
+// vanish, leaving their value to resolve as bare tokens; stat labels keep
+// the keyword so the stat matcher sees "cost 3". "set:" is handled inline
+// (numeric form keeps the keyword, named form drops it) and "artist:" has
+// its own multi-word extraction above the pre-pass.
+const COLON_DROP_LABELS = new Set(["ink","color","colour","rarity","type","types","keyword","ability","classification","characteristic","class","legality","format","contains","name","text"]);
+const COLON_STAT_LABELS = new Set(["cost","costs","strength","str","willpower","wil","will","wp","lore"]);
 
 // Light depluralization — "epics" → "epic", "legendaries" → "legendary", "stitches" → "stitch"
 const depluralize = (w) => {
@@ -3698,12 +3705,36 @@ const parseSearchQuery = (input) => {
   // ("Oggy Christiansson", "Ian MacDonald") aren't split by tokenization.
   // matchesCardFilter does case-insensitive comparison against row.illustrators,
   // so the lowercased capture is fine.
+  raw = raw.replace(/(^|\s)illustrator:\s*/g, "$1artist: ");
   const artistMatch = raw.match(/(?:^|\s)artist:\s*(.+?)(?=\s+\w+:|$)/);
   if(artistMatch){
     out.filters.illustrator = artistMatch[1].trim();
     raw = (raw.slice(0, artistMatch.index) + raw.slice(artistMatch.index + artistMatch[0].length))
       .replace(/\s+/g, " ").trim();
   }
+
+  // Pre-pass: "label: value" colon syntax. The suggestion dropdown renders
+  // dimension rows as "color: amber" / "type: action" and the How It Works
+  // page documents `cost:3` / `set:"wilds unknown"` — but tokenization treated
+  // "color:" as literal name text, so typing exactly what the UI teaches
+  // returned zero cards. Rewrite labels into the bare-token forms the
+  // resolvers below already understand: dimension labels drop (their value
+  // tokens resolve on their own), stat labels keep the keyword with the colon
+  // flattened to a space ("cost:3" → "cost 3"). "set:" keeps its keyword only
+  // for the numeric "set 5" form — for a named set the bare tokens resolve
+  // via SET_NICKNAMES and a leftover "set" would pollute the name search.
+  // Runs AFTER the artist extraction so a "word:" label still terminates a
+  // multi-word artist name. Quotes around any value drop at the end.
+  raw = raw
+    .replace(/(^|\s)set:\s*("?)(\d+)\2(?=\s|$)/g, "$1set $3")
+    .replace(/(^|\s)set:\s*/g, "$1")
+    .replace(/(^|\s)([a-z_]+):\s*/g, (mm, pre, label) => {
+      if(COLON_DROP_LABELS.has(label)) return pre;
+      if(COLON_STAT_LABELS.has(label)) return pre + label + " ";
+      return mm;
+    })
+    .replace(/"([^"]*)"/g, "$1")
+    .replace(/\s+/g, " ").trim();
 
   const tokens = raw.split(/\s+/).filter(Boolean);
   const used = new Set();
@@ -22436,14 +22467,14 @@ function FAQView({onStartTour, onStartSectionTour, user}){
       <li><strong>NM Market</strong> — TCGplayer's algorithmic average of recent <strong>Near Mint sales</strong>. Smoother and slower than Low, but the right number for "what's a clean copy actually worth right now."</li>
     </ul>
     <p>Per-condition pricing (NM-only Low, LP-only Low, etc.) isn't published by TCGplayer's public pricing feed, so we don't track it. If you specifically want NM-quality reference value, lean on <strong>NM Market</strong>.</p>
-    <p>Graded prices are tracked separately, per grading company and per grade. The third-party feed behind those averages was discontinued on <strong>30 June 2026</strong>, so the graded numbers most accounts see are frozen at their final snapshot — the graded views label the date each figure was captured rather than implying it's current. Graded pricing rebuilt from our own record of completed eBay sales (showing a real last-sale price instead of a rolling average) is live for a limited test group and will widen over time.</p>
+    <p>Graded prices are tracked separately, per grading company and per grade, from our own record of completed eBay sales — so graded surfaces show a real <strong>Last Sold</strong> price and an <strong>Avg of last 5</strong> instead of an opaque rolling average, and card detail plots every individual sale. Sales history reaches back to 2023 and is refreshed regularly as new sales are recorded. Graded pricing is open to everyone after a one-time terms acceptance the first time you open a graded surface.</p>
     <p>Earliest tracked price data is <strong>February 2024</strong>. Sets released before that date show a <strong>*</strong> asterisk where applicable.</p>
 
     <h2>How do EV calculations work?</h2>
     <p>Each booster pack contains 12 cards. EV is calculated by multiplying the average price of each rarity (Low or NM Market, depending on the toggle) by the expected number of that rarity per box (24 packs), then summing. So if Legendaries average $5 and you pull 4 per box on average, Legendaries contribute $20 to box EV.</p>
     <p>The "<strong>${"<$1"} → $0</strong>" toggle treats any card under $1 as $0 — gives a more realistic "sellable" picture since bulk cards aren't worth listing individually. "<strong>No Ench/Iconic</strong>" removes those ultra-rare tiers so you can see the base EV without relying on a jackpot pull.</p>
     <p><strong>Pull rates (Sets 1–11)</strong> per box: 144 C, 72 U, ~32 R, 12 SR, 4 L, 13 C foils, 6 U foils, 3 R foils, 1 SR foil, 0.5 L foils, 0.25 Enchanted, 1.5 Epic, ~0.014 Iconic.</p>
-    <p><strong>Pull rates (Sets 12+, Wilds Unknown onward)</strong>: same C/U/SR, but <strong>6 Legendaries</strong>, <strong>0.333 Enchanteds</strong>, <strong>2.5 Epics</strong>, with foil counts adjusted proportionally. These are community-estimated averages — your mileage will vary box-to-box.</p>
+    <p><strong>Pull rates (Sets 12+, Wilds Unknown onward)</strong>: same C/U/SR counts, <strong>~30 Rares</strong> (down from ~32), <strong>6 Legendaries</strong>, <strong>0.333 Enchanteds</strong>, <strong>2.5 Epics</strong>, with foil counts adjusted proportionally. These are community-estimated averages — your mileage will vary box-to-box.</p>
 
     <h2>Install as an app</h2>
     <p>Hit the <strong>\u{1F4F2}</strong> button in the top-right of the page for step-by-step instructions. iOS, Android, and desktop all supported. Once installed, Packs.Ink opens in its own window/app icon with a faster startup and home-screen presence.</p>
@@ -25211,7 +25242,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     ${showGraded && !gradedPremium
       ? html`<${GradedTosGate}/>`
       : html`<${React.Fragment}>
-    <div class="price-db-count muted">${filtered.length} cards${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
+    <div class="price-db-count muted">${(() => {
+      // "X of N" whenever filters are narrowing, so a $5 floor or a chip can
+      // never silently pass off a subset as the whole catalog. Graded synth
+      // rows are built inside the filter memo, so N isn't cheaply known there.
+      const total = showSealed ? (sealedSynth || []).length : (!showGraded && rawEnrichedRows ? rawEnrichedRows.length : null);
+      return total != null && total > filtered.length
+        ? `${filtered.length.toLocaleString()} of ${total.toLocaleString()}`
+        : `${filtered.length.toLocaleString()}`;
+    })()} ${showSealed ? "products" : "cards"}${selected.size>0 ? ` · ${selected.size} selected` : ""}</div>
     ${filtered.length === 0 && raw && raw.length > 0 && html`<div class="empty-state" style=${{textAlign:"center",padding:"26px 12px",color:"var(--text-muted)",fontSize:13}}>
       <div>No cards match the current filters — try clearing a chip or two, or switch the preset back to "All".</div>
       ${hiddenFilterChips.length > 0 && html`<div style=${{marginTop:10}}>
@@ -30981,6 +31020,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   useEffect(()=>{
     try { localStorage.setItem("packsink:decks:discoverFormat", discoverFormat); } catch {}
   }, [discoverFormat]);
+  // Set by an explicit Core/Infinity tab click; the format auto-fallback
+  // below never overrides a choice the user just made.
+  const discoverFormatTouched = useRef(false);
+  const discoverAutoFallback = useRef(false);
   // Cutoff: only show decks created or edited since the most recent mainline
   // set's prerelease (LGS) date. Older decks built for rotated-out sets
   // shouldn't crowd the feed when newer metas have moved on.
@@ -31073,6 +31116,33 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
     return m;
   }, [raw]);
+
+  // The Discover fetch stamps each deck's format with whatever the catalog
+  // held at fetch time. On a cold load the decks usually arrive FIRST, every
+  // deck classifies as Infinity, and Core — the default tab — rendered as an
+  // empty page with a "Try Infinity" hint until a remount. Re-stamp once the
+  // catalog lands, then (one-shot) land the visitor on a format that actually
+  // has decks; an explicit tab click always wins.
+  useEffect(() => {
+    if(!raw || !raw.length || !discoverEntries.length) return;
+    let changed = false;
+    const next = discoverEntries.map(e => {
+      let f;
+      try { f = checkDeckLegality(e.deck, cardById, setsByProductName).format; }
+      catch { f = "infinity"; }
+      if(f !== e.format){ changed = true; return {...e, format: f}; }
+      return e;
+    });
+    if(changed) setDiscoverEntries(next);
+    const fresh = changed ? next : discoverEntries;
+    if(!discoverAutoFallback.current && !discoverFormatTouched.current){
+      discoverAutoFallback.current = true;
+      if(!fresh.some(e => e.format === discoverFormat)){
+        const other = discoverFormat === "core" ? "infinity" : "core";
+        if(fresh.some(e => e.format === other)) setDiscoverFormat(other);
+      }
+    }
+  }, [discoverEntries, cardById, setsByProductName, discoverFormat]);
 
   // Fetch all decks (with cards) for the user. We pull decks + deck_cards
   // separately and stitch on the client — simpler than nested PostgREST.
@@ -32748,7 +32818,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
           const n = discoverEntries.filter(e => e.format === k).length;
           return html`<button key=${k}
             class=${"discover-format-tab"+(discoverFormat===k?" active":"")}
-            onClick=${()=>setDiscoverFormat(k)}>${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}</button>`;
+            onClick=${()=>{ discoverFormatTouched.current = true; setDiscoverFormat(k); }}>${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}</button>`;
         })}
         <span class="muted discover-format-note">
           Sorted by ★ favorites — only decks edited or made since the prerelease of the newest set${discoverCutoff?` (${discoverCutoff})`:""}.
