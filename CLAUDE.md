@@ -113,7 +113,7 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
 
 - **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + graded data.
 - **Price Graphing** = per-card history + multi-card Compare (handoff from Screener batch action).
-- **Analytics** = umbrella for calculator-y tools (EV, Trade Compare, Card Averages, Playset Cost, Heatmap, Sealed, Simulate, Monte Carlo). Sub-tab is reflected in the URL (`?a=<sub>`) — see "Trade Comparison tool".
+- **Analytics** = umbrella for calculator-y tools — **5 sub-tabs since the 2026-08-20 consolidation**: Expected Value · Trade Compare · Set Breakdown · Playset Cost · Simulator (+ hidden pinnable Elo). Sub-tab is reflected in the URL (`?a=<sub>`) — see "Trade Comparison tool" and "Analytics tab" below.
 
 ### Mobile top-nav structure (do NOT regress)
 
@@ -682,6 +682,19 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 2. **30-day sustained move ($3 → $30 → $3):** 0 days smoothed (duration > 14).
 3. **3-day pump ($3 → $100 → $3):** all 3 days smoothed.
 4. **Step-up with no return ($3 → $30 forever):** 0 days smoothed (post never snaps back).
+
+## Analytics tab (reorganized 2026-08-20: 8 tabs → 5)
+
+`MARKET_SUBS` = ev / trade / avg ("Set Breakdown") / setval / sim (+ elo, hidden unless pinned). The consolidation:
+
+- **Set Breakdown (`avg`) = Card Averages + Heatmap merged.** One rarity×set table with a metric toggle (`packsink:market:avgMetric`): `$ per card` averages, or `% of box EV` with the old heatmap's cell shading. **The share lens uses per-set `getPull(set)` — the deleted `HeatmapView` used the flat v1 `PULL` for every set, which was simply wrong for Wilds Unknown onward** (6 Legendaries not 4, 2.5 Epics not 1.5, 0.333 Enchanted not 0.25). Default selection = 4 newest sets (all-sets was a 1,655px-wide table); the `All` chip restores everything; exactly 2 selected still reveals the Diff column (pp units in share mode). The per-rarity "Pull rate" column is gone — rates differ per set now, so each cell's `title` tooltip carries its set's exact rate.
+- **Simulator (`sim`) = Pack + Box + Monte Carlo merged.** Mode lives in `packsink:market:simkind` (`pack | box | bulk`); "Odds" (bulk) is the old `MonteCarloView`, mounted as a mode. The `sim-kind-bar` `<select>` is gone — a `.market-sim-kind` segmented control sits in the shared header.
+- **Sealed tab DELETED — the Screener's Sealed mode superseded it.** `SealedView` is gone from Index.html and its `.sealed-view/.sealed-row*/.sealed-set-*` CSS from styles.css. The display-type classifier helpers (`SEALED_DISPLAY_TYPE_ORDER`, `deriveSealedDisplayType`, `isHiddenSealedListing`, `SEALED_PUZZLES`, `cleanSealedName`) **stay** — Screener sealed mode + SealedCollectionView consume them.
+- **Legacy `?a=` keys must keep resolving** (old links exist in the wild): `MARKET_SUB_ALIASES = {heatmap→avg, montecarlo→sim, sealed→ev}`. App's `marketSub` initializer additionally one-shots the mode preset (`heatmap` writes `avgMetric=share`, `montecarlo` writes `simkind=bulk` to localStorage before the view mounts), and **`?a=sealed` redirects to the Screener**: a mount effect writes `packsink:screener:showSealed=1` / `showGraded=0` and `setView("screener")`. The popstate handler resolves aliases too.
+- **Sub-tabs are `<a href="/analytics?a=…">`** via `navHandler` (SPA-nav convention — modifier-click opens a tool in a new tab). On ≤640px the bar is a single scrolling row (was a 3-row 127px wrap); the trailing gutter is a `::after` flex child per the scroll-container-padding gotcha. The 36px tap floor moved from `.market-subtabs > button` to `> .market-subtab`.
+- **Shared chrome**: `MarketHeader` (the EV header pattern as a component — emits `.ev-header.mkt-header`) + `MarketExplainer` (collapsible "ⓘ How this works", collapsed by default, persisted per tool at `packsink:market:explain:<id>`). Every tool now has the header; the always-on `.market-explainer` walls are gone. `MARKET_SUB_TITLES` gives each sub-tab its own `document.title`.
+- **EV rows carry a `⚄ Sim` chip** (`.ev-row-simbtn`) → `simulateSet(setName)` jumps to Simulator/Box with the set preselected (`presetSet` prop consumed in the sims' `useState` initializers; BoxSim's `onOpenOdds` flips to bulk mode). The EV row's `onKeyDown` now guards `e.target===e.currentTarget` so Enter on a focusable child doesn't also fire the row's open-history.
+- Dead code cleaned with it: the unused v1 `CompareView` (absorbed into Card Averages long ago), `.trade-intro`, `.card-avg-chip-reset`, `.sim-kind-*` CSS.
 
 ## Trade Comparison tool (Analytics » Trade Compare)
 

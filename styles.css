@@ -569,7 +569,7 @@ input[type="checkbox"]{accent-color:var(--accent);}
   .mover-tile .mt-deltas .mt-dlbl{font-size:9px;}
   .mover-tile .mt-deltas .mt-dval{font-size:10px;}
   /* Tap targets: Use Low / Use Market price-mode toggles, small chip-style buttons. */
-  .market-subtabs > button,
+  .market-subtabs > .market-subtab,
   .card-detail-tabs > button{min-height:36px;}
   /* Deck readonly banner toolbar buttons (Mulligan / Export / Edit) — bump from 29px. */
   .deck-readonly-banner button{min-height:36px;}
@@ -1036,13 +1036,25 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
   .price-db-raritybtns{gap:2px;}
   .price-db-raritybtn-icon{padding:4px 5px;gap:0;}
 }
+/* Rendered as <a href="/analytics?a=…"> (not <button>) so modifier-clicks
+   open a tool in a new tab, per the site's SPA-navigation convention. */
 .market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
   border:1px solid transparent;border-radius:6px;cursor:pointer;
+  text-decoration:none;display:inline-flex;align-items:center;white-space:nowrap;
   transition:background 0.1s,color 0.1s,border-color 0.1s;}
 .market-subtab:hover{color:var(--text);background:var(--bg-surface);}
 .market-subtab.active{color:var(--accent);background:var(--accent-glow);
   border-color:var(--border-accent);}
+/* Phones: one scrolling row instead of a 3-row wrap (127px of chrome). */
+@media (max-width:640px){
+  .market-subtabs{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;}
+  .market-subtabs::-webkit-scrollbar{display:none;}
+  .market-subtab{flex:0 0 auto;}
+  /* Trailing gutter lives on a CHILD — container padding is dropped at the
+     end of the scroll range in several engines. */
+  .market-subtabs::after{content:"";flex:0 0 6px;}
+}
 .market-sim-kind{display:inline-flex;margin-left:6px;
   border:1px solid var(--border);border-radius:6px;overflow:hidden;}
 .market-sim-kind button{background:transparent;color:var(--text-muted);
@@ -1063,10 +1075,6 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
 .card-avg-chip:hover{color:var(--text);border-color:var(--border-accent);}
 .card-avg-chip.active{background:var(--accent-glow);color:var(--accent);
   border-color:var(--border-accent);}
-.card-avg-chip-reset{font-size:11px;font-weight:600;padding:4px 10px;
-  background:transparent;color:var(--text-muted);
-  border:1px solid var(--border);border-radius:14px;cursor:pointer;margin-left:4px;}
-.card-avg-chip-reset:hover{color:var(--text);border-color:var(--border-accent);}
 .card-avg-mode-hint{font-size:11px;color:var(--text-muted);font-style:italic;margin-left:8px;}
 .card-avg-set-head{background:transparent;border:none;padding:0;cursor:pointer;
   color:inherit;font:inherit;display:inline-flex;align-items:center;gap:3px;}
@@ -1082,6 +1090,9 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
    same visual language as the rest of the site's stat cards. */
 .ev-header{background:var(--bg-card);border:1px solid var(--border);border-radius:12px;
   padding:18px 20px;display:flex;flex-wrap:wrap;gap:14px;align-items:center;}
+/* MarketHeader-emitted variant — carries its own spacing since the other
+   Analytics tools don't sit inside .ev-view's flex-gap container. */
+.ev-header.mkt-header{margin-bottom:12px;}
 .ev-header-title{flex:0 1 auto;min-width:0;margin-right:6px;}
 .ev-header-eyebrow{font-size:10px;font-weight:700;letter-spacing:1px;
   text-transform:uppercase;color:var(--text-muted);margin-bottom:4px;}
@@ -1144,15 +1155,24 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
   margin-bottom:12px;}
 .market-filter-spacer{flex:1;}
 
-/* Simulate sub-tab kind selector — dropdown replaces the old button pair. */
-.sim-kind-bar{display:flex;gap:10px;align-items:center;
-  padding:10px 12px;background:var(--bg-surface);
-  border:1px solid var(--border);border-radius:8px;margin-bottom:14px;}
-.sim-kind-label{font-size:11px;font-weight:700;letter-spacing:0.5px;
-  text-transform:uppercase;color:var(--text-muted);}
-.sim-kind-select{padding:6px 10px;font-size:13px;background:var(--bg-card);
-  border:1px solid var(--border);border-radius:6px;color:var(--text);
-  min-width:300px;}
+/* Collapsible "How this works" disclosure — replaces the always-on
+   .market-explainer walls. The body reuses .market-explainer styling. */
+.market-explain{margin-bottom:12px;}
+.market-explain-toggle{display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;font-size:11px;font-weight:600;color:var(--text-dim);
+  background:transparent;border:1px solid var(--border);border-radius:6px;}
+.market-explain-toggle:hover{color:var(--accent);border-color:var(--border-accent);}
+.market-explain-toggle.open{color:var(--accent);background:var(--accent-glow);
+  border-color:var(--border-accent);}
+.market-explain-chev{font-size:9px;opacity:0.7;}
+.market-explain .market-explainer{margin-top:8px;margin-bottom:0;}
+
+/* Sticky first column for the wide Analytics matrix tables (Set Breakdown,
+   Playset Cost) — same pass-under shadow trick as the Screener's NAME column.
+   Applied per-cell (not :first-child) so expanded colspan rows stay put. */
+.mkt-sticky-col{position:sticky;left:0;z-index:2;background:var(--bg-modal);
+  box-shadow:1px 0 0 var(--border),6px 0 8px -6px rgba(0,0,0,0.35);}
+th.mkt-sticky-col{z-index:3;}
 
 /* Playset Cost — expanded card list rows. Clickable rows open the card
    modal; the TCG button next to each name jumps straight to TCGPlayer. */
@@ -1164,11 +1184,6 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
   border:1px solid var(--border-accent);border-radius:4px;text-decoration:none;
   vertical-align:middle;transition:all 0.1s;}
 .playset-tcg-btn:hover{background:var(--accent);color:#fff;border-color:var(--accent);}
-
-/* Sealed header layout — title block on the left, price toggle on the right. */
-.sealed-header{display:flex;align-items:flex-start;justify-content:space-between;
-  gap:18px;margin-bottom:14px;flex-wrap:wrap;}
-.sealed-header-text{flex:1;min-width:240px;}
 
 /* Per-set rows */
 .ev-rows{display:flex;flex-direction:column;gap:6px;}
@@ -1227,6 +1242,13 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .ev-row-set-hint{display:inline-block;margin-left:6px;font-size:11px;
   color:var(--text-muted);opacity:0;transition:opacity 0.12s;}
+/* Per-row "⚄ Sim" chip — jumps to the Simulator with the set preselected. */
+.ev-row-simbtn{margin-left:8px;padding:2px 8px;font-size:10px;font-weight:700;
+  letter-spacing:0.4px;text-transform:uppercase;color:var(--text-dim);
+  background:var(--bg-surface);border:1px solid var(--border);border-radius:5px;
+  vertical-align:middle;}
+.ev-row-simbtn:hover{color:var(--accent);border-color:var(--border-accent);
+  background:var(--accent-glow);}
 .ev-row-clickable{cursor:pointer;}
 .ev-row-clickable:hover .ev-row-set{color:var(--accent);}
 .ev-row-clickable:hover .ev-row-set-hint{opacity:1;}
@@ -1276,89 +1298,14 @@ html[data-mode="dark"] .ev-delta-down{background:rgba(232,140,140,0.12);color:#e
    mobile because the head row gets display:none'd). The 780px rule is the
    canonical mobile layout; inline labels per-cell handle the head-row gap. */
 
-/* ── Sealed view ──────────────────────────────────────────────────────── */
-.sealed-view{display:flex;flex-direction:column;gap:22px;}
-.sealed-header{background:var(--bg-card);border:1px solid var(--border);
-  border-radius:12px;padding:18px 20px;}
-.sealed-set{display:flex;flex-direction:column;gap:8px;}
-.sealed-set-header{display:flex;align-items:baseline;gap:8px;
-  padding:4px 4px 6px;border-bottom:1px solid var(--border);}
-.sealed-set-title{font-family:'Cinzel',serif;font-size:16px;font-weight:600;
-  color:var(--accent);background:transparent;border:none;padding:0;
-  display:inline-flex;align-items:center;gap:4px;}
-button.sealed-set-title{cursor:pointer;}
-span.sealed-set-title{cursor:default;}
-button.sealed-set-title:hover{text-decoration:underline;}
-.sealed-set-count{font-size:11px;color:var(--text-muted);font-weight:600;
-  padding:1px 8px;border-radius:10px;background:var(--bg-surface);
-  border:1px solid var(--border);font-variant-numeric:tabular-nums;}
-/* Per-row clickable set pill that routes to Price Graphing. Replaces the
-   product-type pill now that the section header carries the type. */
-.sealed-set-pill{display:inline-flex;align-items:center;gap:3px;
-  padding:4px 10px;font-size:11px;font-weight:600;
-  background:transparent;color:var(--text-dim);
-  border:1px solid var(--border);border-radius:14px;
-  text-align:left;font-family:inherit;
-  transition:background 0.1s,color 0.1s,border-color 0.1s;}
-button.sealed-set-pill{cursor:pointer;}
-button.sealed-set-pill:hover{color:var(--accent);
-  border-color:var(--border-accent);background:var(--accent-glow);}
-.sealed-set-pill-muted{cursor:default;color:var(--text-muted);}
-/* Analytics sub-tabs (Sim Pack, Box Sim, Monte Carlo) render stat rows
-   inline with `repeat(4,1fr)` / `repeat(3,1fr)`. Force a wrap on phones
-   so each $ figure has room without overlapping its neighbor. */
+/* The Analytics Sealed view's rule cluster (.sealed-view / .sealed-set-* /
+   .sealed-row*) was removed with the tab (2026-08-20) — the Screener's
+   Sealed mode superseded it. The Simulator's stat rows below still need
+   their phone wrap. */
 @media (max-width:560px){
-  .sim-kind-select{min-width:0;width:100%;}
   .stat-grid.stat-grid-4{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
   .stat-grid.stat-grid-3{grid-template-columns:repeat(2,minmax(0,1fr)) !important;}
 }
-.sealed-rows{display:flex;flex-direction:column;gap:5px;}
-.sealed-row{display:grid;grid-template-columns:140px 1fr 90px 1fr;column-gap:14px;
-  align-items:center;padding:9px 14px;background:var(--bg-card);
-  border:1px solid var(--border);border-radius:8px;
-  transition:border-color 0.1s,background 0.1s;}
-@media (max-width:780px){
-  /* Mobile layout: set pill + name on row 1, price on row 2.
-     Six-window delta pills hidden — they were rendering without any time-
-     window labels (head row is hidden), so users saw "▼1.4%, ▼4.4%, ▼93.2%"
-     with no idea which span each meant. Tap the row to open the price-
-     history modal for detail.
-     The redundant @media (max-width:820px) block that used to follow this
-     one — and silently fought it — has been removed; this is the canonical
-     mobile sealed-row layout. */
-  .sealed-row{grid-template-columns:auto 1fr !important;
-    grid-template-rows:auto auto;row-gap:6px;column-gap:10px;padding:10px 12px;}
-  .sealed-row-set{grid-column:1;grid-row:1;align-self:center;}
-  .sealed-row-name{grid-column:2;grid-row:1;font-size:13px;}
-  .sealed-row-price{grid-column:1 / -1;grid-row:2;justify-self:flex-start;
-    text-align:left;font-size:15px;}
-  .sealed-row-deltas{display:none !important;}
-  .sealed-row-head{display:none;}
-  /* Set pill stays visible on mobile — sections aren't always obvious when
-     scrolling fast and the pill is cheap. Compact width via shorter padding. */
-  .sealed-set-pill, .sealed-set-pill-muted{padding:3px 7px;font-size:10px;}
-}
-.sealed-row:not(.sealed-row-head):hover{border-color:var(--border-accent);
-  background:var(--bg-surface);}
-.sealed-row-head{background:transparent;border:none;padding:0 14px 2px;
-  font-size:10px;font-weight:700;letter-spacing:0.5px;text-transform:uppercase;
-  color:var(--text-muted);}
-.sealed-row-set{display:flex;justify-content:flex-start;min-width:0;}
-.sealed-row-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-  font-size:13px;font-weight:500;color:var(--text);}
-.sealed-row-name a{color:inherit;text-decoration:none;display:inline-flex;
-  align-items:center;gap:3px;}
-.sealed-row-name a:hover{color:var(--accent);}
-.sealed-name-ext{font-size:10px;opacity:0.55;}
-.sealed-row-name a:hover .sealed-name-ext{opacity:1;}
-.sealed-row-price{font-size:15px;font-weight:700;color:var(--text);
-  text-align:right;font-variant-numeric:tabular-nums;}
-.sealed-row-deltas{display:grid;grid-template-columns:repeat(6,1fr);column-gap:4px;}
-
-/* @media (max-width:820px) block removed — was a duplicate of the 780px
-   rule above that fought with it (single-column + no explicit child grid
-   positions made the delta pills land in unpredictable cells). The 780px
-   block is canonical. */
 .stat{background:var(--stat-bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;}
 .stat .lbl{font-size:11px;color:var(--text-muted);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.3px;}
 .stat .val{font-size:16px;font-weight:600;}
@@ -5323,9 +5270,6 @@ html[data-mode="dark"] .deck-pie-swatch.dual{border-color:rgba(255,255,255,0.35)
 
 /* ── Trade Comparison Tool (Analytics » Trade Compare) ─────────────────── */
 .trade-view{max-width:1000px;margin:0 auto;}
-.trade-intro{font-size:12.5px;color:var(--text-dim);line-height:1.5;
-  margin:4px 0 14px;}
-.trade-intro strong{color:var(--text);font-weight:600;}
 
 /* Search + which-side toggle */
 .trade-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
