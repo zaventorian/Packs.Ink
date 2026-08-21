@@ -8200,7 +8200,7 @@ const COACH_TOURS = {
     {sel:".history-picker-searchrow input", title:"Compare up to 18", body:"Search and add items to overlay them on one chart. \"+ variants\" pulls in a card's other printings and rarities."},
   ]},
   market: { title: "Analytics", steps: [
-    {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Set Breakdown, Playset Cost and the pack/box Simulator — each tab keeps its own URL, so any tool is shareable and bookmarkable."},
+    {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Set Breakdown, Playset Cost, the pack/box Simulator and Swiss tournament odds — each tab keeps its own URL, so any tool is shareable and bookmarkable."},
   ]},
   collection: { title: "Collection", requiresUser: true, steps: [
     {sel:".collection-section-tabs", title:"Cards · Sealed · Graded", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math."},
@@ -22394,7 +22394,7 @@ function FAQView({onStartTour, onStartSectionTour, user}){
     <p><strong>Home</strong> — your dashboard. Top movers, your collection value, decks from people you follow, and the latest tournament finishes.</p>
     <p><strong>Screener</strong> — every tracked card as a sortable financial-database-style table. Filter by set, rarity, ink, price band, and movement window (1D / 1W / 1M / 3M / 6M / 1Y).</p>
     <p><strong>Price Graphing</strong> — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
-    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, and a pack/box Simulator with bulk odds. Sealed pricing lives in the Screener's Sealed mode.</p>
+    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, and Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds). Sealed pricing lives in the Screener's Sealed mode.</p>
     <p><strong>Cards</strong> — browseable visual catalog of every card with filters for ink, rarity, set, and a free-text smart search.</p>
     <p><strong>Collection</strong> — what you own. Three sections (Cards, Sealed, Graded) with set-by-set completion tracking, value over time, and per-section sharing.</p>
     <p><strong>Decks</strong> — your decks, the people you follow, the Discover feed of public decks, and the Tournaments index.</p>
@@ -23196,6 +23196,7 @@ const MARKET_SUBS = [
   ["avg",    "Set Breakdown"],
   ["setval", "Playset Cost"],
   ["sim",    "Simulator"],
+  ["swiss",  "Swiss Odds"],
   // Elo is always a valid sub-key so /analytics?a=elo deep-links work even
   // when the user hasn't pinned it. The Analytics tab BAR hides it unless
   // eloPinned is true (see MarketView's subsList).
@@ -25446,6 +25447,13 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
       ${simKind==="bulk" && html`<${MonteCarloView} rawData=${raw} sets=${setsNewest} theme=${theme}
         presetSet=${simSet} onSetChange=${setSimSet}/>`}
+    <//>`}
+    ${sub==="swiss" && html`<${React.Fragment}>
+      <${MarketHeader} title="Swiss Odds"
+        sub="Monte Carlo odds for Swiss events — what record makes the cut, where the bubble sits, and whether to take the draw.">
+        <a class="market-swiss-full" href="/lab/swiss" target="_blank" rel="noopener">Open full page ↗</a>
+      <//>
+      <iframe class="market-swiss-frame" src="/lab/swiss?embed=1" title="Swiss Simulator"></iframe>
     <//>`}
   </div>`;
 }
@@ -34886,6 +34894,7 @@ const MARKET_SUB_TITLES = {
   avg:    "Lorcana Set Breakdown — Packs.Ink",
   setval: "Lorcana Playset Cost — Packs.Ink",
   sim:    "Lorcana Pack Simulator — Packs.Ink",
+  swiss:  "Lorcana Swiss Odds — Packs.Ink",
   elo:    "Chicagoland Lorcana Elo — Packs.Ink",
 };
 const PATH_TO_VIEW = (() => {

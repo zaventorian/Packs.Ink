@@ -39,7 +39,8 @@ const FILES = [
   "scanner-ocr-worker.js",
   "manifest.json",
   "privacy.html",
-  // Unlisted Swiss simulator, reachable only at /lab/swiss (worker/index.js).
+  // Swiss simulator at /lab/swiss (worker/index.js routes it). Also embedded
+  // by the Analytics "Swiss Odds" tab as an iframe at /lab/swiss?embed=1.
   "swiss.html",
   "robots.txt",
   "sitemap.xml",

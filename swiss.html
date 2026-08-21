@@ -19,6 +19,20 @@
     el.setAttribute("data-theme", resolved);
     el.setAttribute("data-mode", DARK.indexOf(resolved)>=0 ? "dark" : "light");
   }catch(e){}
+  /* Embed mode — the Analytics "Swiss Odds" tab renders this page in an
+     iframe at /lab/swiss?embed=1. The host app already shows nav + theme
+     controls, so flag the root to hide the duplicate chrome, then strip the
+     param so Copy-link (which copies location.href before the first run
+     rebuilds the query) never leaks embed=1 into a shared URL. */
+  try{
+    var q=new URLSearchParams(location.search);
+    if(q.get("embed")==="1"){
+      document.documentElement.setAttribute("data-embed","1");
+      q.delete("embed");
+      var rest=q.toString();
+      history.replaceState(null,"",location.pathname+(rest?"?"+rest:""));
+    }
+  }catch(e){}
 })();
 </script>
 <meta charset="utf-8">
@@ -29,7 +43,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=325">
+<link rel="stylesheet" href="/styles.css">
 <style>
 /* Page-local styles. Everything is sw- prefixed and scoped under .sw-app so
    nothing here can leak into the main app if this gets folded into it later.
@@ -37,6 +51,11 @@
    seven themes work for free. */
 .sw-app{max-width:1180px;margin:0 auto;}
 .sw-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:18px;}
+/* Embedded in the Analytics tab: the host shows nav + theme, so hide the
+   duplicate chrome and tighten the page padding to fit the iframe. */
+html[data-embed="1"] .sw-brand,html[data-embed="1"] .sw-flag,html[data-embed="1"] #btnTheme{display:none;}
+html[data-embed="1"] body{padding:8px 14px 18px;}
+html[data-embed="1"] .sw-top{margin-bottom:12px;}
 .sw-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
 .sw-brand img{height:34px;width:auto;display:block;}
 .sw-spacer{flex:1;min-width:0;}
