@@ -454,7 +454,7 @@ const CACHE_KEY = "packsink:catalog:v53";  // v53: retired the 6 crd_prestage_av
 // every packsink:* key except catalog/auth/install-prefs and write the new
 // stamp. This guarantees every existing user gets a clean aux-cache slate on
 // their next page load without needing them to clear browser storage.
-const AUX_CACHE_VERSION = "2026-08-14-price-movers-paginated";
+const AUX_CACHE_VERSION = "2026-08-14-screener-columns-gear";
 // Sets where Foil and Non-Foil printings of the same card_id are
 // economically distinct enough to render as separate tiles. C1 cards share
 // one card_id between printings (distinguished only by tcg_printing); C2
@@ -24656,11 +24656,21 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // promo sets (Promo Set 1/2/3, LCP C1/C2, D23, EPCOT) were silently missing from
   // the picker and could never be filtered. Derive from the catalog so every real
   // set is selectable; SET_ORDER-unknown names (shouldn't happen) append at the end.
+  // Two explicit groups: mainline booster sets (newest first) on top, then
+  // promo / challenge / extras below. The old version was one SET_ORDER pass
+  // that every call site then .reverse()d — which put any set SET_ORDER didn't
+  // know at the very TOP, because unknowns were appended to the tail before the
+  // reverse. That's how "Attack of the Vine! Promos" and "PD1" ended up above
+  // the mainline sets. Unknowns now sort into the "other" group where they
+  // belong, and no caller reverses.
   const setOptions = useMemo(() => {
     const present = new Set(Object.values(setNameById));
-    const ordered = SET_ORDER.filter(s => present.has(s));
-    for(const s of present) if(!SET_ORDER.includes(s)) ordered.push(s);
-    return ordered;
+    const mainline = MAINLINE_SETS.filter(s => present.has(s)).reverse();
+    const seen = new Set(mainline);
+    const known = SET_ORDER.filter(s => present.has(s) && !seen.has(s)).reverse();
+    for(const s of known) seen.add(s);
+    const unknown = [...present].filter(s => !seen.has(s)).sort();
+    return {mainline, others: [...known, ...unknown], all: [...mainline, ...known, ...unknown]};
   }, [setNameById]);
 
   // Catalog row index keyed by card_id. Used by the Screener's search +
@@ -25207,7 +25217,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const hiddenFilterChips = useMemo(() => {
     const out = [];
     const push = (key, label, clear) => out.push({key, label, clear});
-    const money = (v) => "$" + String(v).replace(/^\$/, "");
+    // Typing ".25" into the Min box rendered the chip as "$.25". Normalize
+    // through Number so it reads "$0.25" / "$5" / "$1,200".
+    const money = (v) => {
+      const n = Number(String(v).replace(/[$,]/g, ""));
+      return Number.isFinite(n)
+        ? "$" + n.toLocaleString(undefined, {minimumFractionDigits: 0, maximumFractionDigits: 2})
+        : "$" + v;
+    };
     const priceLbl = priceMode === "market" ? "NM Market" : "Low";
     if(minPrice !== "") push("minPrice", `${priceLbl} ≥ ${money(minPrice)}`, () => setMinPrice(""));
     if(maxPrice !== "") push("maxPrice", `${priceLbl} ≤ ${money(maxPrice)}`, () => setMaxPrice(""));
@@ -25245,6 +25262,51 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const clearHiddenFilters = useCallback(() => {
     for(const c of hiddenFilterChips) c.clear();
   }, [hiddenFilterChips]);
+
+  // ── Draggable column widths (hooks — must be before the early returns) ──
+  // Persisted alongside order/hidden in colPrefs, so ⚙ Columns → Reset clears
+  // them too. Widths apply through a <colgroup>; the grips live in a sticky,
+  // zero-height bar pinned over the header rather than inside each <th>,
+  // because the <th>s come from the colDefs factories. Header-only grips also
+  // mean no invisible dead strip down every row at each column boundary.
+  //
+  // colDefs/orderedCols are built further down (they close over onSort/arrow),
+  // so the column-key list arrives via gripKeysRef, which render fills in.
+  const theadRef = useRef(null);
+  const gripKeysRef = useRef([]);
+  const dragRef = useRef(null);
+  const [gripGeom, setGripGeom] = useState({headH: 0, edges: []});
+  useLayoutEffect(()=>{
+    const thead = theadRef.current; if(!thead) return;
+    const measure = ()=>{
+      const ths = [...thead.querySelectorAll("th")];
+      const keys = gripKeysRef.current;
+      const headH = thead.getBoundingClientRect().height;
+      const edges = [];
+      for(let i = 0; i < ths.length - 1; i++){
+        const w = ths[i].offsetWidth;
+        if(w === 0) continue;                   // display:none at this breakpoint
+        edges.push({key: keys[i] || ("c"+i), x: ths[i].offsetLeft + w});
+      }
+      setGripGeom(prev => (prev.headH === headH
+        && prev.edges.length === edges.length
+        && prev.edges.every((e,i)=> e.x === edges[i].x && e.key === edges[i].key))
+        ? prev : {headH, edges});
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(thead);
+    return ()=> ro.disconnect();
+  });
+  const onGripMove = useCallback((e)=>{
+    const d = dragRef.current; if(!d) return;
+    // 44px floor keeps a column from collapsing into an untouchable sliver.
+    d.apply(Math.max(44, Math.round(d.startW + (e.clientX - d.startX))));
+  }, []);
+  const onGripUp = useCallback((e)=>{
+    dragRef.current = null;
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+  }, []);
 
   // Customizable-columns state (hooks — must be before the early returns).
   const [colPrefs, setColPrefs] = useState(()=>{ try { return JSON.parse(localStorage.getItem("packsink:screener:colprefs:v1")||"{}"); } catch { return {}; } });
@@ -25444,6 +25506,26 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const moveCol = (key, dir)=>{ const ord = allColsOrdered.map(c=>c.key); const i=ord.indexOf(key); const j=i+dir; if(i<0||j<0||j>=ord.length) return; [ord[i],ord[j]]=[ord[j],ord[i]]; setModePref({order:ord}); };
   const resetCols = ()=> setColPrefs(prev=>{ const n={...prev}; delete n[colModeKey]; return n; });
 
+  // Plain values (not hooks) — safe here, below the early returns.
+  const colWidths = (colPrefs[colModeKey]||{}).widths || {};
+  const hasCustomWidths = Object.keys(colWidths).length > 0;
+  const setColWidth = (key, px)=> setColPrefs(prev=>{
+    const mode = prev[colModeKey] || {};
+    return {...prev, [colModeKey]: {...mode, widths: {...(mode.widths||{}), [key]: px}}};
+  });
+  // check / img / name are fixed columns; the rest come from the registry.
+  const gripKeys = ["check", "img", "name", ...orderedCols.map(c=>c.key)];
+  gripKeysRef.current = gripKeys;
+  const onGripDown = (e, key)=>{
+    const thead = theadRef.current; if(!thead) return;
+    const th = [...thead.querySelectorAll("th")][gripKeys.indexOf(key)];
+    if(!th) return;
+    e.preventDefault();
+    dragRef.current = {startX: e.clientX, startW: th.offsetWidth, apply: (px)=>setColWidth(key, px)};
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+  };
+
+
   return html`<div class=${"price-db density-"+density}>
     ${savedViews.length > 0 && html`<div class="price-db-savedviews">
       <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:4}}>Saved</span>
@@ -25524,11 +25606,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${filterSet.size === 0 ? "All sets" : `${filterSet.size} ${filterSet.size===1?"set":"sets"}`} ▾
         </button>
         ${setSelOpen && html`<div class="price-db-multimenu" style=${{maxHeight:300,overflowY:"auto"}}>
-          ${setOptions.slice().reverse().map((s) => html`<label key=${s} class="price-db-multiitem">
-            <input type="checkbox" checked=${filterSet.has(s)}
-              onChange=${()=>setFilterSet(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; })}/>
-            ${s}
-          </label>`)}
+          ${[["", setOptions.mainline], ["Promos & other", setOptions.others]].map(([grp, list]) =>
+            list.length === 0 ? null : html`<${React.Fragment} key=${grp||"main"}>
+            ${grp && html`<div class="price-db-multigroup">${grp}</div>`}
+            ${list.map((s) => html`<label key=${s} class="price-db-multiitem">
+              <input type="checkbox" checked=${filterSet.has(s)}
+                onChange=${()=>setFilterSet(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; })}/>
+              ${s}
+            </label>`)}<//>`)}
           ${filterSet.size > 0 && html`<button class="price-db-multiclear"
             onClick=${()=>setFilterSet(new Set())}>Clear</button>`}
         </div>`}
@@ -25709,11 +25794,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           <button class=${"chip "+(filterSet.size===0?"active":"")}
             title="No set filter — show every set"
             onClick=${()=>setFilterSet(new Set())}>All sets</button>
-          ${setOptions.slice().reverse().map(s => html`<button key=${s}
+          ${setOptions.mainline.map(s => html`<button key=${s}
             class=${"chip "+(filterSet.has(s)?"active":"")}
             onClick=${()=>setFilterSet(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; })}>${s}</button>`)}
         </div>
       </div>
+      ${setOptions.others.length > 0 && html`<div class="price-db-adv-row">
+        <label>Promos & other</label>
+        <div class="cards-chipgroup" style=${{flexWrap:"wrap",gap:4}}>
+          ${setOptions.others.map(s => html`<button key=${s}
+            class=${"chip "+(filterSet.has(s)?"active":"")}
+            onClick=${()=>setFilterSet(prev=>{ const n=new Set(prev); n.has(s)?n.delete(s):n.add(s); return n; })}>${s}</button>`)}
+        </div>
+      </div>`}
       ${!showSealed && html`<div class="price-db-adv-row">
         <label>Ink</label>
         <div ref=${inkRef} style=${{position:"relative",display:"inline-flex"}}>
@@ -25918,8 +26011,21 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </div>`}
     </div>`}
     <div class="price-db-tablewrap">
-      <table class="price-db-table">
-        <thead><tr>
+      <div class="price-db-tableinner">
+      <div class="price-db-gripbar" aria-hidden="true">
+        ${gripGeom.edges.map(g => html`<button key=${g.key} class="price-db-colgrip"
+          style=${{left: g.x + "px", height: (gripGeom.headH || 24) + "px"}}
+          title="Drag to resize this column"
+          onPointerDown=${(e)=>onGripDown(e, g.key)}
+          onPointerMove=${onGripMove}
+          onPointerUp=${onGripUp}
+          onPointerCancel=${onGripUp}></button>`)}
+      </div>
+      ${hasCustomWidths && html`<style>${gripKeys.map((k,i)=> colWidths[k]
+        ? `.price-db-table.pdb-resized th:nth-child(${i+1}),.price-db-table.pdb-resized td:nth-child(${i+1}){width:${colWidths[k]}px;min-width:${colWidths[k]}px;max-width:${colWidths[k]}px;}`
+        : "").join("")}</style>`}
+      <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
+        <thead ref=${theadRef}><tr>
           <th class="th-check"></th>
           <th></th>
           <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
@@ -25960,6 +26066,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           })}
         </tbody>
       </table>
+      </div>
       ${filtered.length > 1000 && html`<div class="muted" style=${{padding: "10px 6px", textAlign: "center", fontSize: 11}}>Showing first 1,000 of ${filtered.length} — tighten filters to see more.</div>`}
     </div>
     <//>`}

@@ -901,6 +901,8 @@ html[data-mode="dark"] .price-db-advcount{color:#1a1206;}
 .price-db-multiitem{display:flex;align-items:center;gap:8px;padding:6px 10px;
   font-size:13px;cursor:pointer;border-radius:4px;color:var(--text);user-select:none;}
 .price-db-multiitem:hover{background:var(--bg-surface);}
+.price-db-multigroup{padding:7px 10px 3px;font-size:9px;font-weight:800;text-transform:uppercase;
+  letter-spacing:0.5px;color:var(--text-muted);border-top:1px solid var(--border);margin-top:3px;}
 .price-db-multiitem input{cursor:pointer;}
 .price-db-multiclear{margin-top:4px;padding:5px 10px;font-size:11px;font-weight:600;
   cursor:pointer;background:transparent;border:none;color:var(--accent);text-align:left;}
@@ -981,6 +983,40 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
 
 /* Highlight the active sort column so users see why a row is at the top. */
 .price-db-table th.sort-active{color:var(--accent);}
+
+/* ── Draggable column widths ──────────────────────────────────────────────
+   Widths come from a <colgroup>. The name/set columns ship with hard
+   min/max/width rules that would beat a <col>, so once the user has dragged
+   anything the table gets .pdb-resized and those rules stand down. */
+.price-db-tableinner{position:relative;}
+/* width:max-content (not the base 100%) is what makes a drag mean what it says:
+   at 100% the table can never exceed its container, so widening one column just
+   crushed the others — on a 375px phone, dragging NAME to 210px rendered it at
+   14px. Sizing to content lets the table grow and the wrapper scroll instead;
+   min-width:100% keeps it filling the space when the columns are narrow. */
+.price-db-table.pdb-resized{width:max-content;min-width:100%;}
+/* No blanket "min-width:0;max-width:none" here. Relaxing every column the
+   moment ANY column was dragged made the untouched ones snap out to their
+   content width — dragging the NM Market column shoved Name from 150 to 330px.
+   The generated per-column rules (.price-db-table.pdb-resized th:nth-child(N),
+   specificity 0,3,1) already outrank both the base .th-name rules (0,2,1) and
+   the mobile nth-child rules (0,2,1), so only dragged columns change. */
+.price-db-table.pdb-resized td, .price-db-table.pdb-resized th{overflow:hidden;}
+.price-db-table.pdb-resized .td-num{text-overflow:ellipsis;}
+/* Zero-height sticky bar so the grips ride the sticky <thead> instead of
+   scrolling away from it — and so they never cover the rows, which would put a
+   dead strip down the table at every column boundary. */
+.price-db-gripbar{position:sticky;top:0;height:0;z-index:6;overflow:visible;}
+.price-db-colgrip{position:absolute;top:0;width:9px;margin-left:-5px;padding:0;border:0;
+  background:transparent;cursor:col-resize;touch-action:none;}
+.price-db-colgrip::after{content:"";position:absolute;left:4px;top:2px;bottom:2px;width:2px;
+  border-radius:1px;background:transparent;}
+.price-db-colgrip:hover::after, .price-db-colgrip:active::after{background:var(--accent);}
+/* Coarse pointers get a wider target — still header-only, so rows stay tappable. */
+@media (hover:none){
+  .price-db-colgrip{width:22px;margin-left:-11px;}
+  .price-db-colgrip::after{left:10px;background:var(--border);}
+}
 .price-db-table td.sort-active{background:var(--accent-glow);}
 
 /* Saved-view chips at the top of the page. Each chip = a stored snapshot
@@ -1011,24 +1047,23 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
 .price-db-table thead th:nth-child(3){z-index:4;background:var(--bg-modal);}
 .price-db-table tr.price-db-row-sel td:nth-child(3){background:var(--accent-glow);}
 
-/* Mobile: trim padding, hide image / set / rarity columns AND the checkbox
-   (the checkbox is functionally invisible on mobile anyway — the sticky
-   NAME column overlays it permanently — but it still occupied 28px of
-   table width). Columns rendered are:
-   [1] checkbox · [2] image · [3] name+meta · [4] set · [5] rarity ·
-   [6] Low · [7] NM Market · [8+] Δ% windows · [last] signals
-   With checkbox/image/set/rarity hidden and NAME tightened to 110-135px,
-   the default no-scroll view fits NAME + Low + NM Market + 1W on a
-   standard 360-414px phone, which is what the user asked for. Batch-select
-   via checkbox stays available on tablet/desktop. */
+/* Mobile: trim padding and the Name width. Nothing is force-hidden here any
+   more — ⚙ Columns is the single authority on which columns show, at every
+   width. The old rules hid image / set / rarity / checkbox unconditionally,
+   so on a phone the gear's Set and Rarity checkboxes silently did nothing,
+   and the two fixed left columns looked like they'd been cut off.
+   They were also positional (nth-child(4)/(5)) while the gear can REORDER
+   columns, so after a reorder they hid whichever columns happened to land in
+   those slots rather than Set and Rarity. The table scrolls horizontally with
+   NAME pinned, so a wider column set costs a pan, not legibility. */
 @media (max-width: 720px){
   .price-db-table{font-size:11px;}
   .price-db-table th, .price-db-table td{padding:3px 4px;}
-  .price-db-table th:nth-child(1), .price-db-table td:nth-child(1){display:none;} /* checkbox */
-  .price-db-table th:nth-child(2), .price-db-table td:nth-child(2){display:none;} /* image */
-  .price-db-table th:nth-child(4), .price-db-table td:nth-child(4){display:none;} /* set */
-  .price-db-table th:nth-child(5), .price-db-table td:nth-child(5){display:none;} /* rarity */
-  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:110px;max-width:135px;}
+  /* Was 110-135px, which truncated almost every card name to "Charles
+     Muntz -...". Names wrap to 2 lines, so a wider default costs no extra
+     rows and still leaves Low + NM Market + 1W on a 375px phone. Users can
+     drag it from here; a dragged width wins via .pdb-resized below. */
+  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:150px;max-width:175px;}
   /* Tighten the icon-only rarity chips so all 9 canonical rarities fit on a
      single row on phones. At the desktop 4px 10px padding + 3px gap, the
      9-chip strip (~380px) wrapped the last chip (Promo) onto a second line
