@@ -26801,6 +26801,7 @@ const HOME_PANELS = [
   {key:"news",        label:"News feed",            col:"left"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
+  {key:"tools",       label:"Analytics toolbox",    col:"right"},
   {key:"setChamps",   label:"Upcoming events",      col:"right"},
   {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
@@ -26809,6 +26810,10 @@ const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
 // One-shot migration stamp: see the news-feed fix in App's homeLayout init.
 const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
+// One-shot stamp for the Toolbox panel (2026-08-20): normalizeHomeLayout
+// APPENDS unknown keys, which would bury the new panel at the bottom of
+// every existing layout — hoist it to the top of the right rail once.
+const HOME_LAYOUT_TOOLBOX_KEY = "packsink:homeLayoutToolbox";
 const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
 const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
@@ -29015,7 +29020,33 @@ const NewsFeed = ({variant, tiles}) => {
   </aside>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, onEventArtistClick, layout}) => {
+// Home "Toolbox" — a compact remote control into the Analytics tools. Chips
+// are real <a href> links (modifier-click opens the tool in a new tab) that
+// SPA-navigate via onOpenTool, per the site's nav-link convention.
+const HOME_TOOLS = [
+  {k:"ev",     icon:"📦", label:"Expected Value", sub:"Box EV vs box price"},
+  {k:"trade",  icon:"⇄",  label:"Trade Compare",  sub:"Value both sides"},
+  {k:"avg",    icon:"📊", label:"Set Breakdown",  sub:"$ + share by rarity"},
+  {k:"setval", icon:"🃏", label:"Playset Cost",   sub:"Build the whole set"},
+  {k:"sim",    icon:"🎲", label:"Simulator",      sub:"Packs, boxes, odds"},
+  {k:"swiss",  icon:"🏆", label:"Swiss Odds",     sub:"Will you make the cut?"},
+];
+const HomeToolboxPanel = ({onOpenTool}) => html`<aside class="home-feed home-toolbox">
+  <div class="home-feed-title">Toolbox</div>
+  <div class="home-toolbox-grid">
+    ${HOME_TOOLS.map(t => html`<a key=${t.k} class="home-tool-chip"
+      href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
+      onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
+      <span class="home-tool-ico" aria-hidden="true">${t.icon}</span>
+      <span class="home-tool-txt">
+        <span class="home-tool-name">${t.label}</span>
+        <span class="home-tool-sub">${t.sub}</span>
+      </span>
+    </a>`)}
+  </div>
+</aside>`;
+
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
   const homeLayout = useMemo(() => normalizeHomeLayout(layout), [layout]);
@@ -29535,6 +29566,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
         openDeckById=${openDeckById} openTournamentById=${openTournamentById}
         openTournamentsList=${openTournamentsList} collapsible=${true}/>`;
+      case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}/>`;
       case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`;
@@ -35477,6 +35509,11 @@ function App(){
     if(initialUrlParams.a !== "sealed" || view !== "market") return;
     openScreenerSealed();
   }, []);
+  // Home "Toolbox" panel → jump straight to a specific Analytics tool.
+  const openAnalyticsTool = useCallback((k) => {
+    if(MARKET_SUBS.some(([kk]) => kk === k)) setMarketSub(k);
+    setView("market");
+  }, []);
   const marketSubSynced = useRef(false);
   // Keep the URL pathname in sync with `view` so back/forward + reload +
   // bookmarks all work. Strips view-specific deep-link params (?deck=,
@@ -35942,19 +35979,33 @@ function App(){
   // any more, so move news to the rail once. Stamped rather than coerced, so a
   // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
-    let fixNews = false;
+    let fixNews = false, hoistTools = false;
     try {
       fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
       if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
+      hoistTools = !localStorage.getItem(HOME_LAYOUT_TOOLBOX_KEY);
+      if(hoistTools) localStorage.setItem(HOME_LAYOUT_TOOLBOX_KEY, "1");
     } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
       if(stored){
-        const list = normalizeHomeLayout(JSON.parse(stored));
-        return fixNews
-          ? list.map(p => p.key === "news" && p.col === "announce"
-              ? {...p, col: NEWS_DEFAULT_COL} : p)
-          : list;
+        let list = normalizeHomeLayout(JSON.parse(stored));
+        if(fixNews){
+          list = list.map(p => p.key === "news" && p.col === "announce"
+              ? {...p, col: NEWS_DEFAULT_COL} : p);
+        }
+        // normalizeHomeLayout appended the new Toolbox panel at the END of
+        // every pre-existing layout — hoist it to the top of the right rail
+        // once. Stamped, not coerced, so moving it later sticks.
+        if(hoistTools){
+          const tools = list.find(p => p.key === "tools");
+          if(tools && tools.col === "right"){
+            list = list.filter(p => p.key !== "tools");
+            const i = list.findIndex(p => p.col === "right");
+            if(i >= 0) list.splice(i, 0, tools); else list.push(tools);
+          }
+        }
+        return list;
       }
       const legacy = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}");
       if(legacy && typeof legacy === "object"){
@@ -37377,6 +37428,7 @@ function App(){
       openCardsWithSearch=${openCardsWithSearch}
       openCardsFilteredBySet=${openCardsFilteredBySet}
       openScreenerWithFilter=${openScreenerWithFilter}
+      openAnalyticsTool=${openAnalyticsTool}
       layout=${homeLayout}
       onEventArtistClick=${setIndyArtistPick}/>`}
     ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
