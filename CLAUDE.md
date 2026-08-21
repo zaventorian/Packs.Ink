@@ -1267,7 +1267,23 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
   for it yet; re-check that binomial if you touch the pairing.
 - **Drops default OFF on purpose.** They're supported, but modelling attrition removes dropped
   players from the conditional pools (64p/6r at 3 losses halves the sample), which makes losing
-  records read "no data".
+  records read "no data". The threshold list is regenerated from the round count — you can't lose
+  an eighth match in a seven-round event.
+- **Prize tiers (toggle, off by default)** cover payouts past the cut — Nats cuts to 16 but 32 and
+  64 also collect. They are **tie-inclusive**: a tier's cutoff is the point total of the player
+  sitting at that placement, and everyone level with them is paid, so "Top 16" pays ~18 people at
+  136/8. That rule is also why it needs no sorting — the final-points histogram answers
+  `pts >= cutoff` directly. The **cut stays strict** (only N enter the bracket), so the two numbers
+  differ on purpose: a 6-2 at 136/8 makes the cut 77% of the time but takes Top-16 prizing 100% of
+  the time. Every surface that shows both must label them or it reads as a bug.
+- **There is deliberately no on-the-play setting.** If who plays first is a coin flip, a first-player
+  win rate of w makes each match 0.5w + 0.5(1-w) = 0.5 regardless of w, so it cannot move any output.
+  Verified empirically at 50/55/60/70% — identical record distributions. It was removed rather than
+  left as a knob that appears to do something. A real version would have to model winning the die
+  roll more often than half the time, which the pooled-odds design can't express.
+- **No awarded-byes setting either.** A bye for one player is statistically invisible once the odds
+  pool the whole field, and a bye is just a win for record purposes. The meaningful version is
+  "N players receive a first-round bye", which changes the field's point spread — not built.
 - Every match is 50/50 — this measures bracket structure, not decks. Say so in any UI copy.
 - Not built: PlayHub standings import. It needs a server-side fetch (PlayHub is CORS-blocked); the
   Cloudflare worker is the natural place, mirroring the existing `/img-proxy` pattern.

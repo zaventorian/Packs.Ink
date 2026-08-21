@@ -121,6 +121,12 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
   letter-spacing:0.8px;color:var(--green);border:1px solid var(--border);
   border-radius:999px;padding:1px 6px;margin-left:8px;}
 .sw-dead{color:var(--text-muted);}
+#ladder.no-tiers th:nth-child(7),#ladder.no-tiers td:nth-child(7){display:none;}
+.sw-tierchips{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px;}
+.sw-tierchip{border:1px solid var(--border);border-radius:999px;padding:5px 11px;font-size:12px;background:var(--stat-bg);}
+.sw-tierchip b{font-family:'Cinzel',serif;color:var(--accent);margin-left:3px;}
+.sw-tierchip-lbl{font-size:10px;text-transform:uppercase;letter-spacing:0.7px;color:var(--text-muted);
+  font-weight:600;align-self:center;}
 .sw-rd{display:none;color:var(--text-muted);font-family:'Nunito Sans',sans-serif;font-size:11px;}
 @media(max-width:640px){.sw-rd{display:inline;}}
 .sw-good{color:var(--green);}
@@ -146,10 +152,12 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
    verdict text — the numbers next to it already say the same thing. Both still
    scroll if a theme's font metrics push them over. */
 @media(max-width:640px){
-  #ladder th:nth-child(n+6),#ladder td:nth-child(n+6){display:none;}
-  /* "% of field" duplicates what the players-per-event column already says,
-     and the inline bar costs ~60px on its own. */
-  #ladder th:nth-child(4),#ladder td:nth-child(4){display:none;}
+  /* Keep Record / Cume / Makes cut / Prize tier. Pts is derivable from the
+     record, "% of field" duplicates Cume, and the tiebreakers are desktop-only. */
+  #ladder th:nth-child(2),#ladder td:nth-child(2),
+  #ladder th:nth-child(3),#ladder td:nth-child(3),
+  #ladder th:nth-child(5),#ladder td:nth-child(5),
+  #ladder th:nth-child(n+8),#ladder td:nth-child(n+8){display:none;}
   .sw-mini{display:none;}
   .sw-cell{min-width:38px;padding:2px 2px;}
   #safety th:nth-child(6),#safety td:nth-child(6){display:none;}
@@ -188,11 +196,6 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
     <div class="sw-card sw-setup">
       <h2>Event</h2>
 
-      <div class="sw-field">
-        <label>Preset</label>
-        <div class="sw-chips" id="presets"></div>
-      </div>
-
       <div class="sw-row">
         <div class="sw-field">
           <label>Players</label>
@@ -227,6 +230,13 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
         <div class="sw-hint">Realistic: players take the draw in the last two rounds once it mathematically locks their cut.</div>
       </div>
 
+      <div class="sw-field">
+        <label><input type="checkbox" id="tiersOn" style="width:auto;margin-right:6px;vertical-align:-1px">Prize tiers below the cut</label>
+        <input type="text" id="tiers" value="16, 32, 64" disabled>
+        <div class="sw-hint">Placements that pay out even though they miss the cut. Ties count:
+          matching the point total at that placement earns the tier.</div>
+      </div>
+
       <details class="sw-details" id="advWrap" style="margin-top:14px">
         <summary>Advanced</summary>
         <div style="padding-top:2px">
@@ -249,27 +259,10 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
           </div>
 
           <div class="sw-field">
-            <label>On-the-play win rate</label>
-            <input type="number" id="otp" min="50" max="80" step="0.5" value="50">
-            <div class="sw-hint">50% turns the advantage off. Who goes first is a coin flip each match.</div>
-          </div>
-
-          <div class="sw-field">
             <label>Players drop at</label>
-            <select id="dropAt">
-              <option value="0" selected>Nobody drops</option>
-              <option value="2">2 losses</option>
-              <option value="3">3 losses</option>
-              <option value="4">4 losses</option>
-            </select>
+            <select id="dropAt"></select>
             <div class="sw-hint">Modelling attrition shrinks the pool behind every number above, because
               players who leave have no next round. Leave this off unless you specifically want it.</div>
-          </div>
-
-          <div class="sw-field">
-            <label>Your awarded byes</label>
-            <input type="text" id="byes" placeholder="e.g. 1,2" value="">
-            <div class="sw-hint">Comma-separated round numbers. Leave blank for none.</div>
           </div>
 
           <div class="sw-row">
@@ -315,24 +308,37 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
       <h2>Where do I stand</h2>
       <div class="sw-you-in">
         I&rsquo;m
-        <input type="number" id="yw" min="0" max="15" value="3">&ndash;<input type="number" id="yl" min="0" max="15" value="1">&ndash;<input type="number" id="yd" min="0" max="15" value="0">
-        after round <b id="yRound">4</b>
+        <input type="number" id="yw" min="0" max="15" placeholder="W">&ndash;<input type="number" id="yl" min="0" max="15" placeholder="L">&ndash;<input type="number" id="yd" min="0" max="15" placeholder="D">
+        <span id="yRoundWrap" style="display:none">after round <b id="yRound">0</b></span>
         <span class="sw-hint" style="margin:0 0 0 4px">(wins &ndash; losses &ndash; draws)</span>
       </div>
       <div id="youBody"><div class="sw-empty">&mdash;</div></div>
+    </div>
+
+    <div class="sw-card" id="cardTiers" style="display:none">
+      <h2>Prize breakpoints</h2>
+      <div class="sw-tw"><table id="tiersTable">
+        <thead><tr><th>Tier</th><th>Cutoff</th><th>Record</th><th>Cutoff holds</th><th>Players paid</th></tr></thead>
+        <tbody></tbody>
+      </table></div>
+      <div class="sw-hint" style="margin-top:9px">
+        Tie-inclusive: finishing on the same point total as the player sitting at that placement
+        earns the tier, so &ldquo;players paid&rdquo; usually runs above the placement number.
+      </div>
     </div>
 
     <div class="sw-card">
       <h2>Every record, and what it clears</h2>
       <div class="sw-tw"><table id="ladder">
         <thead><tr>
-          <th>Record</th><th>Pts</th><th>Players</th><th>% of field</th>
-          <th>Makes cut</th><th>OMW%</th><th>GW%</th><th>OGW%</th>
+          <th>Record</th><th>Pts</th><th>Players</th><th>Cume</th><th>% of field</th>
+          <th>Makes cut</th><th>Prize tier</th><th>OMW%</th><th>GW%</th><th>OGW%</th>
         </tr></thead>
         <tbody></tbody>
       </table></div>
       <div class="sw-hint" style="margin-top:9px">
-        Averaged across every simulated tournament. &ldquo;Makes cut&rdquo; is how often a player
+        Averaged across every simulated tournament. <b>Cume</b> is how many players finish on that
+        record or better &mdash; the number ahead of you. &ldquo;Makes cut&rdquo; is how often a player
         finishing on that record actually lands inside the cut once tiebreakers resolve.
       </div>
     </div>
@@ -379,14 +385,14 @@ function swissEngine(cfg, nSims, seed, onProgress) {
   const PW = cfg.ptsWin | 0, PD = cfg.ptsDraw | 0;
   const CUT = Math.min(cfg.cut | 0, N);
   const MAXP = R * PW, PSPAN = MAXP + 1;
-  const DRAWP = +cfg.drawRate, OTP = +cfg.otp, USEOTP = Math.abs(OTP - 0.5) > 1e-9;
+  const DRAWP = +cfg.drawRate;
   const DROPAT = cfg.dropAt | 0, ALLOWID = cfg.allowID ? 1 : 0;
 
-  const byeMask = new Uint8Array(R + 2);
-  for (let i = 0; i < (cfg.byes || []).length; i++) {
-    const b = cfg.byes[i] | 0;
-    if (b >= 1 && b <= R) byeMask[b] = 1;
-  }
+  // Prize placements that pay out beyond the cut (Nats: cut 16, but 32 and 64
+  // also collect). Ascending, so tier 0 is always the most exclusive.
+  const tiers = (cfg.tiers || []).filter(t => t > 0).sort((a, b) => a - b);
+  const NT = tiers.length;
+  const tierPts = new Int32Array(NT);
 
   // mulberry32 — seeded so a run is reproducible from the seed shown in the UI.
   let _s = seed >>> 0;
@@ -421,7 +427,11 @@ function swissEngine(cfg, nSims, seed, onProgress) {
     cond: new Float64Array((R + 1) * 256 * 8),
     condPts: new Float64Array((R + 1) * 256 * PSPAN),
     cutline: new Float64Array(PSPAN),
-    sims: 0, players: N, rounds: R, ptsWin: PW, ptsDraw: PD, cut: CUT, maxPts: MAXP, dropAt: DROPAT
+    tierRec: new Float64Array(NT * 4096),
+    tierLine: new Float64Array(NT * PSPAN),
+    tierCond: new Float64Array(NT * (R + 1) * 256 * 4),
+    sims: 0, players: N, rounds: R, ptsWin: PW, ptsDraw: PD, cut: CUT, maxPts: MAXP,
+    dropAt: DROPAT, tiers: tiers
   };
   const cond = A.cond, condPts = A.condPts;
 
@@ -440,28 +450,19 @@ function swissEngine(cfg, nSims, seed, onProgress) {
         for (let p = 0; p < N; p++) if (!dropped[p] && loss[p] >= DROPAT) dropped[p] = 1;
       }
 
-      // Configured byes belong to player 0 ("you"). A bye is a 2-0 win worth
-      // full match points, and its opponent slot is -1 so OMW% skips it.
-      let byeIdx = -1;
-      if (byeMask[round] && !dropped[0]) {
-        byeIdx = 0;
-        pts[0] += PW; wins[0]++; gW[0] += 2;
-        oppFlat[0 * R + rp[0]] = -1; resFlat[0 * R + rp[0]] = 4; rp[0]++;
-      }
-
       // Counting sort of active players into point brackets, high to low.
       // O(n) — a comparison sort here is pure overhead when the key is a
       // small integer that we are about to bucket by anyway.
       cnt.fill(0);
       let active = 0;
       for (let p = 0; p < N; p++) {
-        if (dropped[p] || p === byeIdx) continue;
+        if (dropped[p]) continue;
         cnt[pts[p]]++; active++;
       }
       let off = 0;
       for (let v = MAXP; v >= 0; v--) { start[v] = off; cur[v] = off; off += cnt[v]; }
       for (let p = 0; p < N; p++) {
-        if (dropped[p] || p === byeIdx) continue;
+        if (dropped[p]) continue;
         order[cur[pts[p]]++] = p;
       }
 
@@ -469,11 +470,7 @@ function swissEngine(cfg, nSims, seed, onProgress) {
       // guarantee check below is O(1) instead of a full scan per pairing.
       if (ALLOWID && CUT > 0 && (R - round) <= 1) {
         atLeast[MAXP + 1] = 0;
-        for (let v = MAXP; v >= 0; v--) {
-          let c = cnt[v];
-          if (byeIdx >= 0 && pts[byeIdx] === v) c++;
-          atLeast[v] = atLeast[v + 1] + c;
-        }
+        for (let v = MAXP; v >= 0; v--) atLeast[v] = atLeast[v + 1] + cnt[v];
       }
 
       // ── pair within brackets, floating the odd player down ──────────────
@@ -575,12 +572,7 @@ function swissEngine(cfg, nSims, seed, onProgress) {
           gW[a]++; gW[b]++; gD[a]++; gD[b]++;
           resFlat[a * R + rp[a]] = 3; resFlat[b * R + rp[b]] = 3;
         } else {
-          let aWinP = 0.5;
-          if (USEOTP) {
-            const aFirst = rnd() < 0.5;
-            aWinP = aFirst ? OTP : 1 - OTP;
-          }
-          const aWon = rnd() < aWinP;
+          const aWon = rnd() < 0.5;
           const wI = aWon ? a : b, lI = aWon ? b : a;
           pts[wI] += PW; wins[wI]++; loss[lI]++;
           resFlat[wI * R + rp[wI]] = 1; resFlat[lI * R + rp[lI]] = 2;
@@ -627,10 +619,22 @@ function swissEngine(cfg, nSims, seed, onProgress) {
     // ── who cuts ───────────────────────────────────────────────────────────
     // Only players inside the lowest point bracket that can still reach the
     // cut need ranking, so this sorts ~CUT..3*CUT players instead of all N.
+    // One final-points histogram drives both the cut and every prize tier.
+    cnt.fill(0);
+    for (let p = 0; p < N; p++) cnt[pts[p]]++;
+
+    // A tier's cutoff is the point total of the player sitting at that
+    // placement. Because the payout rule is tie-inclusive, membership is just
+    // "pts >= cutoff" — which the histogram answers without any sorting.
+    for (let t = 0; t < NT; t++) {
+      let acc = 0, v = MAXP;
+      for (; v >= 0; v--) { acc += cnt[v]; if (acc >= tiers[t]) break; }
+      tierPts[t] = v < 0 ? 0 : v;
+      A.tierLine[t * PSPAN + tierPts[t]]++;
+    }
+
     let cutPts = -1;
     if (CUT > 0) {
-      cnt.fill(0);
-      for (let p = 0; p < N; p++) cnt[pts[p]]++;
       let acc = 0, vCut = 0;
       for (let v = MAXP; v >= 0; v--) { acc += cnt[v]; if (acc >= CUT) { vCut = v; break; } }
       const cand = [];
@@ -649,6 +653,7 @@ function swissEngine(cfg, nSims, seed, onProgress) {
       A.recCount[code]++;
       A.recOmw[code] += omw[p]; A.recGw[code] += gwp[p]; A.recOgw[code] += ogw[p];
       if (cutFlag[p]) A.recCut[code]++;
+      for (let t = 0; t < NT; t++) if (pts[p] >= tierPts[t]) A.tierRec[t * 4096 + code]++;
 
       // Conditional pool. Restricted to players who went the distance: a
       // player who dropped at 3 losses has no "next round", and folding their
@@ -669,6 +674,14 @@ function swissEngine(cfg, nSims, seed, onProgress) {
           else if (nx === 2) { cond[ci + 4]++; if (inCut) cond[ci + 5]++; }
           else if (nx === 3) { cond[ci + 6]++; if (inCut) cond[ci + 7]++; }
           condPts[key * PSPAN + fin]++;
+          // slot 0 = regardless of next round, 1/2/3 = won / lost / drew it
+          const slot = (nx === 1 || nx === 4) ? 1 : nx === 2 ? 2 : nx === 3 ? 3 : -1;
+          for (let t = 0; t < NT; t++) {
+            if (fin < tierPts[t]) continue;
+            const ti = (t * (R + 1) * 256 + key) * 4;
+            A.tierCond[ti]++;
+            if (slot > 0) A.tierCond[ti + slot]++;
+          }
         }
       }
 
@@ -683,7 +696,8 @@ function swissEngine(cfg, nSims, seed, onProgress) {
 
 /* Elementwise merge of two accumulator sets (worker shards / batches). */
 function mergeAcc(a, b) {
-  const keys = ["recCount", "recCut", "recOmw", "recGw", "recOgw", "cond", "condPts", "cutline"];
+  const keys = ["recCount", "recCut", "recOmw", "recGw", "recOgw", "cond", "condPts",
+    "cutline", "tierRec", "tierLine", "tierCond"];
   for (const k of keys) {
     const x = a[k], y = b[k];
     for (let i = 0; i < x.length; i++) x[i] += y[i];
@@ -709,17 +723,6 @@ const clampInt = (v, lo, hi, dflt) => {
 const ROUND_STEPS = [[8, 3], [16, 4], [32, 5], [64, 6], [128, 7], [226, 8], [2048, 9]];
 const suggestRounds = (n) => (ROUND_STEPS.find(([t]) => n <= t) || [0, 9])[1];
 
-/* Community-sourced Set Championship structure. Shown as editable defaults,
-   never as gospel — confirm against the current organized-play doc. */
-const SC_TABLE = [[8, 3, 0], [16, 4, 4], [32, 5, 8], [64, 6, 8], [1e9, 7, 8]];
-
-const PRESETS = [
-  { n: "League night", p: 16, r: 4, c: 0, drop: 0, id: 0 },
-  { n: "Store event", p: 32, r: 5, c: 8, drop: 0, id: 1 },
-  { n: "Set Championship", sc: true, p: 128, drop: 0, id: 1 },
-  { n: "Large regional", p: 512, r: 9, c: 8, drop: 0, id: 1 }
-];
-
 let RESULT = null;      // last completed accumulator
 let RUNNING = false;
 let workerURL = null;
@@ -734,22 +737,33 @@ function readCfg() {
     ptsWin: clampInt($("ptsWin").value, 1, 9, 3),
     ptsDraw: clampInt($("ptsDraw").value, 0, 9, 1),
     drawRate: Math.min(0.5, Math.max(0, (parseFloat($("drawRate").value) || 0) / 100)),
-    otp: Math.min(0.8, Math.max(0.5, (parseFloat($("otp").value) || 50) / 100)),
     dropAt: parseInt($("dropAt").value, 10) || 0,
     allowID: $("idsSeg").querySelector("button.active").dataset.v === "1",
-    byes: ($("byes").value || "").split(",").map(s => parseInt(s.trim(), 10)).filter(Number.isFinite)
+    tiers: readTiers(players)
   };
 }
 
-function applyPreset(ps) {
-  $("players").value = ps.p;
-  if (ps.sc) {
-    const row = SC_TABLE.find(([m]) => ps.p <= m);
-    $("rounds").value = row[1]; $("cut").value = String(row[2]);
-  } else { $("rounds").value = ps.r; $("cut").value = String(ps.c); }
-  $("dropAt").value = String(ps.drop);
-  setSeg("idsSeg", ps.id ? "1" : "0");
-  syncHints(); run();
+/* Placements that pay out beyond the cut. Capped at 4 so the table stays
+   readable, and anything at or past the field size is dropped — a "top 64" at
+   a 40-player event is just everyone. */
+function readTiers(players) {
+  if (!$("tiersOn").checked) return [];
+  const seen = new Set();
+  return ($("tiers").value || "").split(",")
+    .map(x => parseInt(x.trim(), 10))
+    .filter(n => Number.isFinite(n) && n > 0 && n < players && !seen.has(n) && seen.add(n))
+    .sort((a, b) => a - b).slice(0, 4);
+}
+
+/* Drop thresholds only make sense up to the round count — you cannot lose an
+   eighth match in a seven-round event. */
+function syncDropOptions() {
+  const R = clampInt($("rounds").value, 1, 15, 6);
+  const sel = $("dropAt"), prev = sel.value;
+  let html = '<option value="0">Nobody drops</option>';
+  for (let i = 1; i <= R; i++) html += '<option value="' + i + '">' + i + (i > 1 ? " losses" : " loss") + '</option>';
+  sel.innerHTML = html;
+  sel.value = (prev && +prev >= 1 && +prev <= R) ? prev : "0";
 }
 
 function setSeg(id, v) {
@@ -889,6 +903,7 @@ function render() {
   renderHead(r, rows);
   renderLadder(r, rows);
   renderSafety(r);
+  renderTiers(r, rows);
   renderYou();
   renderMethod(r);
 }
@@ -967,9 +982,26 @@ function renderHead(r, rows) {
       '<div class="sw-tile-n">' + t[2] + '</div></div>').join("") + '</div>';
 }
 
+/* Most exclusive tier this record actually reaches. */
+function tierCell(r, code, n) {
+  const nt = r.tiers ? r.tiers.length : 0;
+  if (!nt) return "—";
+  for (let t = 0; t < nt; t++) {
+    const p = r.tierRec[t * 4096 + code] / n;
+    if (p >= 0.995) return "Top " + r.tiers[t];
+    if (p >= 0.05) return "Top " + r.tiers[t] + ' <span class="sw-dead">' + pct(p) + "</span>";
+  }
+  return '<span class="sw-dead">&mdash;</span>';
+}
+
 function renderLadder(r, rows) {
   const tb = $("ladder").querySelector("tbody");
-  const keep = rows.filter(x => x.share >= 0.0015);
+  $("ladder").classList.toggle("no-tiers", !(r.tiers && r.tiers.length));
+  // Cume runs over every record, including the ones filtered out of the view,
+  // so "players ahead of you" stays honest.
+  let run = 0;
+  const all = rows.map(x => { run += x.n / r.sims; return Object.assign({ cume: run }, x); });
+  const keep = all.filter(x => x.share >= 0.0015);
   tb.innerHTML = keep.map(x => {
     let cls = "";
     if (x.cut !== null) {
@@ -983,8 +1015,10 @@ function renderLadder(r, rows) {
       '<td class="sw-rec">' + recLabel(x.w, x.l, x.d) + '</td>' +
       '<td>' + x.pts + '</td>' +
       '<td>' + (x.n / r.sims).toFixed(1) + '</td>' +
+      '<td>' + x.cume.toFixed(1) + '</td>' +
       '<td>' + pct(x.share) + '</td>' +
       '<td>' + cutCell + '</td>' +
+      '<td>' + tierCell(r, x.code, x.n) + '</td>' +
       '<td>' + pct(x.omw) + '</td>' +
       '<td>' + pct(x.gw) + '</td>' +
       '<td>' + pct(x.ogw) + '</td></tr>';
@@ -1012,34 +1046,70 @@ function verdict(d) {
   if (dr >= 0.985) return ["Draw and you're in", "The draw is mathematically as good as the win here. Take it and save the round."];
   if (dr >= 0.85) return ["Draw is strong", "Drawing gets there " + pct(dr) + " of the time. Playing it out only adds " + pct(Math.max(0, wn - dr)) + ", and a loss costs you " + pct(Math.max(0, dr - ls)) + "."];
   if (dr >= 0.45) return ["Draw is a coin flip", "A draw lands at " + pct(dr) + ". If your opponent offers, weigh it against the " + pct(wn) + " a win gives you."];
-  return ["You need the win", "A draw only cuts " + pct(dr) + " of the time. Play the match out — the win takes you to " + pct(wn) + "."];
+  return ["You need the win", "A draw only gets there " + pct(dr) + " of the time. Play the match out — the win takes you to " + pct(wn) + "."];
+}
+
+/* Prize-tier chips. `hits[t]` and `denom` are raw sample counts, so this works
+   for both the mid-event conditional pool and a finished record. */
+function tierChips(r, hits, denom) {
+  const nt = r.tiers ? r.tiers.length : 0;
+  if (!nt || !denom) return "";
+  const parts = ['<span class="sw-tierchip-lbl">Prizing</span>'];
+  for (let t = 0; t < nt; t++)
+    parts.push('<span class="sw-tierchip">Top ' + r.tiers[t] + ' <b>' + pct(hits[t] / denom) + '</b></span>');
+  // The cut number and the tier number differ on purpose; unlabelled they read as a bug.
+  const note = r.cut > 0
+    ? 'The cut is strict &mdash; only ' + r.cut + ' players enter the bracket. Prizing goes by point ' +
+      'total, so finishing level with the player at a breakpoint still pays that tier.'
+    : 'Prizing goes by point total, so finishing level with the player at a breakpoint still pays that tier.';
+  return '<div class="sw-tierchips">' + parts.join("") + '</div>' +
+    '<div class="sw-hint" style="margin-top:7px">' + note + '</div>';
 }
 
 function renderYou() {
   const box = $("youBody");
   const r = RESULT;
   if (!r) return;
-  const w = clampInt($("yw").value, 0, 15, 0), l = clampInt($("yl").value, 0, 15, 0), d = clampInt($("yd").value, 0, 15, 0);
+  const raw = ["yw", "yl", "yd"].map(id => $(id).value.trim());
+  if (raw.every(v => v === "")) {
+    $("yRoundWrap").style.display = "none";
+    box.innerHTML = '<div class="sw-empty">Enter your record so far and this fills in &mdash; your odds ' +
+      'from here, and what a win, a draw or a loss each does to them.</div>';
+    return;
+  }
+  const w = clampInt(raw[0], 0, 15, 0), l = clampInt(raw[1], 0, 15, 0), d = clampInt(raw[2], 0, 15, 0);
   const round = w + l + d;
+  $("yRoundWrap").style.display = "";
   $("yRound").textContent = round;
 
-  if (round < 1) { box.innerHTML = '<div class="sw-empty">Enter your record so far and this fills in.</div>'; return; }
+  if (round < 1) { box.innerHTML = '<div class="sw-empty">That is 0 rounds played &mdash; enter at least one result.</div>'; return; }
   if (round > r.rounds) {
     box.innerHTML = '<div class="sw-empty">That is ' + round + ' rounds of results, but this event is only ' +
       r.rounds + ' rounds long.</div>'; return;
   }
-  if (r.cut <= 0) { box.innerHTML = '<div class="sw-empty">Set a top cut to see cut odds.</div>'; return; }
+  const nTier = r.tiers ? r.tiers.length : 0;
+  // With no bracket but prizes on the line, the top prize tier is the goal.
+  const useTier = r.cut <= 0 && nTier > 0;
+  const goalN = useTier ? r.tiers[0] : r.cut;
+  if (r.cut <= 0 && !nTier) {
+    box.innerHTML = '<div class="sw-empty">Set a top cut, or switch on prize tiers, to see your odds.</div>';
+    return;
+  }
 
   // Final round already played — answer from the finished-record ladder instead.
   if (round === r.rounds) {
     const code = ((w & 15) << 8) | ((l & 15) << 4) | (d & 15);
     const n = r.recCount[code];
     if (!n) { box.innerHTML = '<div class="sw-empty">No simulated player finished ' + recLabel(w, l, d) + '.</div>'; return; }
-    const p = r.recCut[code] / n;
+    const hits = [];
+    for (let t = 0; t < nTier; t++) hits.push(r.tierRec[t * 4096 + code]);
+    const p = useTier ? hits[0] / n : r.recCut[code] / n;
     box.innerHTML =
       '<div class="sw-you-big"><div class="sw-you-pct">' + pct(p) + '</div>' +
       '<div class="sw-you-cap">of players who finished <b>' + recLabel(w, l, d) +
-      '</b> made Top ' + r.cut + '. Swiss is over — the rest is tiebreakers.</div></div>';
+      '</b> ' + (useTier ? 'reached Top ' + goalN : 'made Top ' + goalN) +
+      '. Swiss is over — the rest is tiebreakers.</div></div>' +
+      tierChips(r, hits, n);
     return;
   }
 
@@ -1051,22 +1121,37 @@ function renderYou() {
     return;
   }
 
-  const best = Math.max(c.win ? c.win.p : -1, c.draw ? c.draw.p : -1, c.loss ? c.loss.p : -1);
+  // Odds of landing in each paying tier from here, same pooled sample.
+  const key = round * 256 + (w * 16 + l);
+  const hits2 = [];
+  for (let t = 0; t < nTier; t++) hits2.push(r.tierCond[(t * (r.rounds + 1) * 256 + key) * 4]);
+  const chips = tierChips(r, hits2, c.n);
+
+  // Without a cut, re-point every percentage at the top prize tier. Sample
+  // sizes are unchanged — only which outcome counts as success.
+  const tBase = (0 * (r.rounds + 1) * 256 + key) * 4;
+  const aim = (o, slot) => !o ? null : (useTier ? { n: o.n, p: r.tierCond[tBase + slot] / o.n } : o);
+  const oWin = aim(c.win, 1), oLoss = aim(c.loss, 2), oDraw = aim(c.draw, 3);
+  const overall = useTier ? r.tierCond[tBase] / c.n : c.cut;
+
+  const best = Math.max(oWin ? oWin.p : -1, oDraw ? oDraw.p : -1, oLoss ? oLoss.p : -1);
   const opt = (label, o) =>
     '<div class="sw-opt' + (o && o.p === best ? ' best' : '') + '">' +
     '<div class="sw-opt-l">' + label + '</div>' +
     '<div class="sw-opt-v">' + (o ? pct(o.p) : "—") + '</div>' +
     '<div class="sw-opt-n">' + (o ? Math.round(o.n).toLocaleString() + " sampled" : "never happened") + '</div></div>';
 
-  const [vTitle, vBody] = verdict(c);
+  const [vTitle, vBody] = verdict({ win: oWin, loss: oLoss, draw: oDraw });
   const left = r.rounds - round;
+
   box.innerHTML =
-    '<div class="sw-you-big"><div class="sw-you-pct">' + pct(c.cut) + '</div>' +
-    '<div class="sw-you-cap">chance of making Top ' + r.cut + ' from <b>' + recLabel(w, l, d) +
+    '<div class="sw-you-big"><div class="sw-you-pct">' + pct(overall) + '</div>' +
+    '<div class="sw-you-cap">chance of ' + (useTier ? 'reaching' : 'making') + ' Top ' + goalN +
+    ' from <b>' + recLabel(w, l, d) +
     '</b> with ' + left + ' round' + (left === 1 ? "" : "s") + ' to play, pooled from ' +
     Math.round(c.n).toLocaleString() + ' simulated players in exactly your spot.</div></div>' +
-    '<div class="sw-opts">' + opt("If you win", c.win) + opt("If you draw", c.draw) + opt("If you lose", c.loss) + '</div>' +
-    '<div class="sw-call"><b>' + vTitle + '.</b> ' + vBody + '</div>';
+    '<div class="sw-opts">' + opt("If you win", oWin) + opt("If you draw", oDraw) + opt("If you lose", oLoss) + '</div>' +
+    '<div class="sw-call"><b>' + vTitle + '.</b> ' + vBody + '</div>' + chips;
 }
 
 function renderSafety(r) {
@@ -1100,6 +1185,32 @@ function renderSafety(r) {
     : '<tr><td colspan="6" class="sw-empty">Not enough samples — raise the simulation count.</td></tr>';
 }
 
+function renderTiers(r, rows) {
+  const card = $("cardTiers");
+  const nt = r.tiers ? r.tiers.length : 0;
+  if (!nt) { card.style.display = "none"; return; }
+  card.style.display = "";
+  const PS = r.maxPts + 1;
+  const out = [];
+  for (let t = 0; t < nt; t++) {
+    let modal = 0, modalN = 0, tot = 0;
+    for (let v = 0; v < PS; v++) {
+      const c = r.tierLine[t * PS + v];
+      tot += c;
+      if (c > modalN) { modalN = c; modal = v; }
+    }
+    let paid = 0;
+    for (let code = 0; code < 4096; code++) paid += r.tierRec[t * 4096 + code];
+    const rec = rows.find(x => x.pts === modal && x.d === 0);
+    out.push('<tr><td class="sw-rec">Top ' + r.tiers[t] + '</td>' +
+      '<td>' + modal + ' pts</td>' +
+      '<td class="sw-rec">' + (rec ? recLabel(rec.w, rec.l, rec.d) : "&mdash;") + '</td>' +
+      '<td>' + (tot ? pct(modalN / tot) : "&mdash;") + '</td>' +
+      '<td>' + (paid / r.sims).toFixed(1) + '</td></tr>');
+  }
+  $("tiersTable").querySelector("tbody").innerHTML = out.join("");
+}
+
 function renderMethod(r) {
   $("method").innerHTML =
     '<ul>' +
@@ -1118,6 +1229,14 @@ function renderMethod(r) {
     'record at your round is pooled — all of them are statistically interchangeable under equal skill. ' +
     'A 10,000-sim run at 64 players yields tens of thousands of samples per record, and changing your record ' +
     're-reads that pool instantly instead of re-simulating.</li>' +
+    '<li><b>Prize tiers</b> are tie-inclusive, which is how payouts past the cut normally read: ' +
+    'finishing on the same point total as the player sitting at that placement earns the tier. ' +
+    'That is why the players-paid count runs above the placement number. The cut itself stays strict ' +
+    '&mdash; only that many people play the bracket.</li>' +
+    '<li><b>No on-the-play setting</b>, on purpose. If who goes first is a coin flip, a first-player ' +
+    'win rate of <i>w</i> makes each match 0.5&middot;<i>w</i> + 0.5&middot;(1&minus;<i>w</i>) = 0.5 ' +
+    'regardless of <i>w</i> &mdash; so it cannot move any number on this page. Verified: 50% and 70% ' +
+    'produce identical record distributions.</li>' +
     '<li><b>Drop-outs</b> leave after the loss threshold and are excluded from the conditional pools, since a player ' +
     'who has already dropped has no next round to advise on.</li>' +
     '<li><b>Reproducible.</b> ' + r.sims.toLocaleString() + ' tournaments at seed ' + $("seed").value +
@@ -1129,10 +1248,12 @@ function renderMethod(r) {
 function pushUrl(cfg, sims, seed) {
   const q = new URLSearchParams({
     p: cfg.players, r: cfg.rounds, c: cfg.cut, pw: cfg.ptsWin, pd: cfg.ptsDraw,
-    dw: (cfg.drawRate * 100).toFixed(1), otp: (cfg.otp * 100).toFixed(1),
-    dr: cfg.dropAt, id: cfg.allowID ? 1 : 0, by: cfg.byes.join("."),
-    n: sims, s: seed, y: [$("yw").value, $("yl").value, $("yd").value].join("-")
+    dw: (cfg.drawRate * 100).toFixed(1), dr: cfg.dropAt,
+    id: cfg.allowID ? 1 : 0, n: sims, s: seed
   });
+  if (cfg.tiers.length) q.set("t", cfg.tiers.join("."));
+  const y = ["yw", "yl", "yd"].map(id => $(id).value.trim());
+  if (y.some(v => v !== "")) q.set("y", y.map(v => v === "" ? "0" : v).join("-"));
   history.replaceState(null, "", location.pathname + "?" + q.toString());
 }
 
@@ -1141,11 +1262,16 @@ function loadUrl() {
   if (![...q.keys()].length) return;
   const set = (k, id) => { if (q.has(k)) $(id).value = q.get(k); };
   set("p", "players"); set("r", "rounds"); set("pw", "ptsWin"); set("pd", "ptsDraw");
-  set("dw", "drawRate"); set("otp", "otp"); set("n", "sims"); set("s", "seed");
+  set("dw", "drawRate"); set("n", "sims"); set("s", "seed");
   if (q.has("c")) $("cut").value = q.get("c");
-  if (q.has("dr")) $("dropAt").value = q.get("dr");
-  if (q.has("by")) $("byes").value = (q.get("by") || "").split(".").filter(Boolean).join(",");
   if (q.has("id")) setSeg("idsSeg", q.get("id") === "1" ? "1" : "0");
+  if (q.has("t")) {
+    const t = (q.get("t") || "").split(".").filter(Boolean);
+    if (t.length) { $("tiersOn").checked = true; $("tiers").disabled = false; $("tiers").value = t.join(", "); }
+  }
+  // after rounds is known, so the option list exists before we select one
+  syncDropOptions();
+  if (q.has("dr")) $("dropAt").value = q.get("dr");
   if (q.has("y")) {
     const p = (q.get("y") || "").split("-");
     if (p.length === 3) { $("yw").value = p[0]; $("yl").value = p[1]; $("yd").value = p[2]; }
@@ -1153,23 +1279,25 @@ function loadUrl() {
 }
 
 /* ── wiring ───────────────────────────────────────────────────────────── */
-$("presets").innerHTML = PRESETS.map((p, i) =>
-  '<button data-i="' + i + '">' + p.n + '</button>').join("");
-$("presets").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-i]");
-  if (b) applyPreset(PRESETS[+b.dataset.i]);
-});
-
 $("idsSeg").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-v]");
   if (b) { setSeg("idsSeg", b.dataset.v); run(); }
 });
 
 $("players").addEventListener("input", () => {
+  // Setting .value does not fire an input event, so the round-count listeners
+  // below never see this — refresh the dependants by hand.
   $("rounds").value = suggestRounds(clampInt($("players").value, 4, 2048, 64));
+  syncDropOptions();
   syncHints();
 });
 ["rounds", "sims"].forEach(id => $(id).addEventListener("input", syncHints));
+$("rounds").addEventListener("input", syncDropOptions);
+$("tiersOn").addEventListener("change", () => {
+  $("tiers").disabled = !$("tiersOn").checked;
+  run();
+});
+$("tiers").addEventListener("change", () => { if ($("tiersOn").checked) run(); });
 $("btnRun").addEventListener("click", run);
 
 // Your-record inputs re-read the existing pool, so they never re-simulate.
@@ -1204,6 +1332,7 @@ $("btnTheme").addEventListener("click", () => {
 $("btnTheme").innerHTML = document.documentElement.getAttribute("data-mode") === "dark" ? "&#9790;" : "&#9788;";
 
 loadUrl();
+syncDropOptions();
 syncHints();
 run();
 </script>
