@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=337">
+<link rel="stylesheet" href="styles.css?v=338">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -8200,7 +8200,7 @@ const COACH_TOURS = {
     {sel:".history-picker-searchrow input", title:"Compare up to 18", body:"Search and add items to overlay them on one chart. \"+ variants\" pulls in a card's other printings and rarities."},
   ]},
   market: { title: "Analytics", steps: [
-    {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Set Breakdown, Playset Cost, the pack/box Simulator and Swiss tournament odds — each tab keeps its own URL, so any tool is shareable and bookmarkable."},
+    {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Set Breakdown, Playset Cost, the pack/box Simulator, Swiss tournament odds and a Dice Tray for turn order. Overview lists what each one does — and every tab keeps its own URL, so any tool is shareable and bookmarkable."},
   ]},
   collection: { title: "Collection", requiresUser: true, steps: [
     {sel:".collection-section-tabs", title:"Cards · Sealed · Graded", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math."},
@@ -23050,7 +23050,7 @@ function FAQView({onStartTour, onStartSectionTour, user}){
     <p><strong>Home</strong> — your dashboard. Top movers, your collection value, decks from people you follow, and the latest tournament finishes.</p>
     <p><strong>Screener</strong> — every tracked card as a sortable financial-database-style table. Filter by set, rarity, ink, price band, and movement window (1D / 1W / 1M / 3M / 6M / 1Y).</p>
     <p><strong>Price Graphing</strong> — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
-    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, and Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds). Sealed pricing lives in the Screener's Sealed mode.</p>
+    <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds), and a Dice Tray for rolling turn order at the table. Its <em>Overview</em> tab lists every tool and what it answers. Sealed pricing lives in the Screener's Sealed mode.</p>
     <p><strong>Cards</strong> — browseable visual catalog of every card with filters for ink, rarity, set, and a free-text smart search.</p>
     <p><strong>Collection</strong> — what you own. Three sections (Cards, Sealed, Graded) with set-by-set completion tracking, value over time, and per-section sharing.</p>
     <p><strong>Decks</strong> — your decks, the people you follow, the Discover feed of public decks, and the Tournaments index.</p>
@@ -23847,12 +23847,14 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
 }
 
 const MARKET_SUBS = [
+  ["overview","Overview"],
   ["ev",     "Expected Value"],
   ["trade",  "Trade Compare"],
   ["avg",    "Set Breakdown"],
   ["setval", "Playset Cost"],
   ["sim",    "Simulator"],
   ["swiss",  "Swiss Odds"],
+  ["dice",   "Dice Tray"],
   // Elo is always a valid sub-key so /analytics?a=elo deep-links work even
   // when the user hasn't pinned it. The Analytics tab BAR hides it unless
   // eloPinned is true (see MarketView's subsList).
@@ -26102,6 +26104,239 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   </div>`;
 }
 
+// ── Dice Tray ───────────────────────────────────────────────────────────
+// A table helper rather than a market calculator: roll for turn order, flip
+// a coin, throw rock–paper–scissors. Every die keeps its SLOT (one per
+// player, left to right) — a reroll never reshuffles which die belongs to
+// whom, which is the whole point when six people are deciding who goes first.
+const DICE_KINDS = [
+  {k:"coin", label:"Coin", sides:2},
+  {k:"d4",   label:"d4",   sides:4},
+  {k:"d6",   label:"d6",   sides:6},
+  {k:"d8",   label:"d8",   sides:8},
+  {k:"d10",  label:"d10",  sides:10},
+  {k:"d12",  label:"d12",  sides:12},
+  {k:"d20",  label:"d20",  sides:20},
+  {k:"d100", label:"d100", sides:100},
+  {k:"rps",  label:"RPS",  sides:3},
+];
+const DICE_MAX = 8;
+const DICE_SIDES = (k) => (DICE_KINDS.find(d => d.k === k) || DICE_KINDS[2]).sides;
+const RPS_FACES  = [["✊","Rock"],["✋","Paper"],["✌","Scissors"]];
+const COIN_FACES = [["H","Heads"],["T","Tails"]];
+// 3x3 grid slots (row-major) lit for each d6 face.
+const D6_PIPS = {1:[4], 2:[0,8], 3:[0,4,8], 4:[0,2,6,8], 5:[0,2,4,6,8], 6:[0,2,3,5,6,8]};
+// Uniform 1..n out of the CSPRNG. A bare modulo over a 32-bit draw biases the
+// low faces; rejecting the ragged tail of the range costs two lines and makes
+// every face equally likely.
+function rollDie(n){
+  try {
+    const limit = Math.floor(0x100000000 / n) * n;
+    const buf = new Uint32Array(1);
+    for(let i = 0; i < 12; i++){
+      crypto.getRandomValues(buf);
+      if(buf[0] < limit) return (buf[0] % n) + 1;
+    }
+  } catch {/* no crypto → fall through */}
+  return Math.floor(Math.random() * n) + 1;
+}
+const DICE_PREFS_KEY = "packsink:dice:v1";
+function readDicePrefs(){
+  try {
+    const p = JSON.parse(localStorage.getItem(DICE_PREFS_KEY) || "{}");
+    return {
+      kind:  DICE_KINDS.some(d => d.k === p.kind) ? p.kind : "d6",
+      count: Math.min(DICE_MAX, Math.max(1, Math.round(Number(p.count)) || 6)),
+    };
+  } catch { return {kind:"d6", count:6}; }
+}
+// Screen-reader text for a face — the visual d6 is pips and the coin/RPS
+// glyphs are decorative, so the button needs the value spelled out.
+const diceFaceLabel = (kind, v) => {
+  if(kind === "coin") return (COIN_FACES[v-1] || COIN_FACES[0])[1];
+  if(kind === "rps")  return (RPS_FACES[v-1] || RPS_FACES[0])[1];
+  return String(v);
+};
+const DieFace = ({kind, v}) => {
+  if(kind === "coin"){
+    const f = COIN_FACES[v-1] || COIN_FACES[0];
+    return html`<${React.Fragment}>
+      <span class="dice-glyph dice-glyph--coin">${f[0]}</span>
+      <span class="dice-word">${f[1]}</span><//>`;
+  }
+  if(kind === "rps"){
+    const f = RPS_FACES[v-1] || RPS_FACES[0];
+    return html`<${React.Fragment}>
+      <span class="dice-glyph">${f[0]}</span>
+      <span class="dice-word">${f[1]}</span><//>`;
+  }
+  if(kind === "d6") return html`<span class="dice-pips" aria-hidden="true">
+    ${Array.from({length:9}, (_, i) => html`<i key=${i}
+      class=${"dice-pip"+((D6_PIPS[v]||[]).includes(i) ? " on" : "")}></i>`)}
+  </span>`;
+  return html`<span class=${"dice-num"+(v >= 100 ? " dice-num--sm" : "")}>${v}</span>`;
+};
+function DiceTray(){
+  const [kind, setKind]   = useState(() => readDicePrefs().kind);
+  const [count, setCount] = useState(() => readDicePrefs().count);
+  const [vals, setVals]   = useState(() => {
+    const p = readDicePrefs();
+    return Array.from({length: p.count}, () => rollDie(DICE_SIDES(p.kind)));
+  });
+  // Slot indexes currently mid-tumble (null once everything has settled).
+  const [spin, setSpin] = useState(null);
+  const spinRef = useRef(null);
+  useEffect(() => {
+    try { localStorage.setItem(DICE_PREFS_KEY, JSON.stringify({kind, count})); } catch {}
+  }, [kind, count]);
+  useEffect(() => () => {
+    if(spinRef.current){ clearInterval(spinRef.current.iv); clearTimeout(spinRef.current.to); }
+  }, []);
+  // Roll the given slots. `nextKind` lets a type switch reroll in the same
+  // pass — the faces on screen are out of range for the new die.
+  const roll = useCallback((idxs, nextKind) => {
+    const s = DICE_SIDES(nextKind || kind);
+    const hit = new Set(idxs);
+    const shuffle = () => setVals(v => v.map((x, i) => hit.has(i) ? rollDie(s) : x));
+    if(spinRef.current){
+      clearInterval(spinRef.current.iv);
+      clearTimeout(spinRef.current.to);
+      spinRef.current = null;
+    }
+    let reduced = false;
+    try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
+    if(reduced){ setSpin(null); shuffle(); return; }
+    setSpin(hit);
+    const iv = setInterval(shuffle, 70);
+    const to = setTimeout(() => {
+      clearInterval(iv); spinRef.current = null; setSpin(null); shuffle();
+    }, 520);
+    spinRef.current = {iv, to};
+  }, [kind]);
+  const setDiceCount = (n) => {
+    const c = Math.min(DICE_MAX, Math.max(1, n));
+    if(c === count) return;
+    setCount(c);
+    setVals(v => c <= v.length
+      ? v.slice(0, c)
+      : v.concat(Array.from({length: c - v.length}, () => rollDie(DICE_SIDES(kind)))));
+  };
+  const pickKind = (k) => { if(k === kind) return; setKind(k); roll(vals.map((_, i) => i), k); };
+  const rollAll  = () => roll(vals.map((_, i) => i));
+
+  const numeric = kind !== "coin" && kind !== "rps";
+  const settled = !spin;
+  // Who won the turn-order roll. Ties are surfaced rather than broken — the
+  // table rerolls just the tied dice, exactly like it would with real ones.
+  const top = useMemo(() => {
+    if(!numeric || vals.length < 2) return {idxs: [], best: null, tied: false};
+    const best = Math.max(...vals);
+    const idxs = vals.reduce((a, v, i) => (v === best ? a.concat(i) : a), []);
+    return {idxs, best, tied: idxs.length > 1};
+  }, [vals, numeric]);
+  const highs = settled && top.idxs.length === 1 ? top.idxs : [];
+  const summary = (() => {
+    if(!settled) return "Rolling…";
+    if(kind === "coin"){
+      if(vals.length === 1) return (COIN_FACES[vals[0]-1] || COIN_FACES[0])[1];
+      const h = vals.filter(v => v === 1).length;
+      return `${h} heads · ${vals.length - h} tails`;
+    }
+    if(kind === "rps"){
+      if(vals.length === 1) return (RPS_FACES[vals[0]-1] || RPS_FACES[0])[1];
+      return RPS_FACES
+        .map((f, n) => [f[1], vals.filter(v => v === n + 1).length])
+        .filter(([, c]) => c > 0)
+        .map(([w, c]) => `${c} ${w.toLowerCase()}`)
+        .join(" · ");
+    }
+    if(vals.length === 1) return `Rolled ${vals[0]}`;
+    const total = vals.reduce((a, b) => a + b, 0);
+    if(top.tied) return `Tie at ${top.best} — ${top.idxs.map(i => "Player " + (i+1)).join(" & ")}`;
+    return `Player ${top.idxs[0] + 1} goes first with ${top.best} · total ${total}`;
+  })();
+
+  return html`<${React.Fragment}>
+    <${MarketHeader} title="Dice Tray"
+      sub="Roll for turn order at the table — one die per player, each holding its own slot so the results stay matched to seats.">
+      <div class="dice-count" role="group" aria-label="Number of dice">
+        <button onClick=${()=>setDiceCount(count-1)} disabled=${count<=1} aria-label="One fewer die">−</button>
+        <span class="dice-count-n">${count} <span class="dice-count-w">${count===1?"die":"dice"}</span></span>
+        <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label="One more die">+</button>
+      </div>
+    <//>
+    <div class="dice-bar">
+      <div class="seg-toggle dice-kinds" role="group" aria-label="Die type">
+        ${DICE_KINDS.map(d => html`<button key=${d.k} class=${kind===d.k ? "active" : ""}
+          onClick=${()=>pickKind(d.k)}>${d.label}</button>`)}
+      </div>
+      <button class="dice-roll" onClick=${rollAll}>Roll${count>1?" all":""}</button>
+      ${settled && top.tied && html`<button class="dice-retie" onClick=${()=>roll(top.idxs)}>
+        Reroll the tie</button>`}
+    </div>
+    <div class=${"dice-tray"+(spin?" is-rolling":"")}>
+      ${vals.map((v, i) => html`<button key=${i}
+        class=${"dice-die dice-die--"+kind+(spin&&spin.has(i)?" is-spin":"")+(highs.includes(i)?" is-high":"")}
+        onClick=${()=>roll([i])} title="Reroll this one"
+        aria-label=${`Player ${i+1} rolled ${diceFaceLabel(kind, v)} — reroll`}>
+        <span class="dice-slot">Player ${i+1}</span>
+        <span class="dice-face"><${DieFace} kind=${kind} v=${v}/></span>
+      </button>`)}
+    </div>
+    <div class="dice-summary" aria-live="polite">${summary}</div>
+    <${MarketExplainer} id="dice">
+      <p>Every roll comes from the browser's cryptographic random source, drawn so that each
+      face is equally likely — no weighting, no house edge.</p>
+      <p>Dice stay in their slots on purpose. With one die per player you can roll the whole
+      table at once, and a reroll (click a single die, or <strong>Reroll the tie</strong>)
+      leaves everyone else's number alone. Highest roll goes first; a tie is called out
+      instead of quietly broken.</p>
+      <p>Your die type and count are remembered on this device.</p>
+    <//>
+  <//>`;
+}
+
+// Analytics landing page — an index of what lives under this tab, so the
+// tools are discoverable instead of hiding behind a bar of bare labels.
+// Reuses the home Toolbox's icon set so a tool looks the same everywhere.
+const MARKET_TOOL_INFO = {
+  ev:     {blurb:"What a sealed booster box is worth to crack.",
+           pts:["EV per box and per pack at today's prices","Measured against the current box price","One click into a simulated box"]},
+  trade:  {blurb:"Value both sides of a trade before you commit.",
+           pts:["Search cards onto either side, foil or not","Low and NM Market totals with the gap","Share the whole trade as a short link"]},
+  avg:    {blurb:"Where a set's value actually sits.",
+           pts:["Average card value by rarity","Each rarity's share of box EV","Compare any two sets side by side"]},
+  setval: {blurb:"What it costs to finish a set.",
+           pts:["Master set (1 of each) or a full playset","Priced off Low or NM Market","Counts what you already own"]},
+  sim:    {blurb:"Open packs and boxes at real pull rates.",
+           pts:["Pack, box, and thousand-box odds modes","Add what you pull straight to your collection","See how often a box beats its price"]},
+  swiss:  {blurb:"Will your record make the cut?",
+           pts:["Monte Carlo over any field size and round count","Draw safety and intentional-draw guidance","Prize-tier odds past the cut"]},
+  dice:   {blurb:"Roll for turn order, or settle it with a coin.",
+           pts:["Up to 8 dice, one per player, held in place","d4 through d100, plus coins and rock-paper-scissors","Highest roll called out, ties rerolled on their own"]},
+  elo:    {blurb:"Ratings for the Chicagoland scene.",
+           pts:["Player leaderboard and event history","Store activity against the RPH tiers","Scout an upcoming event's field"]},
+};
+const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragment}>
+  <${MarketHeader} title="Analytics"
+    sub="Every calculator on the site, and the question each one answers."/>
+  <div class="mkt-ov-grid">
+    ${subs.filter(([k]) => k !== "overview" && MARKET_TOOL_INFO[k]).map(([k, label]) => html`<a key=${k}
+      class="mkt-ov-card" href=${"/analytics?a="+k} onClick=${navHandler(()=>onOpen(k))}>
+      <span class="mkt-ov-head">
+        <span class="mkt-ov-ico" aria-hidden="true">${HOME_TOOL_ICONS[k]}</span>
+        <span class="mkt-ov-name">${label}</span>
+      </span>
+      <span class="mkt-ov-blurb">${MARKET_TOOL_INFO[k].blurb}</span>
+      <ul class="mkt-ov-pts">
+        ${MARKET_TOOL_INFO[k].pts.map(p => html`<li key=${p}>${p}</li>`)}
+      </ul>
+    </a>`)}
+  </div>
+  ${onOpenSealed && html`<p class="mkt-ov-foot">Sealed product pricing lives in the
+    ${" "}<a href="/screener" onClick=${navHandler(onOpenSealed)}>Screener's Sealed mode</a>.</p>`}
+<//>`;
+
 function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
                     excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
                     user, collection, updateQty, onSignIn, openSetHistory, sealedPrices,
@@ -26174,6 +26409,9 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
         title="Sealed product pricing lives in the Screener's Sealed mode now"
         onClick=${navHandler(openScreenerSealed)}>Sealed ↗</a>`}
     </div>
+    ${sub==="overview" && html`<${AnalyticsOverview} subs=${subsList} onOpen=${setSub}
+      onOpenSealed=${openScreenerSealed}/>`}
+    ${sub==="dice" && html`<${DiceTray}/>`}
     ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
@@ -29825,12 +30063,24 @@ const HOME_TOOL_ICONS = {
   setval: _navSvg(html`
     <rect x="8" y="3" width="12" height="16" rx="2"/>
     <path d="M5 6v14a2 2 0 0 0 2 2h10"/>`),
-  // Simulator — die with three pips
+  // Simulator — a booster pack with its tear strip
   sim: _navSvg(html`
-    <rect x="4" y="4" width="16" height="16" rx="3"/>
-    <circle cx="8.6" cy="8.6" r="0.9" fill="currentColor"/>
-    <circle cx="12" cy="12" r="0.9" fill="currentColor"/>
-    <circle cx="15.4" cy="15.4" r="0.9" fill="currentColor"/>`),
+    <path d="M5 7h14v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V7z"/>
+    <path d="M5 7l2-3h10l2 3"/>
+    <path d="M9 11v6"/>
+    <path d="M15 11v6"/>`),
+  // Dice Tray — a pair of dice
+  dice: _navSvg(html`
+    <rect x="3" y="8" width="12" height="12" rx="3"/>
+    <path d="M9 8V6a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-2"/>
+    <circle cx="7" cy="12" r="0.9" fill="currentColor"/>
+    <circle cx="11" cy="16" r="0.9" fill="currentColor"/>
+    <circle cx="17" cy="8" r="0.9" fill="currentColor"/>`),
+  // Chicagoland Elo — rating line stepping up
+  elo: _navSvg(html`
+    <path d="M3 20h18"/>
+    <path d="M4 15l5-5 4 4 6-7"/>
+    <path d="M15 7h4v4"/>`),
   // Swiss Odds — trophy
   swiss: _navSvg(html`
     <path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/>
@@ -29844,7 +30094,7 @@ const HOME_TOOLS = [
   {k:"ev",     label:"Expected Value", sub:"Box EV vs box price"},
   {k:"trade",  label:"Trade Compare",  sub:"Value both sides"},
   {k:"avg",    label:"Set Breakdown",  sub:"$ + share by rarity"},
-  {k:"setval", label:"Playset Cost",   sub:"Build the whole set"},
+  {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
   {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
   {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
 ];
@@ -29858,7 +30108,10 @@ const HomeToolboxPanel = ({onOpenTool}) => {
   }, [collapsed]);
   return html`<aside class="home-feed home-toolbox">
     <div class="home-feed-head">
-      <div class="home-feed-title">Toolbox</div>
+      <a class="home-feed-title home-feed-title--chase home-toolbox-title"
+        href="/analytics?a=overview"
+        title="Open Analytics — what every tool does"
+        onClick=${navHandler(()=>onOpenTool && onOpenTool("overview"))}>Toolbox</a>
       <button class=${"home-feed-collapse-btn"+(collapsed?" is-collapsed":"")}
         onClick=${()=>setCollapsed(v=>!v)}
         aria-expanded=${!collapsed}
@@ -35852,12 +36105,14 @@ const VIEW_TITLES = {
 // Analytics sub-tools get their own tab titles — every ?a= URL is shareable,
 // so the tab/bookmark should say which tool it is.
 const MARKET_SUB_TITLES = {
+  overview: "Lorcana Analytics Tools — Packs.Ink",
   ev:     "Lorcana Booster Box EV — Packs.Ink",
   trade:  "Lorcana Trade Compare — Packs.Ink",
   avg:    "Lorcana Set Breakdown — Packs.Ink",
   setval: "Lorcana Playset Cost — Packs.Ink",
   sim:    "Lorcana Pack Simulator — Packs.Ink",
   swiss:  "Lorcana Swiss Odds — Packs.Ink",
+  dice:   "Dice Tray — Packs.Ink",
   elo:    "Chicagoland Lorcana Elo — Packs.Ink",
 };
 const PATH_TO_VIEW = (() => {
