@@ -26122,7 +26122,7 @@ const DICE_KINDS = [
 ];
 const DICE_MAX = 8;
 const DICE_SIDES = (k) => (DICE_KINDS.find(d => d.k === k) || DICE_KINDS[2]).sides;
-const RPS_FACES  = [["✊","Rock"],["✋","Paper"],["✌","Scissors"]];
+const RPS_FACES  = [["rock","Rock"],["paper","Paper"],["scissors","Scissors"]];
 const COIN_FACES = [["H","Heads"],["T","Tails"]];
 // 3x3 grid slots (row-major) lit for each d6 face.
 const D6_PIPS = {1:[4], 2:[0,8], 3:[0,4,8], 4:[0,2,6,8], 5:[0,2,4,6,8], 6:[0,2,3,5,6,8]};
@@ -26151,30 +26151,88 @@ function readDicePrefs(){
   } catch { return {kind:"d6", count:2}; }
 }
 // Screen-reader text for a face — the visual d6 is pips and the coin/RPS
-// glyphs are decorative, so the button needs the value spelled out.
+// faces are drawings, so the button needs the value spelled out.
 const diceFaceLabel = (kind, v) => {
   if(kind === "coin") return (COIN_FACES[v-1] || COIN_FACES[0])[1];
   if(kind === "rps")  return (RPS_FACES[v-1] || RPS_FACES[0])[1];
   return String(v);
 };
+// Each die is drawn as its real polyhedral silhouette (viewBox 0 0 100 100):
+// d4 triangle, d8 diamond, d10/d100 kite, d12 pentagon, d20 the classic
+// hexagon-with-inner-triangle — instead of a number in a generic rounded box.
+// `detail` is the faint interior edge lines that sell the solid.
+const DICE_SHAPE_PATHS = {
+  d4:   {poly:"50,9 93,86 7,86", detail:"M50 9L50 53M7 86L50 53M93 86L50 53"},
+  d6:   {rect:true},
+  d8:   {poly:"50,5 94,50 50,95 6,50", detail:"M6 50h88"},
+  d10:  {poly:"50,4 91,41 50,96 9,41", detail:"M9 41l41 13 41-13M50 54v42"},
+  d12:  {poly:"50,6 94,38 77,91 23,91 6,38"},
+  d20:  {poly:"50,4 90,27 90,73 50,96 10,73 10,27",
+         detail:"M50 22L17 67L83 67L50 22M50 4v18M10 27L17 67M90 27L83 67M50 96L17 67M50 96L83 67"},
+  d100: {poly:"50,4 91,41 50,96 9,41", detail:"M9 41l41 13 41-13M50 54v42"},
+  coin: {circle:true},
+  rps:  {rect:true},
+};
+// Line-art rock / paper / scissors (24x24, stroke:currentColor) — no emoji,
+// they render differently on every OS and clash with the drawn dice.
+const RPS_ICONS = {
+  rock: html`<path d="M8 4.5l8-1.5 5.5 6-2.5 9.5-9.5 1L4 12z"/>
+    <path d="M8 4.5l4.5 6.5-2 8.5"/><path d="M12.5 11l8.5-1.5"/>`,
+  paper: html`<path d="M6.5 2.5h8l5 5v14h-13z"/><path d="M14.5 2.5v5h5"/>`,
+  scissors: html`<circle cx="6" cy="6" r="2.6"/><circle cx="6" cy="18" r="2.6"/>
+    <path d="M20 4L8.2 15.8"/><path d="M14.7 14.7L20 20"/><path d="M8.2 8.2L12 12"/>`,
+};
+// The die drawn twice: a themed base fill, then a sheen+stroke copy (shared
+// gradient defs live in DiceTray), plus the interior edge lines.
+const DiceShapeSvg = ({k}) => {
+  const s = DICE_SHAPE_PATHS[k] || DICE_SHAPE_PATHS.d6;
+  const shape = (cls) => s.circle ? html`<circle class=${cls} cx="50" cy="50" r="46"/>`
+    : s.rect ? html`<rect class=${cls} x="8" y="8" width="84" height="84" rx="20"/>`
+    : html`<polygon class=${cls} points=${s.poly}/>`;
+  return html`<svg class="dice-shape-svg" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+    ${shape("dice-shape-base")}
+    ${shape("dice-shape-sheen")}
+    ${s.circle && html`<circle class="dice-shape-detail dice-coin-rim" cx="50" cy="50" r="36" fill="none"/>`}
+    ${s.detail && html`<path class="dice-shape-detail" d=${s.detail} fill="none"/>`}
+  </svg>`;
+};
+// Mini stroke-only version of the same silhouettes for the type picker, so
+// the chip previews the die you're choosing.
+const DiceMini = ({k}) => {
+  if(k === "rps") return html`<svg class="dice-mini" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+    <g class="mr">${RPS_ICONS.scissors}</g></svg>`;
+  const s = DICE_SHAPE_PATHS[k] || DICE_SHAPE_PATHS.d6;
+  return html`<svg class="dice-mini" viewBox="0 0 100 100" aria-hidden="true" focusable="false">
+    ${s.circle ? html`<circle class="m" cx="50" cy="50" r="43"/><circle class="m2" cx="50" cy="50" r="30"/>`
+      : s.rect ? html`<rect class="m" x="11" y="11" width="78" height="78" rx="20"/><circle cx="50" cy="50" r="8" fill="currentColor"/>`
+      : html`<${React.Fragment}><polygon class="m" points=${s.poly}/>
+          ${s.detail && html`<path class="m2" d=${s.detail} fill="none"/>`}<//>`}
+  </svg>`;
+};
 const DieFace = ({kind, v}) => {
-  if(kind === "coin"){
-    const f = COIN_FACES[v-1] || COIN_FACES[0];
-    return html`<${React.Fragment}>
-      <span class="dice-glyph dice-glyph--coin">${f[0]}</span>
-      <span class="dice-word">${f[1]}</span><//>`;
-  }
-  if(kind === "rps"){
-    const f = RPS_FACES[v-1] || RPS_FACES[0];
-    return html`<${React.Fragment}>
-      <span class="dice-glyph">${f[0]}</span>
-      <span class="dice-word">${f[1]}</span><//>`;
-  }
-  if(kind === "d6") return html`<span class="dice-pips" aria-hidden="true">
-    ${Array.from({length:9}, (_, i) => html`<i key=${i}
-      class=${"dice-pip"+((D6_PIPS[v]||[]).includes(i) ? " on" : "")}></i>`)}
+  const overlay = (() => {
+    if(kind === "coin"){
+      const f = COIN_FACES[v-1] || COIN_FACES[0];
+      return html`<${React.Fragment}>
+        <span class="dice-coin-letter">${f[0]}</span>
+        <span class="dice-word dice-word--coin">${f[1]}</span><//>`;
+    }
+    if(kind === "rps"){
+      const f = RPS_FACES[v-1] || RPS_FACES[0];
+      return html`<${React.Fragment}>
+        <svg class="dice-rps-ico" viewBox="0 0 24 24" aria-hidden="true" focusable="false">${RPS_ICONS[f[0]]}</svg>
+        <span class="dice-word">${f[1]}</span><//>`;
+    }
+    if(kind === "d6") return html`<span class="dice-pips" aria-hidden="true">
+      ${Array.from({length:9}, (_, i) => html`<i key=${i}
+        class=${"dice-pip"+((D6_PIPS[v]||[]).includes(i) ? " on" : "")}></i>`)}
+    </span>`;
+    return html`<span class=${"dice-num"+(v >= 100 ? " dice-num--sm" : "")}>${v}</span>`;
+  })();
+  return html`<span class="dice-shape-wrap">
+    <${DiceShapeSvg} k=${kind}/>
+    <span class=${"dice-face-overlay dice-ov--"+kind}>${overlay}</span>
   </span>`;
-  return html`<span class=${"dice-num"+(v >= 100 ? " dice-num--sm" : "")}>${v}</span>`;
 };
 function DiceTray(){
   const [kind, setKind]   = useState(() => readDicePrefs().kind);
@@ -26185,6 +26243,10 @@ function DiceTray(){
   });
   // Slot indexes currently mid-tumble (null once everything has settled).
   const [spin, setSpin] = useState(null);
+  // Bumped per animated roll and used as the face wrapper's key, so a click
+  // mid-tumble remounts the wrapper and restarts the CSS animation — without
+  // it the class never toggles off and the second roll doesn't animate.
+  const [rollTick, setRollTick] = useState(0);
   const spinRef = useRef(null);
   useEffect(() => {
     try { localStorage.setItem(DICE_PREFS_KEY, JSON.stringify({kind, count})); } catch {}
@@ -26203,14 +26265,16 @@ function DiceTray(){
       clearTimeout(spinRef.current.to);
       spinRef.current = null;
     }
+    try { if(navigator.vibrate) navigator.vibrate(15); } catch {}
     let reduced = false;
     try { reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches; } catch {}
     if(reduced){ setSpin(null); shuffle(); return; }
     setSpin(hit);
-    const iv = setInterval(shuffle, 70);
+    setRollTick(t => t + 1);
+    const iv = setInterval(shuffle, 75);
     const to = setTimeout(() => {
       clearInterval(iv); spinRef.current = null; setSpin(null); shuffle();
-    }, 520);
+    }, 620);
     spinRef.current = {iv, to};
   }, [kind]);
   const setDiceCount = (n) => {
@@ -26236,7 +26300,7 @@ function DiceTray(){
   }, [vals, numeric]);
   const highs = settled && top.idxs.length === 1 ? top.idxs : [];
   const summary = (() => {
-    if(!settled) return "Rolling…";
+    if(!settled) return kind === "coin" ? "Flipping…" : "Rolling…";
     if(kind === "coin"){
       if(vals.length === 1) return (COIN_FACES[vals[0]-1] || COIN_FACES[0])[1];
       const h = vals.filter(v => v === 1).length;
@@ -26258,37 +26322,55 @@ function DiceTray(){
 
   return html`<${React.Fragment}>
     <${MarketHeader} title="Dice Tray"
-      sub="Roll for turn order at the table — one die per player, each holding its own slot so the results stay matched to seats.">
-      <div class="dice-count" role="group" aria-label="Number of dice">
-        <button onClick=${()=>setDiceCount(count-1)} disabled=${count<=1} aria-label="One fewer die">−</button>
-        <span class="dice-count-n">${count} <span class="dice-count-w">${count===1?"die":"dice"}</span></span>
-        <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label="One more die">+</button>
+      sub="Roll for turn order at the table — one die per player, each holding its own seat."/>
+    <div class="dice-stage">
+      <svg width="0" height="0" style=${{position:"absolute"}} aria-hidden="true" focusable="false"><defs>
+        <linearGradient id="diceSheen" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
+          <stop offset="0.45" stop-color="#ffffff" stop-opacity="0.03"/>
+          <stop offset="1" stop-color="#000000" stop-opacity="0.16"/>
+        </linearGradient>
+        <radialGradient id="diceCoin" cx="0.35" cy="0.28" r="0.95">
+          <stop offset="0" stop-color="#f7e6a6"/>
+          <stop offset="0.55" stop-color="#dcbc60"/>
+          <stop offset="1" stop-color="#9a7b34"/>
+        </radialGradient>
+      </defs></svg>
+      <div class="dice-kindgrid" role="group" aria-label="Die type">
+        ${DICE_KINDS.map(d => html`<button key=${d.k}
+          class=${"dice-kindbtn"+(kind===d.k?" active":"")}
+          onClick=${()=>pickKind(d.k)} aria-pressed=${kind===d.k}>
+          <${DiceMini} k=${d.k}/>
+          <span class="dice-kindlbl">${d.label}</span>
+        </button>`)}
       </div>
-    <//>
-    <div class="dice-bar">
-      <div class="seg-toggle dice-kinds" role="group" aria-label="Die type">
-        ${DICE_KINDS.map(d => html`<button key=${d.k} class=${kind===d.k ? "active" : ""}
-          onClick=${()=>pickKind(d.k)}>${d.label}</button>`)}
+      <div class="dice-bar">
+        <div class="dice-count" role="group" aria-label="Number of dice">
+          <button onClick=${()=>setDiceCount(count-1)} disabled=${count<=1} aria-label="One fewer die">−</button>
+          <span class="dice-count-n">${count} <span class="dice-count-w">${count===1?"die":"dice"}</span></span>
+          <button onClick=${()=>setDiceCount(count+1)} disabled=${count>=DICE_MAX} aria-label="One more die">+</button>
+        </div>
+        <button class="dice-roll" onClick=${rollAll}>${kind==="coin" ? "Flip" : "Roll"}</button>
+        ${settled && top.tied && html`<button class="dice-retie" onClick=${()=>roll(top.idxs)}>
+          Reroll the tie</button>`}
       </div>
-      <button class="dice-roll" onClick=${rollAll}>Roll${count>1?" all":""}</button>
-      ${settled && top.tied && html`<button class="dice-retie" onClick=${()=>roll(top.idxs)}>
-        Reroll the tie</button>`}
+      <div class=${"dice-tray"+(spin?" is-rolling":"")}>
+        ${vals.map((v, i) => html`<button key=${i}
+          class=${"dice-die dice-die--"+kind+(spin&&spin.has(i)?" is-spin":"")+(highs.includes(i)?" is-high":"")}
+          onClick=${()=>roll([i])} title=${kind==="coin" ? "Flip this one" : "Reroll this one"}
+          aria-label=${`Player ${i+1} rolled ${diceFaceLabel(kind, v)} — reroll`}>
+          ${count > 1 && html`<span class="dice-slot">Player ${i+1}</span>`}
+          <span class="dice-anim" key=${"t"+rollTick}><${DieFace} kind=${kind} v=${v}/></span>
+        </button>`)}
+      </div>
+      <div class="dice-summary" aria-live="polite">${summary}</div>
+      ${count > 1 && html`<div class="dice-hint">Tap any die to ${kind==="coin"?"flip":"reroll"} just that one.</div>`}
     </div>
-    <div class=${"dice-tray"+(spin?" is-rolling":"")}>
-      ${vals.map((v, i) => html`<button key=${i}
-        class=${"dice-die dice-die--"+kind+(spin&&spin.has(i)?" is-spin":"")+(highs.includes(i)?" is-high":"")}
-        onClick=${()=>roll([i])} title="Reroll this one"
-        aria-label=${`Player ${i+1} rolled ${diceFaceLabel(kind, v)} — reroll`}>
-        <span class="dice-slot">Player ${i+1}</span>
-        <span class="dice-face"><${DieFace} kind=${kind} v=${v}/></span>
-      </button>`)}
-    </div>
-    <div class="dice-summary" aria-live="polite">${summary}</div>
     <${MarketExplainer} id="dice">
       <p>Every roll comes from the browser's cryptographic random source, drawn so that each
       face is equally likely — no weighting, no house edge.</p>
-      <p>Dice stay in their slots on purpose. With one die per player you can roll the whole
-      table at once, and a reroll (click a single die, or <strong>Reroll the tie</strong>)
+      <p>Dice stay in their seats on purpose. With one die per player you can roll the whole
+      table at once, and a reroll (tap a single die, or <strong>Reroll the tie</strong>)
       leaves everyone else's number alone. Highest roll goes first; a tie is called out
       instead of quietly broken.</p>
       <p>Your die type and count are remembered on this device.</p>
