@@ -1373,25 +1373,38 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`; robots-disallowed + noindex
   (shared by link, not nav-linked). No sw.js involvement — the page never registers it and OBS's
   browser profile never visits the SPA.
-- **Data**: one PostgREST query per direction against `price_movers`, server-side
-  `order={pct_col}.desc&limit=n` — never pulls the full 5.8k-row matview onto a stream machine.
-  Defaults: 1W window, **NM Market basis** (`mkt_pct_7d` — Low sits frozen for weeks and would lie
-  on short windows), risers only, $1 price floor (keeps 10-cent cards' +300% "moves" out), 40
-  items, all rarities. Params: `w/m/dir/n/min/rar/img/brand/speed/bg/fg` — the URL is the whole
-  config, so a pasted OBS URL is set-and-forget. Refetches every 30 min while live; errors retry
-  in 60s and never blank an already-rendered strip.
+- **The reel is SECTIONS, cycling (windows × rarity groups)** — reworked same day on Zaven's
+  feedback. `buildTickerPlan(cfg)` emits one section per (time frame × group) in window-major
+  canonical order, each introduced by an IN-REEL header ("1D Risers" over the group name) — the
+  brand cap is just logo + "packs.ink", no window label. Groups mirror the home movers banners:
+  Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities. Defaults: 1D + 1W ×
+  Chase + Rare–Legendary, risers, **NM Market basis** (Low sits frozen for weeks and would lie on
+  short windows), 15 cards/section, $1 floor (keeps 10-cent cards' +300% "moves" out).
+- **Data**: one PostgREST query per (section × direction) against `price_movers`, server-side
+  `order={pct_col}.desc&limit=n` — never the full 5.8k-row matview on a stream machine. Params:
+  `w`/`g` (csv, canonical-order sets), `foil=0`/`nf=0`, `m/dir/n/min/img/brand/speed/bg/fg` — the
+  URL is the whole config, so a pasted OBS URL is set-and-forget. Refetches every 30 min; a failed
+  query drops only its own section for the round and retries in 60s — an already-rendered strip is
+  never blanked.
+- **Foil/Non-Foil toggles carry the Screener's chase bypass**: single-printing rarities
+  (Enchanted/Epic/Iconic/Promo) ignore the printing filter — enforced server-side via
+  `or=(printing.in.(…),rarity.in.(bypass))` on mixed groups, and by skipping the filter entirely on
+  all-chase groups, else "non-foil only" silently empties every chase section. Verified live: the
+  quoted in-lists inside `or=()` are valid PostgREST.
 - **Marquee**: one `.tk-seq` duplicated until it spans ≥2 viewports, then `translateX` by exactly
   one sequence width, linear infinite — that equality is what makes the loop seamless. Duration =
   seqWidth / speed so `speed` is true px/s at any bar height. Thumbnails get explicit
   `aspect-ratio:5/7` + height so layout doesn't shift as images load (the measured width feeds the
   animation). Re-measures on resize and `document.fonts.ready`.
 - Items render via `createElement` + `textContent` (card names are DB text — no innerHTML).
-  Foil tags mirror the home movers ("Holofoil" → "Holo"). `bg=transparent` keeps a translucent
-  scrim on the brand cap so it stays readable over gameplay.
+  **Every foil printing badges as "COLD FOIL" below the name — never "Holofoil"/"Holo"**: TCGCSV's
+  Holofoil label covers what are physically cold-foil printings (see the holofoil-mislabel rule),
+  and Zaven explicitly wants the term gone from this surface. `bg=transparent` keeps a translucent
+  scrim on the brand cap and section headers so they stay readable over gameplay.
 - **Guarded by `node scripts/test_ticker_query.mjs`** (extracts `parseTickerCfg` +
-  `buildTickerRequests` out of ticker.html, house pattern): window/metric → real matview column
-  names, direction sign filters, both-mode split, rarity normalization, min=0 not-null guard,
-  clamps. Run it after touching the config layer.
+  `buildTickerPlan` out of ticker.html, house pattern): section ordering + header text, window/
+  metric → real matview column names, group rarity filters, foil-toggle bypass shapes, both-mode
+  split, min=0 not-null guard, clamps. Run it after touching the config layer.
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
   the bar, a nav/Toolbox entry (needs an Index.html touch — do it with a regular cache-bump batch).
 
