@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=327">
+<link rel="stylesheet" href="styles.css?v=328">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -26792,10 +26792,10 @@ const EYE_OFF_ICON = html`<svg width="14" height="14" viewBox="0 0 24 24" fill="
 // sink below the movers and announcements would never be seen). The column
 // picker therefore only governs the desktop copy.
 const HOME_COLUMNS = [
-  {key:"announce", label:"Top"},
-  {key:"left",     label:"Left"},
-  {key:"main",     label:"Main"},
-  {key:"right",    label:"Right"},
+  {key:"announce", label:"Top strip"},
+  {key:"left",     label:"Left rail"},
+  {key:"main",     label:"Below movers"},
+  {key:"right",    label:"Right rail"},
 ];
 const HOME_PANELS = [
   {key:"news",        label:"News feed",            col:"left"},
@@ -29022,31 +29022,87 @@ const NewsFeed = ({variant, tiles}) => {
 
 // Home "Toolbox" — a compact remote control into the Analytics tools. Chips
 // are real <a href> links (modifier-click opens the tool in a new tab) that
-// SPA-navigate via onOpenTool, per the site's nav-link convention.
+// SPA-navigate via onOpenTool, per the site's nav-link convention. Icons are
+// hand-coded line glyphs in the NAV_ICONS style (stroke:currentColor, so
+// they take the accent color from CSS) — no emoji, no asset files.
+const HOME_TOOL_ICONS = {
+  // Expected Value — sealed box (cube with a visible lid seam)
+  ev: _navSvg(html`
+    <path d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3z"/>
+    <path d="M4 7.5l8 4.5 8-4.5"/>
+    <path d="M12 12v9"/>`),
+  // Trade Compare — two opposing arrows
+  trade: _navSvg(html`
+    <path d="M8 3L4 7l4 4"/>
+    <path d="M4 7h16"/>
+    <path d="M16 13l4 4-4 4"/>
+    <path d="M20 17H4"/>`),
+  // Set Breakdown — bar chart
+  avg: _navSvg(html`
+    <path d="M6 20v-6"/>
+    <path d="M12 20V4"/>
+    <path d="M18 20v-10"/>
+    <path d="M3 20h18"/>`),
+  // Playset Cost — a card with copies behind it
+  setval: _navSvg(html`
+    <rect x="8" y="3" width="12" height="16" rx="2"/>
+    <path d="M5 6v14a2 2 0 0 0 2 2h10"/>`),
+  // Simulator — die with three pips
+  sim: _navSvg(html`
+    <rect x="4" y="4" width="16" height="16" rx="3"/>
+    <circle cx="8.6" cy="8.6" r="0.9" fill="currentColor"/>
+    <circle cx="12" cy="12" r="0.9" fill="currentColor"/>
+    <circle cx="15.4" cy="15.4" r="0.9" fill="currentColor"/>`),
+  // Swiss Odds — trophy
+  swiss: _navSvg(html`
+    <path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/>
+    <path d="M7 6H4.5a2.5 2.5 0 0 0 2.6 4"/>
+    <path d="M17 6h2.5a2.5 2.5 0 0 1-2.6 4"/>
+    <path d="M12 14v4"/>
+    <path d="M8 21h8"/>
+    <path d="M9.5 18h5"/>`),
+};
 const HOME_TOOLS = [
-  {k:"ev",     icon:"📦", label:"Expected Value", sub:"Box EV vs box price"},
-  {k:"trade",  icon:"⇄",  label:"Trade Compare",  sub:"Value both sides"},
-  {k:"avg",    icon:"📊", label:"Set Breakdown",  sub:"$ + share by rarity"},
-  {k:"setval", icon:"🃏", label:"Playset Cost",   sub:"Build the whole set"},
-  {k:"sim",    icon:"🎲", label:"Simulator",      sub:"Packs, boxes, odds"},
-  {k:"swiss",  icon:"🏆", label:"Swiss Odds",     sub:"Will you make the cut?"},
+  {k:"ev",     label:"Expected Value", sub:"Box EV vs box price"},
+  {k:"trade",  label:"Trade Compare",  sub:"Value both sides"},
+  {k:"avg",    label:"Set Breakdown",  sub:"$ + share by rarity"},
+  {k:"setval", label:"Playset Cost",   sub:"Build the whole set"},
+  {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
+  {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
 ];
-const HomeToolboxPanel = ({onOpenTool}) => html`<aside class="home-feed home-toolbox">
-  <div class="home-feed-title">Toolbox</div>
-  <div class="home-toolbox-grid">
-    ${HOME_TOOLS.map(t => html`<a key=${t.k} class="home-tool-chip"
-      href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
-      onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
-      <span class="home-tool-ico" aria-hidden="true">${t.icon}</span>
-      <span class="home-tool-txt">
-        <span class="home-tool-name">${t.label}</span>
-        <span class="home-tool-sub">${t.sub}</span>
-      </span>
-    </a>`)}
-  </div>
-</aside>`;
+const HomeToolboxPanel = ({onOpenTool}) => {
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("packsink:home:toolboxCollapsed") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:toolboxCollapsed", collapsed ? "1" : "0"); } catch {}
+  }, [collapsed]);
+  return html`<aside class="home-feed home-toolbox">
+    <div class="home-feed-head">
+      <div class="home-feed-title">Toolbox</div>
+      <button class=${"home-feed-collapse-btn"+(collapsed?" is-collapsed":"")}
+        onClick=${()=>setCollapsed(v=>!v)}
+        aria-expanded=${!collapsed}
+        title=${collapsed ? "Show the toolbox" : "Hide the toolbox"}>
+        <span class="home-feed-chev" aria-hidden="true">▾</span>
+      </button>
+    </div>
+    ${!collapsed && html`<div class="home-toolbox-grid">
+      ${HOME_TOOLS.map(t => html`<a key=${t.k} class="home-tool-chip"
+        href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
+        onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
+        <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
+        <span class="home-tool-txt">
+          <span class="home-tool-name">${t.label}</span>
+          <span class="home-tool-sub">${t.sub}</span>
+        </span>
+      </a>`)}
+    </div>`}
+  </aside>`;
+};
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
   const homeLayout = useMemo(() => normalizeHomeLayout(layout), [layout]);
@@ -29578,10 +29634,55 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       default: return null;
     }
   };
-  const columnNodes = (col) => homeLayout
-    .filter(p => panelCol[p.key] === col)
-    .map(p => panelNode(p.key))
-    .filter(Boolean);
+  // Edit mode: every panel in the column gets a control bar rendered as a
+  // SIBLING above it (never a wrapper — several CSS rules are
+  // `.home-left-col > .home-feed` child selectors). Hidden panels show just
+  // their bar, dimmed, at the bottom of their column.
+  const editing = !!(homeEdit && homeEdit.editing);
+  const editBar = (p, meta) => {
+    const sameCol = homeLayout.filter(q => q.col === p.col && q.on);
+    const pos = sameCol.findIndex(q => q.key === p.key);
+    return html`<div key=${"bar-"+p.key} class=${"home-edit-card"+(p.on?"":" is-off")}>
+      <span class="home-edit-name">${meta.label}</span>
+      <div class="home-edit-ctls">
+        <button class="home-edit-btn2" disabled=${!p.on || pos <= 0}
+          onClick=${()=>homeEdit.move(p.key, -1)} title="Move up within this column"
+          aria-label=${"Move "+meta.label+" up"}>▲</button>
+        <button class="home-edit-btn2" disabled=${!p.on || pos < 0 || pos >= sameCol.length-1}
+          onClick=${()=>homeEdit.move(p.key, 1)} title="Move down within this column"
+          aria-label=${"Move "+meta.label+" down"}>▼</button>
+        <select class="home-edit-col" value=${p.col} aria-label=${meta.label+" column"}
+          title="Which part of the page this section sits in"
+          onChange=${e=>homeEdit.setCol(p.key, e.target.value)}>
+          ${HOME_COLUMNS.map(c => html`<option key=${c.key} value=${c.key}>${c.label}</option>`)}
+        </select>
+        <button class="home-edit-btn2" onClick=${()=>homeEdit.toggle(p.key)}
+          title=${p.on ? "Hide this section from the home page" : "Show this section again"}>
+          ${p.on ? "Hide" : "Show"}
+        </button>
+      </div>
+    </div>`;
+  };
+  const columnNodes = (col) => {
+    if(!editing) return homeLayout
+      .filter(p => panelCol[p.key] === col)
+      .map(p => panelNode(p.key))
+      .filter(Boolean);
+    const out = [];
+    const inCol = homeLayout.filter(p => p.col === col);
+    for(const p of inCol.filter(p => p.on)){
+      const meta = HOME_PANELS.find(h => h.key === p.key);
+      if(!meta) continue;
+      out.push(editBar(p, meta));
+      const node = panelNode(p.key);
+      if(node) out.push(node);
+    }
+    for(const p of inCol.filter(p => !p.on)){
+      const meta = HOME_PANELS.find(h => h.key === p.key);
+      if(meta) out.push(editBar(p, meta));
+    }
+    return out;
+  };
   const announceNodes = columnNodes("announce");
   const leftNodes     = columnNodes("left");
   const mainNodes     = columnNodes("main");
@@ -29592,15 +29693,30 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     + (leftNodes.length  ? "" : " hg-no-left")
     + (rightNodes.length ? "" : " hg-no-right");
 
-  return html`<div class="scr scr-home">
+  return html`<div class=${"scr scr-home"+(editing?" home-editing":"")}>
     <div class="home-page-title">
       <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
     </div>
+    ${homeEdit && html`<div class=${"home-edit-row"+(editing?" is-editing":"")}>
+      ${editing
+        ? html`<${React.Fragment}>
+            <span class="home-edit-hint">Arrange your home page — changes save as you go.</span>
+            <button class="home-edit-btn2" onClick=${homeEdit.reset}
+              title="Restore the default arrangement">Reset</button>
+            <button class="home-edit-btn2" onClick=${homeEdit.cancel}
+              title="Undo everything from this editing session">Cancel</button>
+            <button class="home-edit-done" onClick=${homeEdit.done}>✓ Done</button>
+          <//>`
+        : html`<button class="home-edit-open" onClick=${homeEdit.start}
+            title="Rearrange, hide, or move the home page sections">✎ Edit layout</button>`}
+    </div>`}
     ${announceNodes.length > 0 && html`<div class="home-announce">${announceNodes}</div>`}
 
     <div class=${gridClass}>
       ${leftNodes.length > 0 && html`<div class="home-left-col">${leftNodes}</div>`}
       <div class="home-grid-main">
+        ${editing && html`<div class="home-edit-fixednote">The movers banners are fixed —
+          sections assigned to “Below movers” appear underneath them.</div>`}
         <div class="home-toolbar">
           <div class="seg-grp" role="group" aria-label="Time window">
             ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
@@ -36038,6 +36154,25 @@ function App(){
     return next;
   });
   const resetHomeLayout = () => setHomeLayout(defaultHomeLayout());
+  // On-page home layout editor (the "✎ Edit layout" chip on the home page —
+  // successor to the cramped settings-popover editor, which is now just a
+  // launcher). Entering snapshots the arrangement so Cancel can restore it;
+  // edits apply live and Done simply exits.
+  const [homeEditMode, setHomeEditMode] = useState(false);
+  const homeLayoutDraftBase = useRef(null);
+  const startHomeEdit = () => {
+    homeLayoutDraftBase.current = homeLayout;
+    setHomeEditMode(true);
+    setView("home");
+  };
+  const finishHomeEdit = (save) => {
+    if(!save && homeLayoutDraftBase.current) setHomeLayout(homeLayoutDraftBase.current);
+    homeLayoutDraftBase.current = null;
+    setHomeEditMode(false);
+  };
+  // Navigating away mid-edit keeps the changes (they apply live) and drops
+  // the editing chrome, so coming back never lands on a stale edit session.
+  useEffect(() => { if(view !== "home" && homeEditMode) finishHomeEdit(true); }, [view]);
   const [user,setUser]=useState(null);
   // Map of `${card_id}:${tcg_printing}` -> quantity owned. Stored locally for
   // fast lookup; mirrors the user's rows in collection_items (NM only for v1).
@@ -37299,41 +37434,11 @@ function App(){
             </label>
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">Home page layout</span>
-              <div class="settings-home-hint">Show or hide each section, move it to another
-                column, and reorder it. On phones the columns stack (main, then right,
-                then left) and left-column panels sit two across — except the News feed,
-                which docks beside the Rare – Legendary movers there.</div>
-              <div class="settings-home-panels">
-                ${homeLayout.map((p) => {
-                  const meta = HOME_PANELS.find(h => h.key === p.key);
-                  if(!meta) return null;
-                  const sameCol = homeLayout.filter(q => q.col === p.col && q.on);
-                  const posInCol = sameCol.findIndex(q => q.key === p.key);
-                  return html`<div key=${p.key} class=${"home-panel-row"+(p.on?"":" is-off")}>
-                    <label class="home-panel-name" title=${"Show “"+meta.label+"” on the home page"}>
-                      <input type="checkbox" checked=${p.on}
-                        onChange=${()=>toggleHomePanel(p.key)}/>
-                      <span>${meta.label}</span>
-                    </label>
-                    <select class="home-panel-col" value=${p.col}
-                      disabled=${!p.on}
-                      aria-label=${meta.label+" column"}
-                      title="Which column this section sits in"
-                      onChange=${e=>setHomePanelCol(p.key, e.target.value)}>
-                      ${HOME_COLUMNS.map(c => html`<option key=${c.key} value=${c.key}>${c.label}</option>`)}
-                    </select>
-                    <div class="home-panel-move">
-                      <button type="button" disabled=${!p.on || posInCol <= 0}
-                        onClick=${()=>moveHomePanel(p.key, -1)}
-                        title="Move up within this column" aria-label=${"Move "+meta.label+" up"}>▲</button>
-                      <button type="button" disabled=${!p.on || posInCol < 0 || posInCol >= sameCol.length-1}
-                        onClick=${()=>moveHomePanel(p.key, 1)}
-                        title="Move down within this column" aria-label=${"Move "+meta.label+" down"}>▼</button>
-                    </div>
-                  </div>`;
-                })}
-              </div>
-              <button class="settings-action link" onClick=${resetHomeLayout}>Reset home layout</button>
+              <div class="settings-home-hint">Arrange the home page directly on the page —
+                move sections between columns, reorder them, and hide the ones you don't use.</div>
+              <button class="settings-action" onClick=${()=>{ setSettingsOpen(false); startHomeEdit(); }}>
+                ✎ Edit home layout
+              </button>
             </div>
             <${OfflineImagesPanel} raw=${raw} collection=${collection} user=${user}/>
             <div class="settings-divider"></div>
@@ -37430,6 +37535,10 @@ function App(){
       openScreenerWithFilter=${openScreenerWithFilter}
       openAnalyticsTool=${openAnalyticsTool}
       layout=${homeLayout}
+      homeEdit=${{editing: homeEditMode, start: startHomeEdit,
+        done: ()=>finishHomeEdit(true), cancel: ()=>finishHomeEdit(false),
+        reset: resetHomeLayout, toggle: toggleHomePanel,
+        setCol: setHomePanelCol, move: moveHomePanel}}
       onEventArtistClick=${setIndyArtistPick}/>`}
     ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
