@@ -14,7 +14,10 @@
 // pdfWriter / pdfNum / pdfText / buildProxyPdfBlob / proxySheetGeometry.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+// Index.html has mixed line endings (some regions were written CRLF by
+// Windows sessions); the "\n};" end markers below assume LF, so normalize
+// before extracting. Runtime behavior of the extracted code is unaffected.
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 function grab(startMarker, endMarker) {
   const a = src.indexOf(startMarker);
