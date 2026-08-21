@@ -20925,7 +20925,11 @@ function EloSortTh({label, col, sortCol, sortDir, setSort, className, numeric}){
 const ELO_ALIAS_HIDE = { "METALLICFLARE": /lol/i };
 function eloVisibleAliases(canonicalName, aliases){
   const rx = ELO_ALIAS_HIDE[canonicalName];
-  const list = aliases || [];
+  // Pipeline bookkeeping handles are never real player names — the merge tool
+  // stamps "__pre_merge__<id>_<name>" rows, and one was rendering on the #1
+  // leaderboard row as an alias. Drop double-underscore-prefixed handles for
+  // everyone; display-only, so search still matches them.
+  const list = (aliases || []).filter(a => !/^__/.test(a.display_name || ""));
   return rx ? list.filter(a => !rx.test(a.display_name || "")) : list;
 }
 
