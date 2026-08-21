@@ -29,7 +29,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css?v=323">
+<link rel="stylesheet" href="/styles.css?v=325">
 <style>
 /* Page-local styles. Everything is sw- prefixed and scoped under .sw-app so
    nothing here can leak into the main app if this gets folded into it later.
@@ -308,7 +308,7 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
       <h2>Where do I stand</h2>
       <div class="sw-you-in">
         I&rsquo;m
-        <input type="number" id="yw" min="0" max="15" placeholder="W">&ndash;<input type="number" id="yl" min="0" max="15" placeholder="L">&ndash;<input type="number" id="yd" min="0" max="15" placeholder="D">
+        <input type="number" id="yw" min="0" max="15" placeholder="W" aria-label="Wins">&ndash;<input type="number" id="yl" min="0" max="15" placeholder="L" aria-label="Losses">&ndash;<input type="number" id="yd" min="0" max="15" placeholder="D" aria-label="Draws">
         <span id="yRoundWrap" style="display:none">after round <b id="yRound">0</b></span>
         <span class="sw-hint" style="margin:0 0 0 4px">(wins &ndash; losses &ndash; draws)</span>
       </div>
@@ -351,7 +351,8 @@ tr.sw-locked td:first-child::after{content:'LOCK';font-family:'Cinzel',serif;fon
       </table></div>
       <div class="sw-hint" style="margin-top:9px">
         Observed outcomes, not projections &mdash; every simulated player who held that record at
-        that point is pooled, then split by what they did next.
+        that point is pooled, then split by what they did next. Records with draws aren&rsquo;t
+        listed here &mdash; type yours into <b>Where do I stand</b> instead.
       </div>
     </div>
 
@@ -425,7 +426,6 @@ function swissEngine(cfg, nSims, seed, onProgress) {
     recCount: new Float64Array(4096), recCut: new Float64Array(4096),
     recOmw: new Float64Array(4096), recGw: new Float64Array(4096), recOgw: new Float64Array(4096),
     cond: new Float64Array((R + 1) * 256 * 8),
-    condPts: new Float64Array((R + 1) * 256 * PSPAN),
     cutline: new Float64Array(PSPAN),
     tierRec: new Float64Array(NT * 4096),
     tierLine: new Float64Array(NT * PSPAN),
@@ -433,7 +433,7 @@ function swissEngine(cfg, nSims, seed, onProgress) {
     sims: 0, players: N, rounds: R, ptsWin: PW, ptsDraw: PD, cut: CUT, maxPts: MAXP,
     dropAt: DROPAT, tiers: tiers
   };
-  const cond = A.cond, condPts = A.condPts;
+  const cond = A.cond;
 
   // Record code for the ladder table: w<<8 | l<<4 | d (each capped at 15).
   const rc = (w, l, d) => ((w & 15) << 8) | ((l & 15) << 4) | (d & 15);
@@ -546,21 +546,30 @@ function swissEngine(cfg, nSims, seed, onProgress) {
           // counted with >= rather than >, because a player who merely TIES
           // you still has to be beaten on tiebreakers — treating a tie as
           // safe is how a "locked" 6-2 turns into a 9th-place finish.
+          //
+          // The OPPONENT is a special case: in the draw scenario they draw
+          // THIS round too, so their reach is pts + PD + remAfter*PW, not a
+          // full slate of wins. A same-bracket opponent therefore ties you
+          // forever and must stay counted as a threat — dropping them let
+          // two players knife-edge-tied for the last slot "safely" draw each
+          // other into a 9th-place tiebreaker.
           const finalP = pts[a] + PD * (remAfter + 1);
           const T = finalP - (remAfter + 1) * PW;
+          const bMin = finalP - PD - remAfter * PW;   // opponent-threat floor
           const ti = T <= 0 ? 0 : (T > MAXP ? MAXP + 1 : T);
           let threats = atLeast[ti];
           if (pts[a] >= T) threats--;
-          if (pts[b] >= T) threats--;
+          if (pts[b] >= T && pts[b] < bMin) threats--;
           const aSafe = threats < CUT;
           let bSafe = aSafe;
           if (aSafe && pts[a] !== pts[b]) {
             const fB = pts[b] + PD * (remAfter + 1);
             const TB = fB - (remAfter + 1) * PW;
+            const aMin = fB - PD - remAfter * PW;
             const tj = TB <= 0 ? 0 : (TB > MAXP ? MAXP + 1 : TB);
             let th2 = atLeast[tj];
-            if (pts[a] >= TB) th2--;
             if (pts[b] >= TB) th2--;
+            if (pts[a] >= TB && pts[a] < aMin) th2--;
             bSafe = th2 < CUT;
           }
           isDraw = aSafe && bSafe;
@@ -673,7 +682,6 @@ function swissEngine(cfg, nSims, seed, onProgress) {
           if (nx === 1 || nx === 4) { cond[ci + 2]++; if (inCut) cond[ci + 3]++; }
           else if (nx === 2) { cond[ci + 4]++; if (inCut) cond[ci + 5]++; }
           else if (nx === 3) { cond[ci + 6]++; if (inCut) cond[ci + 7]++; }
-          condPts[key * PSPAN + fin]++;
           // slot 0 = regardless of next round, 1/2/3 = won / lost / drew it
           const slot = (nx === 1 || nx === 4) ? 1 : nx === 2 ? 2 : nx === 3 ? 3 : -1;
           for (let t = 0; t < NT; t++) {
@@ -696,7 +704,7 @@ function swissEngine(cfg, nSims, seed, onProgress) {
 
 /* Elementwise merge of two accumulator sets (worker shards / batches). */
 function mergeAcc(a, b) {
-  const keys = ["recCount", "recCut", "recOmw", "recGw", "recOgw", "cond", "condPts",
+  const keys = ["recCount", "recCut", "recOmw", "recGw", "recOgw", "cond",
     "cutline", "tierRec", "tierLine", "tierCond"];
   for (const k of keys) {
     const x = a[k], y = b[k];
@@ -712,7 +720,13 @@ function mergeAcc(a, b) {
    UI  —  setup, run orchestration, rendering
    ══════════════════════════════════════════════════════════════════════════ */
 const $ = (id) => document.getElementById(id);
-const pct = (x) => (x * 100).toFixed(x >= 0.995 || x === 0 ? 0 : 1) + "%";
+const pct = (x) => {
+  if (x === 0) return "0%";
+  if (x === 1) return "100%";        // literally every sample — only then say so
+  if (x > 0.999) return ">99.9%";
+  if (x < 0.001) return "<0.1%";
+  return (x * 100).toFixed(1) + "%";
+};
 const clampInt = (v, lo, hi, dflt) => {
   const n = parseInt(v, 10);
   return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
@@ -725,6 +739,7 @@ const suggestRounds = (n) => (ROUND_STEPS.find(([t]) => n <= t) || [0, 9])[1];
 
 let RESULT = null;      // last completed accumulator
 let RUNNING = false;
+let PENDING = false;    // a run was requested mid-run; fire once done
 let workerURL = null;
 
 /* ── config plumbing ──────────────────────────────────────────────────── */
@@ -791,14 +806,18 @@ function buildWorkerURL() {
   if (workerURL) return workerURL;
   const src = swissEngine.toString() +
     "\nself.onmessage=function(e){" +
-    "var a=swissEngine(e.data.cfg,e.data.n,e.data.seed,function(d){self.postMessage({t:'p',d:d});});" +
-    "self.postMessage({t:'r',a:a});};";
+    "var k=e.data.k;" +
+    "var a=swissEngine(e.data.cfg,e.data.n,e.data.seed,function(d){self.postMessage({t:'p',k:k,d:d});});" +
+    "self.postMessage({t:'r',k:k,a:a});};";
   workerURL = URL.createObjectURL(new Blob([src], { type: "application/javascript" }));
   return workerURL;
 }
 
 function run() {
-  if (RUNNING) return;
+  // A click during a run (IDs toggle, tier edit) has already updated the
+  // control it landed on — dropping it would leave the UI disagreeing with
+  // the results. Queue one rerun; readCfg() re-reads everything at fire time.
+  if (RUNNING) { PENDING = true; return; }
   RUNNING = true;
   const btn = $("btnRun");
   btn.disabled = true; btn.textContent = "Simulating…";
@@ -812,12 +831,14 @@ function run() {
   pushUrl(cfg, total, seed);
 
   const done = (acc) => {
+    acc.seedUsed = seed;
     RESULT = acc;
     fill.style.width = "100%";
     render();
     btn.disabled = false; btn.textContent = "Run simulation";
     $("bar").classList.remove("on");
     RUNNING = false;
+    if (PENDING) { PENDING = false; run(); }
   };
 
   let nW = 1;
@@ -825,49 +846,106 @@ function run() {
   if (typeof Worker === "undefined" || total < 400) nW = 0;
 
   if (nW > 0) {
+    // Workers pull shards off a shared queue; results are stored by shard
+    // index and folded IN SHARD ORDER once all arrive. Counts are exact in
+    // f64, but the tiebreaker accumulators are float sums, so fold order is
+    // part of the determinism guarantee — arrival order must not leak in.
+    const live = [];
     try {
       const url = buildWorkerURL();
-      const per = Math.ceil(total / nW);
-      const prog = new Array(nW).fill(0);
-      let acc = null, finished = 0, live = [];
-      for (let i = 0; i < nW; i++) {
-        const n = Math.min(per, total - i * per);
-        if (n <= 0) { prog.length = i; break; }
+      const plan = shardPlan(total, seed);
+      const results = new Array(plan.length);
+      const inflight = {};
+      let doneSims = 0, stored = 0, next = 0, failed = false, fired = false;
+      const progress = () => {
+        let inf = 0; for (const k in inflight) inf += inflight[k];
+        fill.style.width = Math.min(99, (doneSims + inf) / total * 100).toFixed(0) + "%";
+      };
+      const fail = () => {
+        // One worker erroring means the blob is bad for all of them — fall
+        // back exactly once, not once per erroring worker.
+        if (failed) return;
+        failed = true;
+        live.forEach(w => { w.onmessage = null; w.onerror = null; w.terminate(); });
+        RUNNING = false;
+        mainThreadRun(cfg, total, seed, done, fill);
+      };
+      const assign = (wk) => {
+        if (failed || fired) return;
+        if (next < plan.length) {
+          const k = next++;
+          wk.postMessage({ cfg, n: plan[k].n, seed: plan[k].seed, k });
+        } else if (stored === plan.length) {
+          fired = true;
+          live.forEach(w => w.terminate());
+          let acc = null;
+          for (const r of results) acc = acc ? mergeAcc(acc, r) : r;
+          done(acc);
+        }
+      };
+      const count = Math.min(nW, plan.length);
+      for (let i = 0; i < count; i++) {
         const wk = new Worker(url);
         live.push(wk);
         wk.onmessage = (e) => {
-          if (e.data.t === "p") {
-            prog[i] = e.data.d;
-            fill.style.width = Math.min(99, prog.reduce((a, b) => a + b, 0) / total * 100).toFixed(0) + "%";
-          } else {
-            acc = acc ? mergeAcc(acc, e.data.a) : e.data.a;
-            if (++finished === live.length) { live.forEach(w => w.terminate()); done(acc); }
+          if (e.data.t === "p") { inflight[e.data.k] = e.data.d; progress(); }
+          else {
+            results[e.data.k] = e.data.a;
+            delete inflight[e.data.k];
+            doneSims += plan[e.data.k].n;
+            stored++;
+            progress();
+            assign(wk);
           }
         };
-        wk.onerror = () => { live.forEach(w => w.terminate()); RUNNING = false; mainThreadRun(cfg, total, seed, done, fill); };
-        // Shards must not share a stream, or every worker replays the same
-        // tournaments and the extra cores buy precision that isn't there.
-        wk.postMessage({ cfg, n, seed: (seed + i * 2654435761) >>> 0 });
+        wk.onerror = fail;
       }
+      live.forEach(assign);
       return;
-    } catch (e) { /* fall through */ }
+    } catch (e) {
+      // A constructor throw mid-loop must not leave orphan workers racing the
+      // fallback to done() with a fraction of the requested sims.
+      live.forEach(w => { try { w.onmessage = null; w.terminate(); } catch (e2) {} });
+    }
   }
   RUNNING = false;
   mainThreadRun(cfg, total, seed, done, fill);
 }
 
-/* No-Worker fallback: same engine, sliced so the tab stays responsive. */
+/* The run is always split into the same <=16 sub-streams with seeds derived
+   from the shard index, no matter how many workers execute them — that plus
+   the in-order fold is what makes a Copy link reproduce EXACTLY, on any
+   device, worker or fallback path alike. */
+function shardPlan(total, seed) {
+  const S = Math.min(16, Math.max(1, total));
+  const base = Math.floor(total / S), rem = total % S, out = [];
+  for (let k = 0; k < S; k++) {
+    const n = base + (k < rem ? 1 : 0);
+    if (n > 0) out.push({ n, seed: (seed + k * 2654435761) >>> 0 });
+  }
+  return out;
+}
+
+/* No-Worker fallback: identical shard plan, identical fold order — the same
+   numbers as the worker path, just sequential. Chunks are bigger than the old
+   200-sim slices, so huge runs are jankier here; this path exists for
+   browsers without Worker support, where correctness beats polish. */
 function mainThreadRun(cfg, total, seed, done, fill) {
   RUNNING = true;
-  const SLICE = 200;
-  let left = total, acc = null, i = 0;
+  const plan = shardPlan(total, seed);
+  const results = [];
+  let doneSims = 0;
   const step = () => {
-    const n = Math.min(SLICE, left);
-    const a = swissEngine(cfg, n, (seed + (i++) * 2654435761) >>> 0);
-    acc = acc ? mergeAcc(acc, a) : a;
-    left -= n;
-    fill.style.width = ((total - left) / total * 100).toFixed(0) + "%";
-    if (left > 0) setTimeout(step, 0); else done(acc);
+    const sh = plan[results.length];
+    results.push(swissEngine(cfg, sh.n, sh.seed));
+    doneSims += sh.n;
+    fill.style.width = (doneSims / total * 100).toFixed(0) + "%";
+    if (results.length < plan.length) setTimeout(step, 0);
+    else {
+      let acc = null;
+      for (const r of results) acc = acc ? mergeAcc(acc, r) : r;
+      done(acc);
+    }
   };
   setTimeout(step, 0);
 }
@@ -938,15 +1016,23 @@ function renderHead(r, rows) {
     return;
   }
 
-  const locks = solid.filter(x => x.cut >= 0.97);
-  const lock = locks.length ? locks[locks.length - 1] : null;   // cheapest record that still locks
+  // Locks scan ALL records (with a real sample), not the 1% display floor —
+  // at ~226 players the undefeated record is 0.4% of the field, and filtering
+  // it made the tile say "nothing is a lock" while X-0 locked every time.
+  const locks = rows.filter(x =>
+    x.cut !== null && x.cut >= 0.97 && x.n >= 20 && x.n / r.sims >= 0.002);
+  // Headline in W-L terms: a draw-carrying lock (4-0-2, from double-IDs) can
+  // be a point cheaper, but nobody plans a tournament around it — prefer the
+  // cheapest ZERO-DRAW lock, and fall back to any lock only if none exists.
+  const lockPool = locks.filter(x => x.d === 0);
+  const lock = (lockPool.length ? lockPool : locks).slice(-1)[0] || null;
   const bub = solid.filter(x => x.cut > 0.02 && x.cut < 0.97).sort(byPop)[0] || null;
   const dead = solid.filter(x => x.cut !== null && x.cut <= 0.02).sort(byPop)[0] || null;
 
   // Modal cut line — the point total the last player inside the cut finished on.
   let cl = 0, clN = 0, clTot = 0;
   for (let v = 0; v < r.cutline.length; v++) { clTot += r.cutline[v]; if (r.cutline[v] > clN) { clN = r.cutline[v]; cl = v; } }
-  const clRec = rows.find(x => x.pts === cl && x.d === 0);
+  const clRec = rows.find(x => x.pts === cl && x.d === 0) || rows.find(x => x.pts === cl);
 
   let head;
   if (lock && bub) {
@@ -959,7 +1045,7 @@ function renderHead(r, rows) {
   } else head = 'Top ' + r.cut + ' of ' + r.players + '.';
 
   const sub = bub
-    ? 'About ' + pct(bub.cut) + ' of ' + recLabel(bub.w, bub.l, bub.d) + ' players clear it' +
+    ? pct(bub.cut) + ' of ' + recLabel(bub.w, bub.l, bub.d) + ' players clear it' +
       (dead ? ', and ' + recLabel(dead.w, dead.l, dead.d) + ' is effectively dead.' : '.')
     : 'Across ' + r.sims.toLocaleString() + ' simulated tournaments.';
 
@@ -1201,7 +1287,7 @@ function renderTiers(r, rows) {
     }
     let paid = 0;
     for (let code = 0; code < 4096; code++) paid += r.tierRec[t * 4096 + code];
-    const rec = rows.find(x => x.pts === modal && x.d === 0);
+    const rec = rows.find(x => x.pts === modal && x.d === 0) || rows.find(x => x.pts === modal);
     out.push('<tr><td class="sw-rec">Top ' + r.tiers[t] + '</td>' +
       '<td>' + modal + ' pts</td>' +
       '<td class="sw-rec">' + (rec ? recLabel(rec.w, rec.l, rec.d) : "&mdash;") + '</td>' +
@@ -1214,7 +1300,7 @@ function renderTiers(r, rows) {
 function renderMethod(r) {
   $("method").innerHTML =
     '<ul>' +
-    '<li><b>Equal skill, every match.</b> Win probability is 50/50 (or the on-the-play rate you set). ' +
+    '<li><b>Equal skill, every match.</b> Every match is a fair 50/50 coin flip. ' +
     'That is the point: it isolates what the bracket does, so anything above these numbers is your edge, not the format’s.</li>' +
     '<li><b>Pairing.</b> Players are bucketed by exact match points, shuffled inside the bucket, then paired ' +
     'avoiding rematches; the odd player floats down to the next bucket. A rematch is only forced when nothing else is left. ' +
@@ -1239,8 +1325,11 @@ function renderMethod(r) {
     'produce identical record distributions.</li>' +
     '<li><b>Drop-outs</b> leave after the loss threshold and are excluded from the conditional pools, since a player ' +
     'who has already dropped has no next round to advise on.</li>' +
-    '<li><b>Reproducible.</b> ' + r.sims.toLocaleString() + ' tournaments at seed ' + $("seed").value +
-    '. Same seed and settings always produce the same table; <i>Copy link</i> captures both.</li>' +
+    '<li><b>Reproducible.</b> ' + r.sims.toLocaleString() + ' tournaments at seed ' +
+    (r.seedUsed != null ? r.seedUsed : $("seed").value) +
+    '. The run is split into a fixed set of sub-streams folded in a fixed order, so the same ' +
+    'settings and seed give identical numbers on any device, workers or not. ' +
+    '<i>Copy link</i> captures everything.</li>' +
     '</ul>';
 }
 
@@ -1317,7 +1406,14 @@ $("btnTheme").addEventListener("click", () => {
   const el = document.documentElement;
   const dark = el.getAttribute("data-mode") === "dark";
   const next = dark ? "light" : "dark";
-  try { localStorage.setItem("packsink:themeMode", next); } catch (e) {}
+  // In "system" mode the main app treats its toggle as a TRANSIENT override
+  // (cleared on reload / OS change), never a persisted pick — a side tool
+  // must not overwrite that cross-device preference. Persist otherwise.
+  let storedMode = null;
+  try { storedMode = localStorage.getItem("packsink:themeMode"); } catch (e) {}
+  if (storedMode !== "system") {
+    try { localStorage.setItem("packsink:themeMode", next); } catch (e) {}
+  }
   const LIGHT = ["parchment", "sunrise", "watercolor", "daydream"], DARK = ["velvet", "aurora", "black"];
   let name;
   try {

@@ -1264,9 +1264,29 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
   record instead of ~10^4, and changing your record re-reads the pool with **no re-simulation**.
   This is also why the numbers are path-aware: a 4-1 who loses cuts ~16% while 4-2 overall cuts
   ~6.7%, because their tiebreakers are better.
-- **Validated against closed form** — 64p/6r reproduces the Swiss triangle (1/6/15/20/15/6/1)
-  exactly, and matches databorn's published table for the same config. `scripts/` has no guard test
-  for it yet; re-check that binomial if you touch the pairing.
+- **Guarded by `node scripts/test_swiss_engine.mjs`** (extracts the real engine out of swiss.html,
+  house pattern): Swiss-triangle exactness at 64p/6r, conservation across odd fields/drops/IDs/tiers,
+  flagship ID behavior (the 5-0 pair always IDs into 5-0-1 and cuts), tie-inclusive tier payouts,
+  and determinism. Run it after touching the engine, pairing, ID rule, or sharding.
+- **Reproducibility is exact, cross-device — keep it that way.** The run is split into a FIXED
+  ≤16-shard plan (`shardPlan`) with seeds derived from the shard index, workers pull shards off a
+  queue, and results fold IN SHARD ORDER. Counts are exact in f64, but the tiebreaker accumulators
+  are float sums, so fold order is part of the guarantee — folding on arrival order (or splitting by
+  `hardwareConcurrency`, as v1 did) makes the same Copy link give different numbers on a 4-core
+  phone vs an 8-core desktop (measured: 137026 vs 137027 vs 136949 for one cell).
+- **The ID guarantee counts the OPPONENT as a threat** when the post-draw opponent can still tie or
+  beat you (`bMin` floor in the engine) — a same-bracket opponent ties you forever, and excluding
+  them let knife-edge pairs "safely" draw each other into a 9th-place tiebreaker. Ties with third
+  parties already counted (>= not >). Don't simplify either away.
+- **`pct()` only says 100%/0% when literally every/no sample hit** — near-certain values render as
+  >99.9% / <0.1% bands. On a draw-safety tool, rounding 99.5% up to "100%" is the one dishonesty
+  that matters.
+- **A click during a run queues one rerun** (`PENDING` in run()/done()) — the IDs seg and tier
+  toggle update visually on click, so dropping the request would leave the UI disagreeing with the
+  results forever.
+- **The theme toggle is transient when the stored mode is "system"** (attributes only, no
+  localStorage write), matching the main app's deliberate system-mode semantics. Explicit
+  light/dark persists to the shared keys.
 - **Drops default OFF on purpose.** They're supported, but modelling attrition removes dropped
   players from the conditional pools (64p/6r at 3 losses halves the sample), which makes losing
   records read "no data". The threshold list is regenerated from the round count — you can't lose
