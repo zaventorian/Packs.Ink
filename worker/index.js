@@ -93,6 +93,12 @@ export default {
       return env.ASSETS.fetch(new Request(new URL("/swiss.html", url.origin), request));
     }
 
+    // The stream ticker lives at /ticker with NO explicit route: Workers
+    // Assets' pretty-URL handling serves ticker.html for it via the asset
+    // fall-through below, with the query intact. Do not add a route that
+    // fetches "/ticker.html" — the assets layer 307s that to /ticker and
+    // DROPS the query string, and ?bar=1&… IS the overlay's configuration.
+
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;
 

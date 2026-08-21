@@ -1350,6 +1350,43 @@ all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme
 - Not built: PlayHub standings import. It needs a server-side fetch (PlayHub is CORS-blocked); the
   Cloudflare worker is the natural place, mirroring the existing `/img-proxy` pattern.
 
+## Stream ticker (`/ticker`) — OBS overlay, added 2026-08-21
+
+Built for streamers (vVonderland's Discord ask): a scrolling bottom-of-stream bar of the top
+%-movers. **Standalone `ticker.html`, NOT part of the SPA** — same reasoning as swiss.html, plus
+an OBS Browser Source should not boot the whole app. `?bar=1` renders ONLY the bar (transparent
+page, every size keyed off `--tkh` = bar height, so the streamer scales it purely by sizing the
+OBS source); without it the page is a configurator with live preview + "Copy overlay URL".
+
+- **Route: `/ticker` has NO worker route on purpose.** Workers Assets' pretty-URL handling serves
+  `ticker.html` for it through the asset fall-through with the query intact. Do NOT add a worker
+  route that fetches `/ticker.html` — the assets layer 307s that to `/ticker` and DROPS the query
+  string, and `?bar=1&…` IS the overlay's configuration (this is the same 307 that moved swiss to
+  `/swiss`). Dev route in `dev_server.py`; listed in `build_dist.mjs`; robots-disallowed + noindex
+  (shared by link, not nav-linked). No sw.js involvement — the page never registers it and OBS's
+  browser profile never visits the SPA.
+- **Data**: one PostgREST query per direction against `price_movers`, server-side
+  `order={pct_col}.desc&limit=n` — never pulls the full 5.8k-row matview onto a stream machine.
+  Defaults: 1W window, **NM Market basis** (`mkt_pct_7d` — Low sits frozen for weeks and would lie
+  on short windows), risers only, $1 price floor (keeps 10-cent cards' +300% "moves" out), 40
+  items, all rarities. Params: `w/m/dir/n/min/rar/img/brand/speed/bg/fg` — the URL is the whole
+  config, so a pasted OBS URL is set-and-forget. Refetches every 30 min while live; errors retry
+  in 60s and never blank an already-rendered strip.
+- **Marquee**: one `.tk-seq` duplicated until it spans ≥2 viewports, then `translateX` by exactly
+  one sequence width, linear infinite — that equality is what makes the loop seamless. Duration =
+  seqWidth / speed so `speed` is true px/s at any bar height. Thumbnails get explicit
+  `aspect-ratio:5/7` + height so layout doesn't shift as images load (the measured width feeds the
+  animation). Re-measures on resize and `document.fonts.ready`.
+- Items render via `createElement` + `textContent` (card names are DB text — no innerHTML).
+  Foil tags mirror the home movers ("Holofoil" → "Holo"). `bg=transparent` keeps a translucent
+  scrim on the brand cap so it stays readable over gameplay.
+- **Guarded by `node scripts/test_ticker_query.mjs`** (extracts `parseTickerCfg` +
+  `buildTickerRequests` out of ticker.html, house pattern): window/metric → real matview column
+  names, direction sign filters, both-mode split, rarity normalization, min=0 not-null guard,
+  clamps. Run it after touching the config layer.
+- Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
+  the bar, a nav/Toolbox entry (needs an Index.html touch — do it with a regular cache-bump batch).
+
 ## Brand assets
 
 - `Logos/` ships at runtime.

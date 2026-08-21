@@ -42,6 +42,9 @@ const FILES = [
   // Swiss simulator at /lab/swiss (worker/index.js routes it). Also embedded
   // by the Analytics "Swiss Odds" tab as an iframe at /lab/swiss?embed=1.
   "swiss.html",
+  // Stream ticker overlay at /ticker (Workers Assets pretty-URL serves it;
+  // no worker route so ?bar=1 survives) — OBS Browser Source bar + configurator.
+  "ticker.html",
   "robots.txt",
   "sitemap.xml",
   "og-image.png",
