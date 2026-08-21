@@ -27466,6 +27466,27 @@ const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
 // APPENDS unknown keys, which would bury the new panel at the bottom of
 // every existing layout — hoist it to the top of the right rail once.
 const HOME_LAYOUT_TOOLBOX_KEY = "packsink:homeLayoutToolbox";
+// Movers-banner ordering (edit mode ▲▼). null = the built-in order, where
+// the newest-set banner floats top during release week and bottom after; a
+// stored order is explicit and retires that heuristic.
+const HOME_BANNER_ORDER_KEY = "packsink:homeBannerOrder";
+const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","graded"];
+const HOME_BANNER_LABELS = {
+  valuable: "Newest set — Most Valuable",
+  chase:    "Chase Movers",
+  rareLeg:  "Rare – Legendary Movers",
+  promo:    "Promo Movers",
+  graded:   "Graded Movers",
+};
+const normalizeBannerOrder = (val) => {
+  if(!Array.isArray(val)) return null;
+  const seen = new Set();
+  const clean = [];
+  for(const k of val) if(HOME_BANNER_KEYS.includes(k) && !seen.has(k)){ seen.add(k); clean.push(k); }
+  if(!clean.length) return null;
+  for(const k of HOME_BANNER_KEYS) if(!seen.has(k)) clean.push(k);
+  return clean;
+};
 const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
 const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
@@ -30367,8 +30388,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <div class=${gridClass}>
       ${leftNodes.length > 0 && html`<div class="home-left-col">${leftNodes}</div>`}
       <div class="home-grid-main">
-        ${editing && html`<div class="home-edit-fixednote">The movers banners are fixed —
-          sections assigned to “Below movers” appear underneath them.</div>`}
+        ${editing && html`<div class="home-edit-fixednote">Reorder the movers banners with
+          the ▲▼ on each one — sections assigned to “Below movers” appear underneath the stack.</div>`}
         <div class="home-toolbar">
           <div class="seg-grp" role="group" aria-label="Time window">
             ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
@@ -30430,9 +30451,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("rareLeg")}
                       onTileClick=${openCard}/>`;
-                  return html`<div>
-                    ${newestSetIsHot && newestBanner}
-                    <${MoversBanner}
+                  const chaseBanner = html`<${MoversBanner}
                       title="Chase Movers"
                       subtitle=${`${chaseLabel || "Epic · Enchanted · Iconic"} — top 20 by ${winLabel} ${directionLabel}`}
                       controls=${chaseControls}
@@ -30441,14 +30460,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       visibleWindows=${visibleWindows}
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("chase")}
-                      onTileClick=${openCard}/>
-                    ${newsFeedRl
-                      ? html`<div class="rl-news-row">
-                          <div class="rl-news-main">${rareLegBanner}</div>
-                          ${newsFeedRl}
-                        </div>`
-                      : rareLegBanner}
-                    <${MoversBanner}
+                      onTileClick=${openCard}/>`;
+                  const promoBanner = html`<${MoversBanner}
                       title="Promo Movers"
                       subtitle=${`Promo printings — top 20 by ${winLabel} ${directionLabel}`}
                       cards=${promo}
@@ -30456,10 +30469,51 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       visibleWindows=${visibleWindows}
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("promo")}
-                      onTileClick=${openCard}/>
-                    ${gradedPremium && html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>`}
-                    ${!newestSetIsHot && newestBanner}
-                  </div>`;
+                      onTileClick=${openCard}/>`;
+                  // Ordered banner stack. With no stored order the newest-set
+                  // banner keeps its hot-aware placement (top during release
+                  // week, bottom otherwise); once the user reorders in edit
+                  // mode the explicit order wins and the heuristic retires.
+                  const bannerNodes = {
+                    valuable: newestBanner || null,
+                    chase:    chaseBanner,
+                    rareLeg:  newsFeedRl
+                      ? html`<div class="rl-news-row">
+                          <div class="rl-news-main">${rareLegBanner}</div>
+                          ${newsFeedRl}
+                        </div>`
+                      : rareLegBanner,
+                    promo:    promoBanner,
+                    graded:   gradedPremium ? html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>` : null,
+                  };
+                  const defaultOrder = newestSetIsHot
+                    ? ["valuable","chase","rareLeg","promo","graded"]
+                    : ["chase","rareLeg","promo","graded","valuable"];
+                  const order = (homeEdit && homeEdit.bannerOrder && homeEdit.bannerOrder.length)
+                    ? homeEdit.bannerOrder : defaultOrder;
+                  const stack = [];
+                  order.forEach((k, i) => {
+                    const node = bannerNodes[k];
+                    if(node == null) return;
+                    if(editing){
+                      stack.push(html`<div key=${"bbar-"+k} class="home-edit-card home-edit-card--banner">
+                        <span class="home-edit-name">${HOME_BANNER_LABELS[k] || k}</span>
+                        <div class="home-edit-ctls">
+                          <button class="home-edit-btn2" disabled=${i <= 0}
+                            onClick=${()=>homeEdit.moveBanner(k, -1, defaultOrder)}
+                            title="Move this banner up" aria-label=${"Move "+(HOME_BANNER_LABELS[k]||k)+" up"}>▲</button>
+                          <button class="home-edit-btn2" disabled=${i >= order.length-1}
+                            onClick=${()=>homeEdit.moveBanner(k, 1, defaultOrder)}
+                            title="Move this banner down" aria-label=${"Move "+(HOME_BANNER_LABELS[k]||k)+" down"}>▼</button>
+                        </div>
+                      </div>`);
+                    }
+                    stack.push(html`<${React.Fragment} key=${"bn-"+k}>${node}<//>`);
+                  });
+                  // A fragment, not a wrapper div — the banners must stay
+                  // DIRECT children of .home-grid-main so the edit-mode
+                  // freeze rule dims each banner while its bar stays live.
+                  return html`<${React.Fragment}>${stack}<//>`;
                 })()}
         ${mainNodes}
       </div>
@@ -36805,21 +36859,49 @@ function App(){
     [next[i], next[j]] = [next[j], next[i]];
     return next;
   });
-  const resetHomeLayout = () => setHomeLayout(defaultHomeLayout());
+  // Movers-banner order (null = built-in hot-aware order). Same edit-mode
+  // lifecycle as homeLayout: snapshot on entry, Cancel restores, Reset nulls.
+  const [homeBannerOrder, setHomeBannerOrder] = useState(() => {
+    try { return normalizeBannerOrder(JSON.parse(localStorage.getItem(HOME_BANNER_ORDER_KEY) || "null")); }
+    catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if(homeBannerOrder) localStorage.setItem(HOME_BANNER_ORDER_KEY, JSON.stringify(homeBannerOrder));
+      else localStorage.removeItem(HOME_BANNER_ORDER_KEY);
+    } catch {}
+  }, [homeBannerOrder]);
+  // First move materializes the current default order (hot-aware) so the swap
+  // lands exactly on what the user is looking at.
+  const moveHomeBanner = (key, dir, defaultOrder) => setHomeBannerOrder(cur => {
+    const base = (cur && cur.length) ? cur.slice() : (defaultOrder || HOME_BANNER_KEYS).slice();
+    const i = base.indexOf(key);
+    const j = i + (dir < 0 ? -1 : 1);
+    if(i < 0 || j < 0 || j >= base.length) return cur;
+    [base[i], base[j]] = [base[j], base[i]];
+    return base;
+  });
+  const resetHomeLayout = () => { setHomeLayout(defaultHomeLayout()); setHomeBannerOrder(null); };
   // On-page home layout editor (the "✎ Edit layout" chip on the home page —
   // successor to the cramped settings-popover editor, which is now just a
   // launcher). Entering snapshots the arrangement so Cancel can restore it;
   // edits apply live and Done simply exits.
   const [homeEditMode, setHomeEditMode] = useState(false);
   const homeLayoutDraftBase = useRef(null);
+  const homeBannerDraftBase = useRef(null);
   const startHomeEdit = () => {
     homeLayoutDraftBase.current = homeLayout;
+    homeBannerDraftBase.current = homeBannerOrder;
     setHomeEditMode(true);
     setView("home");
   };
   const finishHomeEdit = (save) => {
-    if(!save && homeLayoutDraftBase.current) setHomeLayout(homeLayoutDraftBase.current);
+    if(!save){
+      if(homeLayoutDraftBase.current) setHomeLayout(homeLayoutDraftBase.current);
+      setHomeBannerOrder(homeBannerDraftBase.current);
+    }
     homeLayoutDraftBase.current = null;
+    homeBannerDraftBase.current = null;
     setHomeEditMode(false);
   };
   // Navigating away mid-edit keeps the changes (they apply live) and drops
@@ -38190,7 +38272,8 @@ function App(){
       homeEdit=${{editing: homeEditMode, start: startHomeEdit,
         done: ()=>finishHomeEdit(true), cancel: ()=>finishHomeEdit(false),
         reset: resetHomeLayout, toggle: toggleHomePanel,
-        setCol: setHomePanelCol, move: moveHomePanel}}
+        setCol: setHomePanelCol, move: moveHomePanel,
+        bannerOrder: homeBannerOrder, moveBanner: moveHomeBanner}}
       onEventArtistClick=${setIndyArtistPick}/>`}
     ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
