@@ -1386,10 +1386,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `w`/`g` (csv, canonical-order sets), `foil=0`/`nf=0`, `m/dir/n/min/img/brand/speed/bg/fg` — the
   URL is the whole config, so a pasted OBS URL is set-and-forget. A failed query drops only its
   own section for the round and retries in 60s — an already-rendered strip is never blanked.
-- **Refresh follows the ETL clock, not an interval** (`nextTickerRefreshMs`, in the pure layer):
-  prices change once a day (TCGCSV ~20:00 UTC, ETL 20:30, retries 22:30/01:00), so outside the
-  window the page sleeps until 20:45 UTC, then re-checks every 30 min through 03:00 UTC to catch
-  late publishes. Don't "simplify" it back to setInterval.
+- **Refresh = once a day at 5:00 PM America/Chicago** (`nextTickerRefreshMs`, pure layer):
+  prices change once daily (ETL 20:30 UTC ≈ 3:30 PM Chicago), and Zaven wants exactly one safe
+  post-ETL check, not polling. Intl supplies Chicago's wall clock so DST is handled (CDT/CST both
+  covered in the guard test); the initial page load still fetches immediately, and failed fetches
+  retry in 60s. Don't turn it back into an interval.
 - **The "powered by packs.ink" credit is REQUIRED** — flush bottom-RIGHT on the bar (a 22%-of-
   `--tkt` bottom row with NO band or border, right padding `min(24px, 30% of --tkt)` so it hugs
   the corner at any bar height; the movers row gets the rest as `--tkh`), always rendered, no

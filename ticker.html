@@ -147,7 +147,7 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
 .tk-sec-sub{font-size:calc(var(--tkh)*0.16);font-weight:700;letter-spacing:0.14em;
   text-transform:uppercase;opacity:0.68;line-height:1.05;white-space:nowrap;}
 .tk-item{display:flex;align-items:center;gap:calc(var(--tkh)*0.14);flex:0 0 auto;
-  padding:0 calc(var(--tkh)*0.30);}
+  padding:0 calc(var(--tkh)*0.22);}
 .tk-art{height:calc(var(--tkh)*0.72);aspect-ratio:5/7;width:auto;object-fit:cover;
   border-radius:calc(var(--tkh)*0.07);display:block;background:rgba(255,255,255,0.06);}
 .tk-stack{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
@@ -304,7 +304,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
         <input type="text" id="urlOut" readonly spellcheck="false">
         <button class="tk-copy" id="btnCopy">Copy URL</button>
       </div>
-      <div class="tk-hint" style="margin-top:8px;">The URL carries every setting above — paste it into OBS once and it's set. Prices update once a day (TCGplayer snapshot, ~3:30 PM Central); the bar re-checks around that window on its own, so a long stream picks the new numbers up automatically.</div>
+      <div class="tk-hint" style="margin-top:8px;">The URL carries every setting above — paste it into OBS once and it's set. Prices update once a day (~3:30 PM Chicago); the bar re-checks once daily at 5:00 PM Chicago, so a long stream picks the new numbers up automatically.</div>
     </div>
 
     <div class="tk-card">
@@ -459,17 +459,20 @@ function tickerRarityLine(rarity, printing){
   return rarity + (sayFoil ? " · Foil" : "");
 }
 
-/* Prices change ONCE a day: TCGCSV publishes ~20:00 UTC and the ETL loads it
-   at 20:30 UTC (~3:30 PM Central), with retry crons at 22:30 and 01:00. So
-   instead of a dumb fixed interval, sleep until just after the daily load,
-   then re-check every 30 min through the retry window in case the snapshot
-   published late. Returns ms until the next data check. */
+/* Prices change ONCE a day (ETL 20:30 UTC ≈ 3:30 PM Chicago), so the bar
+   re-checks exactly once daily at 5:00 PM America/Chicago — safely after the
+   load, per Zaven. Intl supplies Chicago's wall clock so DST is handled; the
+   wall-clock delta is applied as real seconds, which is only off across the
+   two 2 AM transition nights a year, and the next wake self-corrects. The
+   page still fetches immediately on open — this governs re-checks only. */
 function nextTickerRefreshMs(now){
-  const h = now.getUTCHours();
-  if(h >= 20 || h < 3) return 30 * 60 * 1000;
-  const next = new Date(now.getTime());
-  next.setUTCHours(20, 45, 0, 0);
-  return Math.max(60 * 1000, next.getTime() - now.getTime());
+  const parts = new Intl.DateTimeFormat("en-US", {timeZone: "America/Chicago",
+    hour12: false, hour: "2-digit", minute: "2-digit", second: "2-digit"}).formatToParts(now);
+  const get = (t) => +parts.find(p => p.type === t).value;
+  const sinceMidnight = (get("hour") % 24) * 3600 + get("minute") * 60 + get("second");
+  let wait = 17 * 3600 - sinceMidnight;
+  if(wait <= 0) wait += 24 * 3600;
+  return Math.max(60, wait) * 1000;
 }
 /* ── end pure config layer ── */
 

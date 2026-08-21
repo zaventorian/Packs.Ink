@@ -123,15 +123,20 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("missing rarity, normal row", tickerRarityLine(null, "Normal"), "");
 }
 
-// Refresh scheduling follows the ETL clock: 30-min checks through the publish
-// + retry window (20:00–03:00 UTC), otherwise sleep until 20:45 UTC.
+// Refresh = once daily at 5:00 PM America/Chicago, DST-aware (CDT = UTC-5 in
+// August, CST = UTC-6 in January).
 {
-  const at = (h, m) => new Date(Date.UTC(2026, 7, 21, h, m, 0));
-  check("in-window 21:00 UTC", nextTickerRefreshMs(at(21, 0)), 30 * 60 * 1000);
-  check("in-window 02:59 UTC", nextTickerRefreshMs(at(2, 59)), 30 * 60 * 1000);
-  check("03:00 UTC sleeps to 20:45", nextTickerRefreshMs(at(3, 0)), (17 * 60 + 45) * 60 * 1000);
-  check("10:00 UTC sleeps to 20:45", nextTickerRefreshMs(at(10, 0)), (10 * 60 + 45) * 60 * 1000);
-  check("19:59 UTC sleeps 46 min", nextTickerRefreshMs(at(19, 59)), 46 * 60 * 1000);
+  const H = 3600 * 1000;
+  check("summer: 4 PM CDT waits 1h",
+    nextTickerRefreshMs(new Date("2026-08-21T21:00:00Z")), 1 * H);
+  check("summer: exactly 5 PM CDT waits a full day",
+    nextTickerRefreshMs(new Date("2026-08-21T22:00:00Z")), 24 * H);
+  check("summer: 6:30 PM CDT waits 22.5h",
+    nextTickerRefreshMs(new Date("2026-08-21T23:30:00Z")), 22.5 * H);
+  check("winter: 4 PM CST waits 1h",
+    nextTickerRefreshMs(new Date("2026-01-15T22:00:00Z")), 1 * H);
+  check("winter: 5 PM CST waits a full day",
+    nextTickerRefreshMs(new Date("2026-01-15T23:00:00Z")), 24 * H);
 }
 
 // Every group's rarity list stays inside the canonical vocabulary.
