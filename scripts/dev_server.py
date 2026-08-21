@@ -83,9 +83,17 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         if url_path == "/privacy":
             self.path = "/privacy.html"
             return super().do_GET()
-        # Unlisted internal tool — noindex + not linked from the app.
-        if url_path == "/lab/swiss":
+        # Swiss sim. Canonical path is /swiss (mirrors prod, where Workers
+        # Assets' pretty-URL handling 307s /swiss.html -> /swiss and would
+        # drop the Analytics tab's ?embed=1 on the legacy /lab/swiss route).
+        if url_path in ("/swiss", "/lab/swiss"):
             self.path = "/swiss.html"
+            return super().do_GET()
+        # Stream ticker overlay (?bar=1 = OBS form) + its configurator. Prod
+        # serves /ticker via Workers Assets pretty-URL handling — no worker
+        # route, so the query string survives (it IS the overlay config).
+        if url_path == "/ticker":
+            self.path = "/ticker.html"
             return super().do_GET()
         # Strip query string when checking on-disk; reattach when rewriting.
         rel = url_path.lstrip("/")
