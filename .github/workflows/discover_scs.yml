@@ -39,6 +39,31 @@ on:
         required: false
         default: ""
         type: string
+      backfill_stores:
+        description: "Also backfill every PAST event for tracked stores (slow; needs migration 121)"
+        required: false
+        default: "false"
+        type: string
+      tier_report:
+        description: "Print RPH tier metrics per store to the log (read-only)"
+        required: false
+        default: "false"
+        type: string
+      scrape_attendance:
+        description: "Scrape who PLAYED per past event: true for all (~10min), or a number to cap it"
+        required: false
+        default: "false"
+        type: string
+      skip_discover:
+        description: "Skip the ~20min upcoming scan. For attendance/backfill-only runs."
+        required: false
+        default: "false"
+        type: string
+      diagnose_store:
+        description: "Read-only: show who the Fans count is counting for one store (substring of its name)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   discover:
@@ -48,19 +73,13 @@ jobs:
     # upcoming-Lorcana index, plus the tracked-store sync and the roster scrape.
     # Kept at 35 rather than dropped back to 20: the single scan writes ~4x the
     # rows the SC-only job did, so the upsert leg is longer than the scan it saved.
-    timeout-minutes: 35
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      # scrape_rosters.py imports scripts/supabase_client.py, which needs
-      # `requests`. The discover/sync steps are stdlib-only, so this workflow
-      # shipped without an install step and the roster scrape died on
-      # ModuleNotFoundError in 0s on every run from 2026-06-15 to 2026-07-08.
-      # Installing just the two runtime deps (not scripts/requirements.txt,
-      # which drags in playwright) keeps the job fast.
       - name: Install Python deps
         run: pip install requests python-dotenv
 
@@ -68,7 +87,11 @@ jobs:
       # near me" box reads) + public.set_championships (the SC subset, unchanged,
       # because the whole Elo pipeline binds to that table). A manual dispatch
       # with a set_name instead re-pulls just that set's SCs the old way.
+      # The scan is the long pole (~20 min). An attendance or backfill run has no
+      # need of it, and re-running it there is what pushes the job into its
+      # timeout before the step you actually dispatched for gets to run.
       - name: Discover & upsert Lorcana events
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -91,6 +114,7 @@ jobs:
       # AFTER discover (needs the fresh set_championships) and BEFORE scrape (which
       # reads elo_upcoming_scs = set_championships ⋈ elo_tracked_stores).
       - name: Sync ELO tracked stores
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
@@ -100,7 +124,52 @@ jobs:
       # list + tracked stores refresh (rosters read elo_upcoming_scs, so the fresh
       # rows must land first — hence chained steps in the same job, not parallel).
       # Fails soft per-event; idempotent (REPLACE members + upsert header).
+      # Backfill: every PAST event our tracked stores have run. Only reachable
+      # by hand (backfill_stores=true) — it walks ~30 stores' full history, which
+      # the nightly job has no reason to redo. Once it has run, the archive step
+      # in discover_events.py keeps history current from there.
+      - name: Backfill store event history
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.backfill_stores == 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/scrape_store_history.py
+
+      # Read-only: prints the tier metrics per store to the run log.
+      # Who actually PLAYED, per past event — the real source for RPH's Event
+      # Tickets and Unique Fans. ~4,200 events at one request each on a first
+      # full run, so it's by-hand only; a numeric value caps it for slicing.
+      - name: Scrape past-event attendance
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.scrape_attendance != '' && inputs.scrape_attendance != 'false' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "${{ inputs.scrape_attendance }}" = "true" ]; then
+            python scripts/elo/scrape_event_attendance.py
+          else
+            python scripts/elo/scrape_event_attendance.py --limit "${{ inputs.scrape_attendance }}"
+          fi
+
+      # Read-only: breaks one store's Fans number down into account-keyed vs
+      # name-keyed people, one-and-done vs regulars, and any display names that
+      # map to more than one person — i.e. every way the count could be inflated.
+      - name: Diagnose one store's Fans count
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.diagnose_store != '' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/diagnose_store_fans.py --store "${{ inputs.diagnose_store }}" --list 500 --probe
+
+      - name: Report store tier metrics
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.tier_report == 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/elo/report_store_tiers.py
+
       - name: Scrape tracked-SC rosters
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true' }}
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
