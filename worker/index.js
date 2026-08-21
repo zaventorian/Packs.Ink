@@ -87,6 +87,12 @@ export default {
       return env.ASSETS.fetch(new Request(new URL("/privacy.html", url.origin), request));
     }
 
+    // Unlisted internal tool. Not linked from the app, robots-disallowed and
+    // meta noindex — "hidden" here means undiscoverable, not access-controlled.
+    if (url.pathname === "/lab/swiss") {
+      return env.ASSETS.fetch(new Request(new URL("/swiss.html", url.origin), request));
+    }
+
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;
 

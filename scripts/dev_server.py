@@ -83,6 +83,10 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         if url_path == "/privacy":
             self.path = "/privacy.html"
             return super().do_GET()
+        # Unlisted internal tool — noindex + not linked from the app.
+        if url_path == "/lab/swiss":
+            self.path = "/swiss.html"
+            return super().do_GET()
         # Strip query string when checking on-disk; reattach when rewriting.
         rel = url_path.lstrip("/")
         disk = os.path.join(os.getcwd(), rel) if rel else os.path.join(os.getcwd(), "Index.html")

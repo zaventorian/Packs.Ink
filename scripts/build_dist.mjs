@@ -39,6 +39,8 @@ const FILES = [
   "scanner-ocr-worker.js",
   "manifest.json",
   "privacy.html",
+  // Unlisted Swiss simulator, reachable only at /lab/swiss (worker/index.js).
+  "swiss.html",
   "robots.txt",
   "sitemap.xml",
   "og-image.png",

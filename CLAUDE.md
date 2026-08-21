@@ -1228,6 +1228,37 @@ Lives only on the **How It Works** page: "Packs.Ink is an unofficial fan site. D
 - `set_name` stays **NULL for `kind='other'`** unless the title names a set. A Thursday league night belongs to no set and must not claim one.
 - **Pruning (new).** Every upsert stamps `last_seen_at`; after the pull, upcoming rows this run didn't see are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
 
+## Swiss simulator (`/lab/swiss`) — unlisted, added 2026-08-20
+
+Monte Carlo odds for Lorcana Swiss events. **Standalone `swiss.html`, NOT part of the SPA** — the
+engine is ~15KB of hot loop that no ordinary visitor should download, and keeping it out of
+Index.html avoids fighting the concurrent-session churn there. Links `styles.css` for tokens, so
+all seven themes work with no extra CSS, and reuses Index.html's pre-paint theme boot verbatim.
+
+- **Route**: `/lab/swiss` → `swiss.html`, rewritten in BOTH `worker/index.js` (prod) and
+  `scripts/dev_server.py` (local). Listed in `build_dist.mjs`, `Disallow`d in robots.txt, `noindex`
+  in the head. "Hidden" here means undiscoverable, **not access-controlled** — anyone with the URL
+  can load it. Don't put anything sensitive on it.
+- **The engine is one self-contained `swissEngine()`** stringified into a Blob worker, so the
+  worker and the main-thread fallback literally run the same text and can't drift. Flat typed
+  arrays, not an object per player; counting sort into point brackets; the intentional-draw
+  guarantee check reads a precomputed suffix histogram, making it O(1) instead of O(N) per pairing.
+  Benchmarked **9.5x the reference tool** (databorn.ink) at 256p/8r, and it uses up to 8 workers.
+- **Odds come from pooling every simulated player who held your record**, not from tracking one
+  player — under equal skill they're interchangeable, so a 10k-sim run yields ~10^5 samples per
+  record instead of ~10^4, and changing your record re-reads the pool with **no re-simulation**.
+  This is also why the numbers are path-aware: a 4-1 who loses cuts ~16% while 4-2 overall cuts
+  ~6.7%, because their tiebreakers are better.
+- **Validated against closed form** — 64p/6r reproduces the Swiss triangle (1/6/15/20/15/6/1)
+  exactly, and matches databorn's published table for the same config. `scripts/` has no guard test
+  for it yet; re-check that binomial if you touch the pairing.
+- **Drops default OFF on purpose.** They're supported, but modelling attrition removes dropped
+  players from the conditional pools (64p/6r at 3 losses halves the sample), which makes losing
+  records read "no data".
+- Every match is 50/50 — this measures bracket structure, not decks. Say so in any UI copy.
+- Not built: PlayHub standings import. It needs a server-side fetch (PlayHub is CORS-blocked); the
+  Cloudflare worker is the natural place, mirroring the existing `/img-proxy` pattern.
+
 ## Brand assets
 
 - `Logos/` ships at runtime.
