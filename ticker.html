@@ -34,11 +34,15 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="robots" content="noindex,nofollow">
 <title>Stream Ticker — Packs.Ink</title>
-<link rel="icon" href="/favicon-32.png?v=4">
+<!-- Asset URLs are RELATIVE (not root-absolute) on purpose: ticker.html sits at
+     the repo/site root, so they resolve identically at /ticker AND when the
+     file is double-clicked from disk (file://) — which otherwise loses the
+     stylesheet and every logo. -->
+<link rel="icon" href="favicon-32.png?v=4">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="styles.css">
 <style>
 /* Configurator chrome uses styles.css tokens (tk- prefixed, scoped) so all
    seven themes work. The BAR itself deliberately does NOT use tokens — it's a
@@ -74,6 +78,21 @@
 .tk-seg button + button{border-left:1px solid var(--btn-border);}
 .tk-chips{display:flex;flex-wrap:wrap;gap:5px;}
 .tk-chips button{font-size:11px;padding:5px 10px;}
+/* Selected-state must be unmistakable — and hold up even with styles.css
+   missing (the page double-clicked from disk), so every rule carries a hard
+   fallback and out-!importants the site's .chip styling. */
+.tk-chips button,.tk-seg button{cursor:pointer;font-family:'Nunito Sans',sans-serif;}
+.tk-chips button{border:1px solid var(--btn-border,#8a8a8a);border-radius:999px;
+  background:var(--btn-bg,transparent);color:inherit;}
+.tk-chips button:not(.active),.tk-seg button:not(.active){opacity:0.5;font-weight:400;}
+.tk-chips button:not(.active):hover,.tk-seg button:not(.active):hover{opacity:0.85;}
+.tk-chips button.active,.tk-seg button.active{
+  background:var(--btn-active-bg,#31284d) !important;
+  color:var(--btn-active-text,#fff) !important;
+  border-color:var(--btn-active-border,#d9b96c) !important;
+  box-shadow:inset 0 0 0 1px var(--btn-active-border,#d9b96c);
+  opacity:1;font-weight:700;}
+.tk-chips button.active::before{content:"✓ ";}
 .tk-check{display:flex;align-items:center;gap:7px;font-size:12.5px;color:var(--text-dim);margin-bottom:8px;cursor:pointer;}
 .tk-check input{accent-color:var(--accent);}
 .tk-colorrow{display:flex;align-items:center;gap:8px;}
@@ -140,6 +159,18 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
 .tk-pct.up{color:#3fd68c;}
 .tk-pct.down{color:#ff5f6e;}
 .tk-dot{flex:0 0 auto;font-size:calc(var(--tkh)*0.14);opacity:0.28;line-height:1;}
+/* Right-edge attribution cap. ALWAYS rendered — no param, no checkbox: the
+   left cap is optional, this one is the required "powered by" credit. */
+.tk-pow{flex:0 0 auto;display:flex;align-items:center;gap:calc(var(--tkh)*0.10);
+  padding:0 calc(var(--tkh)*0.18);position:relative;z-index:2;
+  background:var(--tk-bg,#171226);border-left:1px solid rgba(255,255,255,0.12);}
+.tk-bar[data-transparent="1"] .tk-pow{background:rgba(13,10,26,0.82);}
+.tk-pow-txt{display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;}
+.tk-pow-txt span{font-size:calc(var(--tkh)*0.115);letter-spacing:0.14em;text-transform:uppercase;
+  opacity:0.55;font-weight:600;white-space:nowrap;}
+.tk-pow-txt b{font-family:'Cinzel',serif;font-size:calc(var(--tkh)*0.155);color:#d9b96c;
+  letter-spacing:0.05em;font-weight:700;white-space:nowrap;}
+.tk-pow img{height:calc(var(--tkh)*0.46);width:auto;display:block;}
 .tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:calc(var(--tkh)*0.24);opacity:0.55;z-index:1;}
 
@@ -160,8 +191,8 @@ html[data-bar="1"] .tk-bar{--tkh:100vh;height:100vh;width:100vw;}
 <div class="tk-app">
 
 <div class="tk-top">
-  <a class="tk-brand" href="/" title="Back to Packs.Ink">
-    <img src="/Logos/packs-ink-logo.png" alt="Packs.Ink">
+  <a class="tk-brand" href="https://packs.ink/" title="Back to Packs.Ink">
+    <img src="Logos/packs-ink-logo.png" alt="Packs.Ink">
   </a>
   <div>
     <h1 class="tk-h1">Stream Ticker</h1>
@@ -169,16 +200,19 @@ html[data-bar="1"] .tk-bar{--tkh:100vh;height:100vh;width:100vw;}
   </div>
   <div class="tk-spacer"></div>
   <span class="tk-flag">Stream overlay</span>
-  <button id="btnTheme" title="Toggle light / dark">&#9790;</button>
 </div>
 
 <div class="tk-barwrap">
   <div class="tk-bar" id="bar">
     <div class="tk-cap" id="cap">
-      <img src="/Logos/logo%20transparent.png" alt="">
+      <img src="Logos/logo%20transparent.png" alt="">
       <span class="tk-cap-name">packs.ink</span>
     </div>
     <div class="tk-scroll"><div class="tk-rail" id="rail"></div></div>
+    <div class="tk-pow" title="Live Lorcana prices — packs.ink">
+      <span class="tk-pow-txt"><span>powered by</span><b>packs.ink</b></span>
+      <img src="Logos/logo%20transparent.png" alt="">
+    </div>
     <div class="tk-msg" id="msg">loading movers…</div>
   </div>
 </div>
@@ -260,7 +294,7 @@ html[data-bar="1"] .tk-bar{--tkh:100vh;height:100vh;width:100vw;}
         <input type="text" id="urlOut" readonly spellcheck="false">
         <button class="tk-copy" id="btnCopy">Copy URL</button>
       </div>
-      <div class="tk-hint" style="margin-top:8px;">The URL carries every setting above — paste it into OBS once and it's set. Prices refresh themselves every 30 minutes while the source is live.</div>
+      <div class="tk-hint" style="margin-top:8px;">The URL carries every setting above — paste it into OBS once and it's set. Prices update once a day (TCGplayer snapshot, ~3:30 PM Central); the bar re-checks around that window on its own, so a long stream picks the new numbers up automatically.</div>
     </div>
 
     <div class="tk-card">
@@ -316,7 +350,7 @@ const TK_NONFOIL_PRINTINGS = ["Normal","Non-Foil"];
    otherwise "non-foil only" silently empties every chase section. */
 const TK_FOIL_BYPASS = ["Enchanted","Epic","Iconic","Promo"];
 const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"mkt", dir:"up", count:15,
-  min:1, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
+  min:5, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
   transparent:false};
 
 function parseTickerCfg(search){
@@ -403,17 +437,35 @@ function buildTickerPlan(cfg){
   }
   return sections;
 }
+
+/* Prices change ONCE a day: TCGCSV publishes ~20:00 UTC and the ETL loads it
+   at 20:30 UTC (~3:30 PM Central), with retry crons at 22:30 and 01:00. So
+   instead of a dumb fixed interval, sleep until just after the daily load,
+   then re-check every 30 min through the retry window in case the snapshot
+   published late. Returns ms until the next data check. */
+function nextTickerRefreshMs(now){
+  const h = now.getUTCHours();
+  if(h >= 20 || h < 3) return 30 * 60 * 1000;
+  const next = new Date(now.getTime());
+  next.setUTCHours(20, 45, 0, 0);
+  return Math.max(60 * 1000, next.getTime() - now.getTime());
+}
 /* ── end pure config layer ── */
 
 const SB_URL = "https://umwqowkiatjjltologrd.supabase.co";
 const SB_KEY = "sb_publishable_B2qq0Dsfij-7X2CZSxl2uQ_7PWc6Ob0";
-const REFRESH_MS = 30 * 60 * 1000;
 const RETRY_MS = 60 * 1000;
 
 const $ = (id) => document.getElementById(id);
 const BAR_MODE = document.documentElement.getAttribute("data-bar") === "1";
+const IS_FILE = location.protocol === "file:";
+// Copied overlay URLs must always say packs.ink when the page itself was
+// opened from disk — a file:/// URL pasted into OBS breaks for anyone else.
+const TICKER_URL_BASE = IS_FILE ? "https://packs.ink/ticker" : location.origin + location.pathname;
 const lorcastToProxy = (url) => {
   if(typeof url !== "string") return url;
+  // From disk there is no /img-proxy route — hotlink the CDN directly.
+  if(IS_FILE) return url;
   if(url.startsWith("https://cards.lorcast.io/")) return "/img-proxy/" + url.slice("https://cards.lorcast.io/".length);
   return url;
 };
@@ -475,7 +527,12 @@ async function loadData(){
   }
   if(anyFail) setTimeout(() => { if(seq === fetchSeq) loadData(); }, RETRY_MS);
 }
-setInterval(loadData, REFRESH_MS);
+let refreshT = null;
+function scheduleRefresh(){
+  clearTimeout(refreshT);
+  refreshT = setTimeout(() => { loadData(); scheduleRefresh(); }, nextTickerRefreshMs(new Date()));
+}
+scheduleRefresh();
 
 /* ───────── strip ───────── */
 function itemEl(r){
@@ -699,9 +756,11 @@ let fetchT = null;
 function onCfgChange(refetch){
   const params = cfgToParams(cfg);
   const rest = params.toString();
-  history.replaceState(null, "", location.pathname + (rest ? "?" + rest : ""));
+  // replaceState can throw on file:// in some browsers — the URL sync is a
+  // nicety, never worth breaking the controls over.
+  try{ history.replaceState(null, "", location.pathname + (rest ? "?" + rest : "")); }catch(e){}
   params.set("bar", "1");
-  $("urlOut").value = location.origin + location.pathname + "?" + params.toString();
+  $("urlOut").value = TICKER_URL_BASE + "?" + params.toString();
   applyBarLook();
   if(refetch){
     clearTimeout(fetchT);
@@ -718,28 +777,6 @@ if(!BAR_MODE){
       .then(() => { btn.textContent = "Copied ✓"; setTimeout(() => btn.textContent = "Copy URL", 1600); })
       .catch(() => { $("urlOut").select(); btn.textContent = "Press Ctrl+C"; setTimeout(() => btn.textContent = "Copy URL", 1600); });
   });
-  $("btnTheme").addEventListener("click", () => {
-    const el = document.documentElement;
-    const next = el.getAttribute("data-mode") === "dark" ? "light" : "dark";
-    // In "system" mode the main app's toggle is a TRANSIENT override — a side
-    // tool must not overwrite that cross-device preference. Persist otherwise.
-    let storedMode = null;
-    try { storedMode = localStorage.getItem("packsink:themeMode"); } catch (e) {}
-    if (storedMode !== "system") {
-      try { localStorage.setItem("packsink:themeMode", next); } catch (e) {}
-    }
-    const LIGHT = ["parchment", "sunrise", "watercolor", "daydream"], DARK = ["velvet", "aurora", "black"];
-    let name;
-    try {
-      name = next === "light"
-        ? (LIGHT.indexOf(localStorage.getItem("packsink:lightTheme")) >= 0 ? localStorage.getItem("packsink:lightTheme") : "parchment")
-        : (DARK.indexOf(localStorage.getItem("packsink:darkTheme")) >= 0 ? localStorage.getItem("packsink:darkTheme") : "aurora");
-    } catch (e) { name = next === "light" ? "parchment" : "aurora"; }
-    el.setAttribute("data-theme", name);
-    el.setAttribute("data-mode", next);
-    $("btnTheme").innerHTML = next === "dark" ? "&#9790;" : "&#9788;";
-  });
-  $("btnTheme").innerHTML = document.documentElement.getAttribute("data-mode") === "dark" ? "&#9790;" : "&#9788;";
 }
 
 applyBarLook();

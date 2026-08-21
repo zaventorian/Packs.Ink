@@ -16,8 +16,8 @@ if (start < 0 || end < 0) {
   process.exit(1);
 }
 const src = html.slice(start, end);
-const { parseTickerCfg, buildTickerPlan, TK_GROUPS } = new Function(
-  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS};"
+const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs } = new Function(
+  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs};"
 )();
 
 let failures = 0;
@@ -40,7 +40,9 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   const q = qs(plan[0].requests[0]);
   check("defaults: order", q.order, "mkt_pct_1d.desc");
   check("defaults: gainers only", q.mkt_pct_1d, "gt.0");
-  check("defaults: price floor", q.market_today, "gte.1");
+  check("defaults: price floor $5", q.market_today, "gte.5");
+  check("custom floor respected",
+    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).market_today, "gte.1");
   check("defaults: limit", q.limit, "15");
   check("defaults: chase rarity filter", q.rarity, 'in.("Enchanted","Epic","Iconic")');
   check("defaults: rareleg rarity filter", qs(plan[1].requests[0]).rarity,
@@ -54,7 +56,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("low metric + canonical window order", plan.map(s => qs(s.requests[0]).order),
     ["pct_1d.desc", "pct_365d.desc"]);
   check("all group: no rarity filter", "rarity" in qs(plan[0].requests[0]), false);
-  check("low metric price col", qs(plan[0].requests[0]).low_today, "gte.1");
+  check("low metric price col", qs(plan[0].requests[0]).low_today, "gte.5");
   check("unknown tokens fall back to defaults",
     buildTickerPlan(parseTickerCfg("?w=2wk&g=mythic")).map(s => s.win + "/" + s.group),
     ["1d/chase", "1d/rareleg", "1w/chase", "1w/rareleg"]);
@@ -106,6 +108,17 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("transparent bg", parseTickerCfg("?bg=transparent").transparent, true);
   const q = qs(buildTickerPlan(parseTickerCfg("?w=1w&g=all&min=0"))[0].requests[0]);
   check("min=0: not-null guard", q.market_today, "not.is.null");
+}
+
+// Refresh scheduling follows the ETL clock: 30-min checks through the publish
+// + retry window (20:00–03:00 UTC), otherwise sleep until 20:45 UTC.
+{
+  const at = (h, m) => new Date(Date.UTC(2026, 7, 21, h, m, 0));
+  check("in-window 21:00 UTC", nextTickerRefreshMs(at(21, 0)), 30 * 60 * 1000);
+  check("in-window 02:59 UTC", nextTickerRefreshMs(at(2, 59)), 30 * 60 * 1000);
+  check("03:00 UTC sleeps to 20:45", nextTickerRefreshMs(at(3, 0)), (17 * 60 + 45) * 60 * 1000);
+  check("10:00 UTC sleeps to 20:45", nextTickerRefreshMs(at(10, 0)), (10 * 60 + 45) * 60 * 1000);
+  check("19:59 UTC sleeps 46 min", nextTickerRefreshMs(at(19, 59)), 46 * 60 * 1000);
 }
 
 // Every group's rarity list stays inside the canonical vocabulary.

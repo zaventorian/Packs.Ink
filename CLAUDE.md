@@ -1379,13 +1379,27 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   brand cap is just logo + "packs.ink", no window label. Groups mirror the home movers banners:
   Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities. Defaults: 1D + 1W ×
   Chase + Rare–Legendary, risers, **NM Market basis** (Low sits frozen for weeks and would lie on
-  short windows), 15 cards/section, $1 floor (keeps 10-cent cards' +300% "moves" out).
+  short windows), 15 cards/section, **$5 floor** (user-settable; keeps 10-cent cards' +300% "moves"
+  out — matches the Screener's default).
 - **Data**: one PostgREST query per (section × direction) against `price_movers`, server-side
   `order={pct_col}.desc&limit=n` — never the full 5.8k-row matview on a stream machine. Params:
   `w`/`g` (csv, canonical-order sets), `foil=0`/`nf=0`, `m/dir/n/min/img/brand/speed/bg/fg` — the
-  URL is the whole config, so a pasted OBS URL is set-and-forget. Refetches every 30 min; a failed
-  query drops only its own section for the round and retries in 60s — an already-rendered strip is
-  never blanked.
+  URL is the whole config, so a pasted OBS URL is set-and-forget. A failed query drops only its
+  own section for the round and retries in 60s — an already-rendered strip is never blanked.
+- **Refresh follows the ETL clock, not an interval** (`nextTickerRefreshMs`, in the pure layer):
+  prices change once a day (TCGCSV ~20:00 UTC, ETL 20:30, retries 22:30/01:00), so outside the
+  window the page sleeps until 20:45 UTC, then re-checks every 30 min through 03:00 UTC to catch
+  late publishes. Don't "simplify" it back to setInterval.
+- **The right-edge "powered by packs.ink" cap is REQUIRED** — always rendered, no param, no
+  checkbox; the left logo cap is the optional one (`brand=0`). That attribution is the price of a
+  free overlay riding our data — keep it.
+- **Double-clicking ticker.html from disk works** — that's how Zaven first tested it. Asset URLs
+  are RELATIVE (file sits at site root, so they resolve the same at `/ticker` and on `file://`);
+  on file:, card art hotlinks cards.lorcast.io directly (no /img-proxy route exists), the Copy URL
+  is forced to `https://packs.ink/ticker` (a file:/// URL pasted into OBS breaks for anyone else),
+  and `history.replaceState` is try/catch-guarded. Chip active-state styling carries hard token
+  fallbacks + `!important` so toggles stay legible even with styles.css missing. No theme-toggle
+  button (removed as confusing — the page follows the saved/system theme via the boot script).
 - **Foil/Non-Foil toggles carry the Screener's chase bypass**: single-printing rarities
   (Enchanted/Epic/Iconic/Promo) ignore the printing filter — enforced server-side via
   `or=(printing.in.(…),rarity.in.(bypass))` on mixed groups, and by skipping the filter entirely on
