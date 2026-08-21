@@ -111,18 +111,23 @@
 .tk-count{font-size:11px;color:var(--text-muted);margin-top:6px;}
 
 /* ───────── The bar (shared by preview + OBS mode) ───────── */
-/* Every dimension keys off --tkh (the bar height) so the same rules render the
-   64px preview and a 100vh OBS source identically. */
+/* --tkt is the TOTAL bar height (what the OBS source sets); the movers row
+   gets --tkh = 78% of it and the required powered-by strip the rest. Every
+   inner dimension keys off those, so the 72px preview and a 100vh OBS source
+   render identically. */
 .tk-barwrap{border-radius:10px;overflow:hidden;border:1px solid var(--border);}
-.tk-bar{--tkh:64px;height:var(--tkh);position:relative;overflow:hidden;display:flex;align-items:stretch;
+.tk-bar{--tkt:72px;--tkh:calc(var(--tkt)*0.78);height:var(--tkt);position:relative;overflow:hidden;
+  display:flex;flex-direction:column;
   font-family:'Nunito Sans',sans-serif;background:var(--tk-bg,#171226);color:var(--tk-fg,#f2eefc);}
-.tk-cap{flex:0 0 auto;display:flex;align-items:center;gap:calc(var(--tkh)*0.14);
-  padding:0 calc(var(--tkh)*0.26) 0 calc(var(--tkh)*0.18);position:relative;z-index:2;
+.tk-main{flex:1;min-height:0;display:flex;align-items:stretch;}
+/* Left cap: PACKS.INK with the logo stacked under it. */
+.tk-cap{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:calc(var(--tkh)*0.07);padding:0 calc(var(--tkh)*0.26);position:relative;z-index:2;
   background:var(--tk-bg,#171226);border-right:1px solid rgba(255,255,255,0.12);}
 .tk-bar[data-transparent="1"] .tk-cap{background:rgba(13,10,26,0.82);}
-.tk-cap img{height:calc(var(--tkh)*0.72);width:auto;display:block;}
-.tk-cap-name{font-family:'Cinzel',serif;font-weight:700;font-size:calc(var(--tkh)*0.24);
-  letter-spacing:0.06em;color:#d9b96c;line-height:1.15;white-space:nowrap;}
+.tk-cap img{height:calc(var(--tkh)*0.42);width:auto;display:block;}
+.tk-cap-name{font-family:'Cinzel',serif;font-weight:700;font-size:calc(var(--tkh)*0.195);
+  letter-spacing:0.08em;color:#d9b96c;line-height:1;white-space:nowrap;}
 .tk-scroll{flex:1;min-width:0;overflow:hidden;display:flex;align-items:stretch;}
 .tk-rail{display:flex;align-items:center;height:100%;width:max-content;
   animation:tkscroll var(--tk-dur,80s) linear infinite;}
@@ -159,18 +164,18 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
 .tk-pct.up{color:#3fd68c;}
 .tk-pct.down{color:#ff5f6e;}
 .tk-dot{flex:0 0 auto;font-size:calc(var(--tkh)*0.14);opacity:0.28;line-height:1;}
-/* Right-edge attribution cap. ALWAYS rendered — no param, no checkbox: the
-   left cap is optional, this one is the required "powered by" credit. */
-.tk-pow{flex:0 0 auto;display:flex;align-items:center;gap:calc(var(--tkh)*0.10);
-  padding:0 calc(var(--tkh)*0.18);position:relative;z-index:2;
-  background:var(--tk-bg,#171226);border-left:1px solid rgba(255,255,255,0.12);}
-.tk-bar[data-transparent="1"] .tk-pow{background:rgba(13,10,26,0.82);}
-.tk-pow-txt{display:flex;flex-direction:column;align-items:flex-end;line-height:1.2;}
-.tk-pow-txt span{font-size:calc(var(--tkh)*0.115);letter-spacing:0.14em;text-transform:uppercase;
-  opacity:0.55;font-weight:600;white-space:nowrap;}
-.tk-pow-txt b{font-family:'Cinzel',serif;font-size:calc(var(--tkh)*0.155);color:#d9b96c;
-  letter-spacing:0.05em;font-weight:700;white-space:nowrap;}
-.tk-pow img{height:calc(var(--tkh)*0.46);width:auto;display:block;}
+/* Bottom attribution row, below the movers. ALWAYS rendered — no param, no
+   checkbox: the left cap is optional, this strip is the required credit. */
+.tk-powrow{flex:0 0 calc(var(--tkt)*0.22);display:flex;align-items:center;justify-content:center;
+  position:relative;z-index:2;background:rgba(0,0,0,0.28);border-top:1px solid rgba(255,255,255,0.10);}
+.tk-pow-inner{display:inline-flex;align-items:center;gap:max(4px,calc(var(--tkt)*0.05));
+  font-size:max(8px,calc(var(--tkt)*0.105));font-weight:700;letter-spacing:0.16em;
+  text-transform:uppercase;opacity:0.9;white-space:nowrap;line-height:1;}
+.tk-pow-inner b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.10em;font-weight:700;}
+.tk-pow-inner img{height:max(11px,calc(var(--tkt)*0.15));width:auto;display:block;}
+.tk-bar[data-transparent="1"] .tk-powrow{background:transparent;border-top:none;}
+.tk-bar[data-transparent="1"] .tk-pow-inner{background:rgba(13,10,26,0.82);border-radius:999px;
+  padding:calc(var(--tkt)*0.025) calc(var(--tkt)*0.10);}
 .tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:calc(var(--tkh)*0.24);opacity:0.55;z-index:1;}
 
@@ -184,7 +189,7 @@ html[data-bar="1"] body::before{display:none !important;}
 html[data-bar="1"] .tk-app > :not(.tk-barwrap){display:none;}
 html[data-bar="1"] .tk-app{max-width:none;margin:0;}
 html[data-bar="1"] .tk-barwrap{border:none;border-radius:0;overflow:visible;}
-html[data-bar="1"] .tk-bar{--tkh:100vh;height:100vh;width:100vw;}
+html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
 </style>
 </head>
 <body>
@@ -204,14 +209,15 @@ html[data-bar="1"] .tk-bar{--tkh:100vh;height:100vh;width:100vw;}
 
 <div class="tk-barwrap">
   <div class="tk-bar" id="bar">
-    <div class="tk-cap" id="cap">
-      <img src="Logos/logo%20transparent.png" alt="">
-      <span class="tk-cap-name">packs.ink</span>
+    <div class="tk-main">
+      <div class="tk-cap" id="cap">
+        <span class="tk-cap-name">packs.ink</span>
+        <img src="Logos/logo%20transparent.png" alt="">
+      </div>
+      <div class="tk-scroll"><div class="tk-rail" id="rail"></div></div>
     </div>
-    <div class="tk-scroll"><div class="tk-rail" id="rail"></div></div>
-    <div class="tk-pow" title="Live Lorcana prices — packs.ink">
-      <span class="tk-pow-txt"><span>powered by</span><b>packs.ink</b></span>
-      <img src="Logos/logo%20transparent.png" alt="">
+    <div class="tk-powrow" title="Live Lorcana prices — packs.ink">
+      <span class="tk-pow-inner"><span>powered by</span><b>packs.ink</b><img src="Logos/logo%20transparent.png" alt=""></span>
     </div>
     <div class="tk-msg" id="msg">loading movers…</div>
   </div>
@@ -301,7 +307,7 @@ html[data-bar="1"] .tk-bar{--tkh:100vh;height:100vh;width:100vw;}
       <h2>Add it to OBS</h2>
       <ol class="tk-steps">
         <li>In OBS: <b>Sources → + → Browser</b>.</li>
-        <li>Paste the URL above. Set <b>Width 1920</b>, <b>Height 72</b> (any height works — the bar scales to fit; taller = bigger text).</li>
+        <li>Paste the URL above. Set <b>Width 1920</b>, <b>Height 80</b> (any height works — the bar scales to fit; taller = bigger text).</li>
         <li>Drag it to the bottom of your scene. Done — it scrolls and refreshes on its own.</li>
       </ol>
       <div class="tk-note">Works in Streamlabs and any browser-source overlay the same way. Tip: turn on "Transparent bar" above if you want your gameplay showing through behind the text.</div>

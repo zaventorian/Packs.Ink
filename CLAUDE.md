@@ -1390,9 +1390,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   prices change once a day (TCGCSV ~20:00 UTC, ETL 20:30, retries 22:30/01:00), so outside the
   window the page sleeps until 20:45 UTC, then re-checks every 30 min through 03:00 UTC to catch
   late publishes. Don't "simplify" it back to setInterval.
-- **The right-edge "powered by packs.ink" cap is REQUIRED** — always rendered, no param, no
-  checkbox; the left logo cap is the optional one (`brand=0`). That attribution is the price of a
-  free overlay riding our data — keep it.
+- **The "powered by packs.ink" strip is REQUIRED** — a slim bottom row under the movers (22% of
+  `--tkt`, the total bar height; the movers row gets the rest as `--tkh`), always rendered, no
+  param, no checkbox; the left cap (PACKS.INK stacked over the logo) is the optional one
+  (`brand=0`). That attribution is the price of a free overlay riding our data — keep it. In
+  transparent mode the strip's band disappears and the credit sits in its own scrim pill.
 - **Double-clicking ticker.html from disk works** — that's how Zaven first tested it. Asset URLs
   are RELATIVE (file sits at site root, so they resolve the same at `/ticker` and on `file://`);
   on file:, card art hotlinks cards.lorcast.io directly (no /img-proxy route exists), the Copy URL
