@@ -1435,7 +1435,7 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - `Logos/inks/{AMBER,...}.png` — 96px ink shield icons.
 - `Logos/rarity/{common,uncommon,...}.svg` — 9 rarity icons (added 2026-05-23).
 - `Logos/packs-ink-logo.png` — site wordmark (top bar @ 60px height, footer @ 48px).
-- `Logos/Logo on Black.png` — Ink & Lore footer logo (base64-embedded as `LOGO_B64`).
+- `Logos/Logo on Black.png` — Ink & Lore logo (base64-embedded as `LOGO_B64` in logo.js). **Removed from the footer 2026-08-21 (user request)** — logo.js still ships (SW-precached, boot-order sentinel), just nothing renders it.
 - `Logos/PacksInk.ai` + `Logos/PacksInk.pdf` — source files for the commissioned wordmark (not used in deploy).
 - Custom SVG glyphs: `<InkableHex/>`, `<UninkableHex/>`, `<CostHex/>` (shared `<HexFrame/>`).
 
