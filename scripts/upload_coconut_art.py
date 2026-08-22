@@ -19,7 +19,15 @@ Usage:
     # add --commit to actually upload (default is a dry run)
 
 Input files are named by Coconut collector number: 001.webp … 018.webp
-(they're served with a .webp extension but are actually JPEG).
+(they're served with a .webp extension but are actually JPEG). Passing a folder
+with only the numbers you're replacing is fine — the missing-number warning is
+informational, and the upload is an upsert at the same path.
+
+Ravensburger rebalances a leader by RE-RENDERING it in place: same collector
+number, footer stamp goes "[Format Coconut] • Beta" -> "• Beta 1.1". After
+re-uploading one, bump that cn in `COCONUT_ART_REV` (Index.html) — the offline
+image cache `packsink-img-v1` survives deploys and is keyed by URL, so without a
+new query string existing visitors keep the old wording forever.
 """
 from __future__ import annotations
 

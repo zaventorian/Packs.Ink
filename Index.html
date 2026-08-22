@@ -446,7 +446,7 @@ async function encDeckMetaPatch(patch){
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v53";  // v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. (v52: Coconut leader merge/suppress.)
+const CACHE_KEY = "packsink:catalog:v54";  // v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. (v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -31164,7 +31164,7 @@ const COCONUT_CARDS = [
    ability:"Once during your turn, you may choose a character. Until the start of your next turn, they get +1 {L} and can't challenge and must quest if able."},
   {slug:"stitch-rock-star", cn:4, name:"Stitch", version:"Rock Star",
    ink:"Amber", associated:"Stitch - Rock Star",
-   ability:"Once during your turn, you may play a character with cost 2 or less from your hand for free. If you have a character named Stitch in play, you may play a character with cost 2 or less from your discard for free instead."},
+   ability:"Once during your turn, you may play a character with cost 2 or less for free. If that character was named Lilo or Stitch, chosen character gets +1 {L} this turn."},
 
   {slug:"dumbo-ninth-wonder-of-the-universe", cn:18, name:"Dumbo", version:"Ninth Wonder of the Universe",
    ink:"Amethyst", associated:"Dumbo - Ninth Wonder of the Universe",
@@ -31178,10 +31178,10 @@ const COCONUT_CARDS = [
 
   {slug:"donald-duck-fred-honeywell", cn:10, name:"Donald Duck", version:"Fred Honeywell",
    ink:"Emerald", associated:"Donald Duck - Fred Honeywell",
-   ability:"You pay 1 {I} less to use Boost abilities."},
+   ability:"You pay 1 {I} less to use Boost abilities and to play characters or locations with Boost."},
   {slug:"robin-hood-sneaky-sleuth", cn:14, name:"Robin Hood", version:"Sneaky Sleuth",
    ink:"Emerald", associated:"Robin Hood - Sneaky Sleuth",
-   ability:"Once per game during your turn, you may deal 1 damage to each opposing character."},
+   ability:"At the start of your first turn, you may play an item card named Robin's Bow from your collection for free.\nWhenever you play a character named Robin Hood, deal 1 damage to chosen opposing character or location."},
   {slug:"ursula-deceiver-of-all", cn:5, name:"Ursula", version:"Deceiver of All",
    ink:"Emerald", associated:"Ursula - Deceiver of All",
    ability:"Your characters count as having +1 cost for singing songs. Your characters named Ursula count as having +2 cost instead."},
@@ -31201,7 +31201,7 @@ const COCONUT_CARDS = [
    ability:"During your turn, if you have a Moana, Heihei, or Pua character in play, you may ink an additional card."},
   {slug:"mufasa-ruler-of-pride-rock", cn:7, name:"Mufasa", version:"Ruler of Pride Rock",
    ink:"Sapphire", associated:"Mufasa - Ruler of Pride Rock",
-   ability:"Once per game during your turn, you may pay 5 {I} to put the top 3 cards of your deck into your inkwell facedown and exerted."},
+   ability:"Once during your turn, you may pay 5 {I} to put the top 2 cards of your deck into your inkwell facedown and exerted."},
   // The only leader that grants a SECOND copy-limit exception via its own text.
   {slug:"nick-wilde-wily-fox", cn:8, name:"Nick Wilde", version:"Wily Fox",
    ink:"Sapphire", artist:"Brian Weisz", associated:"Nick Wilde - Wily Fox",
@@ -31218,8 +31218,16 @@ const COCONUT_CARDS = [
    ink:"Steel", associated:"Tinker Bell - Giant Fairy",
    ability:"Whenever one of your other abilities or actions deals damage to an opposing character, deal 1 damage to that character."},
 ];
+// Ravensburger rebalances a leader by re-rendering it IN PLACE — the art keeps
+// its collector number and the footer stamp goes "[Format Coconut] • Beta" ->
+// "• Beta 1.1". Our bucket object is overwritten at the same path, and
+// `packsink-img-v1` (the offline image cache) deliberately survives deploys, so
+// without a fresh URL an existing visitor keeps seeing the OLD wording forever.
+// Bump a card's rev here whenever its render is replaced.  Keyed by cn.
+const COCONUT_ART_REV = {4:2, 7:2, 10:2, 14:2};  // Beta 1.1 re-renders, 2026-08-22
 const coconutArtUrl = (cn) =>
-  `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`;
+  `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`
+  + (COCONUT_ART_REV[cn] ? `?v=${COCONUT_ART_REV[cn]}` : "");
 const COCONUT_BY_SLUG = Object.fromEntries(COCONUT_CARDS.map(c => [c.slug, c]));
 const getCoconutCard = (slug) => (slug && COCONUT_BY_SLUG[slug]) || null;
 const coconutDisplayName = (c) => c ? `${c.name} - ${c.version}` : "";
