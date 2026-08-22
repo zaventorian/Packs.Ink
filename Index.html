@@ -25307,6 +25307,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     for(const c of hiddenFilterChips) c.clear();
   }, [hiddenFilterChips]);
 
+  // Customizable-columns state (hooks — must be before the early returns).
+  const [colPrefs, setColPrefs] = useState(()=>{ try { return JSON.parse(localStorage.getItem("packsink:screener:colprefs:v1")||"{}"); } catch { return {}; } });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:colprefs:v1", JSON.stringify(colPrefs)); } catch {} }, [colPrefs]);
+
   // ── Draggable column widths (hooks — must be before the early returns) ──
   // Persisted alongside order/hidden in colPrefs, so ⚙ Columns → Reset clears
   // them too. Widths apply through a <colgroup>; the grips live in a sticky,
@@ -25316,6 +25320,20 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   //
   // colDefs/orderedCols are built further down (they close over onSort/arrow),
   // so the column-key list arrives via gripKeysRef, which render fills in.
+  //
+  // ⚠ The effect MUST keep a deps array (crash 2026-08-22, React error #185).
+  // Depsless, it re-ran measure() inside EVERY commit; on the raw → premium-
+  // graded column flip React fed the setGripGeom updater a stale `prev`
+  // (frozen at the raw-mode geometry), so the deep-equal bail never fired and
+  // each commit synchronously scheduled the next — a nested-update cascade
+  // that blew the update-depth cap and crashed the Screener to the error
+  // boundary for any returning user whose graded ToS was already accepted at
+  // page load. With deps, the sync measure() runs once per real column-layout
+  // change and the ResizeObserver (async, outside the commit phase) covers
+  // the rest, so a single stale-prev misfire settles instead of cascading.
+  // Deps = the inputs that change which columns render or how wide they are:
+  // mode flips, preset/window (visibleWins), sort arrows, density, column
+  // prefs, and the row data itself (table-layout auto sizes to content).
   const theadRef = useRef(null);
   const gripKeysRef = useRef([]);
   const dragRef = useRef(null);
@@ -25340,8 +25358,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(thead);
+    // Observe each th too: column redistribution can move boundaries without
+    // changing the thead's own box (table width capped by the wrap).
+    for(const th of thead.querySelectorAll("th")) ro.observe(th);
     return ()=> ro.disconnect();
-  });
+  }, [filtered, density, showAllWins, moverWin, preset, priceMode,
+      sortKey, sortDesc, sortKey2, sortDesc2,
+      showGraded, showSealed, gradedPremium, colPrefs]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -25351,10 +25374,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     dragRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   }, []);
-
-  // Customizable-columns state (hooks — must be before the early returns).
-  const [colPrefs, setColPrefs] = useState(()=>{ try { return JSON.parse(localStorage.getItem("packsink:screener:colprefs:v1")||"{}"); } catch { return {}; } });
-  useEffect(()=>{ try { localStorage.setItem("packsink:screener:colprefs:v1", JSON.stringify(colPrefs)); } catch {} }, [colPrefs]);
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
   const colsRef = useRef(null);
   useEffect(()=>{ if(!colsMenuOpen) return; const f=(e)=>{ if(colsRef.current && !colsRef.current.contains(e.target)) setColsMenuOpen(false); }; document.addEventListener("mousedown", f); return ()=>document.removeEventListener("mousedown", f); }, [colsMenuOpen]);
@@ -37601,9 +37620,10 @@ function App(){
     setGradedTosOk(true);
     setGradedTosPromptOpen(false);
     // Durable record (best-effort — localStorage already unlocked the UI). Requires a
-    // signed-in user; the localhost preview just relies on localStorage.
-    sbClient.rpc("accept_graded_tos", { p_version: GRADED_TOS_VERSION }).then(()=>{}, ()=>{});
-  }, []);
+    // signed-in user (the RPC is auth.uid()-scoped and 400s for anon — skip the
+    // guaranteed-failing call so the console stays clean for signed-out acceptors).
+    if(user) sbClient.rpc("accept_graded_tos", { p_version: GRADED_TOS_VERSION }).then(()=>{}, ()=>{});
+  }, [user]);
 
   // Open the ToS prompt when a graded surface announces itself (screener
   // graded mode, collection graded tab, card-detail graded tab, price-
