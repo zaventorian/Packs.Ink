@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=343">
+<link rel="stylesheet" href="styles.css?v=344">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -952,6 +952,25 @@ const DISCOVER_FORMATS = [["core","Core Constructed"],["infinity","Infinity"],["
 // scripts/seed_coconut_starter_decks.py.
 const STARTER_DECK_TAG = "packs-ink-starter";
 const isStarterDeck = (d) => Array.isArray(d?.tags) && d.tags.includes(STARTER_DECK_TAG);
+// ── Shareable sub-tab URLs ────────────────────────────────────────────────
+// Decks' sections and the Screener's mode were localStorage-only, so every one
+// of them lived at the same URL and none could be linked to — "here's the
+// Coconut feed" was not a sendable thing. They mirror into ?s= / ?f= / ?m=,
+// which App's view-sync effect knows to keep (VIEW_OWNED) rather than strip.
+//
+// Both mirrors use replaceState, never push. Decks stacks real pages on top of
+// a section (a deck, a tournament, a creator profile) and each pushes its own
+// entry; a filter that also pushed would interleave with those and make Back
+// step sideways through tab changes instead of out of the page you opened.
+const DECK_SECTION_KEYS = ["yours","favorites","following","discover","tournaments"];
+const SCREENER_MODES = ["raw","graded","sealed"];
+const readUrlParam = (name) => {
+  try { return new URLSearchParams(window.location.search).get(name); } catch { return null; }
+};
+const readUrlEnum = (name, allowed) => {
+  const v = readUrlParam(name);
+  return v && allowed.includes(v) ? v : null;
+};
 
 // Mainline booster-pack sets — drives EV / pack sim / box sim / set values /
 // history / etc. Promo sets and Extras & Oddities are intentionally NOT
@@ -24175,6 +24194,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // own row with its own price + Δ% windows. Persisted so the user's view
   // sticks.
   const [showGraded, setShowGraded] = useState(() => {
+    // ?m= wins over the saved mode so /screener?m=graded is a sendable link.
+    const m = readUrlEnum("m", SCREENER_MODES);
+    if(m) return m === "graded";
     try { return localStorage.getItem("packsink:screener:showGraded") === "1"; } catch { return false; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:showGraded", showGraded ? "1" : "0"); } catch{} }, [showGraded]);
@@ -24203,8 +24225,24 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // turns the other off. Persisted so a user who lives in one mode lands
   // there on next visit.
   const [showSealed, setShowSealed] = useState(() => {
+    const m = readUrlEnum("m", SCREENER_MODES);
+    if(m) return m === "sealed";
     try { return localStorage.getItem("packsink:screener:showSealed") === "1"; } catch { return false; }
   });
+  // Mirror the mode into ?m= so Raw / Graded / Sealed are three linkable
+  // pages instead of one URL with a hidden localStorage flag behind it. Raw is
+  // the default and stays bare. replaceState only — a mode toggle is a filter,
+  // not a page, and Back should leave the Screener rather than cycle modes.
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      if((url.pathname.replace(/\/$/, "") || "/") !== "/screener") return;
+      const want = showSealed ? "sealed" : showGraded ? "graded" : null;
+      if(url.searchParams.get("m") === want) return;
+      if(want) url.searchParams.set("m", want); else url.searchParams.delete("m");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {/* no-op */}
+  }, [showGraded, showSealed]);
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:showSealed", showSealed ? "1" : "0"); } catch{} }, [showSealed]);
   // Mode-flip mutex — if both flags ended up true (e.g. a saved view set
   // showGraded and the user then turned on Sealed), turn the other off.
@@ -32266,6 +32304,12 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // section for them); signed-out users land on "Discover" (browsing
   // public decks is the only useful surface without an account).
   const [deckSection, setDeckSection] = useState(()=>{
+    // A shared link outranks the saved pref — /decks?s=discover has to land
+    // where the sender was looking. A bare ?f=<format> implies Discover, since
+    // the format filter exists nowhere else.
+    const s = readUrlEnum("s", DECK_SECTION_KEYS);
+    if(s) return s;
+    if(readUrlEnum("f", DISCOVER_FORMATS.map(f => f[0]))) return "discover";
     try {
       const saved = localStorage.getItem("packsink:decks:section");
       if(saved) return saved;
@@ -32376,6 +32420,14 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         } else {
           setSelectedDeckId(null); setSelectedTournamentId(null);
           setExternalDeck(null); setCreatorProfile(null);
+          // Back out of a deck and onto the section it was opened from — the
+          // section/format live in the URL now, so restore them from it rather
+          // than leaving the user on whatever tab they wandered to since.
+          const f = u.searchParams.get("f");
+          const sec = u.searchParams.get("s");
+          if(f && DISCOVER_FORMATS.some(x => x[0] === f)) setDiscoverFormat(f);
+          if(sec && DECK_SECTION_KEYS.includes(sec)) setDeckSection(sec);
+          else if(f) setDeckSection("discover");
         }
       } catch {}
     };
@@ -32474,17 +32526,21 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // carries its leader), so before this tab existed a published Coconut deck
   // classified as neither Core nor Infinity and was invisible in Discover.
   const [discoverFormat, setDiscoverFormat] = useState(() => {
+    const f = readUrlEnum("f", DISCOVER_FORMATS.map(x => x[0]));
+    if(f) return f;
     try {
       const v = localStorage.getItem("packsink:decks:discoverFormat");
-      return DISCOVER_FORMATS.some(f => f[0] === v) ? v : "core";
+      return DISCOVER_FORMATS.some(x => x[0] === v) ? v : "core";
     } catch { return "core"; }
   });
   useEffect(()=>{
     try { localStorage.setItem("packsink:decks:discoverFormat", discoverFormat); } catch {}
   }, [discoverFormat]);
   // Set by an explicit Core/Infinity tab click; the format auto-fallback
-  // below never overrides a choice the user just made.
-  const discoverFormatTouched = useRef(false);
+  // below never overrides a choice the user just made. A ?f= link counts as
+  // "just made" — otherwise the fallback could quietly move a shared Coconut
+  // link onto whichever format happened to have more decks.
+  const discoverFormatTouched = useRef(!!readUrlEnum("f", DISCOVER_FORMATS.map(x => x[0])));
   const discoverAutoFallback = useRef(false);
   // Cutoff: only show decks created or edited since the most recent mainline
   // set's prerelease (LGS) date. Older decks built for rotated-out sets
@@ -32510,6 +32566,26 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // public-deck list (their "profile page") instead of the section tabs.
   // {creator, decks: [{deck, creator}]} or {error}.
   const [creatorProfile, setCreatorProfile] = useState(null);
+  // Mirror section + Discover format into the URL so a tab is a link you can
+  // send: /decks?s=discover&f=coconut, or just /decks?f=coconut. The default
+  // section is omitted (it depends on sign-in state, so writing it would make
+  // the same tab produce two different URLs for two people), as is the default
+  // format. replaceState only — see the note on DECK_SECTION_KEYS.
+  useEffect(() => {
+    // A deck / tournament / creator page owns the URL while it's open; its
+    // deep-link params must not be overwritten by the section behind it.
+    if(selectedDeckId || externalDeck || selectedTournamentId || creatorProfile) return;
+    try {
+      const url = new URL(window.location.href);
+      if((url.pathname.replace(/\/$/, "") || "/") !== "/decks") return;
+      const wantS = deckSection === (user ? "yours" : "discover") ? null : deckSection;
+      const wantF = (deckSection === "discover" && discoverFormat !== "core") ? discoverFormat : null;
+      if(url.searchParams.get("s") === wantS && url.searchParams.get("f") === wantF) return;
+      if(wantS) url.searchParams.set("s", wantS); else url.searchParams.delete("s");
+      if(wantF) url.searchParams.set("f", wantF); else url.searchParams.delete("f");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {/* no-op */}
+  }, [deckSection, discoverFormat, user, selectedDeckId, externalDeck, selectedTournamentId, creatorProfile]);
   // Aggregate favorite counts keyed by deck_id. Populated via the
   // deck_favorite_counts() SECURITY DEFINER RPC; merged from every refresh
   // path that fetches decks (own / favorites / following / discover / profile).
@@ -34178,11 +34254,16 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
 
   return html`<div>
     <div class="deck-section-tabs">
-      ${SECTIONS.map(([k,l,n]) => html`<button key=${k}
+      ${/* <a>, not <button>: now that a section has its own URL, it should
+            behave like one — ctrl/middle-click opens it in a new tab and
+            right-click offers "Copy link address". Same convention as the
+            Analytics sub-tabs. */""}
+      ${SECTIONS.map(([k,l,n]) => html`<a key=${k}
         class=${"deck-section-tab"+(deckSection===k?" active":"")}
-        onClick=${()=>setDeckSection(k)}>
+        href=${k === (user ? "yours" : "discover") ? "/decks" : "/decks?s=" + k}
+        onClick=${navHandler(()=>setDeckSection(k))}>
         ${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}
-      </button>`)}
+      </a>`)}
       ${deckSection==="yours" && html`<button class="active" onClick=${createDeck}
         style=${{marginLeft:"auto",padding:"7px 14px",fontSize:13}}>+ New Deck</button>`}
       ${err && html`<span style=${{color:"var(--red)",fontSize:12,marginLeft:"auto"}}>${err}</span>`}
@@ -34291,9 +34372,10 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       <div class="discover-format-tabs">
         ${DISCOVER_FORMATS.map(([k, l]) => {
           const n = discoverEntries.filter(e => e.format === k).length;
-          return html`<button key=${k}
+          return html`<a key=${k}
             class=${"discover-format-tab"+(discoverFormat===k?" active":"")}
-            onClick=${()=>{ discoverFormatTouched.current = true; setDiscoverFormat(k); }}>${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}</button>`;
+            href=${"/decks?f=" + k}
+            onClick=${navHandler(()=>{ discoverFormatTouched.current = true; setDiscoverFormat(k); })}>${l}${n>0?html` <span class="deck-section-tab-count">${n}</span>`:""}</a>`;
         })}
         <span class="muted discover-format-note">
           Sorted by ★ favorites — only decks edited or made since the prerelease of the newest set${discoverCutoff?` (${discoverCutoff})`:""}.
@@ -36987,6 +37069,7 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
+                           "s","f","m",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -36995,9 +37078,10 @@ function App(){
       // transition. Cross-view transitions still strip everything dirty so
       // navigating decks → home doesn't carry a stale ?tourney= forward.
       const VIEW_OWNED = {
-        decks:      new Set(["deck","token","user","tourney"]),
+        decks:      new Set(["deck","token","user","tourney","s","f"]),
         collection: new Set(["collection","token","set"]),
         market:     new Set(["a","trade","t"]),
+        screener:   new Set(["m"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned"]),
       };
       const owned = VIEW_OWNED[view] || new Set();

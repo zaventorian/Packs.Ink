@@ -866,6 +866,23 @@ The nested-interactive HTML (button inside `<a>`) is technically invalid but eve
 
 **Common bug**: when converting `<button>` → `<a>`, also flip the matching `</button>` → `</a>`. The first pass missed the closing tag on `.tournament-card` and the page broke until the close tag was flipped.
 
+## Shareable sub-tab URLs — `?s=` / `?f=` / `?m=` (2026-08-22)
+
+Decks' sections and the Screener's mode were localStorage-only, so every one of them lived at `/decks` or `/screener` and **none could be linked to** — "here's the Coconut feed" was not a sendable thing. Now:
+
+- **`/decks?s=<section>`** — `yours|favorites|following|discover|tournaments` (`DECK_SECTION_KEYS`).
+- **`/decks?f=<format>`** — `core|infinity|coconut`; implies Discover, so `/decks?f=coconut` alone is the short share link.
+- **`/screener?m=<mode>`** — `raw|graded|sealed` (`SCREENER_MODES`).
+
+Rules that keep this from fighting the rest of the URL machinery:
+
+- **Register every new param in BOTH `dirtyParams` and `VIEW_OWNED`** (App's view-sync effect). Owned params survive a same-view strip; unregistered ones are wiped on the next view sync, which is exactly what would make a deep link appear to work and then silently reset.
+- **Defaults are omitted.** The default section depends on sign-in state, so writing it would give two people two different URLs for the same tab.
+- **`replaceState`, never push.** Decks stacks real pages on top of a section (deck / tournament / creator profile), each pushing its own entry; a filter that also pushed would interleave and make Back step sideways through tab changes instead of out of the page you opened. The Screener's mode is a filter for the same reason. (Analytics' `?a=` does push — it has no leaf pages under it.)
+- **A leaf page owns the URL while it's open.** The decks mirror early-returns when a deck / tournament / creator is open, or it would strip their deep-link params; DecksView's popstate handler restores section + format from the URL when you back out of one.
+- **A `?f=` link counts as "user touched the format".** Otherwise Discover's auto-fallback (land on a format that has decks) can quietly move a shared Coconut link onto Core.
+- Both tab rows are `<a href>` + `navHandler` now that the URLs exist, so modifier-click and "Copy link address" work — same convention as the Analytics sub-tabs. Their CSS needed `text-decoration:none` and nothing else.
+
 ## [Format Coconut] starter decks + Discover's third tab (2026-08-22)
 
 **`DISCOVER_FORMATS`** is now the single source for Discover's sub-tabs — `core` / `infinity` / `coconut`, keyed on exactly what `checkDeckLegality()` stamps as `format`. Before it existed the tab list was a hardcoded pair, so a published Coconut deck classified as neither and **was invisible in Discover** from migration 110 until this shipped. The empty-state copy and the one-shot auto-fallback both read the list, so a fourth format needs no other edits.
