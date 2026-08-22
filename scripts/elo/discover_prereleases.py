@@ -1,6 +1,12 @@
-"""Discover upcoming set-launch Prerelease events on RPH (Ravensburger Play) and
-upsert them into the Supabase `prerelease_events` table — the sibling of
-`discover_wu_scs.py` (which handles Set Championships).
+"""Classify upcoming set-launch Prerelease events on RPH (Ravensburger Play).
+
+This module OWNS the prerelease classifier: discover_events.py (the daily
+discovery job) imports classify() from here and writes kind='prerelease' rows
+into public.lorcana_events. Run standalone it is ANALYSIS-ONLY — it prints the
+classification (optionally --json dumps it) and writes nothing to Supabase.
+The old standalone target, public.prerelease_events, is dead since migration
+113's client shipped and dropped in migration 123; its upsert path was retired
+2026-08-22 (targeted re-pulls go through discover_events.py).
 
 Same data source and pulling infrastructure as the SC discovery: pull EVERY
 upcoming Lorcana event with no server-side name filter (the RPH `name=` param is
@@ -250,41 +256,12 @@ def classify(ev: dict, sets_sorted, aliases_sorted, launch_sets,
     return None, ""
 
 
-def upsert(rows: list[dict], chunk: int = 200) -> None:
-    if not (SUPABASE_URL and SERVICE_KEY):
-        raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set (scripts/.env)")
-    endpoint = f"{SUPABASE_URL}/rest/v1/prerelease_events"
-    headers = {
-        "apikey": SERVICE_KEY,
-        "Authorization": f"Bearer {SERVICE_KEY}",
-        "Content-Type": "application/json",
-        "Prefer": "resolution=merge-duplicates,return=minimal",
-    }
-    done = 0
-    for i in range(0, len(rows), chunk):
-        batch = rows[i:i + chunk]
-        body = json.dumps(batch).encode()
-        for attempt in range(5):
-            try:
-                req = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
-                with urllib.request.urlopen(req, timeout=60) as r:
-                    _ = r.read()
-                break
-            except urllib.error.HTTPError as e:
-                raise SystemExit(f"upsert failed [{e.code}]: {e.read().decode('utf-8','ignore')[:400]}")
-            except Exception as e:
-                if attempt == 4:
-                    raise SystemExit(f"upsert batch failed after retries: {e}")
-                time.sleep(1.5 * (attempt + 1))
-        done += len(batch)
-        print(f"  upserted {done}/{len(rows)}")
-
-
 def main() -> None:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(description="Analysis-only: classify upcoming RPH "
+        "prereleases and print the result. Writes nothing to Supabase — the daily "
+        "writer is discover_events.py, which imports classify() from this module.")
     ap.add_argument("--country", default=None, help="optional client-side ISO country filter, e.g. US")
     ap.add_argument("--json", default=None, help="also dump the rows to this path")
-    ap.add_argument("--dry-run", action="store_true", help="don't write to Supabase")
     args = ap.parse_args()
 
     print("Pulling ALL upcoming Lorcana events from RPH (no name filter), "
@@ -329,16 +306,11 @@ def main() -> None:
         Path(args.json).write_text(json.dumps(rows, indent=2))
         print(f"  wrote {len(rows)} rows to {args.json}")
 
-    if args.dry_run:
-        print("  (dry run — not writing to Supabase)")
-        for r in rows[:12]:
-            print(f"    {(r['start_datetime'] or '????-??-??')[:10]}  "
-                  f"{(r.get('gameplay_format') or '')[:10]:11}  {(r['name'] or '')[:44]:46}  "
-                  f"{(r['store_name'] or '')[:18]:20}  {r.get('country')}")
-        return
-
-    upsert(rows)
-    print(f"\nDone — {len(rows)} events in public.prerelease_events")
+    for r in rows[:12]:
+        print(f"    {(r['start_datetime'] or '????-??-??')[:10]}  "
+              f"{(r.get('gameplay_format') or '')[:10]:11}  {(r['name'] or '')[:44]:46}  "
+              f"{(r['store_name'] or '')[:18]:20}  {r.get('country')}")
+    print("\n(analysis only — nothing written; discover_events.py owns the daily write)")
 
 
 if __name__ == "__main__":
