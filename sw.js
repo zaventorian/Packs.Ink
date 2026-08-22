@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v339';
+const CACHE_VERSION = 'packsink-v340';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -17,7 +17,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=339',
+  '/styles.css?v=340',
   '/logo.js?v=253',
   // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
   // admin-gated to ~2 users — they runtime-cache on first use instead of
@@ -108,11 +108,16 @@ self.addEventListener('fetch', (event) => {
       fetch(req)
         .then((res) => {
           // Only overwrite the offline app shell with a successful response for
-          // the SPA itself — NOT a real non-SPA document (/privacy serves the
-          // standalone privacy.html) and NOT a 404/5xx error page. Otherwise
-          // visiting /privacy or hitting a mid-deploy hiccup would make that the
-          // permanent offline shell.
-          if (res.ok && url.pathname !== '/privacy' && url.pathname !== '/privacy.html') {
+          // the SPA itself — NOT a real non-SPA document and NOT a 404/5xx
+          // error page. Otherwise visiting a standalone page (or hitting a
+          // mid-deploy hiccup) would make it the permanent offline shell — the
+          // Analytics » Swiss Odds tab iframes /swiss?embed=1, so that
+          // navigation happens on every visit, not just typed URLs. The
+          // dot-check covers every file-ish path (privacy.html, swiss.html,
+          // ticker.html, robots.txt, sitemap.xml, manifest.json, …); SPA
+          // routes are dot-free.
+          if (res.ok && !url.pathname.includes('.') &&
+              !['/privacy', '/swiss', '/ticker', '/lab/swiss'].includes(url.pathname)) {
             const copy = res.clone();
             caches.open(CACHE_VERSION).then((c) => c.put('/Index.html', copy));
           }

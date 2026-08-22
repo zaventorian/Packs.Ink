@@ -49,10 +49,18 @@ async function proxyImage(request, prefix, origin) {
   // Deliberately NOT forwarding the client's headers. These are third-party
   // CDNs; passing cookies or auth along would leak them, and varying on Accept
   // would fragment the edge cache for no benefit on static art.
-  const res = await fetch(upstream, {
-    method: request.method,
-    cf: { cacheEverything: true, cacheTtl: IMG_CACHE_SECONDS },
-  });
+  // A network-level fetch failure (CDN outage, DNS) rejects — without the
+  // catch it propagates out of the worker as a Cloudflare 1101 exception
+  // page instead of a clean upstream error.
+  let res;
+  try {
+    res = await fetch(upstream, {
+      method: request.method,
+      cf: { cacheEverything: true, cacheTtl: IMG_CACHE_SECONDS },
+    });
+  } catch {
+    return new Response("Upstream unreachable", { status: 502 });
+  }
 
   if (!res.ok) return new Response("Upstream error", { status: res.status });
 

@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=339">
+<link rel="stylesheet" href="styles.css?v=340">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -26058,6 +26058,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       <div class="price-db-tableinner">
       <div class="price-db-gripbar" aria-hidden="true">
         ${gripGeom.edges.map(g => html`<button key=${g.key} class="price-db-colgrip"
+          tabIndex=${-1}
           style=${{left: g.x + "px", height: (gripGeom.headH || 24) + "px"}}
           title="Drag to resize this column"
           onPointerDown=${(e)=>onGripDown(e, g.key)}
@@ -30971,19 +30972,24 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     : ["chase","rareLeg","promo","graded","valuable"];
                   const order = (homeEdit && homeEdit.bannerOrder && homeEdit.bannerOrder.length)
                     ? homeEdit.bannerOrder : defaultOrder;
+                  // ▲▼ enable/target off the banners that actually rendered —
+                  // node-less keys (signed-out graded, no hot set) still hold
+                  // order slots but must not be swap partners or end stops.
+                  const visibleBannerKeys = order.filter(k => bannerNodes[k] != null);
                   const stack = [];
-                  order.forEach((k, i) => {
+                  order.forEach((k) => {
                     const node = bannerNodes[k];
                     if(node == null) return;
+                    const vi = visibleBannerKeys.indexOf(k);
                     if(editing){
                       stack.push(html`<div key=${"bbar-"+k} class="home-edit-card home-edit-card--banner">
                         <span class="home-edit-name">${HOME_BANNER_LABELS[k] || k}</span>
                         <div class="home-edit-ctls">
-                          <button class="home-edit-btn2" disabled=${i <= 0}
-                            onClick=${()=>homeEdit.moveBanner(k, -1, defaultOrder)}
+                          <button class="home-edit-btn2" disabled=${vi <= 0}
+                            onClick=${()=>homeEdit.moveBanner(k, -1, defaultOrder, visibleBannerKeys)}
                             title="Move this banner up" aria-label=${"Move "+(HOME_BANNER_LABELS[k]||k)+" up"}>▲</button>
-                          <button class="home-edit-btn2" disabled=${i >= order.length-1}
-                            onClick=${()=>homeEdit.moveBanner(k, 1, defaultOrder)}
+                          <button class="home-edit-btn2" disabled=${vi >= visibleBannerKeys.length-1}
+                            onClick=${()=>homeEdit.moveBanner(k, 1, defaultOrder, visibleBannerKeys)}
                             title="Move this banner down" aria-label=${"Move "+(HOME_BANNER_LABELS[k]||k)+" down"}>▼</button>
                         </div>
                       </div>`);
@@ -37041,11 +37047,19 @@ function App(){
   }, [siteTour, siteTourAttempt]);
   // NOTE: startSiteTour lives further down, after `user` is declared (its
   // stop list drops requiresUser sections for signed-out walkers).
-  const advanceSiteTour = useCallback(() => {
+  // markSeen=false is the retry-ladder skip path: a stop whose coachmark
+  // never rendered must NOT be stamped sectionTourSeen, or a transient data
+  // failure permanently eats that section's 🧭 launcher + auto-tour.
+  const advanceSiteTour = useCallback((markSeen = true) => {
     setSiteTourAttempt(0);
+    // Hide the coachmark in the SAME commit as the index bump. Leaving
+    // siteTourShow true let the NEXT stop's Coachmark mount once on the OLD
+    // view, abort (selectors miss), and burn one retry-ladder rung on every
+    // single advance.
+    setSiteTourShow(false);
     setSiteTour(st => {
       if(!st) return null;
-      try { localStorage.setItem("packsink:sectionTourSeen:"+st.stops[st.i], "1"); } catch {}
+      if(markSeen !== false){ try { localStorage.setItem("packsink:sectionTourSeen:"+st.stops[st.i], "1"); } catch {} }
       const ni = st.i + 1;
       if(ni >= st.stops.length){ flashToast("That's the tour — enjoy the site! 🧭"); return null; }
       return {stops: st.stops, i: ni};
@@ -37062,6 +37076,10 @@ function App(){
       return null;
     });
     setSiteTourAttempt(0);
+    // Same rule as the navigate-away path below: someone who just ended a
+    // tour must not have another section's coachmark auto-pop at them 900ms
+    // after their next tab click.
+    try { sessionStorage.setItem("packsink:autoTourFired", "1"); } catch {}
   }, []);
   // A stop whose selectors resolve to nothing (view still rendering / data
   // still loading) gets progressively longer retries, then the walk moves on
@@ -37069,7 +37087,7 @@ function App(){
   const skipSiteTourStop = useCallback(() => {
     setSiteTourShow(false);
     if(siteTourAttempt < 3) setSiteTourAttempt(siteTourAttempt + 1);
-    else { setSiteTourAttempt(0); advanceSiteTour(); }
+    else { setSiteTourAttempt(0); advanceSiteTour(false); }
   }, [siteTourAttempt, advanceSiteTour]);
   // A tour left open across a top-nav switch used to follow the user into the
   // next view, where its selectors match nothing — spotlight gone, just a
@@ -37421,11 +37439,20 @@ function App(){
   }, [homeBannerOrder]);
   // First move materializes the current default order (hot-aware) so the swap
   // lands exactly on what the user is looking at.
-  const moveHomeBanner = (key, dir, defaultOrder) => setHomeBannerOrder(cur => {
+  // Swaps with the nearest neighbour that actually RENDERED (visibleKeys) —
+  // same lesson as moveHomePanel: graded is null without ToS acceptance and
+  // valuable is null outside a release window, and a plain index±1 swap with
+  // a node-less banner moves nothing on screen while still materializing the
+  // explicit order (a dead button with a side effect).
+  const moveHomeBanner = (key, dir, defaultOrder, visibleKeys) => setHomeBannerOrder(cur => {
     const base = (cur && cur.length) ? cur.slice() : (defaultOrder || HOME_BANNER_KEYS).slice();
+    const vis = new Set(visibleKeys && visibleKeys.length ? visibleKeys : base);
     const i = base.indexOf(key);
-    const j = i + (dir < 0 ? -1 : 1);
-    if(i < 0 || j < 0 || j >= base.length) return cur;
+    if(i < 0) return cur;
+    const step = dir < 0 ? -1 : 1;
+    let j = i + step;
+    while(j >= 0 && j < base.length && !vis.has(base[j])) j += step;
+    if(j < 0 || j >= base.length) return cur;
     [base[i], base[j]] = [base[j], base[i]];
     return base;
   });
@@ -37473,15 +37500,6 @@ function App(){
     setSiteTour({stops, i: 0});
     onTabClick(stops[0]);
   }, [user, onTabClick]);
-  // Example collection for the walk's Collection stop — see buildDemoCollection.
-  // Only kicks in while the walk is running, for a signed-in user whose real
-  // collection is EMPTY; anyone with actual cards always sees their own.
-  const demoCollection = useMemo(() => {
-    if(!siteTour || !user) return null;
-    if(collection && Object.keys(collection).length > 0) return null;
-    const demo = buildDemoCollection(raw);
-    return Object.keys(demo).length ? demo : null;
-  }, [siteTour, user, collection, raw]);
   // Sealed-product collection: { [tcgplayer_product_id]: quantity }. Parallel
   // to `collection` but keyed by product_id since sealed has no card_id.
   const [sealedCollection, setSealedCollection] = useState({});
@@ -37498,6 +37516,17 @@ function App(){
   // Tracks the post-sign-in fetch so the Home panel can show a "loading"
   // state instead of the "empty collection" CTA during the round-trip.
   const [collectionLoading, setCollectionLoading] = useState(false);
+  // Example collection for the walk's Collection stop — see buildDemoCollection.
+  // Only kicks in while the walk is running, for a signed-in user whose real
+  // collection has LOADED and is EMPTY; anyone with actual cards always sees
+  // their own. The loading guard matters: gating on emptiness alone would
+  // swap the demo in over a populated account whose fetch hasn't settled yet.
+  const demoCollection = useMemo(() => {
+    if(!siteTour || !user || collectionLoading) return null;
+    if(collection && Object.keys(collection).length > 0) return null;
+    const demo = buildDemoCollection(raw);
+    return Object.keys(demo).length ? demo : null;
+  }, [siteTour, user, collection, collectionLoading, raw]);
   // Graded data is PUBLIC as of 2026-07-14: every graded surface renders the new
   // per-sale graded_sales scatter (Last Sold / Avg of Last 5) for everyone, and
   // the legacy TCGPriceLookup data (graded_prices_*) is no longer shown. The old

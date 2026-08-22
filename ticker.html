@@ -134,6 +134,12 @@
 @keyframes tkscroll{to{transform:translateX(var(--tk-shift,-2000px));}}
 /* Hover-pause is a configurator affordance only — OBS never hovers. */
 html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
+/* Reduced motion: pause the preview marquee for vestibular-sensitive
+   visitors. Scoped to the configurator — in OBS (?bar=1) scrolling IS the
+   product and no viewer preference reaches a capture source anyway. */
+@media (prefers-reduced-motion:reduce){
+  html:not([data-bar]) .tk-rail{animation-play-state:paused;}
+}
 .tk-seq{display:flex;align-items:center;height:100%;flex:0 0 auto;}
 /* In-reel section header: "1D Risers" with the rarity group under it. */
 .tk-sec{display:flex;flex-direction:column;justify-content:center;align-items:flex-start;flex:0 0 auto;
@@ -507,6 +513,10 @@ const fmtPct = (p) => {
 let cfg = parseTickerCfg(location.search);
 let sections = [];
 let fetchSeq = 0;
+// False until the first loadData settles — renderStrip's empty branch says
+// "loading" rather than "no movers" while the initial fetch is in flight
+// (toggling a checkbox re-renders before the data lands).
+let loadedOnce = false;
 
 /* ───────── data ───────── */
 function fetchRows(r){
@@ -537,15 +547,24 @@ async function loadData(){
       .catch(() => ({sec, rows: [], ok: false}))
   ));
   if(seq !== fetchSeq) return;
+  loadedOnce = true;
   const anyFail = results.some(r => !r.ok);
   const filled = results.filter(r => r.rows.length)
     .map(r => Object.assign({}, r.sec, {rows: r.rows}));
   if(filled.length){
     sections = filled;
     renderStrip();
+  }else if(!anyFail){
+    // Every query SUCCEEDED and none returned rows: the current config
+    // legitimately matches nothing. Clear the reel — keeping the previous
+    // config's strip here made the preview disagree with the URL the Copy
+    // button hands to OBS (which starts empty). Failure is different: a
+    // live bar keeps its old strip and retries below.
+    sections = [];
+    renderStrip();
   }else if(!sections.length){
     $("msg").style.display = "";
-    $("msg").textContent = anyFail ? "couldn't load prices — retrying…" : "no movers match these filters";
+    $("msg").textContent = "couldn't load prices — retrying…";
     $("rowCount").textContent = "";
   }
   if(anyFail) setTimeout(() => { if(seq === fetchSeq) loadData(); }, RETRY_MS);
@@ -628,7 +647,7 @@ function renderStrip(){
   rail.innerHTML = "";
   if(!sections.length){
     $("msg").style.display = "";
-    $("msg").textContent = "no movers match these filters";
+    $("msg").textContent = loadedOnce ? "no movers match these filters" : "loading movers…";
     $("rowCount").textContent = "";
     return;
   }
