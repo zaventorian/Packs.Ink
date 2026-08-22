@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=340">
+<link rel="stylesheet" href="styles.css?v=342">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -942,6 +942,16 @@ const COCONUT_SET_NAME = "Format Coconut";
 // Coconut leaders aren't Characters/Actions/Items/Locations/Songs — they're
 // their own card type, which is also how they're filtered and searched.
 const COCONUT_CARD_TYPE = "Coconut";
+// Discover's format sub-tabs, in display order. The keys are exactly what
+// checkDeckLegality() stamps as `format`, so a format missing from this list is
+// a deck nobody can find — which is what happened to Coconut decks between
+// migration 110 and this list existing.
+const DISCOVER_FORMATS = [["core","Core Constructed"],["infinity","Infinity"],["coconut",COCONUT_SET_NAME]];
+// Ownerless house decks (user_id = null) carry this tag so the feed can name
+// them instead of falling back to "anonymous". Written by
+// scripts/seed_coconut_starter_decks.py.
+const STARTER_DECK_TAG = "packs-ink-starter";
+const isStarterDeck = (d) => Array.isArray(d?.tags) && d.tags.includes(STARTER_DECK_TAG);
 
 // Mainline booster-pack sets — drives EV / pack sim / box sim / set values /
 // history / etc. Promo sets and Extras & Oddities are intentionally NOT
@@ -7305,6 +7315,12 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     : null;
   // Coconut decks get a third ink, so the label can't stay capped at 2.
   const posterCoconut = getCoconutCard(deck.coconut_card);
+  // Robin Hood's bow. It is not one of the 60, so it can't come from `cards` —
+  // and a shared image is often the only thing anyone sees of a deck, so the
+  // card the leader hands you for free belongs on it.
+  const posterBonusImg = useMemo(
+    () => coconutBonusImg(coconutBonusMeta(posterCoconut, cardById)),
+    [posterCoconut, cardById]);
   // Legality issues printed on the poster itself. A shared decklist image is
   // often the only thing someone sees, so "why isn't this legal" has to travel
   // with it rather than living in a tooltip back in the editor.
@@ -7460,11 +7476,32 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               THE card of the deck (the inkDecks treatment). No caption — the
               render already says "[FORMAT COCONUT]", the name and the ability.
               It isn't one of the 60, so it's prepended rather than in `cards`. */""}
-        ${posterCoconut && html`<div style=${{position:"relative",gridColumn:"span 2",gridRow:"span 2"}}>
+        ${posterCoconut && html`<div style=${{position:"relative",gridColumn:"span 2",gridRow:"span 2",
+          display:"flex",alignItems:"flex-end"}}>
+          ${/* Bonus card angled BEHIND the leader. The leader gives up 16% of
+                the cell for it — the pair has to stay inside its own 2x2 area
+                or it collides with the deck tiles beside it. */""}
+          ${posterBonusImg && html`<img src=${proxyImg(posterBonusImg)} crossOrigin="anonymous"
+            alt=${posterCoconut.bonus}
+            onError=${(e)=>{
+              const t = e.target;
+              if(t.dataset.fallback) return;
+              t.dataset.fallback = "1";
+              t.removeAttribute("crossorigin");
+              t.src = posterBonusImg;
+            }}
+            style=${{position:"absolute",right:0,top:"5%",width:"52%",zIndex:0,
+              borderRadius:8,display:"block",transform:"rotate(-9deg)",
+              transformOrigin:"bottom right",boxShadow:"0 4px 12px rgba(0,0,0,0.4)"}}/>`}
           <img src=${coconutArtUrl(posterCoconut.cn)} crossOrigin="anonymous"
             alt=${coconutDisplayName(posterCoconut)}
-            style=${{width:"100%",height:"100%",objectFit:"cover",borderRadius:10,
+            style=${{width:posterBonusImg?"84%":"100%",height:posterBonusImg?"auto":"100%",
+              objectFit:"cover",borderRadius:10,position:"relative",zIndex:1,
               boxShadow:"0 4px 12px rgba(0,0,0,0.4)",display:"block"}}/>
+          ${posterBonusImg && html`<span style=${{position:"absolute",top:6,right:6,zIndex:2,
+            background:"rgba(0,0,0,0.82)",color:"#fbbf24",fontSize:11,fontWeight:800,
+            padding:"3px 8px",borderRadius:6,letterSpacing:0.4,
+            boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>＋ BONUS</span>`}
         </div>`}
         ${cards.map(c => html`<div key=${c.card_id} style=${{position:"relative"}}>
           ${c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
@@ -31133,6 +31170,12 @@ function computeCoreSets(){
 // browse, the Screener, Collection and every set-completion denominator.
 // Pure static reference data, same as SPECIAL_DECK_LIMITS.
 //
+// `bonus` is a card the leader plays from OUTSIDE the deck — Robin Hood's bow
+// comes "from your collection", so it is a free extra copy that costs no deck
+// slot and does NOT consume the singleton allowance: you may still run a normal
+// Robin's Bow among the 60. It is therefore display-only (see
+// `coconutBonusMeta`), never a deck-limit or legality input.
+//
 // `associated` and `extraLimits` keys are Product Names ("<Name> - <Version>",
 // or a bare name for versionless cards like Pawpsicle) — the same key space
 // SPECIAL_DECK_LIMITS uses, because the copy cap is per-NAME across printings.
@@ -31179,8 +31222,10 @@ const COCONUT_CARDS = [
   {slug:"donald-duck-fred-honeywell", cn:10, name:"Donald Duck", version:"Fred Honeywell",
    ink:"Emerald", associated:"Donald Duck - Fred Honeywell",
    ability:"You pay 1 {I} less to use Boost abilities and to play characters or locations with Boost."},
+  // Plays its bonus card from OUTSIDE the deck — see `bonus` below.
   {slug:"robin-hood-sneaky-sleuth", cn:14, name:"Robin Hood", version:"Sneaky Sleuth",
    ink:"Emerald", associated:"Robin Hood - Sneaky Sleuth",
+   bonus:"Robin's Bow",
    ability:"At the start of your first turn, you may play an item card named Robin's Bow from your collection for free.\nWhenever you play a character named Robin Hood, deal 1 damage to chosen opposing character or location."},
   {slug:"ursula-deceiver-of-all", cn:5, name:"Ursula", version:"Deceiver of All",
    ink:"Emerald", associated:"Ursula - Deceiver of All",
@@ -31225,6 +31270,12 @@ const COCONUT_CARDS = [
 // without a fresh URL an existing visitor keeps seeing the OLD wording forever.
 // Bump a card's rev here whenever its render is replaced.  Keyed by cn.
 const COCONUT_ART_REV = {4:2, 7:2, 10:2, 14:2};  // Beta 1.1 re-renders, 2026-08-22
+// Every <img> that renders this URL passes crossOrigin="anonymous", including
+// the ones that never touch a canvas. The bucket sends ACAO:*, so the CORS
+// request always succeeds — but Chrome caches a no-cors response separately,
+// and a later canvas-bound request for the SAME url reuses it and fails with
+// naturalWidth 0. That is exactly how the deck poster's leader silently came
+// out blank whenever you opened the deck (non-CORS showcase) first.
 const coconutArtUrl = (cn) =>
   `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`
   + (COCONUT_ART_REV[cn] ? `?v=${COCONUT_ART_REV[cn]}` : "");
@@ -31253,6 +31304,36 @@ const coconutAbilityText = (s) =>
 // either way. Ruling here: card text beats the format default, which is
 // consistent with Coconut itself using card text (Nick Wilde) to modify limits.
 // Revisit if Ravensburger clarifies.
+// The catalog row for a leader's `bonus` card, so the deck surfaces can show it
+// tucked behind the leader. Scans by Product Name (the bonus is named in card
+// text, not by card_id) and prefers a printing that actually has art over a
+// variant/promo reskin — any copy is legal, this only picks which render.
+// Returns null for the 17 leaders without one. Call inside a useMemo.
+const coconutBonusMeta = (coconut, cardById) => {
+  const want = coconut && coconut.bonus;
+  if(!want || !cardById) return null;
+  let best = null, bestScore = -1;
+  for(const k in cardById){
+    for(const r of (cardById[k] || [])){
+      if(!r || r["Product Name"] !== want) continue;
+      const score = ((r.img_large || r.img_normal || r.img_small) ? 2 : 0)
+                  + (r.variant_label ? 0 : 1);
+      if(score > bestScore){ best = r; bestScore = score; }
+    }
+  }
+  return best;
+};
+// Same /large/ upgrade the poster does — the cached catalog only carries the
+// ~400w /normal/ asset, which is soft when the bonus is rendered card-sized.
+const coconutBonusImg = (meta) => {
+  const s = meta && (meta.img_large || meta.img_normal || meta.img_small);
+  return s ? s.replace("/normal/", "/large/").replace("/small/", "/large/") : null;
+};
+const coconutBonusNote = (coconut) =>
+  coconut && coconut.bonus
+    ? `${coconut.bonus} is played from your collection — a free extra copy that doesn't use a deck slot. You can still run one in the 60.`
+    : "";
+
 const coconutDeckLimit = (coconut, productName) => {
   if(!coconut) return getDeckLimit(productName);
   if(productName === coconut.associated) return 4;
@@ -32387,13 +32468,15 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // user's own). Paginated — we initially load DISCOVER_PAGE entries and
   // grow via the "Load more" button.
   const [discoverEntries, setDiscoverEntries] = useState([]);
-  // Public-feed sub-tab — Core vs Infinity. Default to Core; last-opened
-  // value persists in localStorage so the user lands on the format they
-  // care about between sessions.
+  // Public-feed sub-tab — Core / Infinity / Coconut. Default to Core;
+  // last-opened value persists in localStorage so the user lands on the format
+  // they care about between sessions. Coconut is a DECLARED format (the deck
+  // carries its leader), so before this tab existed a published Coconut deck
+  // classified as neither Core nor Infinity and was invisible in Discover.
   const [discoverFormat, setDiscoverFormat] = useState(() => {
     try {
       const v = localStorage.getItem("packsink:decks:discoverFormat");
-      return v === "infinity" ? "infinity" : "core";
+      return DISCOVER_FORMATS.some(f => f[0] === v) ? v : "core";
     } catch { return "core"; }
   });
   useEffect(()=>{
@@ -32517,8 +32600,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     if(!discoverAutoFallback.current && !discoverFormatTouched.current){
       discoverAutoFallback.current = true;
       if(!fresh.some(e => e.format === discoverFormat)){
-        const other = discoverFormat === "core" ? "infinity" : "core";
-        if(fresh.some(e => e.format === other)) setDiscoverFormat(other);
+        // Land on whichever format actually has decks, in tab order — with
+        // three formats "the other one" is no longer a single answer.
+        const other = DISCOVER_FORMATS.map(f => f[0])
+          .find(k => k !== discoverFormat && fresh.some(e => e.format === k));
+        if(other) setDiscoverFormat(other);
       }
     }
   }, [discoverEntries, cardById, setsByProductName, discoverFormat]);
@@ -33447,7 +33533,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const renderExternalCard = (entry, opts={}) => {
     const d = entry.deck;
     const s = summarizeDeck(d);
-    const creatorName = entry.creator?.display_name || "anonymous";
+    // Ownerless house decks would otherwise read "by anonymous", which makes
+    // the launch-day Coconut feed look abandoned rather than curated.
+    const creatorName = entry.creator?.display_name
+      || (isStarterDeck(d) ? "Packs.Ink" : "anonymous");
+    const starterLeader = isStarterDeck(d) ? getCoconutCard(d.coconut_card) : null;
     const favCount = favoriteCounts[d.id] || 0;
     const viewCount = viewCounts[d.id] || 0;
     const bg = deckGradient(s.inks);
@@ -33473,6 +33563,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             tournament line and the "by <player>" byline below already say
             everything a generated name used to. */""}
       ${d.name && html`<div class="deck-card-name">${d.name}</div>`}
+      ${starterLeader && html`<div class="deck-card-tourney deck-card-starter"
+        title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${starterLeader.ink}`}>
+        <img class="deck-coconut-slot-art" src=${coconutArtUrl(starterLeader.cn)} crossOrigin="anonymous"
+          alt="" aria-hidden="true" loading="lazy"/>
+        <span class="dct-name">${coconutDisplayName(starterLeader)}</span>
+        <span class="dct-place">STARTER</span>
+      </div>`}
       ${isTourneyDeck
         ? html`<div class="deck-card-tourney" title="From this tournament">
             <span class="dct-trophy">🏆</span>
@@ -34193,7 +34290,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         Public decks from across the community. Anyone can publish a deck here by setting its visibility to <strong>Public</strong> from the deck's Share menu.
       </div>
       <div class="discover-format-tabs">
-        ${[["core","Core Constructed"],["infinity","Infinity"]].map(([k, l]) => {
+        ${DISCOVER_FORMATS.map(([k, l]) => {
           const n = discoverEntries.filter(e => e.format === k).length;
           return html`<button key=${k}
             class=${"discover-format-tab"+(discoverFormat===k?" active":"")}
@@ -34210,14 +34307,21 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         : (() => {
             const byFormat = discoverEntries.filter(e => e.format === discoverFormat);
             const visible = filterExternal(byFormat);
+            const fmtLabel = (DISCOVER_FORMATS.find(f => f[0] === discoverFormat) || [,""])[1];
             if(byFormat.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              No ${discoverFormat === "core" ? "Core" : "Infinity"} decks have been published in this window yet.
-              ${discoverFormat === "core"
-                ? html` Try <button class="settings-action link" onClick=${()=>setDiscoverFormat("infinity")}>Infinity</button>.`
-                : html` Try <button class="settings-action link" onClick=${()=>setDiscoverFormat("core")}>Core Constructed</button>.`}
+              No ${fmtLabel} decks have been published in this window yet.
+              ${(() => {
+                const alt = DISCOVER_FORMATS.filter(([k]) => k !== discoverFormat
+                  && discoverEntries.some(e => e.format === k));
+                if(!alt.length) return null;
+                return html` Try ${alt.map(([k, l], i) => html`<${React.Fragment} key=${k}>
+                  ${i > 0 ? " or " : ""}<button class="settings-action link"
+                    onClick=${()=>{ discoverFormatTouched.current = true; setDiscoverFormat(k); }}>${l}</button>
+                </>`)}.`;
+              })()}
             </div>`;
             if(visible.length === 0) return html`<div class="muted" style=${{fontSize:13,padding:"24px 0"}}>
-              No ${discoverFormat === "core" ? "Core" : "Infinity"} decks match the current ink filter. <button class="settings-action link"
+              No ${fmtLabel} decks match the current ink filter. <button class="settings-action link"
                 onClick=${()=>setInkFilter(new Set())}>Clear inks</button>
             </div>`;
             return html`<div class="deck-list">${visible.map(entry => renderExternalCard(entry, {}))}</div>`;
@@ -34982,7 +35086,7 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
             ${COCONUT_CARDS.filter(c => c.ink === ink).map(c => html`
               <button key=${c.slug} class=${"coconut-picker-card"+(current===c.slug?" active":"")}
                 onClick=${()=>onPick(c.slug)}>
-                <img src=${coconutArtUrl(c.cn)} alt=${coconutDisplayName(c)} loading="lazy"/>
+                <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt=${coconutDisplayName(c)} loading="lazy"/>
                 <span class="coconut-picker-name">${coconutDisplayName(c)}</span>
                 <span class="coconut-picker-ability">${coconutAbilityText(c.ability)}</span>
               </button>`)}
@@ -35447,6 +35551,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // Sort comparator for items inside each section.
   // ── [Format Coconut] deck-editor derivations ───────────────────────
   const coconutCard = getCoconutCard(deck.coconut_card);
+  // Robin Hood's bow: outside the 60, so it never reaches the deck-cards path —
+  // it has to be looked up from the catalog to be shown at all.
+  const coconutBonus = useMemo(() => coconutBonusMeta(coconutCard, cardById),
+                               [coconutCard, cardById]);
   // The ink budget for the card browser. Allowed = the leader's ink (fixed by
   // the rules) plus whatever the deck already uses; once that hits 3, nothing
   // introducing a 4th can be added. Derived rather than declared — there's no
@@ -35595,7 +35703,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             : (creator?.display_name && onOpenCreator
               ? html`<button class="deck-creator-link" onClick=${onOpenCreator}
                   title="View this creator's public decks">${creator.display_name}</button>`
-              : html`<span>${creator?.display_name || "an anonymous user"}</span>`)}
+              : html`<span>${creator?.display_name
+                  || (isStarterDeck(deck) ? "Packs.Ink" : "an anonymous user")}</span>`)}
           ${!tournamentContext && onToggleFollowCreator && creatorId && html`<button class=${"deck-creator-follow"+(isFollowingCreator?" on":"")}
             onClick=${canAct ? onToggleFollowCreator : (onSignIn || (()=>{}))}
             title=${canAct
@@ -35664,7 +35773,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             : "Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore."}>
           ${legality.coconut
             ? html`<img class="deck-coconut-slot-art" src=${coconutArtUrl(legality.coconut.cn)}
-                     alt="" aria-hidden="true" loading="lazy"/>
+                     crossOrigin="anonymous" alt="" aria-hidden="true" loading="lazy"/>
                    <span>${coconutDisplayName(legality.coconut)}</span>`
             : html`<span>＋ Coconut leader</span>`}
         </button>`}
@@ -35798,11 +35907,23 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       // eagerly, so a later `const` would hit the temporal dead zone.
       const coconutBlock = coconutCard ? html`<div class="deck-coconut-showcase">
         <span class="deck-coconut-showcase-tag">${COCONUT_SET_NAME} deck</span>
-        <img class="deck-coconut-showcase-art" src=${coconutArtUrl(coconutCard.cn)}
-          alt=${coconutDisplayName(coconutCard)}
-          title=${isOwnDeck ? "Change or remove leader" : coconutDisplayName(coconutCard)}
-          onClick=${isOwnDeck ? (()=>setCoconutPickerOpen(true)) : null}
-          style=${isOwnDeck ? {cursor:"pointer"} : null}/>
+        ${/* The bonus card sits BEHIND the leader, angled, so it reads as an
+              extra that comes with it rather than a second leader. */""}
+        <div class=${"deck-coconut-stack"+(coconutBonus?" has-bonus":"")}>
+          ${coconutBonus && html`<img class="deck-coconut-bonus-art"
+            src=${coconutBonusImg(coconutBonus)} alt=${coconutCard.bonus}
+            title=${coconutBonusNote(coconutCard)} loading="lazy"/>`}
+          <img class="deck-coconut-showcase-art" src=${coconutArtUrl(coconutCard.cn)}
+            crossOrigin="anonymous"
+            alt=${coconutDisplayName(coconutCard)}
+            title=${isOwnDeck ? "Change or remove leader" : coconutDisplayName(coconutCard)}
+            onClick=${isOwnDeck ? (()=>setCoconutPickerOpen(true)) : null}
+            style=${isOwnDeck ? {cursor:"pointer"} : null}/>
+        </div>
+        ${coconutBonus && html`<span class="deck-coconut-bonus-note"
+          title=${coconutBonusNote(coconutCard)}>
+          ＋ ${coconutCard.bonus} · free, outside your 60
+        </span>`}
       </div>` : null;
 
       const statsBlock = html`<div class="deck-stat-row">

@@ -866,6 +866,22 @@ The nested-interactive HTML (button inside `<a>`) is technically invalid but eve
 
 **Common bug**: when converting `<button>` → `<a>`, also flip the matching `</button>` → `</a>`. The first pass missed the closing tag on `.tournament-card` and the page broke until the close tag was flipped.
 
+## [Format Coconut] starter decks + Discover's third tab (2026-08-22)
+
+**`DISCOVER_FORMATS`** is now the single source for Discover's sub-tabs — `core` / `infinity` / `coconut`, keyed on exactly what `checkDeckLegality()` stamps as `format`. Before it existed the tab list was a hardcoded pair, so a published Coconut deck classified as neither and **was invisible in Discover** from migration 110 until this shipped. The empty-state copy and the one-shot auto-fallback both read the list, so a fourth format needs no other edits.
+
+**18 house starter decks, one per leader**, published by `scripts/seed_coconut_starter_decks.py` from the plain-text lists in `scripts/coconut_starter_decks/`. Edit a `.txt`, re-run with `--commit`, done.
+
+- **Ownerless** (`user_id = null`), like tournament decks — so they stay out of everyone's Your Decks, and (same rule) are stored **plaintext**: the deck-obfuscation codec only covers user-authored decks.
+- **Deck ids are a UUIDv5 of the leader slug**, so a re-run REPLACES a deck instead of publishing a second copy. `deck_cards` is deleted before re-insert, otherwise a card cut from the list would linger. Never change the `NS` namespace — that orphans all 18 and republishes them as duplicates.
+- **`tags = ['packs-ink-starter', 'coconut:<slug>']`.** `isStarterDeck(d)` keys the "by Packs.Ink" byline (tile + the shared-deck banner) and the amber `.deck-card-starter` leader strip off that first tag; without it they read "by anonymous", which makes a curated launch feed look abandoned.
+- The seeder re-checks **every rule `checkDeckLegality()` enforces** (60 cards, ≤3 inks incl. the leader's, singleton except the associated 4-of and the leader's own exceptions) before writing. A starter deck that renders with a ⚠ badge is worse than no starter deck.
+
+**Robin Hood's bonus card.** `COCONUT_CARDS` entries may carry `bonus: "<Product Name>"` — a card the leader plays from OUTSIDE the deck ("from your collection"). It is **display-only**: it costs no deck slot and does NOT consume the singleton allowance, so a normal Robin's Bow may still sit among the 60. `coconutBonusMeta(coconut, cardById)` finds its catalog row (scan by Product Name — the bonus is named in card text, not by id); the deck showcase and the poster both tuck it behind the leader.
+
+- **The tilt is `rotate(-9deg)` about `bottom right`, not clockwise.** Any clockwise tilt swings the top-right corner ~30px past the stack, out through the showcase's own border and (in the poster) into the neighbouring card tile.
+- **Every `<img>` rendering `coconutArtUrl()` passes `crossOrigin="anonymous"`, including the ones that never touch a canvas.** The bucket sends `ACAO:*`, so the CORS request always succeeds — but Chrome caches a no-cors response separately, and a later canvas-bound request for the same URL reuses it and fails with `naturalWidth 0`. That is exactly how the deck poster's leader came out blank whenever the (non-CORS) showcase loaded first.
+
 ## Deck sharing model
 
 Three visibility states, each with a 22-char URL-safe `share_token` (~128 bits):
