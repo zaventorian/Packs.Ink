@@ -16733,6 +16733,52 @@ function parseDreambornCsv(text, rowsByName){
   return {entries, matchedCards, unmatched, totalNormal, totalFoil};
 }
 
+// Export the collection as a CSV in the same Dreamborn shape the importer
+// above reads (Normal / Foil / Name + Card Number), so a Packs.Ink export
+// round-trips through our own Import CSV — and loads into Dreamborn and the
+// other tools that speak that format. Set and Rarity ride along as extra
+// columns; importers that don't know them ignore them. One row per card,
+// Normal-printing quantities in the Normal column and every foil-style
+// printing (Foil / Cold Foil / Holofoil) summed into Foil — the exact
+// inverse of the importer's FOIL_PRINTING_PREF resolution.
+function buildCollectionCsv(collection, raw){
+  const metaById = new Map();
+  for(const r of raw){ if(!metaById.has(r.card_id)) metaById.set(r.card_id, r); }
+  const byCard = new Map(); // card_id -> {n, f}
+  // Copies stored under a card_id the transformed catalog no longer emits
+  // (e.g. a CONNECTING_FOILS companion id from before its mapping existed).
+  // They render nowhere in the grid either — count them so the export can
+  // say so instead of silently shorting the file.
+  let skippedCopies = 0;
+  for(const [key, qty] of Object.entries(collection || {})){
+    const q = Number(qty) || 0;
+    if(q <= 0) continue;
+    // card ids can contain "::" (custom variants) — printing never contains
+    // a colon, so split on the LAST one.
+    const i = key.lastIndexOf(":");
+    if(i < 0) continue;
+    const cardId = key.slice(0, i), printing = key.slice(i + 1);
+    if(!metaById.has(cardId)){ skippedCopies += q; continue; }
+    const slot = byCard.get(cardId) || {n: 0, f: 0};
+    if(printing === "Normal") slot.n += q; else slot.f += q;
+    byCard.set(cardId, slot);
+  }
+  if(!byCard.size) return null;
+  const esc = (v) => {
+    const s = String(v == null ? "" : v);
+    return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  };
+  const lines = ["Normal,Foil,Name,Set,Card Number,Rarity"];
+  const rows = [...byCard.entries()].map(([cardId, slot]) => ({meta: metaById.get(cardId), slot}));
+  rows.sort((a, b) => (a.meta.Set || "").localeCompare(b.meta.Set || "")
+    || (parseInt(a.meta.Number, 10) || 0) - (parseInt(b.meta.Number, 10) || 0)
+    || (a.meta["Product Name"] || "").localeCompare(b.meta["Product Name"] || ""));
+  for(const {meta, slot} of rows){
+    lines.push([slot.n, slot.f, esc(meta["Product Name"]), esc(meta.Set), esc(meta.Number), esc(meta.Rarity)].join(","));
+  }
+  return {csv: lines.join("\n"), cards: byCard.size, skippedCopies};
+}
+
 // Sealed Collection — per-user inventory of booster boxes / packs / troves
 // etc. Grouped by display type (mirrors the Market Sealed sub-tab). Rows have
 // +/- counters that persist to sealed_collection_items via updateSealedQty.
@@ -20680,6 +20726,22 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     setImportState({report, mode:"replace", busy:false});
   }, [rowsByName]);
 
+  const handleExportCsv = useCallback(() => {
+    const out = buildCollectionCsv(collection, raw);
+    if(!out){ flashToast("Nothing to export yet — add some cards first."); return; }
+    try {
+      const blob = new Blob([out.csv], {type: "text/csv"});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "packs-ink-collection-" + new Date().toISOString().slice(0, 10) + ".csv";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      flashToast(out.skippedCopies > 0
+        ? `Exported ${out.cards.toLocaleString()} cards (${out.skippedCopies} cop${out.skippedCopies===1?"y":"ies"} skipped — no longer in the catalog)`
+        : `Exported ${out.cards.toLocaleString()} cards`);
+    } catch(e){ flashToast("Couldn't build the CSV: " + (e.message || e)); }
+  }, [collection, raw]);
+
   const commitImport = useCallback(async () => {
     if(!importState || !bulkUpdateCollection) return;
     const {report, mode} = importState;
@@ -20885,6 +20947,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         title="Browse every card across all sets in one grid — sort, filter, and see which you own">▦ All Cards</button>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
         title="Import a collection CSV">Import CSV</button>`}
+      ${!isViewerMode && html`<button class="import-csv-btn" onClick=${handleExportCsv}
+        title="Download your collection as a CSV — re-importable here, and loads into Dreamborn and other tools that read its format">Export CSV</button>`}
       ${!isViewerMode && html`<input ref=${importFileRef} type="file" accept=".csv,text/csv" style=${{display:"none"}}
         onChange=${e=>{ const f=e.target.files && e.target.files[0]; e.target.value=""; handleImportFile(f); }}/>`}
     </div>
