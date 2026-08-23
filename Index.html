@@ -32365,13 +32365,36 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     } catch {}
     return user ? "yours" : "discover";
   });
-  useEffect(()=>{ try { localStorage.setItem("packsink:decks:section", deckSection); } catch {} }, [deckSection]);
+  const sectionBumped = useRef(false);
+  useEffect(()=>{
+    // The signed-out bump below must NOT persist — the whole point is that
+    // signing back in restores the user's last pick.
+    if(sectionBumped.current){ sectionBumped.current = false; return; }
+    try { localStorage.setItem("packsink:decks:section", deckSection); } catch {}
+  }, [deckSection]);
   // When a previously-signed-in user signs out without changing tabs,
   // bump them off any user-specific section onto Discover so they're
   // not staring at a sign-in CTA. The saved-section pref isn't touched,
   // so signing back in restores their last pick naturally.
+  //
+  // `user` is ALSO null during the async session hydration on every cold
+  // load, so a bare !user check bumped signed-in users who refreshed on
+  // /decks (or followed a ?s=yours link) onto Discover — and the persist
+  // effect then overwrote their saved pref. Treat null as signed-out only
+  // when no supabase session token exists in storage (sync check; the SDK
+  // clears it on signOut, so a real sign-out still bumps).
   useEffect(()=>{
-    if(!user && (deckSection === "yours" || deckSection === "favorites" || deckSection === "following")){
+    if(user) return;
+    let hasToken = false;
+    try {
+      for(let i=0; i<localStorage.length; i++){
+        const k = localStorage.key(i);
+        if(k && k.startsWith("sb-") && k.endsWith("-auth-token")){ hasToken = true; break; }
+      }
+    } catch {}
+    if(hasToken) return;
+    if(deckSection === "yours" || deckSection === "favorites" || deckSection === "following"){
+      sectionBumped.current = true;
       setDeckSection("discover");
     }
   }, [user]);
