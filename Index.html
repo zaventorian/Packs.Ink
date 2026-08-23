@@ -29353,6 +29353,26 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
     try { localStorage.setItem("packsink:home:tourneyCollapsed", collapsed ? "1" : "0"); } catch {}
   }, [collapsed]);
   const isCollapsed = collapsible && collapsed;
+  // Clip affordance for the fixed-height list — same state machine as
+  // NewsFeed, but chip-only: NO mask-image fade here, the rows carry <img>
+  // ink shields and a mask over child images forces offscreen compositing
+  // that softens them (see the CSS-pitfalls note).
+  const listRef = useRef(null);
+  const [edge, setEdge] = useState("");
+  const syncEdge = useCallback(() => {
+    const el = listRef.current; if(!el) return;
+    const below = el.scrollHeight - el.clientHeight - el.scrollTop > 4;
+    const above = el.scrollTop > 4;
+    setEdge(above && below ? "both" : below ? "bot" : above ? "top" : "");
+  }, []);
+  useEffect(() => {
+    const el = listRef.current; if(!el) return;
+    syncEdge();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(syncEdge) : null;
+    if(ro) ro.observe(el);
+    window.addEventListener("resize", syncEdge);
+    return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", syncEdge); };
+  }, [syncEdge, groups, isCollapsed]);
   useEffect(() => {
     let cancelled = false;
     const CACHE_KEY = "packsink:home:tourneys:v1";
@@ -29430,9 +29450,10 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
   // box in both placements, so the rows scroll inside it instead of stretching
   // the panel taller.
   const visibleGroups = groups.slice(0, 4);
-  return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney":"")}>
+  return html`<aside class=${"home-feed"+(collapsible?" home-feed--tourney":"")+(edge?" tourney-edge-"+edge:"")}>
     ${headEl}
-    ${isCollapsed ? null : html`<div class="home-tourney-list">
+    ${isCollapsed ? null : html`<div class="home-tourney-scroll">
+    <div class="home-tourney-list" ref=${listRef} onScroll=${syncEdge}>
       ${visibleGroups.map(({tournament: t, decks}) => html`<div key=${t.id} class="home-tourney-block">
         <button class="home-tourney-name"
           onClick=${()=>openTournamentById && openTournamentById(t.id)}
@@ -29478,6 +29499,9 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
           })}
         </ul>
       </div>`)}
+    </div>
+    <button class="home-tourney-more" tabIndex=${-1} aria-hidden="true"
+      onClick=${() => { const el = listRef.current; if(el) el.scrollBy({top: Math.round(el.clientHeight * 0.75), behavior: "smooth"}); }}>⌄</button>
     </div>`}
   </aside>`;
 };
