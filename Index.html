@@ -24169,6 +24169,13 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
                   ${(inA||inB) && html`<span class="trade-result-in" title="Already on a side">${inA&&inB?"A+B":(inA?"A":"B")}</span>`}
                 </button>`;
               })}
+          ${/* The list deliberately stays open after an add (grabbing several
+                variants of one search is a real flow), but on phones it then
+                covers the Difference panel and the only dismissal was a tap
+                outside — invisible as an affordance. Sticky so it stays
+                reachable while the list scrolls. */""}
+          ${matches.length > 0 && html`<button class="trade-results-done"
+            onClick=${()=>setResultsOpen(false)}>✓ Done — close list</button>`}
         </div>`}
       </div>
     </div>
@@ -24927,7 +24934,15 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       if(!cached.stale) return;
       // Fall through and background-refresh.
     }
-    sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "card_id.asc"})
+    const MOVERS_COLS = "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d";
+    // low_last_changed ships in migration 124 — fetch it schema-tolerantly
+    // (42703 → retry without) so this code deploys safely pre-migration.
+    // Rows without the field just never show the staleness hint.
+    sbFetchAll("price_movers", {select: MOVERS_COLS + ",low_last_changed", order: "card_id.asc"})
+      .catch(e => {
+        if(!/42703|low_last_changed/i.test(String(e?.message || e))) throw e;
+        return sbFetchAll("price_movers", {select: MOVERS_COLS, order: "card_id.asc"});
+      })
       // MUST paginate. PostgREST caps a response at 1000 rows no matter what
       // .limit() says, so a bare .limit(N) silently truncates — invisible while
       // price_movers held 622 rows, a 5x cut the moment migration 120 grew it
@@ -25909,8 +25924,23 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
       ...winCols, signalsCol];
+    // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is the
+    // lowest active LISTING, and for high-value cards it sits frozen for weeks
+    // — a parked listing, not fresh signal. Rows whose Low hasn't moved in >3
+    // days get a dim ⏱ with the day count in the title. Rows without the
+    // field (pre-migration, sealed synth, IDB cache from before) never flag.
+    const lowStaleDays = (r) => {
+      if(!r.low_last_changed || r.low_today == null) return null;
+      const d = Math.floor((Date.now() - new Date(r.low_last_changed + "T00:00:00Z").getTime()) / 86400000);
+      return d > 3 ? d : null;
+    };
+    const lowCol = {key:"low", label:"Low",
+      th:()=>html`<th key="low" class="sortable th-num" title="TCGplayer Low — lowest active listing across any condition. ⏱ marks a Low that hasn't changed in over 3 days (a parked listing)." onClick=${(e)=>onSort("low", e)}>Low${arrow("low")}</th>`,
+      td:(r)=>{ const sd = lowStaleDays(r);
+        return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
+          title=${"Low unchanged for "+sd+" days — a parked listing, not fresh signal"}>⏱</span>` : null}</td>`; }};
     return [setCol, rarityCol,
-      money("low","Low","low","low_today","TCGplayer Low — lowest active listing across any condition"),
+      lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
       ...winCols, signalsCol];
   })();
