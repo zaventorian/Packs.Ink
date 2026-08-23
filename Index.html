@@ -30349,6 +30349,12 @@ const HOME_TOOL_ICONS = {
     <path d="M12 14v4"/>
     <path d="M8 21h8"/>
     <path d="M9.5 18h5"/>`),
+  // Stream Ticker — a marquee bar scrolling left
+  ticker: _navSvg(html`
+    <rect x="2" y="8.5" width="20" height="7" rx="2"/>
+    <path d="M6 12h5"/>
+    <path d="M13.5 12h2"/>
+    <path d="M19 10.5L17.5 12l1.5 1.5"/>`),
 };
 const HOME_TOOLS = [
   {k:"ev",     label:"Expected Value", sub:"Box EV vs box price"},
@@ -30357,6 +30363,10 @@ const HOME_TOOLS = [
   {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
   {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
   {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
+  // The stream ticker is a standalone page (deliberately outside the SPA —
+  // see the /ticker notes), so its chip is a plain new-tab link, not an
+  // Analytics sub-tab.
+  {k:"ticker", label:"Stream Ticker",  sub:"Top movers for OBS", href:"/ticker", external:true},
 ];
 const HomeToolboxPanel = ({onOpenTool}) => {
   const [collapsed, setCollapsed] = useState(() => {
@@ -30380,7 +30390,15 @@ const HomeToolboxPanel = ({onOpenTool}) => {
       </button>
     </div>
     ${!collapsed && html`<div class="home-toolbox-grid">
-      ${HOME_TOOLS.map(t => html`<a key=${t.k} class="home-tool-chip"
+      ${HOME_TOOLS.map(t => t.external
+        ? html`<a key=${t.k} class="home-tool-chip" href=${t.href} target="_blank" rel="noopener">
+            <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
+            <span class="home-tool-txt">
+              <span class="home-tool-name">${t.label} ↗</span>
+              <span class="home-tool-sub">${t.sub}</span>
+            </span>
+          </a>`
+        : html`<a key=${t.k} class="home-tool-chip"
         href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
         onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
         <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
@@ -36549,6 +36567,10 @@ const PATH_TO_VIEW = (() => {
   for(const [v, p] of Object.entries(VIEW_PATHS)){
     m[p.replace(/\/$/, "") || "/"] = v;
   }
+  // Aliases people actually type. The view-sync effect rewrites the URL to
+  // the canonical VIEW_PATHS entry on arrival, so these never persist.
+  m["/help"] = "faq";
+  m["/faq"] = "faq";
   return m;
 })();
 function parseViewFromPath(pathname){
