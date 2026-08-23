@@ -14,7 +14,7 @@
 // duplicating it, so it cannot silently drift from what ships.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync("C:/Users/zaven/OneDrive/Desktop/Packs.Ink/Index.html", "utf8");
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
 
 function grab(startMarker, endMarker) {
   const a = src.indexOf(startMarker);
