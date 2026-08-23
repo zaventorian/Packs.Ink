@@ -31654,6 +31654,12 @@ const COCONUT_ART_REV = {4:2, 7:2, 10:2, 14:2};  // Beta 1.1 re-renders, 2026-08
 // out blank whenever you opened the deck (non-CORS showcase) first.
 const coconutArtUrl = (cn) =>
   `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`
+// Square character-crop of the art box (160×160, same bucket under thumbs/).
+// The full beta cards are grayscale renders — shrunk to chip size a whole
+// card reads as a broken-image glyph, so chips use these instead. Callers
+// keep an onError fallback to the full art in case a thumb is missing.
+const coconutThumbUrl = (cn) =>
+  `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/thumbs/${String(cn).padStart(3,"0")}.jpg`
   + (COCONUT_ART_REV[cn] ? `?v=${COCONUT_ART_REV[cn]}` : "");
 const COCONUT_BY_SLUG = Object.fromEntries(COCONUT_CARDS.map(c => [c.slug, c]));
 const getCoconutCard = (slug) => (slug && COCONUT_BY_SLUG[slug]) || null;
@@ -34007,8 +34013,9 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       ${d.name && html`<div class="deck-card-name">${d.name}</div>`}
       ${starterLeader && html`<div class="deck-card-tourney deck-card-starter"
         title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${starterLeader.ink}`}>
-        <img class="deck-coconut-slot-art" src=${coconutArtUrl(starterLeader.cn)} crossOrigin="anonymous"
-          alt="" aria-hidden="true" loading="lazy"/>
+        <img class="deck-coconut-slot-art" src=${coconutThumbUrl(starterLeader.cn)} crossOrigin="anonymous"
+          alt="" aria-hidden="true" loading="lazy"
+          onError=${(e)=>{ const t=e.target; if(t.dataset.fb) return; t.dataset.fb="1"; t.src=coconutArtUrl(starterLeader.cn); }}/>
         <span class="dct-name">${coconutDisplayName(starterLeader)}</span>
       </div>`}
       ${isTourneyDeck
@@ -36219,8 +36226,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             ? `${coconutDisplayName(legality.coconut)} — ${legality.coconut.ink}. Click to change or remove.`
             : "Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore."}>
           ${legality.coconut
-            ? html`<img class="deck-coconut-slot-art" src=${coconutArtUrl(legality.coconut.cn)}
-                     crossOrigin="anonymous" alt="" aria-hidden="true" loading="lazy"/>
+            ? html`<img class="deck-coconut-slot-art" src=${coconutThumbUrl(legality.coconut.cn)}
+                     crossOrigin="anonymous" alt="" aria-hidden="true" loading="lazy"
+                     onError=${(e)=>{ const t=e.target; if(t.dataset.fb) return; t.dataset.fb="1"; t.src=coconutArtUrl(legality.coconut.cn); }}/>
                    <span>${coconutDisplayName(legality.coconut)}</span>`
             : html`<span>＋ Coconut leader</span>`}
         </button>`}
@@ -36349,10 +36357,13 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     ${(() => {
       // Leader showcase. Just the card, big — the render already carries the
       // name, ink and full ability text, so restating any of it alongside was
-      // pure duplication. Declared BEFORE statsBlock because statsBlock embeds
-      // it (it renders directly under the stats box) and html`` evaluates
-      // eagerly, so a later `const` would hit the temporal dead zone.
-      const coconutBlock = coconutCard ? html`<div class="deck-coconut-showcase">
+      // pure duplication. A builder function, not a const: the panel renders
+      // it at the TOP in both modes (it used to be embedded mid-statsBlock,
+      // which buried it under the 60-card list in edit mode — "the leader is
+      // only visible in export"), and edit mode takes the --compact size so
+      // the art doesn't shove the working list down.
+      const coconutShowcase = (compact) => coconutCard ? html`<div
+        class=${"deck-coconut-showcase"+(compact?" deck-coconut-showcase--compact":"")}>
         <span class="deck-coconut-showcase-tag">${COCONUT_SET_NAME} deck</span>
         ${/* The bonus card sits BEHIND the leader, angled, so it reads as an
               extra that comes with it rather than a second leader. */""}
@@ -36397,7 +36408,6 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               <div class="deck-stat-sub">to complete</div>
             </div>`}
       </div>
-      ${coconutBlock}
       ${totalCount > 0 && html`<div class="deck-charts">
         <${DeckCostChart} costByInk=${aggregates.costByInk} cardCountLabel=${cardCountLabel} uniqueCount=${uniqueCount}/>
         <div class="deck-pie-row">
@@ -36713,7 +36723,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       <div class=${"deck-editor-grid"+(readOnly?" readonly":"")+" mobile-tab-"+mobileTab}>
         ${readOnly
           ? html`<div class="deck-view-list">${listBlock}</div>
-                 <aside class="deck-editor-panel">${statsBlock}</aside>`
+                 <aside class="deck-editor-panel">${coconutShowcase(false)}${statsBlock}</aside>`
           : html`<div class="deck-editor-browser">
                    <${CardBrowser} raw=${deckRaw} collection=${collection}
                      onSelectGroup=${onSelectGroupStable}
@@ -36725,7 +36735,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      inkBudget=${coconutInkBudget}
                      defaultInks=${inkColorsInDeck}/>
                  </div>
-                 <aside class="deck-editor-panel">${listBlock}${statsBlock}</aside>`}
+                 <aside class="deck-editor-panel">${coconutShowcase(true)}${listBlock}${statsBlock}</aside>`}
       </div>`;
     })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
