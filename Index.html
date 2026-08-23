@@ -33849,6 +33849,11 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   const renderExternalCard = (entry, opts={}) => {
     const d = entry.deck;
     const s = summarizeDeck(d);
+    // "Can I build this?" at a glance — same number the owned tiles and the
+    // deck-detail Owned stat show, surfaced on Discover / Favorites /
+    // tournament tiles for signed-in users (anon has no collection to
+    // compare against, so they see the original byline).
+    const extOwnedPct = user && s.total ? ` · ${(s.owned/s.total*100).toFixed(0)}% owned` : "";
     // Ownerless house decks would otherwise read "by anonymous", which makes
     // the launch-day Coconut feed look abandoned rather than curated.
     const creatorName = entry.creator?.display_name
@@ -33892,8 +33897,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             ${tctx.place && html`<span class="dct-place">${tctx.place}</span>`}
             ${tctx.num_players ? html`<span class="muted">· ${tctx.num_players}p</span>` : null}
           </div>
-          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`
-        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`}
+          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`
+        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       <div class="deck-card-actions">
