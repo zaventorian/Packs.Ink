@@ -3650,8 +3650,13 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .history-toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;}
 .history-card-mode{display:grid;grid-template-columns:280px 1fr;gap:14px;}
 @media (max-width:900px){
-  /* Stack picker above chart so neither is squeezed below readable width. */
-  .history-card-mode{grid-template-columns:1fr;gap:10px;}
+  /* Stack picker above chart so neither is squeezed below readable width.
+     minmax(0,1fr), NOT bare 1fr — 1fr's auto minimum takes the picker's
+     min-content width (~409px from the search row), which overflows a
+     phone and gets cut by the page root's overflow-x clip (the Filters
+     button rendered half offscreen). Children need min-width:0 too. */
+  .history-card-mode{grid-template-columns:minmax(0,1fr);gap:10px;}
+  .history-card-mode > *{min-width:0;max-width:100%;}
   .history-picker{max-height:none;}
   .history-picker-list{max-height:300px;}
 }
@@ -3809,7 +3814,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .compare-stats-table td.num.up{color:#1d8d4a;font-weight:700;}
 .compare-stats-table td.num.down{color:#c64c5a;font-weight:700;}
 @media(max-width:720px){
-  .history-card-mode{grid-template-columns:1fr;}
+  .history-card-mode{grid-template-columns:minmax(0,1fr);}
   .history-picker{max-height:280px;}
 }
 /* Quantity counters (used in modal and elsewhere) ---------------------- */
