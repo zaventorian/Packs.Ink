@@ -604,12 +604,24 @@ const AUX_EVICTABLE_PREFIXES = [
 ];
 const isPriceDerivedAuxKey = (k) =>
   typeof k === "string" && AUX_EVICTABLE_PREFIXES.some(p => k.startsWith(p));
+// The two price_movers snapshots live in IndexedDB, not localStorage — since
+// migration 120 the full matview serializes past the ~5MB origin quota, so
+// every setItem threw and both "caches" cold-fetched 5.8k rows on each visit.
+// They are still price-derived, so the wipe paths must clear them too.
+const IDB_JSONCACHE_PREFIX = "jsoncache:";
+const IDB_JSONCACHE_WIPE_KEYS = ["packsink:movers:v1", "packsink:screener-movers:v1"];
 const wipePriceDerivedAuxCaches = () => {
   try {
     for(const k of Object.keys(localStorage)){
       if(isPriceDerivedAuxKey(k)) localStorage.removeItem(k);
     }
   } catch {}
+  // Deferred a microtask: the AUX-version-bump call below runs before the IDB
+  // helpers' consts initialize (TDZ); by microtask time the module has fully
+  // evaluated. idbDel resolves (never rejects) on any failure.
+  Promise.resolve().then(() => {
+    for(const k of IDB_JSONCACHE_WIPE_KEYS) idbDel(IDB_JSONCACHE_PREFIX + k);
+  });
 };
 try {
   const prev = localStorage.getItem(AUX_VERSION_KEY);
@@ -2464,6 +2476,25 @@ function writeJsonCache(key, data){
     }
     console.warn("localStorage quota exceeded; could not cache", key);
   }
+}
+
+// IDB-backed variant of the pair above for payloads too big for localStorage
+// (the two full-catalog price_movers snapshots, ~5MB serialized — a single
+// setItem of one throws QuotaExceededError even into EMPTY storage, so they
+// can never live there). Same {t, data} record + stale flag, but async —
+// callers hydrate inside an effect. Keys mirror the localStorage names under
+// "jsoncache:"; both wipe paths clear them via IDB_JSONCACHE_WIPE_KEYS.
+function readJsonCacheIdb(key, ttlMs){
+  return idbGet(IDB_JSONCACHE_PREFIX + key).then(o => {
+    if(!o || typeof o.t !== "number") return null;
+    return {data: o.data, stale: Date.now() - o.t > ttlMs};
+  });
+}
+function writeJsonCacheIdb(key, data){
+  // Reclaim any pre-IDB localStorage copy of the same cache (pre-migration-120
+  // visitors still hold a ~500KB one under the identical key).
+  try { localStorage.removeItem(key); } catch {}
+  return idbSet(IDB_JSONCACHE_PREFIX + key, {t: Date.now(), data});
 }
 
 async function fetchCardHistory(productId, printing){
@@ -24630,12 +24661,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     let cancelled = false;
     // Cache the Screener's price_movers fetch so re-entering the tab
     // hydrates instantly instead of re-running a 10k-row query against
-    // Supabase. 12h TTL because price_movers updates daily.
+    // Supabase. 12h TTL because price_movers updates daily. IDB, not
+    // localStorage — the full-catalog snapshot is ~5MB serialized, so a
+    // localStorage write threw QuotaExceededError on every visit and the
+    // cache never existed (readJsonCacheIdb hydration is async, hence the
+    // IIFE + cancelled guard).
     const CACHE_KEY = "packsink:screener-movers:v1";
-    const cached = readJsonCache(CACHE_KEY, 12 * 60 * 60 * 1000);
-    if(cached && Array.isArray(cached.data) && cached.data.length){
+    (async () => {
+    const cached = await readJsonCacheIdb(CACHE_KEY, 12 * 60 * 60 * 1000);
+    if(cancelled) return;
+    const hadCache = !!(cached && Array.isArray(cached.data) && cached.data.length);
+    if(hadCache){
       setState({rows: cached.data, loading: false, error: null});
-      if(!cached.stale) return () => { cancelled = true; };
+      if(!cached.stale) return;
       // Fall through and background-refresh.
     }
     sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "card_id.asc"})
@@ -24649,7 +24687,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       .then(({data, error}) => {
         if(cancelled) return;
         if(error){
-          if(!cached) setState({rows: null, loading: false, error: error.message});
+          if(!hadCache) setState({rows: null, loading: false, error: error.message});
         } else {
           // Normalize rarity strings: cards.rarity stores Lorcast's raw value
           // (e.g. "Super_rare") but every UI surface compares against the
@@ -24667,9 +24705,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             image_normal: lorcastToProxy(r.image_normal),
           }));
           setState({rows, loading: false, error: null});
-          writeJsonCache(CACHE_KEY, rows);
+          writeJsonCacheIdb(CACHE_KEY, rows);
         }
       });
+    })();
     return () => { cancelled = true; };
   }, []);
 
@@ -30515,12 +30554,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   useEffect(()=>{
     let cancelled = false;
     // Hydrate from cache instantly so the banner doesn't go blank on
-    // tab-return. price_movers updates daily; 12h TTL is safe.
+    // tab-return. price_movers updates daily; 12h TTL is safe. IDB, not
+    // localStorage — the full-catalog snapshot is ~5MB serialized, past the
+    // origin quota, so the old localStorage write always failed silently.
     const CACHE_KEY = "packsink:movers:v1";
-    const cached = readJsonCache(CACHE_KEY, 12 * 60 * 60 * 1000);
-    if(cached && Array.isArray(cached.data) && cached.data.length){
+    (async () => {
+    const cached = await readJsonCacheIdb(CACHE_KEY, 12 * 60 * 60 * 1000);
+    if(cancelled) return;
+    const hadCache = !!(cached && Array.isArray(cached.data) && cached.data.length);
+    if(hadCache){
       setState({rows: cached.data, loading:false, error:null});
-      if(!cached.stale) return ()=>{ cancelled = true; };
+      if(!cached.stale) return;
       // Fall through and background-refresh.
     }
     sbFetchAll("price_movers", {select: "card_id,set_id,name,version,rarity,ink,collector_number,image_small,image_normal,tcgplayer_product_id,printing,low_today,low_prev,low_7d,low_30d,low_90d,low_180d,low_365d,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,abs_pct_1d,market_today,market_prev,market_7d,market_30d,market_90d,market_180d,market_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d", order: "abs_pct_1d.desc.nullslast"})
@@ -30542,7 +30586,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           else
             friendly = "Couldn't load Movers right now. Please try again.";
           // Only surface error if we have no cached data to show.
-          if(!cached) setState({rows:null, loading:false, error:friendly});
+          if(!hadCache) setState({rows:null, loading:false, error:friendly});
         } else {
           // Same normalization as the Screener side — cards.rarity ships
           // "Super_rare" (underscore) from Lorcast and would otherwise miss
@@ -30557,9 +30601,10 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             image_normal: lorcastToProxy(r.image_normal),
           }));
           setState({rows, loading:false, error:null});
-          writeJsonCache(CACHE_KEY, rows);
+          writeJsonCacheIdb(CACHE_KEY, rows);
         }
       });
+    })();
     return ()=>{ cancelled = true; };
   },[]);
 
