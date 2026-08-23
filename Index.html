@@ -6292,6 +6292,20 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   return html`<${React.Fragment}><div class="card-detail-overlay" onClick=${onClose}>
     <div ref=${cardDetailRef} class=${"card-detail"+(effPriceFirst?" card-detail--price-first":"")} onClick=${e=>e.stopPropagation()}>
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+      ${group.card_id && html`<button class="card-detail-close card-detail-share"
+        aria-label="Copy a link to this card" title="Copy a link to this card"
+        onClick=${()=>{
+          // /cards?card=<id> opens this card's modal from anywhere — the
+          // modal itself mounts on several surfaces (Screener, sims, Trade),
+          // so the copied link always routes through the Cards view.
+          // SITE_ORIGIN keeps native-app copies saying packs.ink.
+          try {
+            const u = SITE_ORIGIN + (VIEW_PATHS.cards || "/cards") + "?card=" + encodeURIComponent(group.card_id);
+            navigator.clipboard.writeText(u).then(
+              ()=>flashToast("Card link copied"),
+              ()=>flashToast("Couldn't copy the link"));
+          } catch { flashToast("Couldn't copy the link"); }
+        }}>🔗</button>`}
       <div class="card-detail-top">
         <div class="card-detail-image"
           onClick=${(e)=>{
@@ -9701,6 +9715,10 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   const [pendingSearch, setPendingSearch] = useState(null);
   useEffect(() => {
     if(incomingSearch == null && incomingOpenCardId == null) return;
+    // A ?card=<id> cold load reaches here before the catalog: consuming now
+    // would null the id in App and the modal would never open. Hold until
+    // `raw` lands (the effect re-runs on it).
+    if(incomingOpenCardId && (!raw || !raw.length)) return;
     setPendingSearch(incomingSearch || "");
     if(incomingOpenCardId && raw && raw.length){
       // Build a fully-populated "group" via the canonical groupCards()
@@ -9715,6 +9733,50 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     }
     onConsumedIncomingCardsSearch && onConsumedIncomingCardsSearch();
   }, [incomingSearch, incomingOpenCardId, raw, onConsumedIncomingCardsSearch]);
+  // ── Shareable card URLs ──────────────────────────────────────────────
+  // The open modal is mirrored to ?card=<id> ("card" is registered in
+  // dirtyParams + VIEW_OWNED.cards). Opening pushes a history entry so the
+  // browser/Android Back button closes the modal; navigating between cards
+  // inside the modal replaces in place so swiping doesn't stack entries;
+  // closing via ✕/Esc strips the param with replaceState.
+  useEffect(() => {
+    try {
+      const url = new URL(window.location.href);
+      const cur = url.searchParams.get("card");
+      const want = selectedGroup ? (selectedGroup.card_id || null) : null;
+      if(cur === want) return;
+      if(want) url.searchParams.set("card", want);
+      else url.searchParams.delete("card");
+      if(want && !cur) window.history.pushState({cardModal: true}, "", url.toString());
+      else window.history.replaceState(window.history.state, "", url.toString());
+    } catch {}
+  }, [selectedGroup]);
+  useEffect(() => {
+    const onPop = () => {
+      try {
+        const id = new URLSearchParams(window.location.search).get("card");
+        setSelectedGroup(prev => {
+          if(!id) return null;
+          if(prev && prev.card_id === id) return prev;
+          const row = (raw || []).find(r => r.card_id === id);
+          if(row && row.tcgplayer_product_id){
+            const g = groupFromSimCard(row, raw);
+            if(g) return g;
+          }
+          return prev;
+        });
+      } catch {}
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, [raw]);
+  // Shared links get a per-card tab title; restore the view title on close.
+  useEffect(() => {
+    if(!selectedGroup) return;
+    const prev = document.title;
+    try { document.title = (selectedGroup["Product Name"] || "Card") + " — Packs.Ink"; } catch {}
+    return () => { try { document.title = prev; } catch {} };
+  }, [selectedGroup]);
   // Stable click handler so React.memo on CardTile can actually skip
   // unchanged tiles when filters change. Without useCallback the handler
   // identity changes every parent render, busting the memo.
@@ -36972,9 +37034,20 @@ function App(){
     setTabClickNonce(n => n + 1);
   }, []);
   // Home page quick-search → Cards tab handoff. Pre-fills the smart-search
-  // and (when openCardId is set) opens that card's detail modal.
+  // and (when openCardId is set) opens that card's detail modal. The
+  // initializer also reads ?card=<id> so a shared card link (/cards?card=…)
+  // opens straight into the detail modal once the catalog lands — CardsView
+  // holds the id un-consumed until `raw` is ready.
   const [incomingCardsSearch, setIncomingCardsSearch] = useState(null);
-  const [incomingCardsOpenId, setIncomingCardsOpenId] = useState(null);
+  const [incomingCardsOpenId, setIncomingCardsOpenId] = useState(() => {
+    try {
+      // Only when actually landing on /cards — a stale ?card on any other
+      // path gets stripped by the view sync and must not pop a modal later.
+      const p = window.location.pathname.replace(/\/$/, "") || "/";
+      if(p !== (VIEW_PATHS.cards || "/cards")) return null;
+      return new URLSearchParams(window.location.search).get("card") || null;
+    } catch { return null; }
+  });
   const [scanOpen, setScanOpen] = useState(false);
   const [scanReviewOpen, setScanReviewOpen] = useState(false);
   const [feedbackOpen, setFeedbackOpen] = useState(false);
@@ -36992,7 +37065,7 @@ function App(){
     try {
       const url = new URL(window.location.href);
       url.pathname = VIEW_PATHS.cards || "/cards";
-      for(const p of ["deck","token","user","collection","tourney","trade","t","a", ...CARD_URL_KEYS]){
+      for(const p of ["deck","token","user","collection","tourney","trade","t","a","card", ...CARD_URL_KEYS]){
         url.searchParams.delete(p);
       }
       url.searchParams.set("set", setName);
@@ -37187,7 +37260,7 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "s","f","m",
+                           "s","f","m","card",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -37200,7 +37273,7 @@ function App(){
         collection: new Set(["collection","token","set"]),
         market:     new Set(["a","trade","t"]),
         screener:   new Set(["m"]),
-        cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned"]),
+        cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));
