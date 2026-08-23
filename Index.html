@@ -2872,6 +2872,14 @@ function computeSealedDeltas(history){
   return out;
 }
 
+// Batch size for the parallel prices_daily IN-list queries below. Supabase has
+// a 10s statement timeout and a full-year × full-collection query blows past
+// it; 80-ID batches in parallel land each query in under a second. (This const
+// was collateral damage in the 2026-07-29 legacy-graded deletion — the graded
+// history fetch defined right below it was removed and took it along, which
+// broke every caller of this function for weeks: collection value chart,
+// sealed tile Δ%, Screener sealed mode. Keep it glued to this function.)
+const COLLECTION_HISTORY_BATCH = 80;
 async function fetchCollectionPriceHistory(productIds, sinceDate){
   if(!productIds.length) return [];
   const batches = [];
