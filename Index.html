@@ -9752,7 +9752,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     } catch {}
   }, [selectedGroup]);
   useEffect(() => {
-    const onPop = () => {
+    const syncFromUrl = () => {
       try {
         const id = new URLSearchParams(window.location.search).get("card");
         setSelectedGroup(prev => {
@@ -9767,8 +9767,13 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
         });
       } catch {}
     };
-    window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    // Run once on mount too: Back into /cards?card=<id> from another view
+    // re-mounts this component AFTER the popstate has fired, so the listener
+    // alone would leave the URL saying "card" with no modal. Idempotent —
+    // no ?card in the URL is a no-op.
+    if(raw && raw.length) syncFromUrl();
+    window.addEventListener("popstate", syncFromUrl);
+    return () => window.removeEventListener("popstate", syncFromUrl);
   }, [raw]);
   // Shared links get a per-card tab title; restore the view title on close.
   useEffect(() => {
