@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=345">
+<link rel="stylesheet" href="styles.css?v=346">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -16671,69 +16671,198 @@ function normalizeCardName(s){
 function squashCardName(s){
   return normalizeCardName(s).replace(/\s+/g, "");
 }
+// Last-resort key: additionally folds diacritics + drops apostrophes (via
+// searchNorm), so Dreamborn's "Te Ka" finds "Te Kā".
+function foldCardName(s){
+  return searchNorm(squashCardName(s));
+}
+
+// Name index over the raw catalog for CSV import — three tiers, tried in
+// order: normalized, whitespace-squashed, diacritic-folded.
+function buildImportNameIndex(raw){
+  const primary = {}, squash = {}, fold = {};
+  const push = (m, k, r) => { if(!m[k]) m[k] = []; m[k].push(r); };
+  for(const r of raw || []){
+    const n = r["Product Name"];
+    if(!n || !r.card_id || !r.tcg_printing) continue;
+    push(primary, normalizeCardName(n), r);
+    push(squash, squashCardName(n), r);
+    push(fold, foldCardName(n), r);
+  }
+  return {primary, squash, fold};
+}
+
+// Dreamborn writes promo collector numbers the way they're printed on the
+// card ("14/P1", "10/C1", "5/PD1") while filing the ROW under the mainline
+// set the promo shipped alongside — so the suffix, not the Set Number
+// column, identifies the real set. Unknown suffixes (a future wave) fall
+// through to name matching.
+const DREAMBORN_CN_SUFFIX_SETS = {
+  p1: "Promo Set 1", p2: "Promo Set 2", p3: "Promo Set 3", p4: "Promo Set 4",
+  c1: "Lorcana Challenge Promo (C1)", c2: "Lorcana Challenge Promo (C2)",
+  pd1: "D23 Collection", d23: "D23 Collection",
+};
 
 // Parse a Dreamborn-style CSV and resolve each row to (card_id, printing,
-// qty) entries against our raw catalog (rowsByName index).
+// qty) entries against our raw catalog. Two shapes are accepted:
+//   - long (Dreamborn's current collection export): one row per
+//     card+variant — Set Number / Card Number / Variant / Count / Name;
+//   - wide (our own export + older tools): one row per card with
+//     Normal / Foil count columns.
 // Returns {entries, matchedCards, unmatched, totalNormal, totalFoil, error}.
-function parseDreambornCsv(text, rowsByName){
+function parseDreambornCsv(text, rowsByName, raw){
   const rows = parseCsvText(text).filter(r => r.length && r.some(c => c && c.length));
   if(!rows.length) return {error:"CSV is empty."};
   const header = rows[0].map(h => h.trim().toLowerCase());
-  const need = ["normal","foil","name"];
-  for(const k of need){
-    if(!header.includes(k)) return {error:`CSV is missing required column "${k}". Expected Dreamborn export format.`};
+  const col = (k) => header.indexOf(k);
+  const isLong = col("variant") >= 0 && col("count") >= 0 && col("name") >= 0;
+  if(!isLong){
+    for(const k of ["normal","foil","name"]){
+      if(col(k) < 0) return {error:`Couldn't recognize the CSV (no "${k}" column). Expected a Dreamborn collection export (Variant/Count columns) or a Packs.Ink export (Normal/Foil columns).`};
+    }
   }
-  const idx = {
-    normal: header.indexOf("normal"),
-    foil:   header.indexOf("foil"),
-    name:   header.indexOf("name"),
-    number: header.indexOf("card number"),
+
+  // Collapse rows into per-card wants {name, cn, setNum, n, f}. The long
+  // format splits normal and foil across rows; key on set+number+name so
+  // reprints sharing a name stay distinct.
+  const wants = [];
+  if(isLong){
+    const idx = {set:col("set number"), number:col("card number"), variant:col("variant"), count:col("count"), name:col("name")};
+    const byKey = new Map();
+    for(let i=1; i<rows.length; i++){
+      const cols = rows[i];
+      const qty = parseInt((cols[idx.count]||"").trim(), 10) || 0;
+      const name = (cols[idx.name]||"").trim();
+      if(qty<=0 || !name) continue;
+      const cn = idx.number>=0 ? (cols[idx.number]||"").trim() : "";
+      const setNum = idx.set>=0 ? (parseInt((cols[idx.set]||"").trim(), 10) || 0) : 0;
+      const key = setNum+"|"+cn.toLowerCase()+"|"+normalizeCardName(name);
+      let w = byKey.get(key);
+      if(!w){ w = {name, cn, setNum, n:0, f:0}; byKey.set(key, w); wants.push(w); }
+      if((cols[idx.variant]||"").trim().toLowerCase() === "normal") w.n += qty;
+      else w.f += qty;
+    }
+  } else {
+    const idx = {normal:col("normal"), foil:col("foil"), name:col("name"), number:col("card number")};
+    for(let i=1; i<rows.length; i++){
+      const cols = rows[i];
+      const n = parseInt((cols[idx.normal]||"").trim(), 10) || 0;
+      const f = parseInt((cols[idx.foil]||"").trim(), 10) || 0;
+      const name = (cols[idx.name]||"").trim();
+      if((n<=0 && f<=0) || !name) continue;
+      wants.push({name, cn: idx.number>=0 ? (cols[idx.number]||"").trim() : "", setNum:0, n, f});
+    }
+  }
+
+  // Exact (set, collector number) lookups. Mainline sets key on Dreamborn's
+  // 1-based release index (same convention as the deck importer); promo-
+  // style sets key on the catalog set name resolved from the cn suffix.
+  // Numbers compare slash-stripped + lowercased ("24B" vs "24b", and our
+  // own "24/204"-style Numbers).
+  const cnKey = (v) => String(v==null?"":v).split("/")[0].trim().toLowerCase();
+  const promoSets = new Set(Object.values(DREAMBORN_CN_SUFFIX_SETS));
+  const byMainlineCN = {}, byPromoSetCN = {};
+  for(const r of raw || []){
+    if(!r.card_id || !r.tcg_printing || !r.Set || r.Number==null || r.Number==="") continue;
+    const setIdx = MAINLINE_SETS.indexOf(r.Set);
+    if(setIdx >= 0){
+      const k = (setIdx+1)+"|"+cnKey(r.Number);
+      (byMainlineCN[k] || (byMainlineCN[k]=[])).push(r);
+    } else if(promoSets.has(r.Set)){
+      const k = r.Set+"|"+cnKey(r.Number);
+      (byPromoSetCN[k] || (byPromoSetCN[k]=[])).push(r);
+    }
+  }
+
+  const sameName = (r, name) => {
+    const a = r["Product Name"] || "";
+    return normalizeCardName(a) === normalizeCardName(name)
+      || squashCardName(a) === squashCardName(name)
+      || foldCardName(a) === foldCardName(name);
   };
+
   const entries = [];
+  const entryByKey = new Map();
+  // Merge duplicate (card, printing) targets — two CSV rows can resolve to
+  // the same catalog row (a promo whose set we lack falls back to the base
+  // printing the base row already fills). commitImport applies entries as
+  // independent updates, so an unmerged duplicate would clobber, not add.
+  const pushEntry = (cardId, printing, qty, name) => {
+    const k = cardId+":"+printing;
+    const e = entryByKey.get(k);
+    if(e){ e.qty += qty; return; }
+    const ne = {cardId, printing, qty, name};
+    entryByKey.set(k, ne);
+    entries.push(ne);
+  };
   const unmatched = [];
   let matchedCards = 0, totalNormal = 0, totalFoil = 0;
-  for(let i=1; i<rows.length; i++){
-    const cols = rows[i];
-    const n = parseInt((cols[idx.normal]||"").trim(), 10) || 0;
-    const f = parseInt((cols[idx.foil]||"").trim(), 10) || 0;
-    if(n<=0 && f<=0) continue;
-    const name = (cols[idx.name]||"").trim();
-    if(!name) continue;
-    const cn = idx.number>=0 ? (cols[idx.number]||"").trim() : "";
 
-    let candidates = rowsByName.primary[normalizeCardName(name)];
-    if(!candidates || !candidates.length){
-      candidates = rowsByName.squash[squashCardName(name)];
+  for(const w of wants){
+    const {name, cn, setNum} = w;
+    // "14/P1"-style printed promo number → the suffix names the real set.
+    const pm = /^(\d+[a-z]?)\s*\/\s*([a-z]+\d*)$/i.exec(cn);
+    let candidates = null;
+    if(pm){
+      const setName = DREAMBORN_CN_SUFFIX_SETS[pm[2].toLowerCase()];
+      const hit = setName ? byPromoSetCN[setName+"|"+pm[1].toLowerCase()] : null;
+      // Promo numbering isn't guaranteed to agree between Dreamborn and
+      // Lorcast the way mainline numbering is — only trust the (set, cn)
+      // hit when the name agrees too.
+      if(hit && hit.length && sameName(hit[0], name)) candidates = hit;
+    } else if(setNum && cn){
+      // Mainline numbering IS canonical (it matches the printed card), so
+      // an exact hit wins outright — this also rescues names whose
+      // spelling drifts beyond what the name normalizers fold.
+      candidates = byMainlineCN[setNum+"|"+cnKey(cn)];
     }
     if(!candidates || !candidates.length){
-      unmatched.push({name, normal:n, foil:f});
+      candidates = rowsByName.primary[normalizeCardName(name)]
+        || rowsByName.squash[squashCardName(name)]
+        || (rowsByName.fold && rowsByName.fold[foldCardName(name)]);
+      if(candidates && candidates.length && pm){
+        // A promo-suffixed row must not silently land on the base printing
+        // while a promo candidate exists: narrow to the suffix's set, or
+        // failing that to any Promo-rarity row, before taking the base.
+        const setName = DREAMBORN_CN_SUFFIX_SETS[pm[2].toLowerCase()];
+        const inSet = setName ? candidates.filter(r => r.Set === setName) : [];
+        const pool = inSet.length ? inSet : candidates.filter(r => r.Rarity === "Promo");
+        if(pool.length) candidates = pool;
+      }
+    }
+    if(!candidates || !candidates.length){
+      unmatched.push({name, normal:w.n, foil:w.f});
       continue;
     }
     if(cn){
-      const byNum = candidates.filter(r => String(r.Number).trim() === String(cn).trim());
+      const wantCn = cnKey(cn);
+      const byNum = candidates.filter(r => cnKey(r.Number) === wantCn);
       if(byNum.length) candidates = byNum;
     }
     const byPrint = {};
     for(const r of candidates){ if(!byPrint[r.tcg_printing]) byPrint[r.tcg_printing] = r; }
 
+    let foilRow = null;
+    for(const pref of FOIL_PRINTING_PREF){ if(byPrint[pref]){ foilRow = byPrint[pref]; break; } }
+    if(!foilRow){
+      for(const k of Object.keys(byPrint)){ if(k!=="Normal"){ foilRow = byPrint[k]; break; } }
+    }
+    const normalRow = byPrint.Normal || null;
+    // A side whose printing class is entirely absent from the pool folds
+    // into the other: single-printing cards (promos, chase rarities, C2)
+    // are one physical form regardless of which variant label Dreamborn
+    // stamped on the row. Totals count by the printing actually written.
     let pushed = false;
-    if(n>0 && byPrint.Normal){
-      entries.push({cardId:byPrint.Normal.card_id, printing:"Normal", qty:n, name});
-      totalNormal += n; pushed = true;
-    }
-    if(f>0){
-      let foilRow = null;
-      for(const pref of FOIL_PRINTING_PREF){ if(byPrint[pref]){ foilRow = byPrint[pref]; break; } }
-      if(!foilRow){
-        for(const k of Object.keys(byPrint)){ if(k!=="Normal"){ foilRow = byPrint[k]; break; } }
-      }
-      if(foilRow){
-        entries.push({cardId:foilRow.card_id, printing:foilRow.tcg_printing, qty:f, name});
-        totalFoil += f; pushed = true;
-      }
-    }
+    const place = (row, qty) => {
+      if(!row || qty<=0) return;
+      pushEntry(row.card_id, row.tcg_printing, qty, name);
+      if(row.tcg_printing === "Normal") totalNormal += qty; else totalFoil += qty;
+      pushed = true;
+    };
+    place(normalRow || foilRow, w.n);
+    place(foilRow || normalRow, w.f);
     if(pushed) matchedCards++;
-    else unmatched.push({name, normal:n, foil:f, reason:"no matching printing"});
+    else unmatched.push({name, normal:w.n, foil:w.f, reason:"no matching printing"});
   }
   return {entries, matchedCards, unmatched, totalNormal, totalFoil};
 }
@@ -20551,20 +20680,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   // resolve Dreamborn export rows (which key on Name + collector number)
   // back to our (card_id, tcg_printing) shape. Normalized so case +
   // punctuation drift between Dreamborn and Lorcast doesn't drop matches.
-  const rowsByName = useMemo(()=>{
-    const m = {}, mSquash = {};
-    for(const r of raw){
-      const n = r["Product Name"];
-      if(!n || !r.card_id || !r.tcg_printing) continue;
-      const k = normalizeCardName(n);
-      if(!m[k]) m[k] = [];
-      m[k].push(r);
-      const sk = squashCardName(n);
-      if(!mSquash[sk]) mSquash[sk] = [];
-      mSquash[sk].push(r);
-    }
-    return {primary:m, squash:mSquash};
-  }, [raw]);
+  const rowsByName = useMemo(()=> buildImportNameIndex(raw), [raw]);
 
   // Per-set card lists by rarity bucket — used both for catalog totals and
   // missing/extras value calculation. Each bucket is a Set<card_id>.
@@ -20722,14 +20838,14 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     let text;
     try { text = await file.text(); }
     catch(e){ flashToast("Couldn't read file: "+e.message); return; }
-    const report = parseDreambornCsv(text, rowsByName);
+    const report = parseDreambornCsv(text, rowsByName, raw);
     if(report.error){ flashToast(report.error); return; }
     if(!report.entries.length){
       flashToast("CSV parsed but no rows have Normal or Foil quantities > 0. Nothing to import.");
       return;
     }
     setImportState({report, mode:"replace", busy:false});
-  }, [rowsByName]);
+  }, [rowsByName, raw]);
 
   const handleExportCsv = useCallback(() => {
     const out = buildCollectionCsv(collection, raw);
@@ -20951,7 +21067,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       <button class="import-csv-btn allcards-btn" onClick=${()=>setSelectedSet(ALL_CARDS_VIEW)}
         title="Browse every card across all sets in one grid — sort, filter, and see which you own">▦ All Cards</button>
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${()=>importFileRef.current && importFileRef.current.click()}
-        title="Import a collection CSV">Import CSV</button>`}
+        title="Import a collection CSV — Dreamborn exports and Packs.Ink exports both work">Import CSV</button>`}
       ${!isViewerMode && html`<button class="import-csv-btn" onClick=${handleExportCsv}
         title="Download your collection as a CSV — re-importable here, and loads into Dreamborn and other tools that read its format">Export CSV</button>`}
       ${!isViewerMode && html`<input ref=${importFileRef} type="file" accept=".csv,text/csv" style=${{display:"none"}}
