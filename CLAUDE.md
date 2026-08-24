@@ -757,10 +757,11 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 | `sealed_no_set` | sealed row loaded with `set_id` null → renders under "Other / Promo" |
 | `card_no_pid` | `cards.tcgplayer_product_id` null → `card_prices_latest` is an INNER JOIN, so that card can never show a price |
 | `missing_set` | Lorcast published a set we never created |
+| `review_due` | a **scheduled review** came due — see below |
 
 **It is its own workflow, not an ETL job, deliberately.** ETL red = prices are broken, act now. Catalog watch red = something new exists, decide what to do with it. Sharing one light teaches you to ignore both. It also stopped firing 3–4x a day (once per prices dispatch) to answer a question that changes daily at most.
 
-**Red means something NEW.** Everything already ruled on lives in `scripts/catalog_watch_ack.json`:
+**Red means something NEW.** Everything already ruled on lives in `scripts/catalog_watch.json`:
 - `acks` — one exact `kind:id`, with a `why` and an optional `until` date that **expires the ack and re-alerts**. That's how "revisit when Q3 ships" is expressed as a mechanism instead of a promise someone has to remember.
 - `rules` — a regex over the finding name, scoped to a kind, for a whole class we don't model (puzzle inserts, Lore Cards, Case File Cards). A new member of the class never re-alerts.
 
@@ -770,7 +771,18 @@ Acknowledge from the CLI, don't hand-edit: `python scripts/reconcile_catalog.py 
 
 Two things it does NOT re-report, structurally rather than by ack: `load_sealed_products.SKIP_NAME_PATTERNS` is **imported** (so a deliberate loader exclusion can't come back as a finding — add a pattern there and it's silent here in the same commit), and `sealed_no_set` skips `product_type='Promo Single'` / `card_no_pid` skips Format Coconut, where a null is the correct steady state.
 
-Guarded by `python scripts/test_catalog_watch.py` (no network) — it runs first in the workflow, because a bad ack file fails by making the sweep pass. It checks `until` really expires, that a rule can't match outside its kind, and that every committed entry carries a reason.
+**Scheduled reviews — the parts no feed can watch.** Japan Core legality comes from a Japanese retailer's HTML; the pin and lore-counter lists come from a fan site; next set's spoilers come from press releases. Nothing can watch those, so `catalog_watch.json`'s `reviews` list carries them: each becomes a `review_due` finding on its date and rides the same red run and the same email. The `how` steps are printed **inside** the alert, because nobody is going to go dig them up. Four are seeded:
+
+| id | due | what |
+|---|---|---|
+| `set-spoilers` | 2026-09-25 | prestage the next set's revealed cards before Lorcast indexes them |
+| `promo-printing-policy` | 2026-09-28 | decide if promo *printings* are separate tracked items — 9 acks are blocked on it, and it must land before Q3 prestaging |
+| `japan-core` | 2026-10-30 | re-scrape the Curator's Library waves into `JAPAN_CORE_PARTIAL_NUMBERS` |
+| `pins-lore-counters` | 2026-10-30 | new season's pin + counters, and the still-missing photos |
+
+`--done <id> [--next YYYY-MM-DD]` marks one done and rolls it forward (`every_days` is only the fallback when `--next` is omitted — these key off the release calendar, not a round number of days). A review is "acknowledged" exactly when its `due` is in the future; `acks` don't apply to it, so the only way to silence one is to do it or to deliberately push the date.
+
+Guarded by `python scripts/test_catalog_watch.py` (no network) — it runs first in the workflow, because a bad state file fails by making the sweep pass. It checks `until` really expires, that a review actually comes due, that a rule can't match outside its kind, that every committed entry carries a reason, and that no review ships already overdue.
 
 ## Inks & dual-ink cards
 

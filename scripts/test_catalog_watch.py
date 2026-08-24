@@ -1,11 +1,11 @@
 """
-test_catalog_watch.py — guards the acknowledgement layer of the catalog watch.
+test_catalog_watch.py — guards the acknowledgement + review layers of the watch.
 
     python scripts/test_catalog_watch.py
 
 No network, no database: it imports the real ack functions out of
 reconcile_catalog and checks them against hand-built inputs, then validates the
-committed catalog_watch_ack.json.
+committed catalog_watch.json.
 
 Why this exists. The whole point of the watch is that a red run means something
 NEW, and that only holds if acknowledgement behaves exactly as advertised. Two
@@ -14,7 +14,9 @@ failure modes would quietly destroy it:
   - an ack that matches too much (a sloppy rule regex swallowing a real
     finding), so a genuinely missing set never alerts;
   - an `until` date that doesn't actually expire, so "revisit when Q3 ships"
-    becomes "never".
+    becomes "never";
+  - a scheduled review that never comes due, which is the whole difference
+    between a reminder and a note somebody wrote down once.
 
 Both are invisible in production — the run is green either way. The only place
 to catch them is here.
@@ -31,7 +33,9 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from reconcile_catalog import ACK_PATH, KIND_LABEL, ack_reason, load_ack  # noqa: E402
+from reconcile_catalog import (  # noqa: E402
+    ACK_PATH, KIND_LABEL, ack_reason, due_reviews, load_ack,
+)
 
 failed = 0
 
@@ -122,6 +126,51 @@ for k, v in list(real["acks"].items()) + [(f"rule[{i}]", x) for i, x in enumerat
     if u and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(u)):
         bad_dates.append(k)
 check("every `until` is YYYY-MM-DD", bad_dates, [])
+
+
+# ── scheduled reviews ─────────────────────────────────────────────────────
+print()
+SCHED = {"reviews": [
+    {"id": "past", "what": "overdue", "due": "2020-01-01", "how": "do it"},
+    {"id": "today", "what": "due today", "due": TODAY, "how": "do it"},
+    {"id": "future", "what": "not yet", "due": "2999-01-01", "how": "do it"},
+    {"id": "undated", "what": "no due date", "how": "do it"},
+]}
+fired = {f["key"] for f in due_reviews(SCHED, TODAY)}
+check("an overdue review fires", "past" in fired, True)
+check("a review due today fires", "today" in fired, True)
+check("a future review stays quiet", "future" in fired, False)
+check("a review with no due date never fires", "undated" in fired, False)
+check("a fired review is kind review_due",
+      {f["kind"] for f in due_reviews(SCHED, TODAY)}, {"review_due"})
+check("the steps travel with the alert",
+      due_reviews(SCHED, TODAY)[0]["hint"], "do it")
+
+reviews = real.get("reviews", [])
+check("the committed file has reviews", len(reviews) > 0, True)
+
+ids = [r.get("id") for r in reviews]
+check("every review has an id", [i for i in ids if not i], [])
+check("review ids are unique", len(set(ids)), len(ids))
+
+for field in ("what", "why", "how", "due"):
+    missing = [r.get("id") for r in reviews if not (r.get(field) or "")]
+    check(f"every review has `{field}`", missing, [])
+
+bad_due = [r.get("id") for r in reviews
+           if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(r.get("due", "")))]
+check("every review `due` is YYYY-MM-DD", bad_due, [])
+
+# --done with no --next needs every_days to roll; without either, the review
+# would be marked done and then never come back.
+bad_every = [r.get("id") for r in reviews
+             if r.get("every_days") is not None and not isinstance(r["every_days"], int)]
+check("every_days is an int when present", bad_every, [])
+
+# A review that is already overdue in the committed file means we shipped a red
+# workflow — nearly always a mistake in the seed dates rather than intent.
+overdue = [r.get("id") for r in reviews if str(r.get("due", "")) < TODAY]
+check("no review ships already overdue", overdue, [])
 
 print(f"\n{failed} FAILED" if failed else "\nall passed")
 raise SystemExit(1 if failed else 0)

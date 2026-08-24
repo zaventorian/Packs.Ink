@@ -61,10 +61,21 @@ opens. An alert with no delivery is not an alert.
     findings = everything wrong  −  everything acknowledged
     exit 1 if any remain  →  red run  →  GitHub failure email
 
-Acknowledgements live in scripts/catalog_watch_ack.json, each with a reason and
+Acknowledgements live in scripts/catalog_watch.json, each with a reason and
 an optional `until` date that makes it expire and re-alert. That is what keeps
 the noise floor at zero: a standing backlog is acknowledged once, with a stated
 decision, instead of being re-reported forever until everyone stops looking.
+
+Scheduled reviews
+-----------------
+The checks above all read a machine-readable feed. Some of the catalog does not
+have one — Japan Core legality comes from a Japanese retailer's HTML, the pin
+and lore-counter lists come from a fan site, next set's spoilers come from press
+releases. Nothing can watch those, so the same file carries a `reviews` list:
+each one becomes a finding on its due date and rides the same red run and the
+same email. `--done <id>` rolls it forward.
+
+That is the difference between a reminder and a note somebody wrote down once.
 
 Usage
 -----
@@ -258,7 +269,7 @@ def fmt_money(v) -> str:
         return "—"
 
 
-ACK_PATH = os.path.join(os.path.dirname(__file__), "catalog_watch_ack.json")
+ACK_PATH = os.path.join(os.path.dirname(__file__), "catalog_watch.json")
 
 # `sealed_no_set` deliberately skips this bucket. 'Promo Single' is
 # load_sealed_products' catch-all for products that map to no set by
@@ -275,13 +286,14 @@ def load_ack(path: str) -> dict:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
     except FileNotFoundError:
-        return {"acks": {}, "rules": []}
+        return {"acks": {}, "rules": [], "reviews": []}
     except json.JSONDecodeError as e:
         # A broken ack file must not silently un-acknowledge everything and
         # bury a real finding under a hundred old ones.
-        raise SystemExit(f"catalog_watch_ack.json is not valid JSON: {e}")
+        raise SystemExit(f"catalog_watch.json is not valid JSON: {e}")
     data.setdefault("acks", {})
     data.setdefault("rules", [])
+    data.setdefault("reviews", [])
     return data
 
 
@@ -316,6 +328,29 @@ def save_ack(path: str, data: dict) -> None:
         f.write("\n")
 
 
+def due_reviews(ack: dict, today: str) -> list[dict]:
+    """Scheduled reviews whose due date has arrived.
+
+    Not gated by `acks` at all — a review is "acknowledged" exactly when its
+    `due` is still in the future, so the only way to silence one is to do it
+    (--done) or to deliberately push its date out.
+    """
+    out = []
+    for rv in ack.get("reviews", []):
+        due = rv.get("due")
+        if not due or due > today:
+            continue
+        out.append({
+            "kind": "review_due",
+            "key": rv.get("id") or "?",
+            "name": rv.get("what") or rv.get("id") or "?",
+            "detail": f"due {due}" + (f" · last done {rv['last_done']}" if rv.get("last_done") else " · never done"),
+            "hint": rv.get("how") or "no steps recorded",
+            "why": rv.get("why") or "",
+        })
+    return out
+
+
 def fetch_all_products() -> tuple[list[dict], dict[int, dict]]:
     """Every TCGCSV group and every product in it, keyed by pid.
 
@@ -344,7 +379,7 @@ def fetch_all_products() -> tuple[list[dict], dict[int, dict]]:
     return groups, index
 
 
-def collect_findings(sb: Supabase) -> list[dict]:
+def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = None) -> list[dict]:
     """Everything the catalog is missing or hasn't wired up, as flat findings."""
     groups, products = fetch_all_products()
     card_pids = column_pids(sb, "cards")
@@ -431,6 +466,9 @@ def collect_findings(sb: Supabase) -> list[dict]:
     except Exception as e:  # Lorcast down must not fail the whole watch
         print(f"  (Lorcast set check skipped, non-fatal: {e})")
 
+    if ack is not None:
+        out.extend(due_reviews(ack, today or date.today().isoformat()))
+
     out.sort(key=lambda f: (f["kind"], f["name"]))
     return out
 
@@ -442,14 +480,17 @@ KIND_LABEL = {
     "sealed_no_set":  "Sealed product with no set",
     "card_no_pid":    "Card with no TCGplayer id (can never price)",
     "missing_set":    "Lorcast set we don't have",
+    "review_due":     "Scheduled review (no feed watches this — a person has to look)",
 }
 
 
 def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
     today = date.today().isoformat()
     ack = load_ack(ACK_PATH)
-    findings = collect_findings(sb)
-    fresh = [f for f in findings if ack_reason(ack, f["kind"], f["key"], f["name"], today) is None]
+    findings = collect_findings(sb, ack, today)
+    fresh = [f for f in findings
+             if f["kind"] == "review_due"
+             or ack_reason(ack, f["kind"], f["key"], f["name"], today) is None]
     known = len(findings) - len(fresh)
 
     print(f"\n{'='*72}")
@@ -464,13 +505,28 @@ def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
             by_kind.setdefault(f["kind"], []).append(f)
         for kind, items in by_kind.items():
             print(f"\n▶ {KIND_LABEL.get(kind, kind)}  ({len(items)})")
+            if kind == "review_due":
+                # A review's whole value is that the steps travel with the
+                # alert — nobody is going to go dig up how to do it.
+                for f in items:
+                    print(f"\n    {f['key']}   [{f['detail']}]")
+                    print(f"      {f['name']}")
+                    if f.get("why"):
+                        print(f"      why:  {f['why']}")
+                    for i, line in enumerate(str(f["hint"]).split("\n")):
+                        print(("      how:  " if i == 0 else "            ") + line)
+                    print(f"      done: python scripts/reconcile_catalog.py --done {f['key']} "
+                          f"--next YYYY-MM-DD")
+                continue
             for f in items:
                 print(f"    {f['kind']}:{f['key']}")
                 print(f"      {f['name']}   [{f['detail']}]")
             print(f"    → {items[0]['hint']}")
-        print("\nEither fix it, or record the decision so it stops asking:")
-        print(f"    python scripts/reconcile_catalog.py --ack {fresh[0]['kind']}:{fresh[0]['key']} "
-              f'--why "why this is fine" [--until YYYY-MM-DD]')
+        gap = next((f for f in fresh if f["kind"] != "review_due"), None)
+        if gap:
+            print("\nEither fix it, or record the decision so it stops asking:")
+            print(f"    python scripts/reconcile_catalog.py --ack {gap['kind']}:{gap['key']} "
+                  f'--why "why this is fine" [--until YYYY-MM-DD]')
 
     _write_watch_summary(fresh, known)
     _send_watch_webhook(fresh)
@@ -542,7 +598,38 @@ def run_ack(key: str, why: str | None, until: str | None) -> int:
     ack["acks"][key] = entry
     save_ack(ACK_PATH, ack)
     print(f"Acknowledged {key}" + (f" until {until}" if until else "") + f"\n  {why.strip()}")
-    print("Commit scripts/catalog_watch_ack.json so CI picks it up.")
+    print("Commit scripts/catalog_watch.json so CI picks it up.")
+    return 0
+
+
+def run_done(review_id: str, next_due: str | None) -> int:
+    ack = load_ack(ACK_PATH)
+    reviews = ack.get("reviews", [])
+    rv = next((r for r in reviews if r.get("id") == review_id), None)
+    if rv is None:
+        print(f"No review with id {review_id!r}. Known: "
+              f"{', '.join(r.get('id', '?') for r in reviews) or '(none)'}")
+        return 2
+    today = date.today()
+    if next_due:
+        try:
+            date.fromisoformat(next_due)
+        except ValueError:
+            print(f"--next must be YYYY-MM-DD (got {next_due!r})")
+            return 2
+        nxt = next_due
+    else:
+        every = rv.get("every_days")
+        if not every:
+            print(f"{review_id} has no `every_days`, so --next is required "
+                  "(these are keyed to set releases, not a fixed cadence).")
+            return 2
+        nxt = (today + timedelta(days=int(every))).isoformat()
+    rv["last_done"] = today.isoformat()
+    rv["due"] = nxt
+    save_ack(ACK_PATH, ack)
+    print(f"{review_id} marked done today; next due {nxt}.")
+    print("Commit scripts/catalog_watch.json so CI picks it up.")
     return 0
 
 
@@ -559,12 +646,16 @@ def main() -> int:
                     help="Write the full structured report to this path.")
     ap.add_argument("--watch", action="store_true",
                     help="Widened sweep (unpriced products, unbound groups, null pids, new "
-                         "Lorcast sets) filtered through catalog_watch_ack.json. Exits 1 on "
+                         "Lorcast sets) filtered through catalog_watch.json. Exits 1 on "
                          "anything unacknowledged — this is what CI runs.")
     ap.add_argument("--no-fail", action="store_true",
                     help="With --watch: print the report but always exit 0.")
     ap.add_argument("--ack", default=None, metavar="KIND:ID",
                     help="Record an acknowledgement for one finding and exit.")
+    ap.add_argument("--done", default=None, metavar="REVIEW_ID",
+                    help="Mark a scheduled review done and roll it forward.")
+    ap.add_argument("--next", dest="next_due", default=None, metavar="YYYY-MM-DD",
+                    help="With --done: when it is due again (defaults to every_days).")
     ap.add_argument("--why", default=None,
                     help="Required with --ack: why this finding is acceptable.")
     ap.add_argument("--until", default=None, metavar="YYYY-MM-DD",
@@ -577,6 +668,9 @@ def main() -> int:
 
     if args.ack:
         return run_ack(args.ack, args.why, args.until)
+
+    if args.done:
+        return run_done(args.done, args.next_due)
 
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     sb = Supabase()
