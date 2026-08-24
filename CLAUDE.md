@@ -743,7 +743,34 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 - **`MAINLINE_RELEASE_ORDER`** = `MAINLINE_SETS` minus unreleased. Drives Core Constructed rotation.
 - Decks pick up format automatically (`checkDeckLegality`): core-legal sets → "Core Constructed"; structurally legal → "Infinity"; otherwise → "Invalid Deck".
 - **`TCGCSV_GROUP_SET_ALIASES` (`scripts/tcgcsv_common.py`) is how a TCGplayer group binds to a Lorcast set when their names don't match.** Both `etl_tcgcsv_daily.update_set_group_mapping` (writes `sets.tcgplayer_group_id`) and `load_sealed_products.build_group_to_setid` (writes `sealed_products.set_id`) resolve through `group_name_candidates()`, which tries the alias, then the literal group name, then the post-colon form ("Disney Lorcana: Fabled" → "Fabled"). An unmatched group is quietly expensive: `link_preorder_pids.py` only walks sets that HAVE a `tcgplayer_group_id`, so that set's new cards never get a pid linked and stay priceless/invisible until Lorcast fills `tcgplayer_id` itself. Seeded with `"d23 promos" → "D23 Collection"` — TCGplayer files every D23 drop (2024 #1-9, 2026 #10-15, both years' sealed collection SKUs) under one "D23 Promos" group. Add an entry whenever a new promo group appears under a name that isn't the set's.
-- **Check one product with `python scripts/reconcile_catalog.py --pid <id>`** — reports it across TCGCSV / `cards` / `sealed_products` / `prices_daily` and exits 1 if it's in neither catalog table. The daily sweep can't answer this for a brand-new SKU (it only looks at pids priced in the last 14 days).
+- **Check one product with `python scripts/reconcile_catalog.py --pid <id>`** — reports it across TCGCSV / `cards` / `sealed_products` / `prices_daily` and exits 1 if it's in neither catalog table.
+
+### Catalog watch — the thing that tells you a new set exists
+
+`.github/workflows/catalog-watch.yml`, daily at 03:30 UTC (after the ETL window), running `python scripts/reconcile_catalog.py --watch`. It answers "is there anything Lorcana out there we don't know about?" across six checks:
+
+| kind | what it catches |
+|---|---|
+| `missing_single` | TCGplayer sells a card, it's in neither `cards` nor `sealed_products` |
+| `missing_sealed` | same for a sealed SKU |
+| `unbound_group` | a TCGCSV group no `sets.tcgplayer_group_id` points at — **how a new set announces itself, weeks before a card of it is listed** |
+| `sealed_no_set` | sealed row loaded with `set_id` null → renders under "Other / Promo" |
+| `card_no_pid` | `cards.tcgplayer_product_id` null → `card_prices_latest` is an INNER JOIN, so that card can never show a price |
+| `missing_set` | Lorcast published a set we never created |
+
+**It is its own workflow, not an ETL job, deliberately.** ETL red = prices are broken, act now. Catalog watch red = something new exists, decide what to do with it. Sharing one light teaches you to ignore both. It also stopped firing 3–4x a day (once per prices dispatch) to answer a question that changes daily at most.
+
+**Red means something NEW.** Everything already ruled on lives in `scripts/catalog_watch_ack.json`:
+- `acks` — one exact `kind:id`, with a `why` and an optional `until` date that **expires the ack and re-alerts**. That's how "revisit when Q3 ships" is expressed as a mechanism instead of a promise someone has to remember.
+- `rules` — a regex over the finding name, scoped to a kind, for a whole class we don't model (puzzle inserts, Lore Cards, Case File Cards). A new member of the class never re-alerts.
+
+Acknowledge from the CLI, don't hand-edit: `python scripts/reconcile_catalog.py --ack missing_single:711520 --why "…" [--until YYYY-MM-DD]`. `--why` is mandatory — the file is a decision record, and an entry with no reason can't be told apart from sweeping something under the rug. Commit the file so CI sees it.
+
+**Why any of this exists:** the old `reconcile` job ran green every single day with **18 genuinely missing singles in its output**, because it exited 0, `RECONCILE_ALERT_WEBHOOK` was never set, and its report went to a Step Summary nobody opens. An alert with no delivery is not an alert. The other half was coverage — it only looked at pids with a recent PRICE, so a product listed before release (a new Quest set, next set's boxes) was invisible to it.
+
+Two things it does NOT re-report, structurally rather than by ack: `load_sealed_products.SKIP_NAME_PATTERNS` is **imported** (so a deliberate loader exclusion can't come back as a finding — add a pattern there and it's silent here in the same commit), and `sealed_no_set` skips `product_type='Promo Single'` / `card_no_pid` skips Format Coconut, where a null is the correct steady state.
+
+Guarded by `python scripts/test_catalog_watch.py` (no network) — it runs first in the workflow, because a bad ack file fails by making the sweep pass. It checks `until` really expires, that a rule can't match outside its kind, and that every committed entry carries a reason.
 
 ## Inks & dual-ink cards
 
