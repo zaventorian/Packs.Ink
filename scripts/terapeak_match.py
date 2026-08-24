@@ -40,6 +40,10 @@ MAINLINE = [
     "The First Chapter", "Rise of the Floodborn", "Into the Inklands",
     "Ursula's Return", "Shimmering Skies", "Azurite Sea", "Archazia's Island",
     "Reign of Jafar", "Fabled", "Whispers in the Well",
+    # 11-13 were missing, so `EN 11/12/13` titles resolved to NO set hint and the
+    # cn-conflict guard could never forgive an over-numbered chase card, dropping
+    # real four-figure Attack-of-the-Vine sales at load. The index IS the EN number.
+    "Winterspell", "Wilds Unknown", "Attack of the Vine!",
 ]
 # extra set-name aliases -> exact set name in the catalog
 SET_ALIASES = {
@@ -51,6 +55,11 @@ SET_ALIASES = {
     "fabled": "Fabled", "whispers in the well": "Whispers in the Well",
     "wilds unknown": "Wilds Unknown", "winterspell": "Winterspell",
     "epcot": "EPCOT Festival of the Arts",
+    "attack of the vine": "Attack of the Vine!",
+    "attack of vine": "Attack of the Vine!",
+    "curator's collection": "Curator's Collection: Heroines",
+    "curators collection": "Curator's Collection: Heroines",
+    "heroines": "Curator's Collection: Heroines",
 }
 STOP = set("""disney lorcana ravensburger the of a an and en card tcg trading game
 psa cgc bgs sgc tag beckett gem mint mt graded grade foil nonfoil non holo holofoil
@@ -186,7 +195,7 @@ def strong_collectors(title: str):
     grade subgrade like '10/10/9.5'. The '#' form takes digits only, so the set
     code in '#D23' isn't read as collector 23."""
     nums = set()
-    for m in re.finditer(r"(?<![\d./])(\d{1,3}[A-Za-z]?)\s*/\s*(\d{1,3}|[A-Za-z]\d+)", title):
+    for m in re.finditer(r"(?<![\d./])(\d{1,3}[A-Za-z]?)\s*/\s*(\d{1,3}|[A-Za-z]{1,3}\d+)", title):
         num, den = m.group(1), m.group(2)
         if den[0].isalpha() or int(den) >= 100:
             nums.add(norm_cn(num))
@@ -211,7 +220,7 @@ def suffixed_collectors(title: str):
     fell back to name tokens, landing every printing on one card. Same for the
     five Dalmatian Puppy variants (#4a-#4e)."""
     out = set()
-    for m in re.finditer(r"(?<![\d./])(\d{1,3}[A-Za-z])\s*/\s*(\d{1,3}|[A-Za-z]\d+)", title):
+    for m in re.finditer(r"(?<![\d./])(\d{1,3}[A-Za-z])\s*/\s*(\d{1,3}|[A-Za-z]{1,3}\d+)", title):
         den = m.group(2)
         if den[0].isalpha() or int(den) >= 100:
             out.add(norm_cn(m.group(1)))
@@ -297,6 +306,30 @@ def best_match(title, by_cn, inv):
     # none does, the suffix is noise (a seller's "#10A" for a card catalogued
     # as plain 10) and must not perturb the ordinary match.
     any_exact = bool(xcns) and any(c["_cn"] in xcns for c in cand.values())
+    # A card whose NAME is its own set's name ("Attack of the Vine!" #202) covers its
+    # tokens perfectly off the SET words alone, so it won the full-name tier outright
+    # and the cn-conflict guard then discarded the row -- dropping real chase sales at
+    # load. Only such set-name cards are overridden, and only by a card in the SAME set
+    # that owns the printed number: the community-numbering forgiveness this guard was
+    # built for (Challenge "3/C1" -> Lorcast #42) must keep working untouched.
+    scn_t = strong_collectors(title)
+    _set_toks = toks(hint) if hint else set()
+
+    def _owns_scn(c):
+        if not scn_t:
+            return False
+        cn = c["_cn"]
+        # A regional printing IS that collector number: "25ja"/"25zh" own a printed
+        # "25". Without this a stray "Auction #1" outscored them and handed the row to
+        # whichever card really is #1. reg_pref still separates ja from zh.
+        rm = re.match(r"^(\d+)[A-Za-z]{2}$", cn or "")
+        owns = cn in scn_t or bool(rm and rm.group(1) in scn_t)
+        return owns and (not hint or c["_set"] == hint)
+
+    def _is_set_name_card(c):
+        return bool(_set_toks) and bool(c["_tok"]) and c["_tok"] <= _set_toks
+
+    any_strong_cn = any(_owns_scn(c) for c in cand.values())
     scored = []
     for c in cand.values():
         if not c["_tok"]:
@@ -346,8 +379,14 @@ def best_match(title, by_cn, inv):
         # which is otherwise identical in name, version, set and overlap.
         cn_exact = c["_cn"] in xcns
         exact_pref = (0.8 if cn_exact else -0.5) if any_exact else 0.0
+        # Owning the printed number, in the hinted set, outranks a set-name overlap.
+        # Require the card to have SOME name support: a printed number must not let a
+        # card with zero name overlap beat one the title actually names (a stray "#4"
+        # in a Captain Hook title must not hand the row to Cruella - Miserable #4).
+        strong_pref = 0.5 if (any_strong_cn and _owns_scn(c) and nmatch >= 1) else 0.0
         sc = ov + (0.4 if cn_hit else 0.0) + (0.4 if set_hit else 0.0) \
-            + (0.6 if d23_pref else 0.0) + rarity_pref + reg_pref + exact_pref
+            + (0.6 if d23_pref else 0.0) + rarity_pref + reg_pref + exact_pref \
+            + strong_pref
         if set_miss and ov < 0.9:
             sc -= 0.3
         scored.append((c, ov, cn_hit, set_hit, sc, nmatch, d23_pref, rarity_ok, cn_exact))
@@ -360,6 +399,10 @@ def best_match(title, by_cn, inv):
     # 1.0 overlap, so every other key ties and the winner was whichever card the
     # candidate dict happened to yield first.
     strong = [s for s in scored if s[1] >= 0.85 and s[5] >= 2]
+    if any_strong_cn:
+        # Drop ONLY set-name cards that do not own the printed number.
+        strong = [s for s in strong
+                  if _owns_scn(s[0]) or not _is_set_name_card(s[0])]
     if strong:
         c, ov, cn_hit, set_hit = max(strong, key=lambda s: (s[8], s[7], s[6], s[2], s[3], s[1]))[:4]
         sc = next(s[4] for s in strong if s[0] is c)
