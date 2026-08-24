@@ -976,6 +976,82 @@ const isStarterDeck = (d) => Array.isArray(d?.tags) && d.tags.includes(STARTER_D
 // step sideways through tab changes instead of out of the page you opened.
 const DECK_SECTION_KEYS = ["yours","favorites","following","discover","tournaments"];
 const SCREENER_MODES = ["raw","graded","sealed"];
+// Collection's Cards / Sealed / Graded split was the last localStorage-only
+// sub-tab: /collection meant three different pages depending on what you last
+// clicked, so "look at my graded" was unsendable. Same rules as ?s= above.
+const COLLECTION_SECTIONS = ["cards","sealed","graded"];
+const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded"};
+// Human names for the toast. Deliberately separate from the nav labels: this
+// reads as a sentence ("Link to Decks · Tournaments copied"), not a chip.
+const VIEW_SHARE_LABELS = {
+  home: "the home page", screener: "the Screener", history: "Price Graphing",
+  market: "Analytics", cards: "Cards", collection: "your Collection",
+  decks: "Decks", faq: "How it works", elo: "the Elo board",
+};
+const DECK_SECTION_LABELS = {
+  yours: "Your decks", favorites: "Favorites", following: "Following",
+  discover: "Discover", tournaments: "Tournaments",
+};
+const SCREENER_MODE_LABELS = {raw: "Raw prices", graded: "Graded", sealed: "Sealed"};
+const MARKET_SUB_LABELS = {
+  overview: "Overview", ev: "Expected Value", trade: "Trade Compare",
+  avg: "Set Breakdown", setval: "Playset Cost", sim: "Simulator",
+  swiss: "Swiss Odds", dice: "Dice Tray", elo: "Elo",
+};
+const collectionSectionHref = (key, viewerContext) => {
+  const q = new URLSearchParams();
+  if(viewerContext && viewerContext.ownerId){
+    q.set("collection", viewerContext.ownerId);
+    if(viewerContext.ownerToken) q.set("token", viewerContext.ownerToken);
+  }
+  if(key !== "cards") q.set("c", key);
+  const qs = q.toString();
+  return "/collection" + (qs ? "?" + qs : "");
+};
+// "Copy link to this page". Every view and sub-tab already mirrors itself into
+// the URL, so the address bar is always right — except in the installed app,
+// where there IS no address bar, which made the one place people live in the
+// only place they couldn't share from.
+//
+// It reads window.location rather than reconstructing anything, so it inherits
+// every deep link the app already writes (?deck=, ?set=, ?tourney=, ?card=,
+// ?a=, ?s=, ?f=, ?m=, ?c=) without a second source of truth to keep in sync.
+// The origin is forced to SITE_ORIGIN so a native build copies packs.ink
+// instead of a capacitor:// or localhost URL nobody else can open.
+const currentShareUrl = () => {
+  try {
+    const u = new URL(window.location.href);
+    return SITE_ORIGIN + u.pathname + u.search;
+  } catch { return SITE_ORIGIN + "/"; }
+};
+// What the toast says it copied. Naming the page is the confirmation that it
+// caught the right thing — "Link copied" leaves you wondering whether it got
+// the deck you had open or the tab behind it.
+const shareUrlLabel = () => {
+  try {
+    const u = new URL(window.location.href);
+    const path = (u.pathname.replace(/\/$/, "") || "/");
+    const q = u.searchParams;
+    if(q.get("deck"))       return "this deck";
+    if(q.get("tourney"))    return "this tournament";
+    if(q.get("collection")) return "this collection";
+    if(q.get("user"))       return "this creator";
+    if(q.get("card"))       return "this card";
+    if(q.get("t") || q.get("trade")) return "this trade";
+    if(q.get("set"))        return q.get("set");
+    const view = PATH_TO_VIEW[path];
+    const SUB = {
+      decks:      () => DECK_SECTION_LABELS[q.get("s")] || null,
+      collection: () => COLLECTION_SECTION_LABELS[q.get("c")] || null,
+      market:     () => MARKET_SUB_LABELS[q.get("a")] || null,
+      screener:   () => SCREENER_MODE_LABELS[q.get("m")] || null,
+    };
+    const base = VIEW_SHARE_LABELS[view] || "this page";
+    const sub = SUB[view] ? SUB[view]() : null;
+    return sub ? base + " \u00b7 " + sub : base;
+  } catch { return "this page"; }
+};
+
 const readUrlParam = (name) => {
   try { return new URLSearchParams(window.location.search).get(name); } catch { return null; }
 };
@@ -4664,6 +4740,27 @@ const browseSibling = (group, dir) => {
 // as a portrait image with the card rotated 90° clockwise inside it.
 const isLandscapeCard = (row) =>
   !!row && String(row.card_type || "").split(" - ").includes("Location");
+
+// Copy the current page's link. Uses the clipboard synchronously inside the
+// click (Safari drops a write that happens after an await), and falls back to
+// the share sheet on touch, where a system share is what people actually want
+// and where clipboard permission is flakier.
+const copyCurrentPageLink = async () => {
+  const url = currentShareUrl();
+  const what = shareUrlLabel();
+  try {
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(url);
+      flashToast("Link to " + what + " copied");
+      return;
+    }
+  } catch {/* fall through */}
+  try {
+    if(navigator.share){ await navigator.share({url}); return; }
+  } catch {/* user dismissed the sheet — not an error */ return; }
+  // Last resort: show it so it can be selected by hand.
+  flashToast(url, 8000);
+};
 
 const EnlargedCardOverlay = () => {
   const [group, setGroup] = useState(null);
@@ -20971,11 +21068,42 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   }, []);
   // Cards-vs-Sealed top-level toggle. Persisted so coming back lands on the
   // tab the user was last using.
+  // ?c= wins over the stored preference: someone opening a shared link means
+  // the section in the link, not the one they were last on.
   const [section, setSection] = useState(()=>{
+    const fromUrl = readUrlEnum("c", COLLECTION_SECTIONS);
+    if(fromUrl) return fromUrl;
     try { return localStorage.getItem("packsink:collection:section") || "cards"; }
     catch { return "cards"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:collection:section", section); } catch {} }, [section]);
+  // Mirror the section into /collection?c=<section>. "cards" is the default so
+  // it's omitted — one page, one URL. replaceState only: a set page (?set=) and
+  // a viewer's collection (?collection=) both push their own history entries on
+  // top of this, and a section change that also pushed would interleave with
+  // them so Back stepped sideways through tabs instead of out of the set.
+  useEffect(() => {
+    // A set page owns the URL while it's open, exactly like a deck does on the
+    // Decks tab — don't overwrite its ?set= from the section behind it.
+    if(selectedSet) return;
+    try {
+      const url = new URL(window.location.href);
+      if((url.pathname.replace(/\/$/, "") || "/") !== "/collection") return;
+      const want = section === "cards" ? null : section;
+      if(url.searchParams.get("c") === want) return;
+      if(want) url.searchParams.set("c", want); else url.searchParams.delete("c");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {/* no-op */}
+  }, [section, selectedSet]);
+  // Back / Forward out of a set page restores the section the URL names.
+  useEffect(() => {
+    const onPop = () => {
+      const v = readUrlEnum("c", COLLECTION_SECTIONS);
+      setSection(v || "cards");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   // Re-clicking the Collection tab while inside a set drops back to the
   // top-level set grid. tabClickNonce increments on every tab click.
   useEffect(() => {
@@ -21468,13 +21596,19 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         </div>`}
       </div>`;
     })()}
+    ${/* <a href>, not <button> — the SPA-nav convention, so ctrl/middle-click
+          opens a section in a new tab and right-click offers "Copy link
+          address". In viewer mode the href keeps ?collection= so the copied
+          link still points at whose collection you're looking at. */""}
     <div class="collection-section-tabs">
-      ${(!isViewerMode || viewerVis.raw) && html`<button class=${"collection-section-tab"+(effectiveSection==="cards"?" active":"")}
-        onClick=${()=>setSection("cards")}>Cards</button>`}
-      ${(!isViewerMode || viewerVis.sealed) && html`<button class=${"collection-section-tab"+(effectiveSection==="sealed"?" active":"")}
-        onClick=${()=>setSection("sealed")}>Sealed</button>`}
-      ${(!isViewerMode || viewerVis.graded) && html`<button class=${"collection-section-tab"+(effectiveSection==="graded"?" active":"")}
-        onClick=${()=>setSection("graded")}>Graded</button>`}
+      ${COLLECTION_SECTIONS.map(k => {
+        const vis = k === "cards" ? viewerVis.raw : k === "sealed" ? viewerVis.sealed : viewerVis.graded;
+        if(isViewerMode && !vis) return null;
+        return html`<a key=${k}
+          class=${"collection-section-tab"+(effectiveSection===k?" active":"")}
+          href=${collectionSectionHref(k, isViewerMode ? viewerContext : null)}
+          onClick=${navHandler(()=>setSection(k))}>${COLLECTION_SECTION_LABELS[k]}</a>`;
+      })}
       ${!isViewerMode && user && ownerProfile && html`<div class="collection-share-wrap" ref=${shareRef}>
         <button class=${"collection-share-btn"+(shareOpen?" open":"")}
           onClick=${()=>setShareOpen(o=>!o)}
@@ -31126,12 +31260,6 @@ const HOME_TOOL_ICONS = {
     <path d="M12 14v4"/>
     <path d="M8 21h8"/>
     <path d="M9.5 18h5"/>`),
-  // Stream Ticker — a marquee bar scrolling left
-  ticker: _navSvg(html`
-    <rect x="2" y="8.5" width="20" height="7" rx="2"/>
-    <path d="M6 12h5"/>
-    <path d="M13.5 12h2"/>
-    <path d="M19 10.5L17.5 12l1.5 1.5"/>`),
 };
 const HOME_TOOLS = [
   {k:"ev",     label:"Expected Value", sub:"Box EV vs box price"},
@@ -31140,10 +31268,10 @@ const HOME_TOOLS = [
   {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
   {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
   {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
-  // The stream ticker is a standalone page (deliberately outside the SPA —
-  // see the /ticker notes), so its chip is a plain new-tab link, not an
-  // Analytics sub-tab.
-  {k:"ticker", label:"Stream Ticker",  sub:"Top movers for OBS", href:"/ticker", external:true},
+  // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven). /ticker
+  // still works and is still the thing you paste into OBS — it just isn't a
+  // toolbox entry, because the toolbox is the calculators an ordinary visitor
+  // uses and the ticker is a tool for the handful of people who stream.
 ];
 const HomeToolboxPanel = ({onOpenTool}) => {
   const [collapsed, setCollapsed] = useState(() => {
@@ -31167,15 +31295,7 @@ const HomeToolboxPanel = ({onOpenTool}) => {
       </button>
     </div>
     ${!collapsed && html`<div class="home-toolbox-grid">
-      ${HOME_TOOLS.map(t => t.external
-        ? html`<a key=${t.k} class="home-tool-chip" href=${t.href} target="_blank" rel="noopener">
-            <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
-            <span class="home-tool-txt">
-              <span class="home-tool-name">${t.label} ↗</span>
-              <span class="home-tool-sub">${t.sub}</span>
-            </span>
-          </a>`
-        : html`<a key=${t.k} class="home-tool-chip"
+      ${HOME_TOOLS.map(t => html`<a key=${t.k} class="home-tool-chip"
         href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
         onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
         <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
@@ -38133,7 +38253,7 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "s","f","m","card",
+                           "s","f","m","c","card",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -38143,7 +38263,7 @@ function App(){
       // navigating decks → home doesn't carry a stale ?tourney= forward.
       const VIEW_OWNED = {
         decks:      new Set(["deck","token","user","tourney","s","f"]),
-        collection: new Set(["collection","token","set"]),
+        collection: new Set(["collection","token","set","c"]),
         market:     new Set(["a","trade","t"]),
         screener:   new Set(["m"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
@@ -39979,6 +40099,13 @@ function App(){
           ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
             onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
             title="Install Packs.Ink as an app" aria-label="Install app">📲</button>`}
+          ${/* Only in the installed app / native shell — which is exactly where
+                there is no address bar to copy from, and also the one state
+                where the install bubble above is hidden, so row 1 keeps its
+                width. A browser tab has the URL on screen already. */""}
+          ${(isStandalone || IS_NATIVE_APP) && html`<button class="theme-toggle theme-toggle--link"
+            onClick=${(e)=>{ e.stopPropagation(); copyCurrentPageLink(); }}
+            title="Copy a link to this page" aria-label="Copy a link to this page">🔗</button>`}
           ${user
             ? html`<button class="profile-btn" onClick=${()=>setSettingsOpen(o=>!o)}
                 title="Account & settings" aria-expanded=${settingsOpen}>
@@ -40093,6 +40220,11 @@ function App(){
                 onChange=${e=>setShowTopBarTheme(e.target.checked)}/>
               <span>Theme button in top bar</span>
             </label>
+            <button class="settings-action"
+              onClick=${()=>{ setSettingsOpen(false); copyCurrentPageLink(); }}
+              title="Copy a link to whatever you're looking at right now">
+              🔗 Copy link to this page
+            </button>
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">Home page layout</span>
               <div class="settings-home-hint">Arrange the home page directly on the page —
