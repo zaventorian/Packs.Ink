@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=346">
+<link rel="stylesheet" href="styles.css?v=347">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -3995,6 +3995,20 @@ const parseSearchQuery = (input) => {
     }
   }
 
+  // Dual-ink: "dual" / "duals" / "dualink" / "dual ink". Runs BEFORE the
+  // inkwell pass on purpose — otherwise "dual ink" would ALSO be read as
+  // inkable=true by the bare "ink" token below and silently drop every
+  // uninkable dual.
+  for(let i=0; i<tokens.length; i++){
+    if(used.has(i)) continue;
+    const t = tokens[i];
+    if(t === "dual" || t === "duals" || t === "dualink" || t === "dualinks"){
+      out.filters.dualInk = true; used.add(i);
+      if(["ink","inks","inked","color","colors","colour","colours"].includes(tokens[i+1] || "")) used.add(i+1);
+      break;
+    }
+  }
+
   // Inkwell: "ink" or "inkable" → inkable=true; "unink" or "uninkable" → inkable=false
   for(let i=0; i<tokens.length; i++){
     if(used.has(i)) continue;
@@ -4035,7 +4049,7 @@ const SUGGEST_KIND_LABEL = {
   ink: "color", rarity: "rarity", set: "set", classification: "characteristic",
   card_type: "type", keyword: "keyword", cost: "cost",
   inkable: "inkable", legality: "legality", illustrator: "artist", contains: "contains",
-  price: "price",
+  price: "price", dualInk: "ink",
 };
 // Split a multi-word query into dimension chips + leftover name text, the way a
 // person reads it: "rapunzel promo" is a name AND a rarity, not a phrase. Every
@@ -4050,13 +4064,16 @@ const SUGGEST_KIND_LABEL = {
 // "elsa spirit" keeps its working contains: behaviour. Bail entirely if the
 // parse produced a filter with no chip equivalent (strength/willpower/lore) —
 // better to leave the query alone than to silently drop half of it.
-const _SPLIT_TRIGGER_DIMS = ["ink", "rarity", "set", "legality", "inkable"];
+const _SPLIT_TRIGGER_DIMS = ["ink", "rarity", "set", "legality", "inkable", "dualInk"];
 const _SPLIT_CHIPPABLE = [
   ["ink","ink"], ["rarity","rarity"], ["set","set"], ["card_type","card_type"],
   ["classification","classification"], ["ability_keyword","keyword"],
   ["legality","legality"], ["inkable","inkable"], ["illustrator","illustrator"],
   ["cost","cost"],
 ];
+// Boolean dimensions carry no meaningful value of their own — the chip's value
+// is just its display word, so "elsa dual" splits into `ink: dual` + a name.
+const _SPLIT_CHIP_VALUE = {dualInk: "dual"};
 const _UNCHIPPABLE_FILTERS = ["strength","willpower","lore"];
 const smartSplitSuggestion = (raw) => {
   if(!raw || !raw.includes(" ")) return null;
@@ -4075,7 +4092,7 @@ const smartSplitSuggestion = (raw) => {
   if(!hasPrice && !_SPLIT_TRIGGER_DIMS.some(k => f[k] != null)) return null;
   const chips = [];
   for(const [fk, kind] of _SPLIT_CHIPPABLE){
-    if(f[fk] != null) chips.push({kind, value:f[fk]});
+    if(f[fk] != null) chips.push({kind, value: _SPLIT_CHIP_VALUE[fk] ?? f[fk]});
   }
   if(hasPrice) chips.push(priceSmartChip(f.priceMin, f.priceMax));
   if(!chips.length) return null;
@@ -4141,6 +4158,12 @@ const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   }
   if(last.length >= 2 && "japan".startsWith(last)){
     pushOnce({kind:"legality", value:"japan", label:"legality: japan core", replace:last});
+  }
+  // Dual-ink. Offered from 2 chars so "du" already surfaces it — it's a
+  // dimension with no other spelling, and nothing else in the vocabulary
+  // starts "dual".
+  if(last.length >= 2 && ("dual".startsWith(last) || "dualink".startsWith(last))){
+    pushOnce({kind:"dualInk", value:"dual", label:"ink: dual-ink cards", replace:last});
   }
   // Inkable shortcuts
   if(prefix("inkable") || prefix("ink"))   pushOnce({kind:"inkable", value:true,  label:"inkable: yes", replace:last});
@@ -4217,6 +4240,7 @@ const summarizeParsedQuery = (parsed) => {
   const _wilL  = _statLabel("willpower","Wil");  if(_wilL)  parts.push(_wilL);
   const _loreL = _statLabel("lore","Lore");      if(_loreL) parts.push(_loreL);
   if(parsed.filters.ability_keyword) parts.push("\""+parsed.filters.ability_keyword+"\"");
+  if(parsed.filters.dualInk)           parts.push("Dual ink");
   if(parsed.filters.inkable === true)  parts.push("Inkable");
   if(parsed.filters.inkable === false) parts.push("Uninkable");
   if(parsed.filters.legality === "core")     parts.push("Core Constructed");
@@ -4349,6 +4373,7 @@ const matchesCardFilter = (row, f, parsed) => {
   // values when both chip-state and parsed produce the same dimension.
   if(parsed){
     if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink)) return false;
+    if(parsed.filters.dualInk && cardInks.length < 2) return false;
     if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity) return false;
     if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
     if(parsed.filters.set){ const pp = cardParentSetForFilter(row); if(!(row.Set === parsed.filters.set || pp === parsed.filters.set)) return false; }
@@ -4551,6 +4576,7 @@ const matchesCardFilter = (row, f, parsed) => {
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
   if(f.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
+  if(f.dualInk && cardInks.length < 2) return false;
   // Chip-state price. Same semantics as the typed form: a max is satisfied by
   // the CHEAPEST printing, a min by the DEAREST — so "under $5" keeps a card
   // whose non-foil is $2 even though its foil is $40, and "over $20" keeps it
@@ -4634,6 +4660,11 @@ const browseSibling = (group, dir) => {
   return (j >= 0 && j < _browseList.length) ? _browseList[j] : null;
 };
 
+// Locations are the only landscape-layout card in Lorcana. Lorcast serves them
+// as a portrait image with the card rotated 90° clockwise inside it.
+const isLandscapeCard = (row) =>
+  !!row && String(row.card_type || "").split(" - ").includes("Location");
+
 const EnlargedCardOverlay = () => {
   const [group, setGroup] = useState(null);
   const imgRef = useRef(null);
@@ -4689,8 +4720,14 @@ const EnlargedCardOverlay = () => {
   // buildRow's fallback chain. Either way the overlay caps at viewport size.
   const src = group.img_large || group.img_normal || group.img_small;
   if(!src) return null;
+  // Locations are printed landscape but Lorcast stores them inside a portrait
+  // frame, rotated 90° clockwise — so at full size the title and rules text
+  // read bottom-to-top. Spin them back for the enlarged view, which is the
+  // one surface where people actually read the card. Thumbnails and banners
+  // stay portrait on purpose: a landscape chip in a 5:7 grid slot is worse.
+  const sideways = isLandscapeCard(group);
   return html`<div class="enlarged-card-overlay" onClick=${()=>setGroup(null)}>
-    <img ref=${imgRef} class="enlarged-card-img" src=${src} alt=${group["Product Name"] || ""}
+    <img ref=${imgRef} class=${"enlarged-card-img"+(sideways?" enlarged-card-img--sideways":"")} src=${src} alt=${group["Product Name"] || ""}
       onClick=${e=>e.stopPropagation()} draggable=${false}
       style=${{touchAction:"none", WebkitUserSelect:"none", userSelect:"none", WebkitTouchCallout:"none"}}/>
     <button class="enlarged-card-close" onClick=${()=>setGroup(null)} aria-label="Close enlarged card">×</button>
@@ -4859,7 +4896,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
   const splitBadge = group.isSplitPrinting
     ? (group.foil ? "PRIZE FOIL" : "PRIZE WALL")
     : null;
-  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")} onClick=${onClick}
+  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")+(checkboxEl?" card-tile--selectable":"")} onClick=${onClick}
     role="button" tabIndex="0"
     onKeyDown=${e=>{ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); } }}
     aria-label=${productName}>
@@ -4880,7 +4917,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
         title="Add one copy to your collection" aria-label="Add one copy to your collection">+</button>`}
       ${onMagnify && html`<button class="tile-magnify-btn" onClick=${onMagnify}
         title="Enlarge card art" aria-label="Enlarge card art">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
              stroke="currentColor" stroke-width="2.2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="10.5" cy="10.5" r="6.5"/>
@@ -6650,6 +6687,11 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
             <img src=${INK_ICONS[ink]} alt=${ink}/>
           </button>`)}
         </div>
+        <div class="cards-chipgroup" style=${{marginTop:6}}>
+          <button class=${"chip "+(filter.dualInk?"active":"")}
+            title="Only cards printed with two ink colors. Composes with the color chips above — Amber + Dual ink gives every Amber dual."
+            onClick=${()=>setFilter(f=>({...f, dualInk: !f.dualInk}))}>Dual ink</button>
+        </div>
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head">Cost</div>
@@ -6786,7 +6828,7 @@ const countActiveFilters = (f) =>
   + (f.inkable!==null?1:0)
   + (f.classifications?.size||0) + (f.keywords?.size||0) + (f.illustrators?.size||0)
   + (f.strengths?.size||0) + (f.willpowers?.size||0) + (f.lores?.size||0)
-  + (f.legality?1:0) + (f.onlyOwned?1:0)
+  + (f.legality?1:0) + (f.onlyOwned?1:0) + (f.dualInk?1:0)
   // A price bound counts once whether one or both ends are set; the basis is a
   // modifier on that bound, not a filter of its own, so it never counts alone.
   + ((f.priceMin!=null||f.priceMax!=null)?1:0) + (f.unpricedOnly?1:0);
@@ -6797,6 +6839,10 @@ const emptyFilter = () => ({
   classifications:new Set(), keywords:new Set(), illustrators:new Set(),
   strengths:new Set(), willpowers:new Set(), lores:new Set(),
   legality:null, onlyOwned:false,
+  // Dual-ink lens: true = only cards printed with two ink colors. Kept as its
+  // own flag rather than an `inks` value because a dual card ALSO matches its
+  // two individual ink chips — the two dimensions compose.
+  dualInk:false,
   // $ filters. priceMin/priceMax are inclusive bounds in dollars (null = open
   // end); priceBasis ∈ any|low|market picks which printing price is compared;
   // unpricedOnly inverts to "cards with no price data".
@@ -6819,7 +6865,7 @@ const emptyFilter = () => ({
 // can be shared/bookmarked. Advanced text-multi filters (classifications /
 // keywords / illustrators / stats) aren't URL-backed yet — they reset on reload.
 const CARD_URL_SETFIELDS = [["set","sets"],["ink","inks"],["rarity","rarities"],["cost","costs"],["type","cardTypes"]];
-const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","pmin","pmax","pbasis","unpriced"];
+const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","dual","pmin","pmax","pbasis","unpriced"];
 const cardFilterToParams = (f) => {
   const p = new URLSearchParams();
   if(f.search && f.search.trim()) p.set("q", f.search.trim());
@@ -6830,6 +6876,7 @@ const cardFilterToParams = (f) => {
   else if(f.inkable === false) p.set("inkable","0");
   if(f.legality) p.set("legal", f.legality);
   if(f.onlyOwned) p.set("owned","1");
+  if(f.dualInk) p.set("dual","1");
   if(f.priceMin != null) p.set("pmin", String(f.priceMin));
   if(f.priceMax != null) p.set("pmax", String(f.priceMax));
   if(f.priceBasis && f.priceBasis !== "any") p.set("pbasis", f.priceBasis);
@@ -6855,6 +6902,7 @@ const cardParamsToFilter = (search) => {
   if(inkable === "1") f.inkable = true; else if(inkable === "0") f.inkable = false;
   const legal = p.get("legal"); if(legal) f.legality = legal;
   if(p.get("owned") === "1") f.onlyOwned = true;
+  if(p.get("dual") === "1") f.dualInk = true;
   const _px = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
   f.priceMin = _px("pmin"); f.priceMax = _px("pmax");
   const pbasis = p.get("pbasis"); if(pbasis === "low" || pbasis === "market") f.priceBasis = pbasis;
@@ -7984,6 +8032,10 @@ const proxySheetGeometry = (paper) => {
 };
 
 const PROXY_PREFS_KEY = "packsink:proxyPrint:v1";
+// Sanity ceiling on a single card's print count. Nothing in Lorcana needs
+// more than 4 except Dalmatian Puppy / Microbots, and a typo of 400 in the
+// stepper would try to render 400 pages.
+const PROXY_MAX_PER_CARD = 99;
 const readProxyPrefs = () => {
   try { return JSON.parse(localStorage.getItem(PROXY_PREFS_KEY)) || {}; } catch { return {}; }
 };
@@ -7996,7 +8048,12 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
   const [watermark, setWatermark] = useState(["subtle","bold","none"].includes(saved.watermark) ? saved.watermark : "subtle");
   const [paper, setPaper]         = useState(PROXY_PAPERS[saved.paper] ? saved.paper : "letter");
   const [guides, setGuides]       = useState(saved.guides !== false);
-  const [scope, setScope]         = useState(saved.scope === "one" ? "one" : "all");
+  // Per-card print counts, keyed by card_id. Seeded from the deck's own
+  // quantities; a card at 0 is simply not printed. This replaced the old
+  // all-or-one-of-each toggle — a proxy run is usually "3 of this, 1 of that",
+  // which that toggle could not express at all.
+  const [qty, setQty]             = useState(null);
+  const [listOpen, setListOpen]   = useState(saved.listOpen !== false);
   const [busy, setBusy]           = useState(false);
   const [progress, setProgress]   = useState(null);
   const [result, setResult]       = useState(null);
@@ -8006,9 +8063,9 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, scope}));
+      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, listOpen}));
     } catch {}
-  }, [ink, lighten, watermark, paper, guides, scope]);
+  }, [ink, lighten, watermark, paper, guides, listOpen]);
 
   // Revoke the blob URL on unmount only — regeneration revokes its own
   // predecessor, so tying this to `result` would pull the URL out from under
@@ -8034,6 +8091,10 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         card_id: c.card_id,
         quantity: c.quantity,
         name: meta["Product Name"] || "",
+        // Set + number disambiguate the list: a Cards-tab selection routinely
+        // holds two printings of one Product Name, which would otherwise show
+        // as two identical rows.
+        sub: [meta.Set, meta.Number ? "#" + meta.Number : null, meta.Rarity].filter(Boolean).join(" · "),
         cost: meta.cost ?? 99,
         type: meta.card_type || "",
         img,
@@ -8045,34 +8106,66 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
       rank(a.type) - rank(b.type) || a.cost - b.cost || a.name.localeCompare(b.name));
   }, [deck.cards, cardById]);
 
-  const totalCards = scope === "one"
-    ? cards.length
-    : cards.reduce((s, c) => s + Math.max(0, c.quantity), 0);
+  // Re-seed whenever the card set itself changes (a different deck, or the
+  // deck edited underneath us) — but NOT on every render, or the steppers
+  // would snap back to the deck's counts as you press them.
+  const cardsKey = cards.map(c => c.card_id).join("|");
+  useEffect(() => {
+    const next = {};
+    for(const c of cards) next[c.card_id] = Math.max(0, Math.min(PROXY_MAX_PER_CARD, c.quantity));
+    setQty(next);
+    setResult(null);
+  }, [cardsKey]);
+
+  const qtyOf = (cid) => (qty && qty[cid] != null) ? qty[cid] : 0;
+  const clampQty = (n) => Math.max(0, Math.min(PROXY_MAX_PER_CARD, n|0));
+  const setQtyFor = (cid, n) => {
+    setQty(q => ({...(q||{}), [cid]: clampQty(n)}));
+    setResult(null);
+  };
+  // Relative bump reads the previous state rather than the render's snapshot,
+  // so two clicks landing inside one React commit still add up to two.
+  const bumpQty = (cid, delta) => {
+    setQty(q => ({...(q||{}), [cid]: clampQty(((q && q[cid]) || 0) + delta)}));
+    setResult(null);
+  };
+  const applyPreset = (kind) => {
+    const next = {};
+    for(const c of cards){
+      next[c.card_id] = kind === "deck" ? Math.max(0, Math.min(PROXY_MAX_PER_CARD, c.quantity))
+                      : kind === "one"  ? 1
+                      : 0;
+    }
+    setQty(next); setResult(null);
+  };
+
+  const printCards = cards.filter(c => qtyOf(c.card_id) > 0);
+  const totalCards = printCards.reduce((s, c) => s + qtyOf(c.card_id), 0);
   const pageCount = Math.ceil(totalCards / PROXY_PER_PAGE) || 0;
-  const missingArt = cards.filter(c => !c.img).length;
+  const missingArt = printCards.filter(c => !c.img).length;
 
   const generate = async () => {
-    if(busy || !cards.length) return;
+    if(busy || !printCards.length) return;
     cancelled.current = false;
     setBusy(true); setError(null);
-    setProgress({done: 0, total: cards.length});
+    setProgress({done: 0, total: printCards.length});
     try {
       const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark};
       const imgs = [];
       const indexOf = new Map();
-      for(let i = 0; i < cards.length; i++){
+      for(let i = 0; i < printCards.length; i++){
         if(cancelled.current) return;
-        indexOf.set(cards[i].card_id, imgs.length);
-        imgs.push(await renderProxyCardJpeg(cards[i], opts));
-        setProgress({done: i + 1, total: cards.length});
+        indexOf.set(printCards[i].card_id, imgs.length);
+        imgs.push(await renderProxyCardJpeg(printCards[i], opts));
+        setProgress({done: i + 1, total: printCards.length});
         // Yield so the progress bar actually paints between cards.
         await new Promise(r => setTimeout(r, 0));
       }
       if(cancelled.current) return;
 
       const seq = [];
-      for(const c of cards){
-        const n = scope === "one" ? 1 : Math.max(0, c.quantity);
+      for(const c of printCards){
+        const n = qtyOf(c.card_id);
         for(let k = 0; k < n; k++) seq.push(indexOf.get(c.card_id));
       }
       const geo = proxySheetGeometry(paper);
@@ -8124,7 +8217,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
       </div>
       <div class="modal-body proxy-body">
         <p class="proxy-lede">
-          Builds a PDF of this deck at true card size — ${PROXY_PER_PAGE} per page, ready to print and cut.
+          Builds a PDF at true card size — ${PROXY_PER_PAGE} per page, ready to print and cut.
           Every card is stamped <strong>PROXY</strong>. For playtesting only: proxies aren't
           legal in sanctioned play and must never be sold or passed off as real cards.
         </p>
@@ -8162,10 +8255,41 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         <div class="proxy-opt">
           <div class="proxy-opt-lbl">Cards</div>
           <div class="proxy-opt-row">
-            ${seg("all", scope, setScope, "Every copy", "All 4 copies of a 4-of, ready to sleeve")}
-            ${seg("one", scope, setScope, "One of each", "A single copy of each card")}
+            <button type="button" class="chip" onClick=${() => applyPreset("deck")}
+              title="Match the deck — all 4 copies of a 4-of">Deck counts</button>
+            <button type="button" class="chip" onClick=${() => applyPreset("one")}
+              title="A single copy of each card">One of each</button>
+            <button type="button" class="chip" onClick=${() => applyPreset("none")}
+              title="Clear every count, then pick the cards you want">None</button>
+            <button type="button" class="chip proxy-list-toggle" onClick=${() => setListOpen(v => !v)}>
+              ${listOpen ? "▾" : "▸"} ${printCards.length} of ${cards.length} cards
+            </button>
           </div>
         </div>
+        ${listOpen && cards.length > 0 && html`<div class="proxy-cardlist">
+          ${cards.map(c => {
+            const n = qtyOf(c.card_id);
+            return html`<div key=${c.card_id} class=${"proxy-cardrow"+(n>0?" on":"")}>
+              <button type="button" class=${"proxy-cardcheck"+(n>0?" on":"")}
+                aria-pressed=${n>0} aria-label=${(n>0?"Exclude ":"Include ")+c.name}
+                title=${n > 0 ? "Don't print this card" : "Print this card"}
+                onClick=${() => setQtyFor(c.card_id, n > 0 ? 0 : (c.quantity || 1))}>${n>0?"✓":""}</button>
+              <span class="proxy-cardname" title=${c.name + (c.sub ? " — " + c.sub : "")}>
+                ${c.name}${c.sub && html`<span class="proxy-cardsub"> ${c.sub}</span>`}
+              </span>
+              ${!c.img && html`<span class="proxy-cardwarn" title="No art available — prints as a name card">no art</span>`}
+              <div class="proxy-cardqty" onClick=${e => e.stopPropagation()}>
+                <button type="button" onClick=${() => bumpQty(c.card_id, -1)} disabled=${n <= 0}
+                  aria-label=${"One fewer "+c.name}>−</button>
+                <input type="number" min="0" max=${PROXY_MAX_PER_CARD} inputMode="numeric"
+                  value=${n} aria-label=${"Copies of "+c.name}
+                  onInput=${e => setQtyFor(c.card_id, parseInt(e.target.value, 10) || 0)}/>
+                <button type="button" onClick=${() => bumpQty(c.card_id, +1)}
+                  disabled=${n >= PROXY_MAX_PER_CARD} aria-label=${"One more "+c.name}>+</button>
+              </div>
+            </div>`;
+          })}
+        </div>`}
 
         <label class="proxy-check">
           <input type="checkbox" checked=${guides}
@@ -8174,9 +8298,11 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         </label>
 
         <div class="proxy-summary">
-          ${cards.length
-            ? html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${cards.length} unique`
-            : html`<span class="muted">This deck has no cards yet.</span>`}
+          ${!cards.length
+            ? html`<span class="muted">Nothing to print yet.</span>`
+            : totalCards === 0
+              ? html`<span class="muted">No cards selected — tick some above, or hit “One of each”.</span>`
+              : html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${printCards.length} unique`}
           ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no art available — they print as a name card.</div>`}
         </div>
 
@@ -8194,7 +8320,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
 
         <div class="proxy-actions">
           ${!result
-            ? html`<button class="active proxy-go" disabled=${busy || !cards.length} onClick=${generate}>
+            ? html`<button class="active proxy-go" disabled=${busy || !printCards.length} onClick=${generate}>
                 ${busy ? "Building PDF…" : "Build PDF"}
               </button>`
             : html`<${React.Fragment}>
@@ -9024,7 +9150,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       deckQtyAcrossName,
                       sortDefault="relevance",
                       onQuickAdd,
-                      selectable, isAuthed, onSignIn,
+                      selectable, isAuthed, onSignIn, onBulkPrintProxy,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
                       coconutCard, onPickCoconut, inkBudget,
@@ -9171,6 +9297,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       else if(chip.kind === "classification") classifications.push(chip.value);
       else if(chip.kind === "keyword")   keywords.push(chip.value);
       else if(chip.kind === "inkable")   p.filters.inkable = chip.value;
+      else if(chip.kind === "dualInk")   p.filters.dualInk = true;
       else if(chip.kind === "cost")      p.filters.cost = chip.value;
       else if(chip.kind === "legality")  p.filters.legality = chip.value;
       else if(chip.kind === "illustrator") p.filters.illustrator = chip.value;
@@ -9357,6 +9484,42 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       return next;
     });
   }, [grouped]);
+
+  // The bulk bar starts in flow under the toolbar, then docks to the bottom of
+  // the viewport once its home position scrolls up past the sticky top-nav —
+  // with a long grid the actions were otherwise a full page-scroll away. The
+  // slot keeps the bar's height while docked so the grid doesn't jump, and the
+  // measurement reads the SLOT (whose position never changes) so docking can't
+  // feed back into its own trigger.
+  const bulkSlotRef = useRef(null);
+  const bulkBarRef = useRef(null);
+  const [bulkDocked, setBulkDocked] = useState(false);
+  const [bulkH, setBulkH] = useState(0);
+  const hasSelection = allowSelect && selected.size > 0;
+  useEffect(() => {
+    if(!hasSelection){ setBulkDocked(false); return; }
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const slot = bulkSlotRef.current;
+      if(!slot) return;
+      const bar = bulkBarRef.current;
+      if(bar){ const h = bar.offsetHeight; if(h) setBulkH(h); }
+      // Same coordinate the sticky offsets use: 96px clears the two-row mobile
+      // nav, 8px the desktop one.
+      const navH = window.innerWidth <= 640 ? 96 : 8;
+      setBulkDocked(slot.getBoundingClientRect().top < navH);
+    };
+    const onScroll = () => { if(!raf) raf = requestAnimationFrame(measure); };
+    measure();
+    window.addEventListener("scroll", onScroll, {passive:true});
+    window.addEventListener("resize", onScroll);
+    return () => {
+      if(raf) cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [hasSelection]);
 
   // Action dropdown state — what's open, and the cached deck list for the
   // "Add to existing deck" submenu.
@@ -9586,7 +9749,9 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       <span class="parsed-hint-lbl">Filtering:</span>
       ${parsedSummary.map(p => html`<span class="parsed-hint-pill" key=${p}>${p}</span>`)}
     </div>`}
-    ${allowSelect && selected.size > 0 && html`<div class="cards-bulk-bar">
+    ${hasSelection && html`<div class="cards-bulk-slot" ref=${bulkSlotRef}
+      style=${bulkDocked && bulkH ? {height: bulkH + "px"} : null}>
+    <div ref=${bulkBarRef} class=${"cards-bulk-bar"+(bulkDocked?" cards-bulk-bar--docked":"")}>
       <span class="cards-bulk-count">${selected.size} selected</span>
       <button class="cards-bulk-link" onClick=${selectAllVisible}
         title="Add every card matching the current filters to the selection">
@@ -9631,6 +9796,18 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
               <div class="cards-bulk-menu-sub">Create a deck pre-seeded with the selection</div>
             </div>
           </button>
+          ${/* No auth gate — proxies are rendered and written entirely in the
+                browser, so there's nothing to sign in for. */""}
+          ${onBulkPrintProxy && html`<button class="cards-bulk-menu-item" onClick=${()=>{
+            onBulkPrintProxy(Array.from(selected));
+            setActionMenu(null);
+          }}>
+            <span class="cards-bulk-menu-icon">🖨</span>
+            <div>
+              <div class="cards-bulk-menu-title">Print proxies…</div>
+              <div class="cards-bulk-menu-sub">Print-and-cut PDF — pick how many of each</div>
+            </div>
+          </button>`}
         </div>`}
         ${actionMenu === "deckPicker" && html`<div class="cards-bulk-menu cards-bulk-menu-picker">
           <div class="cards-bulk-menu-head">
@@ -9657,6 +9834,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                 </div>`}
         </div>`}
       </div>
+    </div>
     </div>`}
     <div class=${(viewMode==="list"?"cards-list":"cards-grid")+(isFiltering?" cards-pending":"")}>
       ${grouped.slice(0, visibleCount).map((g,i) => html`<${CardTile}
@@ -9908,6 +10086,29 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   }, [user, rowByCardId, showToast]);
 
   // Lazy-fetch the user's decks for the "Add to existing deck" picker.
+  // Proxy printing from a browse selection. The modal takes a deck-shaped
+  // payload, so a selection is just an ad-hoc one-of-each "deck" — the modal's
+  // own per-card steppers do the rest.
+  const [proxySelection, setProxySelection] = useState(null);
+  const proxyCardById = useMemo(() => {
+    if(!proxySelection) return null;
+    const want = new Set(proxySelection);
+    const m = {};
+    for(const r of raw){
+      if(!r.card_id || !want.has(r.card_id)) continue;
+      (m[r.card_id] = m[r.card_id] || []).push(r);
+    }
+    return m;
+  }, [proxySelection, raw]);
+  const proxyDeck = useMemo(() => proxySelection ? {
+    name: "Selected cards",
+    cards: proxySelection.filter(id => proxyCardById && proxyCardById[id]).map(id => ({card_id:id, quantity:1})),
+  } : null, [proxySelection, proxyCardById]);
+  const onBulkPrintProxy = useCallback((ids) => {
+    if(!ids || !ids.length) return;
+    setProxySelection(ids);
+  }, []);
+
   const fetchUserDecks = useCallback(async () => {
     if(!user) return [];
     const {data, error} = await sbClient.from("decks")
@@ -9928,6 +10129,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       onBulkAddCollection=${onBulkAddCollection}
       onBulkNewDeck=${onBulkNewDeck}
       onBulkAddToDeck=${onBulkAddToDeck}
+      onBulkPrintProxy=${onBulkPrintProxy}
       fetchUserDecks=${fetchUserDecks}
       pendingSearch=${pendingSearch}
       onConsumedPendingSearch=${() => setPendingSearch(null)}
@@ -9936,6 +10138,9 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       onClose=${()=>setSelectedGroup(null)}
       onNavigate=${(g)=>setSelectedGroup(g)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${proxyDeck && proxyCardById && html`<${ProxyPrintModal}
+      deck=${proxyDeck} cardById=${proxyCardById}
+      onClose=${()=>setProxySelection(null)}/>`}
     ${toast && html`<div class="cards-toast">${toast}</div>`}
   </div>`;
 };
@@ -18276,6 +18481,91 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
   </div>`;
 };
 
+// ── Owned graded movers (shared) ─────────────────────────────────
+// Two surfaces render "your top graded movers": the banner at the top of the
+// Graded collection, and the optional home-page panel. They read the same
+// graded_sales_rollup and must never disagree about what counts as a mover, so
+// the whole computation lives here rather than in either component.
+const GRADED_OWNED_WINDOWS = [["1d","1D","pct_1d"],["1w","1W","pct_7d"],["1m","1M","pct_30d"]];
+// 1M is the default everywhere: graded sales are sparse enough that a 1D or 1W
+// window over one person's slabs is usually empty or a single noisy print.
+const GRADED_OWNED_DEFAULT_WINDOW = "1m";
+const gradedOwnedPctKey = (win) =>
+  (GRADED_OWNED_WINDOWS.find(w => w[0] === win) || GRADED_OWNED_WINDOWS[2])[2];
+
+// Δ% map for the tile pills + both movers banners, from the per-sale rollup
+// (last_sold + windowed pct, migration 75). Keyed by
+// (pid, printing, grader, grade) under every plausible printing because the
+// owned slot's stored printing and the rollup's may disagree.
+const gradedOwnedDeltaIndex = (rollup, cardById) => {
+  if(!rollup) return null;
+  const m = new Map();
+  const PR = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+  // Same two-pass shape as priceByKey, and for the same reason: writing every
+  // rollup row under every printing key makes the LAST row win, which on a
+  // Challenge Promo (one card_id, two very different markets) prices a Prize
+  // Wall slab at the Top Prize's number — Cinderella - Stouthearted PSA 10
+  // read $3,265 (Foil) on a ~$460 Non-Foil copy.
+  const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+  const deltaOf = (r, meta) => ({tcgplayer_product_id: meta.tcgplayer_product_id,
+    grader: (r.grader||"").toLowerCase(), grade: r.grade,
+    low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
+    pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
+  // Pass 1: non-split ("") and split-but-unclassified ("Unknown") rows under
+  // every key — a foil-only chase card's slot is stamped "Normal" by the
+  // migration-50 backfill, so a strict match would drop it entirely.
+  for(const r of (rollup||[])){
+    if(r.printing && r.printing !== "Unknown") continue;
+    const meta = cardById.get(r.card_id);
+    if(!meta || !meta.tcgplayer_product_id) continue;
+    const d = deltaOf(r, meta);
+    for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
+  }
+  // Pass 2: rows that name a printing override just their own slot keys.
+  for(const r of (rollup||[])){
+    if(!r.printing || r.printing === "Unknown") continue;
+    const meta = cardById.get(r.card_id);
+    if(!meta || !meta.tcgplayer_product_id) continue;
+    const d = deltaOf(r, meta);
+    for(const pr of (SYN[r.printing] || [r.printing])) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
+  }
+  return m;
+};
+
+// Top movers within the user's OWNED graded slots, sorted by |Δ%| in the
+// chosen window. Flat slots (pct null / 0 / beyond the sanity cap) drop out so
+// they can't crowd genuine movers.
+const buildGradedOwnedMovers = (items, deltaIndex, cardById, pctKey, limit = 20) => {
+  if(!deltaIndex || !items || !items.length) return [];
+  const rows = [];
+  for(const it of items){
+    if((it.quantity||0) <= 0) continue;
+    const meta = cardById.get(it.card_id);
+    if(!meta || !meta.tcgplayer_product_id) continue;
+    // Graded movers are a chase-rarity surface — base-rarity graded sales are
+    // too sparse/noisy to read as movement (matches the market-wide banner).
+    if(!GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
+    const printing = it.printing || "Normal";
+    const key = `${meta.tcgplayer_product_id}|${printing}|${(it.grader||"").toLowerCase()}|${it.grade}`;
+    const d = deltaIndex.get(key);
+    if(!d) continue;
+    const pct = sanePct(d[pctKey]);
+    if(pct == null || pct === 0) continue;
+    rows.push({
+      card_id: it.card_id, tcgplayer_product_id: meta.tcgplayer_product_id,
+      printing, grader: it.grader, grade: it.grade,
+      name: meta["Product Name"], rarity: meta.Rarity,
+      img_normal: meta.img_normal, img_small: meta.img_small,
+      price: d.low_today, pct,
+      // 3-window Δ% for the tile's bottom grid. The window picker re-sorts by
+      // `pct` (the selected window) but the grid always shows all 3.
+      pct_1d: d.pct_1d, pct_7d: d.pct_7d, pct_30d: d.pct_30d,
+    });
+  }
+  rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
+  return rows.slice(0, limit);
+};
+
 const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded, onOwnershipChanged, collection, updateQty}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   useEffect(() => { signalGradedSurface(); }, []);
@@ -18390,10 +18680,20 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [gradedBannerWindow, setGradedBannerWindow] = useState(()=>{
     try {
       const v = localStorage.getItem("packsink:graded:bannerWindow");
-      return (v === "1d" || v === "1w" || v === "1m") ? v : "1w";
-    } catch { return "1w"; }
+      return GRADED_OWNED_WINDOWS.some(w => w[0] === v) ? v : GRADED_OWNED_DEFAULT_WINDOW;
+    } catch { return GRADED_OWNED_DEFAULT_WINDOW; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:graded:bannerWindow", gradedBannerWindow); } catch {} }, [gradedBannerWindow]);
+  // Mirror of the home layout's `gradedOwned` panel, so the banner can offer a
+  // one-tap "put this on my home page" right where the user is looking at it
+  // instead of only in the layout editor. App owns the real state; the event
+  // keeps the two in sync in both directions.
+  const [onHome, setOnHome] = useState(isHomePanelEnabled("gradedOwned"));
+  useEffect(() => {
+    const sync = () => setOnHome(isHomePanelEnabled("gradedOwned"));
+    window.addEventListener("packsink:home-layout-changed", sync);
+    return () => window.removeEventListener("packsink:home-layout-changed", sync);
+  }, []);
   // "Remove from tracking" — per-tile opt-out from set-goal placeholder
   // checklists. Replaces the older "Hide" feature (2026-05-26 revamp).
   //
@@ -18579,78 +18879,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // rollup (last_sold + windowed pct, migration 75). Keyed by
   // (pid, printing, grader, grade) under every plausible printing because the
   // owned slot's stored printing and the rollup's may disagree.
-  const tileDeltasByKey = useMemo(() => {
-    if(!rollup) return null;
-    const m = new Map();
-    const PR = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
-    // Same two-pass shape as priceByKey below, and for the same reason: writing
-    // every rollup row under every printing key makes the LAST row win, which
-    // on a Challenge Promo (one card_id, two very different markets) prices a
-    // Prize Wall slab at the Top Prize's number — Cinderella - Stouthearted
-    // PSA 10 read $3,265 (Foil) on a ~$460 Non-Foil copy.
-    const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
-    const deltaOf = (r, meta) => ({tcgplayer_product_id: meta.tcgplayer_product_id,
-      grader: (r.grader||"").toLowerCase(), grade: r.grade,
-      low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
-      pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
-    // Pass 1: non-split ("") and split-but-unclassified ("Unknown") rows under
-    // every key — a foil-only chase card's slot is stamped "Normal" by the
-    // migration-50 backfill, so a strict match would drop it entirely.
-    for(const r of (rollup||[])){
-      if(r.printing && r.printing !== "Unknown") continue;
-      const meta = cardById.get(r.card_id);
-      if(!meta || !meta.tcgplayer_product_id) continue;
-      const d = deltaOf(r, meta);
-      for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
-    }
-    // Pass 2: rows that name a printing override just their own slot keys.
-    for(const r of (rollup||[])){
-      if(!r.printing || r.printing === "Unknown") continue;
-      const meta = cardById.get(r.card_id);
-      if(!meta || !meta.tcgplayer_product_id) continue;
-      const d = deltaOf(r, meta);
-      for(const pr of (SYN[r.printing] || [r.printing])) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
-    }
-    return m;
-  }, [rollup, cardById]);
-  // Map "1d" | "1w" | "1m" → the pct_* key on the delta row. Tile slots
-  // always show all three windows so they don't need a window→key lookup
-  // — only the banner's sort-by-window picker uses bannerPctKey now.
-  const bannerPctKey = gradedBannerWindow === "1d" ? "pct_1d" : gradedBannerWindow === "1m" ? "pct_30d" : "pct_7d";
-  // Top movers within the user's OWNED graded slots, sorted by |Δ%| in the
-  // banner's selected window. Driven off the same tileDeltasByKey that the
-  // tile Δ% pills use — same fetch, two consumers. Floor at the smallest
-  // |Δ%| change > 0 so flat slots don't crowd genuine movers.
-  const gradedBannerMovers = useMemo(() => {
-    if(!tileDeltasByKey || !items || !items.length) return [];
-    const rows = [];
-    for(const it of items){
-      if((it.quantity||0) <= 0) continue;
-      const meta = cardById.get(it.card_id);
-      if(!meta || !meta.tcgplayer_product_id) continue;
-      // Graded movers are a chase-rarity surface — base-rarity graded sales are
-      // too sparse/noisy to read as movement (matches the home banner).
-      if(!GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
-      const printing = it.printing || "Normal";
-      const key = `${meta.tcgplayer_product_id}|${printing}|${(it.grader||"").toLowerCase()}|${it.grade}`;
-      const d = tileDeltasByKey.get(key);
-      if(!d) continue;
-      const pct = sanePct(d[bannerPctKey]);
-      if(pct == null || pct === 0) continue;
-      rows.push({
-        card_id: it.card_id, tcgplayer_product_id: meta.tcgplayer_product_id,
-        printing, grader: it.grader, grade: it.grade,
-        name: meta["Product Name"], rarity: meta.Rarity,
-        img_normal: meta.img_normal, img_small: meta.img_small,
-        price: d.low_today, pct,
-        // 3-window Δ% for the tile's bottom grid. Banner picker re-sorts
-        // by `pct` (the selected window) but the grid always shows all 3.
-        pct_1d: d.pct_1d, pct_7d: d.pct_7d, pct_30d: d.pct_30d,
-      });
-    }
-    rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
-    return rows.slice(0, 20);
-  }, [tileDeltasByKey, items, bannerPctKey, cardById]);
+  const tileDeltasByKey = useMemo(() => gradedOwnedDeltaIndex(rollup, cardById), [rollup, cardById]);
+  const bannerPctKey = gradedOwnedPctKey(gradedBannerWindow);
+  const gradedBannerMovers = useMemo(
+    () => buildGradedOwnedMovers(items, tileDeltasByKey, cardById, bannerPctKey),
+    [tileDeltasByKey, items, bannerPctKey, cardById]);
   // Index latest prices by (pid, printing, grader, grade). Printing was
   // added in migration 49 so split-printing rows no longer collapse.
   // Legacy callers that don't know printing can look up under "Normal".
@@ -19255,10 +19488,19 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       ${!gradedMoversCollapsed && html`<div class="graded-movers-banner-body">
         <div class="graded-movers-banner-controls">
           <div class="seg-toggle gc-caps-seg" title="Δ% window for the banner">
-            <button class=${gradedBannerWindow==="1d"?"active":""} onClick=${()=>setGradedBannerWindow("1d")}>1D</button>
-            <button class=${gradedBannerWindow==="1w"?"active":""} onClick=${()=>setGradedBannerWindow("1w")}>1W</button>
-            <button class=${gradedBannerWindow==="1m"?"active":""} onClick=${()=>setGradedBannerWindow("1m")}>1M</button>
+            ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
+              class=${gradedBannerWindow===k?"active":""}
+              onClick=${()=>setGradedBannerWindow(k)}>${lbl}</button>`)}
           </div>
+          ${!readOnly && html`<button
+            class=${"chip gc-caps-btn graded-movers-home-toggle"+(onHome?" active":"")}
+            aria-pressed=${onHome}
+            title=${onHome
+              ? "Remove this banner from your home page. (Also editable under Home page layout.)"
+              : "Pin this banner to your home page, alongside the other movers feeds."}
+            onClick=${()=>setHomePanelEnabled("gradedOwned", !onHome)}>
+            ${onHome ? "★ On home" : "☆ Show on home"}
+          </button>`}
           ${onJumpToScreenerGraded && html`<button class="chip gc-caps-btn graded-movers-screener-jump"
             onClick=${onJumpToScreenerGraded}
             title="Open the Screener filtered to your graded cards, sorted by 1W Δ%">View in Screener →</button>`}
@@ -24774,7 +25016,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       filterStrengths: Array.from(filterStrengths),
       filterWillpowers: Array.from(filterWillpowers),
       filterLores: Array.from(filterLores),
-      filterInkable, filterLegality,
+      filterInkable, filterLegality, filterDualInk,
       filterKeywords: Array.from(filterKeywords),
       filterClassifications: Array.from(filterClassifications),
       filterIllustrators: Array.from(filterIllustrators),
@@ -24819,6 +25061,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterWillpowers(new Set(v.filterWillpowers || []));
     setFilterLores(new Set(v.filterLores || []));
     setFilterInkable(v.filterInkable == null ? null : v.filterInkable);
+    setFilterDualInk(!!v.filterDualInk);
     setFilterLegality(v.filterLegality || "");
     setFilterKeywords(new Set(v.filterKeywords || []));
     setFilterClassifications(new Set(v.filterClassifications || []));
@@ -24919,6 +25162,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [filterWillpowers, setFilterWillpowers] = useState(() => new Set());
   const [filterLores, setFilterLores] = useState(() => new Set());
   const [filterInkable, setFilterInkable] = useState(null); // null | true | false
+  const [filterDualInk, setFilterDualInk] = useState(false);
   const [filterLegality, setFilterLegality] = useState(""); // "" | "core" | "infinity"
   const [filterKeywords, setFilterKeywords] = useState(() => new Set());
   const [filterClassifications, setFilterClassifications] = useState(() => new Set());
@@ -25315,6 +25559,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       willpowers: filterWillpowers,
       lores: filterLores,
       inkable: filterInkable,
+      dualInk: filterDualInk,
       legality: filterLegality || undefined,
       keywords: filterKeywords,
       classifications: filterClassifications,
@@ -25511,7 +25756,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -25681,6 +25926,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fromSet("lore",  "Lore",       filterLores,      setFilterLores);
     if(filterInkable !== null)
       push("inkable", filterInkable ? "Inkable" : "Uninkable", () => setFilterInkable(null));
+    if(filterDualInk) push("dualink", "Dual ink", () => setFilterDualInk(false));
     if(filterLegality)
       push("legality", filterLegality === "core" ? "Core" : filterLegality === "japan" ? "Japan Core" : "Infinity",
         () => setFilterLegality(""));
@@ -25689,7 +25935,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fromSet("art", "Artist",         filterIllustrators,    setFilterIllustrators);
     return out;
   }, [showSealed, priceMode, minPrice, maxPrice, pctWin, minPct, maxPct, filterInks, filterCosts,
-      filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable,
+      filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk,
       filterLegality, filterKeywords, filterClassifications, filterIllustrators]);
 
   const clearHiddenFilters = useCallback(() => {
@@ -26341,6 +26587,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             onClick=${()=>setFilterInkable(v=>v===true?null:true)}>Inkable</button>
           <button class=${"chip "+(filterInkable===false?"active":"")}
             onClick=${()=>setFilterInkable(v=>v===false?null:false)}>Uninkable</button>
+          <button class=${"chip "+(filterDualInk?"active":"")}
+            title="Only cards printed with two ink colors."
+            onClick=${()=>setFilterDualInk(v=>!v)}>Dual ink</button>
         </div>
         <label style=${{marginLeft:16}}>Legality</label>
         <div class="cards-chipgroup" style=${{gap:4}}>
@@ -28346,6 +28595,9 @@ const HOME_PANELS = [
   {key:"setChamps",   label:"Upcoming events",      col:"right"},
   {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
+  // Off by default: it is empty for anyone with no graded slabs, and the
+  // people who do want it turn it on from the banner in the Graded collection.
+  {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
@@ -28377,7 +28629,7 @@ const normalizeBannerOrder = (val) => {
   return clean;
 };
 const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
-const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
+const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:!p.off}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
 // layout: unknown keys dropped, missing keys appended at their default column,
 // bad column names reset. Never throws — a corrupt value falls back to default.
@@ -28393,8 +28645,26 @@ const normalizeHomeLayout = (val) => {
       out.push({key:k, col: cols.has(it.col) ? it.col : byKey.get(k).col, on: it.on !== false});
     }
   }
-  for(const p of HOME_PANELS) if(!seen.has(p.key)) out.push({key:p.key, col:p.col, on:true});
+  // A panel marked `off` starts hidden when it is APPENDED to an existing
+  // layout too, not just in a fresh one — otherwise shipping an opt-in panel
+  // would silently switch it on for every returning browser.
+  for(const p of HOME_PANELS) if(!seen.has(p.key)) out.push({key:p.key, col:p.col, on:!p.off});
   return out;
+};
+
+// Read/write one home panel's visibility from outside HomeView. App owns the
+// state; these are the bridge so a surface elsewhere in the app (the Graded
+// collection's movers banner) can offer "show this on my home page" inline
+// instead of sending people to the layout editor.
+const isHomePanelEnabled = (key) => {
+  try {
+    const p = normalizeHomeLayout(JSON.parse(localStorage.getItem(HOME_LAYOUT_KEY) || "null"))
+      .find(x => x.key === key);
+    return !!(p && p.on !== false);
+  } catch { return false; }
+};
+const setHomePanelEnabled = (key, on) => {
+  window.dispatchEvent(new CustomEvent("packsink:set-home-panel", {detail:{key, on: !!on}}));
 };
 
 // Right-side panel on Home: current collection value, line chart over a
@@ -30721,6 +30991,137 @@ const HomeToolboxPanel = ({onOpenTool}) => {
   </aside>`;
 };
 
+// Home-page twin of the Graded collection's "Graded Movers" banner: the user's
+// OWN slabs, ranked by Δ% in one window. Opt-in (HOME_PANELS marks it `off`)
+// and switchable straight from the banner in the Graded collection, because
+// that is where someone is when they decide they want to watch these daily.
+//
+// It fetches its own graded items + rollup rather than reading CollectionPanel's
+// — the two panels are independently placeable and either can be switched off.
+const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
+  const gradedPremium = useContext(GradedPremiumContext);
+  const [items, setItems] = useState(null);
+  const [rollup, setRollup] = useState(null);
+  const [win, setWin] = useState(() => {
+    // Shares the Graded collection banner's window preference on purpose: one
+    // person, one idea of "the window I care about".
+    try {
+      const v = localStorage.getItem("packsink:graded:bannerWindow");
+      return GRADED_OWNED_WINDOWS.some(w => w[0] === v) ? v : GRADED_OWNED_DEFAULT_WINDOW;
+    } catch { return GRADED_OWNED_DEFAULT_WINDOW; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:graded:bannerWindow", win); } catch {} }, [win]);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("packsink:home:gradedOwnedCollapsed") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:gradedOwnedCollapsed", collapsed ? "1" : "0"); } catch {}
+  }, [collapsed]);
+
+  useEffect(() => {
+    if(!user){ setItems([]); return; }
+    let cancelled = false;
+    sbClient.from("graded_collection_items")
+      .select("card_id,printing,grader,grade,quantity")
+      .eq("user_id", user.id)
+      .then(r => { if(!cancelled) setItems(r.data || []); })
+      .catch(() => { if(!cancelled) setItems([]); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const cardById = useMemo(() => {
+    const m = new Map();
+    for(const r of (raw||[])) if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, r);
+    return m;
+  }, [raw]);
+
+  // Scoped to the card_ids the user actually owns — the full rollup is a
+  // paginated table read and this panel can be on for every home visit.
+  const ownedIdsKey = useMemo(() =>
+    Array.from(new Set((items||[]).map(i => i.card_id).filter(Boolean))).sort().join(","), [items]);
+  useEffect(() => {
+    if(!gradedPremium || !ownedIdsKey){ setRollup(null); return; }
+    let cancelled = false;
+    const ids = ownedIdsKey.split(",");
+    const BATCH = 50, batches = [];
+    for(let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
+    Promise.all(batches.map(b => sbFetchAll("graded_sales_rollup", {
+      select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d",
+      card_id: "in.(" + b.join(",") + ")",
+      order: "card_id.asc",
+    }))).then(rs => { if(!cancelled) setRollup(rs.flat()); })
+      .catch(() => { if(!cancelled) setRollup([]); });
+    return () => { cancelled = true; };
+  }, [ownedIdsKey, gradedPremium]);
+
+  const deltaIndex = useMemo(() => gradedOwnedDeltaIndex(rollup, cardById), [rollup, cardById]);
+  const movers = useMemo(
+    () => buildGradedOwnedMovers(items, deltaIndex, cardById, gradedOwnedPctKey(win)),
+    [items, deltaIndex, cardById, win]);
+
+  // Nothing to say to someone with no slabs — render nothing rather than an
+  // empty box, the same way the graded home banner hides for non-premium.
+  if(!gradedPremium || !user) return null;
+  if(items != null && items.length === 0) return null;
+
+  return html`<aside class=${"home-feed home-feed--gowned"+(collapsed?" is-collapsed":"")}>
+    <div class="panel-header">
+      ${onTitleClick
+        ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
+            title="Open your graded collection"
+            style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Graded Movers</button>`
+        : html`<h2 class="panel-title">Your Graded Movers</h2>`}
+      <button class="home-feed-collapse-btn" onClick=${()=>setCollapsed(c=>!c)}
+        title=${collapsed ? "Expand" : "Collapse"}
+        aria-label=${collapsed ? "Expand Your Graded Movers" : "Collapse Your Graded Movers"}>
+        ${collapsed ? "▸" : "▾"}
+      </button>
+    </div>
+    ${!collapsed && html`<div class="gowned-body">
+      <div class="gowned-controls">
+        <div class="seg-toggle gc-caps-seg" title="Δ% window">
+          ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
+            class=${win===k?"active":""} onClick=${()=>setWin(k)}>${lbl}</button>`)}
+        </div>
+        <span class="muted gowned-sub">Your slabs by Δ%</span>
+      </div>
+      ${(items == null || deltaIndex == null)
+        ? html`<div class="muted" style=${{padding:"14px 4px",fontSize:12}}>Loading graded sales…</div>`
+        : movers.length === 0
+          ? html`<div class="muted" style=${{padding:"14px 4px",fontSize:12}}>
+              No ${win.toUpperCase()} movement in your graded slabs. Try a longer window.</div>`
+          : html`<${AutoScrollStrip} items=${movers}
+              keyFor=${(c)=>`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
+              renderItem=${(c, key) => {
+                const img = c.img_normal || c.img_small;
+                return html`<button key=${key} class="gmover-tile"
+                  onClick=${()=>{
+                    const matching = (raw||[]).filter(r => r.card_id === c.card_id);
+                    const groups = matching.length ? groupCards(matching) : [];
+                    if(groups[0] && onCard) onCard(groups[0]);
+                  }}
+                  title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+                  ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
+                  <div class="gmover-name">${c.name}</div>
+                  <div class="gmover-meta">
+                    <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
+                    <span class="gmover-price">$${Math.round(c.price)}</span>
+                  </div>
+                  <div class="gmover-deltas">
+                    <span class="gmover-dh">1D</span>
+                    <span class="gmover-dh">1W</span>
+                    <span class="gmover-dh">1M</span>
+                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_1d))}}>${fmtPct(sanePct(c.pct_1d))}</span>
+                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
+                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
+                  </div>
+                </button>`;
+              }}/>`}
+    </div>`}
+  </aside>`;
+};
+
 const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
@@ -31251,6 +31652,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`;
+      case "gradedOwned": return html`<${GradedOwnedMoversHomePanel} key="gradedOwned"
+        raw=${raw} user=${user} onCard=${openCard} onTitleClick=${goCollection}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
         collection=${collection} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
         sealedPrices=${sealedPrices} collectionLoading=${collectionLoading} setsMeta=${setsMeta}
@@ -31787,17 +32190,45 @@ const getFormat = (key) => DECK_FORMATS.find(f => f.key === key) || DECK_FORMATS
 // only PARTIALLY released — only the specific cards listed below are legal
 // from those two sets (e.g. Grandmother Willow, in Winterspell but not on
 // the list, is NOT Japan-legal). Promos are excluded entirely.
-//   When set 13 (Attack of the Vine!) reaches Japan, the rest of 10/11 will
-//   have released too — at that point move Whispers/Winterspell into
-//   JAPAN_CORE_FULL_SETS (or clear the partial gating) and add set 13.
+//   Japan SKIPPED standalone releases of sets 10 and 11. Their cards instead
+//   trickle out through the "Curator's Library" — a 7th card slot added to
+//   Japanese booster packs from set 12 onward — so the partial gating is
+//   permanent for those two, not a temporary catch-up. Refresh
+//   JAPAN_CORE_PARTIAL_NUMBERS after each new Japanese set adds a wave.
+//   Set 12 (Wilds Unknown) and set 13 (Attack of the Vine! / ヴァインズ・
+//   アタック!, JP 2026-07-17) released simultaneously with English.
 const JAPAN_CORE_FULL_SETS = new Set([
   "The First Chapter", "Rise of the Floodborn", "Into the Inklands", "Ursula's Return",
   "Shimmering Skies", "Azurite Sea", "Archazia's Island", "Reign of Jafar", "Fabled",
-  "Wilds Unknown",
+  "Wilds Unknown", "Attack of the Vine!",
 ]);
 const JAPAN_CORE_PARTIAL_SETS = new Set(["Whispers in the Well", "Winterspell"]);
 // Match by Product Name ("Name - Version"), punctuation/case-insensitive.
 const _jpNorm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+// Collector numbers released so far through the Curator's Library slot, per
+// set. Sourced 2026-08-24 from a Japanese singles retailer's two Curator's
+// Library categories (the only per-card listing that exists — Ravensburger
+// publishes no Japan-legal card list), cross-checked against the hand-built
+// name list below: it covered 94 of those 100 and added 62 more.
+//   Numbers, not names, because that's what the Japanese listings actually
+// print ("150/204 JA-10") and because a name is ambiguous across sets — "Let
+// It Go" is a Winterspell card AND a Challenge promo. The `f` suffix on a few
+// Winterspell rows (113f = the foil printing of 113) is stripped before the
+// lookup: the foil of a released card is the same released card.
+const JAPAN_CORE_PARTIAL_NUMBERS = {
+  "Whispers in the Well": new Set([
+    5,21,24,26,27,29,32,34,45,57,62,66,68,70,75,78,83,87,89,97,98,102,105,106,111,
+    115,118,133,137,141,146,150,154,155,156,157,160,162,165,166,169,172,176,178,179,
+    181,185,187,196,199,200,202,205,207,214,217,220,223,239,
+  ]),
+  "Winterspell": new Set([
+    1,2,3,4,6,7,8,9,10,11,12,13,16,17,18,19,20,22,25,26,27,28,29,31,32,33,38,39,40,
+    43,45,46,47,50,51,52,55,59,60,61,64,65,66,68,71,72,79,80,84,85,86,87,89,90,92,97,
+    102,106,107,111,113,114,115,116,118,119,121,123,124,125,127,131,136,139,141,145,
+    147,149,150,153,158,166,168,169,172,174,176,177,179,181,184,185,188,189,190,192,
+    193,194,195,196,197,199,202,204,206,216,223,227,228,230,233,236,239,241,
+  ]),
+};
 const JAPAN_CORE_PARTIAL_NAMES = new Set([
   // Winterspell (set 11) — released-in-Japan cards
   "Beast - Snowfield Troublemaker", "White Rabbit - Late Again", "Timon - Snowball Swiper",
@@ -31842,8 +32273,14 @@ const isJapanCoreLegal = (row) => {
   if(!row) return false;
   const set = row.Set;
   if(JAPAN_CORE_FULL_SETS.has(set)) return true;
-  if(JAPAN_CORE_PARTIAL_SETS.has(set)) return JAPAN_CORE_PARTIAL_NAMES.has(_jpNorm(row["Product Name"]));
-  return false;
+  if(!JAPAN_CORE_PARTIAL_SETS.has(set)) return false;
+  // Numbers are the primary key; the older name list stays as a union so the
+  // six cards the retailer happened to be out of stock on don't silently
+  // become illegal. Either source saying "released" is enough.
+  const n = parseInt(String(row.Number ?? "").replace(/\D/g, ""), 10);
+  const nums = JAPAN_CORE_PARTIAL_NUMBERS[set];
+  if(nums && Number.isFinite(n) && nums.has(n)) return true;
+  return JAPAN_CORE_PARTIAL_NAMES.has(_jpNorm(row["Product Name"]));
 };
 
 // Lowest current Low/Market price for a card across its printings. Used to
@@ -38056,16 +38493,33 @@ function App(){
         }
         return list;
       }
+      // The pre-layout visibility map. `|| "{}"` means this branch runs even
+      // for a browser that has never stored one, so it must only override the
+      // default `on` for keys the legacy map actually mentions — otherwise it
+      // silently switches on every opt-in panel for every fresh visitor.
       const legacy = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}");
       if(legacy && typeof legacy === "object"){
-        return defaultHomeLayout().map(p => ({...p, on: legacy[p.key] !== false}));
+        return defaultHomeLayout().map(p => ({...p,
+          on: Object.prototype.hasOwnProperty.call(legacy, p.key) ? legacy[p.key] !== false : p.on}));
       }
     } catch {}
     return defaultHomeLayout();
   });
   useEffect(() => {
     try { localStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify(homeLayout)); } catch {}
+    // Persist FIRST, then announce — isHomePanelEnabled reads localStorage.
+    window.dispatchEvent(new Event("packsink:home-layout-changed"));
   }, [homeLayout]);
+  useEffect(() => {
+    const onSet = (e) => {
+      const key = e.detail && e.detail.key;
+      if(!key) return;
+      const on = !!(e.detail && e.detail.on);
+      setHomeLayout(l => normalizeHomeLayout(l).map(p => p.key === key ? {...p, on} : p));
+    };
+    window.addEventListener("packsink:set-home-panel", onSet);
+    return () => window.removeEventListener("packsink:set-home-panel", onSet);
+  }, []);
   const toggleHomePanel = (key) =>
     setHomeLayout(l => l.map(p => p.key === key ? {...p, on: !p.on} : p));
   const setHomePanelCol = (key, col) =>
@@ -39341,8 +39795,19 @@ function App(){
                 <span class="profile-btn-name">${profile?.display_name || "you"}</span>
               </button>`
             : html`<button class="signin-btn" onClick=${()=>setSettingsOpen(o=>!o)}
-                title="Sign in" aria-expanded=${settingsOpen}>Sign in</button>`}
+                title="Sign in & settings" aria-expanded=${settingsOpen}>
+                <span>Sign in</span>
+                <span class="signin-btn-gear" aria-hidden="true">${GEAR_BADGE_ICON}</span>
+              </button>`}
           ${settingsOpen && html`<div class="settings-popover">
+            ${/* Signed out, the popover's whole reason to exist is auth — so the
+                  Google button leads. It is ALSO still rendered at the bottom
+                  next to Sign out, which is where returning users look. */""}
+            ${!user && html`<${React.Fragment}>
+              <button class="settings-action primary settings-signin-top"
+                onClick=${()=>{ setSettingsOpen(false); signIn(); }}>Sign in with Google</button>
+              <div class="settings-divider"></div>
+            </>`}
             ${user && html`<div class="avatar-row">
               ${avatarSrc
                 ? html`<img src=${avatarSrc} alt=""
@@ -39353,7 +39818,9 @@ function App(){
                 ${user.email && html`<div class="avatar-row-email">${user.email}</div>`}
               </div>
             </div>`}
-            <div class="settings-section-title">${user ? "Profile" : "Settings"}</div>
+            ${/* Signed out there is nothing under it — the profile controls are
+                  the section. "Preferences" below is the first real heading. */""}
+            ${user && html`<div class="settings-section-title">Profile</div>`}
             ${user && html`<div class="settings-row-stack">
               <${DisplayNameEditor} profile=${profile} onSave=${saveDisplayName}/>
               <button class="settings-action" onClick=${()=>{ setAvatarPickerOpen(true); setSettingsOpen(false); }}>
@@ -39438,12 +39905,11 @@ function App(){
               </button>
             </div>
             <${OfflineImagesPanel} raw=${raw} collection=${collection} user=${user}/>
-            <div class="settings-divider"></div>
-            ${user
-              ? html`<button class="settings-action danger"
-                  onClick=${()=>{ setSettingsOpen(false); signOut(); }}>Sign out</button>`
-              : html`<button class="settings-action primary"
-                  onClick=${()=>{ setSettingsOpen(false); signIn(); }}>Sign in with Google</button>`}
+            ${user && html`<${React.Fragment}>
+              <div class="settings-divider"></div>
+              <button class="settings-action danger"
+                onClick=${()=>{ setSettingsOpen(false); signOut(); }}>Sign out</button>
+            </>`}
           </div>`}
         </div>
         <div class="top-nav-right-row top-nav-right-row--bubbles">

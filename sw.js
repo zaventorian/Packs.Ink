@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v346';
+const CACHE_VERSION = 'packsink-v347';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -17,7 +17,7 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=346',
+  '/styles.css?v=347',
   '/logo.js?v=253',
   // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
   // admin-gated to ~2 users — they runtime-cache on first use instead of
