@@ -10722,13 +10722,22 @@ function scanRRF(lists, weights, k){
 // (stage → review → save, the post-incident invariant; nothing else can touch a
 // collection).
 //
-// STAYS TRUE for the public beta (2026-08-04), deliberately. This name is now
-// misleading — it reads like a testing switch, but review-before-save is exactly
-// the right UX for a scanner that still misreads cards, and it's the only flow
-// with field miles on it. Flipping it to false brings back the Stack-scan /
-// Single auto-add workflow, which should not happen until ✓-row precision is
-// HONESTLY measured against the ≥95% bar (photo-verify a random sample of
-// UNREVIEWED shown-✓ rows — the labelled rows can't tell you, see round 11).
+// PERMANENT as of 2026-08-23 — Zaven's call: "I don't want auto-add to
+// collection; let the user confirm the list after running a session." Review-
+// before-save is the shipping UX, not a testing switch, so the ≥95% precision
+// bar is no longer a gate on anything. Flipping this to false would restore the
+// Stack-scan / Single auto-add workflow; don't, without a new product decision.
+//
+// For the record, the bar WAS measured that day (the honest way — photo-verify
+// a random sample of UNREVIEWED shown-✓ rows, since labelled rows can't tell
+// you; see round 11): 170 v16 samples judged against official art in two
+// disjoint rounds, 167 correct = 98.2%, one-sided 95% lower bound 95.7% — it
+// clears. Retired pre-v16 builds sat at 83.3% (25/30), and the difference is
+// real (Fisher exact p=0.009), so v16's matcher work is what moved it.
+// The 3 v16 misses were all name/art collisions between distinct cards
+// (Minnie Curious Adventurer vs Drum Major; Genie - Hard to Grasp read as
+// Gene - Niceland Resident; a red-panda song read as another song), which is
+// exactly the class the review screen exists to catch.
 const SCANNER_QA_ONLY = true;
 // Visible build stamp — shown in the scanner title + stamped into every QA
 // upload so a test session is provably on the intended build (two field

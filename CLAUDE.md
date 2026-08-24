@@ -81,7 +81,8 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 
 - **`canScan = true`** in App — everyone gets the 📷 button. It was `isGradedAdmin || isScannerTester`; the client-side `is_scanner_tester()` probe is GONE (it fired on every sign-in to answer a question no longer asked).
 - **`scanner_testers` + `is_scanner_tester()` are NOT dead code.** Migration 98's `scan_samples` RLS still uses them server-side to decide who may read OTHER people's samples. Don't drop them as orphans.
-- **`SCANNER_QA_ONLY` stays `true`.** The name reads like a testing switch but review-before-save is the shipping UX. Flipping it to the auto-add flow needs ✓-row precision honestly measured against the ≥95% bar first — and per round 11 you **cannot** get that from labelled rows (testers only touch rows they must fix, so the corrected-rate over reviewed ✓ rows is meaningless). Photo-verify a random sample of *unreviewed* shown-✓ rows.
+- **`SCANNER_QA_ONLY` stays `true` — PERMANENTLY, as of 2026-08-23.** Zaven's call: *"I don't want auto-add to collection; let the user confirm the list after running a session."* Review-before-save is the shipping UX, so the ≥95% precision bar gates nothing any more; flipping this to false restores the Stack-scan / Single auto-add flow and needs a new product decision, not a metric.
+  - **The bar was measured anyway that day, the honest way** (photo-verify a random sample of UNREVIEWED shown-✓ rows — labelled rows cannot tell you, per round 11): 170 v16 samples judged against official art in two disjoint seeded rounds → **167 correct = 98.2%, one-sided 95% lower bound 95.7%. It clears.** Retired pre-v16 builds: 83.3% (25/30); the gap is real (Fisher exact p=0.009), so v16's matcher work is what moved it. All 3 v16 misses were name/art collisions between distinct cards (Minnie *Curious Adventurer* vs *Drum Major*; *Genie - Hard to Grasp* read as *Gene - Niceland Resident*; one red-panda song read as another) — exactly the class review catches. Method, if it ever needs re-running: pull `scan_samples` where `reviewed=false AND corrected=false AND debug->>conf='high'`, seeded-sample per build, compose side-by-side sheets of the stored scan crop vs the claimed card's `image_normal`, judge each pair, then Wilson-interval the result.
 
 ### Consent + the upload opt-out (migration 114)
 
@@ -1509,7 +1510,7 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 **Top of the list:**
 
 - ~~Domain transfer Netlify → Cloudflare~~ — **DONE 2026-08-04**, packs.ink is served by the Cloudflare Worker. See "Deploying" above. Remaining Phase 4: add a Cloudflare **www → apex redirect rule BEFORE decommissioning Netlify** (Netlify's load balancer is what serves www's 301 today, so killing it first breaks www). Never enable free Bot Fight Mode — it has no skip rules and breaks native card art.
-- **Card scanner** — SHIPPED as a public beta 2026-08-04 (see "Card scanner" above). Remaining: measure ✓-row precision against the 95% bar on real public traffic, then decide on `SCANNER_QA_ONLY`; on-device detection tuning; foil/glare reads.
+- **Card scanner** — SHIPPED as a public beta 2026-08-04 (see "Card scanner" above). ✓-row precision measured 2026-08-23: **v16 = 98.2% (167/170), 95% lower bound 95.7%** — clears the bar, and `SCANNER_QA_ONLY` is now permanently true by product decision (review-before-save), so that measurement gates nothing. Remaining: on-device detection tuning; foil/glare reads; the 3 known misses are all name/art collisions between distinct cards.
 
 **Nice to have:**
 
