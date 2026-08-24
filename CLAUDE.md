@@ -113,6 +113,34 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 
 Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
+## Icons — there are no emoji in the UI (2026-08-24)
+
+**`uiIcon(key, size)`** (Index.html, right below `NAV_ICONS`) is the one accessor for every
+pictograph on the site. Paths live in `UI_ICON_PATHS`, drawn in the same Tabler/Lucide line
+vocabulary as the nav: 24x24 box, `fill=none`, `stroke=currentColor`, round caps. Default size 14
+(inline with button text); 16-20 for a standalone bubble.
+
+The sweep that removed the last 218 emoji is not cosmetic bikeshedding — emoji failed three ways
+at once: **every platform draws them differently** (the same button was a flat glyph on desktop
+and a glossy colour sticker on Android, which is how Zaven noticed), they **carry their own
+palette** so they never matched the accent or the theme, and their **metrics are unrelated to the
+text beside them**, which is why icon+label buttons never sat straight.
+
+- **Add a glyph by adding a path to `UI_ICON_PATHS`.** Don't inline a one-off `<svg>` at a call
+  site and don't reach for an emoji "just this once" — the point is that the set is closed.
+- **`svg[focusable="false"]{vertical-align:-0.18em;flex:0 0 auto}`** (styles.css, above `.chip`) is
+  the single global rule that makes inline glyphs sit on the cap height and never shrink in a
+  tight button. Every icon in the set carries `focusable="false"`; nothing else does. It is inert
+  inside flex/grid parents, so `NAV_ICONS` and the deck-action rows are unaffected.
+- **Typographic marks stay**: `✓ ✕ ★ ☆ ✦ ≡ ⚑ → ↴`. Those read as type, not as pictures.
+  `⚠` survives in exactly one place, the Coconut legality badge text, where it is a character in
+  a string rather than a rendered control.
+- **Two documents can't reach `uiIcon`** and hold literal SVG instead: the Artist Alley poster
+  (`window.open`) and the `/swiss` + `/ticker` standalone pages. In the poster the icon is a
+  sibling of a `<span>` label, and the mid-render `textContent` swaps target the span — setting
+  `btn.textContent` would wipe the glyph.
+- **Comments and CLAUDE.md still use emoji freely.** They are documentation, not UI.
+
 ## Top-level nav
 
 **Two-row icon nav** (restructured 2026-05-25). Row 1 = "my stuff", Row 2 = "market intel". Home tab removed — the logo IS the home click target.
@@ -139,6 +167,12 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
 - **Help is a bubble in the right cluster's bubble row** (as of 2026-05-26), NOT a peer chip in tabs row 2. The previous "Help chip inside the tabs row" layout collided with the sign-in pill / profile chip on phones — the chip sat at the right edge of the scrolling tabs row and overlapped the anchored right cluster. Moving Help to `.top-nav-right-row--bubbles` puts it in the same flex container as install + theme, where it can't bump into the sign-in pill above it. Implemented as `<button class="theme-toggle theme-toggle--help">` (inherits bubble shape; `.active` paints accent when view=faq).
 - **Gear badge on the avatar** (`.profile-gear-badge`, added 2026-08-04): a 13px gear pinned to the top-right of the profile button's avatar, so the button reads as "account **and** settings" rather than just "me" — theme, home layout, offline images and sign-out all live behind it and people weren't finding them. Purely decorative; `.profile-btn > *{pointer-events:none}` already makes the button the sole click target. Lights accent on hover and while `aria-expanded="true"`.
 - Every container in the right cluster has `background: var(--bg)` explicitly so the sticky header paints opaquely over scrolled content.
+- **The profile button is EXACTLY 36x36 on mobile**, like every bubble beside and below it. It
+  used to size to its content — 42px wide, a 20px avatar swimming in 11px of padding — which made
+  right-cluster row 1 wider than row 2, so the link bubble sat 6px left of the help bubble under
+  it and the rows read as misaligned (reported 2026-08-24). Fixed width is what makes the columns
+  line up; the avatar fills 28px and the gear badge tucks inside the button instead of hanging
+  5px past its right edge.
 - **Mobile tap-target floor: 36px** on every top-nav control (`.signin-btn`, `.profile-btn`, `.theme-toggle`, `.theme-toggle--help`). Apple HIG recommends 44pt; 36px is the compromise that keeps the two-row nav from growing too tall. Was 26–28px before 2026-05-25 and the profile pill was nearly impossible to hit on iPhone — don't shrink back below 36px.
 
 ### iOS safe-area-inset (do NOT regress)
@@ -927,6 +961,42 @@ const navHandler = (fn) => (e) => {
 The nested-interactive HTML (button inside `<a>`) is technically invalid but every browser in practice tolerates it, AND the user gets every link affordance: modifier-click opens new tab via browser default, right-click shows "Open in new tab", middle-click works, hover shows the destination URL in the status bar, devtools can copy the link.
 
 **Common bug**: when converting `<button>` → `<a>`, also flip the matching `</button>` → `</a>`. The first pass missed the closing tag on `.tournament-card` and the page broke until the close tag was flipped.
+
+## Home panels: the title IS the permalink (`?panel=`, 2026-08-24)
+
+You could not link anyone to one box on the home page — "the tournament box" was "scroll down".
+Now every configurable panel except `setChamps` has a title that is an
+**`<a href="/?panel=<key>">` + `navHandler`**, so:
+
+- plain click **pops the panel out** over the dimmed page, where the Copy-link button lives;
+- ctrl/⌘-click and middle-click open the deep link in a new tab;
+- right-click offers **Copy link address** without opening anything.
+
+That last point is the whole reason **no box carries a link icon** — Zaven's constraint. Don't add
+one.
+
+- **`homePanelTitle({cls, label, panelKey, onPopOut})`** (next to `HOME_PANELS`) builds it; each
+  panel renders `${homePanelTitle(...) || <its old title>}`, so a panel with no `onPopOut` (the
+  `--rl` copy of NewsFeed, any future non-home mount) still renders exactly as before.
+- **The panel is MOVED into the modal, not copied.** `columnNodes` skips `openPanel`; a second
+  mount would re-run its fetches and fork the collapsible ones' open/closed state.
+- **Whatever the title used to do is relocated to the modal footer** as `panelCta[key]` —
+  Following still reaches Decks·Following, Toolbox still reaches Analytics. Nothing was removed,
+  it moved one click deeper and got a bigger tap target.
+- **`.home-title-link`'s reset sits ABOVE the per-title colour rules** in styles.css on purpose:
+  it is an `<a>` now, so it needs `text-decoration:none` + `color:inherit`, but
+  `.home-feed-title--chase` must keep its gold. Declared late, `color:inherit` wins and the gold
+  titles go grey.
+- **`panel` is registered in BOTH `dirtyParams` and `VIEW_OWNED.home`** — the standing rule for
+  every deep-link param. Unregistered, the link appears to work and then silently resets.
+- **pushState, not replace** (unlike the sub-tab params below): a modal is a place you can leave,
+  so Back closes it. `closePanel` only calls `history.back()` when the entry is one it pushed —
+  on a cold `/?panel=` load, back would leave the site, so it cleans the URL instead.
+- **`setChamps` is deliberately excluded**, and `HOME_POPOUT_KEYS` (not `HOME_PANEL_LABELS`) is
+  what `shareUrlLabel` checks. Upcoming events already expands on its own title click and already
+  carries richer deep links (`?sczip` / `scc` / `scdist` / `scdate` / `scmode`) that a bare
+  `?panel=` would flatten. Labelling it would promise a link that opens nothing.
+- Guarded by `node scripts/test_share_links.mjs`, which now walks every panel key.
 
 ## Shareable sub-tab URLs — `?s=` / `?f=` / `?m=` / `?c=`
 

@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=347">
+<link rel="stylesheet" href="styles.css?v=348">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -236,7 +236,7 @@
   };
 </script>
 <script src="/vendor/supabase.js?v=254"></script>
-<script src="logo.js?v=253"></script>
+<script src="logo.js?v=348"></script>
 <!-- Scanner is a PUBLIC beta now, so defer matters MORE than it did when this
      was admin-gated: every visitor pays for these, and almost none of them open
      the scanner on any given visit. Both scripts only attach globals used when
@@ -1098,6 +1098,11 @@ const shareUrlLabel = () => {
     if(q.get("collection")) return "this collection";
     if(q.get("user"))       return "this creator";
     if(q.get("card"))       return "this card";
+    // A popped-out home section, after the leaf pages: those own the label
+    // when both are in the URL, the same way an open deck beats a section.
+    const panel = q.get("panel");
+    if(panel && HOME_POPOUT_KEYS.has(panel) && HOME_PANEL_LABELS[panel])
+      return HOME_PANEL_LABELS[panel];
     if(q.get("t") || q.get("trade")) return "this trade";
     if(q.get("set"))        return q.get("set");
     const view = PATH_TO_VIEW[path];
@@ -1703,6 +1708,67 @@ const NAV_ICONS = {
   scan: _navSvg(html`
     <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/>
     <circle cx="12" cy="13" r="3.2"/>`),
+};
+
+// -- The site's glyph set ---------------------------------------------------
+// Every pictograph in the UI is drawn here, in the same Tabler/Lucide-style
+// line vocabulary as NAV_ICONS: 24x24 box, no fill, currentColor stroke, round
+// caps. Emoji used to do this job and they were the wrong tool three times
+// over: every platform draws them differently (the same button was a flat
+// glyph on desktop and a glossy colour sticker on Android), they carry their
+// own palette so they never match the accent or the theme, and their metrics
+// are unrelated to the text beside them, which is why icon+label buttons never
+// sat straight. A path inherits colour, scales with the type, and looks the
+// same on every device.
+//
+// uiIcon(key, size) is the one accessor. Size defaults to 14 (inline with
+// button text); pass 16-20 for a standalone bubble. Declared here, above every
+// consumer, because module-scope consts are read at render time from surfaces
+// tens of thousands of lines further down.
+const _icoSvg = (path, sw) => (size) => html`<svg viewBox="0 0 24 24"
+  width=${size || 14} height=${size || 14} fill="none" stroke="currentColor"
+  stroke-width=${sw || 1.9} stroke-linecap="round" stroke-linejoin="round"
+  aria-hidden="true" focusable="false">${path}</svg>`;
+
+const UI_ICON_PATHS = {
+  link:      _icoSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
+  copy:      _icoSvg(html`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`),
+  clipboard: _icoSvg(html`<path d="M9 4h6v3H9z"/><path d="M9 5.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15"/><path d="M8.5 12h7"/><path d="M8.5 16h4.5"/>`),
+  save:      _icoSvg(html`<path d="M12 3.5v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17"/>`),
+  inbox:     _icoSvg(html`<path d="M3.5 13.5h4l1.5 3h6l1.5-3h4"/><path d="M5.6 5.2h12.8l2.1 8.3v4.5a1.5 1.5 0 0 1-1.5 1.5H5a1.5 1.5 0 0 1-1.5-1.5v-4.5z"/>`),
+  print:     _icoSvg(html`<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M7 16h10v4H7z"/>`),
+  image:     _icoSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l4.5-4.5L13 17"/><path d="M13.5 14.5L16 12l4 4.5"/>`),
+  eye:       _icoSvg(html`<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>`),
+  edit:      _icoSvg(html`<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/>`),
+  trash:     _icoSvg(html`<path d="M4 7h16"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l1 13h9l1-13"/><path d="M10.5 11v6"/><path d="M13.5 11v6"/>`),
+  gear:      _icoSvg(html`<path d="M4 7.5h9"/><path d="M18.5 7.5h1.5"/><circle cx="15.6" cy="7.5" r="2.4"/><path d="M4 16.5h1.5"/><path d="M11 16.5h9"/><circle cx="8.4" cy="16.5" r="2.4"/>`),
+  warn:      _icoSvg(html`<path d="M10.3 4.3L2.8 17.2A2 2 0 0 0 4.5 20.2h15A2 2 0 0 0 21.2 17.2L13.7 4.3a2 2 0 0 0-3.4 0z"/><path d="M12 9.5v4"/><path d="M12 17h.01"/>`),
+  lock:      _icoSvg(html`<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>`),
+  trophy:    _icoSvg(html`<path d="M8 3.5h8V9a4 4 0 0 1-8 0z"/><path d="M8 5H5.2a.7.7 0 0 0-.7.7c0 2.4 1.6 4.3 3.9 4.6"/><path d="M16 5h2.8a.7.7 0 0 1 .7.7c0 2.4-1.6 4.3-3.9 4.6"/><path d="M12 13v3.4"/><path d="M8.6 20.5h6.8"/><path d="M10 16.9h4l.7 3.6H9.3z"/>`),
+  compass:   _icoSvg(html`<circle cx="12" cy="12" r="8.6"/><path d="M15.4 8.6l-2 4.8-4.8 2 2-4.8z"/>`),
+  camera:    _icoSvg(html`<path d="M4.5 7.5h3l1.5-2.4h6l1.5 2.4h3A1.5 1.5 0 0 1 21 9v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 18V9a1.5 1.5 0 0 1 1.5-1.5z"/><circle cx="12" cy="13" r="3.6"/>`),
+  torch:     _icoSvg(html`<path d="M9 2.8h6v3.4l1.5 2v12.5a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1V8.2L9 6.2z"/><path d="M7.5 9.4h9"/><path d="M12 12.4v3"/>`),
+  install:   _icoSvg(html`<rect x="6" y="2.5" width="12" height="19" rx="2.5"/><path d="M12 7v7"/><path d="M9 11l3 3 3-3"/><path d="M10.5 18.5h3"/>`),
+  chat:      _icoSvg(html`<path d="M20.5 12.6a7.6 7.6 0 0 1-8.2 7.6 8.6 8.6 0 0 1-2.8-.6L4 21l1.4-4.2a7.6 7.6 0 0 1-.9-3.6 7.6 7.6 0 0 1 7.6-7.6h.5a7.6 7.6 0 0 1 7.9 7.1z"/>`),
+  cart:      _icoSvg(html`<circle cx="9.5" cy="19.5" r="1.4"/><circle cx="17" cy="19.5" r="1.4"/><path d="M2.5 3.5h2.6l2.3 11.1a1.5 1.5 0 0 0 1.5 1.2h8.2a1.5 1.5 0 0 0 1.5-1.2l1.4-7.1H6"/>`),
+  chart:     _icoSvg(html`<path d="M3.5 20.5h17"/><path d="M6.5 20.5V12"/><path d="M11.5 20.5V5.5"/><path d="M16.5 20.5v-6"/>`),
+  pin:       _icoSvg(html`<path d="M14.5 2.8l6.7 6.7-2.4 1a3 3 0 0 0-1.6 1.5l-1.7 3.7-7.2-7.2 3.7-1.7a3 3 0 0 0 1.5-1.6z"/><path d="M8.3 15.7L3 21"/>`),
+  news:      _icoSvg(html`<path d="M4 9.5h3.5L14 5v14L7.5 14.5H4a1.5 1.5 0 0 1-1.5-1.5v-2A1.5 1.5 0 0 1 4 9.5z"/><path d="M17.5 9.2a4 4 0 0 1 0 5.6"/><path d="M20 6.5a7.7 7.7 0 0 1 0 11"/>`),
+  offline:   _icoSvg(html`<path d="M3 4l18 16"/><path d="M12 18.5h.01"/><path d="M8.2 14.8a5.4 5.4 0 0 1 6-1"/><path d="M4.9 11.4A10.2 10.2 0 0 1 9 9.1"/><path d="M14.6 9.4a10.2 10.2 0 0 1 4.5 2"/>`),
+  coconut:   _icoSvg(html`<circle cx="12" cy="12" r="8.3"/><path d="M9.3 9.6h.01"/><path d="M14.7 9.6h.01"/><path d="M12 13.4h.01"/><path d="M4.6 14.6c3.4 1.9 11.4 1.9 14.8 0"/>`),
+  sparkle:   _icoSvg(html`<path d="M12 3l1.7 4.9L18.6 9.6l-4.9 1.7L12 16.2l-1.7-4.9L5.4 9.6l4.9-1.7z"/><path d="M18.5 16.5l.7 2 2 .7-2 .7-.7 2-.7-2-2-.7 2-.7z"/>`),
+  shuffle:   _icoSvg(html`<path d="M3.5 6.5h3.2a4 4 0 0 1 3.3 1.8l3.5 5.4a4 4 0 0 0 3.3 1.8h3.7"/><path d="M17 3.5l3.5 3-3.5 3"/><path d="M3.5 17.5h3.2a4 4 0 0 0 3.3-1.8l.6-1"/><path d="M14.4 9.3l.4-.6a4 4 0 0 1 3.3-1.8h2.4"/><path d="M17 14.5l3.5 3-3.5 3"/>`),
+  people:    _icoSvg(html`<path d="M15.5 20v-1.6a4 4 0 0 0-4-4h-4a4 4 0 0 0-4 4V20"/><circle cx="9.5" cy="7.5" r="3.4"/><path d="M17 11.2a3.4 3.4 0 0 0 0-6.6"/><path d="M20.8 20v-1.6a4 4 0 0 0-3-3.8"/>`),
+  wave:      _icoSvg(html`<path d="M8 11.2V7.9a1.5 1.5 0 0 1 3 0v3"/><path d="M11 10.4V5.4a1.5 1.5 0 0 1 3 0v5"/><path d="M14 10.6V6.1a1.5 1.5 0 0 1 3 0v5"/><path d="M17 11.6V8.6a1.5 1.5 0 0 1 3 0v5.9a6.5 6.5 0 0 1-6.5 6.5h-1a5.5 5.5 0 0 1-4.4-2.2l-3.4-4.5a1.6 1.6 0 0 1 2.4-2.1L9.5 15"/>`),
+  party:     _icoSvg(html`<path d="M3.2 20.8l4.4-12 8.4 8.4z"/><path d="M13.5 4.5c1.3-1.3 3-1.2 3.9 0"/><path d="M19 8c1.3-1.3 1.4-3 .1-4.3"/><path d="M14.8 10.2l1.4-1.4"/><path d="M19.6 13.4h.01"/><path d="M11.4 4.1h.01"/>`),
+  check:     _icoSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
+  sun:       _icoSvg(html`<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4"/><path d="M12 19.1v2.4"/><path d="M4.2 4.2l1.7 1.7"/><path d="M18.1 18.1l1.7 1.7"/><path d="M2.5 12h2.4"/><path d="M19.1 12h2.4"/><path d="M4.2 19.8l1.7-1.7"/><path d="M18.1 5.9l1.7-1.7"/>`),
+  moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
+};
+
+const uiIcon = (key, size) => {
+  const f = UI_ICON_PATHS[key];
+  return f ? f(size) : null;
 };
 
 const CostHex = ({n, label}) => {
@@ -4911,7 +4977,7 @@ const ImageSaverOverlay = () => {
       <button class="image-saver-close" onClick=${close} aria-label="Close">×</button>
       <div class="image-saver-hint">Press and hold the image to save or copy it</div>
       <img class="image-saver-img" src=${data.url} alt="Card image to save"/>
-      <a class="image-saver-dl" href=${data.url} download=${data.name}>⬇ Download</a>
+      <a class="image-saver-dl" href=${data.url} download=${data.name}>${uiIcon("save")} Download</a>
     </div>
   </div>`;
 };
@@ -5729,7 +5795,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
           ${onReport && html`<button class="gs-report-btn" type="button"
             onClick=${()=>onReport(sel)} title="Report this sale as mislabeled or not a valid graded single">⚑ Report</button>`}
           ${canEditGraded && onEditGraded && html`<button class="gs-admin-btn" type="button"
-            onClick=${()=>onEditGraded(sel)} title="Admin: edit or delete this sale">✎ Edit</button>`}
+            onClick=${()=>onEditGraded(sel)} title="Admin: edit or delete this sale">${uiIcon("edit")} Edit</button>`}
         </div>
       </div>
       <button class="gs-sale-detail-close" type="button" onClick=${()=>setSel(null)} aria-label="Close detail">×</button>
@@ -5754,7 +5820,7 @@ const GradedSalesTab = ({sales, loading, focusKey:focusKeyProp, onFocusChange, h
             <td class="muted">${priv?"private":s.listing_type==="auction"?"auction":s.listing_type==="fixed_price"?"fixed":"—"}</td>
             <td>${safeHttpUrl(s.listing_url)
               ? html`<a href=${safeHttpUrl(s.listing_url)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()} title="View on eBay">↗</a>`
-              : priv ? html`<span class="gs-private-tag" title="Private / manually entered sale">✎</span>` : ""}</td>
+              : priv ? html`<span class="gs-private-tag" title="Private / manually entered sale">${uiIcon("edit", 12)}</span>` : ""}</td>
           </tr>`; })}
         </tbody>
       </table>
@@ -6500,7 +6566,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
               ()=>flashToast("Card link copied"),
               ()=>flashToast("Couldn't copy the link"));
           } catch { flashToast("Couldn't copy the link"); }
-        }}>🔗</button>`}
+        }}>${uiIcon("link", 15)}</button>`}
       <div class="card-detail-top">
         <div class="card-detail-image"
           onClick=${(e)=>{
@@ -7690,7 +7756,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:32,lineHeight:1,letterSpacing:"-0.3px"}}>${deckDisplayTitle(deck, tournamentContext)}</div>
           ${tournamentContext
             ? html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:600,fontSize:14,lineHeight:1.2,marginTop:6,color:subColor,letterSpacing:"0.2px"}}>
-                🏆 ${tournamentContext.tournament_name}${tournamentContext.place ? ` · ${tournamentContext.place}` : ""}${tournamentContext.num_players ? ` · ${tournamentContext.num_players} players` : ""}
+                ${uiIcon("trophy")} ${tournamentContext.tournament_name}${tournamentContext.place ? ` · ${tournamentContext.place}` : ""}${tournamentContext.num_players ? ` · ${tournamentContext.num_players} players` : ""}
               </div>
               ${tournamentContext.player_name && html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:500,fontSize:14,lineHeight:1.2,marginTop:3,color:subColor,letterSpacing:"0.2px"}}>by ${tournamentContext.player_name}</div>`}`
             : (creatorName && html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:500,
@@ -7743,7 +7809,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         border:`1px solid ${isLightBg?"rgba(146,64,14,0.3)":"rgba(245,158,11,0.4)"}`}}>
         <div style=${{fontSize:10,fontWeight:800,letterSpacing:0.6,textTransform:"uppercase",
           color:isLightBg?"#92400e":"#f59e0b",marginBottom:3}}>
-          ⚠ Not tournament legal${posterCoconut ? " — " + COCONUT_SET_NAME : ""}
+          ${uiIcon("warn")} Not tournament legal${posterCoconut ? " — " + COCONUT_SET_NAME : ""}
         </div>
         <div style=${{fontSize:11,lineHeight:1.5,color:textColor}}>
           ${posterIssues.join(" · ")}
@@ -7840,10 +7906,10 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         <div class="deck-poster-controls">
           <div class="deck-poster-actions">
             <button class="active" onClick=${copyImage} disabled=${!!busy}>
-              ${busy==="copy" ? "Copying…" : "📋 Copy"}
+              ${busy==="copy" ? "Copying…" : html`${uiIcon("copy")} Copy`}
             </button>
             <button onClick=${saveImage} disabled=${!!busy}>
-              ${busy==="save" ? "Saving…" : "💾 Save"}
+              ${busy==="save" ? "Saving…" : html`${uiIcon("save")} Save`}
             </button>
           </div>
           <div class="deck-poster-hint">Right-click the preview for "Save image as…" if the buttons fail.</div>
@@ -7912,13 +7978,13 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                       onClick=${()=>isOwner && onChangeVisibility && onChangeVisibility("unlisted")}
                       disabled=${!isOwner}
                       title=${isOwner ? "Click to make this deck Unlisted (link works for anyone with the URL)" : "Only the owner can change visibility"}>
-                      🔒 QR code
+                      ${uiIcon("lock", 12)} QR code
                     </button>
                     <button class="chip chip-locked"
                       onClick=${()=>isOwner && onChangeVisibility && onChangeVisibility("unlisted")}
                       disabled=${!isOwner}
                       title=${isOwner ? "Click to make this deck Unlisted (link works for anyone with the URL)" : "Only the owner can change visibility"}>
-                      🔒 URL footer
+                      ${uiIcon("lock", 12)} URL footer
                     </button>
                     ${isOwner && html`<div class="poster-share-quick">
                       <span>Switch deck to:</span>
@@ -8370,7 +8436,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal proxy-modal" onClick=${e => e.stopPropagation()}>
       <div class="modal-header">
-        <h2 class="title-font" style=${{margin: 0, fontSize: 18}}>🖨 Print proxies</h2>
+        <h2 class="title-font" style=${{margin: 0, fontSize: 18}}>${uiIcon("print", 16)} Print proxies</h2>
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
       <div class="modal-body proxy-body">
@@ -8465,7 +8531,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         </div>
 
         <div class="proxy-print-note">
-          ⚠ When printing, set <strong>Scale: 100%</strong> (or “Actual size”) — “Fit to page”
+          ${uiIcon("warn")} When printing, set <strong>Scale: 100%</strong> (or “Actual size”) — “Fit to page”
           shrinks the cards and they won't match real ones.
         </div>
 
@@ -8491,7 +8557,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
                 <button onClick=${() => {
                   const w = window.open(result.url, "_blank");
                   if(!w) flashToast("Pop-up blocked — use Save PDF instead");
-                }}>🖨 Open & print</button>
+                }}>${uiIcon("print")} Open & print</button>
                 <button onClick=${generate} disabled=${busy}>Rebuild</button>
                 <span class="proxy-done muted">
                   ${result.pages} page${result.pages === 1 ? "" : "s"} · ${(result.bytes / 1048576).toFixed(1)} MB
@@ -8540,7 +8606,7 @@ const WelcomeTourModal = ({onClose, onGo, onStartWalk}) => {
   return html`<div class="card-detail-overlay" onClick=${onClose}>
     <div class="welcome-tour" onClick=${e=>e.stopPropagation()} role="dialog" aria-label="Welcome">
       <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
-      <div class="welcome-tour-emoji" aria-hidden="true">🎉</div>
+      <div class="welcome-tour-emoji" aria-hidden="true">${uiIcon("sparkle", 34)}</div>
       <h3 class="welcome-tour-title title-font">Welcome to Packs.Ink</h3>
       <p class="welcome-tour-body">Daily TCGplayer prices for every Lorcana card — and the tools to put them to work.</p>
       <div class="welcome-feats">
@@ -8551,7 +8617,7 @@ const WelcomeTourModal = ({onClose, onGo, onStartWalk}) => {
         </button>`)}
       </div>
       ${onStartWalk && html`<button class="welcome-tour-cta welcome-tour-cta--walk"
-        onClick=${onStartWalk}>🧭 Show me around <span class="welcome-walk-sub">a 2-minute guided tour</span></button>`}
+        onClick=${onStartWalk}>${uiIcon("compass", 16)} Show me around <span class="welcome-walk-sub">a 2-minute guided tour</span></button>`}
       <button class="welcome-tour-skip" onClick=${onClose}>I'll explore on my own</button>
     </div>
   </div>`;
@@ -8771,7 +8837,7 @@ const InstallHelpModal = ({installEvent, clearInstallEvent, isIOS, isAndroid, on
   return html`<div class="modal-backdrop" onClick=${onClose}>
     <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:460}}>
       <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>📲 Packs.Ink is an app</h2>
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${uiIcon("install", 16)} Packs.Ink is an app</h2>
         <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
       </div>
       <div class="modal-body" style=${{padding:20}}>
@@ -8939,7 +9005,7 @@ const MulliganSimulator = ({deck, cardById, onClose}) => {
                   : html`<span style=${{fontSize:12,color:"var(--green)",fontWeight:600}}>✓ Hand locked in</span>`}
                 <button onClick=${reshuffle} style=${{padding:"8px 16px",fontSize:13}}
                   title="Reshuffle the deck and draw a fresh opening hand">
-                  🔀 Go again
+                  ${uiIcon("shuffle")} Go again
                 </button>
               </div>
             </div>`}
@@ -9046,7 +9112,10 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
         .actions{position:fixed;bottom:20px;right:20px;display:flex;gap:8px;z-index:10;}
         .actions button{padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;
           border:1px solid rgba(255,255,255,0.2);background:#7c3aed;color:#fff;cursor:pointer;
-          font-family:inherit;}
+          font-family:inherit;display:inline-flex;align-items:center;gap:7px;}
+        /* Icon + label span; the JS swaps only the span's text, so a mid-render
+           "Rendering..." can't wipe the glyph. */
+        .actions button svg{flex:0 0 auto;}
         .actions button.secondary{background:rgba(255,255,255,0.1);}
         /* Packs.Ink branding badge — bottom-right of poster, always
            visible in screen + print + html2canvas captures. */
@@ -9098,9 +9167,9 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
         <img src="${window.location.origin}/Logos/packs-ink-logo.png?v=5" alt="Packs.Ink" crossorigin="anonymous"/>
       </div>
       <div class="actions">
-        <button id="copy-img-btn" onclick="copyAsImage()" title="Copy the entire poster to your clipboard as one tall PNG">📋 Copy as Image</button>
-        <button id="save-img-btn" onclick="saveAsImage()" title="Download the entire poster as a single JPG (well under 10 MB so Discord accepts it)">💾 Save JPG</button>
-        <button onclick="window.print()" title="Open the print dialog, then choose 'Save as PDF' as the destination">🖨 Save as PDF</button>
+        <button id="copy-img-btn" onclick="copyAsImage()" title="Copy the entire poster to your clipboard as one tall PNG"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg><span>Copy as Image</span></button>
+        <button id="save-img-btn" onclick="saveAsImage()" title="Download the entire poster as a single JPG (well under 10 MB so Discord accepts it)"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><path d="M4 17v2.5A1.5 1.5 0 0 0 5.5 21h13a1.5 1.5 0 0 0 1.5-1.5V17"/></svg><span>Save JPG</span></button>
+        <button onclick="window.print()" title="Open the print dialog, then choose 'Save as PDF' as the destination"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M7 16h10v4H7z"/></svg><span>Save as PDF</span></button>
         <button class="secondary" onclick="window.close()">Close</button>
       </div>
       <div id="toast" style="position:fixed;bottom:80px;right:20px;padding:10px 16px;
@@ -9170,7 +9239,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
         };
         async function copyAsImage(){
           const btn = document.getElementById('copy-img-btn');
-          btn.disabled = true; btn.textContent = '⏳ Rendering…';
+          btn.disabled = true; btn.querySelector('span').textContent = 'Rendering…';
           try {
             if(!navigator.clipboard || !window.ClipboardItem){
               throw new Error('Clipboard image copy not supported in this browser — try Save instead.');
@@ -9194,12 +9263,12 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
           } catch(e) {
             showToast('Copy failed: ' + (e && e.message || e), 4000);
           } finally {
-            btn.disabled = false; btn.textContent = '📋 Copy as Image';
+            btn.disabled = false; btn.querySelector('span').textContent = 'Copy as Image';
           }
         }
         async function saveAsImage(){
           const btn = document.getElementById('save-img-btn');
-          btn.disabled = true; btn.textContent = '⏳ Rendering…';
+          btn.disabled = true; btn.querySelector('span').textContent = 'Rendering…';
           try {
             const canvas = await renderPosterCanvas();
             const blob = await encodeJpegUnderBudget(canvas);
@@ -9215,7 +9284,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
           } catch(e) {
             showToast('Save failed: ' + (e && e.message || e), 4000);
           } finally {
-            btn.disabled = false; btn.textContent = '💾 Save JPG';
+            btn.disabled = false; btn.querySelector('span').textContent = 'Save JPG';
           }
         }
       <\/script>
@@ -9899,7 +9968,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
         title=${coconutCard
           ? `Coconut leader: ${coconutDisplayName(getCoconutCard(coconutCard))}. Click to change or remove.`
           : "Build a [Format Coconut] deck — pick a leader, then build around it"}>
-        ${coconutCard ? "🥥 " + coconutDisplayName(getCoconutCard(coconutCard)) : "🥥 Coconut deck"}
+        ${uiIcon("coconut")} ${coconutCard ? coconutDisplayName(getCoconutCard(coconutCard)) : "Coconut deck"}
       </button>`}
       <div class="cards-count" style=${{marginLeft:"auto"}}>${grouped.length.toLocaleString()} cards</div>
     </div>
@@ -9960,7 +10029,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
             onBulkPrintProxy(Array.from(selected));
             setActionMenu(null);
           }}>
-            <span class="cards-bulk-menu-icon">🖨</span>
+            <span class="cards-bulk-menu-icon">${uiIcon("print")}</span>
             <div>
               <div class="cards-bulk-menu-title">Print proxies…</div>
               <div class="cards-bulk-menu-sub">Print-and-cut PDF — pick how many of each</div>
@@ -10024,7 +10093,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
             <div style=${{fontSize:15,marginBottom:6}}>Coconut leaders aren't deck cards.</div>
             <p>A leader sits alongside your 60 — you pick one for the deck rather than
                adding copies of it. ${COCONUT_CARDS.length} to choose from.</p>
-            <button class="chip active" onClick=${onPickCoconut}>🥥 Pick a Coconut leader</button>
+            <button class="chip active" onClick=${onPickCoconut}>${uiIcon("coconut")} Pick a Coconut leader</button>
           </div>`
         : html`<div style=${{fontSize:15,marginBottom:12}}>No cards match your search.</div>
       ${(activeCount > 0 || (filter.search||"").trim()) && html`<button class="clear-filters-btn"
@@ -10339,7 +10408,7 @@ const FeedbackModal = ({user, onClose})=>{
       <div class="modal-body" style=${{padding:18}}>
         ${done
           ? html`<div>
-              <p style=${{margin:"0 0 16px",fontSize:14,lineHeight:1.5}}>Got it — thanks for helping make Packs.Ink better. 🙏</p>
+              <p style=${{margin:"0 0 16px",fontSize:14,lineHeight:1.5}}>Got it — thanks for helping make Packs.Ink better.</p>
               <div style=${{display:"flex",justifyContent:"flex-end"}}>
                 <button class="active" onClick=${onClose} style=${{padding:"7px 16px",fontSize:13}}>Close</button>
               </div>
@@ -10418,7 +10487,7 @@ const FeedbackAdminModal = ({onClose})=>{
         ${rows===null
           ? html`<div class="muted" style=${{padding:"20px 0",textAlign:"center",fontSize:13}}>Loading…</div>`
           : shown.length===0
-            ? html`<div class="muted" style=${{padding:"24px 0",textAlign:"center",fontSize:13}}>${filter==="open" ? "No open feedback. 🎉" : "No feedback yet."}</div>`
+            ? html`<div class="muted" style=${{padding:"24px 0",textAlign:"center",fontSize:13}}>${filter==="open" ? "No open feedback." : "No feedback yet."}</div>`
             : html`<div style=${{display:"flex",flexDirection:"column",gap:8,maxHeight:"60vh",overflowY:"auto"}}>
                 ${shown.map(r => html`<div key=${r.id} style=${{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:8,
                     background: r.resolved ? "var(--bg-surface)" : "var(--bg-card)", opacity: r.resolved ? 0.7 : 1}}>
@@ -10472,18 +10541,18 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"var(--btn-bg)",border:"1px solid var(--btn-border)",
             color:"var(--btn-text)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
-          💬 Send feedback</button>`}
+          ${uiIcon("chat")} Send feedback</button>`}
         ${onViewFeedback && html`<button class="footer-feedback-btn" onClick=${onViewFeedback}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"1px solid var(--btn-border)",
             color:"var(--text-muted)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
-          📥 Feedback inbox</button>`}
+          ${uiIcon("inbox")} Feedback inbox</button>`}
       </div>`}
       ${stale && html`<div class="footer-stale" title=${"Last successful ETL on " + lastEtlDate + " (your local time). The daily price refresh may be failing — check the ETL cron."}>
-        ⚠ Prices may be stale (last update ${relativeTime(lastEtlDate)})
+        ${uiIcon("warn", 12)} Prices may be stale (last update ${relativeTime(lastEtlDate)})
       </div>`}
       ${matviewLag && !stale && html`<div class="footer-stale"
         title=${"prices_daily has " + lastRawPriceDate + " but card_prices_latest only has " + lastEtlDate + ". Refresh the matview to recover."}>
-        ⚠ Display layer is behind raw data (${lastEtlDate} vs ${lastRawPriceDate}) — run refresh_card_prices_latest()
+        ${uiIcon("warn", 12)} Display layer is behind raw data (${lastEtlDate} vs ${lastRawPriceDate}) — run refresh_card_prices_latest()
       </div>`}
     </div>
     <div class="footer-logos">
@@ -12068,7 +12137,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         }
       }
       // coaching hint (priority: shiny > too-far > one-card)
-      if(label && shiny) setFH("✨ Shiny card — tilt slightly to kill the glare");
+      if(label && shiny) setFH("Shiny card — tilt slightly to kill the glare");
       else if(tinyQuad) setFH("Move closer — hold ONE card so it fills the frame");
       else if(offBox) setFH("Line the card up inside the box");
       // v11 field: cards filled only ~21% of frame on average → detection kept
@@ -13662,7 +13731,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaConfChip = (cf, ver) => cf === "user"
     ? html`<span class="scanner-qa-conf user" title="Set by you">✓</span>`
     : cf === "unread"
-    ? html`<span class="scanner-qa-conf low" title="Couldn't read the card name">⚠</span>`
+    ? html`<span class="scanner-qa-conf low" title="Couldn't read the card name">${uiIcon("warn", 12)}</span>`
     : (cf === "lock" || cf === "high")
     ? (ver ? html`<span class="scanner-qa-conf med" title="Character confirmed — version may be off, check the alternates">≈</span>`
            : html`<span class=${"scanner-qa-conf " + (cf === "lock" ? "lock" : "high")} title=${cf === "lock" ? "Snapped from the live ✓-confirmed ID" : "High confidence"}>✓</span>`)
@@ -13689,7 +13758,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <div class="scanner-qa-rowinfo">
         ${x.status === "identifying"
           ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
-          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap ✎ to pick"}</span>` : (x.guess || "(no match)")}</span>`}
+          : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap edit to pick"}</span>` : (x.guess || "(no match)")}</span>`}
         ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
         ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
             <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>Non-Foil</button>
@@ -13701,7 +13770,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         <span class="scanner-session-price">${x.price != null ? "$" + Number(x.price).toFixed(2) : ""}</span>
         ${x.saved ? html`<span class="scanner-qa-savedchip">✓ saved</span>` : null}
         <span class="scanner-qa-actions">
-          <button class="scanner-qa-editbtn" title="Wrong card? Fix or confirm it" aria-label="Edit this scan" onClick=${() => qaOpenEdit(x.id)}>✎</button>
+          <button class="scanner-qa-editbtn" title="Wrong card? Fix or confirm it" aria-label="Edit this scan" onClick=${() => qaOpenEdit(x.id)}>${uiIcon("edit", 13)}</button>
           <button class="scanner-qa-editbtn scanner-qa-delbtn" title="Remove this scan" aria-label="Remove this scan" onClick=${() => qaDeleteRow(x.id)}>×</button>
         </span>
       </div>
@@ -13775,16 +13844,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
                 : html`<span class="scanner-amb-now-empty">${!workerReady ? "Loading detector…" : (detected ? "Identifying…" : "Point at one card")}</span>`}
         </div>
         ${user ? html`<div class="scanner-amb-mid">
-                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">🔦</button>` : null}
+                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">${uiIcon("torch", 18)}</button>` : null}
                  <button class=${"scanner-shutter scanner-amb-add ready" + (qpv && qpv.textOk ? " locked" : "")} onClick=${snapForQA} aria-label="Snap this card"
-                   title=${qpv && qpv.textOk ? "Log this card and move to the next" : "Snap — identifies in the background"}>📸</button>
+                   title=${qpv && qpv.textOk ? "Log this card and move to the next" : "Snap — identifies in the background"}>${uiIcon("camera", 26)}</button>
                </div>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to test</button>`}
         <span class="scanner-amb-auto scanner-qa-count">${qaCount} snapped</span>
       </div>
       ${savedMsg ? html`<div class="scanner-saved-msg">${savedMsg}</div>` : null}
       ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
-      <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, 📸 logs it instantly. Not confirmed yet? 📸 still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b></div>
+      <div class="scanner-qa-note">Point at a card — when the name is <b>✓ confirmed</b>, the shutter logs it instantly. Not confirmed yet? It still captures and identifies in the background, so you can move straight to the next card. Wrong match? Tap <b>✎</b> on its row to fix it — every fix helps train the scanner. <b>${"Nothing is added anywhere until you Review & save."}</b></div>
       <div class="scanner-session">
         <div class="scanner-session-head">
           <span class="scanner-session-count">${qaResults.length} scanned</span>
@@ -13793,7 +13862,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
         </div>
         <div class="scanner-session-list">
           ${qaResults.length === 0
-            ? html`<div class="scanner-session-empty">Point at a card and tap <b>📸</b>. Hold close — one card, good light. No need to wait between snaps.</div>`
+            ? html`<div class="scanner-session-empty">Point at a card and tap the <b>shutter</b>. Hold close — one card, good light. No need to wait between snaps.</div>`
             : qaResults.map(qaRowJsx)}
         </div>
       </div>
@@ -13811,10 +13880,10 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
                : html`<span class="scanner-amb-now-empty">${detected ? "Identifying…" : (workerReady ? "Hover over a card" : "Loading detector…")}</span>`}
         </div>
         ${user ? html`<div class="scanner-amb-mid">
-                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">🔦</button>` : null}
+                 ${torchAvail ? html`<button class=${"scanner-torch" + (torchOn ? " on" : "")} onClick=${toggleTorch} aria-label="Toggle flashlight" title="Flashlight">${uiIcon("torch", 18)}</button>` : null}
                  <button class="scanner-amb-snap" onClick=${snapForQA}
                    title="QA snap — saves this photo + the scanner's full guess & reasoning for review later. Does NOT stage or add the card."
-                   aria-label="QA snap">📸${qaCount ? html` <span class="scanner-amb-snap-n">${qaCount}</span>` : null}</button>
+                   aria-label="QA snap">${uiIcon("camera", 26)}${qaCount ? html` <span class="scanner-amb-snap-n">${qaCount}</span>` : null}</button>
                  <button class=${"scanner-shutter scanner-amb-add" + (ready && pv ? " ready" : "")} onClick=${tapCommit} disabled=${!pv} aria-label="Add this card">＋</button>
                </div>`
                : html`<button class="scanner-btn primary" onClick=${onSignIn}>Sign in to scan</button>`}
@@ -13885,7 +13954,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     ${qaUndo ? html`<div class="scanner-saved-msg">Removed ${qaUndo.label} · <button class="scanner-link" onClick=${qaUndoDelete}>Undo</button></div>` : null}
     <div class="scanner-session-list scanner-qa-review-list">
       ${qaResults.length === 0
-        ? html`<div class="scanner-session-empty">Nothing scanned yet — go back to the camera and 📸 some cards.</div>`
+        ? html`<div class="scanner-session-empty">Nothing scanned yet — go back to the camera and snap some cards.</div>`
         : qaResults.map(qaRowJsx)}
     </div>
     <div class="scanner-qa-review-actions">
@@ -13896,7 +13965,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     </div>
     ${(qaAgg.pending || qaAgg.unmatched || qaAgg.unpriceable) ? html`<div class="scanner-qa-note">${[
       qaAgg.pending ? qaAgg.pending + " still identifying" : null,
-      qaAgg.unmatched ? qaAgg.unmatched + " with no match (✎ to fix)" : null,
+      qaAgg.unmatched ? qaAgg.unmatched + " with no match (edit to fix)" : null,
       qaAgg.unpriceable ? qaAgg.unpriceable + " not in the price catalog" : null,
     ].filter(Boolean).join(" · ")} — these won't be added.</div>` : null}
   </div>`;
@@ -13958,7 +14027,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       <video ref=${videoRef} class="scanner-video" playsInline muted autoplay></video>
       <canvas ref=${overlayRef} class="scanner-overlay-cv"></canvas>
       ${!result && !detected ? html`<div class="scanner-softframe" aria-hidden="true"></div>` : null}
-      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "📸 to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
+      ${!result ? html`<div class=${"scanner-detbadge" + (detected ? " on" : "")}>${detected ? (SCANNER_QA_ONLY ? "Tap to snap" : (mode === "ambient" ? "tap to stage" : "card detected")) : (workerReady ? "point at a card" : "loading detector…")}</div>` : null}
       ${!result && mode === "ambient" && frameHint ? html`<div class="scanner-coach">${frameHint}</div>` : null}
       ${flash ? html`<div class="scanner-flash" aria-hidden="true"></div>` : null}
       ${busy ? html`<div class="scanner-busy">Reading card…</div>` : null}
@@ -14221,7 +14290,7 @@ function BoxSim({rawData,sets,theme,user,collection,updateQty,onSignIn,presetSet
       <div class="scr"><table>
         <thead><tr><th>Box #</th><th>Total</th><th>Best Pull</th><th>Best Card $</th></tr></thead>
         <tbody>${boxHist.slice().reverse().map(b=>html`<tr key=${b.num} style=${{background:b===bestBox?"var(--accent-glow)":"inherit"}}>
-          <td style=${{fontWeight:500}}>Box #${b.num}${b===bestBox?" \u2B50":""}</td>
+          <td style=${{fontWeight:500}}>Box #${b.num}${b===bestBox?" ★":""}</td>
           <td style=${{color:b.total>=100?"var(--green)":"inherit"}}>${fmt(b.total)}</td>
           <td style=${{textAlign:"left",maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>${b.best?.name||"\u2014"}</td>
           <td style=${{color:b.best?.price>=10?"var(--green)":"inherit"}}>${fmt(b.best?.price)}</td>
@@ -14476,7 +14545,7 @@ const GoalControl = ({goal, setGoal, setFoilMode}) => {
     <div class="seg-toggle" title="Completion target — Master = 1 of each, Play = 4 of each, or a custom non-foil / foil / chase split.">
       <button class=${activePreset==="master"?"active":""} style=${dim} onClick=${()=>{ setShowCustom(false); setGoal({n:1,f:1,c:1,chase:null}); }}>Master Set</button>
       <button class=${activePreset==="play"?"active":""} style=${dim} onClick=${()=>{ setShowCustom(false); setGoal({n:4,f:4,c:4,chase:null}); }}>Play Set</button>
-      <button class=${activePreset==="custom"?"active":""} onClick=${enterCustom}>✎ Custom</button>
+      <button class=${activePreset==="custom"?"active":""} onClick=${enterCustom}>${uiIcon("edit")} Custom</button>
     </div>
     ${inputsOpen && html`<div class="setdet-goal-custom" style=${{display:"flex", alignItems:"center", gap:10, fontSize:11, flexWrap:"wrap"}}>
       <label style=${lblStyle}>Non-foil
@@ -14856,7 +14925,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
       ${allMode
         ? html`<button class=${"import-csv-btn setdet-filters-btn"+(countActiveFilters(drawerFilter)>0?" has-active":"")} onClick=${()=>setDrawerOpen(true)}
             title="Open the full filter panel — ink, cost, rarity, type, keywords, classifications, stats, sets, artist…">
-            ⚙ Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
+            ${uiIcon("gear")} Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
           </button>
           <button class=${"chip"+(separateBySet?" active":"")} onClick=${()=>setSeparateBySet(v=>!v)}
             title="Group the list into per-set sections with headers">⊟ Separate by set</button>`
@@ -16686,7 +16755,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                        <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
             </div>
             ${compareCards.length > 0 && html`<div class="compare-export-group">
-              <button class="settings-action" onClick=${doExportPng} title="Export the comparison chart + product list as a PNG report.">📥 PNG</button>
+              <button class="settings-action" onClick=${doExportPng} title="Export the comparison chart + product list as a PNG report.">${uiIcon("save")} PNG</button>
               <button class="settings-action" onClick=${doExportSvg} title="Export as scalable vector (SVG).">SVG</button>
               <button class="settings-action" onClick=${doExportCsv} title="Export the products table as CSV.">CSV</button>
               <button class="settings-action link" onClick=${()=>{ setCompareCards([]); setCompareSeries({}); }} style=${{fontSize:11}}>Clear all</button>
@@ -18549,7 +18618,7 @@ const GradedOwnedGrid = ({items, cardById, priceByKey, raw, theme, onOpen, basis
         value=${drawerFilter.search||""} onInput=${e=>setDrawerFilter(f=>({...f, search:e.target.value}))}/>
       <button class=${"import-csv-btn setdet-filters-btn"+(countActiveFilters(drawerFilter)>0?" has-active":"")} onClick=${()=>setDrawerOpen(true)}
         title="Open the full filter panel — ink, cost, rarity, type, keywords, classifications, stats, sets, artist…">
-        ⚙ Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
+        ${uiIcon("gear")} Filters${countActiveFilters(drawerFilter)>0 ? ` · ${countActiveFilters(drawerFilter)}` : ""}
       </button>
       <button class=${"chip"+(separateBySet?" active":"")} onClick=${()=>setSeparateBySet(v=>!v)}
         title="Group into per-set sections with headers">⊟ Separate by set</button>
@@ -19816,7 +19885,7 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       return [...(prev||[]), {card_id: slot.card_id, printing: slot.printing, grader, grade, quantity: sub.quantity||1, updated_at: new Date().toISOString()}];
     });
     await removeSubmission(sub.id);
-    flashToast("Graduated to your graded collection 🎉");
+    flashToast("Graduated to your graded collection");
     return true;
   }, [user, removeSubmission]);
 
@@ -20662,7 +20731,7 @@ const GradedCollectionAddModal = ({raw, cardById, priceByKey, preselectCardId, p
             ${hasPriceData
               ? html`<span style=${{color:"var(--accent)",fontWeight:700}}>✓ Price data available</span>
                   · ${grader.toUpperCase()} ${grade} latest avg: <strong>$${Number(priceVal||0).toLocaleString(undefined,{maximumFractionDigits:2})}</strong>`
-              : html`<span style=${{color:"var(--red)",fontWeight:700}}>⚠ No price data for this grader/grade</span>
+              : html`<span style=${{color:"var(--red)",fontWeight:700}}>${uiIcon("warn", 12)} No price data for this grader/grade</span>
                   · You can still save it; portfolio value will exclude this slot until a sale is recorded.`}
           </div>
           <div style=${{display:"flex",gap:8,justifyContent:"flex-end"}}>
@@ -21583,7 +21652,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
 
   return html`<div>
     ${demoMode && html`<div class="collection-demo-banner">
-      ✨ Showing an <strong>example collection</strong> for the tour — it disappears when the tour ends, and everything here works the same on your real cards.
+      ${uiIcon("sparkle", 13)} Showing an <strong>example collection</strong> for the tour — it disappears when the tour ends, and everything here works the same on your real cards.
     </div>`}
     ${isViewerMode && (() => {
       const p = viewerContext.data?.profile || {};
@@ -22718,7 +22787,7 @@ function EloEventDetail({eventId, onBack, onPlayerClick, canViewStore, onStoreCl
         ${ev.platform === "melee"
           ? html`<a class="elo-event-link" href=${"https://melee.gg/Tournament/View/" + (ev.event_id - 100000000)} target="_blank" rel="noopener">View on melee.gg →</a>`
           : html`<a class="elo-event-link" href=${"https://tcg.ravensburgerplay.com/events/" + ev.event_id} target="_blank" rel="noopener">View on Play Hub →</a>`}
-        ${canViewStore && ev.store && html`<button class="elo-event-link elo-store-link" onClick=${()=>onStoreClick && onStoreClick(ev.store)}>📋 Store report →</button>`}
+        ${canViewStore && ev.store && html`<button class="elo-event-link elo-store-link" onClick=${()=>onStoreClick && onStoreClick(ev.store)}>${uiIcon("clipboard")} Store report →</button>`}
       </p>
     </header>
 
@@ -22882,7 +22951,7 @@ function EloStoreReport({storeKey, onBack, onPlayerClick, onEventClick, excludeO
         <span class="elo-se-date">${fmtD(e.date)}</span>
         <span class="elo-se-main">
           <span class="elo-se-name">${e.name}</span>
-          <span class="elo-se-meta">${e.season || ""}${e.winner ? html` · 🏆 ${e.winner}` : ""}</span>
+          <span class="elo-se-meta">${e.season || ""}${e.winner ? html` · ${uiIcon("trophy", 12)} ${e.winner}` : ""}</span>
         </span>
         <span class="elo-se-players">${e.num_players != null ? e.num_players+"p" : ""}</span>
       </button>`)}
@@ -23259,7 +23328,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
             ${eloOf(sel) != null && html`<div><dt>Avg Elo</dt><dd>${eloOf(sel)} · last 4 events</dd></div>`}
           </dl>
           ${canViewStore && html`<button class="sc-modal-cta sc-modal-cta--report"
-            onClick=${()=>{ const st = sel.store_name; setSel(null); onStoreClick && onStoreClick(st); }}>📋 Store scouting report</button>`}
+            onClick=${()=>{ const st = sel.store_name; setSel(null); onStoreClick && onStoreClick(st); }}>${uiIcon("clipboard")} Store scouting report</button>`}
           ${canViewStore && sel.event_id && html`<button class="sc-modal-cta sc-modal-cta--roster"
             onClick=${()=>{ const id = sel.event_id, meta = {store_name: sel.store_name, name: sel.name, capacity: sel.capacity}; setSel(null); setRosterMeta(meta); setRosterEventId(id); }}>👥 Who's signed up + field Elo</button>`}
           <div class="sc-modal-actions">
@@ -24059,18 +24128,20 @@ function EloView({eloPinned, setEloPinned, user}){
 function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
   return html`<div class="faq-section">
     ${onStartTour && html`<div class="faq-tours">
-      <button class="faq-tour-btn" onClick=${onStartTour}>👋 Quick welcome tour</button>
-      ${onStartSiteWalk && html`<button class="faq-tour-btn" onClick=${onStartSiteWalk}>🧭 Full site walkthrough</button>`}
+      <button class="faq-tour-btn" onClick=${onStartTour}>${uiIcon("wave")} Quick welcome tour</button>
+      ${onStartSiteWalk && html`<button class="faq-tour-btn" onClick=${onStartSiteWalk}>${uiIcon("compass")} Full site walkthrough</button>`}
       ${onStartSectionTour && Object.entries(COACH_TOURS)
         .filter(([, t]) => !(t.requiresUser && !user))
         .map(([v, t]) => html`<button key=${v} class="faq-tour-btn faq-tour-btn--section"
-          onClick=${()=>onStartSectionTour(v)}>🧭 ${t.title}</button>`)}
+          onClick=${()=>onStartSectionTour(v)}>${uiIcon("compass")} ${t.title}</button>`)}
     </div>`}
     <h2>What is Packs.Ink?</h2>
     <p>Packs.Ink is a market and collection tracker for the Disney Lorcana TCG. Use it to <strong>watch prices and price movement</strong>, <strong>track what you own</strong> (raw, sealed, and graded), <strong>build decks</strong>, and <strong>share lists and tournament results</strong> with the community. Prices update daily.</p>
 
     <h2>The tabs at a glance</h2>
     <p><strong>Home</strong> — your dashboard. Top movers, your collection value, decks from people you follow, and the latest tournament finishes.</p>
+    <p><strong>You arrange the home page yourself.</strong> Hit <em>Edit layout</em> under the search box (or the same entry in the profile menu) to show, hide, reorder and re-column every section, including the mover banners. It saves per browser, so your phone and your desktop can be laid out differently. <em>Reset</em> puts everything back.</p>
+    <p><strong>Click a section's heading</strong> — News, Following, Tournament Results, Toolbox, Recent set EV, Your Collection — and it opens on its own over the page, with a <em>Copy link to this section</em> button. That link goes straight back to the same view, so you can send someone the tournament box rather than "scroll down on the home page". The heading is an ordinary link, so ctrl/⌘-click opens it in a new tab and right-click offers <em>Copy link address</em> without opening anything.</p>
     <p><strong>Screener</strong> — every tracked card as a sortable financial-database-style table. Filter by set, rarity, ink, price band, and movement window (1D / 1W / 1M / 3M / 6M / 1Y).</p>
     <p><strong>Price Graphing</strong> — per-card history charts. Multi-select on the Screener to open a Compare view that overlays several cards on one chart.</p>
     <p><strong>Analytics</strong> — calculator-y tools: Expected Value (EV) per box, a Trade Compare tool that values both sides of a trade, a Set Breakdown of average card prices and where box value lives, Playset Cost, a pack/box Simulator with bulk odds, Swiss Odds (Monte Carlo cut-line odds for tournament Swiss rounds), and a Dice Tray for rolling turn order at the table. Its <em>Overview</em> tab lists every tool and what it answers. Sealed pricing lives in the Screener's Sealed mode.</p>
@@ -24086,13 +24157,19 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
       <li><code>cost&lt;=2</code>, <code>cost&gt;=5</code> — numeric ranges</li>
       <li><code>set:"wilds unknown"</code> — limit to a set</li>
       <li><code>ench</code> or <code>iconic</code> — chase-tier shortcuts</li>
+      <li><code>dual</code> — dual-ink cards only. Combines with everything else: <code>dual legendary</code>, <code>amber dual</code> (dual-ink cards that include Amber).</li>
+      <li><code>under $5</code>, <code>over $200</code>, <code>$1-$10</code> — price. A card matches a ceiling on its <em>cheapest</em> printing and a floor on its <em>dearest</em>, so "under $1" keeps a common whose foil is $30.</li>
+      <li><code>rush</code>, <code>bodyguard</code>, <code>shift</code> — keywords the card actually declares, not ones its text merely mentions.</li>
+      <li><code>-enchanted</code>, <code>non amber</code>, <code>without rush</code> — exclude a rarity, ink, type, keyword or classification.</li>
       <li>Anything else falls back to a name / text-box / illustrator search.</li>
     </ul>
+    <p>Press <kbd>Enter</kbd> and the box splits a mixed query for you — <code>rapunzel promo</code> becomes a Promo filter plus a name search, rather than looking for the literal words "rapunzel promo".</p>
     <p>Filters and search stack — use ink chips + rarity chips + the smart search together to narrow fast.</p>
 
     <h2>Tracking your collection</h2>
     <p>Sign in (Google) and start adding cards from <strong>Cards</strong>, the <strong>Screener</strong>, any deck detail page, or by clicking a card's title from a deck list. Use the +/- buttons on the card tile or counter to set quantities for normal and foil copies independently.</p>
-    <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets). <strong>Graded</strong> tracks PSA / BGS / CGC certifications with per-grade price tracking. Bulk CSV import is available in the Collection section if you prefer paste-in.</p>
+    <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets) and, at the bottom of that section, the <strong>puzzles, pins and lore dials</strong> Ravensburger has released through Organized Play, Illumineer's Troves and convention drops — checklist-only for now, since none of them have a public price feed. <strong>Graded</strong> tracks PSA / BGS / CGC certifications with per-grade price tracking.</p>
+    <p><strong>CSV goes both ways.</strong> <em>Import CSV</em> takes a paste-in list; <em>Export CSV</em> downloads everything you own in the same format, which also loads into Dreamborn and other tools that read it. Exporting and re-importing is a round trip — nothing is lost in between.</p>
     <p>The Home page's <strong>Collection Value</strong> chart graphs the value of everything you own over time. Pre-release price spikes are filtered out so a brand-new set doesn't inflate your historical value.</p>
     <p><strong>Phantom-spike smoothing.</strong> TCGplayer's <strong>Low</strong> is the lowest active listing, not the lowest sale — sometimes a single mispriced listing pins Low at $200 or $2,000 for a few days while nothing actually trades at that number. Without intervention, that single bad listing would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
@@ -24100,7 +24177,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <h2>Card scanner (beta)</h2>
     <p>The <strong>Scan</strong> tab in the top nav points your phone's camera at a card and identifies it, then lets you review the list and add everything to your collection or a new deck in one go. Sign-in required.</p>
     <p><strong>It runs on your phone.</strong> Your browser downloads a card index once, and the matching happens locally — no photo is sent anywhere to be identified, and the scanner works offline.</p>
-    <p><strong>It's a beta, so it will get cards wrong.</strong> Rows it isn't sure about are marked ≈ or ?, and every row has a ✎ button to correct it. Check the list before you save — nothing touches your collection until you press the button.</p>
+    <p><strong>It's a beta, so it will get cards wrong.</strong> Rows it isn't sure about are marked ≈ or ?, and every row has an edit button to correct it. Check the list before you save — nothing touches your collection until you press the button.</p>
     <p><strong>About the photos.</strong> While it's in beta we upload a photo of each scan so we can find the cards it misreads and fix them. It's the whole camera frame, not a crop; it's stored privately against your account, never sold or shared, never analyzed for faces, and deleted after 12 months. <strong>You can switch the upload off</strong> — on the notice the first time you open the scanner, or from the scanner's review screen — and it identifies cards exactly the same either way. Full details are on the <a href="/privacy#scanner" target="_blank" rel="noopener">privacy page</a>.</p>
     <p>Tips for a good read: one card, flat, plain background, decent light, and fill the frame. Sleeves and top-loaders are fine. Japanese and other non-English cards aren't supported yet — it will tell you rather than guess.</p>
 
@@ -24112,10 +24189,18 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
       <li><strong>Unlisted</strong> — anyone with the share link can view, but it isn't listed publicly.</li>
       <li><strong>Public</strong> — appears in your creator profile and on the Discover feed.</li>
     </ul>
-    <p>Flipping back to Private rotates the share link so the old URL stops working. There's also a one-click "Regenerate link" if you ever want to revoke a leaked URL without going fully private.</p>
+    <p>Making a deck <em>less</em> visible rotates the share link, so every URL already out there stops working. There's also a one-click "Regenerate link" if you want to revoke a leaked URL without going fully private.</p>
+
+    <h2>Deck version history</h2>
+    <p>Every time you leave edit mode having changed something, the deck's previous state is saved as a version. Open <strong>History</strong> in the deck toolbar to page through them and see exactly what changed between any two — cards added, cards cut, counts moved, renames. The last 30 versions are kept.</p>
+    <p>History is <strong>yours alone</strong> unless you tick <em>Include version history</em> in the Share panel. Sharing a deck is one decision; sharing every draft it passed through is a bigger one, so it never happens by accident.</p>
+
+    <h2>Printing proxies</h2>
+    <p><strong>Print Proxies</strong> in the deck toolbar turns a decklist into a print-and-cut PDF — nine cards to a page at true card size (63 × 88 mm), colour or black-and-white, with crop marks in the margins. Pick the whole deck or tick individual cards and set how many of each you want. The <em>PROXY</em> mark is painted into the image itself, not laid over the page, so it survives whatever happens to the file afterwards.</p>
+    <p>One thing matters more than any of the options: set your printer dialog to <strong>Scale: 100%</strong> (or "Actual size"). Browsers default to "Fit to page", which shrinks the cards so they no longer match real ones. The same bulk action is on the Cards tab, for proxying a handful of cards without building a deck first.</p>
 
     <h2>Exporting a deck image</h2>
-    <p>Open any deck and hit <strong>\u{1F5BC} Export Image</strong> to generate a poster you can post or DM. Toggle the QR code, stats, cost curve, and the three deck-cost lines on/off, change the background style (Ink / Dark / Light), and pick 5–8 columns of card art. Use the <em>Copy</em> button to put a PNG on your clipboard, or <em>Save</em> to download.</p>
+    <p>Open any deck and hit <strong>Export Image</strong> to generate a poster you can post or DM. Toggle the QR code, stats, cost curve, and the three deck-cost lines on/off, change the background style (Ink / Dark / Light), and pick 5–8 columns of card art. Use the <em>Copy</em> button to put a PNG on your clipboard, or <em>Save</em> to download.</p>
     <p><strong>Deck-cost lines</strong> (all three default on, individually toggleable):</p>
     <ul>
       <li><strong>Non-Foil</strong> — total cost if every copy in the deck is a Normal printing.</li>
@@ -24128,6 +24213,10 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
       <li>Other <strong>Promo</strong>-rarity printings priced over <strong>$1,000</strong> are also skipped. (<strong>Iconic</strong>-rarity printings priced over $1,000 are kept — that's a legitimate chase tier, not an outlier.)</li>
     </ul>
     <p>All cost lines use the same <strong>Low</strong> price shown elsewhere on the site.</p>
+
+    <h2>Linking to what you're looking at</h2>
+    <p>Almost every view keeps its state in the URL, so a refresh, a bookmark or a pasted link all land in the same place: the Screener's mode, the Analytics tool, the Decks section and format, which Collection section you're in, the card you have open, a search and its filters. The <strong>link button</strong> in the top-right copies the current one and tells you what it points at.</p>
+    <p>Share links for a deck, a collection or a trade are separate things with their own privacy rules — see the sections below.</p>
 
     <h2>Sharing your collection</h2>
     <p>From the Collection tab's <strong>Share ▾</strong> menu, set each section (Cards / Sealed / Graded) independently to Private, Unlisted, or Public. Public collections appear on your creator profile; Unlisted needs the share link. Visitors who are signed in get a <strong>comparison strip</strong> showing what they own, what overlaps, and what they're missing.</p>
@@ -24156,7 +24245,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p><strong>Pull rates (Sets 12+, Wilds Unknown onward)</strong>: same C/U/SR counts, <strong>~30 Rares</strong> (down from ~32), <strong>6 Legendaries</strong>, <strong>0.333 Enchanteds</strong>, <strong>2.5 Epics</strong>, with foil counts adjusted proportionally. These are community-estimated averages — your mileage will vary box-to-box.</p>
 
     <h2>Install as an app</h2>
-    <p>Hit the <strong>\u{1F4F2}</strong> button in the top-right of the page for step-by-step instructions. iOS, Android, and desktop all supported. Once installed, Packs.Ink opens in its own window/app icon with a faster startup and home-screen presence.</p>
+    <p>Hit the <strong>install</strong> button (a phone with a down-arrow) in the top-right of the page for step-by-step instructions. iOS, Android, and desktop all supported. Once installed, Packs.Ink opens in its own window/app icon with a faster startup and home-screen presence.</p>
 
     <h2>Affiliate disclosure</h2>
     <p>Packs.Ink participates in the TCGplayer Affiliate Program. As a TCGplayer Affiliate, we earn a commission from qualifying purchases made through TCGplayer links on this site (the price-tag buttons on every card). This costs you nothing extra and helps keep the site running. Thanks for clicking through!</p>
@@ -24827,7 +24916,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       <div class="trade-diff-head">
         <span class="trade-diff-title">Difference</span>
         <div class="trade-diff-tools">
-          <button class="trade-share-btn" title="Copy a link to this trade for the other party" onClick=${shareTrade}>🔗 Share</button>
+          <button class="trade-share-btn" title="Copy a link to this trade for the other party" onClick=${shareTrade}>${uiIcon("link")} Share</button>
           <button class="trade-share-btn trade-clearall-btn" title="Remove every card from both sides"
             disabled=${!sideA.length && !sideB.length} onClick=${clearAll}>Clear all</button>
           <div class="seg-toggle trade-layout-seg" title="Card layout">
@@ -26752,7 +26841,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       </button>
       <div ref=${colsRef} style=${{position:"relative",display:"inline-flex"}}>
         <button class="price-db-advbtn" onClick=${()=>setColsMenuOpen(o=>!o)}
-          title="Show / hide and reorder the table columns">⚙ Columns</button>
+          title="Show / hide and reorder the table columns">${uiIcon("gear")} Columns</button>
         ${colsMenuOpen && html`<div class="price-db-colsmenu">
           <div class="price-db-colsmenu-head">
             <span>Columns</span>
@@ -27062,7 +27151,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             return html`<a class="price-db-batchitem" href=${buyUrl || "#"} target="_blank"
               rel="noopener nofollow sponsored"
               onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
-              🛒 Buy on TCGplayer (affiliate cart)
+              ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
             </a>
             <button class="price-db-batchitem" onClick=${() => {
               const lines = selRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
@@ -27072,7 +27161,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 prompt("Copy this decklist text:", lines);
               }
               setBatchOpen(false);
-            }}>📋 Copy as decklist (paste into a deck)</button>
+            }}>${uiIcon("clipboard")} Copy as decklist (paste into a deck)</button>
             <button class="price-db-batchitem"
               onClick=${() => {
                 const cards = selRows.slice(0, COMPARE_MAX).map(r => ({
@@ -27090,7 +27179,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                 setBatchOpen(false);
                 if(onCompareCards) onCompareCards(cards);
               }}>
-              📊 Add to Price Graphing
+              ${uiIcon("chart")} Add to Price Graphing
               ${selRows.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:4}}>(first ${COMPARE_MAX} of ${selRows.length})</span>`}
             </button>`;
           })()}
@@ -28992,6 +29081,24 @@ const HOME_PANELS = [
   {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
+const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.label]));
+// Every panel except setChamps can be popped out and linked to.
+const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps"));
+// A panel's TITLE is its permalink. Plain click pops the panel out over a
+// dimmed home page, where the Copy-link button lives; ctrl/cmd-click and
+// middle-click open /?panel=<key> in a new tab, and right-click offers "Copy
+// link address" — which is why no box needs a link icon of its own. Same
+// <a href> + navHandler convention as the top nav.
+//
+// setChamps is deliberately absent: Upcoming events already expands on its
+// own title click and already carries richer deep links (?sczip / scc / scdist
+// / scdate / scmode) that a bare ?panel= would flatten.
+const homePanelHref = (key) => "/?panel=" + encodeURIComponent(key);
+const homePanelTitle = ({cls, label, panelKey, onPopOut}) => (panelKey && onPopOut)
+  ? html`<a class=${cls + " home-title-link"} href=${homePanelHref(panelKey)}
+      title=${"Open " + label + " on its own \u2014 and copy a link to it"}
+      onClick=${navHandler(() => onPopOut(panelKey))}>${label}</a>`
+  : null;
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
 // One-shot migration stamp: see the news-feed fix in App's homeLayout init.
 const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
@@ -29061,7 +29168,8 @@ const setHomePanelEnabled = (key, on) => {
 
 // Right-side panel on Home: current collection value, line chart over a
 // user-selected range, and a tiny "top movers in your collection" list.
-const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, setsMeta}) => {
+const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, onPopOut, setsMeta}) => {
+  const popTitle = homePanelTitle({cls:"panel-title", label:"Your Collection", panelKey:"collection", onPopOut});
   sealedMeta = sealedMeta || {};
   // Premium accounts value graded slabs off the new per-sale dataset (Avg-of-5)
   // instead of the legacy TCGPriceLookup graded_prices_daily.
@@ -29576,11 +29684,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
 
   if(!user) return html`<aside class="collection-panel">
     <div class="panel-header">
-      ${onTitleClick
+      ${popTitle || (onTitleClick
         ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
             title="Open Collection tab"
             style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Collection</button>`
-        : html`<h2 class="panel-title">Your Collection</h2>`}
+        : html`<h2 class="panel-title">Your Collection</h2>`)}
       ${minBtn}
     </div>
     ${!minimized && html`<div>
@@ -29593,11 +29701,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
   // Empty state — fires when the user owns nothing across all three sections.
   if(owned.ownedRows.length === 0 && sealedOwned.size === 0 && gradedSlots.length === 0) return html`<aside class="collection-panel">
     <div class="panel-header">
-      ${onTitleClick
+      ${popTitle || (onTitleClick
         ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
             title="Open Collection tab"
             style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Collection</button>`
-        : html`<h2 class="panel-title">Your Collection</h2>`}
+        : html`<h2 class="panel-title">Your Collection</h2>`)}
       ${minBtn}
     </div>
     ${!minimized && (collectionLoading
@@ -29611,11 +29719,11 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
 
   return html`<aside class=${"collection-panel"+(minimized?" is-min":"")}>
     <div class="panel-header">
-      ${onTitleClick
+      ${popTitle || (onTitleClick
         ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
             title="Open Collection tab"
             style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Collection</button>`
-        : html`<h2 class="panel-title">Your Collection</h2>`}
+        : html`<h2 class="panel-title">Your Collection</h2>`)}
       <div class="panel-header-actions">${eyeBtn}${minBtn}</div>
     </div>
     <div class="panel-value">
@@ -29844,7 +29952,7 @@ const _CollectionMoversSection_unused = ({user, raw, collection, moversByKey, pa
 // current pricing, plus the TCGPlayer Booster Box price (linked through
 // the affiliate wrapper when available). Tiny inline toggles let the
 // user adjust the EV semantics without leaving the page.
-const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick}) => {
+const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, onPopOut}) => {
   const [nc, setNc] = useState(false);
   const [excludeBoth, setExcludeBoth] = useState(false);
   const lastFour = useMemo(() => {
@@ -29903,10 +30011,11 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick}) => {
   if(!lastFour.length) return null;
   return html`<div class="home-ev-strip">
     <div class="home-ev-strip-head">
-      ${onTitleClick
+      ${homePanelTitle({cls:"home-ev-strip-title", label:"Recent set EV", panelKey:"setEv", onPopOut})
+        || (onTitleClick
         ? html`<button class="home-ev-strip-title home-title-link" onClick=${onTitleClick}
             title="Open Analytics → Expected Value">Recent set EV</button>`
-        : html`<div class="home-ev-strip-title">Recent set EV</div>`}
+        : html`<div class="home-ev-strip-title">Recent set EV</div>`)}
       <${Tip} text="EV (Expected Value) = the average total price of the cards you'd pull from one booster box at today's market prices. Compare it to the box price to see whether a set is 'worth cracking'."><span class="tip-info-glyph" aria-label="What is EV?">ⓘ</span><//>
       <div class="home-ev-strip-toggles">
         <label title="Treat cards under $1 as $0 — filters bulk pennies out of the average.">
@@ -29957,11 +30066,12 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick}) => {
 //   unlisted deck → fetch via the SECURITY DEFINER get_shared_deck RPC,
 //   which bypasses RLS as long as the token matches. This lets users see
 //   updates to unlisted decks they're authorised to view.
-const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick}) => {
-  const titleEl = onTitleClick
+const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, onPopOut}) => {
+  const titleEl = homePanelTitle({cls:"home-feed-title", label:"Following", panelKey:"following", onPopOut})
+    || (onTitleClick
     ? html`<button class="home-feed-title home-feed-title-link" onClick=${onTitleClick}
         title="Open Decks → Following">Following</button>`
-    : html`<div class="home-feed-title">Following</div>`;
+    : html`<div class="home-feed-title">Following</div>`);
   const [entries, setEntries] = useState(null);
   const [err, setErr] = useState(null);
   // Mobile collapses to the 2 most recent entries; toggle reveals the
@@ -30285,7 +30395,7 @@ const useMaxWidth = (px) => {
 // collapsible — full-width under a tall stack of banners, a user who doesn't
 // follow tournaments should be able to fold it away for good.
 const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTournamentsList,
-                                  chaseStyleTitle, collapsible}) => {
+                                  chaseStyleTitle, collapsible, onPopOut}) => {
   const [groups, setGroups] = useState(null);  // [{tournament, decks:[...]}]
   const [err, setErr] = useState(null);
   // Always render full top-8 per event. The "Show more" toggle was removed
@@ -30370,11 +30480,13 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
   // the MoversBanner titles, so "Tournament Results" reads as a peer of the
   // banners it now sits under instead of a different design language.
   const titleClass = chaseStyleTitle ? "home-feed-title home-feed-title--chase" : "home-feed-title";
-  const titleEl = openTournamentsList
+  const titleEl = homePanelTitle({cls:titleClass, label:"Tournament Results",
+      panelKey:"tournaments", onPopOut})
+    || (openTournamentsList
     ? html`<button class=${titleClass+" home-feed-title-link"}
         onClick=${openTournamentsList}
         title="See all tournaments">Tournament Results</button>`
-    : html`<div class=${titleClass}>Tournament Results</div>`;
+    : html`<div class=${titleClass}>Tournament Results</div>`);
   // Collapsible placement wraps the title in a flex row with the chevron; the
   // always-expanded one keeps the bare title so desktop spacing is untouched.
   const headEl = collapsible
@@ -30905,7 +31017,7 @@ const UpcomingSCsBox = () => {
         <button class="sc-copy-link" type="button" onClick=${copyLink}
           disabled=${!scZipReady(zip, country)}
           title="Copy a link that reopens this view (ZIP, distance, date)">
-          ${copied ? "✓ Copied" : "🔗 Copy link"}
+          ${copied ? html`${uiIcon("check")} Copied` : html`${uiIcon("link")} Copy link`}
         </button>
         ${expanded
           ? html`<button class="sc-collapse-btn" type="button" onClick=${closeExpanded}
@@ -31009,7 +31121,7 @@ const UpcomingSCsBox = () => {
             <button class=${"sc-tile-pin"+(isPinned(e.series_key)?" pinned":"")} type="button"
               onClick=${()=>togglePin(e.series_key)}
               aria-label=${isPinned(e.series_key)?"Unpin event":"Pin event to top"}
-              title=${isPinned(e.series_key)?"Unpin":"Pin to top"}>📌</button>
+              title=${isPinned(e.series_key)?"Unpin":"Pin to top"}>${uiIcon("pin", 13)}</button>
             </div>
             ${more && html`<button class=${"sc-tile-more"+(isOpen?" open":"")} type="button"
               aria-expanded=${isOpen}
@@ -31239,7 +31351,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
 // hide their scrollbars until you're already scrolling. `edge` tracks which
 // ends have content past the fold so the fade + the ⌄ chip appear only when
 // there really is more to see.
-const NewsFeed = ({variant, tiles}) => {
+const NewsFeed = ({variant, tiles, onPopOut}) => {
   const listRef = useRef(null);
   const [edge, setEdge] = useState("");
   const sync = useCallback(() => {
@@ -31259,7 +31371,8 @@ const NewsFeed = ({variant, tiles}) => {
     return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
   }, [sync, tiles.length]);
   return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant+(edge?" news-edge-"+edge:"")} aria-label="News">
-    <div class="home-feed-title--chase">News</div>
+    ${homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", onPopOut})
+      || html`<div class="home-feed-title--chase">News</div>`}
     <div class="home-news-feed-scroll">
       <div class="home-news-feed-list" ref=${listRef} onScroll=${sync}>${tiles}</div>
       <button class="home-news-feed-more" tabIndex=${-1} aria-hidden="true"
@@ -31334,7 +31447,7 @@ const HOME_TOOLS = [
   // toolbox entry, because the toolbox is the calculators an ordinary visitor
   // uses and the ticker is a tool for the handful of people who stream.
 ];
-const HomeToolboxPanel = ({onOpenTool}) => {
+const HomeToolboxPanel = ({onOpenTool, onPopOut}) => {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem("packsink:home:toolboxCollapsed") === "1"; }
     catch { return false; }
@@ -31344,10 +31457,12 @@ const HomeToolboxPanel = ({onOpenTool}) => {
   }, [collapsed]);
   return html`<aside class="home-feed home-toolbox">
     <div class="home-feed-head">
-      <a class="home-feed-title home-feed-title--chase home-toolbox-title"
+      ${homePanelTitle({cls:"home-feed-title home-feed-title--chase home-toolbox-title",
+          label:"Toolbox", panelKey:"tools", onPopOut})
+        || html`<a class="home-feed-title home-feed-title--chase home-toolbox-title"
         href="/analytics?a=overview"
         title="Open Analytics — what every tool does"
-        onClick=${navHandler(()=>onOpenTool && onOpenTool("overview"))}>Toolbox</a>
+        onClick=${navHandler(()=>onOpenTool && onOpenTool("overview"))}>Toolbox</a>`}
       <button class=${"home-feed-collapse-btn"+(collapsed?" is-collapsed":"")}
         onClick=${()=>setCollapsed(v=>!v)}
         aria-expanded=${!collapsed}
@@ -31376,7 +31491,7 @@ const HomeToolboxPanel = ({onOpenTool}) => {
 //
 // It fetches its own graded items + rollup rather than reading CollectionPanel's
 // — the two panels are independently placeable and either can be switched off.
-const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
+const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick, onPopOut}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   const [items, setItems] = useState(null);
   const [rollup, setRollup] = useState(null);
@@ -31445,11 +31560,13 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
 
   return html`<aside class=${"home-feed home-feed--gowned"+(collapsed?" is-collapsed":"")}>
     <div class="panel-header">
-      ${onTitleClick
+      ${homePanelTitle({cls:"panel-title", label:"Your Graded Movers",
+          panelKey:"gradedOwned", onPopOut})
+        || (onTitleClick
         ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
             title="Open your graded collection"
             style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Graded Movers</button>`
-        : html`<h2 class="panel-title">Your Graded Movers</h2>`}
+        : html`<h2 class="panel-title">Your Graded Movers</h2>`)}
       <button class="home-feed-collapse-btn" onClick=${()=>setCollapsed(c=>!c)}
         title=${collapsed ? "Expand" : "Collapse"}
         aria-label=${collapsed ? "Expand Your Graded Movers" : "Collapse Your Graded Movers"}>
@@ -31498,6 +31615,44 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
               }}/>`}
     </div>`}
   </aside>`;
+};
+
+// One home panel, alone on a dimmed page, with the link to it. Opened by
+// clicking a panel's title; the panel itself is MOVED here rather than
+// duplicated, so nothing double-fetches and no component sees two mounts.
+// `cta` is whatever that title used to do before it became the permalink —
+// relocated, not removed.
+const HomePanelModal = ({panelKey, label, node, cta, onClose}) => {
+  useEscToClose(onClose);
+  const [copied, setCopied] = useState(false);
+  const url = SITE_ORIGIN + homePanelHref(panelKey);
+  const copy = () => {
+    // Synchronous inside the click: Safari rejects a clipboard write that
+    // waits on a promise chain first.
+    try { navigator.clipboard.writeText(url); } catch {}
+    setCopied(true);
+    flashToast("Link to " + label + " copied");
+    setTimeout(() => setCopied(false), 1600);
+  };
+  return html`<div class="home-panel-overlay" onClick=${onClose}>
+    <div class="home-panel-modal" role="dialog" aria-modal="true" aria-label=${label}
+      onClick=${e => e.stopPropagation()}>
+      <div class="home-panel-modal-head">
+        <span class="home-panel-modal-kicker">Home</span>
+        <h2 class="home-panel-modal-title">${label}</h2>
+        <button class="home-panel-modal-close" onClick=${onClose} aria-label="Close">\u00d7</button>
+      </div>
+      <div class="home-panel-modal-body">${node}</div>
+      <div class="home-panel-modal-foot">
+        <button class=${"home-panel-copy" + (copied ? " is-copied" : "")} onClick=${copy}>
+          ${copied ? uiIcon("check") : uiIcon("link")}
+          <span>${copied ? "Copied" : "Copy link to this section"}</span>
+        </button>
+        ${cta && html`<button class="home-panel-cta" onClick=${() => { onClose(); cta.go(); }}>
+          ${cta.label} \u2192</button>`}
+      </div>
+    </div>
+  </div>`;
 };
 
 const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout, homeEdit}) => {
@@ -31971,7 +32126,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           href=${"/cards?set=" + encodeURIComponent(newsSet)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(newsSet))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
-          <div class="home-news-kicker">📣 News</div>
+          <div class="home-news-kicker">${uiIcon("news", 13)} News</div>
           <div class="home-news-title">${newsSet} — ${newsCount} card${newsCount===1?"":"s"} revealed!</div>
           <div class="home-news-sub">Browse the set →</div>
         </a>`);
@@ -31999,7 +32154,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
-          <div class="home-news-kicker">🥥 New Format</div>
+          <div class="home-news-kicker">${uiIcon("coconut", 13)} New Format</div>
           <div class="home-news-title">${COCONUT_SET_NAME}</div>
           <div class="home-news-sub">
             Multiplayer, 3 inks, first to ${COCONUT_LORE_GOAL} lore. Browse all ${coconutCount} Coconut card${coconutCount===1?"":"s"} →
@@ -32012,9 +32167,55 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // loading/error states the rl copy renders full-width so announcements
   // never disappear behind a data hiccup on phones.
   const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
-    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}/>`
+    ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}
+        onPopOut=${variant === "rail" ? popOutPanel : null}/>`
     : null;
   const newsFeedRl = newsFeedAside("rl");
+
+  // Pop-out state. The URL is the source of truth on first paint (so a
+  // /?panel=news link opens straight into it) and history-backed after, so
+  // Back closes the panel instead of leaving the page. pushState, not
+  // replace: a modal is a place you can leave, the same as an open deck.
+  const [openPanel, setOpenPanel] = useState(() => {
+    try {
+      const k = new URLSearchParams(window.location.search).get("panel");
+      return HOME_POPOUT_KEYS.has(k) ? k : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    const onPop = () => {
+      try {
+        const k = new URLSearchParams(window.location.search).get("panel");
+        setOpenPanel(HOME_POPOUT_KEYS.has(k) ? k : null);
+      } catch { setOpenPanel(null); }
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
+  const popOutPanel = useCallback((key) => {
+    if(!HOME_POPOUT_KEYS.has(key)) return;
+    try { window.history.pushState({homePanel: key}, "", homePanelHref(key)); } catch {}
+    setOpenPanel(key);
+  }, []);
+  const closePanel = useCallback(() => {
+    setOpenPanel(null);
+    // Back if this modal is the entry we pushed; otherwise (a cold /?panel=
+    // load, where going back would leave the site) just clean the URL.
+    try {
+      if(window.history.state && window.history.state.homePanel) window.history.back();
+      else window.history.replaceState({}, "", "/");
+    } catch {}
+  }, []);
+  // What each panel's title used to do, relocated into the modal footer.
+  const panelCta = {
+    following:   {label: "Open Decks \u00b7 Following", go: goFollowing},
+    tournaments: openTournamentsList ? {label: "See all tournaments", go: openTournamentsList} : null,
+    tools:       {label: "Open Analytics", go: () => openAnalyticsTool && openAnalyticsTool("overview")},
+    setEv:       {label: "Open Expected Value", go: goAnalytics},
+    collection:  {label: "Open your Collection", go: goCollection},
+    gradedOwned: {label: "Open your graded collection", go: goCollection},
+    news:        null,
+  };
 
   // One node per configurable panel. `null` means "nothing to draw" — either
   // the panel is switched off (panelCol is null) or it has no content.
@@ -32022,21 +32223,23 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     switch(key){
       case "news":       return newsFeedAside("rail");
       case "following":  return html`<${FollowingFeed} key="following" user=${user} onSignIn=${onSignIn}
-        raw=${raw} openDeckById=${openDeckById} onTitleClick=${goFollowing}/>`;
+        raw=${raw} openDeckById=${openDeckById} onPopOut=${popOutPanel}/>`;
       case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
         openDeckById=${openDeckById} openTournamentById=${openTournamentById}
-        openTournamentsList=${openTournamentsList} collapsible=${true}/>`;
-      case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}/>`;
+        openTournamentsList=${openTournamentsList} collapsible=${true}
+        onPopOut=${popOutPanel}/>`;
+      case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}
+        onPopOut=${popOutPanel}/>`;
       case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
-        sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`;
+        sealedPrices=${sealedPrices} setsMeta=${setsMeta} onPopOut=${popOutPanel}/>`;
       case "gradedOwned": return html`<${GradedOwnedMoversHomePanel} key="gradedOwned"
-        raw=${raw} user=${user} onCard=${openCard} onTitleClick=${goCollection}/>`;
+        raw=${raw} user=${user} onCard=${openCard} onPopOut=${popOutPanel}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
         collection=${collection} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
         sealedPrices=${sealedPrices} collectionLoading=${collectionLoading} setsMeta=${setsMeta}
         moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
-        onTitleClick=${goCollection}/>`;
+        onPopOut=${popOutPanel}/>`;
       default: return null;
     }
   };
@@ -32069,16 +32272,19 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       </div>
     </div>`;
   };
+  // The popped-out panel is MOVED into the modal, not copied — a second
+  // mount would re-run its fetches and (for the collapsible ones) fork its
+  // open/closed state. The page behind is dimmed, so the gap is never seen.
   const columnNodes = (col) => {
     if(!editing) return homeLayout
-      .filter(p => panelCol[p.key] === col)
+      .filter(p => panelCol[p.key] === col && p.key !== openPanel)
       .map(p => panelNode(p.key))
       .filter(Boolean);
     const out = [];
     const inCol = homeLayout.filter(p => p.col === col);
     for(const p of inCol.filter(p => p.on)){
       const meta = HOME_PANELS.find(h => h.key === p.key);
-      if(!meta) continue;
+      if(!meta || p.key === openPanel) continue;
       out.push(editBar(p, meta));
       const node = panelNode(p.key);
       if(node) out.push(node);
@@ -32099,7 +32305,13 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     + (leftNodes.length  ? "" : " hg-no-left")
     + (rightNodes.length ? "" : " hg-no-right");
 
+  // Editing the layout and reading one panel full-screen are two different
+  // jobs; the edit bars belong to the page, so the modal stays closed there.
+  const openPanelNode = (!editing && openPanel) ? panelNode(openPanel) : null;
   return html`<div class=${"scr scr-home"+(editing?" home-editing":"")}>
+    ${openPanelNode && html`<${HomePanelModal} panelKey=${openPanel}
+      label=${HOME_PANEL_LABELS[openPanel] || "Section"} node=${openPanelNode}
+      cta=${panelCta[openPanel] || null} onClose=${closePanel}/>`}
     <div class="home-page-title">
       <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
     </div>
@@ -32114,7 +32326,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             <button class="home-edit-done" onClick=${homeEdit.done}>✓ Done</button>
           <//>`
         : html`<button class="home-edit-open" onClick=${homeEdit.start}
-            title="Rearrange, hide, or move the home page sections">✎ Edit layout</button>`}
+            title="Rearrange, hide, or move the home page sections">${uiIcon("edit")} Edit layout</button>`}
     </div>`}
     ${announceNodes.length > 0 && html`<div class="home-announce">${announceNodes}</div>`}
 
@@ -32737,7 +32949,7 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
         style=${bg ? {background: bg, cursor: hasDeck ? "pointer" : "default"} : {cursor: hasDeck ? "pointer" : "default"}}
         onClickCapture=${navCapture}
         onClick=${navHandler((e)=>hasDeck && onOpenDeck && onOpenDeck(r.deck_id, r.deck_share_token))}>
-      <span class="tdc-place" title=${"Placed " + (r.place || "—")}>🏆 ${r.place || "—"}</span>
+      <span class="tdc-place" title=${"Placed " + (r.place || "—")}>${uiIcon("trophy", 12)} ${r.place || "—"}</span>
       ${inks.length > 0 && inkShields("tdc-inks")}
       ${titleText && html`<span class="tdc-title">${titleText}</span>`}
       <span class="tdc-by muted">${playerName}</span>
@@ -32745,20 +32957,20 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
       <span class="tdc-actions">
         <button disabled=${!hasDeck} aria-label="Copy share link"
           onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
-          title="Copy share link">🔗</button>
+          title="Copy share link">${uiIcon("link", 13)}</button>
         <button disabled=${!hasDeck} aria-label="Copy decklist as text"
           onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
-          title="Copy decklist as text">📋</button>
+          title="Copy decklist as text">${uiIcon("clipboard", 13)}</button>
         ${onViewDeckImage && html`<button disabled=${!hasDeck} aria-label="Preview the deck poster"
           onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
-          title="Preview the deck poster">👁</button>`}
+          title="Preview the deck poster">${uiIcon("eye", 13)}</button>`}
         <button disabled=${!hasDeck} aria-label="Copy deck poster image"
           onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
-          title="Copy deck poster image">🖼</button>
+          title="Copy deck poster image">${uiIcon("image", 13)}</button>
         ${isAdmin && html`<button aria-label="Edit this deck" title="Edit this deck"
-          onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>✎</button>`}
+          onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>${uiIcon("edit", 13)}</button>`}
         ${isAdmin && html`<button class="danger" aria-label="Remove this deck" title="Remove this deck from the tournament"
-          onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>🗑</button>`}
+          onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>${uiIcon("trash", 13)}</button>`}
       </span>
     </a>`;
   }
@@ -32772,7 +32984,7 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
       ${event.name}${event.event_date ? " · " + fmtIsoDate(event.event_date) : ""}
     </div>`}
     <div class="deck-card-tourney" title=${"Placed " + (r.place || "—")}>
-      <span class="dct-trophy">🏆</span>
+      <span class="dct-trophy">${uiIcon("trophy", 13)}</span>
       <span class="dct-place">${r.place || "—"}</span>
       <span class="dct-name">by ${playerName}</span>
     </div>
@@ -32817,8 +33029,8 @@ const TournamentDetailView = ({tournament, results, onBack, onOpenDeck, isAdmin,
       <button onClick=${onBack} style=${{fontSize:12,padding:"5px 10px"}}>← Back to Tournaments</button>
       ${isAdmin ? html`<div style=${{display:"flex",gap:6}}>
         <button onClick=${onAddDeck} style=${{fontSize:12,padding:"5px 10px"}}>+ Add deck</button>
-        <button onClick=${onEdit} style=${{fontSize:12,padding:"5px 10px"}}>✎ Edit all</button>
-        <button onClick=${onDelete} style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>🗑 Delete</button>
+        <button onClick=${onEdit} style=${{fontSize:12,padding:"5px 10px"}}>${uiIcon("edit")} Edit all</button>
+        <button onClick=${onDelete} style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>${uiIcon("trash")} Delete</button>
       </div>` : null}
     </div>
     <div style=${{padding:"12px 16px",background:"var(--bg-surface)",border:"1px solid var(--border)",
@@ -34897,7 +35109,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       </div>`}
       ${isTourneyDeck
         ? html`<div class="deck-card-tourney" title="From this tournament">
-            <span class="dct-trophy">🏆</span>
+            <span class="dct-trophy">${uiIcon("trophy", 13)}</span>
             <span class="dct-name">${tctx.tournament_name}</span>
             ${tctx.place && html`<span class="dct-place">${tctx.place}</span>`}
             ${tctx.num_players ? html`<span class="muted">· ${tctx.num_players}p</span>` : null}
@@ -37277,7 +37489,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
 
   return html`<div>
     ${((readOnly && !isOwnDeck) || tournamentContext) && html`<div class="deck-readonly-banner">
-      ${tournamentContext ? html`<span class="deck-readonly-avatar deck-readonly-avatar-fallback" style=${{background:"var(--accent)",color:"#fff"}}>🏆</span>`
+      ${tournamentContext ? html`<span class="deck-readonly-avatar deck-readonly-avatar-fallback" style=${{background:"var(--accent)",color:"#fff"}}>${uiIcon("trophy", 15)}</span>`
         : (creator && (creator.avatar_url
           ? html`<img class="deck-readonly-avatar" src=${creator.avatar_url} alt=""/>`
           : html`<span class="deck-readonly-avatar deck-readonly-avatar-fallback">${(creator?.display_name||"?")[0].toUpperCase()}</span>`))}
@@ -37707,7 +37919,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
             ${(!coconutCard || item.quantity > 1 || gridOverLimit) && html`
               <span class=${"deck-grid-tile-qty"+(gridOverLimit?" over":"")}
                 title=${gridOverLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${gridCocoLimit === Infinity ? "any number" : gridCocoLimit}` : null}>
-                ${gridOverLimit ? "⚠ " : ""}${item.quantity}×
+                ${gridOverLimit ? html`${uiIcon("warn", 11)} ` : ""}${item.quantity}×
               </span>`}
             ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
             ${ownedFracBadge}
@@ -37768,7 +37980,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           onMouseEnter=${onRowEnter} onMouseMove=${onRowMove} onMouseLeave=${onRowLeave}>
           <span class=${"deck-row-qty"+(overLimit?" over":"")}
             title=${overLimit ? `${item.quantity} copies — ${COCONUT_SET_NAME} allows ${cocoLimit === Infinity ? "any number" : cocoLimit}` : null}>
-            ${overLimit ? html`<span class="coconut-over-flag" aria-label="Over the Coconut copy limit">⚠</span>` : ""}${qtyText}
+            ${overLimit ? html`<span class="coconut-over-flag" aria-label="Over the Coconut copy limit">${uiIcon("warn", 11)}</span>` : ""}${qtyText}
           </span>
           <span class="deck-row-costshield" title=${meta.inkable===false?`Cost ${meta.cost ?? "—"} · Uninkable`:`Cost ${meta.cost ?? "—"} · Inkable`}>
             <${CostInkShield} cost=${meta.cost} inkable=${meta.inkable !== false}/>
@@ -38646,7 +38858,7 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "s","f","m","c","card",
+                           "s","f","m","c","card","panel",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -38660,6 +38872,7 @@ function App(){
         market:     new Set(["a","trade","t"]),
         screener:   new Set(["m"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
+        home:       new Set(["panel"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));
@@ -38869,7 +39082,7 @@ function App(){
       if(!st) return null;
       if(markSeen !== false){ try { localStorage.setItem("packsink:sectionTourSeen:"+st.stops[st.i], "1"); } catch {} }
       const ni = st.i + 1;
-      if(ni >= st.stops.length){ flashToast("That's the tour — enjoy the site! 🧭"); return null; }
+      if(ni >= st.stops.length){ flashToast("That's the tour — enjoy the site!"); return null; }
       return {stops: st.stops, i: ni};
     });
   }, []);
@@ -40473,7 +40686,7 @@ function App(){
   return html`<${TipsContext.Provider} value=${tipsEnabled}><${CatalogContext.Provider} value=${raw}><${GradedPremiumContext.Provider} value=${canViewGradedPremium && gradedTosOk}><${GradedAdminContext.Provider} value=${isGradedAdmin}><div>
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
-    ${!isOnline && html`<div class="offline-pill" role="status">📡 Offline — showing saved data</div>`}
+    ${!isOnline && html`<div class="offline-pill" role="status">${uiIcon("offline", 13)} Offline — showing saved data</div>`}
     <div class="top-nav">
       <a class="tabs-logo-btn" href="/"
         onClick=${navHandler(()=>onTabClick("home"))}
@@ -40491,14 +40704,14 @@ function App(){
           ref=${settingsRef} style=${{position:"relative",display:"inline-flex",gap:4,alignItems:"center"}}>
           ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
             onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
-            title="Install Packs.Ink as an app" aria-label="Install app">📲</button>`}
+            title="Install Packs.Ink as an app" aria-label="Install app">${uiIcon("install", 17)}</button>`}
           ${/* Only in the installed app / native shell — which is exactly where
                 there is no address bar to copy from, and also the one state
                 where the install bubble above is hidden, so row 1 keeps its
                 width. A browser tab has the URL on screen already. */""}
           ${(isStandalone || IS_NATIVE_APP) && html`<button class="theme-toggle theme-toggle--link"
             onClick=${(e)=>{ e.stopPropagation(); copyCurrentPageLink(); }}
-            title="Copy a link to this page" aria-label="Copy a link to this page">🔗</button>`}
+            title="Copy a link to this page" aria-label="Copy a link to this page">${uiIcon("link", 17)}</button>`}
           ${user
             ? html`<button class="profile-btn" onClick=${()=>setSettingsOpen(o=>!o)}
                 title="Account & settings" aria-expanded=${settingsOpen}>
@@ -40616,14 +40829,14 @@ function App(){
             <button class="settings-action"
               onClick=${()=>{ setSettingsOpen(false); copyCurrentPageLink(); }}
               title="Copy a link to whatever you're looking at right now">
-              🔗 Copy link to this page
+              ${uiIcon("link")} Copy link to this page
             </button>
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">Home page layout</span>
               <div class="settings-home-hint">Arrange the home page directly on the page —
                 move sections between columns, reorder them, and hide the ones you don't use.</div>
               <button class="settings-action" onClick=${()=>{ setSettingsOpen(false); startHomeEdit(); }}>
-                ✎ Edit home layout
+                ${uiIcon("edit")} Edit home layout
               </button>
             </div>
             <${OfflineImagesPanel} raw=${raw} collection=${collection} user=${user}/>
@@ -40639,7 +40852,7 @@ function App(){
             onClick=${()=>onTabClick("faq")}
             title="How it works" aria-label="How it works">${NAV_ICONS.faq}</button>
           ${showTopBarTheme && html`<button class="theme-toggle" onClick=${toggleTheme} title=${isDarkTheme(theme)?"Switch to light":"Switch to dark"}>
-            ${isDarkTheme(theme)?"\u2600":"\uD83C\uDF19"}
+            ${isDarkTheme(theme) ? uiIcon("sun", 16) : uiIcon("moon", 16)}
           </button>`}
         </div>
       </div>
@@ -40696,7 +40909,7 @@ function App(){
       && (() => { try { return localStorage.getItem("packsink:sectionTourSeen:"+view) !== "1"; } catch { return true; } })()
       && html`<button class="section-tour-btn"
       onClick=${()=>setActiveTour(view)}
-      title=${"Take a guided tour of the "+COACH_TOURS[view].title+" page"}>🧭 Tour</button>`}
+      title=${"Take a guided tour of the "+COACH_TOURS[view].title+" page"}>${uiIcon("compass")} Tour</button>`}
     ${indyArtistPick && html`<${ArtistAlleyModal}
       allIllustrators=${indyAllIllustrators} raw=${raw}
       initialArtist=${indyArtistPick}
@@ -40962,7 +41175,7 @@ function SeasonReviewView({ meta }){
               ${rows.map((p) => html`<tr key=${p.player_id}>
                 <td class="l"><span class="sr-pname">${p.name}</span>${p.platform==="melee"?html`<span class="sr-plat">melee</span>`:null}</td>
                 <td>${p.events}</td>
-                <td>${p.titles>0?html`<span class="sr-titles">🏆 ${p.titles}</span>`:html`<span class="sr-z">0</span>`}</td>
+                <td>${p.titles>0?html`<span class="sr-titles">${uiIcon("trophy", 12)} ${p.titles}</span>`:html`<span class="sr-z">0</span>`}</td>
                 <td>${p.finals>0?p.finals:html`<span class="sr-z">0</span>`}</td>
                 <td>${p.top4>0?p.top4:html`<span class="sr-z">0</span>`}</td>
                 <td>${p.top8>0?p.top8:html`<span class="sr-z">0</span>`}</td>

@@ -32,6 +32,12 @@ function grabLine(prefix) {
   return line;
 }
 
+// HOME_PANELS is the source for the panel labels; grab the array and rebuild
+// the map the same way Index.html does, so a renamed panel shows up here.
+const homePanels = grab("const HOME_PANELS = [", NL + "];");
+const homePanelLabels = grabLine("const HOME_PANEL_LABELS = ");
+const homePanelKeys = grabLine("const HOME_PANEL_KEYS = ");
+const homePopoutKeys = grabLine("const HOME_POPOUT_KEYS = ");
 const labels = grab(
   "const VIEW_SHARE_LABELS = {",
   'swiss: "Swiss Odds", dice: "Dice Tray", elo: "Elo",' + NL + "};",
@@ -54,9 +60,13 @@ const moduleSrc = [
   sections,
   sectionLabels,
   labels,
+  homePanels,
+  homePanelKeys,
+  homePanelLabels,
+  homePopoutKeys,
   hrefFn,
   labelFn,
-  "export {collectionSectionHref, shareUrlLabel, COLLECTION_SECTIONS};",
+  "export {collectionSectionHref, shareUrlLabel, COLLECTION_SECTIONS, HOME_PANEL_LABELS, HOME_POPOUT_KEYS};",
 ].join(NL);
 
 const mod = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -127,6 +137,23 @@ for (const k of mod.COLLECTION_SECTIONS) {
   check('collection section "' + k + '" has a label',
     at("/collection", "?c=" + k), "your Collection · " + EXPECTED[k]);
 }
+
+// ── ?panel= (a popped-out home section) ──────────────────────────────────
+// The pop-out is the only way to link to one box on the home page, and the
+// toast is the only confirmation that the right one got copied. A panel key
+// with no label would silently degrade to "the home page" — the label of the
+// thing you were trying NOT to send.
+for(const [key, label] of Object.entries(mod.HOME_PANEL_LABELS)){
+  // setChamps is in the label map but has no ?panel= view — Upcoming events
+  // expands on its own and carries richer deep links. Labelling it would
+  // promise a link that opens nothing, so it must fall through.
+  const popsOut = mod.HOME_POPOUT_KEYS.has(key);
+  check('panel "' + key + (popsOut ? '" names itself' : '" has no pop-out, so no label'),
+    at("/", "?panel=" + key), popsOut ? label : "the home page");
+}
+check("a bogus panel falls back to the page", at("/", "?panel=nonsense"), "the home page");
+check("a panel param elsewhere does not hijack a leaf page",
+  at("/decks", "?deck=d1&panel=news"), "this deck");
 
 console.log(failed ? NL + failed + " FAILED" : NL + "all passed");
 process.exit(failed ? 1 : 0);

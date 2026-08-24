@@ -544,9 +544,22 @@ input[type="checkbox"]{accent-color:var(--accent);}
      name eats ~80px which was the difference between row 2 (Screener / Price
      Graphing / Analytics / ?) fitting vs. the help button scrolling off the
      right. Tap the avatar to open the popover; the full name is in there. */
-  .profile-btn{padding:2px;min-height:36px;min-width:36px;
-    border-radius:50%;gap:0;}
+  /* Exactly 36x36, the same as every bubble beside and below it. It used to
+     size to its content (42px wide, a 20px avatar swimming in 11px of
+     padding), which made right-cluster row 1 wider than row 2 — so the
+     link bubble sat 6px left of the help bubble under it and the two rows
+     read as misaligned. Fixed size is what makes the columns line up. */
+  .profile-btn{padding:0;width:36px;min-width:36px;max-width:36px;
+    height:36px;min-height:36px;border-radius:50%;gap:0;
+    justify-content:center;overflow:visible;}
   .profile-btn-name{display:none;}
+  /* Fill the button properly instead of leaving a small disc in a big circle. */
+  .profile-btn .profile-avatar-wrap{width:28px;height:28px;}
+  .profile-btn .profile-avatar-wrap > img,
+  .profile-btn .profile-avatar-wrap > span{width:28px !important;height:28px !important;}
+  /* Badge tucks onto the avatar's corner rather than hanging outside the
+     button — an overhang is what made the row look wider than it measured. */
+  .profile-btn .profile-gear-badge{top:-2px;right:-2px;}
   .top-nav-right .theme-toggle{min-height:36px;width:36px;padding:0;font-size:14px;
     display:inline-flex;align-items:center;justify-content:center;}
   /* Pin the settings popover to the viewport on mobile so it isn't clipped
@@ -1700,6 +1713,21 @@ html[data-mode="dark"] .ev-delta-down{background:rgba(232,140,140,0.12);color:#e
   background:rgba(153,27,27,0.08);color:var(--red);
   border:1px solid rgba(153,27,27,0.25);border-radius:5px;cursor:pointer;}
 .clear-filters-btn:hover{background:rgba(153,27,27,0.16);border-color:var(--red);}
+/* ---- Drawn UI glyphs (uiIcon) --------------------------------------------
+   Every pictograph in the app is an inline <svg> from UI_ICON_PATHS, not an
+   emoji. Two things follow from that and both are handled once, here.
+
+   1. An inline SVG sits on the text baseline, which drops it a couple of px
+      below the cap height of the label beside it. One global nudge beats a
+      per-button fix, and it is inert inside flex/grid parents (where
+      vertical-align does nothing), so NAV_ICONS and the deck-action rows are
+      unaffected.
+   2. A glyph must never be the thing that shrinks when a button is tight --
+      the label can ellipsis, the icon cannot.
+   The selector keys on focusable="false", which every icon in the set carries
+   and nothing else does. */
+svg[focusable="false"]{vertical-align:-0.18em;flex:0 0 auto;}
+
 .chip{cursor:pointer;border:1px solid var(--btn-border);background:var(--btn-bg);border-radius:14px;padding:3px 10px;font-size:11px;color:var(--btn-text);transition:all 0.12s;font-family:'Nunito Sans',sans-serif;font-weight:500;display:inline-flex;align-items:center;gap:4px;}
 .chip:hover{background:var(--bg-surface-hover);}
 .chip.active{background:var(--btn-active-bg);color:var(--btn-active-text);border-color:var(--btn-active-border);}
@@ -2593,6 +2621,47 @@ button.graded-home-title{cursor:pointer;}
    in this flex column collapses a panel to its content width — the Toolbox
    sat visibly narrower than .sc-box / .home-ev-strip / .collection-panel,
    which all set width:100%. Same override the left column already has. */
+/* ---- Popped-out home section ---------------------------------------------
+   A home panel, alone, over the dimmed page, with the link to it. Reached by
+   clicking the panel's title -- which is a real <a href="/?panel=key">, so
+   ctrl-click and "Copy link address" work without any box needing a link icon.
+   The panel is MOVED here rather than duplicated, so its own layout rules
+   still apply: the shell only supplies width and a scroll box. */
+.home-panel-overlay{position:fixed;inset:0;z-index:120;background:rgba(0,0,0,0.62);
+  backdrop-filter:blur(2px);display:flex;align-items:flex-start;justify-content:center;
+  padding:max(28px,env(safe-area-inset-top)) 16px max(28px,env(safe-area-inset-bottom));
+  overflow-y:auto;}
+.home-panel-modal{background:var(--bg-modal);border:1px solid var(--border);
+  border-radius:14px;box-shadow:0 24px 60px rgba(0,0,0,0.45);width:min(680px,100%);
+  max-width:100%;display:flex;flex-direction:column;overflow:hidden;}
+.home-panel-modal-head{display:flex;align-items:center;gap:10px;padding:14px 16px 10px;
+  border-bottom:1px solid var(--border);}
+.home-panel-modal-kicker{font-size:10px;letter-spacing:0.09em;text-transform:uppercase;
+  color:var(--text-muted);border:1px solid var(--border);border-radius:10px;padding:2px 8px;}
+.home-panel-modal-title{margin:0;font-size:16px;font-weight:600;flex:1;min-width:0;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.home-panel-modal-close{background:none;border:0;color:var(--text-muted);font-size:22px;
+  line-height:1;cursor:pointer;padding:0 4px;min-height:32px;min-width:32px;}
+.home-panel-modal-close:hover{color:var(--text);}
+/* The panel keeps its own internal scroll caps; this is the outer ceiling so a
+   long feed can't push the Copy-link row off the bottom of the viewport. */
+.home-panel-modal-body{padding:14px 16px;max-height:min(70vh,720px);overflow-y:auto;}
+.home-panel-modal-body > *{margin:0;width:100%;box-sizing:border-box;}
+.home-panel-modal-foot{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;
+  border-top:1px solid var(--border);background:var(--bg-surface);}
+.home-panel-copy,.home-panel-cta{display:inline-flex;align-items:center;gap:7px;
+  font-family:inherit;font-size:12px;font-weight:600;padding:7px 13px;border-radius:8px;
+  cursor:pointer;border:1px solid var(--btn-border);background:var(--btn-bg);
+  color:var(--btn-text);min-height:36px;}
+.home-panel-copy:hover,.home-panel-cta:hover{border-color:var(--accent);color:var(--accent);}
+.home-panel-copy.is-copied{border-color:var(--green);color:var(--green);}
+.home-panel-cta{margin-left:auto;}
+@media (max-width:640px){
+  .home-panel-overlay{padding:max(12px,env(safe-area-inset-top)) 8px
+    max(12px,env(safe-area-inset-bottom));}
+  .home-panel-modal-body{max-height:min(64vh,620px);padding:12px;}
+  .home-panel-cta{margin-left:0;}
+}
 .home-grid-right > .home-feed{align-self:stretch;width:100%;box-sizing:border-box;margin-bottom:0;}
 
 /* "Upcoming Set Championships Near Me" box (home right column). */
@@ -2921,6 +2990,13 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   .home-tourney-deck .ht-deck{display:none;}
   .home-tourney-deck .ht-player::after{content:"";}
 }
+/* A home panel's title is an <a href="/?panel=key"> — that href is the whole
+   reason no box carries a link icon. Strip the anchor/button chrome so it
+   still reads as a heading; this sits ABOVE the per-title colour rules on
+   purpose, so .home-feed-title--chase keeps its gold. */
+.home-title-link{text-decoration:none;color:inherit;background:transparent;
+  border:0;padding:0;margin:0;font:inherit;text-align:left;cursor:pointer;
+  display:inline-block;}
 .home-feed-title{font-size:10px;font-weight:700;letter-spacing:0.5px;
   text-transform:uppercase;color:var(--text-muted);margin:2px 4px 4px;}
 /* Home Toolbox — compact chip links into the Analytics tools. */
