@@ -16,7 +16,14 @@
 // real code out of Index.html so it cannot drift from what ships.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+// Normalize CRLF -> LF before slicing. The repo stores LF, but git's
+// core.autocrlf=true (the default on Zaven's Windows checkout) hands this
+// script a CRLF working copy, and the multi-line end markers below are
+// written with "\n" — so every grab() threw "missing end marker" and the
+// guard could only ever pass in an LF checkout. Extraction is the whole
+// point of this test, so it has to survive both.
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8")
+  .replace(/\r\n/g, "\n");
 
 function grab(startMarker, endMarker) {
   const a = src.indexOf(startMarker);
