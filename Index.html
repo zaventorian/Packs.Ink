@@ -10627,6 +10627,8 @@ const SEALED_DISPLAY_TYPE_ORDER = [
   "Cases",
   "Other Displays / Cases",
   "Puzzles",
+  "Pins",
+  "Lore Counters",
 ];
 const SEALED_DISPLAY_TYPE_FOR = {
   "Booster Box":         "Booster Boxes",
@@ -10649,6 +10651,10 @@ function isHiddenSealedListing(item){
   return name.includes("[set of ") || name.includes("art bundle");
 }
 function deriveSealedDisplayType(item){
+  // Collectibles short-circuit: their names are card names ("Tinker Bell",
+  // "The First Chapter") and would otherwise fall through the keyword rules
+  // below into whatever they happen to contain.
+  if(item.is_collectible) return item.product_type === "Pin" ? "Pins" : "Lore Counters";
   const name = (item.name || "").toLowerCase();
   // Cases & displays. Booster-box cases (the popular ones) get their own
   // "Cases" section; every other case/display lands in "Other Displays /
@@ -10679,6 +10685,12 @@ function deriveSealedDisplayType(item){
   }
   return SEALED_DISPLAY_TYPE_FOR[item.product_type] || item.product_type || "Other Sealed";
 }
+// Static (non-TCGplayer) sections, keyed by their synthetic set_id.
+const SEALED_STATIC_SECTION_NAMES = {
+  "__puzzles__": "Puzzles",
+  "__pins__": "Pins",
+  "__lore_counters__": "Lore Counters",
+};
 const sealedDisplayTypeRank = (t) => {
   const i = SEALED_DISPLAY_TYPE_ORDER.indexOf(t);
   return i === -1 ? 999 : i;
@@ -10716,6 +10728,129 @@ const SEALED_PUZZLES = [
   puzzle_pieces: p.pieces,
   puzzle_exclusive: p.exclusive,
 }));
+// Official Lorcana PINS and LORE COUNTERS (the spin-dial trackers) — the two
+// non-card collectibles Ravensburger has run since launch. Neither is sold: a
+// pin comes from a Weekly Play / League season kit, a convention, a Challenge
+// prize wall or a championship; a lore counter comes from a season kit or an
+// Illumineer's Trove. So there is no TCGplayer SKU, no price, and no purchase
+// link — what a collector wants is a checklist and where each one came from.
+//
+// Shaped like a sealed_prices row (same reason as SEALED_PUZZLES above) so they
+// flow through the Sealed collection's grouping + tiles unchanged, and
+// ownership persists in sealed_collection_items — no FK on the product id, so
+// synthetic ids are fine. Bands: pins 950000000+n, counters 960000000+n, both
+// clear of the puzzles' 912.0M range and of TCGplayer's real id space.
+//
+// ⚠️ `n` is the STABLE id, not the array index — never renumber an existing
+// entry or you silently move somebody's owned mark onto a different pin.
+// Append new ones with the next free n.
+//
+// Images are deliberately absent for now (there is no official catalog for
+// either; every photo in circulation belongs to a fan site). The tiles render
+// name + source + date and degrade cleanly — add `img` per entry later and the
+// grid picks it up with no other change.
+const LORCANA_PINS = [
+  {n:1,  name:"Mickey Mouse - Brave Little Tailor",        source:"League - The First Chapter",       date:"Sep 2022"},
+  {n:2,  name:"Maleficent Logo (Purple)",                  source:"League - The First Chapter",       date:"Sep 2022"},
+  {n:3,  name:"Ariel - Whoseit Collector",                 source:"League - The First Chapter",       date:"Aug 2023"},
+  {n:4,  name:"Scar - Fiery Usurper",                      source:"League - The First Chapter",       date:"Aug 2023"},
+  {n:5,  name:"The First Chapter Logo",                    source:"League - The First Chapter",       date:"Aug 2023"},
+  {n:6,  name:"Rapunzel - Gifted Artist",                  source:"League - Rise of the Floodborn",   date:"Nov 2023"},
+  {n:7,  name:"Rise of the Floodborn Logo",                source:"League - Rise of the Floodborn",   date:"Nov 2023"},
+  {n:8,  name:"Winnie the Pooh - Hunny Wizard",            source:"League - Rise of the Floodborn",   date:"Nov 2023"},
+  {n:9,  name:"Into the Inklands Logo",                    source:"League - Into the Inklands",       date:"Feb 2024"},
+  {n:10, name:"Sheriff of Nottingham - Corrupt Official",  source:"League - Into the Inklands",       date:"Feb 2024"},
+  {n:11, name:"Stitch - Covert Agent",                     source:"League - Into the Inklands",       date:"Feb 2024"},
+  {n:12, name:"Kida - Atlantean",                          source:"League - Ursula's Return",         date:"May 2024"},
+  {n:13, name:"Madam Mim - Purple Dragon",                 source:"League - Ursula's Return",         date:"May 2024"},
+  {n:14, name:"Ursula's Return Logo",                      source:"League - Ursula's Return",         date:"May 2024"},
+  {n:15, name:"Mickey Mouse - Brave Little Tailor (1st Anniversary)", source:"Promotional event",     date:"Aug 2024"},
+  {n:16, name:"Hades - Infernal Schemer",                  source:"League - Shimmering Skies",        date:"Aug 2024"},
+  {n:17, name:"Shimmering Skies Logo",                     source:"League - Shimmering Skies",        date:"Aug 2024"},
+  {n:18, name:"Sisu - Emboldened Warrior",                 source:"League - Shimmering Skies",        date:"Aug 2024"},
+  {n:19, name:"Azurite Sea Logo",                          source:"League - Azurite Sea",             date:"Nov 2024"},
+  {n:20, name:"Baymax - Personal Healthcare Companion",    source:"League - Azurite Sea",             date:"Nov 2024"},
+  {n:21, name:"Tigger - In the Crow's Nest",               source:"League - Azurite Sea",             date:"Nov 2024"},
+  {n:22, name:"Cinderella - Stouthearted",                 source:"Challenge prize wall",             date:"Dec 2024"},
+  {n:23, name:"Amber Ink Symbol",                          source:"League - Archazia's Island",       date:"Mar 2025"},
+  {n:24, name:"Bolt - Superdog",                           source:"League - Archazia's Island",       date:"Mar 2025"},
+  {n:25, name:"Mad Hatter - Unruly Eccentric",             source:"League - Archazia's Island",       date:"Mar 2025"},
+  {n:26, name:"Amethyst Ink Symbol",                       source:"League - Reign of Jafar",          date:"May 2025"},
+  {n:27, name:"Captain Hook - The Pirate King",            source:"League - Reign of Jafar",          date:"May 2025"},
+  {n:28, name:"Into the Unknown",                          source:"League - Reign of Jafar",          date:"May 2025"},
+  {n:29, name:"A Whole New World",                         source:"World Championship",               date:"Jun 2025"},
+  {n:30, name:"Aurora",                                    source:"League - Fabled",                  date:"Aug 2025"},
+  {n:31, name:"Emerald Ink Symbol",                        source:"League - Fabled",                  date:"Aug 2025"},
+  {n:32, name:"Gaston",                                    source:"League - Fabled",                  date:"Aug 2025"},
+  {n:33, name:"Lilo",                                      source:"League - Fabled",                  date:"Aug 2025"},
+  {n:34, name:"Elsa - Ice Maker",                          source:"Challenge prize wall",             date:"Oct 2025"},
+  {n:35, name:"Ruby Ink Symbol",                           source:"League - Whispers in the Well",    date:"Nov 2025"},
+  {n:36, name:"Sapphire Ink Symbol",                       source:"League - Winterspell",             date:"Feb 2026"},
+  {n:37, name:"Be Prepared",                               source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:38, name:"Gaston - Superior Archer",                  source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:39, name:"Madam Mim - Resourceful Trickster",         source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:40, name:"Ursula - Deceiver",                         source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:41, name:"The Great Hunny Rescue",                    source:"Illumineer's Quest (retail)",      date:"Oct 2026"},
+];
+// Weekly Play counters come first (one per season, six per store kit), then the
+// Illumineer's Trove dials (one per set). Several names appear in both lists —
+// the source line on the tile is what tells them apart, so it is not optional.
+const LORCANA_LORE_COUNTERS = [
+  {n:1,  name:"The First Chapter",                source:"Weekly Play - The First Chapter",      date:"Aug 2023"},
+  {n:2,  name:"Rise of the Floodborn",            source:"Weekly Play - Rise of the Floodborn",  date:"Nov 2023"},
+  {n:3,  name:"Into the Inklands",                source:"Weekly Play - Into the Inklands",      date:"Feb 2024"},
+  {n:4,  name:"Ursula's Return",                  source:"Weekly Play - Ursula's Return",        date:"May 2024"},
+  {n:5,  name:"Winnie the Pooh",                  source:"Weekly Play - Shimmering Skies",       date:"Aug 2024"},
+  {n:6,  name:"Tinker Bell",                      source:"Weekly Play - Azurite Sea",            date:"Nov 2024"},
+  {n:7,  name:"Belle - Mechanic Extraordinaire",  source:"Weekly Play - Archazia's Island",      date:"Mar 2025"},
+  {n:8,  name:"Rapunzel - High Climber",          source:"Weekly Play - Reign of Jafar",         date:"May 2025"},
+  {n:9,  name:"Fabled",                           source:"Weekly Play - Fabled",                 date:"Aug 2025"},
+  {n:10, name:"Spooky Sight!",                    source:"Weekly Play - Whispers in the Well",   date:"Nov 2025"},
+  {n:11, name:"Tiana - Warm and Happy",           source:"Weekly Play - Winterspell (first event)", date:"Feb 2026"},
+  {n:12, name:"Into the Inklands",                source:"Illumineer's Trove",                   date:"Feb 2024"},
+  {n:13, name:"Ursula's Return",                  source:"Illumineer's Trove",                   date:"May 2024"},
+  {n:14, name:"Shimmering Skies",                 source:"Illumineer's Trove",                   date:"Aug 2024"},
+  {n:15, name:"Azurite Sea",                      source:"Illumineer's Trove",                   date:"Nov 2024"},
+  {n:16, name:"Archazia's Island",                source:"Illumineer's Trove",                   date:"Mar 2025"},
+  {n:17, name:"Reign of Jafar",                   source:"Illumineer's Trove",                   date:"May 2025"},
+  {n:18, name:"Fabled",                           source:"Illumineer's Trove",                   date:"Aug 2025"},
+  {n:19, name:"Whispers in the Well",             source:"Illumineer's Trove",                   date:"Nov 2025"},
+  {n:20, name:"Winterspell",                      source:"Illumineer's Trove",                   date:"Feb 2026"},
+  {n:21, name:"Attack of the Vine!",              source:"Illumineer's Trove",                   date:"Jul 2026"},
+];
+// Stand-ins until real photos exist — without one, a grid tile collapses to a
+// bare line of text and the section reads as broken rather than as a checklist.
+// Hand-drawn like NAV_ICONS so they inherit currentColor.
+const COLLECTIBLE_GLYPHS = {
+  "Pin": html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="9" r="5.2"/><circle cx="12" cy="9" r="1.7"/>
+    <path d="M12 14.2v7"/></svg>`,
+  "Lore Counter": html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.4"/><path d="M12 12l3.6-2.6"/>
+    <path d="M12 3.6v1.8M20.4 12h-1.8M12 20.4v-1.8M3.6 12h1.8"/></svg>`,
+};
+const _collectibleRow = (c, kind, base, setId) => ({
+  tcgplayer_product_id: base + c.n,
+  name: c.name,
+  clean_name: c.name,
+  product_type: kind,
+  set_id: setId,
+  printing: "Normal",
+  low_price: null,
+  market_price: null,
+  image_url: c.img || null,
+  buy_url: null,
+  is_collectible: true,
+  collectible_n: c.n,
+  collectible_source: c.source,
+  collectible_date: c.date,
+});
+const SEALED_COLLECTIBLES = [
+  ...LORCANA_PINS.map(c => _collectibleRow(c, "Pin", 950000000, "__pins__")),
+  ...LORCANA_LORE_COUNTERS.map(c => _collectibleRow(c, "Lore Counter", 960000000, "__lore_counters__")),
+];
 // Strip the "Disney Lorcana: " prefix that TCGCSV prepends to every product —
 // the set pill already says where this is from; the prefix is just noise.
 const cleanSealedName = (name) => (name || "").replace(/^Disney Lorcana:\s*/i, "");
@@ -17301,7 +17436,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   // per-card cache (readCardHistCache) — sealed pids slot into the same
   // (pid, printing) keyspace cleanly.
   useEffect(() => {
-    if(!product?.tcgplayer_product_id || product?.is_puzzle){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
+    if(!product?.tcgplayer_product_id || product?.is_puzzle || product?.is_collectible){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
     let cancelled = false;
     setHistoryState({loading: true, error: null});
     fetchCardHistory(product.tcgplayer_product_id, "Normal")
@@ -17336,6 +17471,53 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     return out;
   }, [history]);
   if(!product) return null;
+  // Pins and lore counters are prizes, not products — no SKU, no price, nothing
+  // to link to. The modal exists for the one thing a collector wants beyond the
+  // tile: where it came from, spelled out.
+  if(product.is_collectible){
+    const pc = product.tcgplayer_product_id;
+    const qc = sealedCollection?.[pc] || 0;
+    const bumpC = (delta) => { const next = Math.max(0, Math.min(99, qc + delta)); if(next !== qc) updateSealedQty(pc, next); };
+    const kind = product.product_type === "Pin" ? "Pin" : "Lore counter";
+    return html`<div class="card-detail-overlay" onClick=${onClose}>
+      <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
+        <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+        <div class="sealed-detail-head">
+          <div class="sealed-detail-img-wrap">
+            ${product.image_url
+              ? html`<img class="sealed-detail-img" src=${product.image_url} alt=${product.name}/>`
+              : html`<div class="sealed-detail-img-fallback collectible-ph collectible-ph--lg">
+                  ${COLLECTIBLE_GLYPHS[product.product_type] || null}</div>`}
+          </div>
+          <div class="sealed-detail-info">
+            <h2 class="sealed-detail-name">${product.name}</h2>
+            <div class="sealed-detail-meta muted">
+              <span>${kind}</span><span class="sealed-detail-sep">·</span><span>${product.collectible_date}</span>
+            </div>
+            <div class="sealed-detail-prices">
+              <div class="collectible-source">
+                <span class="collectible-source-lbl">How it was given out</span>
+                <span class="collectible-source-val">${product.collectible_source}</span>
+              </div>
+              <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>
+                ${kind}s aren't sold by Ravensburger — they come from event kits and prize walls,
+                so there's no market price to track here.</span>
+            </div>
+            ${!readOnly && html`<div class="sealed-detail-owncounter">
+              <span class="sealed-detail-owncounter-lbl">Owned</span>
+              <button onClick=${()=>bumpC(-1)} disabled=${qc<=0} aria-label="Decrease quantity">−</button>
+              <span class=${"sealed-coll-counter-qty"+(qc>0?" has":"")}>${qc}</span>
+              <button onClick=${()=>bumpC(+1)} disabled=${qc>=99} aria-label="Increase quantity">+</button>
+            </div>`}
+            ${!readOnly && qc > 0 && html`<${CostDateInputs}
+              currentPaid=${sealedMeta?.[pc]?.amount_paid ?? null}
+              currentDate=${sealedMeta?.[pc]?.acquired_date || null}
+              onCommit=${patch => updateSealedMeta(pc, patch)}/>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
   // Puzzles are unpriced merch — show a trimmed modal (big box art, piece
   // count, ownership, Ravensburger link) with no price/chart/Δ% sections.
   if(product.is_puzzle){
@@ -17556,9 +17738,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
   // render below doesn't need to branch — set_id doubles as the section
   // key in either mode (using the type string when grouping by type).
   const grouped = useMemo(()=>{
-    // SEALED_PUZZLES are unpriced static catalog rows merged in so they render
-    // as a "Puzzles" section alongside the priced sealed products.
-    const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
+    // SEALED_PUZZLES and SEALED_COLLECTIBLES are unpriced static catalog rows
+    // merged in so they render as their own sections alongside the priced
+    // sealed products.
+    const items = [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_COLLECTIBLES].filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const filtered = (hideUnowned
@@ -17581,6 +17764,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       for(const [type, list] of byType){
         // Inside each type-section, sort newest-set first then by name.
         list.sort((a, b) => {
+          // Collectibles are a timeline; `n` is release order, and several
+          // share a name across sources, so alphabetical is actively wrong.
+          if(a.collectible_n != null && b.collectible_n != null) return a.collectible_n - b.collectible_n;
           const ai = a.set_id != null ? (setOrder[a.set_id] ?? 999) : 1000;
           const bi = b.set_id != null ? (setOrder[b.set_id] ?? 999) : 1000;
           if(ai !== bi) return ai - bi;
@@ -17600,11 +17786,15 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     }
     const out = [];
     for(const [sid, list] of bySet){
-      list.sort((a, b) => sealedDisplayTypeRank(deriveSealedDisplayType(a)) - sealedDisplayTypeRank(deriveSealedDisplayType(b))
-        || (a.name||"").localeCompare(b.name||""));
+      list.sort((a, b) =>
+        (a.collectible_n != null && b.collectible_n != null)
+          ? a.collectible_n - b.collectible_n
+          : sealedDisplayTypeRank(deriveSealedDisplayType(a)) - sealedDisplayTypeRank(deriveSealedDisplayType(b))
+            || (a.name||"").localeCompare(b.name||""));
       out.push({
         set_id: sid,
-        set_name: sid === "__puzzles__" ? "Puzzles" : (sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid)),
+        set_name: SEALED_STATIC_SECTION_NAMES[sid]
+          || (sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid)),
         items: list,
       });
     }
@@ -17757,7 +17947,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                   ${section.items.map(item => {
                     const qty = sealedCollection[item.tcgplayer_product_id] || 0;
                     const price = item[priceField];
-                    const url = item.is_puzzle ? item.buy_url : tcgUrl(item.tcgplayer_product_id);
+                    // A synthetic pid would build a dead TCGplayer link, so
+                    // anything static uses its own buy_url (null = no link).
+                    const url = (item.is_puzzle || item.is_collectible)
+                      ? item.buy_url : tcgUrl(item.tcgplayer_product_id);
                     const dtype = deriveSealedDisplayType(item);
                     // Booster packs have 3 cover-art variants (no separate
                     // SKU); show a 3-art completion checklist on those tiles.
@@ -17786,7 +17979,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     const paidSealed = sealedMeta[item.tcgplayer_product_id]?.amount_paid;
                     const paidNum = paidSealed != null ? Number(paidSealed) : null;
                     const ownedValSealed = (price || 0) * qty;
-                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle
+                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle && !item.is_collectible
                       && paidNum != null && Number.isFinite(paidNum) && paidNum > 0;
                     const retSealed = hasRetSealed ? ownedValSealed - paidNum : null;
                     const retPctSealed = hasRetSealed ? (retSealed/paidNum)*100 : null;
@@ -17794,11 +17987,15 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                         onClick=${()=>setSelectedProduct(item)}
                         title="View price history and details">
                       ${displayMode==="grid" && item.image_url && html`<img src=${item.image_url} alt="" class="gc-card-img sealed-card-img" loading="lazy"/>`}
+                      ${displayMode==="grid" && !item.image_url && item.is_collectible && html`<div class="gc-card-img sealed-card-img collectible-ph" aria-hidden="true">
+                        ${COLLECTIBLE_GLYPHS[item.product_type] || null}</div>`}
                       <div class="gc-card-body">
                         <div class="gc-card-name" title=${item.name}>${cleanSealedName(item.name)}</div>
-                        <div class="gc-card-sub muted">${dtype}</div>
+                        <div class="gc-card-sub muted">${item.is_collectible ? item.collectible_source : dtype}</div>
                         <div class="gc-card-raw">
-                          ${item.is_puzzle
+                          ${item.is_collectible
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.collectible_date}</span>`
+                            : item.is_puzzle
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.puzzle_pieces} pcs${item.puzzle_exclusive ? " · Disney Store excl." : ""}</span>`
                             : showBoth
                             ? html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lowPx)}</span>
@@ -17839,10 +18036,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                                         if(qty < need) updateSealedQty(item.tcgplayer_product_id, need);
                                       }
                                     }}>${i}</button>`)}
-                                  ${qty > 0 && !item.is_puzzle && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                  ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 </span>`
                               : html`
-                                ${qty > 0 && !item.is_puzzle && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${"Now " + fmt(ownedValSealed) + " · paid " + fmt(paidNum)}
                                   style=${{color: retSealed>=0?"var(--green)":"var(--red)"}}>${retSealed>=0?"+":""}${fmt(retSealed)} (${fmtPct(retPctSealed)})</span>`}`}
                           </div>
