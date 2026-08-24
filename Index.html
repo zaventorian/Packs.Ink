@@ -32779,23 +32779,27 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     ${inks.length > 0 && html`<div class="deck-card-chips">
       ${inkShields("deck-card-inks")}
     </div>`}
-    <div class="deck-card-actions">
-      <button disabled=${!hasDeck}
+    <div class="deck-card-actions deck-act-row">
+      <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
-        title="Copy share link">🔗 Copy link</button>
-      <button disabled=${!hasDeck}
+        title="Copy share link">${DECK_ICONS.copy}<span>Link</span></button>
+      <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
-        title="Copy decklist as text">📋 Copy list</button>
-      ${onViewDeckImage && html`<button disabled=${!hasDeck}
-        onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
-        title="Preview the deck poster">👁 View image</button>`}
-      <button disabled=${!hasDeck}
+        title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+      <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
-        title="Copy deck poster image">🖼 Copy image</button>
-      ${isAdmin && html`<button title="Edit this deck"
-        onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>✎ Edit</button>`}
-      ${isAdmin && html`<button class="danger" title="Remove this deck from the tournament"
-        onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>🗑 Remove</button>`}
+        title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+      ${onViewDeckImage && html`<button class="deck-act deck-act--sm" disabled=${!hasDeck}
+        onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
+        title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>`}
+      ${isAdmin && deckSep("t1")}
+      ${isAdmin && html`<button class="deck-act deck-act--sm" title="Edit this deck"
+        onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>
+        ${DECK_ICONS.edit}<span>Edit</span></button>`}
+      ${isAdmin && html`<button class="deck-act deck-act--sm deck-act--danger"
+        title="Remove this deck from the tournament"
+        onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>
+        ${DECK_ICONS.trash}<span>Remove</span></button>`}
     </div>
   </a>`;
 };
@@ -34513,10 +34517,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // suppress it (the deck wouldn't be visible to the viewer if it weren't
   // shareable in the first place).
   const visibilityPill = (v) => {
+    // Drawn glyphs, matching DECK_ICONS on the buttons right below — an emoji
+    // pill above a row of line icons is the one thing that made the tile look
+    // assembled rather than designed.
     const map = {
-      public:   {label: "Public",   cls: "vis-public",   icon: "🌐"},
-      unlisted: {label: "Unlisted", cls: "vis-unlisted", icon: "🔗"},
-      private:  {label: "Private",  cls: "vis-private",  icon: "🔒"},
+      public:   {label: "Public",   cls: "vis-public",   icon: VIS_ICONS.public},
+      unlisted: {label: "Unlisted", cls: "vis-unlisted", icon: VIS_ICONS.unlisted},
+      private:  {label: "Private",  cls: "vis-private",  icon: VIS_ICONS.private},
     };
     const m = map[v || "private"];
     return html`<span class=${"deck-card-vis "+m.cls}
@@ -34812,18 +34819,34 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
-      <div class="deck-card-actions">
-        <button onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
-          title=${d.visibility === "private" ? "Private decks have no shareable link" : "Copy share link"}>🔗 Copy link</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
-          title="Copy decklist as text">📋 Copy list</button>
-        <button onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
-          title="Preview the deck poster">👁 View image</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
-          title="Copy deck poster image">🖼 Copy image</button>
-        <button onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}>Rename</button>
-        <button onClick=${e=>{e.stopPropagation(); duplicateDeck(d.id);}}>Duplicate</button>
-        <button class="danger" onClick=${e=>{e.stopPropagation(); deleteDeck(d.id);}}>Delete</button>
+      ${/* Two clusters: three things you COPY, then the ones that CHANGE the
+            deck. The row wraps on a narrow tile, and because copy comes first
+            the wrap lands on the group boundary instead of mid-thought. The
+            labels shed their verb — the copy icon carries it. */""}
+      <div class="deck-card-actions deck-act-row">
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
+          title=${d.visibility === "private" ? "Private decks have no shareable link" : "Copy share link"}>
+          ${DECK_ICONS.copy}<span>Link</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
+          title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
+          title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
+          title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>
+        ${deckSep("d1")}
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}
+          title="Rename this deck">${DECK_ICONS.rename}<span>Rename</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); duplicateDeck(d.id);}}
+          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>
+        <button class="deck-act deck-act--sm deck-act--danger"
+          onClick=${e=>{e.stopPropagation(); deleteDeck(d.id);}}
+          title="Delete this deck">${DECK_ICONS.trash}<span>Delete</span></button>
       </div>
     </a>`;
   };
@@ -34883,18 +34906,30 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
-      <div class="deck-card-actions">
-        <button onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
-          title="Copy share link">🔗 Copy link</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
-          title="Copy decklist as text">📋 Copy list</button>
-        <button onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
-          title="Preview the deck poster">👁 View image</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
-          title="Copy deck poster image">🖼 Copy image</button>
-        <button onClick=${e=>{e.stopPropagation(); duplicateExternalDeck(d);}}>Duplicate</button>
-        ${opts.showUnfavorite && html`<button class="danger" onClick=${e=>{e.stopPropagation(); toggleFavorite(d.id);}}>Unfavorite</button>`}
-        ${opts.showUnfollowCreator && d.user_id && html`<button class="danger" onClick=${e=>{e.stopPropagation(); toggleFollowCreator(d.user_id);}}>Unfollow ${entry.creator?.display_name || "creator"}</button>`}
+      <div class="deck-card-actions deck-act-row">
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
+          title="Copy share link">${DECK_ICONS.copy}<span>Link</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
+          title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
+          title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
+          title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>
+        ${deckSep("x1")}
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); duplicateExternalDeck(d);}}
+          title="Copy this deck into your own decks">${DECK_ICONS.duplicate}<span>Duplicate</span></button>
+        ${opts.showUnfavorite && html`<button class="deck-act deck-act--sm deck-act--danger"
+          onClick=${e=>{e.stopPropagation(); toggleFavorite(d.id);}}
+          title="Remove from your favorites">${DECK_ICONS.star}<span>Unfavorite</span></button>`}
+        ${opts.showUnfollowCreator && d.user_id && html`<button class="deck-act deck-act--sm deck-act--danger"
+          onClick=${e=>{e.stopPropagation(); toggleFollowCreator(d.user_id);}}
+          title=${"Stop following " + (entry.creator?.display_name || "this creator")}>
+          ${DECK_ICONS.unfollow}<span>Unfollow</span></button>`}
       </div>
     </a>`;
   };
@@ -36459,6 +36494,43 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
   </div>`;
 };
 
+// Deck action icons. Emoji were doing this job and doing it badly: they render
+// at a different size and weight in every font stack, they can't take
+// currentColor so they stay full-colour against a themed button, and they made
+// every label wider. These are the same hand-drawn line glyphs as NAV_ICONS.
+const _deckSvg = (path) => html`<svg viewBox="0 0 24 24" width="14" height="14"
+  fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+  stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
+const DECK_ICONS = {
+  edit:      _deckSvg(html`<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/>`),
+  done:      _deckSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
+  undo:      _deckSvg(html`<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>`),
+  imports:   _deckSvg(html`<path d="M12 3v11"/><path d="M8 10l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>`),
+  share:     _deckSvg(html`<path d="M13 4h7v7"/><path d="M20 4l-9 9"/><path d="M18 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/>`),
+  history:   _deckSvg(html`<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/>`),
+  link:      _deckSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
+  notes:     _deckSvg(html`<path d="M5 4h11l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M15 4v5h5"/><path d="M8 13h8"/><path d="M8 17h5"/>`),
+  mulligan:  _deckSvg(html`<rect x="3" y="6" width="12" height="15" rx="2"/><path d="M8 3h10a2 2 0 0 1 2 2v11"/><path d="M7 11h4"/><path d="M7 15h4"/>`),
+  image:     _deckSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l4.5-4.5L13 17"/><path d="M13.5 14.5L16 12l4 4.5"/>`),
+  proxies:   _deckSvg(html`<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M7 16h10v4H7z"/>`),
+  decklist:  _deckSvg(html`<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4.5 6h.01"/><path d="M4.5 12h.01"/><path d="M4.5 18h.01"/>`),
+  copy:      _deckSvg(html`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`),
+  preview:   _deckSvg(html`<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>`),
+  rename:    _deckSvg(html`<path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/>`),
+  duplicate: _deckSvg(html`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`),
+  trash:     _deckSvg(html`<path d="M4 7h16"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l1 13h9l1-13"/><path d="M10.5 11v6"/><path d="M13.5 11v6"/>`),
+  unfollow:  _deckSvg(html`<path d="M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20"/><circle cx="9.5" cy="7.5" r="3.5"/><path d="M17 8.5h5"/>`),
+  star:      _deckSvg(html`<path d="M12 4l2.4 5 5.6.8-4 3.9 1 5.5-5-2.6-5 2.6 1-5.5-4-3.9 5.6-.8z"/>`),
+};
+const VIS_ICONS = {
+  public:   _deckSvg(html`<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5a13 13 0 0 1 0 17a13 13 0 0 1 0-17z"/>`),
+  unlisted: _deckSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
+  private:  _deckSvg(html`<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>`),
+};
+// A group divider inside a deck action row. Purely structural — it is what
+// turns "eleven buttons" into "five things you might want to do".
+const deckSep = (key) => html`<span key=${key} class="deck-act-sep" aria-hidden="true"></span>`;
+
 // Deck version history. Lists every saved editing session newest-first, with
 // "Current" pinned at the top, and shows the changelog between any version and
 // the one after it. Owners read deck_versions directly (RLS scopes it to their
@@ -37314,32 +37386,30 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         title=${favoriteCount + " user" + (favoriteCount===1?"":"s") + " favorited this deck"}>
         ★ ${favoriteCount}
       </span>`}
-      <div class=${"deck-editor-toolbar-actions"+(mobileTab==="cards"?" hide-on-cards-tab":"")}
-        style=${{marginLeft:"auto",display:"flex",gap:6,position:"relative",flexWrap:"wrap",justifyContent:"flex-end"}}>
-        ${/* No deck-toolbar-keep: History collapses away on the mobile Cards
-              tab like Share and Notes do, because the card browser needs the
-              vertical room more than a read-only view of the past does. */""}
-        ${(isOwnDeck || shareVersions) && html`<button
-          onClick=${()=>setHistoryOpen(true)}
-          title="See earlier versions of this deck and what changed between them"
-          style=${{fontSize:12,padding:"5px 10px"}}>\ud83d\udd52 History</button>`}
+      ${/* Five groups, hairline-separated: EDIT what it is — SHARE it — PLAY
+            with it — GET IT OUT — DECK OPS. Eleven equal-weight buttons in one
+            undifferentiated row is what this replaced; the dividers are the
+            whole point, and the icons are drawn (NOT emoji) so they inherit
+            currentColor and hold one consistent size. */""}
+      <div class=${"deck-editor-toolbar-actions deck-act-row"+(mobileTab==="cards"?" hide-on-cards-tab":"")}>
         ${isOwnDeck && onToggleEditMode && html`<button onClick=${onToggleEditMode}
-          class=${"deck-toolbar-keep "+(!readOnly ? "active" : "")}
-          style=${{fontSize:12,padding:"5px 10px"}}
+          class=${"deck-act deck-toolbar-keep "+(!readOnly ? "active" : "")}
           title=${readOnly ? "Edit this deck — open the card browser" : "Done editing — back to view"}>
-          ${readOnly ? "✎ Edit" : "✓ Done"}
+          ${readOnly ? DECK_ICONS.edit : DECK_ICONS.done}<span>${readOnly ? "Edit" : "Done"}</span>
         </button>`}
+        ${!readOnly && html`<button onClick=${handleImport} class="deck-act deck-toolbar-keep"
+          title="Paste a decklist to replace this deck's contents">
+          ${DECK_ICONS.imports}<span>Import</span></button>`}
         ${!readOnly && hasUnsavedChanges && onUndoChanges && html`<button onClick=${handleUndoClick}
-          class=${"deck-toolbar-keep deck-toolbar-undo"+(undoArmed?" armed":"")}
-          style=${{fontSize:12,padding:"5px 10px"}}
+          class=${"deck-act deck-toolbar-keep deck-toolbar-undo"+(undoArmed?" armed":"")}
           title=${undoArmed ? "Click again to discard every change made this edit session" : "Revert to the deck's state when you clicked Edit"}>
-          ${undoArmed ? "⚠ Click again to confirm" : "↶ Undo Changes"}
+          ${DECK_ICONS.undo}<span>${undoArmed ? "Confirm?" : "Undo"}</span>
         </button>`}
+        ${isOwnDeck && deckSep("s1")}
         ${isOwnDeck && html`<div ref=${shareRef} class="deck-toolbar-pop">
           <button onClick=${()=>setShareOpen(o=>!o)}
-            class=${visibility==="public" || visibility==="unlisted" ? "active" : ""}
-            style=${{fontSize:12,padding:"5px 10px"}}
-            title="Share this deck via URL">↗ Share</button>
+            class=${"deck-act "+(visibility==="public" || visibility==="unlisted" ? "active" : "")}
+            title="Share this deck via URL">${DECK_ICONS.share}<span>Share</span></button>
           ${shareOpen && html`<div class="deck-share-popover">
             <div class="deck-share-section-title">Visibility</div>
             <label class=${"deck-share-radio"+(visibility==="private"?" active":"")}>
@@ -37406,11 +37476,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </div>`}
         </div>`}
         ${isOwnDeck && html`<div ref=${notesRef} class="deck-toolbar-pop">
+          ${/* One class attribute, not two — htm keeps the last and silently
+                drops the first, which is how this button lost deck-act. */""}
           <button onClick=${()=>setNotesOpen(o=>!o)}
-            class=${(deck.description || deck.youtube_url) ? "active" : ""}
-            style=${{fontSize:12,padding:"5px 10px"}}
+            class=${"deck-act "+((deck.description || deck.youtube_url) ? "active" : "")}
             title="Add notes or a YouTube video for this deck (optional)">
-            ${(deck.description || deck.youtube_url) ? "📝 Notes ✓" : "📝 Notes"}
+            ${DECK_ICONS.notes}<span>Notes</span>
           </button>
           ${notesOpen && html`<div class="deck-notes-popover">
             <div class="deck-share-section-title">Notes</div>
@@ -37425,21 +37496,36 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </div>`}
         </div>`}
         ${!isOwnDeck && shareUrl && html`<button onClick=${copyShareUrl}
-          style=${{fontSize:12,padding:"5px 10px"}}
-          class=${copied ? "active" : ""}
-          title="Copy the URL for this deck">${copied ? "🔗 Copied ✓" : "🔗 Copy link"}</button>`}
-        <button onClick=${()=>setMulliganOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
-          title="Simulate drawing your opening hand and mulliganing">🎴 Mulligan</button>
-        <button onClick=${()=>setPosterOpen(true)} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}}
-          title="Open a printable image of this deck (Save as PDF / screenshot)">🖼 Export Image</button>
-        <button onClick=${()=>setProxyOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
-          title="Build a print-and-cut PDF of this deck at true card size">🖨 Print Proxies</button>
-        ${!readOnly && html`<button onClick=${handleImport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
-        <button onClick=${handleExport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export Decklist Text</button>
-        ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
+          class=${"deck-act "+(copied ? "active" : "")}
+          title="Copy the URL for this deck">${DECK_ICONS.link}<span>${copied ? "Copied" : "Copy link"}</span></button>`}
+        ${(isOwnDeck || shareVersions) && html`<button class="deck-act"
+          onClick=${()=>setHistoryOpen(true)}
+          title="See earlier versions of this deck and what changed between them">
+          ${DECK_ICONS.history}<span>History</span></button>`}
+        ${deckSep("s2")}
+        <button class="deck-act" onClick=${()=>setMulliganOpen(true)}
+          title="Simulate drawing your opening hand and mulliganing">
+          ${DECK_ICONS.mulligan}<span>Mulligan</span></button>
+        ${deckSep("s3")}
+        ${/* One cluster for "get this deck out of the app", so the three ways
+              of doing it read as alternatives rather than three unrelated
+              buttons. Labels drop the Export/Print verb the group already
+              implies; the titles keep the full phrasing. */""}
+        <button onClick=${()=>setPosterOpen(true)} class="deck-act deck-toolbar-keep"
+          title="Export a printable image of this deck (Save as PDF / screenshot)">
+          ${DECK_ICONS.image}<span>Image</span></button>
+        <button onClick=${()=>setProxyOpen(true)} class="deck-act"
+          title="Print proxies — a print-and-cut PDF at true card size">
+          ${DECK_ICONS.proxies}<span>Proxies</span></button>
+        <button onClick=${handleExport} class="deck-act deck-toolbar-keep"
+          title="Copy this deck as a plain-text decklist">
+          ${DECK_ICONS.decklist}<span>Decklist</span></button>
+        ${isOwnDeck && (onDuplicate || onDelete) && deckSep("s4")}
+        ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} class="deck-act"
+          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>`}
         ${isOwnDeck && onDelete && html`<button onClick=${onDelete}
-          class="deck-toolbar-keep"
-          style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
+          class="deck-act deck-act--danger deck-toolbar-keep"
+          title="Delete this deck">${DECK_ICONS.trash}<span>Delete</span></button>`}
       </div>
     </div>
     ${/* Gated on `legal`, not on format === "invalid" — a Coconut deck keeps its

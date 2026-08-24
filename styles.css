@@ -4528,8 +4528,10 @@ html[data-mode="dark"] .sd-row-price.foil{color:#c0a3ef;}
   gap:8px;margin-bottom:4px;}
 .deck-card-header .deck-card-name{margin-bottom:0;}
 .deck-card-vis{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;
-  white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:3px;
+  white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:4px;
   letter-spacing:0.3px;}
+/* Drawn glyph, sized to the 10px label rather than the 14px button icons. */
+.deck-card-vis svg{width:11px;height:11px;flex:none;}
 .deck-card-vis.vis-public{background:rgba(22,101,52,0.14);color:var(--green);
   border:1px solid rgba(22,101,52,0.25);}
 .deck-card-vis.vis-unlisted{background:rgba(196,128,30,0.14);color:#c4801e;
@@ -4580,13 +4582,53 @@ html[data-mode="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .creator-profile-meta{font-size:12px;color:var(--text-muted);}
 .deck-card-name{font-family:'Cinzel',serif;font-size:15px;font-weight:600;color:var(--accent);margin-bottom:4px;}
 .deck-card-meta{font-size:11px;color:var(--text-muted);margin-bottom:8px;}
-.deck-card-actions{display:flex;gap:6px;flex-wrap:wrap;}
-.deck-card-actions button{padding:3px 9px;font-size:11px;font-weight:600;
-  background:var(--bg-surface-hover);color:var(--text);border:1px solid var(--border);
-  border-radius:4px;cursor:pointer;}
-.deck-card-actions button:hover{border-color:var(--accent);}
-.deck-card-actions button.danger{color:var(--red);}
-.deck-card-actions button.danger:hover{border-color:var(--red);background:rgba(153,27,27,0.08);}
+/* ── Deck action buttons ──────────────────────────────────────────────────
+   One system for the deck toolbar and all three tile variants (owned,
+   Discover, tournament). Replaced a mix of emoji + inline styles, where every
+   button was the same weight and nothing said which ones belonged together.
+
+   Icons are drawn SVG (DECK_ICONS), not emoji: emoji can't take currentColor,
+   so they stayed full-colour on a themed button, and they render at a
+   different size and metric in every font stack, which is what made the row
+   look ragged.
+
+   .deck-act-sep is the whole idea — a hairline between groups turns a row of
+   eleven equal buttons into five things you might want to do. */
+.deck-act-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.deck-editor-toolbar-actions.deck-act-row{margin-left:auto;position:relative;
+  justify-content:flex-end;gap:5px;}
+.deck-act{display:inline-flex;align-items:center;gap:6px;
+  padding:5px 10px;font-size:12px;font-weight:600;line-height:1.25;
+  background:var(--btn-bg);color:var(--text);border:1px solid var(--border);
+  border-radius:7px;cursor:pointer;white-space:nowrap;
+  transition:border-color 0.12s,background 0.12s,color 0.12s;}
+.deck-act svg{flex:none;opacity:0.72;}
+.deck-act:hover{border-color:var(--border-accent);background:var(--bg-surface);}
+.deck-act:hover svg{opacity:1;}
+.deck-act.active{background:var(--accent-glow);border-color:var(--border-accent);color:var(--accent);}
+.deck-act.active svg{opacity:1;}
+.deck-act:disabled{opacity:0.42;cursor:default;}
+.deck-act:disabled:hover{border-color:var(--border);background:var(--btn-bg);}
+/* Destructive actions read as destructive on hover, not at rest — a row of
+   red buttons makes Delete no more careful than Duplicate. */
+.deck-act--danger{color:var(--red);}
+.deck-act--danger svg{opacity:0.8;}
+.deck-act--danger:hover{border-color:var(--red);background:rgba(153,27,27,0.10);color:var(--red);}
+/* Tile variant: same shape, tuned down so seven of them fit a 280px card. */
+.deck-act--sm{padding:3px 8px;font-size:11px;gap:5px;border-radius:6px;}
+.deck-act--sm svg{width:12px;height:12px;}
+.deck-act-sep{flex:none;width:1px;align-self:stretch;min-height:18px;
+  margin:0 3px;background:var(--border);opacity:0.75;}
+/* A divider that lands at the start or end of a wrapped line is a stray tick
+   against nothing — only draw it between two buttons on the same line. */
+.deck-act-sep:first-child,.deck-act-sep:last-child{display:none;}
+@media (max-width:520px){
+  /* On a phone the row is already several lines; the dividers stop helping
+     and start looking like noise, so the grouping falls back to order alone. */
+  .deck-card-actions .deck-act-sep{display:none;}
+  .deck-act--sm{padding:3px 7px;}
+}
+.deck-card-actions{display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
 
 /* Editor: card browser (left) + deck summary panel (right) */
 .deck-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 460px;gap:16px;align-items:start;}

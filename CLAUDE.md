@@ -832,6 +832,16 @@ Both exits are hooked: **Done** (`toggleDeckEditMode`) and **Back** (`onBack`). 
 - **`decks.share_versions`, default FALSE.** Sharing a deck is one decision; sharing every draft it passed through is a bigger one, and it must never happen because somebody forgot a checkbox existed. `get_shared_deck_versions` requires all three of: not private, token matches, `share_versions` true. `get_shared_deck` reports the flag so a viewer's client knows whether to offer the History button.
 - **The flag is read on demand in DeckEditor, NOT plumbed through the deck lists.** Adding `share_versions` to those hot selects would 400 every list query until the migration lands. Same reason every version call routes through `deckVersionsUnavailable(err)` (42P01 / 42703 / PGRST202): pre-migration the History modal says "isn't switched on for this site yet" instead of throwing.
 
+## Deck action buttons — one system (2026-08-24)
+
+The deck toolbar and all three tile variants (owned / Discover / tournament) share `.deck-act`. Before this they were a mix of emoji labels and per-button inline styles where every button carried the same weight and nothing said which ones belonged together.
+
+- **Icons are drawn SVG (`DECK_ICONS`, `VIS_ICONS`), never emoji.** Emoji can't take `currentColor`, so they stayed full-colour on a themed button, and they render at a different size and metric in every font stack — that's what made the row look ragged. `_deckSvg` is the `_navSvg` pattern at 14px.
+- **`.deck-act-sep` is the point.** A hairline between clusters turns eleven equal buttons into five things you might want to do. Toolbar order: **Edit/Import/Undo · Share/Notes/History · Mulligan · Image/Proxies/Decklist · Duplicate/Delete**. Tiles: **Link/List/Image/Preview · Rename/Duplicate/Delete**, so a wrap on a narrow tile lands on the group boundary instead of mid-thought. Dividers are hidden at ≤520px, where the row is several lines anyway and they read as noise.
+- Export labels drop the verb the group already implies (`Export Image` → **Image**, `Print Proxies` → **Proxies**, `Export Decklist Text` → **Decklist**); the `title` keeps the full phrasing. Desktop went 2 rows → **1**.
+- `.deck-act--danger` colours on **hover**, not at rest — a row of red buttons makes Delete no more careful than Duplicate.
+- **⚠️ One `class` attribute per element.** htm keeps the LAST and silently drops the first, which is how the Notes button lost `deck-act` and kept its emoji through a whole verification pass. If a class needs to be conditional, build the whole string in one expression.
+
 ## Deck-tile copy actions (🔗 / 📋 / 🖼)
 
 Every deck-card tile in DecksView (owned, Discover, Favorites, Following, the per-tournament tile inside TournamentDetailView) carries three actions. They live inside `.deck-card-actions`, which got `flex-wrap: wrap` to handle the now ≥5-button row on ~260px tiles.
@@ -1552,7 +1562,8 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - **Elo event roster / field scouting (LIVE):** migration 68 + `get_event_roster` RPC + `scripts/elo/scrape_rosters.py` + `refresh-elo-rosters` edge fn (verify_jwt=false) + `EloEventRoster` UI. RPH `/events/{id}/registrations/` is CORS-blocked → server-side scrape only.
 - Also: `scripts/synthetic_monitor.py` (+ workflow, every 2h), tournament `ArchetypeBreakdown`, deck shop-missing name-aggregation, F4 keyboard shortcuts (`/`, `?`).
 
-- **`supabase/125_deck_versions.sql`** — deck version history + `decks.share_versions`. **STAGED, not applied.** Until it lands the History button renders and degrades honestly, and two 4xx probes (`decks?select=share_versions` 400, `deck_versions` 404) are expected in the console on a deck page.
+- ~~**`supabase/125_deck_versions.sql`**~~ — **APPLIED 2026-08-24 by Zaven.**
+- **`supabase/126_deck_versions_grants.sql`** — **STAGED.** 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
 - ~~`supabase/112_drop_legacy_graded_feed.sql`~~ — **APPLIED 2026-08-22 by Zaven; verified via REST probe** (`graded_prices_daily` / `graded_prices_latest` both 404; `graded_sales_rollup` + `card_prices_latest` healthy). The 70,990-row archive remains at `Desktop/graded_prices_daily_archive_20260729.jsonl` (18.9 MB).
