@@ -1,0 +1,285 @@
+{
+  "_readme": [
+    "State file for scripts/reconcile_catalog.py --watch.",
+    "",
+    "The watch exits non-zero on any finding that is NOT covered here, which is",
+    "what turns the Catalog watch workflow red and sends the failure email. So a",
+    "red run always means something genuinely new. Silence means nothing changed.",
+    "",
+    "THREE SECTIONS",
+    "",
+    "acks  — one exact finding key, e.g. \"missing_single:711520\". Use for a",
+    "        specific product we have looked at and decided about. An optional",
+    "        `until` date EXPIRES the ack and re-alerts, which is how",
+    "        \"revisit when Q3 ships\" becomes a mechanism instead of a promise.",
+    "",
+    "rules — a regex over the finding's name, scoped to one kind. Use for a",
+    "        whole class we deliberately do not model, so a new member of that",
+    "        class never re-alerts. ALWAYS set `kind`: a kindless rule silences",
+    "        its pattern across every check, which is how a missing SET gets",
+    "        swallowed by a rule written for sealed inserts.",
+    "",
+    "reviews — the parts of the catalog no feed can watch: Japan Core legality",
+    "        (a Japanese retailer's HTML), pins and lore counters (a fan site),",
+    "        next set's spoilers (press releases). Each becomes a finding on its",
+    "        `due` date and rides the same red run and the same email. `how` is",
+    "        printed IN the alert, so the steps travel with it.",
+    "",
+    "EVERY ack and rule needs a real `why`. This file is a decision record — an",
+    "entry with no reason is indistinguishable from sweeping something under the",
+    "rug, and the next person cannot tell whether it is still true.",
+    "",
+    "Use the CLI rather than hand-editing, then commit the file:",
+    "  python scripts/reconcile_catalog.py --ack missing_single:711520 --why \"...\" [--until YYYY-MM-DD]",
+    "  python scripts/reconcile_catalog.py --done japan-core --next 2027-02-05"
+  ],
+  "rules": [
+    {
+      "kind": "missing_sealed",
+      "name_matches": "(?i)puzzle insert|complete puzzle set",
+      "why": "Pack-insert puzzle pieces. 79 SKUs and growing one set at a time; we model the finished Ravensburger puzzles (SEALED_PUZZLES) but not the insert fragments. Revisit only if we decide to track inserts as a collectible class.",
+      "added": "2026-08-24"
+    },
+    {
+      "kind": "missing_sealed",
+      "name_matches": "(?i)lore card|case file card",
+      "why": "Pack-insert collectible cards (RoJ 19, Archazia 20, Winterspell 9, Whispers 18). Same call as the puzzle inserts — a category we have never modelled. NOT the spin-dial lore counters, which we now track in the Sealed collection.",
+      "added": "2026-08-24"
+    },
+    {
+      "kind": "missing_sealed",
+      "name_matches": "(?i)^reign of jafar insert - ",
+      "why": "Reign of Jafar Hourglass/Gray/Red inserts — same insert class as above.",
+      "added": "2026-08-24"
+    }
+  ],
+  "acks": {
+    "card_no_pid:Lorcana Challenge Year 3|15": {
+      "why": "Stand Out — Challenge promo. Challenge prize-wall cards frequently never get a TCGplayer SKU at all; a null pid is the expected steady state, not a defect.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Lorcana Challenge Year 3|16": {
+      "why": "Down In New Orleans — Challenge promo, same as #15.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Lorcana Challenge Year 3|17": {
+      "why": "The Headless Horseman - Cursed Rider — Challenge promo, same as #15.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Lorcana Challenge Year 3|18": {
+      "why": "Tinker Bell - Insistent Fairy — Challenge promo, same as #15.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:PD1|1": {
+      "why": "Beast - Snowfield Troublemaker. No TCGplayer listing found under this PD1 numbering (673338 is the older #31 promo, a different printing). Nothing to link until TCGplayer lists it — and when they do it arrives as an unacknowledged missing_single, so this ack cannot hide it.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:PD1|2": {
+      "why": "Rapunzel - Ethereal Protector. TCGplayer pid 711443 is almost certainly it — same name, same collector number #2, in the promo group that matches PD1 #2-#8 exactly. One line in TCG_PID_OVERRIDES + a patch_pid_overrides.py run. Deferred only because it is catalog surgery, not workflow.",
+      "added": "2026-08-24",
+      "until": "2026-09-21"
+    },
+    "card_no_pid:Promo Set 1|41": {
+      "why": "Snow White - Unexpected Houseguest — JAPAN_ONLY_NONFOIL. Deliberately has no TCGplayer listing; the null pid is correct.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Promo Set 2|38": {
+      "why": "Elsa - Snow Queen — regional exclusive with no TCGplayer listing. Null pid is correct.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Promo Set 2|42": {
+      "why": "Snow White - Unexpected Houseguest — regional exclusive with no TCGplayer listing. Null pid is correct.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Promo Set 2|43": {
+      "why": "Stitch - Little Rocket — regional exclusive with no TCGplayer listing. Null pid is correct.",
+      "added": "2026-08-24"
+    },
+    "card_no_pid:Promo Set 3|59": {
+      "why": "Elsa - Exploring the Unknown. No TCGplayer SKU found. Same reasoning as PD1 #1: if one ever appears it surfaces as a missing_single, which is not acknowledged.",
+      "added": "2026-08-24"
+    },
+    "missing_single:692490": {
+      "why": "Sulley - The New Boss, Promo Set 3 #58. A genuine hole in P3 (we hold 1-57 and 59). Needs a real cards row via patch_pid_overrides.py's synthetic_cards — deliberate work, not a blind insert.",
+      "added": "2026-08-24",
+      "until": "2026-09-21"
+    },
+    "missing_single:692491": {
+      "why": "Woody - Helping a Friend, Promo Set 3 #60. Same hole and same fix as #58.",
+      "added": "2026-08-24",
+      "until": "2026-09-21"
+    },
+    "missing_single:705078": {
+      "why": "Morph - Little Imitator promo #9 — promo printing of Attack of the Vine #57. Same policy decision.",
+      "added": "2026-08-24"
+    },
+    "missing_single:705079": {
+      "why": "Randall Boggs - Scary Smart promo #11 — promo printing of Attack of the Vine #153. Same policy decision.",
+      "added": "2026-08-24"
+    },
+    "missing_single:705080": {
+      "why": "Meilin Lee - Lead Vocalist promo #10 — promo printing of Attack of the Vine #7. Same policy decision.",
+      "added": "2026-08-24"
+    },
+    "missing_single:705081": {
+      "why": "If I Didn't Have You promo #14 — promo printing of Attack of the Vine #32. Same policy decision.",
+      "added": "2026-08-24"
+    },
+    "missing_single:705082": {
+      "why": "Belle - Always Reading promo #13 — promo printing of Attack of the Vine #148. Same policy decision.",
+      "added": "2026-08-24"
+    },
+    "missing_single:709862": {
+      "why": "Pete - Made by the Vine — Illumineer's Quest: The Great Hunny Rescue (Q3). Prestage the whole 37-card set at once near release rather than dribbling in the 5 SKUs TCGplayer has listed so far.",
+      "added": "2026-08-24",
+      "until": "2026-10-03"
+    },
+    "missing_single:709870": {
+      "why": "Vine Sprout - Buzzer — Q3, prestage with the rest of the set.",
+      "added": "2026-08-24",
+      "until": "2026-10-03"
+    },
+    "missing_single:709874": {
+      "why": "Cruella De Vil - Made by the Vine — Q3, prestage with the rest of the set.",
+      "added": "2026-08-24",
+      "until": "2026-10-03"
+    },
+    "missing_single:709875": {
+      "why": "Bramble Bully - Protecting the Stalk — Q3, prestage with the rest of the set.",
+      "added": "2026-08-24",
+      "until": "2026-10-03"
+    },
+    "missing_single:709896": {
+      "why": "With a Few Good Friends promo #16 (Quest Q3) — promo printing of Attack of the Vine #65. Will be revisited with the rest of Q3 when that set is prestaged near its 2026-10-02 release.",
+      "added": "2026-08-24"
+    },
+    "missing_single:711443": {
+      "why": "Rapunzel - Ethereal Protector promo #2 — the pid for PD1 #2, not a separate card. Resolving card_no_pid:PD1|2 closes this one too.",
+      "added": "2026-08-24",
+      "until": "2026-09-21"
+    },
+    "missing_single:711485": {
+      "why": "Pegasus - Searching High and Low promo #15 — promo printing of PD1 #106/#106f. Same policy decision. Probably the promo bundled with the Quest of Wonders lorebook.",
+      "added": "2026-08-24"
+    },
+    "missing_single:711519": {
+      "why": "Mother Knows Best promo #1 — a promo PRINTING of a card we already hold (TFC #95, Fabled #99), not a new card. Blocked on the promo-printing policy: decide whether Packs.Ink tracks promo printings as separately-priced items before adding any of them.",
+      "added": "2026-08-24"
+    },
+    "missing_single:711520": {
+      "why": "Mother Knows Best (Foil) promo #13 — same promo-printing decision as 711519.",
+      "added": "2026-08-24"
+    },
+    "sealed_no_set:543862": {
+      "why": "Illumineer's Quest: Deep Trouble box. Quest sets fold into EXTRAS_MAP rather than getting a sets row, so the box legitimately belongs to no set.",
+      "added": "2026-08-24"
+    },
+    "sealed_no_set:623065": {
+      "why": "Illumineer's Quest: Palace Heist box — same as Deep Trouble.",
+      "added": "2026-08-24"
+    },
+    "sealed_no_set:666352": {
+      "why": "Portfolio Bundle — an accessory, not tied to a set. Null set_id is correct.",
+      "added": "2026-08-24"
+    },
+    "sealed_no_set:701135": {
+      "why": "Illumineer's Quest: The Great Hunny Rescue box. Revisit with the rest of Q3 — if that set does get its own sets row, this binds to it.",
+      "added": "2026-08-24",
+      "until": "2026-10-03"
+    },
+    "sealed_no_set:702474": {
+      "why": "Curator's Collection: Heroines Edition. We DO have set_curators_cc1, so this one could be bound — a one-row update, low value on its own. Batch it with the next sealed cleanup.",
+      "added": "2026-08-24",
+      "until": "2026-09-21"
+    },
+    "sealed_no_set:706239": {
+      "why": "Hyperia City Booster Box — downstream of unbound_group:24740. Binding the group fixes all six Hyperia SKUs at once.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    },
+    "sealed_no_set:706240": {
+      "why": "Hyperia City Booster Box Case — see 706239.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    },
+    "sealed_no_set:706241": {
+      "why": "Hyperia City Booster Pack — see 706239.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    },
+    "sealed_no_set:706242": {
+      "why": "Hyperia City Sleeved Booster Pack — see 706239.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    },
+    "sealed_no_set:706243": {
+      "why": "Hyperia City Illumineer's Trove — see 706239.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    },
+    "sealed_no_set:706244": {
+      "why": "Hyperia City Illumineer's Trove Case — see 706239.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    },
+    "unbound_group:23234": {
+      "why": "Disney Lorcana Promo Cards. Deliberately unbound: TCGCSV lumps every promo into one group and we split them across Promo Set 1/2/3 by collector-number range, so no single sets row can own it.",
+      "added": "2026-08-24"
+    },
+    "unbound_group:23305": {
+      "why": "Disney100 Promos — same as the promo group: split across our promo sets by number.",
+      "added": "2026-08-24"
+    },
+    "unbound_group:23528": {
+      "why": "Illumineer's Quest: Deep Trouble. Quest sets are modelled as EXTRAS_MAP buckets, not sets rows, so there is nothing to bind the group to.",
+      "added": "2026-08-24"
+    },
+    "unbound_group:24257": {
+      "why": "Illumineer's Quest: Palace Heist — same as Deep Trouble.",
+      "added": "2026-08-24"
+    },
+    "unbound_group:24734": {
+      "why": "Illumineer's Quest: The Great Hunny Rescue. Publishes 2026-10-02; decide then whether Q3 follows the EXTRAS_MAP pattern of Q1/Q2 or earns its own set.",
+      "added": "2026-08-24",
+      "until": "2026-10-03"
+    },
+    "unbound_group:24740": {
+      "why": "Hyperia City (set 14). Prerelease 2026-10-16. Create the set and bind the group as part of the normal pre-release prestage, which is also what lets link_preorder_pids.py start walking it for singles.",
+      "added": "2026-08-24",
+      "until": "2026-10-17"
+    }
+  },
+  "reviews": [
+    {
+      "id": "set-spoilers",
+      "what": "Prestage the next set's revealed cards before Lorcast indexes them",
+      "why": "Lorcast publishes a set weeks after spoiler season starts, and TCGplayer lists sealed months early. Between those, revealed cards exist everywhere except on Packs.Ink. unbound_group catches the set itself; nothing catches its cards.",
+      "how": "Check the official site + Mushu Report/LorcanaPlayer for revealed cards.\nRun scripts/prestage_set_cards.py for any with a confirmed collector number.\nCards with a name but no number are NOT prestageable — wait for the checklist.\nNext up: Hyperia City (set 14), previews 2026-10-16, ships 2026-10-23.",
+      "due": "2026-09-25",
+      "every_days": 60
+    },
+    {
+      "id": "japan-core",
+      "what": "Refresh JAPAN_CORE_PARTIAL_NUMBERS + the fully-released set list",
+      "why": "Japan skipped sets 10 and 11 as standalone releases; their cards trickle out through the Curator's Library pack slot, a new wave per Japanese set. Nothing publishes that list — not Ravensburger, not Lorcast — so the filter silently drifts out of date until someone re-scrapes it.",
+      "how": "Scrape lorhappy.com categories ct139 (Whispers, JA-10) + ct140 (Winterspell, JA-11),\nregex the `N/204 JA-1x` collector numbers out of the product titles, UNION them\ninto JAPAN_CORE_PARTIAL_NUMBERS in Index.html (never replace — a retailer can be\nout of stock on a card).\nAlso add any set that has since released in Japan to JAPAN_CORE_FULL_SETS.\nPlain curl works there with a browser UA; lorcanaplayer.com is Cloudflare-blocked.\nSee the project_japan_core_legality memory for the full method.",
+      "due": "2026-10-30",
+      "every_days": 90
+    },
+    {
+      "id": "pins-lore-counters",
+      "what": "Check for new pins and lore counters, and chase the missing photos",
+      "why": "One pin per League/Weekly Play season plus one lore counter per season and per Illumineer's Trove, so a new set means roughly 3-4 new collectibles. The lists are static data in Index.html (LORCANA_PINS / LORCANA_LORE_COUNTERS) with no feed behind them at all.",
+      "how": "Compare against lorcanaplayer.com/disney-lorcana-pins/ and /disney-lorcana-lore-counters/\n(Cloudflare-blocked to curl — use a fetch tool; the product sitemap enumerates them).\nAppend with the NEXT FREE `n` — never renumber, it moves someone's owned mark.\nStill open: no images at all (Zaven's call, 2026-08-24) — decide whether we shoot\nor licence a set, then add `img` per entry.\nStill open: Wilds Unknown has no counter in either list. Source hole, or real gap?",
+      "due": "2026-10-30",
+      "every_days": 90
+    },
+    {
+      "id": "promo-printing-policy",
+      "what": "Decide whether Packs.Ink tracks promo PRINTINGS as separate priced items",
+      "why": "Nine acked missing_singles are all blocked on this one call — TCGplayer sells a promo printing of a card we already hold, with its own pid, its own promo collector number and its own price. Every new promo wave adds more. Until it is decided they accumulate as acks, which is exactly the pile that trained everyone to stop reading this report.",
+      "how": "Options: (a) EXTRAS_MAP entries so each promo printing is its own tile,\n(b) CUSTOM_VARIANTS clones, (c) keep ignoring them.\nAlso settles whether AVP and PD1 are one promo series we have split in two\n(TCGplayer numbers Tigger #12 / Maleficent #4; we store #10 / #9).\nDecide BEFORE Q3 prestaging on 2026-10-02, or it gets done twice.",
+      "due": "2026-09-28"
+    }
+  ]
+}

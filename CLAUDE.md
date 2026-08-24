@@ -743,7 +743,46 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 - **`MAINLINE_RELEASE_ORDER`** = `MAINLINE_SETS` minus unreleased. Drives Core Constructed rotation.
 - Decks pick up format automatically (`checkDeckLegality`): core-legal sets → "Core Constructed"; structurally legal → "Infinity"; otherwise → "Invalid Deck".
 - **`TCGCSV_GROUP_SET_ALIASES` (`scripts/tcgcsv_common.py`) is how a TCGplayer group binds to a Lorcast set when their names don't match.** Both `etl_tcgcsv_daily.update_set_group_mapping` (writes `sets.tcgplayer_group_id`) and `load_sealed_products.build_group_to_setid` (writes `sealed_products.set_id`) resolve through `group_name_candidates()`, which tries the alias, then the literal group name, then the post-colon form ("Disney Lorcana: Fabled" → "Fabled"). An unmatched group is quietly expensive: `link_preorder_pids.py` only walks sets that HAVE a `tcgplayer_group_id`, so that set's new cards never get a pid linked and stay priceless/invisible until Lorcast fills `tcgplayer_id` itself. Seeded with `"d23 promos" → "D23 Collection"` — TCGplayer files every D23 drop (2024 #1-9, 2026 #10-15, both years' sealed collection SKUs) under one "D23 Promos" group. Add an entry whenever a new promo group appears under a name that isn't the set's.
-- **Check one product with `python scripts/reconcile_catalog.py --pid <id>`** — reports it across TCGCSV / `cards` / `sealed_products` / `prices_daily` and exits 1 if it's in neither catalog table. The daily sweep can't answer this for a brand-new SKU (it only looks at pids priced in the last 14 days).
+- **Check one product with `python scripts/reconcile_catalog.py --pid <id>`** — reports it across TCGCSV / `cards` / `sealed_products` / `prices_daily` and exits 1 if it's in neither catalog table.
+
+### Catalog watch — the thing that tells you a new set exists
+
+`.github/workflows/catalog-watch.yml`, daily at 03:30 UTC (after the ETL window), running `python scripts/reconcile_catalog.py --watch`. It answers "is there anything Lorcana out there we don't know about?" across six checks:
+
+| kind | what it catches |
+|---|---|
+| `missing_single` | TCGplayer sells a card, it's in neither `cards` nor `sealed_products` |
+| `missing_sealed` | same for a sealed SKU |
+| `unbound_group` | a TCGCSV group no `sets.tcgplayer_group_id` points at — **how a new set announces itself, weeks before a card of it is listed** |
+| `sealed_no_set` | sealed row loaded with `set_id` null → renders under "Other / Promo" |
+| `card_no_pid` | `cards.tcgplayer_product_id` null → `card_prices_latest` is an INNER JOIN, so that card can never show a price |
+| `missing_set` | Lorcast published a set we never created |
+| `review_due` | a **scheduled review** came due — see below |
+
+**It is its own workflow, not an ETL job, deliberately.** ETL red = prices are broken, act now. Catalog watch red = something new exists, decide what to do with it. Sharing one light teaches you to ignore both. It also stopped firing 3–4x a day (once per prices dispatch) to answer a question that changes daily at most.
+
+**Red means something NEW.** Everything already ruled on lives in `scripts/catalog_watch.json`:
+- `acks` — one exact `kind:id`, with a `why` and an optional `until` date that **expires the ack and re-alerts**. That's how "revisit when Q3 ships" is expressed as a mechanism instead of a promise someone has to remember.
+- `rules` — a regex over the finding name, scoped to a kind, for a whole class we don't model (puzzle inserts, Lore Cards, Case File Cards). A new member of the class never re-alerts.
+
+Acknowledge from the CLI, don't hand-edit: `python scripts/reconcile_catalog.py --ack missing_single:711520 --why "…" [--until YYYY-MM-DD]`. `--why` is mandatory — the file is a decision record, and an entry with no reason can't be told apart from sweeping something under the rug. Commit the file so CI sees it.
+
+**Why any of this exists:** the old `reconcile` job ran green every single day with **18 genuinely missing singles in its output**, because it exited 0, `RECONCILE_ALERT_WEBHOOK` was never set, and its report went to a Step Summary nobody opens. An alert with no delivery is not an alert. The other half was coverage — it only looked at pids with a recent PRICE, so a product listed before release (a new Quest set, next set's boxes) was invisible to it.
+
+Two things it does NOT re-report, structurally rather than by ack: `load_sealed_products.SKIP_NAME_PATTERNS` is **imported** (so a deliberate loader exclusion can't come back as a finding — add a pattern there and it's silent here in the same commit), and `sealed_no_set` skips `product_type='Promo Single'` / `card_no_pid` skips Format Coconut, where a null is the correct steady state.
+
+**Scheduled reviews — the parts no feed can watch.** Japan Core legality comes from a Japanese retailer's HTML; the pin and lore-counter lists come from a fan site; next set's spoilers come from press releases. Nothing can watch those, so `catalog_watch.json`'s `reviews` list carries them: each becomes a `review_due` finding on its date and rides the same red run and the same email. The `how` steps are printed **inside** the alert, because nobody is going to go dig them up. Four are seeded:
+
+| id | due | what |
+|---|---|---|
+| `set-spoilers` | 2026-09-25 | prestage the next set's revealed cards before Lorcast indexes them |
+| `promo-printing-policy` | 2026-09-28 | decide if promo *printings* are separate tracked items — 9 acks are blocked on it, and it must land before Q3 prestaging |
+| `japan-core` | 2026-10-30 | re-scrape the Curator's Library waves into `JAPAN_CORE_PARTIAL_NUMBERS` |
+| `pins-lore-counters` | 2026-10-30 | new season's pin + counters, and the still-missing photos |
+
+`--done <id> [--next YYYY-MM-DD]` marks one done and rolls it forward (`every_days` is only the fallback when `--next` is omitted — these key off the release calendar, not a round number of days). A review is "acknowledged" exactly when its `due` is in the future; `acks` don't apply to it, so the only way to silence one is to do it or to deliberately push the date.
+
+Guarded by `python scripts/test_catalog_watch.py` (no network) — it runs first in the workflow, because a bad state file fails by making the sweep pass. It checks `until` really expires, that a review actually comes due, that a rule can't match outside its kind, that every committed entry carries a reason, and that no review ships already overdue.
 
 ## Inks & dual-ink cards
 
@@ -780,6 +819,28 @@ Implementation:
 Public deck access paths (no auth needed):
 - `externalDeck` flow — set via `openExternalDeckEntry()` when a Discover card is clicked. The SECURITY DEFINER RPCs `get_shared_deck(uuid, text)` / `get_shared_deck_cards(uuid, text)` handle the fetch without auth.
 - Incoming URL deep-links (`?deck=<id>` or `?deck=<id>&token=<x>`) hit the same fetch path BEFORE the gate logic — already designed for logged-out shared-link visitors.
+
+## Deck version history (migration 125 — STAGED)
+
+**A version is one EDITING SESSION, not one keystroke.** The editor already snapshots the deck when you enter edit mode (`editSnapshot`, which powers "Undo changes"); leaving edit mode writes that pre-edit state as the next version — but only if `deckCardsSignature` says something actually changed. Snapshot per card-tap and you get four hundred rows nobody can read as history.
+
+Both exits are hooked: **Done** (`toggleDeckEditMode`) and **Back** (`onBack`). Miss the second and a whole session is absent from history purely because the user backed out instead of pressing Done. Both must read `editSnapshot` BEFORE flipping `editMode` — the effect that owns the snapshot clears it the instant the flag goes false.
+
+- `deck_versions(deck_id, version, name, coconut_card, cards jsonb, created_at)`. Cards carry the **same obfuscation as `deck_cards`** (card_id deterministic-encrypted, quantity plain int) — an archive of decklists shouldn't be readable when the live table isn't. `decDeckVersionRows` decodes on read.
+- Writes go through **`save_deck_version()`** only; there is no INSERT policy. It assigns `max(version)+1` and prunes past **30** under one lock, so the number can't be raced. Version numbers are never reused — "v4" always means the same snapshot even after v1 is pruned.
+- `diffDeckVersions(from, to)` keys on **card_id + printing** (the `deck_cards` PK), so a Normal→Foil swap reads as one card out and one in — which is what happened to the deck. Guarded by `node scripts/test_deck_versions.mjs`; the signature is the dangerous half, since being too sensitive fills history with empty changelogs and being too lax loses real edits, and both are silent.
+- **`decks.share_versions`, default FALSE.** Sharing a deck is one decision; sharing every draft it passed through is a bigger one, and it must never happen because somebody forgot a checkbox existed. `get_shared_deck_versions` requires all three of: not private, token matches, `share_versions` true. `get_shared_deck` reports the flag so a viewer's client knows whether to offer the History button.
+- **The flag is read on demand in DeckEditor, NOT plumbed through the deck lists.** Adding `share_versions` to those hot selects would 400 every list query until the migration lands. Same reason every version call routes through `deckVersionsUnavailable(err)` (42P01 / 42703 / PGRST202): pre-migration the History modal says "isn't switched on for this site yet" instead of throwing.
+
+## Deck action buttons — one system (2026-08-24)
+
+The deck toolbar and all three tile variants (owned / Discover / tournament) share `.deck-act`. Before this they were a mix of emoji labels and per-button inline styles where every button carried the same weight and nothing said which ones belonged together.
+
+- **Icons are drawn SVG (`DECK_ICONS`, `VIS_ICONS`), never emoji.** Emoji can't take `currentColor`, so they stayed full-colour on a themed button, and they render at a different size and metric in every font stack — that's what made the row look ragged. `_deckSvg` is the `_navSvg` pattern at 14px.
+- **`.deck-act-sep` is the point.** A hairline between clusters turns eleven equal buttons into five things you might want to do. Toolbar order: **Edit/Import/Undo · Share/Notes/History · Mulligan · Image/Proxies/Decklist · Duplicate/Delete**. Tiles: **Link/List/Image/Preview · Rename/Duplicate/Delete**, so a wrap on a narrow tile lands on the group boundary instead of mid-thought. Dividers are hidden at ≤520px, where the row is several lines anyway and they read as noise.
+- Export labels drop the verb the group already implies (`Export Image` → **Image**, `Print Proxies` → **Proxies**, `Export Decklist Text` → **Decklist**); the `title` keeps the full phrasing. Desktop went 2 rows → **1**.
+- `.deck-act--danger` colours on **hover**, not at rest — a row of red buttons makes Delete no more careful than Duplicate.
+- **⚠️ One `class` attribute per element.** htm keeps the LAST and silently drops the first, which is how the Notes button lost `deck-act` and kept its emoji through a whole verification pass. If a class needs to be conditional, build the whole string in one expression.
 
 ## Deck-tile copy actions (🔗 / 📋 / 🖼)
 
@@ -867,13 +928,14 @@ The nested-interactive HTML (button inside `<a>`) is technically invalid but eve
 
 **Common bug**: when converting `<button>` → `<a>`, also flip the matching `</button>` → `</a>`. The first pass missed the closing tag on `.tournament-card` and the page broke until the close tag was flipped.
 
-## Shareable sub-tab URLs — `?s=` / `?f=` / `?m=` (2026-08-22)
+## Shareable sub-tab URLs — `?s=` / `?f=` / `?m=` / `?c=`
 
 Decks' sections and the Screener's mode were localStorage-only, so every one of them lived at `/decks` or `/screener` and **none could be linked to** — "here's the Coconut feed" was not a sendable thing. Now:
 
 - **`/decks?s=<section>`** — `yours|favorites|following|discover|tournaments` (`DECK_SECTION_KEYS`).
 - **`/decks?f=<format>`** — `core|infinity|coconut`; implies Discover, so `/decks?f=coconut` alone is the short share link.
 - **`/screener?m=<mode>`** — `raw|graded|sealed` (`SCREENER_MODES`).
+- **`/collection?c=<section>`** — `cards|sealed|graded` (`COLLECTION_SECTIONS`, added 2026-08-24). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
 
 Rules that keep this from fighting the rest of the URL machinery:
 
@@ -882,7 +944,18 @@ Rules that keep this from fighting the rest of the URL machinery:
 - **`replaceState`, never push.** Decks stacks real pages on top of a section (deck / tournament / creator profile), each pushing its own entry; a filter that also pushed would interleave and make Back step sideways through tab changes instead of out of the page you opened. The Screener's mode is a filter for the same reason. (Analytics' `?a=` does push — it has no leaf pages under it.)
 - **A leaf page owns the URL while it's open.** The decks mirror early-returns when a deck / tournament / creator is open, or it would strip their deep-link params; DecksView's popstate handler restores section + format from the URL when you back out of one.
 - **A `?f=` link counts as "user touched the format".** Otherwise Discover's auto-fallback (land on a format that has decks) can quietly move a shared Coconut link onto Core.
-- Both tab rows are `<a href>` + `navHandler` now that the URLs exist, so modifier-click and "Copy link address" work — same convention as the Analytics sub-tabs. Their CSS needed `text-decoration:none` and nothing else.
+- Both tab rows are `<a href>` + `navHandler` now that the URLs exist, so modifier-click and "Copy link address" work — same convention as the Analytics sub-tabs. Their CSS needed `text-decoration:none` and nothing else. Collection's section tabs went the same way (they also needed `display:inline-flex` + `line-height`, which `<button>` had given for free).
+
+### "Copy link to this page"
+
+Every view and sub-tab mirrors itself into the URL, so the address bar is always right — **except in the installed app, where there is no address bar**, which made the one place people live the only place they couldn't share from.
+
+- `currentShareUrl()` reads `window.location` rather than reconstructing anything, so it inherits every deep link the app already writes (`?deck=` `?set=` `?tourney=` `?card=` `?a=` `?s=` `?f=` `?m=` `?c=`) with no second source of truth. Origin is forced to `SITE_ORIGIN` so a native build copies packs.ink, not `capacitor://`.
+- `shareUrlLabel()` names what it caught — "Link to **Decks · Tournaments** copied". A bare "Link copied" leaves you unsure whether it got the deck you had open or the tab behind it. Leaf params (deck / tournament / collection / user / card / trade / set) win over the section behind them.
+- Two entry points: a 🔗 bubble in the top nav **only when `isStandalone || IS_NATIVE_APP`**, and a row in the settings popover always. The bubble sits in right-cluster row 1 — the slot the install bubble vacates once installed, so the two are mutually exclusive by construction and row 2 never grows to the 3 bubbles that used to push ANALYTICS off the edge at ≤420px.
+- Guarded by `node scripts/test_share_links.mjs` (extracts both helpers out of Index.html). Both failure modes are silent — a dropped share token, or a label that starts claiming the wrong page as params are added.
+
+**Do links open the installed app?** Android: yes. Chrome installs a PWA as a WebAPK that registers intent filters for the manifest `scope`, which is `/` here, so any packs.ink link opens the app. Nothing to configure. iOS: no — a home-screen PWA gets no URL handling, links always open in Safari. The native Capacitor shell: no — its only intent filter is the custom `ink.packs.app://auth-callback` OAuth scheme, and there's no `/.well-known/assetlinks.json` or `apple-app-site-association`. Adding those needs the app published and its signing-cert SHA-256, so it belongs with the phase-2 native work.
 
 ## [Format Coconut] starter decks + Discover's third tab (2026-08-22)
 
@@ -1096,7 +1169,7 @@ The avatar gate is one-shot — closing the picker once flips `packsink:avatarPr
 
 Every home section except the movers stack is a **user-arrangeable panel**: show/hide, move between columns, reorder within a column. Edited from the settings popover ("Home page layout"), persisted to `localStorage["packsink:homeLayout"]` as an ordered `[{key, col, on}]`.
 
-- **`HOME_PANELS`** declares the panels + their default column; **`HOME_COLUMNS`** the four targets: `announce` (full-width strip under the search box) · `left` · `main` · `right` (labels: Top strip / Left rail / Below movers / Right rail). **`tools` ("Analytics toolbox", added 2026-08-20, default = top of `right`)** is `HomeToolboxPanel` — six `<a href>` chips into the Analytics tools via App's `openAnalyticsTool(subKey)`, with hand-coded `_navSvg`-style line icons (`HOME_TOOL_ICONS`, accent-colored — NO emoji, per user) and a collapsible header (`packsink:home:toolboxCollapsed`, same chevron pattern as the tournaments panel). Because `normalizeHomeLayout` APPENDS new keys at the bottom of existing layouts, it shipped with a one-shot hoist stamp (`packsink:homeLayoutToolbox`, same pattern as the news-rail fix) that moves it to the top of the right rail once; a later user re-position sticks.
+- **`HOME_PANELS`** declares the panels + their default column; **`HOME_COLUMNS`** the four targets: `announce` (full-width strip under the search box) · `left` · `main` · `right` (labels: Top strip / Left rail / Below movers / Right rail). **`tools` ("Analytics toolbox", added 2026-08-20, default = top of `right`)** is `HomeToolboxPanel` — `<a href>` chips into the Analytics tools via App's `openAnalyticsTool(subKey)`, with hand-coded `_navSvg`-style line icons (`HOME_TOOL_ICONS`, accent-colored — NO emoji, per user) and a collapsible header (`packsink:home:toolboxCollapsed`, same chevron pattern as the tournaments panel). Because `normalizeHomeLayout` APPENDS new keys at the bottom of existing layouts, it shipped with a one-shot hoist stamp (`packsink:homeLayoutToolbox`, same pattern as the news-rail fix) that moves it to the top of the right rail once; a later user re-position sticks.
 - **Movers banners are reorderable in edit mode (2026-08-21)**: each rendered banner gets a `.home-edit-card--banner` bar with ▲▼ only. Order persists at `packsink:homeBannerOrder` (`HOME_BANNER_KEYS` = valuable/chase/rareLeg/promo/graded, normalized by `normalizeBannerOrder`); **null = the built-in hot-aware order** (newest-set banner floats top during release week, bottom after) — the first ▲▼ materializes the order the user is looking at and retires the heuristic. The rareLeg entry moves the whole `rl-news-row` (news feed rides along); banners with no node (signed-out graded, no newest set) render no bar. The movers stack now returns a **Fragment, not a wrapper div**, so banners are direct children of `.home-grid-main` and the edit-mode freeze dims each one while its bar stays live. Banner order shares the edit lifecycle: snapshot on entry, Cancel restores, Reset nulls it.
 - **On-page layout edit mode (2026-08-21)** replaced the cramped settings-popover editor (which is now just an "✎ Edit home layout" launcher → `startHomeEdit()`). The "✎ Edit layout" chip under the home search enters editing: every panel gets a dashed `.home-edit-card` control bar — ▲▼ reorder, a column `<select>`, Hide/Show — rendered as a SIBLING above the panel, **never a wrapper** (the `.home-left-col > .home-feed` child-selector rule still stands). Hidden panels keep a dimmed bar at the bottom of their column so they're restorable in place. Live panels get `pointer-events:none` + dimming via `.home-editing` so a stray tap can't navigate. The sticky control row (Reset / Cancel / ✓ Done) pins at `top:96px` on phones (below the two-row nav, same trick as `.cards-bulk-bar`). Edits apply live; entering snapshots the layout so **Cancel restores it** (`homeLayoutDraftBase` ref in App); navigating away mid-edit keeps changes and exits. **`normalizeHomeLayout(val)`** is the only way state enters — it drops unknown keys, appends missing ones at their default column, resets bad column names, and never throws. Both App (on load) and HomeView (on render) run it, so a hand-edited or half-migrated value can't render a broken page.
 - **Migration**: the old visibility-only `packsink:homePanels` map is read once on first load and folded into the new shape. Both keys are `localStorage`-only — deliberately NOT in the `user_metadata` prefs-sync effect, since a phone and a desktop wanting different arrangements is normal, not drift to reconcile.
@@ -1488,6 +1561,9 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - **Guided site walk (2026-08-21).** `SITE_TOUR_ORDER` chains the section coachmarks across views: home → cards → screener → history → decks → market → collection, each stop's last Next reading "Next: <section> →". App state `siteTour {stops, i}`; stops are frozen at start (requiresUser sections dropped for signed-out walkers). Each stop's coachmark mounts on a **growing retry ladder** (900/1700/2800/4200ms, `siteTourAttempt`) because the Screener's shell doesn't render until its movers fetch lands (~1.6s cold) — a single quick retry made the walk skip it. Esc / dim-click / "End tour" ends the walk; the user navigating away mid-walk also ends it AND burns the session's auto-fire flag (so the section they escaped to doesn't immediately pop another coachmark). Sections the walk shows are marked `sectionTourSeen`. **Demo collection**: while the walk runs and a signed-in user's real collection is EMPTY, `buildDemoCollection(raw)` (deterministic ~40 cards from the two newest *priced* mainline sets — prestaged pre-order sets skipped) is swapped in at the CollectionView render site with no-op mutators + a `demoMode` banner, so the Collection stop doesn't tour an empty page; it vanishes when the walk ends and can never write to the DB.
 - **Elo event roster / field scouting (LIVE):** migration 68 + `get_event_roster` RPC + `scripts/elo/scrape_rosters.py` + `refresh-elo-rosters` edge fn (verify_jwt=false) + `EloEventRoster` UI. RPH `/events/{id}/registrations/` is CORS-blocked → server-side scrape only.
 - Also: `scripts/synthetic_monitor.py` (+ workflow, every 2h), tournament `ArchetypeBreakdown`, deck shop-missing name-aggregation, F4 keyboard shortcuts (`/`, `?`).
+
+- ~~**`supabase/125_deck_versions.sql`**~~ — **APPLIED 2026-08-24 by Zaven.**
+- **`supabase/126_deck_versions_grants.sql`** — **STAGED.** 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
 - ~~`supabase/112_drop_legacy_graded_feed.sql`~~ — **APPLIED 2026-08-22 by Zaven; verified via REST probe** (`graded_prices_daily` / `graded_prices_latest` both 404; `graded_sales_rollup` + `card_prices_latest` healthy). The 70,990-row archive remains at `Desktop/graded_prices_daily_archive_20260729.jsonl` (18.9 MB).

@@ -24,6 +24,14 @@ the daily metadata job) the moment Lorcast publishes the real card for that
 (set, collector number) — so the site switches to Lorcast's image/data with zero
 manual work. Re-run this script with a fresh folder each reveal batch.
 
+Without --folder, the script runs in TCGCSV-only mode: it walks the group's
+collector numbers and points the art at TCGplayer's own CDN
+(`.../product/<pid>_400w.jpg`) instead of uploading local PNGs. That is the
+right mode for a promo wave TCGplayer catalogues before Lorcast does and for
+which no official gallery art exists yet -- `sealed_products` already stores
+that same CDN form, and Index.html maps it through /tcg-img-proxy. The rows
+still retire themselves the moment Lorcast publishes.
+
 Usage:
     python scripts/prestage_set_cards.py --folder "Art Assets/Set13_Cards" \
         --set-id set_57c6817823c14dda8eccbca4b555d858 --setcode 207 --group 24666
@@ -208,28 +216,36 @@ set_id_tag = "set13"  # storage subfolder + id tag; set in main()
 def main():
     global set_id_tag
     ap = argparse.ArgumentParser()
-    ap.add_argument("--folder", required=True)
+    ap.add_argument("--folder", default=None,
+                    help="official-gallery PNG folder; omit to use TCGplayer CDN art")
     ap.add_argument("--set-id", required=True)
-    ap.add_argument("--setcode", required=True, help="filename set code, e.g. 207 or PD1")
+    ap.add_argument("--setcode", default=None, help="filename set code, e.g. 207 or PD1 (only with --folder)")
     ap.add_argument("--group", type=int, default=None,
                     help="TCGCSV group id (omit to skip TCGCSV — image+name only)")
     ap.add_argument("--tag", default="set13", help="id/storage tag (default set13)")
     ap.add_argument("--default-rarity", default=None,
                     help="rarity for image-only rows (e.g. Promo) when no TCGCSV data")
+    ap.add_argument("--only-cn", default=None,
+                    help="comma-separated collector numbers to limit to")
     ap.add_argument("--commit", action="store_true")
     args = ap.parse_args()
     set_id_tag = args.tag
+    if not args.folder and not args.group:
+        ap.error("need --group when --folder is omitted (TCGCSV is the only data source then)")
+    if args.folder and not args.setcode:
+        ap.error("--setcode is required with --folder")
 
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     sb = Supabase() if args.commit else None
 
-    # Parse the image folder for this setcode.
+    # Parse the image folder for this setcode (folder mode only).
     files = {}
-    for f in os.listdir(args.folder):
-        m = re.match(r"^\d+_(\d+)-" + re.escape(args.setcode) + r"_(.+)\.png$", f)
-        if m:
-            files[int(m.group(1))] = {"slug": m.group(2), "file": os.path.join(args.folder, f)}
-    print(f"Folder cards for setcode {args.setcode}: {len(files)}")
+    if args.folder:
+        for f in os.listdir(args.folder):
+            m = re.match(r"^\d+_(\d+)-" + re.escape(args.setcode) + r"_(.+)\.png$", f)
+            if m:
+                files[int(m.group(1))] = {"slug": m.group(2), "file": os.path.join(args.folder, f)}
+        print(f"Folder cards for setcode {args.setcode}: {len(files)}")
 
     # Which collector numbers are already real (non-prestage) cards in this set?
     existing = set()
@@ -245,22 +261,39 @@ def main():
     tcg = build_tcgcsv_by_cn(args.group) if args.group else {}
     print(f"TCGCSV cards in group {args.group}: {len(tcg)}\n")
 
+    only = None
+    if args.only_cn:
+        only = {to_int(x) for x in args.only_cn.split(",") if to_int(x) is not None}
+
+    # Folder mode walks the art; TCGCSV mode walks the group.
+    todo = sorted(files) if args.folder else sorted(tcg)
+    if only is not None:
+        todo = [cn for cn in todo if cn in only]
+
     rows, full, imageonly, skipped = [], 0, 0, 0
-    for cn in sorted(files):
+    for cn in todo:
         if cn in existing:
             skipped += 1
             continue
-        slug = files[cn]["slug"]
-        img_url = f"{sb.url if sb else 'https://<supabase>'}/storage/v1/object/public/{BUCKET}/{set_id_tag}/{cn}.jpg"
+        slug = files[cn]["slug"] if cn in files else ""
+        if args.folder:
+            img_url = f"{sb.url if sb else 'https://<supabase>'}/storage/v1/object/public/{BUCKET}/{set_id_tag}/{cn}.jpg"
+        else:
+            # TCGplayer's CDN tops out at 400w; that is the same form
+            # sealed_products stores and Index.html already proxies.
+            pid = tcg[cn]["pid"]
+            img_url = f"https://tcgplayer-cdn.tcgplayer.com/product/{pid}_400w.jpg"
         if cn in tcg:
             row = card_row_from_tcgcsv(args.set_id, cn, tcg[cn], img_url)
+            if not args.folder:
+                row["image_small"] = img_url.replace("_400w.jpg", "_200w.jpg")
             src = "TCGCSV"
             full += 1
         else:
             row = card_row_image_only(args.set_id, cn, slug, img_url, args.default_rarity)
             src = "image "
             imageonly += 1
-        rows.append((cn, files[cn]["file"], row))
+        rows.append((cn, files[cn]["file"] if cn in files else None, row))
         print(f"  #{cn:>3} [{src}] {row['name']}"
               + (f" - {row['version']}" if row.get('version') else "")
               + f"  | {row.get('rarity') or '—'} | {row.get('ink') or '—'}"
@@ -272,6 +305,11 @@ def main():
 
     if not args.commit:
         print("\nDry run — no images uploaded, no rows written. Re-run with --commit.")
+        return
+    if not args.folder:
+        # TCGCSV mode: art is hotlinked from TCGplayer's CDN, nothing to upload.
+        sb.upsert("cards", [r for _cn, _f, r in rows], on_conflict="id")
+        print(f"Wrote {len(rows)} prestage rows (TCGplayer CDN art, no upload).")
         return
 
     print("\nUploading images + upserting rows...")

@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=346">
+<link rel="stylesheet" href="styles.css?v=347">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -443,6 +443,67 @@ async function encDeckMetaPatch(patch){
   if("description" in o && o.description != null) o.description = await encDeckRnd(o.description);
   return o;
 }
+
+// ── Deck version history ────────────────────────────────────────
+// A version is one EDITING SESSION. The editor already snapshots the deck when
+// you enter edit mode (it powers "Undo changes"); pressing Done writes that
+// pre-edit state as the next version, if anything actually changed. Snapshot
+// per card-tap and you get four hundred rows nobody can read as history.
+//
+// Rows live in deck_versions (migration 125), obfuscated exactly like
+// deck_cards — an archive of decklists shouldn't be readable when the live
+// table isn't.
+const DECK_VER_SEP = "\x1f";
+const deckVerKey = (c) => (c.card_id || "") + DECK_VER_SEP + (c.printing || "");
+// Order-independent fingerprint, so "did this session change anything" doesn't
+// depend on the order two card arrays happen to be in.
+const deckCardsSignature = (cards) =>
+  (cards || []).map(c => deckVerKey(c) + DECK_VER_SEP + (c.quantity || 0)).sort().join("|");
+
+// What changed between two card lists. Keyed on card_id + printing (the
+// deck_cards PK), so swapping a Normal for its Foil reads as one card out and
+// one card in — which is what actually happened to the deck.
+const diffDeckVersions = (fromCards, toCards) => {
+  const A = new Map(), B = new Map();
+  for(const c of (fromCards || [])) A.set(deckVerKey(c), c);
+  for(const c of (toCards   || [])) B.set(deckVerKey(c), c);
+  const added = [], removed = [], changed = [];
+  for(const [k, c] of B) if(!A.has(k)) added.push({card_id:c.card_id, printing:c.printing, qty:c.quantity||0});
+  for(const [k, c] of A) if(!B.has(k)) removed.push({card_id:c.card_id, printing:c.printing, qty:c.quantity||0});
+  for(const [k, c] of A){
+    const d = B.get(k);
+    if(d && (d.quantity||0) !== (c.quantity||0)){
+      changed.push({card_id:c.card_id, printing:c.printing, from:c.quantity||0, to:d.quantity||0});
+    }
+  }
+  const total = (list) => (list || []).reduce((n, c) => n + (c.quantity||0), 0);
+  const byName = (a, b) => String(a.card_id).localeCompare(String(b.card_id));
+  added.sort(byName); removed.sort(byName); changed.sort(byName);
+  return {
+    added, removed, changed,
+    fromCount: total(fromCards), toCount: total(toCards),
+    isEmpty: !added.length && !removed.length && !changed.length,
+  };
+};
+
+// A version row's cards come back with card_id still encrypted — same shape
+// deck_cards reads take, so decDeckCards does the job.
+async function decDeckVersionRows(rows){
+  return Promise.all((rows || []).map(async v => ({
+    ...v,
+    name: await decDeck(v.name),
+    cards: await decDeckCards(Array.isArray(v.cards) ? v.cards : []),
+  })));
+}
+// PostgREST reports a missing table as 42P01 and a missing column as 42703.
+// Migration 125 is staged, not applied, so every version call has to survive
+// the table simply not being there yet rather than throwing at the user.
+const deckVersionsUnavailable = (err) => {
+  const code = err && (err.code || "");
+  const msg = String((err && err.message) || "");
+  return code === "42P01" || code === "42703" || code === "PGRST202"
+    || /deck_versions|save_deck_version|get_shared_deck_versions|share_versions/i.test(msg);
+};
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
@@ -976,6 +1037,82 @@ const isStarterDeck = (d) => Array.isArray(d?.tags) && d.tags.includes(STARTER_D
 // step sideways through tab changes instead of out of the page you opened.
 const DECK_SECTION_KEYS = ["yours","favorites","following","discover","tournaments"];
 const SCREENER_MODES = ["raw","graded","sealed"];
+// Collection's Cards / Sealed / Graded split was the last localStorage-only
+// sub-tab: /collection meant three different pages depending on what you last
+// clicked, so "look at my graded" was unsendable. Same rules as ?s= above.
+const COLLECTION_SECTIONS = ["cards","sealed","graded"];
+const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded"};
+// Human names for the toast. Deliberately separate from the nav labels: this
+// reads as a sentence ("Link to Decks · Tournaments copied"), not a chip.
+const VIEW_SHARE_LABELS = {
+  home: "the home page", screener: "the Screener", history: "Price Graphing",
+  market: "Analytics", cards: "Cards", collection: "your Collection",
+  decks: "Decks", faq: "How it works", elo: "the Elo board",
+};
+const DECK_SECTION_LABELS = {
+  yours: "Your decks", favorites: "Favorites", following: "Following",
+  discover: "Discover", tournaments: "Tournaments",
+};
+const SCREENER_MODE_LABELS = {raw: "Raw prices", graded: "Graded", sealed: "Sealed"};
+const MARKET_SUB_LABELS = {
+  overview: "Overview", ev: "Expected Value", trade: "Trade Compare",
+  avg: "Set Breakdown", setval: "Playset Cost", sim: "Simulator",
+  swiss: "Swiss Odds", dice: "Dice Tray", elo: "Elo",
+};
+const collectionSectionHref = (key, viewerContext) => {
+  const q = new URLSearchParams();
+  if(viewerContext && viewerContext.ownerId){
+    q.set("collection", viewerContext.ownerId);
+    if(viewerContext.ownerToken) q.set("token", viewerContext.ownerToken);
+  }
+  if(key !== "cards") q.set("c", key);
+  const qs = q.toString();
+  return "/collection" + (qs ? "?" + qs : "");
+};
+// "Copy link to this page". Every view and sub-tab already mirrors itself into
+// the URL, so the address bar is always right — except in the installed app,
+// where there IS no address bar, which made the one place people live in the
+// only place they couldn't share from.
+//
+// It reads window.location rather than reconstructing anything, so it inherits
+// every deep link the app already writes (?deck=, ?set=, ?tourney=, ?card=,
+// ?a=, ?s=, ?f=, ?m=, ?c=) without a second source of truth to keep in sync.
+// The origin is forced to SITE_ORIGIN so a native build copies packs.ink
+// instead of a capacitor:// or localhost URL nobody else can open.
+const currentShareUrl = () => {
+  try {
+    const u = new URL(window.location.href);
+    return SITE_ORIGIN + u.pathname + u.search;
+  } catch { return SITE_ORIGIN + "/"; }
+};
+// What the toast says it copied. Naming the page is the confirmation that it
+// caught the right thing — "Link copied" leaves you wondering whether it got
+// the deck you had open or the tab behind it.
+const shareUrlLabel = () => {
+  try {
+    const u = new URL(window.location.href);
+    const path = (u.pathname.replace(/\/$/, "") || "/");
+    const q = u.searchParams;
+    if(q.get("deck"))       return "this deck";
+    if(q.get("tourney"))    return "this tournament";
+    if(q.get("collection")) return "this collection";
+    if(q.get("user"))       return "this creator";
+    if(q.get("card"))       return "this card";
+    if(q.get("t") || q.get("trade")) return "this trade";
+    if(q.get("set"))        return q.get("set");
+    const view = PATH_TO_VIEW[path];
+    const SUB = {
+      decks:      () => DECK_SECTION_LABELS[q.get("s")] || null,
+      collection: () => COLLECTION_SECTION_LABELS[q.get("c")] || null,
+      market:     () => MARKET_SUB_LABELS[q.get("a")] || null,
+      screener:   () => SCREENER_MODE_LABELS[q.get("m")] || null,
+    };
+    const base = VIEW_SHARE_LABELS[view] || "this page";
+    const sub = SUB[view] ? SUB[view]() : null;
+    return sub ? base + " \u00b7 " + sub : base;
+  } catch { return "this page"; }
+};
+
 const readUrlParam = (name) => {
   try { return new URLSearchParams(window.location.search).get(name); } catch { return null; }
 };
@@ -3995,6 +4132,20 @@ const parseSearchQuery = (input) => {
     }
   }
 
+  // Dual-ink: "dual" / "duals" / "dualink" / "dual ink". Runs BEFORE the
+  // inkwell pass on purpose — otherwise "dual ink" would ALSO be read as
+  // inkable=true by the bare "ink" token below and silently drop every
+  // uninkable dual.
+  for(let i=0; i<tokens.length; i++){
+    if(used.has(i)) continue;
+    const t = tokens[i];
+    if(t === "dual" || t === "duals" || t === "dualink" || t === "dualinks"){
+      out.filters.dualInk = true; used.add(i);
+      if(["ink","inks","inked","color","colors","colour","colours"].includes(tokens[i+1] || "")) used.add(i+1);
+      break;
+    }
+  }
+
   // Inkwell: "ink" or "inkable" → inkable=true; "unink" or "uninkable" → inkable=false
   for(let i=0; i<tokens.length; i++){
     if(used.has(i)) continue;
@@ -4035,7 +4186,7 @@ const SUGGEST_KIND_LABEL = {
   ink: "color", rarity: "rarity", set: "set", classification: "characteristic",
   card_type: "type", keyword: "keyword", cost: "cost",
   inkable: "inkable", legality: "legality", illustrator: "artist", contains: "contains",
-  price: "price",
+  price: "price", dualInk: "ink",
 };
 // Split a multi-word query into dimension chips + leftover name text, the way a
 // person reads it: "rapunzel promo" is a name AND a rarity, not a phrase. Every
@@ -4050,13 +4201,16 @@ const SUGGEST_KIND_LABEL = {
 // "elsa spirit" keeps its working contains: behaviour. Bail entirely if the
 // parse produced a filter with no chip equivalent (strength/willpower/lore) —
 // better to leave the query alone than to silently drop half of it.
-const _SPLIT_TRIGGER_DIMS = ["ink", "rarity", "set", "legality", "inkable"];
+const _SPLIT_TRIGGER_DIMS = ["ink", "rarity", "set", "legality", "inkable", "dualInk"];
 const _SPLIT_CHIPPABLE = [
   ["ink","ink"], ["rarity","rarity"], ["set","set"], ["card_type","card_type"],
   ["classification","classification"], ["ability_keyword","keyword"],
   ["legality","legality"], ["inkable","inkable"], ["illustrator","illustrator"],
   ["cost","cost"],
 ];
+// Boolean dimensions carry no meaningful value of their own — the chip's value
+// is just its display word, so "elsa dual" splits into `ink: dual` + a name.
+const _SPLIT_CHIP_VALUE = {dualInk: "dual"};
 const _UNCHIPPABLE_FILTERS = ["strength","willpower","lore"];
 const smartSplitSuggestion = (raw) => {
   if(!raw || !raw.includes(" ")) return null;
@@ -4075,7 +4229,7 @@ const smartSplitSuggestion = (raw) => {
   if(!hasPrice && !_SPLIT_TRIGGER_DIMS.some(k => f[k] != null)) return null;
   const chips = [];
   for(const [fk, kind] of _SPLIT_CHIPPABLE){
-    if(f[fk] != null) chips.push({kind, value:f[fk]});
+    if(f[fk] != null) chips.push({kind, value: _SPLIT_CHIP_VALUE[fk] ?? f[fk]});
   }
   if(hasPrice) chips.push(priceSmartChip(f.priceMin, f.priceMax));
   if(!chips.length) return null;
@@ -4141,6 +4295,12 @@ const buildSearchSuggestions = (input, allIllustrators, cardNames) => {
   }
   if(last.length >= 2 && "japan".startsWith(last)){
     pushOnce({kind:"legality", value:"japan", label:"legality: japan core", replace:last});
+  }
+  // Dual-ink. Offered from 2 chars so "du" already surfaces it — it's a
+  // dimension with no other spelling, and nothing else in the vocabulary
+  // starts "dual".
+  if(last.length >= 2 && ("dual".startsWith(last) || "dualink".startsWith(last))){
+    pushOnce({kind:"dualInk", value:"dual", label:"ink: dual-ink cards", replace:last});
   }
   // Inkable shortcuts
   if(prefix("inkable") || prefix("ink"))   pushOnce({kind:"inkable", value:true,  label:"inkable: yes", replace:last});
@@ -4217,6 +4377,7 @@ const summarizeParsedQuery = (parsed) => {
   const _wilL  = _statLabel("willpower","Wil");  if(_wilL)  parts.push(_wilL);
   const _loreL = _statLabel("lore","Lore");      if(_loreL) parts.push(_loreL);
   if(parsed.filters.ability_keyword) parts.push("\""+parsed.filters.ability_keyword+"\"");
+  if(parsed.filters.dualInk)           parts.push("Dual ink");
   if(parsed.filters.inkable === true)  parts.push("Inkable");
   if(parsed.filters.inkable === false) parts.push("Uninkable");
   if(parsed.filters.legality === "core")     parts.push("Core Constructed");
@@ -4349,6 +4510,7 @@ const matchesCardFilter = (row, f, parsed) => {
   // values when both chip-state and parsed produce the same dimension.
   if(parsed){
     if(parsed.filters.ink && !cardInks.includes(parsed.filters.ink)) return false;
+    if(parsed.filters.dualInk && cardInks.length < 2) return false;
     if(parsed.filters.rarity && row.Rarity !== parsed.filters.rarity) return false;
     if(parsed.filters.card_type && !cardTypeParts.includes(parsed.filters.card_type)) return false;
     if(parsed.filters.set){ const pp = cardParentSetForFilter(row); if(!(row.Set === parsed.filters.set || pp === parsed.filters.set)) return false; }
@@ -4551,6 +4713,7 @@ const matchesCardFilter = (row, f, parsed) => {
     if(coreSets && !coreSets.has(row.Set)) return false;
   }
   if(f.legality === "japan" && typeof isJapanCoreLegal === "function" && !isJapanCoreLegal(row)) return false;
+  if(f.dualInk && cardInks.length < 2) return false;
   // Chip-state price. Same semantics as the typed form: a max is satisfied by
   // the CHEAPEST printing, a min by the DEAREST — so "under $5" keeps a card
   // whose non-foil is $2 even though its foil is $40, and "over $20" keeps it
@@ -4634,6 +4797,32 @@ const browseSibling = (group, dir) => {
   return (j >= 0 && j < _browseList.length) ? _browseList[j] : null;
 };
 
+// Locations are the only landscape-layout card in Lorcana. Lorcast serves them
+// as a portrait image with the card rotated 90° clockwise inside it.
+const isLandscapeCard = (row) =>
+  !!row && String(row.card_type || "").split(" - ").includes("Location");
+
+// Copy the current page's link. Uses the clipboard synchronously inside the
+// click (Safari drops a write that happens after an await), and falls back to
+// the share sheet on touch, where a system share is what people actually want
+// and where clipboard permission is flakier.
+const copyCurrentPageLink = async () => {
+  const url = currentShareUrl();
+  const what = shareUrlLabel();
+  try {
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      await navigator.clipboard.writeText(url);
+      flashToast("Link to " + what + " copied");
+      return;
+    }
+  } catch {/* fall through */}
+  try {
+    if(navigator.share){ await navigator.share({url}); return; }
+  } catch {/* user dismissed the sheet — not an error */ return; }
+  // Last resort: show it so it can be selected by hand.
+  flashToast(url, 8000);
+};
+
 const EnlargedCardOverlay = () => {
   const [group, setGroup] = useState(null);
   const imgRef = useRef(null);
@@ -4689,8 +4878,14 @@ const EnlargedCardOverlay = () => {
   // buildRow's fallback chain. Either way the overlay caps at viewport size.
   const src = group.img_large || group.img_normal || group.img_small;
   if(!src) return null;
+  // Locations are printed landscape but Lorcast stores them inside a portrait
+  // frame, rotated 90° clockwise — so at full size the title and rules text
+  // read bottom-to-top. Spin them back for the enlarged view, which is the
+  // one surface where people actually read the card. Thumbnails and banners
+  // stay portrait on purpose: a landscape chip in a 5:7 grid slot is worse.
+  const sideways = isLandscapeCard(group);
   return html`<div class="enlarged-card-overlay" onClick=${()=>setGroup(null)}>
-    <img ref=${imgRef} class="enlarged-card-img" src=${src} alt=${group["Product Name"] || ""}
+    <img ref=${imgRef} class=${"enlarged-card-img"+(sideways?" enlarged-card-img--sideways":"")} src=${src} alt=${group["Product Name"] || ""}
       onClick=${e=>e.stopPropagation()} draggable=${false}
       style=${{touchAction:"none", WebkitUserSelect:"none", userSelect:"none", WebkitTouchCallout:"none"}}/>
     <button class="enlarged-card-close" onClick=${()=>setGroup(null)} aria-label="Close enlarged card">×</button>
@@ -4859,7 +5054,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
   const splitBadge = group.isSplitPrinting
     ? (group.foil ? "PRIZE FOIL" : "PRIZE WALL")
     : null;
-  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")} onClick=${onClick}
+  return html`<div class=${"card-tile"+(isSelected?" is-selected":"")+(checkboxEl?" card-tile--selectable":"")} onClick=${onClick}
     role="button" tabIndex="0"
     onKeyDown=${e=>{ if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onClick && onClick(e); } }}
     aria-label=${productName}>
@@ -4880,7 +5075,7 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
         title="Add one copy to your collection" aria-label="Add one copy to your collection">+</button>`}
       ${onMagnify && html`<button class="tile-magnify-btn" onClick=${onMagnify}
         title="Enlarge card art" aria-label="Enlarge card art">
-        <svg viewBox="0 0 24 24" width="14" height="14" fill="none"
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none"
              stroke="currentColor" stroke-width="2.2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <circle cx="10.5" cy="10.5" r="6.5"/>
@@ -6650,6 +6845,11 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
             <img src=${INK_ICONS[ink]} alt=${ink}/>
           </button>`)}
         </div>
+        <div class="cards-chipgroup" style=${{marginTop:6}}>
+          <button class=${"chip "+(filter.dualInk?"active":"")}
+            title="Only cards printed with two ink colors. Composes with the color chips above — Amber + Dual ink gives every Amber dual."
+            onClick=${()=>setFilter(f=>({...f, dualInk: !f.dualInk}))}>Dual ink</button>
+        </div>
       </div>
       <div class="drawer-section">
         <div class="drawer-section-head">Cost</div>
@@ -6786,7 +6986,7 @@ const countActiveFilters = (f) =>
   + (f.inkable!==null?1:0)
   + (f.classifications?.size||0) + (f.keywords?.size||0) + (f.illustrators?.size||0)
   + (f.strengths?.size||0) + (f.willpowers?.size||0) + (f.lores?.size||0)
-  + (f.legality?1:0) + (f.onlyOwned?1:0)
+  + (f.legality?1:0) + (f.onlyOwned?1:0) + (f.dualInk?1:0)
   // A price bound counts once whether one or both ends are set; the basis is a
   // modifier on that bound, not a filter of its own, so it never counts alone.
   + ((f.priceMin!=null||f.priceMax!=null)?1:0) + (f.unpricedOnly?1:0);
@@ -6797,6 +6997,10 @@ const emptyFilter = () => ({
   classifications:new Set(), keywords:new Set(), illustrators:new Set(),
   strengths:new Set(), willpowers:new Set(), lores:new Set(),
   legality:null, onlyOwned:false,
+  // Dual-ink lens: true = only cards printed with two ink colors. Kept as its
+  // own flag rather than an `inks` value because a dual card ALSO matches its
+  // two individual ink chips — the two dimensions compose.
+  dualInk:false,
   // $ filters. priceMin/priceMax are inclusive bounds in dollars (null = open
   // end); priceBasis ∈ any|low|market picks which printing price is compared;
   // unpricedOnly inverts to "cards with no price data".
@@ -6819,7 +7023,7 @@ const emptyFilter = () => ({
 // can be shared/bookmarked. Advanced text-multi filters (classifications /
 // keywords / illustrators / stats) aren't URL-backed yet — they reset on reload.
 const CARD_URL_SETFIELDS = [["set","sets"],["ink","inks"],["rarity","rarities"],["cost","costs"],["type","cardTypes"]];
-const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","pmin","pmax","pbasis","unpriced"];
+const CARD_URL_KEYS = ["q","set","ink","rarity","cost","type","inkable","legal","owned","dual","pmin","pmax","pbasis","unpriced"];
 const cardFilterToParams = (f) => {
   const p = new URLSearchParams();
   if(f.search && f.search.trim()) p.set("q", f.search.trim());
@@ -6830,6 +7034,7 @@ const cardFilterToParams = (f) => {
   else if(f.inkable === false) p.set("inkable","0");
   if(f.legality) p.set("legal", f.legality);
   if(f.onlyOwned) p.set("owned","1");
+  if(f.dualInk) p.set("dual","1");
   if(f.priceMin != null) p.set("pmin", String(f.priceMin));
   if(f.priceMax != null) p.set("pmax", String(f.priceMax));
   if(f.priceBasis && f.priceBasis !== "any") p.set("pbasis", f.priceBasis);
@@ -6855,6 +7060,7 @@ const cardParamsToFilter = (search) => {
   if(inkable === "1") f.inkable = true; else if(inkable === "0") f.inkable = false;
   const legal = p.get("legal"); if(legal) f.legality = legal;
   if(p.get("owned") === "1") f.onlyOwned = true;
+  if(p.get("dual") === "1") f.dualInk = true;
   const _px = (k) => { const v = parseFloat(p.get(k)); return Number.isFinite(v) && v >= 0 ? v : null; };
   f.priceMin = _px("pmin"); f.priceMax = _px("pmax");
   const pbasis = p.get("pbasis"); if(pbasis === "low" || pbasis === "market") f.priceBasis = pbasis;
@@ -7984,6 +8190,10 @@ const proxySheetGeometry = (paper) => {
 };
 
 const PROXY_PREFS_KEY = "packsink:proxyPrint:v1";
+// Sanity ceiling on a single card's print count. Nothing in Lorcana needs
+// more than 4 except Dalmatian Puppy / Microbots, and a typo of 400 in the
+// stepper would try to render 400 pages.
+const PROXY_MAX_PER_CARD = 99;
 const readProxyPrefs = () => {
   try { return JSON.parse(localStorage.getItem(PROXY_PREFS_KEY)) || {}; } catch { return {}; }
 };
@@ -7996,7 +8206,12 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
   const [watermark, setWatermark] = useState(["subtle","bold","none"].includes(saved.watermark) ? saved.watermark : "subtle");
   const [paper, setPaper]         = useState(PROXY_PAPERS[saved.paper] ? saved.paper : "letter");
   const [guides, setGuides]       = useState(saved.guides !== false);
-  const [scope, setScope]         = useState(saved.scope === "one" ? "one" : "all");
+  // Per-card print counts, keyed by card_id. Seeded from the deck's own
+  // quantities; a card at 0 is simply not printed. This replaced the old
+  // all-or-one-of-each toggle — a proxy run is usually "3 of this, 1 of that",
+  // which that toggle could not express at all.
+  const [qty, setQty]             = useState(null);
+  const [listOpen, setListOpen]   = useState(saved.listOpen !== false);
   const [busy, setBusy]           = useState(false);
   const [progress, setProgress]   = useState(null);
   const [result, setResult]       = useState(null);
@@ -8006,9 +8221,9 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
 
   useEffect(() => {
     try {
-      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, scope}));
+      localStorage.setItem(PROXY_PREFS_KEY, JSON.stringify({ink, lighten, watermark, paper, guides, listOpen}));
     } catch {}
-  }, [ink, lighten, watermark, paper, guides, scope]);
+  }, [ink, lighten, watermark, paper, guides, listOpen]);
 
   // Revoke the blob URL on unmount only — regeneration revokes its own
   // predecessor, so tying this to `result` would pull the URL out from under
@@ -8034,6 +8249,10 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         card_id: c.card_id,
         quantity: c.quantity,
         name: meta["Product Name"] || "",
+        // Set + number disambiguate the list: a Cards-tab selection routinely
+        // holds two printings of one Product Name, which would otherwise show
+        // as two identical rows.
+        sub: [meta.Set, meta.Number ? "#" + meta.Number : null, meta.Rarity].filter(Boolean).join(" · "),
         cost: meta.cost ?? 99,
         type: meta.card_type || "",
         img,
@@ -8045,34 +8264,66 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
       rank(a.type) - rank(b.type) || a.cost - b.cost || a.name.localeCompare(b.name));
   }, [deck.cards, cardById]);
 
-  const totalCards = scope === "one"
-    ? cards.length
-    : cards.reduce((s, c) => s + Math.max(0, c.quantity), 0);
+  // Re-seed whenever the card set itself changes (a different deck, or the
+  // deck edited underneath us) — but NOT on every render, or the steppers
+  // would snap back to the deck's counts as you press them.
+  const cardsKey = cards.map(c => c.card_id).join("|");
+  useEffect(() => {
+    const next = {};
+    for(const c of cards) next[c.card_id] = Math.max(0, Math.min(PROXY_MAX_PER_CARD, c.quantity));
+    setQty(next);
+    setResult(null);
+  }, [cardsKey]);
+
+  const qtyOf = (cid) => (qty && qty[cid] != null) ? qty[cid] : 0;
+  const clampQty = (n) => Math.max(0, Math.min(PROXY_MAX_PER_CARD, n|0));
+  const setQtyFor = (cid, n) => {
+    setQty(q => ({...(q||{}), [cid]: clampQty(n)}));
+    setResult(null);
+  };
+  // Relative bump reads the previous state rather than the render's snapshot,
+  // so two clicks landing inside one React commit still add up to two.
+  const bumpQty = (cid, delta) => {
+    setQty(q => ({...(q||{}), [cid]: clampQty(((q && q[cid]) || 0) + delta)}));
+    setResult(null);
+  };
+  const applyPreset = (kind) => {
+    const next = {};
+    for(const c of cards){
+      next[c.card_id] = kind === "deck" ? Math.max(0, Math.min(PROXY_MAX_PER_CARD, c.quantity))
+                      : kind === "one"  ? 1
+                      : 0;
+    }
+    setQty(next); setResult(null);
+  };
+
+  const printCards = cards.filter(c => qtyOf(c.card_id) > 0);
+  const totalCards = printCards.reduce((s, c) => s + qtyOf(c.card_id), 0);
   const pageCount = Math.ceil(totalCards / PROXY_PER_PAGE) || 0;
-  const missingArt = cards.filter(c => !c.img).length;
+  const missingArt = printCards.filter(c => !c.img).length;
 
   const generate = async () => {
-    if(busy || !cards.length) return;
+    if(busy || !printCards.length) return;
     cancelled.current = false;
     setBusy(true); setError(null);
-    setProgress({done: 0, total: cards.length});
+    setProgress({done: 0, total: printCards.length});
     try {
       const opts = {bw: ink === "bw", lighten: ink === "bw" && lighten, watermark};
       const imgs = [];
       const indexOf = new Map();
-      for(let i = 0; i < cards.length; i++){
+      for(let i = 0; i < printCards.length; i++){
         if(cancelled.current) return;
-        indexOf.set(cards[i].card_id, imgs.length);
-        imgs.push(await renderProxyCardJpeg(cards[i], opts));
-        setProgress({done: i + 1, total: cards.length});
+        indexOf.set(printCards[i].card_id, imgs.length);
+        imgs.push(await renderProxyCardJpeg(printCards[i], opts));
+        setProgress({done: i + 1, total: printCards.length});
         // Yield so the progress bar actually paints between cards.
         await new Promise(r => setTimeout(r, 0));
       }
       if(cancelled.current) return;
 
       const seq = [];
-      for(const c of cards){
-        const n = scope === "one" ? 1 : Math.max(0, c.quantity);
+      for(const c of printCards){
+        const n = qtyOf(c.card_id);
         for(let k = 0; k < n; k++) seq.push(indexOf.get(c.card_id));
       }
       const geo = proxySheetGeometry(paper);
@@ -8124,7 +8375,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
       </div>
       <div class="modal-body proxy-body">
         <p class="proxy-lede">
-          Builds a PDF of this deck at true card size — ${PROXY_PER_PAGE} per page, ready to print and cut.
+          Builds a PDF at true card size — ${PROXY_PER_PAGE} per page, ready to print and cut.
           Every card is stamped <strong>PROXY</strong>. For playtesting only: proxies aren't
           legal in sanctioned play and must never be sold or passed off as real cards.
         </p>
@@ -8162,10 +8413,41 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         <div class="proxy-opt">
           <div class="proxy-opt-lbl">Cards</div>
           <div class="proxy-opt-row">
-            ${seg("all", scope, setScope, "Every copy", "All 4 copies of a 4-of, ready to sleeve")}
-            ${seg("one", scope, setScope, "One of each", "A single copy of each card")}
+            <button type="button" class="chip" onClick=${() => applyPreset("deck")}
+              title="Match the deck — all 4 copies of a 4-of">Deck counts</button>
+            <button type="button" class="chip" onClick=${() => applyPreset("one")}
+              title="A single copy of each card">One of each</button>
+            <button type="button" class="chip" onClick=${() => applyPreset("none")}
+              title="Clear every count, then pick the cards you want">None</button>
+            <button type="button" class="chip proxy-list-toggle" onClick=${() => setListOpen(v => !v)}>
+              ${listOpen ? "▾" : "▸"} ${printCards.length} of ${cards.length} cards
+            </button>
           </div>
         </div>
+        ${listOpen && cards.length > 0 && html`<div class="proxy-cardlist">
+          ${cards.map(c => {
+            const n = qtyOf(c.card_id);
+            return html`<div key=${c.card_id} class=${"proxy-cardrow"+(n>0?" on":"")}>
+              <button type="button" class=${"proxy-cardcheck"+(n>0?" on":"")}
+                aria-pressed=${n>0} aria-label=${(n>0?"Exclude ":"Include ")+c.name}
+                title=${n > 0 ? "Don't print this card" : "Print this card"}
+                onClick=${() => setQtyFor(c.card_id, n > 0 ? 0 : (c.quantity || 1))}>${n>0?"✓":""}</button>
+              <span class="proxy-cardname" title=${c.name + (c.sub ? " — " + c.sub : "")}>
+                ${c.name}${c.sub && html`<span class="proxy-cardsub"> ${c.sub}</span>`}
+              </span>
+              ${!c.img && html`<span class="proxy-cardwarn" title="No art available — prints as a name card">no art</span>`}
+              <div class="proxy-cardqty" onClick=${e => e.stopPropagation()}>
+                <button type="button" onClick=${() => bumpQty(c.card_id, -1)} disabled=${n <= 0}
+                  aria-label=${"One fewer "+c.name}>−</button>
+                <input type="number" min="0" max=${PROXY_MAX_PER_CARD} inputMode="numeric"
+                  value=${n} aria-label=${"Copies of "+c.name}
+                  onInput=${e => setQtyFor(c.card_id, parseInt(e.target.value, 10) || 0)}/>
+                <button type="button" onClick=${() => bumpQty(c.card_id, +1)}
+                  disabled=${n >= PROXY_MAX_PER_CARD} aria-label=${"One more "+c.name}>+</button>
+              </div>
+            </div>`;
+          })}
+        </div>`}
 
         <label class="proxy-check">
           <input type="checkbox" checked=${guides}
@@ -8174,9 +8456,11 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
         </label>
 
         <div class="proxy-summary">
-          ${cards.length
-            ? html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${cards.length} unique`
-            : html`<span class="muted">This deck has no cards yet.</span>`}
+          ${!cards.length
+            ? html`<span class="muted">Nothing to print yet.</span>`
+            : totalCards === 0
+              ? html`<span class="muted">No cards selected — tick some above, or hit “One of each”.</span>`
+              : html`<strong>${totalCards}</strong> card${totalCards === 1 ? "" : "s"} · <strong>${pageCount}</strong> page${pageCount === 1 ? "" : "s"} · ${printCards.length} unique`}
           ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no art available — they print as a name card.</div>`}
         </div>
 
@@ -8194,7 +8478,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
 
         <div class="proxy-actions">
           ${!result
-            ? html`<button class="active proxy-go" disabled=${busy || !cards.length} onClick=${generate}>
+            ? html`<button class="active proxy-go" disabled=${busy || !printCards.length} onClick=${generate}>
                 ${busy ? "Building PDF…" : "Build PDF"}
               </button>`
             : html`<${React.Fragment}>
@@ -9024,7 +9308,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                       deckQtyAcrossName,
                       sortDefault="relevance",
                       onQuickAdd,
-                      selectable, isAuthed, onSignIn,
+                      selectable, isAuthed, onSignIn, onBulkPrintProxy,
                       onBulkAddCollection, onBulkAddToDeck, onBulkNewDeck, fetchUserDecks,
                       pendingSearch, onConsumedPendingSearch,
                       coconutCard, onPickCoconut, inkBudget,
@@ -9171,6 +9455,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       else if(chip.kind === "classification") classifications.push(chip.value);
       else if(chip.kind === "keyword")   keywords.push(chip.value);
       else if(chip.kind === "inkable")   p.filters.inkable = chip.value;
+      else if(chip.kind === "dualInk")   p.filters.dualInk = true;
       else if(chip.kind === "cost")      p.filters.cost = chip.value;
       else if(chip.kind === "legality")  p.filters.legality = chip.value;
       else if(chip.kind === "illustrator") p.filters.illustrator = chip.value;
@@ -9357,6 +9642,42 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       return next;
     });
   }, [grouped]);
+
+  // The bulk bar starts in flow under the toolbar, then docks to the bottom of
+  // the viewport once its home position scrolls up past the sticky top-nav —
+  // with a long grid the actions were otherwise a full page-scroll away. The
+  // slot keeps the bar's height while docked so the grid doesn't jump, and the
+  // measurement reads the SLOT (whose position never changes) so docking can't
+  // feed back into its own trigger.
+  const bulkSlotRef = useRef(null);
+  const bulkBarRef = useRef(null);
+  const [bulkDocked, setBulkDocked] = useState(false);
+  const [bulkH, setBulkH] = useState(0);
+  const hasSelection = allowSelect && selected.size > 0;
+  useEffect(() => {
+    if(!hasSelection){ setBulkDocked(false); return; }
+    let raf = 0;
+    const measure = () => {
+      raf = 0;
+      const slot = bulkSlotRef.current;
+      if(!slot) return;
+      const bar = bulkBarRef.current;
+      if(bar){ const h = bar.offsetHeight; if(h) setBulkH(h); }
+      // Same coordinate the sticky offsets use: 96px clears the two-row mobile
+      // nav, 8px the desktop one.
+      const navH = window.innerWidth <= 640 ? 96 : 8;
+      setBulkDocked(slot.getBoundingClientRect().top < navH);
+    };
+    const onScroll = () => { if(!raf) raf = requestAnimationFrame(measure); };
+    measure();
+    window.addEventListener("scroll", onScroll, {passive:true});
+    window.addEventListener("resize", onScroll);
+    return () => {
+      if(raf) cancelAnimationFrame(raf);
+      window.removeEventListener("scroll", onScroll);
+      window.removeEventListener("resize", onScroll);
+    };
+  }, [hasSelection]);
 
   // Action dropdown state — what's open, and the cached deck list for the
   // "Add to existing deck" submenu.
@@ -9586,7 +9907,9 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
       <span class="parsed-hint-lbl">Filtering:</span>
       ${parsedSummary.map(p => html`<span class="parsed-hint-pill" key=${p}>${p}</span>`)}
     </div>`}
-    ${allowSelect && selected.size > 0 && html`<div class="cards-bulk-bar">
+    ${hasSelection && html`<div class="cards-bulk-slot" ref=${bulkSlotRef}
+      style=${bulkDocked && bulkH ? {height: bulkH + "px"} : null}>
+    <div ref=${bulkBarRef} class=${"cards-bulk-bar"+(bulkDocked?" cards-bulk-bar--docked":"")}>
       <span class="cards-bulk-count">${selected.size} selected</span>
       <button class="cards-bulk-link" onClick=${selectAllVisible}
         title="Add every card matching the current filters to the selection">
@@ -9631,6 +9954,18 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
               <div class="cards-bulk-menu-sub">Create a deck pre-seeded with the selection</div>
             </div>
           </button>
+          ${/* No auth gate — proxies are rendered and written entirely in the
+                browser, so there's nothing to sign in for. */""}
+          ${onBulkPrintProxy && html`<button class="cards-bulk-menu-item" onClick=${()=>{
+            onBulkPrintProxy(Array.from(selected));
+            setActionMenu(null);
+          }}>
+            <span class="cards-bulk-menu-icon">🖨</span>
+            <div>
+              <div class="cards-bulk-menu-title">Print proxies…</div>
+              <div class="cards-bulk-menu-sub">Print-and-cut PDF — pick how many of each</div>
+            </div>
+          </button>`}
         </div>`}
         ${actionMenu === "deckPicker" && html`<div class="cards-bulk-menu cards-bulk-menu-picker">
           <div class="cards-bulk-menu-head">
@@ -9657,6 +9992,7 @@ const CardBrowser = ({raw, onSelectGroup, collection, deckQty, onDeckQtyChange,
                 </div>`}
         </div>`}
       </div>
+    </div>
     </div>`}
     <div class=${(viewMode==="list"?"cards-list":"cards-grid")+(isFiltering?" cards-pending":"")}>
       ${grouped.slice(0, visibleCount).map((g,i) => html`<${CardTile}
@@ -9908,6 +10244,29 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
   }, [user, rowByCardId, showToast]);
 
   // Lazy-fetch the user's decks for the "Add to existing deck" picker.
+  // Proxy printing from a browse selection. The modal takes a deck-shaped
+  // payload, so a selection is just an ad-hoc one-of-each "deck" — the modal's
+  // own per-card steppers do the rest.
+  const [proxySelection, setProxySelection] = useState(null);
+  const proxyCardById = useMemo(() => {
+    if(!proxySelection) return null;
+    const want = new Set(proxySelection);
+    const m = {};
+    for(const r of raw){
+      if(!r.card_id || !want.has(r.card_id)) continue;
+      (m[r.card_id] = m[r.card_id] || []).push(r);
+    }
+    return m;
+  }, [proxySelection, raw]);
+  const proxyDeck = useMemo(() => proxySelection ? {
+    name: "Selected cards",
+    cards: proxySelection.filter(id => proxyCardById && proxyCardById[id]).map(id => ({card_id:id, quantity:1})),
+  } : null, [proxySelection, proxyCardById]);
+  const onBulkPrintProxy = useCallback((ids) => {
+    if(!ids || !ids.length) return;
+    setProxySelection(ids);
+  }, []);
+
   const fetchUserDecks = useCallback(async () => {
     if(!user) return [];
     const {data, error} = await sbClient.from("decks")
@@ -9928,6 +10287,7 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       onBulkAddCollection=${onBulkAddCollection}
       onBulkNewDeck=${onBulkNewDeck}
       onBulkAddToDeck=${onBulkAddToDeck}
+      onBulkPrintProxy=${onBulkPrintProxy}
       fetchUserDecks=${fetchUserDecks}
       pendingSearch=${pendingSearch}
       onConsumedPendingSearch=${() => setPendingSearch(null)}
@@ -9936,6 +10296,9 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       onClose=${()=>setSelectedGroup(null)}
       onNavigate=${(g)=>setSelectedGroup(g)}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${proxyDeck && proxyCardById && html`<${ProxyPrintModal}
+      deck=${proxyDeck} cardById=${proxyCardById}
+      onClose=${()=>setProxySelection(null)}/>`}
     ${toast && html`<div class="cards-toast">${toast}</div>`}
   </div>`;
 };
@@ -10422,6 +10785,8 @@ const SEALED_DISPLAY_TYPE_ORDER = [
   "Cases",
   "Other Displays / Cases",
   "Puzzles",
+  "Pins",
+  "Lore Counters",
 ];
 const SEALED_DISPLAY_TYPE_FOR = {
   "Booster Box":         "Booster Boxes",
@@ -10444,6 +10809,10 @@ function isHiddenSealedListing(item){
   return name.includes("[set of ") || name.includes("art bundle");
 }
 function deriveSealedDisplayType(item){
+  // Collectibles short-circuit: their names are card names ("Tinker Bell",
+  // "The First Chapter") and would otherwise fall through the keyword rules
+  // below into whatever they happen to contain.
+  if(item.is_collectible) return item.product_type === "Pin" ? "Pins" : "Lore Counters";
   const name = (item.name || "").toLowerCase();
   // Cases & displays. Booster-box cases (the popular ones) get their own
   // "Cases" section; every other case/display lands in "Other Displays /
@@ -10474,6 +10843,12 @@ function deriveSealedDisplayType(item){
   }
   return SEALED_DISPLAY_TYPE_FOR[item.product_type] || item.product_type || "Other Sealed";
 }
+// Static (non-TCGplayer) sections, keyed by their synthetic set_id.
+const SEALED_STATIC_SECTION_NAMES = {
+  "__puzzles__": "Puzzles",
+  "__pins__": "Pins",
+  "__lore_counters__": "Lore Counters",
+};
 const sealedDisplayTypeRank = (t) => {
   const i = SEALED_DISPLAY_TYPE_ORDER.indexOf(t);
   return i === -1 ? 999 : i;
@@ -10511,6 +10886,129 @@ const SEALED_PUZZLES = [
   puzzle_pieces: p.pieces,
   puzzle_exclusive: p.exclusive,
 }));
+// Official Lorcana PINS and LORE COUNTERS (the spin-dial trackers) — the two
+// non-card collectibles Ravensburger has run since launch. Neither is sold: a
+// pin comes from a Weekly Play / League season kit, a convention, a Challenge
+// prize wall or a championship; a lore counter comes from a season kit or an
+// Illumineer's Trove. So there is no TCGplayer SKU, no price, and no purchase
+// link — what a collector wants is a checklist and where each one came from.
+//
+// Shaped like a sealed_prices row (same reason as SEALED_PUZZLES above) so they
+// flow through the Sealed collection's grouping + tiles unchanged, and
+// ownership persists in sealed_collection_items — no FK on the product id, so
+// synthetic ids are fine. Bands: pins 950000000+n, counters 960000000+n, both
+// clear of the puzzles' 912.0M range and of TCGplayer's real id space.
+//
+// ⚠️ `n` is the STABLE id, not the array index — never renumber an existing
+// entry or you silently move somebody's owned mark onto a different pin.
+// Append new ones with the next free n.
+//
+// Images are deliberately absent for now (there is no official catalog for
+// either; every photo in circulation belongs to a fan site). The tiles render
+// name + source + date and degrade cleanly — add `img` per entry later and the
+// grid picks it up with no other change.
+const LORCANA_PINS = [
+  {n:1,  name:"Mickey Mouse - Brave Little Tailor",        source:"League - The First Chapter",       date:"Sep 2022"},
+  {n:2,  name:"Maleficent Logo (Purple)",                  source:"League - The First Chapter",       date:"Sep 2022"},
+  {n:3,  name:"Ariel - Whoseit Collector",                 source:"League - The First Chapter",       date:"Aug 2023"},
+  {n:4,  name:"Scar - Fiery Usurper",                      source:"League - The First Chapter",       date:"Aug 2023"},
+  {n:5,  name:"The First Chapter Logo",                    source:"League - The First Chapter",       date:"Aug 2023"},
+  {n:6,  name:"Rapunzel - Gifted Artist",                  source:"League - Rise of the Floodborn",   date:"Nov 2023"},
+  {n:7,  name:"Rise of the Floodborn Logo",                source:"League - Rise of the Floodborn",   date:"Nov 2023"},
+  {n:8,  name:"Winnie the Pooh - Hunny Wizard",            source:"League - Rise of the Floodborn",   date:"Nov 2023"},
+  {n:9,  name:"Into the Inklands Logo",                    source:"League - Into the Inklands",       date:"Feb 2024"},
+  {n:10, name:"Sheriff of Nottingham - Corrupt Official",  source:"League - Into the Inklands",       date:"Feb 2024"},
+  {n:11, name:"Stitch - Covert Agent",                     source:"League - Into the Inklands",       date:"Feb 2024"},
+  {n:12, name:"Kida - Atlantean",                          source:"League - Ursula's Return",         date:"May 2024"},
+  {n:13, name:"Madam Mim - Purple Dragon",                 source:"League - Ursula's Return",         date:"May 2024"},
+  {n:14, name:"Ursula's Return Logo",                      source:"League - Ursula's Return",         date:"May 2024"},
+  {n:15, name:"Mickey Mouse - Brave Little Tailor (1st Anniversary)", source:"Promotional event",     date:"Aug 2024"},
+  {n:16, name:"Hades - Infernal Schemer",                  source:"League - Shimmering Skies",        date:"Aug 2024"},
+  {n:17, name:"Shimmering Skies Logo",                     source:"League - Shimmering Skies",        date:"Aug 2024"},
+  {n:18, name:"Sisu - Emboldened Warrior",                 source:"League - Shimmering Skies",        date:"Aug 2024"},
+  {n:19, name:"Azurite Sea Logo",                          source:"League - Azurite Sea",             date:"Nov 2024"},
+  {n:20, name:"Baymax - Personal Healthcare Companion",    source:"League - Azurite Sea",             date:"Nov 2024"},
+  {n:21, name:"Tigger - In the Crow's Nest",               source:"League - Azurite Sea",             date:"Nov 2024"},
+  {n:22, name:"Cinderella - Stouthearted",                 source:"Challenge prize wall",             date:"Dec 2024"},
+  {n:23, name:"Amber Ink Symbol",                          source:"League - Archazia's Island",       date:"Mar 2025"},
+  {n:24, name:"Bolt - Superdog",                           source:"League - Archazia's Island",       date:"Mar 2025"},
+  {n:25, name:"Mad Hatter - Unruly Eccentric",             source:"League - Archazia's Island",       date:"Mar 2025"},
+  {n:26, name:"Amethyst Ink Symbol",                       source:"League - Reign of Jafar",          date:"May 2025"},
+  {n:27, name:"Captain Hook - The Pirate King",            source:"League - Reign of Jafar",          date:"May 2025"},
+  {n:28, name:"Into the Unknown",                          source:"League - Reign of Jafar",          date:"May 2025"},
+  {n:29, name:"A Whole New World",                         source:"World Championship",               date:"Jun 2025"},
+  {n:30, name:"Aurora",                                    source:"League - Fabled",                  date:"Aug 2025"},
+  {n:31, name:"Emerald Ink Symbol",                        source:"League - Fabled",                  date:"Aug 2025"},
+  {n:32, name:"Gaston",                                    source:"League - Fabled",                  date:"Aug 2025"},
+  {n:33, name:"Lilo",                                      source:"League - Fabled",                  date:"Aug 2025"},
+  {n:34, name:"Elsa - Ice Maker",                          source:"Challenge prize wall",             date:"Oct 2025"},
+  {n:35, name:"Ruby Ink Symbol",                           source:"League - Whispers in the Well",    date:"Nov 2025"},
+  {n:36, name:"Sapphire Ink Symbol",                       source:"League - Winterspell",             date:"Feb 2026"},
+  {n:37, name:"Be Prepared",                               source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:38, name:"Gaston - Superior Archer",                  source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:39, name:"Madam Mim - Resourceful Trickster",         source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:40, name:"Ursula - Deceiver",                         source:"League - Season of Villainy",      date:"Sep 2026"},
+  {n:41, name:"The Great Hunny Rescue",                    source:"Illumineer's Quest (retail)",      date:"Oct 2026"},
+];
+// Weekly Play counters come first (one per season, six per store kit), then the
+// Illumineer's Trove dials (one per set). Several names appear in both lists —
+// the source line on the tile is what tells them apart, so it is not optional.
+const LORCANA_LORE_COUNTERS = [
+  {n:1,  name:"The First Chapter",                source:"Weekly Play - The First Chapter",      date:"Aug 2023"},
+  {n:2,  name:"Rise of the Floodborn",            source:"Weekly Play - Rise of the Floodborn",  date:"Nov 2023"},
+  {n:3,  name:"Into the Inklands",                source:"Weekly Play - Into the Inklands",      date:"Feb 2024"},
+  {n:4,  name:"Ursula's Return",                  source:"Weekly Play - Ursula's Return",        date:"May 2024"},
+  {n:5,  name:"Winnie the Pooh",                  source:"Weekly Play - Shimmering Skies",       date:"Aug 2024"},
+  {n:6,  name:"Tinker Bell",                      source:"Weekly Play - Azurite Sea",            date:"Nov 2024"},
+  {n:7,  name:"Belle - Mechanic Extraordinaire",  source:"Weekly Play - Archazia's Island",      date:"Mar 2025"},
+  {n:8,  name:"Rapunzel - High Climber",          source:"Weekly Play - Reign of Jafar",         date:"May 2025"},
+  {n:9,  name:"Fabled",                           source:"Weekly Play - Fabled",                 date:"Aug 2025"},
+  {n:10, name:"Spooky Sight!",                    source:"Weekly Play - Whispers in the Well",   date:"Nov 2025"},
+  {n:11, name:"Tiana - Warm and Happy",           source:"Weekly Play - Winterspell (first event)", date:"Feb 2026"},
+  {n:12, name:"Into the Inklands",                source:"Illumineer's Trove",                   date:"Feb 2024"},
+  {n:13, name:"Ursula's Return",                  source:"Illumineer's Trove",                   date:"May 2024"},
+  {n:14, name:"Shimmering Skies",                 source:"Illumineer's Trove",                   date:"Aug 2024"},
+  {n:15, name:"Azurite Sea",                      source:"Illumineer's Trove",                   date:"Nov 2024"},
+  {n:16, name:"Archazia's Island",                source:"Illumineer's Trove",                   date:"Mar 2025"},
+  {n:17, name:"Reign of Jafar",                   source:"Illumineer's Trove",                   date:"May 2025"},
+  {n:18, name:"Fabled",                           source:"Illumineer's Trove",                   date:"Aug 2025"},
+  {n:19, name:"Whispers in the Well",             source:"Illumineer's Trove",                   date:"Nov 2025"},
+  {n:20, name:"Winterspell",                      source:"Illumineer's Trove",                   date:"Feb 2026"},
+  {n:21, name:"Attack of the Vine!",              source:"Illumineer's Trove",                   date:"Jul 2026"},
+];
+// Stand-ins until real photos exist — without one, a grid tile collapses to a
+// bare line of text and the section reads as broken rather than as a checklist.
+// Hand-drawn like NAV_ICONS so they inherit currentColor.
+const COLLECTIBLE_GLYPHS = {
+  "Pin": html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="9" r="5.2"/><circle cx="12" cy="9" r="1.7"/>
+    <path d="M12 14.2v7"/></svg>`,
+  "Lore Counter": html`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <circle cx="12" cy="12" r="8.4"/><path d="M12 12l3.6-2.6"/>
+    <path d="M12 3.6v1.8M20.4 12h-1.8M12 20.4v-1.8M3.6 12h1.8"/></svg>`,
+};
+const _collectibleRow = (c, kind, base, setId) => ({
+  tcgplayer_product_id: base + c.n,
+  name: c.name,
+  clean_name: c.name,
+  product_type: kind,
+  set_id: setId,
+  printing: "Normal",
+  low_price: null,
+  market_price: null,
+  image_url: c.img || null,
+  buy_url: null,
+  is_collectible: true,
+  collectible_n: c.n,
+  collectible_source: c.source,
+  collectible_date: c.date,
+});
+const SEALED_COLLECTIBLES = [
+  ...LORCANA_PINS.map(c => _collectibleRow(c, "Pin", 950000000, "__pins__")),
+  ...LORCANA_LORE_COUNTERS.map(c => _collectibleRow(c, "Lore Counter", 960000000, "__lore_counters__")),
+];
 // Strip the "Disney Lorcana: " prefix that TCGCSV prepends to every product —
 // the set pill already says where this is from; the prefix is just noise.
 const cleanSealedName = (name) => (name || "").replace(/^Disney Lorcana:\s*/i, "");
@@ -17096,7 +17594,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   // per-card cache (readCardHistCache) — sealed pids slot into the same
   // (pid, printing) keyspace cleanly.
   useEffect(() => {
-    if(!product?.tcgplayer_product_id || product?.is_puzzle){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
+    if(!product?.tcgplayer_product_id || product?.is_puzzle || product?.is_collectible){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
     let cancelled = false;
     setHistoryState({loading: true, error: null});
     fetchCardHistory(product.tcgplayer_product_id, "Normal")
@@ -17131,6 +17629,53 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
     return out;
   }, [history]);
   if(!product) return null;
+  // Pins and lore counters are prizes, not products — no SKU, no price, nothing
+  // to link to. The modal exists for the one thing a collector wants beyond the
+  // tile: where it came from, spelled out.
+  if(product.is_collectible){
+    const pc = product.tcgplayer_product_id;
+    const qc = sealedCollection?.[pc] || 0;
+    const bumpC = (delta) => { const next = Math.max(0, Math.min(99, qc + delta)); if(next !== qc) updateSealedQty(pc, next); };
+    const kind = product.product_type === "Pin" ? "Pin" : "Lore counter";
+    return html`<div class="card-detail-overlay" onClick=${onClose}>
+      <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
+        <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+        <div class="sealed-detail-head">
+          <div class="sealed-detail-img-wrap">
+            ${product.image_url
+              ? html`<img class="sealed-detail-img" src=${product.image_url} alt=${product.name}/>`
+              : html`<div class="sealed-detail-img-fallback collectible-ph collectible-ph--lg">
+                  ${COLLECTIBLE_GLYPHS[product.product_type] || null}</div>`}
+          </div>
+          <div class="sealed-detail-info">
+            <h2 class="sealed-detail-name">${product.name}</h2>
+            <div class="sealed-detail-meta muted">
+              <span>${kind}</span><span class="sealed-detail-sep">·</span><span>${product.collectible_date}</span>
+            </div>
+            <div class="sealed-detail-prices">
+              <div class="collectible-source">
+                <span class="collectible-source-lbl">How it was given out</span>
+                <span class="collectible-source-val">${product.collectible_source}</span>
+              </div>
+              <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>
+                ${kind}s aren't sold by Ravensburger — they come from event kits and prize walls,
+                so there's no market price to track here.</span>
+            </div>
+            ${!readOnly && html`<div class="sealed-detail-owncounter">
+              <span class="sealed-detail-owncounter-lbl">Owned</span>
+              <button onClick=${()=>bumpC(-1)} disabled=${qc<=0} aria-label="Decrease quantity">−</button>
+              <span class=${"sealed-coll-counter-qty"+(qc>0?" has":"")}>${qc}</span>
+              <button onClick=${()=>bumpC(+1)} disabled=${qc>=99} aria-label="Increase quantity">+</button>
+            </div>`}
+            ${!readOnly && qc > 0 && html`<${CostDateInputs}
+              currentPaid=${sealedMeta?.[pc]?.amount_paid ?? null}
+              currentDate=${sealedMeta?.[pc]?.acquired_date || null}
+              onCommit=${patch => updateSealedMeta(pc, patch)}/>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
   // Puzzles are unpriced merch — show a trimmed modal (big box art, piece
   // count, ownership, Ravensburger link) with no price/chart/Δ% sections.
   if(product.is_puzzle){
@@ -17351,9 +17896,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
   // render below doesn't need to branch — set_id doubles as the section
   // key in either mode (using the type string when grouping by type).
   const grouped = useMemo(()=>{
-    // SEALED_PUZZLES are unpriced static catalog rows merged in so they render
-    // as a "Puzzles" section alongside the priced sealed products.
-    const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
+    // SEALED_PUZZLES and SEALED_COLLECTIBLES are unpriced static catalog rows
+    // merged in so they render as their own sections alongside the priced
+    // sealed products.
+    const items = [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_COLLECTIBLES].filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const filtered = (hideUnowned
@@ -17376,6 +17922,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       for(const [type, list] of byType){
         // Inside each type-section, sort newest-set first then by name.
         list.sort((a, b) => {
+          // Collectibles are a timeline; `n` is release order, and several
+          // share a name across sources, so alphabetical is actively wrong.
+          if(a.collectible_n != null && b.collectible_n != null) return a.collectible_n - b.collectible_n;
           const ai = a.set_id != null ? (setOrder[a.set_id] ?? 999) : 1000;
           const bi = b.set_id != null ? (setOrder[b.set_id] ?? 999) : 1000;
           if(ai !== bi) return ai - bi;
@@ -17395,11 +17944,15 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     }
     const out = [];
     for(const [sid, list] of bySet){
-      list.sort((a, b) => sealedDisplayTypeRank(deriveSealedDisplayType(a)) - sealedDisplayTypeRank(deriveSealedDisplayType(b))
-        || (a.name||"").localeCompare(b.name||""));
+      list.sort((a, b) =>
+        (a.collectible_n != null && b.collectible_n != null)
+          ? a.collectible_n - b.collectible_n
+          : sealedDisplayTypeRank(deriveSealedDisplayType(a)) - sealedDisplayTypeRank(deriveSealedDisplayType(b))
+            || (a.name||"").localeCompare(b.name||""));
       out.push({
         set_id: sid,
-        set_name: sid === "__puzzles__" ? "Puzzles" : (sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid)),
+        set_name: SEALED_STATIC_SECTION_NAMES[sid]
+          || (sid === "__other__" ? "Other / Promo" : (setNameById[sid] || sid)),
         items: list,
       });
     }
@@ -17552,7 +18105,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                   ${section.items.map(item => {
                     const qty = sealedCollection[item.tcgplayer_product_id] || 0;
                     const price = item[priceField];
-                    const url = item.is_puzzle ? item.buy_url : tcgUrl(item.tcgplayer_product_id);
+                    // A synthetic pid would build a dead TCGplayer link, so
+                    // anything static uses its own buy_url (null = no link).
+                    const url = (item.is_puzzle || item.is_collectible)
+                      ? item.buy_url : tcgUrl(item.tcgplayer_product_id);
                     const dtype = deriveSealedDisplayType(item);
                     // Booster packs have 3 cover-art variants (no separate
                     // SKU); show a 3-art completion checklist on those tiles.
@@ -17581,7 +18137,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     const paidSealed = sealedMeta[item.tcgplayer_product_id]?.amount_paid;
                     const paidNum = paidSealed != null ? Number(paidSealed) : null;
                     const ownedValSealed = (price || 0) * qty;
-                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle
+                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle && !item.is_collectible
                       && paidNum != null && Number.isFinite(paidNum) && paidNum > 0;
                     const retSealed = hasRetSealed ? ownedValSealed - paidNum : null;
                     const retPctSealed = hasRetSealed ? (retSealed/paidNum)*100 : null;
@@ -17589,11 +18145,15 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                         onClick=${()=>setSelectedProduct(item)}
                         title="View price history and details">
                       ${displayMode==="grid" && item.image_url && html`<img src=${item.image_url} alt="" class="gc-card-img sealed-card-img" loading="lazy"/>`}
+                      ${displayMode==="grid" && !item.image_url && item.is_collectible && html`<div class="gc-card-img sealed-card-img collectible-ph" aria-hidden="true">
+                        ${COLLECTIBLE_GLYPHS[item.product_type] || null}</div>`}
                       <div class="gc-card-body">
                         <div class="gc-card-name" title=${item.name}>${cleanSealedName(item.name)}</div>
-                        <div class="gc-card-sub muted">${dtype}</div>
+                        <div class="gc-card-sub muted">${item.is_collectible ? item.collectible_source : dtype}</div>
                         <div class="gc-card-raw">
-                          ${item.is_puzzle
+                          ${item.is_collectible
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.collectible_date}</span>`
+                            : item.is_puzzle
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.puzzle_pieces} pcs${item.puzzle_exclusive ? " · Disney Store excl." : ""}</span>`
                             : showBoth
                             ? html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lowPx)}</span>
@@ -17634,10 +18194,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                                         if(qty < need) updateSealedQty(item.tcgplayer_product_id, need);
                                       }
                                     }}>${i}</button>`)}
-                                  ${qty > 0 && !item.is_puzzle && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                  ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 </span>`
                               : html`
-                                ${qty > 0 && !item.is_puzzle && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${"Now " + fmt(ownedValSealed) + " · paid " + fmt(paidNum)}
                                   style=${{color: retSealed>=0?"var(--green)":"var(--red)"}}>${retSealed>=0?"+":""}${fmt(retSealed)} (${fmtPct(retPctSealed)})</span>`}`}
                           </div>
@@ -18276,6 +18836,91 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
   </div>`;
 };
 
+// ── Owned graded movers (shared) ─────────────────────────────────
+// Two surfaces render "your top graded movers": the banner at the top of the
+// Graded collection, and the optional home-page panel. They read the same
+// graded_sales_rollup and must never disagree about what counts as a mover, so
+// the whole computation lives here rather than in either component.
+const GRADED_OWNED_WINDOWS = [["1d","1D","pct_1d"],["1w","1W","pct_7d"],["1m","1M","pct_30d"]];
+// 1M is the default everywhere: graded sales are sparse enough that a 1D or 1W
+// window over one person's slabs is usually empty or a single noisy print.
+const GRADED_OWNED_DEFAULT_WINDOW = "1m";
+const gradedOwnedPctKey = (win) =>
+  (GRADED_OWNED_WINDOWS.find(w => w[0] === win) || GRADED_OWNED_WINDOWS[2])[2];
+
+// Δ% map for the tile pills + both movers banners, from the per-sale rollup
+// (last_sold + windowed pct, migration 75). Keyed by
+// (pid, printing, grader, grade) under every plausible printing because the
+// owned slot's stored printing and the rollup's may disagree.
+const gradedOwnedDeltaIndex = (rollup, cardById) => {
+  if(!rollup) return null;
+  const m = new Map();
+  const PR = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
+  // Same two-pass shape as priceByKey, and for the same reason: writing every
+  // rollup row under every printing key makes the LAST row win, which on a
+  // Challenge Promo (one card_id, two very different markets) prices a Prize
+  // Wall slab at the Top Prize's number — Cinderella - Stouthearted PSA 10
+  // read $3,265 (Foil) on a ~$460 Non-Foil copy.
+  const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
+  const deltaOf = (r, meta) => ({tcgplayer_product_id: meta.tcgplayer_product_id,
+    grader: (r.grader||"").toLowerCase(), grade: r.grade,
+    low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
+    pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
+  // Pass 1: non-split ("") and split-but-unclassified ("Unknown") rows under
+  // every key — a foil-only chase card's slot is stamped "Normal" by the
+  // migration-50 backfill, so a strict match would drop it entirely.
+  for(const r of (rollup||[])){
+    if(r.printing && r.printing !== "Unknown") continue;
+    const meta = cardById.get(r.card_id);
+    if(!meta || !meta.tcgplayer_product_id) continue;
+    const d = deltaOf(r, meta);
+    for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
+  }
+  // Pass 2: rows that name a printing override just their own slot keys.
+  for(const r of (rollup||[])){
+    if(!r.printing || r.printing === "Unknown") continue;
+    const meta = cardById.get(r.card_id);
+    if(!meta || !meta.tcgplayer_product_id) continue;
+    const d = deltaOf(r, meta);
+    for(const pr of (SYN[r.printing] || [r.printing])) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
+  }
+  return m;
+};
+
+// Top movers within the user's OWNED graded slots, sorted by |Δ%| in the
+// chosen window. Flat slots (pct null / 0 / beyond the sanity cap) drop out so
+// they can't crowd genuine movers.
+const buildGradedOwnedMovers = (items, deltaIndex, cardById, pctKey, limit = 20) => {
+  if(!deltaIndex || !items || !items.length) return [];
+  const rows = [];
+  for(const it of items){
+    if((it.quantity||0) <= 0) continue;
+    const meta = cardById.get(it.card_id);
+    if(!meta || !meta.tcgplayer_product_id) continue;
+    // Graded movers are a chase-rarity surface — base-rarity graded sales are
+    // too sparse/noisy to read as movement (matches the market-wide banner).
+    if(!GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
+    const printing = it.printing || "Normal";
+    const key = `${meta.tcgplayer_product_id}|${printing}|${(it.grader||"").toLowerCase()}|${it.grade}`;
+    const d = deltaIndex.get(key);
+    if(!d) continue;
+    const pct = sanePct(d[pctKey]);
+    if(pct == null || pct === 0) continue;
+    rows.push({
+      card_id: it.card_id, tcgplayer_product_id: meta.tcgplayer_product_id,
+      printing, grader: it.grader, grade: it.grade,
+      name: meta["Product Name"], rarity: meta.Rarity,
+      img_normal: meta.img_normal, img_small: meta.img_small,
+      price: d.low_today, pct,
+      // 3-window Δ% for the tile's bottom grid. The window picker re-sorts by
+      // `pct` (the selected window) but the grid always shows all 3.
+      pct_1d: d.pct_1d, pct_7d: d.pct_7d, pct_30d: d.pct_30d,
+    });
+  }
+  rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
+  return rows.slice(0, limit);
+};
+
 const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGradedRows, onJumpToScreenerGraded, onOwnershipChanged, collection, updateQty}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   useEffect(() => { signalGradedSurface(); }, []);
@@ -18390,10 +19035,20 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   const [gradedBannerWindow, setGradedBannerWindow] = useState(()=>{
     try {
       const v = localStorage.getItem("packsink:graded:bannerWindow");
-      return (v === "1d" || v === "1w" || v === "1m") ? v : "1w";
-    } catch { return "1w"; }
+      return GRADED_OWNED_WINDOWS.some(w => w[0] === v) ? v : GRADED_OWNED_DEFAULT_WINDOW;
+    } catch { return GRADED_OWNED_DEFAULT_WINDOW; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:graded:bannerWindow", gradedBannerWindow); } catch {} }, [gradedBannerWindow]);
+  // Mirror of the home layout's `gradedOwned` panel, so the banner can offer a
+  // one-tap "put this on my home page" right where the user is looking at it
+  // instead of only in the layout editor. App owns the real state; the event
+  // keeps the two in sync in both directions.
+  const [onHome, setOnHome] = useState(isHomePanelEnabled("gradedOwned"));
+  useEffect(() => {
+    const sync = () => setOnHome(isHomePanelEnabled("gradedOwned"));
+    window.addEventListener("packsink:home-layout-changed", sync);
+    return () => window.removeEventListener("packsink:home-layout-changed", sync);
+  }, []);
   // "Remove from tracking" — per-tile opt-out from set-goal placeholder
   // checklists. Replaces the older "Hide" feature (2026-05-26 revamp).
   //
@@ -18579,78 +19234,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
   // rollup (last_sold + windowed pct, migration 75). Keyed by
   // (pid, printing, grader, grade) under every plausible printing because the
   // owned slot's stored printing and the rollup's may disagree.
-  const tileDeltasByKey = useMemo(() => {
-    if(!rollup) return null;
-    const m = new Map();
-    const PR = ["Normal", "Holofoil", "Cold Foil", "Foil", "Non-Foil"];
-    // Same two-pass shape as priceByKey below, and for the same reason: writing
-    // every rollup row under every printing key makes the LAST row win, which
-    // on a Challenge Promo (one card_id, two very different markets) prices a
-    // Prize Wall slab at the Top Prize's number — Cinderella - Stouthearted
-    // PSA 10 read $3,265 (Foil) on a ~$460 Non-Foil copy.
-    const SYN = {"Foil": ["Foil", "Holofoil", "Cold Foil"], "Non-Foil": ["Non-Foil", "Normal"], "Cold Foil": ["Cold Foil"]};
-    const deltaOf = (r, meta) => ({tcgplayer_product_id: meta.tcgplayer_product_id,
-      grader: (r.grader||"").toLowerCase(), grade: r.grade,
-      low_today: r.last_sold_price != null ? Number(r.last_sold_price) : null,
-      pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d});
-    // Pass 1: non-split ("") and split-but-unclassified ("Unknown") rows under
-    // every key — a foil-only chase card's slot is stamped "Normal" by the
-    // migration-50 backfill, so a strict match would drop it entirely.
-    for(const r of (rollup||[])){
-      if(r.printing && r.printing !== "Unknown") continue;
-      const meta = cardById.get(r.card_id);
-      if(!meta || !meta.tcgplayer_product_id) continue;
-      const d = deltaOf(r, meta);
-      for(const pr of PR) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
-    }
-    // Pass 2: rows that name a printing override just their own slot keys.
-    for(const r of (rollup||[])){
-      if(!r.printing || r.printing === "Unknown") continue;
-      const meta = cardById.get(r.card_id);
-      if(!meta || !meta.tcgplayer_product_id) continue;
-      const d = deltaOf(r, meta);
-      for(const pr of (SYN[r.printing] || [r.printing])) m.set(`${meta.tcgplayer_product_id}|${pr}|${d.grader}|${r.grade}`, d);
-    }
-    return m;
-  }, [rollup, cardById]);
-  // Map "1d" | "1w" | "1m" → the pct_* key on the delta row. Tile slots
-  // always show all three windows so they don't need a window→key lookup
-  // — only the banner's sort-by-window picker uses bannerPctKey now.
-  const bannerPctKey = gradedBannerWindow === "1d" ? "pct_1d" : gradedBannerWindow === "1m" ? "pct_30d" : "pct_7d";
-  // Top movers within the user's OWNED graded slots, sorted by |Δ%| in the
-  // banner's selected window. Driven off the same tileDeltasByKey that the
-  // tile Δ% pills use — same fetch, two consumers. Floor at the smallest
-  // |Δ%| change > 0 so flat slots don't crowd genuine movers.
-  const gradedBannerMovers = useMemo(() => {
-    if(!tileDeltasByKey || !items || !items.length) return [];
-    const rows = [];
-    for(const it of items){
-      if((it.quantity||0) <= 0) continue;
-      const meta = cardById.get(it.card_id);
-      if(!meta || !meta.tcgplayer_product_id) continue;
-      // Graded movers are a chase-rarity surface — base-rarity graded sales are
-      // too sparse/noisy to read as movement (matches the home banner).
-      if(!GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
-      const printing = it.printing || "Normal";
-      const key = `${meta.tcgplayer_product_id}|${printing}|${(it.grader||"").toLowerCase()}|${it.grade}`;
-      const d = tileDeltasByKey.get(key);
-      if(!d) continue;
-      const pct = sanePct(d[bannerPctKey]);
-      if(pct == null || pct === 0) continue;
-      rows.push({
-        card_id: it.card_id, tcgplayer_product_id: meta.tcgplayer_product_id,
-        printing, grader: it.grader, grade: it.grade,
-        name: meta["Product Name"], rarity: meta.Rarity,
-        img_normal: meta.img_normal, img_small: meta.img_small,
-        price: d.low_today, pct,
-        // 3-window Δ% for the tile's bottom grid. Banner picker re-sorts
-        // by `pct` (the selected window) but the grid always shows all 3.
-        pct_1d: d.pct_1d, pct_7d: d.pct_7d, pct_30d: d.pct_30d,
-      });
-    }
-    rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
-    return rows.slice(0, 20);
-  }, [tileDeltasByKey, items, bannerPctKey, cardById]);
+  const tileDeltasByKey = useMemo(() => gradedOwnedDeltaIndex(rollup, cardById), [rollup, cardById]);
+  const bannerPctKey = gradedOwnedPctKey(gradedBannerWindow);
+  const gradedBannerMovers = useMemo(
+    () => buildGradedOwnedMovers(items, tileDeltasByKey, cardById, bannerPctKey),
+    [tileDeltasByKey, items, bannerPctKey, cardById]);
   // Index latest prices by (pid, printing, grader, grade). Printing was
   // added in migration 49 so split-printing rows no longer collapse.
   // Legacy callers that don't know printing can look up under "Normal".
@@ -19255,10 +19843,19 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
       ${!gradedMoversCollapsed && html`<div class="graded-movers-banner-body">
         <div class="graded-movers-banner-controls">
           <div class="seg-toggle gc-caps-seg" title="Δ% window for the banner">
-            <button class=${gradedBannerWindow==="1d"?"active":""} onClick=${()=>setGradedBannerWindow("1d")}>1D</button>
-            <button class=${gradedBannerWindow==="1w"?"active":""} onClick=${()=>setGradedBannerWindow("1w")}>1W</button>
-            <button class=${gradedBannerWindow==="1m"?"active":""} onClick=${()=>setGradedBannerWindow("1m")}>1M</button>
+            ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
+              class=${gradedBannerWindow===k?"active":""}
+              onClick=${()=>setGradedBannerWindow(k)}>${lbl}</button>`)}
           </div>
+          ${!readOnly && html`<button
+            class=${"chip gc-caps-btn graded-movers-home-toggle"+(onHome?" active":"")}
+            aria-pressed=${onHome}
+            title=${onHome
+              ? "Remove this banner from your home page. (Also editable under Home page layout.)"
+              : "Pin this banner to your home page, alongside the other movers feeds."}
+            onClick=${()=>setHomePanelEnabled("gradedOwned", !onHome)}>
+            ${onHome ? "★ On home" : "☆ Show on home"}
+          </button>`}
           ${onJumpToScreenerGraded && html`<button class="chip gc-caps-btn graded-movers-screener-jump"
             onClick=${onJumpToScreenerGraded}
             title="Open the Screener filtered to your graded cards, sorted by 1W Δ%">View in Screener →</button>`}
@@ -20532,11 +21129,42 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
   }, []);
   // Cards-vs-Sealed top-level toggle. Persisted so coming back lands on the
   // tab the user was last using.
+  // ?c= wins over the stored preference: someone opening a shared link means
+  // the section in the link, not the one they were last on.
   const [section, setSection] = useState(()=>{
+    const fromUrl = readUrlEnum("c", COLLECTION_SECTIONS);
+    if(fromUrl) return fromUrl;
     try { return localStorage.getItem("packsink:collection:section") || "cards"; }
     catch { return "cards"; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:collection:section", section); } catch {} }, [section]);
+  // Mirror the section into /collection?c=<section>. "cards" is the default so
+  // it's omitted — one page, one URL. replaceState only: a set page (?set=) and
+  // a viewer's collection (?collection=) both push their own history entries on
+  // top of this, and a section change that also pushed would interleave with
+  // them so Back stepped sideways through tabs instead of out of the set.
+  useEffect(() => {
+    // A set page owns the URL while it's open, exactly like a deck does on the
+    // Decks tab — don't overwrite its ?set= from the section behind it.
+    if(selectedSet) return;
+    try {
+      const url = new URL(window.location.href);
+      if((url.pathname.replace(/\/$/, "") || "/") !== "/collection") return;
+      const want = section === "cards" ? null : section;
+      if(url.searchParams.get("c") === want) return;
+      if(want) url.searchParams.set("c", want); else url.searchParams.delete("c");
+      window.history.replaceState(window.history.state, "", url.toString());
+    } catch {/* no-op */}
+  }, [section, selectedSet]);
+  // Back / Forward out of a set page restores the section the URL names.
+  useEffect(() => {
+    const onPop = () => {
+      const v = readUrlEnum("c", COLLECTION_SECTIONS);
+      setSection(v || "cards");
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
   // Re-clicking the Collection tab while inside a set drops back to the
   // top-level set grid. tabClickNonce increments on every tab click.
   useEffect(() => {
@@ -21029,13 +21657,19 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         </div>`}
       </div>`;
     })()}
+    ${/* <a href>, not <button> — the SPA-nav convention, so ctrl/middle-click
+          opens a section in a new tab and right-click offers "Copy link
+          address". In viewer mode the href keeps ?collection= so the copied
+          link still points at whose collection you're looking at. */""}
     <div class="collection-section-tabs">
-      ${(!isViewerMode || viewerVis.raw) && html`<button class=${"collection-section-tab"+(effectiveSection==="cards"?" active":"")}
-        onClick=${()=>setSection("cards")}>Cards</button>`}
-      ${(!isViewerMode || viewerVis.sealed) && html`<button class=${"collection-section-tab"+(effectiveSection==="sealed"?" active":"")}
-        onClick=${()=>setSection("sealed")}>Sealed</button>`}
-      ${(!isViewerMode || viewerVis.graded) && html`<button class=${"collection-section-tab"+(effectiveSection==="graded"?" active":"")}
-        onClick=${()=>setSection("graded")}>Graded</button>`}
+      ${COLLECTION_SECTIONS.map(k => {
+        const vis = k === "cards" ? viewerVis.raw : k === "sealed" ? viewerVis.sealed : viewerVis.graded;
+        if(isViewerMode && !vis) return null;
+        return html`<a key=${k}
+          class=${"collection-section-tab"+(effectiveSection===k?" active":"")}
+          href=${collectionSectionHref(k, isViewerMode ? viewerContext : null)}
+          onClick=${navHandler(()=>setSection(k))}>${COLLECTION_SECTION_LABELS[k]}</a>`;
+      })}
       ${!isViewerMode && user && ownerProfile && html`<div class="collection-share-wrap" ref=${shareRef}>
         <button class=${"collection-share-btn"+(shareOpen?" open":"")}
           onClick=${()=>setShareOpen(o=>!o)}
@@ -24774,7 +25408,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       filterStrengths: Array.from(filterStrengths),
       filterWillpowers: Array.from(filterWillpowers),
       filterLores: Array.from(filterLores),
-      filterInkable, filterLegality,
+      filterInkable, filterLegality, filterDualInk,
       filterKeywords: Array.from(filterKeywords),
       filterClassifications: Array.from(filterClassifications),
       filterIllustrators: Array.from(filterIllustrators),
@@ -24819,6 +25453,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterWillpowers(new Set(v.filterWillpowers || []));
     setFilterLores(new Set(v.filterLores || []));
     setFilterInkable(v.filterInkable == null ? null : v.filterInkable);
+    setFilterDualInk(!!v.filterDualInk);
     setFilterLegality(v.filterLegality || "");
     setFilterKeywords(new Set(v.filterKeywords || []));
     setFilterClassifications(new Set(v.filterClassifications || []));
@@ -24919,6 +25554,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [filterWillpowers, setFilterWillpowers] = useState(() => new Set());
   const [filterLores, setFilterLores] = useState(() => new Set());
   const [filterInkable, setFilterInkable] = useState(null); // null | true | false
+  const [filterDualInk, setFilterDualInk] = useState(false);
   const [filterLegality, setFilterLegality] = useState(""); // "" | "core" | "infinity"
   const [filterKeywords, setFilterKeywords] = useState(() => new Set());
   const [filterClassifications, setFilterClassifications] = useState(() => new Set());
@@ -25315,6 +25951,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       willpowers: filterWillpowers,
       lores: filterLores,
       inkable: filterInkable,
+      dualInk: filterDualInk,
       legality: filterLegality || undefined,
       keywords: filterKeywords,
       classifications: filterClassifications,
@@ -25511,7 +26148,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -25681,6 +26318,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fromSet("lore",  "Lore",       filterLores,      setFilterLores);
     if(filterInkable !== null)
       push("inkable", filterInkable ? "Inkable" : "Uninkable", () => setFilterInkable(null));
+    if(filterDualInk) push("dualink", "Dual ink", () => setFilterDualInk(false));
     if(filterLegality)
       push("legality", filterLegality === "core" ? "Core" : filterLegality === "japan" ? "Japan Core" : "Infinity",
         () => setFilterLegality(""));
@@ -25689,7 +26327,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     fromSet("art", "Artist",         filterIllustrators,    setFilterIllustrators);
     return out;
   }, [showSealed, priceMode, minPrice, maxPrice, pctWin, minPct, maxPct, filterInks, filterCosts,
-      filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable,
+      filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk,
       filterLegality, filterKeywords, filterClassifications, filterIllustrators]);
 
   const clearHiddenFilters = useCallback(() => {
@@ -26341,6 +26979,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             onClick=${()=>setFilterInkable(v=>v===true?null:true)}>Inkable</button>
           <button class=${"chip "+(filterInkable===false?"active":"")}
             onClick=${()=>setFilterInkable(v=>v===false?null:false)}>Uninkable</button>
+          <button class=${"chip "+(filterDualInk?"active":"")}
+            title="Only cards printed with two ink colors."
+            onClick=${()=>setFilterDualInk(v=>!v)}>Dual ink</button>
         </div>
         <label style=${{marginLeft:16}}>Legality</label>
         <div class="cards-chipgroup" style=${{gap:4}}>
@@ -28346,6 +28987,9 @@ const HOME_PANELS = [
   {key:"setChamps",   label:"Upcoming events",      col:"right"},
   {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
+  // Off by default: it is empty for anyone with no graded slabs, and the
+  // people who do want it turn it on from the banner in the Graded collection.
+  {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
@@ -28377,7 +29021,7 @@ const normalizeBannerOrder = (val) => {
   return clean;
 };
 const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
-const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));
+const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:!p.off}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
 // layout: unknown keys dropped, missing keys appended at their default column,
 // bad column names reset. Never throws — a corrupt value falls back to default.
@@ -28393,8 +29037,26 @@ const normalizeHomeLayout = (val) => {
       out.push({key:k, col: cols.has(it.col) ? it.col : byKey.get(k).col, on: it.on !== false});
     }
   }
-  for(const p of HOME_PANELS) if(!seen.has(p.key)) out.push({key:p.key, col:p.col, on:true});
+  // A panel marked `off` starts hidden when it is APPENDED to an existing
+  // layout too, not just in a fresh one — otherwise shipping an opt-in panel
+  // would silently switch it on for every returning browser.
+  for(const p of HOME_PANELS) if(!seen.has(p.key)) out.push({key:p.key, col:p.col, on:!p.off});
   return out;
+};
+
+// Read/write one home panel's visibility from outside HomeView. App owns the
+// state; these are the bridge so a surface elsewhere in the app (the Graded
+// collection's movers banner) can offer "show this on my home page" inline
+// instead of sending people to the layout editor.
+const isHomePanelEnabled = (key) => {
+  try {
+    const p = normalizeHomeLayout(JSON.parse(localStorage.getItem(HOME_LAYOUT_KEY) || "null"))
+      .find(x => x.key === key);
+    return !!(p && p.on !== false);
+  } catch { return false; }
+};
+const setHomePanelEnabled = (key, on) => {
+  window.dispatchEvent(new CustomEvent("packsink:set-home-panel", {detail:{key, on: !!on}}));
 };
 
 // Right-side panel on Home: current collection value, line chart over a
@@ -30659,12 +31321,6 @@ const HOME_TOOL_ICONS = {
     <path d="M12 14v4"/>
     <path d="M8 21h8"/>
     <path d="M9.5 18h5"/>`),
-  // Stream Ticker — a marquee bar scrolling left
-  ticker: _navSvg(html`
-    <rect x="2" y="8.5" width="20" height="7" rx="2"/>
-    <path d="M6 12h5"/>
-    <path d="M13.5 12h2"/>
-    <path d="M19 10.5L17.5 12l1.5 1.5"/>`),
 };
 const HOME_TOOLS = [
   {k:"ev",     label:"Expected Value", sub:"Box EV vs box price"},
@@ -30673,10 +31329,10 @@ const HOME_TOOLS = [
   {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
   {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
   {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
-  // The stream ticker is a standalone page (deliberately outside the SPA —
-  // see the /ticker notes), so its chip is a plain new-tab link, not an
-  // Analytics sub-tab.
-  {k:"ticker", label:"Stream Ticker",  sub:"Top movers for OBS", href:"/ticker", external:true},
+  // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven). /ticker
+  // still works and is still the thing you paste into OBS — it just isn't a
+  // toolbox entry, because the toolbox is the calculators an ordinary visitor
+  // uses and the ticker is a tool for the handful of people who stream.
 ];
 const HomeToolboxPanel = ({onOpenTool}) => {
   const [collapsed, setCollapsed] = useState(() => {
@@ -30700,15 +31356,7 @@ const HomeToolboxPanel = ({onOpenTool}) => {
       </button>
     </div>
     ${!collapsed && html`<div class="home-toolbox-grid">
-      ${HOME_TOOLS.map(t => t.external
-        ? html`<a key=${t.k} class="home-tool-chip" href=${t.href} target="_blank" rel="noopener">
-            <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
-            <span class="home-tool-txt">
-              <span class="home-tool-name">${t.label} ↗</span>
-              <span class="home-tool-sub">${t.sub}</span>
-            </span>
-          </a>`
-        : html`<a key=${t.k} class="home-tool-chip"
+      ${HOME_TOOLS.map(t => html`<a key=${t.k} class="home-tool-chip"
         href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
         onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
         <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
@@ -30717,6 +31365,137 @@ const HomeToolboxPanel = ({onOpenTool}) => {
           <span class="home-tool-sub">${t.sub}</span>
         </span>
       </a>`)}
+    </div>`}
+  </aside>`;
+};
+
+// Home-page twin of the Graded collection's "Graded Movers" banner: the user's
+// OWN slabs, ranked by Δ% in one window. Opt-in (HOME_PANELS marks it `off`)
+// and switchable straight from the banner in the Graded collection, because
+// that is where someone is when they decide they want to watch these daily.
+//
+// It fetches its own graded items + rollup rather than reading CollectionPanel's
+// — the two panels are independently placeable and either can be switched off.
+const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
+  const gradedPremium = useContext(GradedPremiumContext);
+  const [items, setItems] = useState(null);
+  const [rollup, setRollup] = useState(null);
+  const [win, setWin] = useState(() => {
+    // Shares the Graded collection banner's window preference on purpose: one
+    // person, one idea of "the window I care about".
+    try {
+      const v = localStorage.getItem("packsink:graded:bannerWindow");
+      return GRADED_OWNED_WINDOWS.some(w => w[0] === v) ? v : GRADED_OWNED_DEFAULT_WINDOW;
+    } catch { return GRADED_OWNED_DEFAULT_WINDOW; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:graded:bannerWindow", win); } catch {} }, [win]);
+  const [collapsed, setCollapsed] = useState(() => {
+    try { return localStorage.getItem("packsink:home:gradedOwnedCollapsed") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:gradedOwnedCollapsed", collapsed ? "1" : "0"); } catch {}
+  }, [collapsed]);
+
+  useEffect(() => {
+    if(!user){ setItems([]); return; }
+    let cancelled = false;
+    sbClient.from("graded_collection_items")
+      .select("card_id,printing,grader,grade,quantity")
+      .eq("user_id", user.id)
+      .then(r => { if(!cancelled) setItems(r.data || []); })
+      .catch(() => { if(!cancelled) setItems([]); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const cardById = useMemo(() => {
+    const m = new Map();
+    for(const r of (raw||[])) if(r.card_id && !m.has(r.card_id)) m.set(r.card_id, r);
+    return m;
+  }, [raw]);
+
+  // Scoped to the card_ids the user actually owns — the full rollup is a
+  // paginated table read and this panel can be on for every home visit.
+  const ownedIdsKey = useMemo(() =>
+    Array.from(new Set((items||[]).map(i => i.card_id).filter(Boolean))).sort().join(","), [items]);
+  useEffect(() => {
+    if(!gradedPremium || !ownedIdsKey){ setRollup(null); return; }
+    let cancelled = false;
+    const ids = ownedIdsKey.split(",");
+    const BATCH = 50, batches = [];
+    for(let i = 0; i < ids.length; i += BATCH) batches.push(ids.slice(i, i + BATCH));
+    Promise.all(batches.map(b => sbFetchAll("graded_sales_rollup", {
+      select: "card_id,grader,grade,printing,last_sold_price,pct_1d,pct_7d,pct_30d",
+      card_id: "in.(" + b.join(",") + ")",
+      order: "card_id.asc",
+    }))).then(rs => { if(!cancelled) setRollup(rs.flat()); })
+      .catch(() => { if(!cancelled) setRollup([]); });
+    return () => { cancelled = true; };
+  }, [ownedIdsKey, gradedPremium]);
+
+  const deltaIndex = useMemo(() => gradedOwnedDeltaIndex(rollup, cardById), [rollup, cardById]);
+  const movers = useMemo(
+    () => buildGradedOwnedMovers(items, deltaIndex, cardById, gradedOwnedPctKey(win)),
+    [items, deltaIndex, cardById, win]);
+
+  // Nothing to say to someone with no slabs — render nothing rather than an
+  // empty box, the same way the graded home banner hides for non-premium.
+  if(!gradedPremium || !user) return null;
+  if(items != null && items.length === 0) return null;
+
+  return html`<aside class=${"home-feed home-feed--gowned"+(collapsed?" is-collapsed":"")}>
+    <div class="panel-header">
+      ${onTitleClick
+        ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
+            title="Open your graded collection"
+            style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Graded Movers</button>`
+        : html`<h2 class="panel-title">Your Graded Movers</h2>`}
+      <button class="home-feed-collapse-btn" onClick=${()=>setCollapsed(c=>!c)}
+        title=${collapsed ? "Expand" : "Collapse"}
+        aria-label=${collapsed ? "Expand Your Graded Movers" : "Collapse Your Graded Movers"}>
+        ${collapsed ? "▸" : "▾"}
+      </button>
+    </div>
+    ${!collapsed && html`<div class="gowned-body">
+      <div class="gowned-controls">
+        <div class="seg-toggle gc-caps-seg" title="Δ% window">
+          ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
+            class=${win===k?"active":""} onClick=${()=>setWin(k)}>${lbl}</button>`)}
+        </div>
+        <span class="muted gowned-sub">Your slabs by Δ%</span>
+      </div>
+      ${(items == null || deltaIndex == null)
+        ? html`<div class="muted" style=${{padding:"14px 4px",fontSize:12}}>Loading graded sales…</div>`
+        : movers.length === 0
+          ? html`<div class="muted" style=${{padding:"14px 4px",fontSize:12}}>
+              No ${win.toUpperCase()} movement in your graded slabs. Try a longer window.</div>`
+          : html`<${AutoScrollStrip} items=${movers}
+              keyFor=${(c)=>`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
+              renderItem=${(c, key) => {
+                const img = c.img_normal || c.img_small;
+                return html`<button key=${key} class="gmover-tile"
+                  onClick=${()=>{
+                    const matching = (raw||[]).filter(r => r.card_id === c.card_id);
+                    const groups = matching.length ? groupCards(matching) : [];
+                    if(groups[0] && onCard) onCard(groups[0]);
+                  }}
+                  title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+                  ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
+                  <div class="gmover-name">${c.name}</div>
+                  <div class="gmover-meta">
+                    <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
+                    <span class="gmover-price">$${Math.round(c.price)}</span>
+                  </div>
+                  <div class="gmover-deltas">
+                    <span class="gmover-dh">1D</span>
+                    <span class="gmover-dh">1W</span>
+                    <span class="gmover-dh">1M</span>
+                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_1d))}}>${fmtPct(sanePct(c.pct_1d))}</span>
+                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
+                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
+                  </div>
+                </button>`;
+              }}/>`}
     </div>`}
   </aside>`;
 };
@@ -31251,6 +32030,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} onTitleClick=${goAnalytics}/>`;
+      case "gradedOwned": return html`<${GradedOwnedMoversHomePanel} key="gradedOwned"
+        raw=${raw} user=${user} onCard=${openCard} onTitleClick=${goCollection}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
         collection=${collection} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
         sealedPrices=${sealedPrices} collectionLoading=${collectionLoading} setsMeta=${setsMeta}
@@ -31787,17 +32568,45 @@ const getFormat = (key) => DECK_FORMATS.find(f => f.key === key) || DECK_FORMATS
 // only PARTIALLY released — only the specific cards listed below are legal
 // from those two sets (e.g. Grandmother Willow, in Winterspell but not on
 // the list, is NOT Japan-legal). Promos are excluded entirely.
-//   When set 13 (Attack of the Vine!) reaches Japan, the rest of 10/11 will
-//   have released too — at that point move Whispers/Winterspell into
-//   JAPAN_CORE_FULL_SETS (or clear the partial gating) and add set 13.
+//   Japan SKIPPED standalone releases of sets 10 and 11. Their cards instead
+//   trickle out through the "Curator's Library" — a 7th card slot added to
+//   Japanese booster packs from set 12 onward — so the partial gating is
+//   permanent for those two, not a temporary catch-up. Refresh
+//   JAPAN_CORE_PARTIAL_NUMBERS after each new Japanese set adds a wave.
+//   Set 12 (Wilds Unknown) and set 13 (Attack of the Vine! / ヴァインズ・
+//   アタック!, JP 2026-07-17) released simultaneously with English.
 const JAPAN_CORE_FULL_SETS = new Set([
   "The First Chapter", "Rise of the Floodborn", "Into the Inklands", "Ursula's Return",
   "Shimmering Skies", "Azurite Sea", "Archazia's Island", "Reign of Jafar", "Fabled",
-  "Wilds Unknown",
+  "Wilds Unknown", "Attack of the Vine!",
 ]);
 const JAPAN_CORE_PARTIAL_SETS = new Set(["Whispers in the Well", "Winterspell"]);
 // Match by Product Name ("Name - Version"), punctuation/case-insensitive.
 const _jpNorm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+// Collector numbers released so far through the Curator's Library slot, per
+// set. Sourced 2026-08-24 from a Japanese singles retailer's two Curator's
+// Library categories (the only per-card listing that exists — Ravensburger
+// publishes no Japan-legal card list), cross-checked against the hand-built
+// name list below: it covered 94 of those 100 and added 62 more.
+//   Numbers, not names, because that's what the Japanese listings actually
+// print ("150/204 JA-10") and because a name is ambiguous across sets — "Let
+// It Go" is a Winterspell card AND a Challenge promo. The `f` suffix on a few
+// Winterspell rows (113f = the foil printing of 113) is stripped before the
+// lookup: the foil of a released card is the same released card.
+const JAPAN_CORE_PARTIAL_NUMBERS = {
+  "Whispers in the Well": new Set([
+    5,21,24,26,27,29,32,34,45,57,62,66,68,70,75,78,83,87,89,97,98,102,105,106,111,
+    115,118,133,137,141,146,150,154,155,156,157,160,162,165,166,169,172,176,178,179,
+    181,185,187,196,199,200,202,205,207,214,217,220,223,239,
+  ]),
+  "Winterspell": new Set([
+    1,2,3,4,6,7,8,9,10,11,12,13,16,17,18,19,20,22,25,26,27,28,29,31,32,33,38,39,40,
+    43,45,46,47,50,51,52,55,59,60,61,64,65,66,68,71,72,79,80,84,85,86,87,89,90,92,97,
+    102,106,107,111,113,114,115,116,118,119,121,123,124,125,127,131,136,139,141,145,
+    147,149,150,153,158,166,168,169,172,174,176,177,179,181,184,185,188,189,190,192,
+    193,194,195,196,197,199,202,204,206,216,223,227,228,230,233,236,239,241,
+  ]),
+};
 const JAPAN_CORE_PARTIAL_NAMES = new Set([
   // Winterspell (set 11) — released-in-Japan cards
   "Beast - Snowfield Troublemaker", "White Rabbit - Late Again", "Timon - Snowball Swiper",
@@ -31842,8 +32651,14 @@ const isJapanCoreLegal = (row) => {
   if(!row) return false;
   const set = row.Set;
   if(JAPAN_CORE_FULL_SETS.has(set)) return true;
-  if(JAPAN_CORE_PARTIAL_SETS.has(set)) return JAPAN_CORE_PARTIAL_NAMES.has(_jpNorm(row["Product Name"]));
-  return false;
+  if(!JAPAN_CORE_PARTIAL_SETS.has(set)) return false;
+  // Numbers are the primary key; the older name list stays as a union so the
+  // six cards the retailer happened to be out of stock on don't silently
+  // become illegal. Either source saying "released" is enough.
+  const n = parseInt(String(row.Number ?? "").replace(/\D/g, ""), 10);
+  const nums = JAPAN_CORE_PARTIAL_NUMBERS[set];
+  if(nums && Number.isFinite(n) && nums.has(n)) return true;
+  return JAPAN_CORE_PARTIAL_NAMES.has(_jpNorm(row["Product Name"]));
 };
 
 // Lowest current Low/Market price for a card across its printings. Used to
@@ -31964,23 +32779,27 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     ${inks.length > 0 && html`<div class="deck-card-chips">
       ${inkShields("deck-card-inks")}
     </div>`}
-    <div class="deck-card-actions">
-      <button disabled=${!hasDeck}
+    <div class="deck-card-actions deck-act-row">
+      <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
-        title="Copy share link">🔗 Copy link</button>
-      <button disabled=${!hasDeck}
+        title="Copy share link">${DECK_ICONS.copy}<span>Link</span></button>
+      <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
-        title="Copy decklist as text">📋 Copy list</button>
-      ${onViewDeckImage && html`<button disabled=${!hasDeck}
-        onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
-        title="Preview the deck poster">👁 View image</button>`}
-      <button disabled=${!hasDeck}
+        title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+      <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
-        title="Copy deck poster image">🖼 Copy image</button>
-      ${isAdmin && html`<button title="Edit this deck"
-        onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>✎ Edit</button>`}
-      ${isAdmin && html`<button class="danger" title="Remove this deck from the tournament"
-        onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>🗑 Remove</button>`}
+        title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+      ${onViewDeckImage && html`<button class="deck-act deck-act--sm" disabled=${!hasDeck}
+        onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
+        title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>`}
+      ${isAdmin && deckSep("t1")}
+      ${isAdmin && html`<button class="deck-act deck-act--sm" title="Edit this deck"
+        onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>
+        ${DECK_ICONS.edit}<span>Edit</span></button>`}
+      ${isAdmin && html`<button class="deck-act deck-act--sm deck-act--danger"
+        title="Remove this deck from the tournament"
+        onClick=${e=>{e.stopPropagation(); onDeleteDeck && onDeleteDeck(r);}}>
+        ${DECK_ICONS.trash}<span>Remove</span></button>`}
     </div>
   </a>`;
 };
@@ -33698,10 +34517,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // suppress it (the deck wouldn't be visible to the viewer if it weren't
   // shareable in the first place).
   const visibilityPill = (v) => {
+    // Drawn glyphs, matching DECK_ICONS on the buttons right below — an emoji
+    // pill above a row of line icons is the one thing that made the tile look
+    // assembled rather than designed.
     const map = {
-      public:   {label: "Public",   cls: "vis-public",   icon: "🌐"},
-      unlisted: {label: "Unlisted", cls: "vis-unlisted", icon: "🔗"},
-      private:  {label: "Private",  cls: "vis-private",  icon: "🔒"},
+      public:   {label: "Public",   cls: "vis-public",   icon: VIS_ICONS.public},
+      unlisted: {label: "Unlisted", cls: "vis-unlisted", icon: VIS_ICONS.unlisted},
+      private:  {label: "Private",  cls: "vis-private",  icon: VIS_ICONS.private},
     };
     const m = map[v || "private"];
     return html`<span class=${"deck-card-vis "+m.cls}
@@ -33997,18 +34819,34 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
-      <div class="deck-card-actions">
-        <button onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
-          title=${d.visibility === "private" ? "Private decks have no shareable link" : "Copy share link"}>🔗 Copy link</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
-          title="Copy decklist as text">📋 Copy list</button>
-        <button onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
-          title="Preview the deck poster">👁 View image</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
-          title="Copy deck poster image">🖼 Copy image</button>
-        <button onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}>Rename</button>
-        <button onClick=${e=>{e.stopPropagation(); duplicateDeck(d.id);}}>Duplicate</button>
-        <button class="danger" onClick=${e=>{e.stopPropagation(); deleteDeck(d.id);}}>Delete</button>
+      ${/* Two clusters: three things you COPY, then the ones that CHANGE the
+            deck. The row wraps on a narrow tile, and because copy comes first
+            the wrap lands on the group boundary instead of mid-thought. The
+            labels shed their verb — the copy icon carries it. */""}
+      <div class="deck-card-actions deck-act-row">
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
+          title=${d.visibility === "private" ? "Private decks have no shareable link" : "Copy share link"}>
+          ${DECK_ICONS.copy}<span>Link</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
+          title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
+          title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
+          title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>
+        ${deckSep("d1")}
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}
+          title="Rename this deck">${DECK_ICONS.rename}<span>Rename</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); duplicateDeck(d.id);}}
+          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>
+        <button class="deck-act deck-act--sm deck-act--danger"
+          onClick=${e=>{e.stopPropagation(); deleteDeck(d.id);}}
+          title="Delete this deck">${DECK_ICONS.trash}<span>Delete</span></button>
       </div>
     </a>`;
   };
@@ -34068,18 +34906,30 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
-      <div class="deck-card-actions">
-        <button onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
-          title="Copy share link">🔗 Copy link</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
-          title="Copy decklist as text">📋 Copy list</button>
-        <button onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
-          title="Preview the deck poster">👁 View image</button>
-        <button onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
-          title="Copy deck poster image">🖼 Copy image</button>
-        <button onClick=${e=>{e.stopPropagation(); duplicateExternalDeck(d);}}>Duplicate</button>
-        ${opts.showUnfavorite && html`<button class="danger" onClick=${e=>{e.stopPropagation(); toggleFavorite(d.id);}}>Unfavorite</button>`}
-        ${opts.showUnfollowCreator && d.user_id && html`<button class="danger" onClick=${e=>{e.stopPropagation(); toggleFollowCreator(d.user_id);}}>Unfollow ${entry.creator?.display_name || "creator"}</button>`}
+      <div class="deck-card-actions deck-act-row">
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
+          title="Copy share link">${DECK_ICONS.copy}<span>Link</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckListToClipboard(d);}}
+          title="Copy the decklist as text">${DECK_ICONS.copy}<span>List</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
+          title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
+          title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>
+        ${deckSep("x1")}
+        <button class="deck-act deck-act--sm"
+          onClick=${e=>{e.stopPropagation(); duplicateExternalDeck(d);}}
+          title="Copy this deck into your own decks">${DECK_ICONS.duplicate}<span>Duplicate</span></button>
+        ${opts.showUnfavorite && html`<button class="deck-act deck-act--sm deck-act--danger"
+          onClick=${e=>{e.stopPropagation(); toggleFavorite(d.id);}}
+          title="Remove from your favorites">${DECK_ICONS.star}<span>Unfavorite</span></button>`}
+        ${opts.showUnfollowCreator && d.user_id && html`<button class="deck-act deck-act--sm deck-act--danger"
+          onClick=${e=>{e.stopPropagation(); toggleFollowCreator(d.user_id);}}
+          title=${"Stop following " + (entry.creator?.display_name || "this creator")}>
+          ${DECK_ICONS.unfollow}<span>Unfollow</span></button>`}
       </div>
     </a>`;
   };
@@ -34473,6 +35323,49 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
   }, [user, decks, editSnapshot]);
 
+  // Write the pre-edit snapshot as the next version, if this session actually
+  // changed the deck. Called when leaving edit mode, which is the only moment
+  // we know both "what it looked like before" and "the user is done".
+  //
+  // Fire-and-forget: version history is a nicety, and a failed write must never
+  // block Done or roll back an edit the user already made. It stays silent when
+  // migration 125 hasn't been applied yet.
+  const saveDeckVersionIfChanged = useCallback(async (deckId) => {
+    if(!user || !deckId || !editSnapshot || editSnapshot.deckId !== deckId) return;
+    const deck = (decks || []).find(d => d.id === deckId);
+    if(!deck) return;
+    const before = editSnapshot;
+    const cardsChanged = deckCardsSignature(before.cards) !== deckCardsSignature(deck.cards || []);
+    const nameChanged = (before.name || "") !== (deck.name || "");
+    const coconutChanged = (before.coconut_card || null) !== (deck.coconut_card || null);
+    if(!cardsChanged && !nameChanged && !coconutChanged) return;
+    try {
+      const {error} = await sbClient.rpc("save_deck_version", {
+        p_deck_id: deckId,
+        p_name: await encDeckRnd(before.name || ""),
+        p_coconut_card: before.coconut_card || null,
+        // Same shape and same obfuscation as a deck_cards row, minus deck_id.
+        p_cards: (await encDeckCardRows((before.cards || []).map(c =>
+          ({card_id: c.card_id, printing: c.printing, quantity: c.quantity})))),
+      });
+      if(error) throw error;
+      setDeckVersionNonce(n => n + 1);
+    } catch(e){
+      if(!deckVersionsUnavailable(e)) console.warn("deck version save failed:", e?.message || e);
+    }
+  }, [user, decks, editSnapshot]);
+
+  // Bumped after a successful write so an open History modal refetches.
+  const [deckVersionNonce, setDeckVersionNonce] = useState(0);
+
+  // Leaving edit mode is the session boundary. Snapshot BEFORE flipping the
+  // flag — the effect that owns editSnapshot clears it the moment editMode
+  // goes false, so reading it afterwards would always come up empty.
+  const toggleDeckEditMode = useCallback(() => {
+    if(editMode && selectedDeckId) saveDeckVersionIfChanged(selectedDeckId);
+    setEditMode(m => !m);
+  }, [editMode, selectedDeckId, saveDeckVersionIfChanged]);
+
   // Update deck-level metadata (format/tags/description/etc). Optimistic
   // local merge + Supabase update with rollback on failure. Reads the
   // updated row back so trigger-set columns (like share_token, which the
@@ -34601,6 +35494,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         creator=${externalDeck.creator}
         creatorId=${creatorId}
         isOwnDeck=${false}
+        shareToken=${externalDeck.shareToken || null}
+        viewerShareVersions=${!!d.share_versions}
         canAct=${!!user}
         isFavorited=${favorites.has(d.id)}
         onToggleFavorite=${user ? (()=>toggleFavorite(d.id, externalDeck.shareToken || null)) : (()=>onSignIn && onSignIn())}
@@ -34641,8 +35536,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         tournamentContext=${tournamentByDeckId[deck.id] || null}
         onOpenTournament=${(tid)=>{ setDeckSection("tournaments"); setSelectedTournamentId(tid); setSelectedDeckId(null); }}
         ownerDisplayName=${ownerDisplayName}
-        onToggleEditMode=${()=>setEditMode(m=>!m)}
-        onBack=${()=>setSelectedDeckId(null)}
+        onToggleEditMode=${toggleDeckEditMode}
+        ${/* Backing out mid-edit still ends the session, so the version gets
+              written — otherwise a whole edit is missing from history purely
+              because the user hit Back instead of Done. */""}
+        onBack=${()=>{ if(editMode) saveDeckVersionIfChanged(deck.id); setSelectedDeckId(null); }}
+        deckVersionNonce=${deckVersionNonce}
+        shareToken=${deck.share_token || null}
         onRename=${(newName)=>renameDeckInline(deck.id, newName)}
         onDelete=${()=>deleteDeck(deck.id)}
         onDuplicate=${()=>duplicateDeck(deck.id)}
@@ -35594,6 +36494,181 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
   </div>`;
 };
 
+// Deck action icons. Emoji were doing this job and doing it badly: they render
+// at a different size and weight in every font stack, they can't take
+// currentColor so they stay full-colour against a themed button, and they made
+// every label wider. These are the same hand-drawn line glyphs as NAV_ICONS.
+const _deckSvg = (path) => html`<svg viewBox="0 0 24 24" width="14" height="14"
+  fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"
+  stroke-linejoin="round" aria-hidden="true" focusable="false">${path}</svg>`;
+const DECK_ICONS = {
+  edit:      _deckSvg(html`<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/>`),
+  done:      _deckSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
+  undo:      _deckSvg(html`<path d="M4 9h11a5 5 0 0 1 0 10h-6"/><path d="M8 5L4 9l4 4"/>`),
+  imports:   _deckSvg(html`<path d="M12 3v11"/><path d="M8 10l4 4 4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/>`),
+  share:     _deckSvg(html`<path d="M13 4h7v7"/><path d="M20 4l-9 9"/><path d="M18 14v5a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h5"/>`),
+  history:   _deckSvg(html`<path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"/><path d="M3.5 4.5V9H8"/><path d="M12 7.5V12l3 2"/>`),
+  link:      _deckSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
+  notes:     _deckSvg(html`<path d="M5 4h11l4 4v12a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1z"/><path d="M15 4v5h5"/><path d="M8 13h8"/><path d="M8 17h5"/>`),
+  mulligan:  _deckSvg(html`<rect x="3" y="6" width="12" height="15" rx="2"/><path d="M8 3h10a2 2 0 0 1 2 2v11"/><path d="M7 11h4"/><path d="M7 15h4"/>`),
+  image:     _deckSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l4.5-4.5L13 17"/><path d="M13.5 14.5L16 12l4 4.5"/>`),
+  proxies:   _deckSvg(html`<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M7 16h10v4H7z"/>`),
+  decklist:  _deckSvg(html`<path d="M9 6h11"/><path d="M9 12h11"/><path d="M9 18h11"/><path d="M4.5 6h.01"/><path d="M4.5 12h.01"/><path d="M4.5 18h.01"/>`),
+  copy:      _deckSvg(html`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`),
+  preview:   _deckSvg(html`<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>`),
+  rename:    _deckSvg(html`<path d="M4 7V5h16v2"/><path d="M12 5v14"/><path d="M9 19h6"/>`),
+  duplicate: _deckSvg(html`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`),
+  trash:     _deckSvg(html`<path d="M4 7h16"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l1 13h9l1-13"/><path d="M10.5 11v6"/><path d="M13.5 11v6"/>`),
+  unfollow:  _deckSvg(html`<path d="M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20"/><circle cx="9.5" cy="7.5" r="3.5"/><path d="M17 8.5h5"/>`),
+  star:      _deckSvg(html`<path d="M12 4l2.4 5 5.6.8-4 3.9 1 5.5-5-2.6-5 2.6 1-5.5-4-3.9 5.6-.8z"/>`),
+};
+const VIS_ICONS = {
+  public:   _deckSvg(html`<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5a13 13 0 0 1 0 17a13 13 0 0 1 0-17z"/>`),
+  unlisted: _deckSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
+  private:  _deckSvg(html`<rect x="4.5" y="10.5" width="15" height="9.5" rx="2"/><path d="M8 10.5V7.5a4 4 0 0 1 8 0v3"/>`),
+};
+// A group divider inside a deck action row. Purely structural — it is what
+// turns "eleven buttons" into "five things you might want to do".
+const deckSep = (key) => html`<span key=${key} class="deck-act-sep" aria-hidden="true"></span>`;
+
+// Deck version history. Lists every saved editing session newest-first, with
+// "Current" pinned at the top, and shows the changelog between any version and
+// the one after it. Owners read deck_versions directly (RLS scopes it to their
+// own decks); a viewer goes through get_shared_deck_versions, which additionally
+// requires the owner to have ticked "Include version history".
+const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, onClose}) => {
+  useEscToClose(onClose);
+  const [rows, setRows] = useState(null);   // null = loading
+  const [err, setErr] = useState(null);
+  const [pick, setPick] = useState(0);      // index into the timeline below
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setErr(null);
+      try {
+        let data;
+        if(isOwner){
+          const r = await sbClient.from("deck_versions")
+            .select("version,name,coconut_card,cards,created_at")
+            .eq("deck_id", deck.id).order("version", {ascending:false});
+          if(r.error) throw r.error;
+          data = r.data;
+        } else {
+          const r = await sbClient.rpc("get_shared_deck_versions",
+            {p_deck_id: deck.id, p_token: shareToken || ""});
+          if(r.error) throw r.error;
+          data = r.data;
+        }
+        const decoded = await decDeckVersionRows(data || []);
+        if(!cancelled) setRows(decoded);
+      } catch(e){
+        if(cancelled) return;
+        setRows([]);
+        setErr(deckVersionsUnavailable(e)
+          ? "Version history isn\u2019t switched on for this site yet."
+          : (e?.message || "Couldn\u2019t load version history."));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [deck.id, isOwner, shareToken, refreshNonce]);
+
+  // Newest first: Current, then vN … v1. Each entry knows what it is and what
+  // it should be compared against (the entry below it — i.e. older).
+  const timeline = useMemo(() => {
+    const out = [{
+      key: "current", label: "Current", sub: "live deck",
+      cards: deck.cards || [], name: deck.name, coconut_card: deck.coconut_card || null,
+      at: deck.updated_at || null,
+    }];
+    for(const v of (rows || [])){
+      out.push({
+        key: "v" + v.version, label: "v" + v.version, sub: null,
+        cards: v.cards || [], name: v.name, coconut_card: v.coconut_card || null,
+        at: v.created_at,
+      });
+    }
+    return out;
+  }, [rows, deck.cards, deck.name, deck.coconut_card, deck.updated_at]);
+
+  const newer = timeline[pick] || timeline[0];
+  const older = timeline[pick + 1] || null;
+  const diff = useMemo(
+    () => older ? diffDeckVersions(older.cards, newer.cards) : null,
+    [older, newer]);
+
+  // A version stores card_id; the changelog has to say the card's NAME, or it
+  // is a list of hashes. Falls back to the id for a card that has since left
+  // the catalog rather than rendering a blank row.
+  const nameOf = (cid) => {
+    const meta = (cardById[cid] || [])[0];
+    return (meta && meta["Product Name"]) || cid;
+  };
+  const line = (c, sign, qty, extra) => html`<li key=${deckVerKey(c)} class=${"dv-line dv-"+sign}>
+    <span class="dv-qty">${extra || (sign === "add" ? "+" : "\u2212") + qty}</span>
+    <span class="dv-name">${nameOf(c.card_id)}</span>
+    ${c.printing && c.printing !== "Normal" && html`<span class="dv-print">${c.printing}</span>`}
+  </li>`;
+
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal deck-history-modal" onClick=${e=>e.stopPropagation()}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>\ud83d\udd52 Version history</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close">\u00d7</button>
+      </div>
+      <div class="modal-body deck-history-body">
+        ${rows == null
+          ? html`<div class="muted" style=${{padding:"24px 4px",fontSize:13}}>Loading history\u2026</div>`
+          : err
+            ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:13}}>${err}</div>`
+            : html`<${React.Fragment}>
+              <p class="dv-lede">
+                A version is saved each time you finish an editing session that changed something.
+                ${rows.length === 0 ? " Nothing yet \u2014 edit this deck and the version before your changes lands here." : ""}
+              </p>
+              <div class="dv-cols">
+                <ol class="dv-list">
+                  ${timeline.map((t, i) => html`<li key=${t.key}>
+                    <button class=${"dv-pill"+(i===pick?" active":"")+(i===0?" is-current":"")}
+                      onClick=${()=>setPick(i)}>
+                      <span class="dv-pill-lbl">${t.label}</span>
+                      <span class="dv-pill-sub">${t.sub || (t.at ? relativeTime(t.at) : "")}</span>
+                    </button>
+                  </li>`)}
+                </ol>
+                <div class="dv-detail">
+                  ${!older
+                    ? html`<div class="muted" style=${{fontSize:13}}>
+                        ${timeline.length > 1
+                          ? "This is the oldest version we have \u2014 nothing before it to compare against."
+                          : "Only the live deck exists so far."}
+                      </div>`
+                    : html`<${React.Fragment}>
+                      <div class="dv-detail-head">
+                        <strong>${older.label}</strong> \u2192 <strong>${newer.label}</strong>
+                        <span class="muted dv-detail-count">${diff.fromCount} \u2192 ${diff.toCount} cards</span>
+                      </div>
+                      ${(older.name || "") !== (newer.name || "") && html`<div class="dv-meta">
+                        Renamed \u201c${older.name}\u201d \u2192 \u201c${newer.name}\u201d</div>`}
+                      ${(older.coconut_card || null) !== (newer.coconut_card || null) && html`<div class="dv-meta">
+                        Coconut leader changed</div>`}
+                      ${diff.isEmpty
+                        ? html`<div class="muted" style=${{fontSize:13}}>No card changes between these two.</div>`
+                        : html`<ul class="dv-changes">
+                            ${diff.added.map(c => line(c, "add", c.qty))}
+                            ${diff.changed.map(c => line(c, c.to > c.from ? "add" : "del", 0,
+                              (c.to > c.from ? "+" : "\u2212") + Math.abs(c.to - c.from) + " (" + c.from + "\u2192" + c.to + ")"))}
+                            ${diff.removed.map(c => line(c, "del", c.qty))}
+                          </ul>`}
+                    </>`}
+                </div>
+              </div>
+            </>`}
+      </div>
+    </div>
+  </div>`;
+};
+
 const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
@@ -35603,7 +36678,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      isFavorited, onToggleFavorite,
                      isFollowingCreator, onToggleFollowCreator,
                      onOpenCreator, favoriteCount, ownerDisplayName,
-                     tournamentContext, onOpenTournament}) => {
+                     tournamentContext, onOpenTournament,
+                     deckVersionNonce, shareToken, viewerShareVersions}) => {
   // Detail modal for clicking a tile's image — same modal used by the Cards
   // tab so the deck builder feels native, not separate.
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -35620,6 +36696,33 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   useEffect(() => {
     try { window.scrollTo({top:0, behavior:"auto"}); } catch {}
   }, [deck?.id]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // `decks.share_versions` is read here rather than plumbed through the deck
+  // lists: migration 125 is staged, and adding the column to those hot selects
+  // would 400 every list query until it lands. One row, on demand, owner only.
+  const [ownerShareVersions, setOwnerShareVersions] = useState(false);
+  useEffect(() => {
+    if(!isOwnDeck || !deck?.id) return;
+    let cancelled = false;
+    sbClient.from("decks").select("share_versions").eq("id", deck.id).maybeSingle()
+      .then(r => { if(!cancelled && !r.error) setOwnerShareVersions(!!(r.data && r.data.share_versions)); })
+      .catch(()=>{});
+    return () => { cancelled = true; };
+  }, [deck?.id, isOwnDeck]);
+  // Owners see their own truth; a viewer only ever sees what get_shared_deck
+  // reported, which is already gated on the owner having opted in.
+  const shareVersions = isOwnDeck ? ownerShareVersions : !!viewerShareVersions;
+  const onSetShareVersions = useCallback(async (on) => {
+    if(!isOwnDeck || !deck?.id) return;
+    setOwnerShareVersions(on);
+    const {error} = await sbClient.from("decks").update({share_versions: on}).eq("id", deck.id);
+    if(error){
+      setOwnerShareVersions(!on);
+      flashToast(deckVersionsUnavailable(error)
+        ? "Version sharing isn’t switched on for this site yet."
+        : "Couldn’t save that: " + error.message);
+    }
+  }, [isOwnDeck, deck?.id]);
   // Share popover (owner-only). Holds visibility radio + share URL.
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -36283,25 +37386,30 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         title=${favoriteCount + " user" + (favoriteCount===1?"":"s") + " favorited this deck"}>
         ★ ${favoriteCount}
       </span>`}
-      <div class=${"deck-editor-toolbar-actions"+(mobileTab==="cards"?" hide-on-cards-tab":"")}
-        style=${{marginLeft:"auto",display:"flex",gap:6,position:"relative",flexWrap:"wrap",justifyContent:"flex-end"}}>
+      ${/* Five groups, hairline-separated: EDIT what it is — SHARE it — PLAY
+            with it — GET IT OUT — DECK OPS. Eleven equal-weight buttons in one
+            undifferentiated row is what this replaced; the dividers are the
+            whole point, and the icons are drawn (NOT emoji) so they inherit
+            currentColor and hold one consistent size. */""}
+      <div class=${"deck-editor-toolbar-actions deck-act-row"+(mobileTab==="cards"?" hide-on-cards-tab":"")}>
         ${isOwnDeck && onToggleEditMode && html`<button onClick=${onToggleEditMode}
-          class=${"deck-toolbar-keep "+(!readOnly ? "active" : "")}
-          style=${{fontSize:12,padding:"5px 10px"}}
+          class=${"deck-act deck-toolbar-keep "+(!readOnly ? "active" : "")}
           title=${readOnly ? "Edit this deck — open the card browser" : "Done editing — back to view"}>
-          ${readOnly ? "✎ Edit" : "✓ Done"}
+          ${readOnly ? DECK_ICONS.edit : DECK_ICONS.done}<span>${readOnly ? "Edit" : "Done"}</span>
         </button>`}
+        ${!readOnly && html`<button onClick=${handleImport} class="deck-act deck-toolbar-keep"
+          title="Paste a decklist to replace this deck's contents">
+          ${DECK_ICONS.imports}<span>Import</span></button>`}
         ${!readOnly && hasUnsavedChanges && onUndoChanges && html`<button onClick=${handleUndoClick}
-          class=${"deck-toolbar-keep deck-toolbar-undo"+(undoArmed?" armed":"")}
-          style=${{fontSize:12,padding:"5px 10px"}}
+          class=${"deck-act deck-toolbar-keep deck-toolbar-undo"+(undoArmed?" armed":"")}
           title=${undoArmed ? "Click again to discard every change made this edit session" : "Revert to the deck's state when you clicked Edit"}>
-          ${undoArmed ? "⚠ Click again to confirm" : "↶ Undo Changes"}
+          ${DECK_ICONS.undo}<span>${undoArmed ? "Confirm?" : "Undo"}</span>
         </button>`}
+        ${isOwnDeck && deckSep("s1")}
         ${isOwnDeck && html`<div ref=${shareRef} class="deck-toolbar-pop">
           <button onClick=${()=>setShareOpen(o=>!o)}
-            class=${visibility==="public" || visibility==="unlisted" ? "active" : ""}
-            style=${{fontSize:12,padding:"5px 10px"}}
-            title="Share this deck via URL">↗ Share</button>
+            class=${"deck-act "+(visibility==="public" || visibility==="unlisted" ? "active" : "")}
+            title="Share this deck via URL">${DECK_ICONS.share}<span>Share</span></button>
           ${shareOpen && html`<div class="deck-share-popover">
             <div class="deck-share-section-title">Visibility</div>
             <label class=${"deck-share-radio"+(visibility==="private"?" active":"")}>
@@ -36325,6 +37433,25 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                 <div class="deck-share-radio-sub">Anyone with the link can view, plus this deck appears in discovery.</div>
               </div>
             </label>
+            ${/* Default OFF and stays off unless asked: sharing a deck is one
+                  decision, sharing every draft it passed through is a bigger
+                  one, and it should never happen by forgetting a checkbox. */""}
+            ${isOwnDeck && html`<${React.Fragment}>
+              <div class="deck-share-divider"></div>
+              <label class="deck-share-check">
+                <input type="checkbox" checked=${!!shareVersions}
+                  disabled=${visibility === "private"}
+                  onChange=${e=>onSetShareVersions(e.target.checked)}/>
+                <div>
+                  <div class="deck-share-radio-title">Include version history</div>
+                  <div class="deck-share-radio-sub">
+                    ${visibility === "private"
+                      ? "Make the deck Unlisted or Public first."
+                      : "Anyone with the link can also see earlier versions and what changed between them."}
+                  </div>
+                </div>
+              </label>
+            </>`}
             <div class="deck-share-divider"></div>
             <div class="deck-share-section-title">Share URL</div>
             <div class="deck-share-url-row">
@@ -36349,11 +37476,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </div>`}
         </div>`}
         ${isOwnDeck && html`<div ref=${notesRef} class="deck-toolbar-pop">
+          ${/* One class attribute, not two — htm keeps the last and silently
+                drops the first, which is how this button lost deck-act. */""}
           <button onClick=${()=>setNotesOpen(o=>!o)}
-            class=${(deck.description || deck.youtube_url) ? "active" : ""}
-            style=${{fontSize:12,padding:"5px 10px"}}
+            class=${"deck-act "+((deck.description || deck.youtube_url) ? "active" : "")}
             title="Add notes or a YouTube video for this deck (optional)">
-            ${(deck.description || deck.youtube_url) ? "📝 Notes ✓" : "📝 Notes"}
+            ${DECK_ICONS.notes}<span>Notes</span>
           </button>
           ${notesOpen && html`<div class="deck-notes-popover">
             <div class="deck-share-section-title">Notes</div>
@@ -36368,21 +37496,36 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </div>`}
         </div>`}
         ${!isOwnDeck && shareUrl && html`<button onClick=${copyShareUrl}
-          style=${{fontSize:12,padding:"5px 10px"}}
-          class=${copied ? "active" : ""}
-          title="Copy the URL for this deck">${copied ? "🔗 Copied ✓" : "🔗 Copy link"}</button>`}
-        <button onClick=${()=>setMulliganOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
-          title="Simulate drawing your opening hand and mulliganing">🎴 Mulligan</button>
-        <button onClick=${()=>setPosterOpen(true)} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}}
-          title="Open a printable image of this deck (Save as PDF / screenshot)">🖼 Export Image</button>
-        <button onClick=${()=>setProxyOpen(true)} style=${{fontSize:12,padding:"5px 10px"}}
-          title="Build a print-and-cut PDF of this deck at true card size">🖨 Print Proxies</button>
-        ${!readOnly && html`<button onClick=${handleImport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Paste a decklist to replace this deck's contents">Import</button>`}
-        <button onClick=${handleExport} class="deck-toolbar-keep" style=${{fontSize:12,padding:"5px 10px"}} title="Copy as plain-text decklist">Export Decklist Text</button>
-        ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} style=${{fontSize:12,padding:"5px 10px"}} title="Make a copy of this deck">Duplicate</button>`}
+          class=${"deck-act "+(copied ? "active" : "")}
+          title="Copy the URL for this deck">${DECK_ICONS.link}<span>${copied ? "Copied" : "Copy link"}</span></button>`}
+        ${(isOwnDeck || shareVersions) && html`<button class="deck-act"
+          onClick=${()=>setHistoryOpen(true)}
+          title="See earlier versions of this deck and what changed between them">
+          ${DECK_ICONS.history}<span>History</span></button>`}
+        ${deckSep("s2")}
+        <button class="deck-act" onClick=${()=>setMulliganOpen(true)}
+          title="Simulate drawing your opening hand and mulliganing">
+          ${DECK_ICONS.mulligan}<span>Mulligan</span></button>
+        ${deckSep("s3")}
+        ${/* One cluster for "get this deck out of the app", so the three ways
+              of doing it read as alternatives rather than three unrelated
+              buttons. Labels drop the Export/Print verb the group already
+              implies; the titles keep the full phrasing. */""}
+        <button onClick=${()=>setPosterOpen(true)} class="deck-act deck-toolbar-keep"
+          title="Export a printable image of this deck (Save as PDF / screenshot)">
+          ${DECK_ICONS.image}<span>Image</span></button>
+        <button onClick=${()=>setProxyOpen(true)} class="deck-act"
+          title="Print proxies — a print-and-cut PDF at true card size">
+          ${DECK_ICONS.proxies}<span>Proxies</span></button>
+        <button onClick=${handleExport} class="deck-act deck-toolbar-keep"
+          title="Copy this deck as a plain-text decklist">
+          ${DECK_ICONS.decklist}<span>Decklist</span></button>
+        ${isOwnDeck && (onDuplicate || onDelete) && deckSep("s4")}
+        ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} class="deck-act"
+          title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>`}
         ${isOwnDeck && onDelete && html`<button onClick=${onDelete}
-          class="deck-toolbar-keep"
-          style=${{fontSize:12,padding:"5px 10px",color:"var(--red)"}}>Delete</button>`}
+          class="deck-act deck-act--danger deck-toolbar-keep"
+          title="Delete this deck">${DECK_ICONS.trash}<span>Delete</span></button>`}
       </div>
     </div>
     ${/* Gated on `legal`, not on format === "invalid" — a Coconut deck keeps its
@@ -36817,6 +37960,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     </div>`}
     ${mulliganOpen && html`<${MulliganSimulator} deck=${deck} cardById=${cardById}
       onClose=${()=>setMulliganOpen(false)}/>`}
+    ${historyOpen && html`<${DeckHistoryModal} deck=${deck} cardById=${cardById}
+      isOwner=${!!isOwnDeck} shareToken=${shareToken || null}
+      refreshNonce=${deckVersionNonce || 0}
+      onClose=${()=>setHistoryOpen(false)}/>`}
     ${proxyOpen && html`<${ProxyPrintModal} deck=${deck} cardById=${cardById}
       onClose=${()=>setProxyOpen(false)}/>`}
     ${posterOpen && html`<${DeckPosterModal} deck=${deck} cardById=${cardById}
@@ -37499,7 +38646,7 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "s","f","m","card",
+                           "s","f","m","c","card",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -37509,7 +38656,7 @@ function App(){
       // navigating decks → home doesn't carry a stale ?tourney= forward.
       const VIEW_OWNED = {
         decks:      new Set(["deck","token","user","tourney","s","f"]),
-        collection: new Set(["collection","token","set"]),
+        collection: new Set(["collection","token","set","c"]),
         market:     new Set(["a","trade","t"]),
         screener:   new Set(["m"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
@@ -38056,16 +39203,33 @@ function App(){
         }
         return list;
       }
+      // The pre-layout visibility map. `|| "{}"` means this branch runs even
+      // for a browser that has never stored one, so it must only override the
+      // default `on` for keys the legacy map actually mentions — otherwise it
+      // silently switches on every opt-in panel for every fresh visitor.
       const legacy = JSON.parse(localStorage.getItem("packsink:homePanels") || "{}");
       if(legacy && typeof legacy === "object"){
-        return defaultHomeLayout().map(p => ({...p, on: legacy[p.key] !== false}));
+        return defaultHomeLayout().map(p => ({...p,
+          on: Object.prototype.hasOwnProperty.call(legacy, p.key) ? legacy[p.key] !== false : p.on}));
       }
     } catch {}
     return defaultHomeLayout();
   });
   useEffect(() => {
     try { localStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify(homeLayout)); } catch {}
+    // Persist FIRST, then announce — isHomePanelEnabled reads localStorage.
+    window.dispatchEvent(new Event("packsink:home-layout-changed"));
   }, [homeLayout]);
+  useEffect(() => {
+    const onSet = (e) => {
+      const key = e.detail && e.detail.key;
+      if(!key) return;
+      const on = !!(e.detail && e.detail.on);
+      setHomeLayout(l => normalizeHomeLayout(l).map(p => p.key === key ? {...p, on} : p));
+    };
+    window.addEventListener("packsink:set-home-panel", onSet);
+    return () => window.removeEventListener("packsink:set-home-panel", onSet);
+  }, []);
   const toggleHomePanel = (key) =>
     setHomeLayout(l => l.map(p => p.key === key ? {...p, on: !p.on} : p));
   const setHomePanelCol = (key, col) =>
@@ -39328,6 +40492,13 @@ function App(){
           ${!IS_NATIVE_APP && !isStandalone && (isIOS || isAndroid) && html`<button class="theme-toggle theme-toggle--install"
             onClick=${(e)=>{ e.stopPropagation(); setInstallHelpOpen(true); }}
             title="Install Packs.Ink as an app" aria-label="Install app">📲</button>`}
+          ${/* Only in the installed app / native shell — which is exactly where
+                there is no address bar to copy from, and also the one state
+                where the install bubble above is hidden, so row 1 keeps its
+                width. A browser tab has the URL on screen already. */""}
+          ${(isStandalone || IS_NATIVE_APP) && html`<button class="theme-toggle theme-toggle--link"
+            onClick=${(e)=>{ e.stopPropagation(); copyCurrentPageLink(); }}
+            title="Copy a link to this page" aria-label="Copy a link to this page">🔗</button>`}
           ${user
             ? html`<button class="profile-btn" onClick=${()=>setSettingsOpen(o=>!o)}
                 title="Account & settings" aria-expanded=${settingsOpen}>
@@ -39341,8 +40512,19 @@ function App(){
                 <span class="profile-btn-name">${profile?.display_name || "you"}</span>
               </button>`
             : html`<button class="signin-btn" onClick=${()=>setSettingsOpen(o=>!o)}
-                title="Sign in" aria-expanded=${settingsOpen}>Sign in</button>`}
+                title="Sign in & settings" aria-expanded=${settingsOpen}>
+                <span>Sign in</span>
+                <span class="signin-btn-gear" aria-hidden="true">${GEAR_BADGE_ICON}</span>
+              </button>`}
           ${settingsOpen && html`<div class="settings-popover">
+            ${/* Signed out, the popover's whole reason to exist is auth — so the
+                  Google button leads. It is ALSO still rendered at the bottom
+                  next to Sign out, which is where returning users look. */""}
+            ${!user && html`<${React.Fragment}>
+              <button class="settings-action primary settings-signin-top"
+                onClick=${()=>{ setSettingsOpen(false); signIn(); }}>Sign in with Google</button>
+              <div class="settings-divider"></div>
+            </>`}
             ${user && html`<div class="avatar-row">
               ${avatarSrc
                 ? html`<img src=${avatarSrc} alt=""
@@ -39353,7 +40535,9 @@ function App(){
                 ${user.email && html`<div class="avatar-row-email">${user.email}</div>`}
               </div>
             </div>`}
-            <div class="settings-section-title">${user ? "Profile" : "Settings"}</div>
+            ${/* Signed out there is nothing under it — the profile controls are
+                  the section. "Preferences" below is the first real heading. */""}
+            ${user && html`<div class="settings-section-title">Profile</div>`}
             ${user && html`<div class="settings-row-stack">
               <${DisplayNameEditor} profile=${profile} onSave=${saveDisplayName}/>
               <button class="settings-action" onClick=${()=>{ setAvatarPickerOpen(true); setSettingsOpen(false); }}>
@@ -39429,6 +40613,11 @@ function App(){
                 onChange=${e=>setShowTopBarTheme(e.target.checked)}/>
               <span>Theme button in top bar</span>
             </label>
+            <button class="settings-action"
+              onClick=${()=>{ setSettingsOpen(false); copyCurrentPageLink(); }}
+              title="Copy a link to whatever you're looking at right now">
+              🔗 Copy link to this page
+            </button>
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">Home page layout</span>
               <div class="settings-home-hint">Arrange the home page directly on the page —
@@ -39438,12 +40627,11 @@ function App(){
               </button>
             </div>
             <${OfflineImagesPanel} raw=${raw} collection=${collection} user=${user}/>
-            <div class="settings-divider"></div>
-            ${user
-              ? html`<button class="settings-action danger"
-                  onClick=${()=>{ setSettingsOpen(false); signOut(); }}>Sign out</button>`
-              : html`<button class="settings-action primary"
-                  onClick=${()=>{ setSettingsOpen(false); signIn(); }}>Sign in with Google</button>`}
+            ${user && html`<${React.Fragment}>
+              <div class="settings-divider"></div>
+              <button class="settings-action danger"
+                onClick=${()=>{ setSettingsOpen(false); signOut(); }}>Sign out</button>
+            </>`}
           </div>`}
         </div>
         <div class="top-nav-right-row top-nav-right-row--bubbles">

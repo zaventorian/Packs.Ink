@@ -1,0 +1,68 @@
+name: Catalog watch
+
+# Answers one question daily: "is there anything Lorcana out there that Packs.Ink
+# doesn't know about?" — new sets, new promos, new sealed, cards that can never
+# price, TCGplayer groups nobody bound to a set.
+#
+# It lives in its own workflow ON PURPOSE. It used to be a job inside etl.yml,
+# where a red run would have meant "the price pipeline is broken" — the signal
+# you have to act on within the hour. A catalog gap is a to-do, not an outage,
+# and mixing the two teaches you to ignore both. Two workflows, two emails, two
+# different urgencies:
+#
+#   ETL red            → prices are broken, fix now
+#   Catalog watch red  → something new exists; decide what to do with it
+#
+# Red means something NEW. Everything already ruled on lives in
+# scripts/catalog_watch_ack.json with a reason (and often an expiry date), so
+# the noise floor is zero and silence genuinely means nothing changed. Before
+# that file existed this check ran green every day with 18 missing singles in
+# its output, because it exited 0 and wrote to a Step Summary nobody opens.
+
+on:
+  schedule:
+    # 03:30 UTC — after the ETL's 01:30 safety-net window, so `sealed_products`
+    # has already absorbed anything load_sealed_products picked up overnight and
+    # we don't flag this cycle's new boxes as missing.
+    - cron: "30 3 * * *"
+  workflow_dispatch:
+    inputs:
+      fail_on_new:
+        description: "Exit non-zero (red run + email) when something unacknowledged shows up"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: catalog-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    name: Catalog watch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      # Runs first and needs no network: a malformed ack file (bad regex, an
+      # entry with no reason, a kindless rule that swallows everything) would
+      # otherwise fail silently by making the sweep pass.
+      - name: Test the acknowledgement layer
+        run: python scripts/test_catalog_watch.py
+      - name: Watch the catalog
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Optional. Unset → the report is the Step Summary plus (on a red run)
+          # GitHub's own failure email, which is the delivery path that matters.
+          RECONCILE_ALERT_WEBHOOK: ${{ secrets.RECONCILE_ALERT_WEBHOOK }}
+        run: |
+          python scripts/reconcile_catalog.py --watch \
+            ${{ (github.event_name == 'workflow_dispatch' && !inputs.fail_on_new) && '--no-fail' || '' }}

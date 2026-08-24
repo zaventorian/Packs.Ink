@@ -579,15 +579,32 @@ input[type="checkbox"]{accent-color:var(--accent);}
   .deck-readonly-banner button{min-height:36px;}
 }
 /* Cards tab — multi-select bulk bar + per-tile checkbox + ephemeral toast. */
+.cards-bulk-slot{margin-bottom:10px;}
 .cards-bulk-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;
-  padding:8px 12px;margin-bottom:10px;
-  background:var(--accent-glow);border:1px solid var(--border-accent);border-radius:8px;
+  padding:8px 12px;
+  /* Opaque, not tinted-transparent: the accent glow is layered OVER an opaque
+     modal base so the grid can't read through the bar once it's floating. */
+  background:linear-gradient(var(--accent-glow),var(--accent-glow)),var(--bg-modal);
+  border:1px solid var(--border-accent);border-radius:8px;
   position:sticky;top:8px;z-index:10;}
 /* On phones the two-row top-nav is ~94px and sticky at top:0; pin the bulk bar
    just below it so its 'Add to…' controls aren't occluded behind the header
    when scrolling with cards selected. (Same coordinate system as the nav, so
    no extra safe-area term — the body padding already offsets both.) */
 @media (max-width:640px){ .cards-bulk-bar{top:96px;} }
+/* Docked: once the bar's home position scrolls up past the nav it becomes a
+   bottom action bar, so a selection made 40 rows down is still actionable
+   without scrolling back. The slot holds the height, so nothing reflows. */
+.cards-bulk-bar--docked{position:fixed;left:0;right:0;bottom:0;top:auto;
+  margin:0;border-radius:0;border-left:0;border-right:0;border-bottom:0;
+  padding-bottom:calc(8px + env(safe-area-inset-bottom));
+  box-shadow:0 -6px 18px rgba(0,0,0,0.22);z-index:60;
+  /* Full-bleed bar, content aligned to the same 1300px column as the page. */
+  padding-inline:max(12px, calc((100% - 1300px) / 2));}
+/* Its menu has to open upward once it's pinned to the bottom edge. */
+.cards-bulk-bar--docked .cards-bulk-menu{top:auto;bottom:calc(100% + 4px);}
+/* Keep transient toasts clear of the docked bar. */
+body:has(.cards-bulk-bar--docked) .cards-toast{bottom:calc(78px + env(safe-area-inset-bottom));}
 .cards-bulk-count{font-size:13px;font-weight:700;color:var(--accent);
   padding:2px 8px;background:var(--bg-card);border-radius:5px;}
 .cards-bulk-link{background:none;border:none;color:var(--text-dim);font-size:12px;
@@ -622,12 +639,21 @@ input[type="checkbox"]{accent-color:var(--accent);}
 
 /* The little checkbox button overlaid on each card tile. Hidden by default
    in grid mode and revealed on hover; once selected, stays visible. */
-.card-tile-check{position:absolute;top:6px;left:6px;width:22px;height:22px;
+.card-tile-check{position:absolute;top:6px;right:6px;width:30px;height:30px;
   padding:0;display:inline-flex;align-items:center;justify-content:center;
   border:1.5px solid rgba(255,255,255,0.85);background:rgba(0,0,0,0.45);
-  color:#fff;border-radius:4px;font-size:13px;font-weight:700;cursor:pointer;
-  z-index:3;opacity:0;transition:opacity 0.1s,background 0.1s,border-color 0.1s;
+  color:#fff;border-radius:6px;font-size:17px;font-weight:700;cursor:pointer;
+  z-index:4;opacity:0;transition:opacity 0.1s,background 0.1s,border-color 0.1s;
   line-height:1;}
+/* The checkbox now sits where the owned badge does, so the badge steps down
+   to make room — but only while the checkbox is actually on screen (hover, or
+   selected), otherwise every resting tile would carry a 36px hole under its
+   top edge. Needs the doubled class to outrank `.card-tile .owned-badge`,
+   which is equally specific but declared later in this file. */
+.card-tile.card-tile--selectable .owned-badge{transition:top 0.1s;}
+.card-tile.card-tile--selectable:hover .owned-badge,
+.card-tile.card-tile--selectable:focus-within .owned-badge,
+.card-tile.card-tile--selectable:has(.card-tile-check.on) .owned-badge{top:42px;}
 .card-tile:hover .card-tile-check,
 .card-tile-check.on{opacity:1;}
 .card-tile-check.on{background:var(--accent);border-color:var(--accent);}
@@ -1742,7 +1768,16 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
 .card-tile .owned-badge{position:absolute;top:6px;right:6px;display:flex;flex-direction:column;gap:2px;align-items:flex-end;font-size:10px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1;pointer-events:none;}
 .card-tile .owned-badge .owned-n{background:rgba(22,101,52,0.92);color:#fff;padding:3px 6px;border-radius:4px;box-shadow:0 2px 4px rgba(0,0,0,0.25);}
 .card-tile .owned-badge .owned-f{background:rgba(85,55,140,0.92);color:#fff;padding:3px 6px;border-radius:4px;box-shadow:0 2px 4px rgba(0,0,0,0.25);}
-.card-tile .price-row{position:absolute;bottom:4px;left:4px;right:4px;display:flex;justify-content:flex-end;gap:3px;pointer-events:none;}
+.card-tile .price-row{position:absolute;bottom:4px;left:4px;right:4px;display:flex;justify-content:flex-end;gap:3px;pointer-events:none;transition:opacity 0.12s;}
+/* Hovering a tile clears the price chips off the art so you can actually see
+   the card. They still occupy the same box and the badges keep
+   pointer-events, so moving onto them brings them straight back — the
+   affiliate links stay reachable, they just stop covering the artwork.
+   Pointer-only: touch devices never "hover", so the chips stay put there. */
+@media (hover:hover){
+  .card-tile:hover .price-row{opacity:0;}
+  .card-tile:hover .price-row:has(:hover){opacity:1;}
+}
 .card-tile .price-badge{color:#fff;padding:2px 5px;border-radius:5px;text-decoration:none;display:flex;flex-direction:column;align-items:flex-end;line-height:1.05;box-shadow:0 1px 4px rgba(0,0,0,0.22);pointer-events:auto;}
 .card-tile .price-badge.normal{background:rgba(22,101,52,0.95);}
 .card-tile .price-badge.normal:hover{background:rgba(22,101,52,1);}
@@ -2280,6 +2315,15 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
 .graded-movers-banner-controls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
   margin-bottom:10px;}
 .graded-movers-screener-jump{margin-left:auto;font-size:11px;}
+.graded-movers-home-toggle{font-size:11px;}
+/* Home-page twin of the banner above. Reuses .gmover-tile / AutoScrollStrip
+   verbatim so the two surfaces can't drift visually either. */
+.home-feed--gowned .gowned-controls{display:flex;align-items:center;gap:10px;
+  flex-wrap:wrap;margin-bottom:8px;}
+.home-feed--gowned .gowned-sub{font-size:11px;}
+.home-feed--gowned .gmover-tile{flex-basis:126px;max-width:126px;}
+.home-feed--gowned .gmover-tile img,
+.home-feed--gowned .gmover-img-fallback{width:106px;height:148px;}
 /* Strip uses the proven wrap-track pattern (mirrors .movers-wrap /
    .movers-track on the home banners): the OUTER element owns overflow-x,
    the INNER track is width:max-content so its flex children push past the
@@ -2459,6 +2503,15 @@ button.graded-home-title{cursor:pointer;}
   background:var(--accent);color:#fff;border:1px solid var(--accent);
   border-radius:6px;cursor:pointer;min-height:36px;text-transform:uppercase;}
 .signin-btn:hover{filter:brightness(1.08);}
+.signin-btn > *{pointer-events:none;}
+/* Same job the gear badge does on the avatar: say that settings (theme,
+   home layout, offline images) live behind this button too, not just auth.
+   Inline rather than badged — there's no avatar to pin a corner marker to. */
+.signin-btn{gap:6px;}
+.signin-btn-gear{display:inline-flex;align-items:center;justify-content:center;
+  width:14px;height:14px;opacity:0.85;}
+.signin-btn-gear svg{display:block;width:12px;height:12px;}
+.settings-signin-top{margin-bottom:2px;}
 
 /* Avatar picker modal */
 .avatar-picker-backdrop{position:fixed;inset:0;background:rgba(0,0,0,0.5);
@@ -3271,6 +3324,16 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   height:auto;max-height:92vh;
   border-radius:14px;
   box-shadow:0 12px 50px rgba(0,0,0,0.7);cursor:default;}
+/* Location cards: rotate the portrait-framed art back to how the card is
+   actually printed. The layout box stays portrait (the transform doesn't
+   reflow anything), so the sizing swaps axes — the box's WIDTH becomes the
+   on-screen height and its height becomes the on-screen width. Hence
+   width:min(92vh, 92vw*5/7): 92vh caps the visual height, 92vw*5/7 caps the
+   visual width once the 7/5 box height is laid out sideways. */
+.enlarged-card-img--sideways{
+  width:min(92vh, calc(92vw * 5 / 7), 720px);
+  max-height:none;
+  transform:rotate(90deg);}
 .enlarged-card-close{position:absolute;
   top:max(20px, env(safe-area-inset-top));right:20px;
   width:40px;height:40px;font-size:22px;line-height:1;
@@ -3280,6 +3343,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 @media (max-width:640px){
   .enlarged-card-overlay{padding:12px;}
   .enlarged-card-img{max-width:96vw;max-height:88vh;border-radius:10px;}
+  .enlarged-card-img--sideways{width:min(88vh, calc(96vw * 5 / 7));max-width:none;max-height:none;}
   .enlarged-card-close{top:max(12px, env(safe-area-inset-top));right:12px;
     width:36px;height:36px;font-size:20px;}
 }
@@ -3861,8 +3925,11 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 /* Cards / Sealed top-level toggle inside the Collection tab. */
 .collection-section-tabs{display:flex;gap:4px;margin-bottom:18px;
   padding-bottom:10px;border-bottom:1px solid var(--border);}
+/* <a> since 2026-08-24 (each section is a real /collection?c= URL), so it needs
+   the anchor resets a <button> gave for free. */
 .collection-section-tab{padding:6px 16px;font-size:13px;font-weight:600;
-  background:transparent;color:var(--text-dim);
+  background:transparent;color:var(--text-dim);text-decoration:none;
+  display:inline-flex;align-items:center;line-height:1.4;
   border:1px solid transparent;border-radius:6px;cursor:pointer;
   transition:background 0.1s,color 0.1s,border-color 0.1s;}
 .collection-section-tab:hover{color:var(--text);background:var(--bg-surface);}
@@ -4461,8 +4528,10 @@ html[data-mode="dark"] .sd-row-price.foil{color:#c0a3ef;}
   gap:8px;margin-bottom:4px;}
 .deck-card-header .deck-card-name{margin-bottom:0;}
 .deck-card-vis{font-size:10px;font-weight:700;padding:2px 7px;border-radius:10px;
-  white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:3px;
+  white-space:nowrap;flex-shrink:0;display:inline-flex;align-items:center;gap:4px;
   letter-spacing:0.3px;}
+/* Drawn glyph, sized to the 10px label rather than the 14px button icons. */
+.deck-card-vis svg{width:11px;height:11px;flex:none;}
 .deck-card-vis.vis-public{background:rgba(22,101,52,0.14);color:var(--green);
   border:1px solid rgba(22,101,52,0.25);}
 .deck-card-vis.vis-unlisted{background:rgba(196,128,30,0.14);color:#c4801e;
@@ -4513,13 +4582,53 @@ html[data-mode="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .creator-profile-meta{font-size:12px;color:var(--text-muted);}
 .deck-card-name{font-family:'Cinzel',serif;font-size:15px;font-weight:600;color:var(--accent);margin-bottom:4px;}
 .deck-card-meta{font-size:11px;color:var(--text-muted);margin-bottom:8px;}
-.deck-card-actions{display:flex;gap:6px;flex-wrap:wrap;}
-.deck-card-actions button{padding:3px 9px;font-size:11px;font-weight:600;
-  background:var(--bg-surface-hover);color:var(--text);border:1px solid var(--border);
-  border-radius:4px;cursor:pointer;}
-.deck-card-actions button:hover{border-color:var(--accent);}
-.deck-card-actions button.danger{color:var(--red);}
-.deck-card-actions button.danger:hover{border-color:var(--red);background:rgba(153,27,27,0.08);}
+/* ── Deck action buttons ──────────────────────────────────────────────────
+   One system for the deck toolbar and all three tile variants (owned,
+   Discover, tournament). Replaced a mix of emoji + inline styles, where every
+   button was the same weight and nothing said which ones belonged together.
+
+   Icons are drawn SVG (DECK_ICONS), not emoji: emoji can't take currentColor,
+   so they stayed full-colour on a themed button, and they render at a
+   different size and metric in every font stack, which is what made the row
+   look ragged.
+
+   .deck-act-sep is the whole idea — a hairline between groups turns a row of
+   eleven equal buttons into five things you might want to do. */
+.deck-act-row{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
+.deck-editor-toolbar-actions.deck-act-row{margin-left:auto;position:relative;
+  justify-content:flex-end;gap:5px;}
+.deck-act{display:inline-flex;align-items:center;gap:6px;
+  padding:5px 10px;font-size:12px;font-weight:600;line-height:1.25;
+  background:var(--btn-bg);color:var(--text);border:1px solid var(--border);
+  border-radius:7px;cursor:pointer;white-space:nowrap;
+  transition:border-color 0.12s,background 0.12s,color 0.12s;}
+.deck-act svg{flex:none;opacity:0.72;}
+.deck-act:hover{border-color:var(--border-accent);background:var(--bg-surface);}
+.deck-act:hover svg{opacity:1;}
+.deck-act.active{background:var(--accent-glow);border-color:var(--border-accent);color:var(--accent);}
+.deck-act.active svg{opacity:1;}
+.deck-act:disabled{opacity:0.42;cursor:default;}
+.deck-act:disabled:hover{border-color:var(--border);background:var(--btn-bg);}
+/* Destructive actions read as destructive on hover, not at rest — a row of
+   red buttons makes Delete no more careful than Duplicate. */
+.deck-act--danger{color:var(--red);}
+.deck-act--danger svg{opacity:0.8;}
+.deck-act--danger:hover{border-color:var(--red);background:rgba(153,27,27,0.10);color:var(--red);}
+/* Tile variant: same shape, tuned down so seven of them fit a 280px card. */
+.deck-act--sm{padding:3px 8px;font-size:11px;gap:5px;border-radius:6px;}
+.deck-act--sm svg{width:12px;height:12px;}
+.deck-act-sep{flex:none;width:1px;align-self:stretch;min-height:18px;
+  margin:0 3px;background:var(--border);opacity:0.75;}
+/* A divider that lands at the start or end of a wrapped line is a stray tick
+   against nothing — only draw it between two buttons on the same line. */
+.deck-act-sep:first-child,.deck-act-sep:last-child{display:none;}
+@media (max-width:520px){
+  /* On a phone the row is already several lines; the dividers stop helping
+     and start looking like noise, so the grouping falls back to order alone. */
+  .deck-card-actions .deck-act-sep{display:none;}
+  .deck-act--sm{padding:3px 7px;}
+}
+.deck-card-actions{display:flex;gap:5px;flex-wrap:wrap;align-items:center;}
 
 /* Editor: card browser (left) + deck summary panel (right) */
 .deck-editor-grid{display:grid;grid-template-columns:minmax(0,1fr) 460px;gap:16px;align-items:start;}
@@ -4664,6 +4773,58 @@ html[data-mode="dark"] .deck-card-vis.vis-unlisted{color:#e8b664;}
 .deck-share-radio-title{font-size:13px;font-weight:700;color:var(--text);line-height:1.2;}
 .deck-share-radio.active .deck-share-radio-title{color:var(--accent);}
 .deck-share-radio-sub{font-size:11px;color:var(--text-muted);line-height:1.35;margin-top:1px;}
+/* "Include version history" — a checkbox, not one of the visibility radios,
+   because it's an independent yes/no on top of whichever one is picked. */
+.deck-share-check{display:flex;align-items:flex-start;gap:10px;padding:8px 10px;
+  border:1px solid var(--border);border-radius:7px;cursor:pointer;}
+.deck-share-check:hover{border-color:var(--border-accent);}
+.deck-share-check input{margin-top:3px;cursor:pointer;accent-color:var(--accent);}
+.deck-share-check:has(input:checked){background:var(--accent-glow);border-color:var(--border-accent);}
+.deck-share-check:has(input:checked) .deck-share-radio-title{color:var(--accent);}
+.deck-share-check:has(input:disabled){opacity:0.6;cursor:default;}
+
+/* ── Deck version history ─────────────────────────────────────────────── */
+.deck-history-modal{max-width:720px;width:100%;}
+.deck-history-body{padding:14px 18px 18px;display:flex;flex-direction:column;gap:12px;}
+.dv-lede{margin:0;font-size:12px;line-height:1.5;color:var(--text-dim);}
+/* Version rail beside the changelog; stacks on phones, where a 150px rail
+   would leave the diff too narrow to read a card name in. */
+.dv-cols{display:grid;grid-template-columns:150px minmax(0,1fr);gap:14px;align-items:start;}
+@media (max-width:600px){ .dv-cols{grid-template-columns:1fr;} }
+.dv-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:4px;
+  max-height:340px;overflow-y:auto;}
+@media (max-width:600px){
+  .dv-list{flex-direction:row;overflow-x:auto;max-height:none;padding-bottom:4px;}
+  .dv-list > li{flex:0 0 auto;}
+}
+.dv-pill{width:100%;text-align:left;display:flex;flex-direction:column;gap:1px;
+  padding:6px 10px;border:1px solid var(--border);border-radius:7px;
+  background:transparent;cursor:pointer;}
+.dv-pill:hover{border-color:var(--border-accent);}
+.dv-pill.active{background:var(--accent-glow);border-color:var(--border-accent);}
+.dv-pill-lbl{font-size:13px;font-weight:700;color:var(--text);
+  font-variant-numeric:tabular-nums;}
+.dv-pill.active .dv-pill-lbl{color:var(--accent);}
+.dv-pill.is-current .dv-pill-lbl::after{content:" \25cf";color:var(--green);font-size:9px;}
+.dv-pill-sub{font-size:10.5px;color:var(--text-muted);}
+.dv-detail{min-width:0;display:flex;flex-direction:column;gap:9px;}
+.dv-detail-head{font-size:13px;color:var(--text-dim);display:flex;gap:8px;
+  align-items:baseline;flex-wrap:wrap;}
+.dv-detail-count{font-size:11.5px;font-variant-numeric:tabular-nums;}
+.dv-meta{font-size:12px;color:var(--text-dim);padding:6px 9px;border-radius:6px;
+  background:var(--bg-surface);border:1px solid var(--border);}
+.dv-changes{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;
+  max-height:320px;overflow-y:auto;}
+.dv-line{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:8px;
+  align-items:baseline;padding:3px 8px;border-radius:5px;font-size:13px;}
+.dv-line.dv-add{background:rgba(47,125,79,0.10);}
+.dv-line.dv-del{background:rgba(168,58,52,0.10);}
+.dv-qty{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;
+  font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap;}
+.dv-add .dv-qty{color:var(--green);}
+.dv-del .dv-qty{color:var(--red);}
+.dv-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.dv-print{font-size:10.5px;color:var(--text-muted);white-space:nowrap;}
 .deck-share-divider{height:1px;background:var(--border);margin:6px 0;}
 .deck-share-url-row{display:flex;gap:6px;}
 .deck-share-url{flex:1;min-width:0;font-size:12px;padding:6px 8px;
@@ -5072,7 +5233,7 @@ html[data-mode="dark"] .card-row-price.foil{color:#c0a3ef;}
    SVG glyph matches the site's other Lucide-style line icons. On touch
    devices we still surface the button because hover doesn't reliably fire:
    the @media (hover:none) rule below pins opacity to 1. */
-.tile-magnify-btn{position:absolute;bottom:5px;left:5px;width:22px;height:22px;
+.tile-magnify-btn{position:absolute;bottom:5px;left:5px;width:30px;height:30px;
   display:inline-flex;align-items:center;justify-content:center;
   background:rgba(0,0,0,0.6);color:#fff;border:none;border-radius:5px;
   line-height:1;cursor:pointer;padding:0;
@@ -5834,6 +5995,20 @@ html[data-mode="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .sealed-detail-meta{font-size:12px;display:flex;gap:6px;flex-wrap:wrap;}
 .sealed-detail-sep{opacity:0.4;}
 .sealed-detail-prices{display:flex;gap:16px;align-items:center;flex-wrap:wrap;}
+/* Pins and lore counters have no photographs yet, so the image slot carries a
+   drawn glyph instead. It keeps the tile's shape and the grid's rhythm; swap in
+   real art by putting an `img` on the entry and this stops rendering. */
+.collectible-ph{display:flex;align-items:center;justify-content:center;
+  color:var(--accent);opacity:0.55;background:var(--accent-glow);}
+.collectible-ph svg{width:60%;height:60%;max-width:34px;max-height:34px;display:block;}
+.collectible-ph--lg{min-height:150px;border-radius:10px;}
+.collectible-ph--lg svg{width:76px;height:76px;max-width:76px;max-height:76px;}
+/* Pins / lore counters: provenance takes the slot a price would occupy —
+   "which season kit was this in" is the whole question for these. */
+.collectible-source{display:flex;flex-direction:column;gap:2px;flex:1 1 220px;min-width:0;}
+.collectible-source-lbl{font-size:10px;font-weight:700;letter-spacing:0.7px;
+  text-transform:uppercase;color:var(--text-muted);}
+.collectible-source-val{font-size:15px;font-weight:700;color:var(--accent);}
 .sealed-detail-price-cell{display:flex;flex-direction:column;align-items:flex-start;}
 .sealed-detail-price-lbl{font-size:9.5px;font-weight:700;letter-spacing:0.4px;
   text-transform:uppercase;color:var(--text-muted);}
@@ -7243,6 +7418,30 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
   cursor:pointer;color:var(--text-dim);}
 .proxy-check input{margin-top:2px;flex:none;}
 .proxy-check .muted{font-size:11px;}
+/* Per-card include + copy-count list. Scrolls inside the modal so a 60-card
+   deck doesn't push the Build button off the bottom. */
+.proxy-cardlist{max-height:300px;overflow-y:auto;-webkit-overflow-scrolling:touch;
+  border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);
+  padding:4px;display:flex;flex-direction:column;gap:1px;margin-top:-6px;}
+.proxy-cardrow{display:grid;grid-template-columns:22px minmax(0,1fr) auto auto;
+  align-items:center;gap:8px;padding:3px 6px;border-radius:6px;}
+.proxy-cardrow.on{background:var(--accent-glow);}
+.proxy-cardcheck{width:20px;height:20px;padding:0;flex:none;border-radius:4px;
+  border:1.5px solid var(--border);background:transparent;color:var(--text-muted);
+  font-size:12px;font-weight:700;line-height:1;cursor:pointer;
+  display:inline-flex;align-items:center;justify-content:center;}
+.proxy-cardcheck.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+.proxy-cardname{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.proxy-cardsub{font-size:10.5px;color:var(--text-muted);}
+.proxy-cardrow:not(.on) .proxy-cardname{color:var(--text-muted);}
+.proxy-cardwarn{font-size:10px;color:var(--text-muted);white-space:nowrap;}
+.proxy-cardqty{display:inline-flex;align-items:center;gap:2px;}
+.proxy-cardqty button{width:22px;height:22px;padding:0;font-size:14px;line-height:1;
+  border-radius:5px;cursor:pointer;}
+.proxy-cardqty button:disabled{opacity:0.35;cursor:default;}
+.proxy-cardqty input{width:40px;padding:2px 4px;font-size:12px;text-align:center;
+  font-variant-numeric:tabular-nums;}
+.proxy-list-toggle{margin-left:auto;}
 .proxy-summary{font-size:12.5px;color:var(--text-dim);padding:10px 12px;border-radius:8px;
   background:var(--bg-surface);border:1px solid var(--border);}
 .proxy-summary strong{color:var(--text);}

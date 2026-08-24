@@ -27,7 +27,7 @@ function grab(startMarker, endMarker) {
 
 const consts = grab(
   "const HOME_COLUMNS = [",
-  "const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:true}));",
+  "const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:!p.off}));",
 );
 const normalize = grab("const normalizeHomeLayout = (val) => {", "\n};");
 // The App initializer, rewritten only enough to be callable outside React.
@@ -87,6 +87,30 @@ check("legacy visibility map: hidden panel respected", legacy.find((p) => p.key 
 
 store = { "packsink:homeLayout": "{not json" };
 check("corrupt layout falls back to the default", colOf(initHomeLayout(), "news"), NEWS_DEFAULT);
+
+// Opt-in panels (HOME_PANELS `off:true`) must start hidden BOTH on a fresh
+// browser and when appended to a layout that predates them — otherwise
+// shipping one silently switches it on for everyone who has ever visited.
+const optIn = HOME_PANELS.filter((p) => p.off).map((p) => p.key);
+if (!optIn.length) console.log("SKIP  no opt-in panels declared");
+for (const key of optIn) {
+  store = {};
+  check(`opt-in ${key}: off for a fresh browser`, initHomeLayout().find((p) => p.key === key).on, false);
+  store = {
+    "packsink:homeLayout": JSON.stringify(
+      HOME_PANELS.filter((p) => p.key !== key).map((p) => ({ key: p.key, col: p.col, on: true })),
+    ),
+  };
+  check(`opt-in ${key}: off when appended to an older layout`,
+    initHomeLayout().find((p) => p.key === key).on, false);
+  store = {
+    "packsink:homeLayout": JSON.stringify(
+      HOME_PANELS.map((p) => ({ key: p.key, col: p.col, on: true })),
+    ),
+  };
+  check(`opt-in ${key}: a deliberate ON survives`,
+    initHomeLayout().find((p) => p.key === key).on, true);
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

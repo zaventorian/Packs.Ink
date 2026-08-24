@@ -136,7 +136,7 @@ jobs:
     # manual run. --skip-promo-singles is deliberate: the sealed UI filters out
     # product_type=='Promo Single' everywhere, so those rows would never show in
     # the tab, AND keeping those pids OUT of sealed_products is what lets the
-    # reconcile watchdog (below) still flag them as missing singles. The loader
+    # catalog watch (catalog-watch.yml) still flag them as missing singles. The loader
     # refreshes sealed_prices_latest at the end so new products appear same-day.
     # Idempotent full upsert — a no-op once every current sealed SKU is loaded.
     if: |
@@ -158,43 +158,13 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/load_sealed_products.py --skip-promo-singles
 
-  reconcile:
-    name: Reconcile catalog (orphan watchdog)
-    runs-on: ubuntu-latest
-    # Depends on `sealed` too so it reads a freshly-loaded sealed_products —
-    # otherwise it'd transiently flag this cycle's new boxes/packs as sealed
-    # orphans. always() + the prices-success guard mean a sealed failure never
-    # suppresses the watchdog.
-    needs: [prices, sealed]
-    # Flags TCGPlayer products that are priced but missing from `cards` AND
-    # `sealed_products` — i.e. singles Lorcast hasn't indexed yet (promos,
-    # Store-Championship cards), which otherwise sit invisible on the site the
-    # way Dash Parr 52/P3 did for a month. Alert-only: it never writes to the
-    # catalog, so it can't fail the ETL. The actionable "missing singles" list
-    # lands in the run's Step Summary and (if RECONCILE_ALERT_WEBHOOK is set) a
-    # Discord ping. Cheap (~19 TCGCSV calls); runs on the daily prices trigger.
-    if: |
-      always() && needs.prices.result == 'success' && (
-        (github.event_name == 'schedule' && github.event.schedule == '30 1 * * *') ||
-        (github.event_name == 'workflow_dispatch' && (inputs.job == 'prices' || inputs.job == 'both'))
-      )
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: scripts/requirements.txt
-      - run: pip install -r scripts/requirements.txt
-      - name: Reconcile catalog
-        env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-          # Optional: a Discord (or Discord-compatible) webhook to get pinged
-          # when a new missing single appears. Unset → report stays in the Step
-          # Summary only.
-          RECONCILE_ALERT_WEBHOOK: ${{ secrets.RECONCILE_ALERT_WEBHOOK }}
-        run: python scripts/reconcile_catalog.py
+  # The orphan watchdog MOVED OUT of the ETL on 2026-08-24 → catalog-watch.yml.
+  # Two reasons. It fired on every prices/both dispatch (3-4x a day) to answer a
+  # question that changes at most once a day, and — the real one — a catalog gap
+  # and a broken price pipeline were sharing one red/green light. They need
+  # different reactions, so they now get different workflows and different
+  # emails. The new mode also sees products TCGplayer lists but hasn't priced
+  # yet, which is how a set announces itself weeks before release.
 
   link:
     name: Link pre-order pids

@@ -46,9 +46,44 @@ Exit code is 0 by default so a standing backlog doesn't spam the ETL with red
 runs. Pass --fail-on-card-orphans to make CI go red (and email) while any
 genuine missing single exists.
 
+The --watch mode (what CI runs)
+-------------------------------
+The sweep above only sees pids that have a PRICE, which structurally misses the
+things that hurt most: a product listed weeks before release (a new Quest set,
+next set's boxes), a whole new TCGCSV group nobody bound to a set, a card row
+with no pid that therefore can never price. --watch adds those checks and, more
+importantly, gives the result somewhere to go.
+
+Before --watch existed this script ran green every day with 18 genuinely missing
+singles in its output, because it exited 0 and wrote to a Step Summary nobody
+opens. An alert with no delivery is not an alert.
+
+    findings = everything wrong  −  everything acknowledged
+    exit 1 if any remain  →  red run  →  GitHub failure email
+
+Acknowledgements live in scripts/catalog_watch.json, each with a reason and
+an optional `until` date that makes it expire and re-alert. That is what keeps
+the noise floor at zero: a standing backlog is acknowledged once, with a stated
+decision, instead of being re-reported forever until everyone stops looking.
+
+Scheduled reviews
+-----------------
+The checks above all read a machine-readable feed. Some of the catalog does not
+have one — Japan Core legality comes from a Japanese retailer's HTML, the pin
+and lore-counter lists come from a fan site, next set's spoilers come from press
+releases. Nothing can watch those, so the same file carries a `reviews` list:
+each one becomes a finding on its due date and rides the same red run and the
+same email. `--done <id>` rolls it forward.
+
+That is the difference between a reminder and a note somebody wrote down once.
+
 Usage
 -----
-    python scripts/reconcile_catalog.py                  # daily watchdog, exit 0
+    python scripts/reconcile_catalog.py --watch            # CI: red on anything new
+    python scripts/reconcile_catalog.py --watch --no-fail  # same report, always exit 0
+    python scripts/reconcile_catalog.py --ack missing_single:711520 --why "..."
+    python scripts/reconcile_catalog.py --ack unbound_group:24740 --why "..." --until 2026-10-17
+    python scripts/reconcile_catalog.py                  # legacy priced-orphan sweep, exit 0
     python scripts/reconcile_catalog.py --days 30        # widen priced window
     python scripts/reconcile_catalog.py --audit-promo-singles   # deep periodic audit
     python scripts/reconcile_catalog.py --fail-on-card-orphans
@@ -60,6 +95,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from datetime import date, timedelta
@@ -71,6 +107,10 @@ from dotenv import load_dotenv
 sys.path.insert(0, os.path.dirname(__file__))
 from supabase_client import Supabase
 from tcgcsv_common import LORCANA_CATEGORY_ID, TCGCSV_BASE
+# The loader's own "not a real product" list, imported rather than restated so
+# a deliberate exclusion can't come back as a watch finding. Adding a pattern
+# there silences it here in the same commit.
+from load_sealed_products import SKIP_NAME_PATTERNS as LOADER_SKIP_PATTERNS
 
 USER_AGENT = "PacksInk/1.0 (+https://packs.ink) reconcile-catalog"
 
@@ -229,6 +269,370 @@ def fmt_money(v) -> str:
         return "—"
 
 
+ACK_PATH = os.path.join(os.path.dirname(__file__), "catalog_watch.json")
+
+# `sealed_no_set` deliberately skips this bucket. 'Promo Single' is
+# load_sealed_products' catch-all for products that map to no set by
+# construction — the rows are hidden in the UI and a null set_id on them is the
+# expected state, not a defect. 113 of the 121 null-set rows are these.
+SEALED_NO_SET_SKIP_TYPES = {"Promo Single"}
+# `card_no_pid` skips Format Coconut for the same reason: its leaders are static
+# synthetic rows, not TCGplayer products, so they can never carry a pid.
+CARD_NO_PID_SKIP_SETS = {"Format Coconut"}
+
+
+def load_ack(path: str) -> dict:
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {"acks": {}, "rules": [], "reviews": []}
+    except json.JSONDecodeError as e:
+        # A broken ack file must not silently un-acknowledge everything and
+        # bury a real finding under a hundred old ones.
+        raise SystemExit(f"catalog_watch.json is not valid JSON: {e}")
+    data.setdefault("acks", {})
+    data.setdefault("rules", [])
+    data.setdefault("reviews", [])
+    return data
+
+
+def ack_reason(ack: dict, kind: str, key: str, name: str, today: str) -> str | None:
+    """Why this finding is covered, or None if it is not.
+
+    An `until` date expires the acknowledgement, so "revisit when Q3 actually
+    releases" is a thing the file can express instead of a promise someone has
+    to remember.
+    """
+    entry = ack["acks"].get(f"{kind}:{key}")
+    if entry is not None:
+        until = entry.get("until")
+        if until and until < today:
+            return None  # lapsed — re-alert
+        return entry.get("why") or "(no reason recorded)"
+    for rule in ack["rules"]:
+        if rule.get("kind") and rule["kind"] != kind:
+            continue
+        pat = rule.get("name_matches")
+        if pat and re.search(pat, name or ""):
+            until = rule.get("until")
+            if until and until < today:
+                return None
+            return rule.get("why") or "(no reason recorded)"
+    return None
+
+
+def save_ack(path: str, data: dict) -> None:
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+
+
+def due_reviews(ack: dict, today: str) -> list[dict]:
+    """Scheduled reviews whose due date has arrived.
+
+    Not gated by `acks` at all — a review is "acknowledged" exactly when its
+    `due` is still in the future, so the only way to silence one is to do it
+    (--done) or to deliberately push its date out.
+    """
+    out = []
+    for rv in ack.get("reviews", []):
+        due = rv.get("due")
+        if not due or due > today:
+            continue
+        out.append({
+            "kind": "review_due",
+            "key": rv.get("id") or "?",
+            "name": rv.get("what") or rv.get("id") or "?",
+            "detail": f"due {due}" + (f" · last done {rv['last_done']}" if rv.get("last_done") else " · never done"),
+            "hint": rv.get("how") or "no steps recorded",
+            "why": rv.get("why") or "",
+        })
+    return out
+
+
+def fetch_all_products() -> tuple[list[dict], dict[int, dict]]:
+    """Every TCGCSV group and every product in it, keyed by pid.
+
+    build_tcgcsv_index already downloaded all of this and threw away everything
+    that wasn't a priced orphan, so widening the sweep to unpriced products
+    costs no extra requests — just the ones we were already discarding.
+    """
+    groups = fetch_results(f"{TCGCSV_BASE}/{LORCANA_CATEGORY_ID}/groups")
+    index: dict[int, dict] = {}
+    for g in groups:
+        gid = g.get("groupId")
+        if gid is None:
+            continue
+        for prod in fetch_results(f"{TCGCSV_BASE}/{LORCANA_CATEGORY_ID}/{gid}/products"):
+            pid = prod.get("productId")
+            if pid is None:
+                continue
+            index[pid] = {
+                "name": (prod.get("name") or "").strip(),
+                "group": g.get("name", str(gid)),
+                "group_id": gid,
+                "number": ext(prod, "Number"),
+                "rarity": ext(prod, "Rarity"),
+                "url": prod.get("url"),
+            }
+    return groups, index
+
+
+def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = None) -> list[dict]:
+    """Everything the catalog is missing or hasn't wired up, as flat findings."""
+    groups, products = fetch_all_products()
+    card_pids = column_pids(sb, "cards")
+    sealed_rows = sb.select("sealed_products",
+                            columns="tcgplayer_product_id,name,product_type,set_id",
+                            order="tcgplayer_product_id.asc")
+    sealed_pids = {r["tcgplayer_product_id"] for r in sealed_rows
+                   if r.get("tcgplayer_product_id") is not None}
+    sets_rows = sb.select("sets", columns="id,name,tcgplayer_group_id", order="id.asc")
+    set_name = {r["id"]: r.get("name") or r["id"] for r in sets_rows}
+    bound_groups = {r["tcgplayer_group_id"] for r in sets_rows
+                    if r.get("tcgplayer_group_id") is not None}
+
+    out: list[dict] = []
+
+    # 1/2. TCGplayer sells it; we have it in neither table. Unlike the legacy
+    #      sweep this includes products with no price row yet, which is exactly
+    #      how a set announces itself weeks before release.
+    for pid, m in products.items():
+        if pid in card_pids or pid in sealed_pids:
+            continue
+        low = m["name"].lower()
+        if any(pat in low for pat in LOADER_SKIP_PATTERNS):
+            continue  # load_sealed_products drops it on purpose
+        is_card = bool(m["number"]) and not looks_sealed(m["name"])
+        out.append({
+            "kind": "missing_single" if is_card else "missing_sealed",
+            "key": str(pid),
+            "name": m["name"],
+            "detail": f"{m['group']} #{m['number'] or '?'} · {m['rarity'] or '—'}",
+            "hint": ("add a `cards` row (see MISSING SINGLES flow)" if is_card
+                     else "run `python scripts/load_sealed_products.py --skip-promo-singles`"),
+        })
+
+    # 3. A TCGCSV group nothing points at. A brand-new set or Quest shows up
+    #    here first — before a single card of it is listed or priced.
+    for g in groups:
+        gid = g.get("groupId")
+        if gid is None or gid in bound_groups:
+            continue
+        out.append({
+            "kind": "unbound_group", "key": str(gid), "name": g.get("name") or str(gid),
+            "detail": f"published {(g.get('publishedOn') or '?')[:10]}",
+            "hint": "create the `sets` row and set tcgplayer_group_id, or add a "
+                    "TCGCSV_GROUP_SET_ALIASES entry in scripts/tcgcsv_common.py",
+        })
+
+    # 4. Sealed product loaded but unbound, so it renders under "Other / Promo"
+    #    instead of its own set section.
+    for r in sealed_rows:
+        if r.get("set_id") or (r.get("product_type") or "") in SEALED_NO_SET_SKIP_TYPES:
+            continue
+        out.append({
+            "kind": "sealed_no_set", "key": str(r.get("tcgplayer_product_id")),
+            "name": r.get("name") or "", "detail": r.get("product_type") or "—",
+            "hint": "bind its TCGCSV group to a set, then re-run load_sealed_products.py",
+        })
+
+    # 5. card_prices_latest is an INNER JOIN on the pid, so a null one means the
+    #    card can never show a price no matter how well TCGplayer lists it.
+    for r in sb.select("cards", columns="name,version,collector_number,set_id,tcgplayer_product_id",
+                       filters={"tcgplayer_product_id": "is.null"}, order="set_id.asc"):
+        sname = set_name.get(r.get("set_id"), r.get("set_id") or "?")
+        if sname in CARD_NO_PID_SKIP_SETS:
+            continue
+        disp = r["name"] + (f" - {r['version']}" if r.get("version") else "")
+        out.append({
+            "kind": "card_no_pid", "key": f"{sname}|{r.get('collector_number')}",
+            "name": disp, "detail": f"{sname} #{r.get('collector_number')}",
+            "hint": "find its pid on TCGplayer and add it to TCG_PID_OVERRIDES, "
+                    "then run scripts/patch_pid_overrides.py",
+        })
+
+    # 6. Lorcast published a set we never created.
+    try:
+        for st in fetch_results("https://api.lorcast.com/v0/sets"):
+            if st.get("id") and st["id"] not in set_name:
+                out.append({
+                    "kind": "missing_set", "key": st["id"],
+                    "name": st.get("name") or st["id"],
+                    "detail": f"code {st.get('code')} · released {st.get('released_at')}",
+                    "hint": "run scripts/load_lorcast.py to create the set + its cards",
+                })
+    except Exception as e:  # Lorcast down must not fail the whole watch
+        print(f"  (Lorcast set check skipped, non-fatal: {e})")
+
+    if ack is not None:
+        out.extend(due_reviews(ack, today or date.today().isoformat()))
+
+    out.sort(key=lambda f: (f["kind"], f["name"]))
+    return out
+
+
+KIND_LABEL = {
+    "missing_single": "Missing single (TCGplayer sells it, we don't list it)",
+    "missing_sealed": "Missing sealed product",
+    "unbound_group":  "TCGplayer group bound to no set",
+    "sealed_no_set":  "Sealed product with no set",
+    "card_no_pid":    "Card with no TCGplayer id (can never price)",
+    "missing_set":    "Lorcast set we don't have",
+    "review_due":     "Scheduled review (no feed watches this — a person has to look)",
+}
+
+
+def run_watch(sb: Supabase, fail: bool, json_path: str | None) -> int:
+    today = date.today().isoformat()
+    ack = load_ack(ACK_PATH)
+    findings = collect_findings(sb, ack, today)
+    fresh = [f for f in findings
+             if f["kind"] == "review_due"
+             or ack_reason(ack, f["kind"], f["key"], f["name"], today) is None]
+    known = len(findings) - len(fresh)
+
+    print(f"\n{'='*72}")
+    print(f"CATALOG WATCH — {len(fresh)} new, {known} acknowledged")
+    print("=" * 72)
+
+    if not fresh:
+        print("\n✅ Nothing new. Every gap in the catalog is one we've already ruled on.")
+    else:
+        by_kind: dict[str, list[dict]] = {}
+        for f in fresh:
+            by_kind.setdefault(f["kind"], []).append(f)
+        for kind, items in by_kind.items():
+            print(f"\n▶ {KIND_LABEL.get(kind, kind)}  ({len(items)})")
+            if kind == "review_due":
+                # A review's whole value is that the steps travel with the
+                # alert — nobody is going to go dig up how to do it.
+                for f in items:
+                    print(f"\n    {f['key']}   [{f['detail']}]")
+                    print(f"      {f['name']}")
+                    if f.get("why"):
+                        print(f"      why:  {f['why']}")
+                    for i, line in enumerate(str(f["hint"]).split("\n")):
+                        print(("      how:  " if i == 0 else "            ") + line)
+                    print(f"      done: python scripts/reconcile_catalog.py --done {f['key']} "
+                          f"--next YYYY-MM-DD")
+                continue
+            for f in items:
+                print(f"    {f['kind']}:{f['key']}")
+                print(f"      {f['name']}   [{f['detail']}]")
+            print(f"    → {items[0]['hint']}")
+        gap = next((f for f in fresh if f["kind"] != "review_due"), None)
+        if gap:
+            print("\nEither fix it, or record the decision so it stops asking:")
+            print(f"    python scripts/reconcile_catalog.py --ack {gap['kind']}:{gap['key']} "
+                  f'--why "why this is fine" [--until YYYY-MM-DD]')
+
+    _write_watch_summary(fresh, known)
+    _send_watch_webhook(fresh)
+    if json_path:
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump({"new": fresh, "acknowledged": known}, f, indent=2)
+        print(f"\nWrote structured report → {json_path}")
+
+    if fresh and fail:
+        print(f"\n{len(fresh)} unacknowledged finding(s) → exiting 1 so the run goes red.")
+        return 1
+    return 0
+
+
+def _write_watch_summary(fresh: list[dict], known: int) -> None:
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    lines = ["## Catalog watch\n\n"]
+    if not fresh:
+        lines.append(f"✅ Nothing new. {known} known gap(s) already acknowledged.\n")
+    else:
+        lines.append(f"**{len(fresh)} new finding(s)**, {known} acknowledged.\n\n")
+        lines.append("| key | what | where |\n|--|--|--|\n")
+        for f in fresh:
+            lines.append(f"| `{f['kind']}:{f['key']}` | {f['name']} | {f['detail']} |\n")
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.writelines(lines)
+    except OSError:
+        pass
+
+
+def _send_watch_webhook(fresh: list[dict]) -> None:
+    url = os.environ.get("RECONCILE_ALERT_WEBHOOK")
+    if not url or not fresh:
+        return
+    top = "\n".join(f"• [{f['kind']}] {f['name']} — {f['detail']}" for f in fresh[:15])
+    extra = f"\n…and {len(fresh) - 15} more" if len(fresh) > 15 else ""
+    try:
+        requests.post(url, json={"content":
+            f"**Packs.Ink catalog watch** — {len(fresh)} new gap(s):\n{top}{extra}"[:1900]}, timeout=30)
+    except requests.RequestException as e:
+        print(f"  (webhook post failed, non-fatal: {e})")
+
+
+def run_ack(key: str, why: str | None, until: str | None) -> int:
+    if ":" not in key:
+        print(f"Key must look like kind:id, e.g. missing_single:711520 (got {key!r})")
+        return 2
+    kind = key.split(":", 1)[0]
+    if kind not in KIND_LABEL:
+        print(f"Unknown kind {kind!r}. One of: {', '.join(sorted(KIND_LABEL))}")
+        return 2
+    if not why or not why.strip():
+        print("--why is required. This file is a decision record; an entry with no "
+              "reason is indistinguishable from hiding the problem.")
+        return 2
+    if until:
+        try:
+            date.fromisoformat(until)
+        except ValueError:
+            print(f"--until must be YYYY-MM-DD (got {until!r})")
+            return 2
+    ack = load_ack(ACK_PATH)
+    entry = {"why": why.strip(), "added": date.today().isoformat()}
+    if until:
+        entry["until"] = until
+    ack["acks"][key] = entry
+    save_ack(ACK_PATH, ack)
+    print(f"Acknowledged {key}" + (f" until {until}" if until else "") + f"\n  {why.strip()}")
+    print("Commit scripts/catalog_watch.json so CI picks it up.")
+    return 0
+
+
+def run_done(review_id: str, next_due: str | None) -> int:
+    ack = load_ack(ACK_PATH)
+    reviews = ack.get("reviews", [])
+    rv = next((r for r in reviews if r.get("id") == review_id), None)
+    if rv is None:
+        print(f"No review with id {review_id!r}. Known: "
+              f"{', '.join(r.get('id', '?') for r in reviews) or '(none)'}")
+        return 2
+    today = date.today()
+    if next_due:
+        try:
+            date.fromisoformat(next_due)
+        except ValueError:
+            print(f"--next must be YYYY-MM-DD (got {next_due!r})")
+            return 2
+        nxt = next_due
+    else:
+        every = rv.get("every_days")
+        if not every:
+            print(f"{review_id} has no `every_days`, so --next is required "
+                  "(these are keyed to set releases, not a fixed cadence).")
+            return 2
+        nxt = (today + timedelta(days=int(every))).isoformat()
+    rv["last_done"] = today.isoformat()
+    rv["due"] = nxt
+    save_ack(ACK_PATH, ack)
+    print(f"{review_id} marked done today; next due {nxt}.")
+    print("Commit scripts/catalog_watch.json so CI picks it up.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=14,
@@ -240,14 +644,39 @@ def main() -> int:
                          "(periodic deep audit; off for the daily watchdog).")
     ap.add_argument("--json", dest="json_path", default=None,
                     help="Write the full structured report to this path.")
+    ap.add_argument("--watch", action="store_true",
+                    help="Widened sweep (unpriced products, unbound groups, null pids, new "
+                         "Lorcast sets) filtered through catalog_watch.json. Exits 1 on "
+                         "anything unacknowledged — this is what CI runs.")
+    ap.add_argument("--no-fail", action="store_true",
+                    help="With --watch: print the report but always exit 0.")
+    ap.add_argument("--ack", default=None, metavar="KIND:ID",
+                    help="Record an acknowledgement for one finding and exit.")
+    ap.add_argument("--done", default=None, metavar="REVIEW_ID",
+                    help="Mark a scheduled review done and roll it forward.")
+    ap.add_argument("--next", dest="next_due", default=None, metavar="YYYY-MM-DD",
+                    help="With --done: when it is due again (defaults to every_days).")
+    ap.add_argument("--why", default=None,
+                    help="Required with --ack: why this finding is acceptable.")
+    ap.add_argument("--until", default=None, metavar="YYYY-MM-DD",
+                    help="With --ack: expire the acknowledgement on this date so it re-alerts.")
     ap.add_argument("--pid", action="append", default=None, metavar="ID",
                     help="Probe specific TCGPlayer product id(s) instead of running the sweep. "
                          "Repeatable, and accepts a comma-separated list. Exits 1 if any probed "
                          "product is in neither cards nor sealed_products.")
     args = ap.parse_args()
 
+    if args.ack:
+        return run_ack(args.ack, args.why, args.until)
+
+    if args.done:
+        return run_done(args.done, args.next_due)
+
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
     sb = Supabase()
+
+    if args.watch:
+        return run_watch(sb, fail=not args.no_fail, json_path=args.json_path)
 
     if args.pid:
         pids = []
