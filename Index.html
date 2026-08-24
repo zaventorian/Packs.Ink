@@ -444,6 +444,67 @@ async function encDeckMetaPatch(patch){
   return o;
 }
 
+// ── Deck version history ────────────────────────────────────────
+// A version is one EDITING SESSION. The editor already snapshots the deck when
+// you enter edit mode (it powers "Undo changes"); pressing Done writes that
+// pre-edit state as the next version, if anything actually changed. Snapshot
+// per card-tap and you get four hundred rows nobody can read as history.
+//
+// Rows live in deck_versions (migration 125), obfuscated exactly like
+// deck_cards — an archive of decklists shouldn't be readable when the live
+// table isn't.
+const DECK_VER_SEP = "\x1f";
+const deckVerKey = (c) => (c.card_id || "") + DECK_VER_SEP + (c.printing || "");
+// Order-independent fingerprint, so "did this session change anything" doesn't
+// depend on the order two card arrays happen to be in.
+const deckCardsSignature = (cards) =>
+  (cards || []).map(c => deckVerKey(c) + DECK_VER_SEP + (c.quantity || 0)).sort().join("|");
+
+// What changed between two card lists. Keyed on card_id + printing (the
+// deck_cards PK), so swapping a Normal for its Foil reads as one card out and
+// one card in — which is what actually happened to the deck.
+const diffDeckVersions = (fromCards, toCards) => {
+  const A = new Map(), B = new Map();
+  for(const c of (fromCards || [])) A.set(deckVerKey(c), c);
+  for(const c of (toCards   || [])) B.set(deckVerKey(c), c);
+  const added = [], removed = [], changed = [];
+  for(const [k, c] of B) if(!A.has(k)) added.push({card_id:c.card_id, printing:c.printing, qty:c.quantity||0});
+  for(const [k, c] of A) if(!B.has(k)) removed.push({card_id:c.card_id, printing:c.printing, qty:c.quantity||0});
+  for(const [k, c] of A){
+    const d = B.get(k);
+    if(d && (d.quantity||0) !== (c.quantity||0)){
+      changed.push({card_id:c.card_id, printing:c.printing, from:c.quantity||0, to:d.quantity||0});
+    }
+  }
+  const total = (list) => (list || []).reduce((n, c) => n + (c.quantity||0), 0);
+  const byName = (a, b) => String(a.card_id).localeCompare(String(b.card_id));
+  added.sort(byName); removed.sort(byName); changed.sort(byName);
+  return {
+    added, removed, changed,
+    fromCount: total(fromCards), toCount: total(toCards),
+    isEmpty: !added.length && !removed.length && !changed.length,
+  };
+};
+
+// A version row's cards come back with card_id still encrypted — same shape
+// deck_cards reads take, so decDeckCards does the job.
+async function decDeckVersionRows(rows){
+  return Promise.all((rows || []).map(async v => ({
+    ...v,
+    name: await decDeck(v.name),
+    cards: await decDeckCards(Array.isArray(v.cards) ? v.cards : []),
+  })));
+}
+// PostgREST reports a missing table as 42P01 and a missing column as 42703.
+// Migration 125 is staged, not applied, so every version call has to survive
+// the table simply not being there yet rather than throwing at the user.
+const deckVersionsUnavailable = (err) => {
+  const code = err && (err.code || "");
+  const msg = String((err && err.message) || "");
+  return code === "42P01" || code === "42703" || code === "PGRST202"
+    || /deck_versions|save_deck_version|get_shared_deck_versions|share_versions/i.test(msg);
+};
+
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
 const CACHE_KEY = "packsink:catalog:v54";  // v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. (v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
@@ -35227,6 +35288,49 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
     }
   }, [user, decks, editSnapshot]);
 
+  // Write the pre-edit snapshot as the next version, if this session actually
+  // changed the deck. Called when leaving edit mode, which is the only moment
+  // we know both "what it looked like before" and "the user is done".
+  //
+  // Fire-and-forget: version history is a nicety, and a failed write must never
+  // block Done or roll back an edit the user already made. It stays silent when
+  // migration 125 hasn't been applied yet.
+  const saveDeckVersionIfChanged = useCallback(async (deckId) => {
+    if(!user || !deckId || !editSnapshot || editSnapshot.deckId !== deckId) return;
+    const deck = (decks || []).find(d => d.id === deckId);
+    if(!deck) return;
+    const before = editSnapshot;
+    const cardsChanged = deckCardsSignature(before.cards) !== deckCardsSignature(deck.cards || []);
+    const nameChanged = (before.name || "") !== (deck.name || "");
+    const coconutChanged = (before.coconut_card || null) !== (deck.coconut_card || null);
+    if(!cardsChanged && !nameChanged && !coconutChanged) return;
+    try {
+      const {error} = await sbClient.rpc("save_deck_version", {
+        p_deck_id: deckId,
+        p_name: await encDeckRnd(before.name || ""),
+        p_coconut_card: before.coconut_card || null,
+        // Same shape and same obfuscation as a deck_cards row, minus deck_id.
+        p_cards: (await encDeckCardRows((before.cards || []).map(c =>
+          ({card_id: c.card_id, printing: c.printing, quantity: c.quantity})))),
+      });
+      if(error) throw error;
+      setDeckVersionNonce(n => n + 1);
+    } catch(e){
+      if(!deckVersionsUnavailable(e)) console.warn("deck version save failed:", e?.message || e);
+    }
+  }, [user, decks, editSnapshot]);
+
+  // Bumped after a successful write so an open History modal refetches.
+  const [deckVersionNonce, setDeckVersionNonce] = useState(0);
+
+  // Leaving edit mode is the session boundary. Snapshot BEFORE flipping the
+  // flag — the effect that owns editSnapshot clears it the moment editMode
+  // goes false, so reading it afterwards would always come up empty.
+  const toggleDeckEditMode = useCallback(() => {
+    if(editMode && selectedDeckId) saveDeckVersionIfChanged(selectedDeckId);
+    setEditMode(m => !m);
+  }, [editMode, selectedDeckId, saveDeckVersionIfChanged]);
+
   // Update deck-level metadata (format/tags/description/etc). Optimistic
   // local merge + Supabase update with rollback on failure. Reads the
   // updated row back so trigger-set columns (like share_token, which the
@@ -35355,6 +35459,8 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         creator=${externalDeck.creator}
         creatorId=${creatorId}
         isOwnDeck=${false}
+        shareToken=${externalDeck.shareToken || null}
+        viewerShareVersions=${!!d.share_versions}
         canAct=${!!user}
         isFavorited=${favorites.has(d.id)}
         onToggleFavorite=${user ? (()=>toggleFavorite(d.id, externalDeck.shareToken || null)) : (()=>onSignIn && onSignIn())}
@@ -35395,8 +35501,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         tournamentContext=${tournamentByDeckId[deck.id] || null}
         onOpenTournament=${(tid)=>{ setDeckSection("tournaments"); setSelectedTournamentId(tid); setSelectedDeckId(null); }}
         ownerDisplayName=${ownerDisplayName}
-        onToggleEditMode=${()=>setEditMode(m=>!m)}
-        onBack=${()=>setSelectedDeckId(null)}
+        onToggleEditMode=${toggleDeckEditMode}
+        ${/* Backing out mid-edit still ends the session, so the version gets
+              written — otherwise a whole edit is missing from history purely
+              because the user hit Back instead of Done. */""}
+        onBack=${()=>{ if(editMode) saveDeckVersionIfChanged(deck.id); setSelectedDeckId(null); }}
+        deckVersionNonce=${deckVersionNonce}
+        shareToken=${deck.share_token || null}
         onRename=${(newName)=>renameDeckInline(deck.id, newName)}
         onDelete=${()=>deleteDeck(deck.id)}
         onDuplicate=${()=>duplicateDeck(deck.id)}
@@ -36348,6 +36459,144 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
   </div>`;
 };
 
+// Deck version history. Lists every saved editing session newest-first, with
+// "Current" pinned at the top, and shows the changelog between any version and
+// the one after it. Owners read deck_versions directly (RLS scopes it to their
+// own decks); a viewer goes through get_shared_deck_versions, which additionally
+// requires the owner to have ticked "Include version history".
+const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, onClose}) => {
+  useEscToClose(onClose);
+  const [rows, setRows] = useState(null);   // null = loading
+  const [err, setErr] = useState(null);
+  const [pick, setPick] = useState(0);      // index into the timeline below
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setErr(null);
+      try {
+        let data;
+        if(isOwner){
+          const r = await sbClient.from("deck_versions")
+            .select("version,name,coconut_card,cards,created_at")
+            .eq("deck_id", deck.id).order("version", {ascending:false});
+          if(r.error) throw r.error;
+          data = r.data;
+        } else {
+          const r = await sbClient.rpc("get_shared_deck_versions",
+            {p_deck_id: deck.id, p_token: shareToken || ""});
+          if(r.error) throw r.error;
+          data = r.data;
+        }
+        const decoded = await decDeckVersionRows(data || []);
+        if(!cancelled) setRows(decoded);
+      } catch(e){
+        if(cancelled) return;
+        setRows([]);
+        setErr(deckVersionsUnavailable(e)
+          ? "Version history isn\u2019t switched on for this site yet."
+          : (e?.message || "Couldn\u2019t load version history."));
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [deck.id, isOwner, shareToken, refreshNonce]);
+
+  // Newest first: Current, then vN … v1. Each entry knows what it is and what
+  // it should be compared against (the entry below it — i.e. older).
+  const timeline = useMemo(() => {
+    const out = [{
+      key: "current", label: "Current", sub: "live deck",
+      cards: deck.cards || [], name: deck.name, coconut_card: deck.coconut_card || null,
+      at: deck.updated_at || null,
+    }];
+    for(const v of (rows || [])){
+      out.push({
+        key: "v" + v.version, label: "v" + v.version, sub: null,
+        cards: v.cards || [], name: v.name, coconut_card: v.coconut_card || null,
+        at: v.created_at,
+      });
+    }
+    return out;
+  }, [rows, deck.cards, deck.name, deck.coconut_card, deck.updated_at]);
+
+  const newer = timeline[pick] || timeline[0];
+  const older = timeline[pick + 1] || null;
+  const diff = useMemo(
+    () => older ? diffDeckVersions(older.cards, newer.cards) : null,
+    [older, newer]);
+
+  // A version stores card_id; the changelog has to say the card's NAME, or it
+  // is a list of hashes. Falls back to the id for a card that has since left
+  // the catalog rather than rendering a blank row.
+  const nameOf = (cid) => {
+    const meta = (cardById[cid] || [])[0];
+    return (meta && meta["Product Name"]) || cid;
+  };
+  const line = (c, sign, qty, extra) => html`<li key=${deckVerKey(c)} class=${"dv-line dv-"+sign}>
+    <span class="dv-qty">${extra || (sign === "add" ? "+" : "\u2212") + qty}</span>
+    <span class="dv-name">${nameOf(c.card_id)}</span>
+    ${c.printing && c.printing !== "Normal" && html`<span class="dv-print">${c.printing}</span>`}
+  </li>`;
+
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal deck-history-modal" onClick=${e=>e.stopPropagation()}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>\ud83d\udd52 Version history</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close">\u00d7</button>
+      </div>
+      <div class="modal-body deck-history-body">
+        ${rows == null
+          ? html`<div class="muted" style=${{padding:"24px 4px",fontSize:13}}>Loading history\u2026</div>`
+          : err
+            ? html`<div class="muted" style=${{padding:"18px 4px",fontSize:13}}>${err}</div>`
+            : html`<${React.Fragment}>
+              <p class="dv-lede">
+                A version is saved each time you finish an editing session that changed something.
+                ${rows.length === 0 ? " Nothing yet \u2014 edit this deck and the version before your changes lands here." : ""}
+              </p>
+              <div class="dv-cols">
+                <ol class="dv-list">
+                  ${timeline.map((t, i) => html`<li key=${t.key}>
+                    <button class=${"dv-pill"+(i===pick?" active":"")+(i===0?" is-current":"")}
+                      onClick=${()=>setPick(i)}>
+                      <span class="dv-pill-lbl">${t.label}</span>
+                      <span class="dv-pill-sub">${t.sub || (t.at ? relativeTime(t.at) : "")}</span>
+                    </button>
+                  </li>`)}
+                </ol>
+                <div class="dv-detail">
+                  ${!older
+                    ? html`<div class="muted" style=${{fontSize:13}}>
+                        ${timeline.length > 1
+                          ? "This is the oldest version we have \u2014 nothing before it to compare against."
+                          : "Only the live deck exists so far."}
+                      </div>`
+                    : html`<${React.Fragment}>
+                      <div class="dv-detail-head">
+                        <strong>${older.label}</strong> \u2192 <strong>${newer.label}</strong>
+                        <span class="muted dv-detail-count">${diff.fromCount} \u2192 ${diff.toCount} cards</span>
+                      </div>
+                      ${(older.name || "") !== (newer.name || "") && html`<div class="dv-meta">
+                        Renamed \u201c${older.name}\u201d \u2192 \u201c${newer.name}\u201d</div>`}
+                      ${(older.coconut_card || null) !== (newer.coconut_card || null) && html`<div class="dv-meta">
+                        Coconut leader changed</div>`}
+                      ${diff.isEmpty
+                        ? html`<div class="muted" style=${{fontSize:13}}>No card changes between these two.</div>`
+                        : html`<ul class="dv-changes">
+                            ${diff.added.map(c => line(c, "add", c.qty))}
+                            ${diff.changed.map(c => line(c, c.to > c.from ? "add" : "del", 0,
+                              (c.to > c.from ? "+" : "\u2212") + Math.abs(c.to - c.from) + " (" + c.from + "\u2192" + c.to + ")"))}
+                            ${diff.removed.map(c => line(c, "del", c.qty))}
+                          </ul>`}
+                    </>`}
+                </div>
+              </div>
+            </>`}
+      </div>
+    </div>
+  </div>`;
+};
+
 const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
@@ -36357,7 +36606,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      isFavorited, onToggleFavorite,
                      isFollowingCreator, onToggleFollowCreator,
                      onOpenCreator, favoriteCount, ownerDisplayName,
-                     tournamentContext, onOpenTournament}) => {
+                     tournamentContext, onOpenTournament,
+                     deckVersionNonce, shareToken, viewerShareVersions}) => {
   // Detail modal for clicking a tile's image — same modal used by the Cards
   // tab so the deck builder feels native, not separate.
   const [selectedGroup, setSelectedGroup] = useState(null);
@@ -36374,6 +36624,33 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   useEffect(() => {
     try { window.scrollTo({top:0, behavior:"auto"}); } catch {}
   }, [deck?.id]);
+  const [historyOpen, setHistoryOpen] = useState(false);
+  // `decks.share_versions` is read here rather than plumbed through the deck
+  // lists: migration 125 is staged, and adding the column to those hot selects
+  // would 400 every list query until it lands. One row, on demand, owner only.
+  const [ownerShareVersions, setOwnerShareVersions] = useState(false);
+  useEffect(() => {
+    if(!isOwnDeck || !deck?.id) return;
+    let cancelled = false;
+    sbClient.from("decks").select("share_versions").eq("id", deck.id).maybeSingle()
+      .then(r => { if(!cancelled && !r.error) setOwnerShareVersions(!!(r.data && r.data.share_versions)); })
+      .catch(()=>{});
+    return () => { cancelled = true; };
+  }, [deck?.id, isOwnDeck]);
+  // Owners see their own truth; a viewer only ever sees what get_shared_deck
+  // reported, which is already gated on the owner having opted in.
+  const shareVersions = isOwnDeck ? ownerShareVersions : !!viewerShareVersions;
+  const onSetShareVersions = useCallback(async (on) => {
+    if(!isOwnDeck || !deck?.id) return;
+    setOwnerShareVersions(on);
+    const {error} = await sbClient.from("decks").update({share_versions: on}).eq("id", deck.id);
+    if(error){
+      setOwnerShareVersions(!on);
+      flashToast(deckVersionsUnavailable(error)
+        ? "Version sharing isn’t switched on for this site yet."
+        : "Couldn’t save that: " + error.message);
+    }
+  }, [isOwnDeck, deck?.id]);
   // Share popover (owner-only). Holds visibility radio + share URL.
   const [shareOpen, setShareOpen] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -37039,6 +37316,13 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       </span>`}
       <div class=${"deck-editor-toolbar-actions"+(mobileTab==="cards"?" hide-on-cards-tab":"")}
         style=${{marginLeft:"auto",display:"flex",gap:6,position:"relative",flexWrap:"wrap",justifyContent:"flex-end"}}>
+        ${/* No deck-toolbar-keep: History collapses away on the mobile Cards
+              tab like Share and Notes do, because the card browser needs the
+              vertical room more than a read-only view of the past does. */""}
+        ${(isOwnDeck || shareVersions) && html`<button
+          onClick=${()=>setHistoryOpen(true)}
+          title="See earlier versions of this deck and what changed between them"
+          style=${{fontSize:12,padding:"5px 10px"}}>\ud83d\udd52 History</button>`}
         ${isOwnDeck && onToggleEditMode && html`<button onClick=${onToggleEditMode}
           class=${"deck-toolbar-keep "+(!readOnly ? "active" : "")}
           style=${{fontSize:12,padding:"5px 10px"}}
@@ -37079,6 +37363,25 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                 <div class="deck-share-radio-sub">Anyone with the link can view, plus this deck appears in discovery.</div>
               </div>
             </label>
+            ${/* Default OFF and stays off unless asked: sharing a deck is one
+                  decision, sharing every draft it passed through is a bigger
+                  one, and it should never happen by forgetting a checkbox. */""}
+            ${isOwnDeck && html`<${React.Fragment}>
+              <div class="deck-share-divider"></div>
+              <label class="deck-share-check">
+                <input type="checkbox" checked=${!!shareVersions}
+                  disabled=${visibility === "private"}
+                  onChange=${e=>onSetShareVersions(e.target.checked)}/>
+                <div>
+                  <div class="deck-share-radio-title">Include version history</div>
+                  <div class="deck-share-radio-sub">
+                    ${visibility === "private"
+                      ? "Make the deck Unlisted or Public first."
+                      : "Anyone with the link can also see earlier versions and what changed between them."}
+                  </div>
+                </div>
+              </label>
+            </>`}
             <div class="deck-share-divider"></div>
             <div class="deck-share-section-title">Share URL</div>
             <div class="deck-share-url-row">
@@ -37571,6 +37874,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     </div>`}
     ${mulliganOpen && html`<${MulliganSimulator} deck=${deck} cardById=${cardById}
       onClose=${()=>setMulliganOpen(false)}/>`}
+    ${historyOpen && html`<${DeckHistoryModal} deck=${deck} cardById=${cardById}
+      isOwner=${!!isOwnDeck} shareToken=${shareToken || null}
+      refreshNonce=${deckVersionNonce || 0}
+      onClose=${()=>setHistoryOpen(false)}/>`}
     ${proxyOpen && html`<${ProxyPrintModal} deck=${deck} cardById=${cardById}
       onClose=${()=>setProxyOpen(false)}/>`}
     ${posterOpen && html`<${DeckPosterModal} deck=${deck} cardById=${cardById}
