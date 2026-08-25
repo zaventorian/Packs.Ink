@@ -2750,6 +2750,56 @@ async function fetchCardHistory(productId, printing){
   return rows;
 }
 
+// ── Market indices (migration 128) ──────────────────────────────────────
+// A benchmark to read a card against. Both fetchers are schema-tolerant: the
+// matviews may not exist yet, and a missing benchmark must degrade to "no
+// benchmark offered", never to a broken Screener or a chart that won't draw.
+// `null` = unavailable, `[]`/`{}` = available but empty.
+const MARKET_INDEX_MISSING = /42P01|PGRST(202|205)|does not exist|relation/i;
+
+async function fetchMarketIndexSeries(scope, scopeKey){
+  const key = `packsink:mktindex:v1:${scope}:${scopeKey || "-"}`;
+  const cached = readJsonCache(key, 12 * 60 * 60 * 1000);
+  if(cached) return cached;
+  try {
+    const rows = await sbFetchAll("market_index_daily", {
+      select: "date,value,n_components",
+      scope: "eq." + scope,
+      scope_key: "eq." + (scopeKey || ""),
+      order: "date.asc",
+    });
+    const out = (rows || []).map(r => ({x: Date.parse(r.date), y: Number(r.value)}))
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+    writeJsonCache(key, out);
+    return out;
+  } catch(e){
+    if(MARKET_INDEX_MISSING.test(String(e?.message || e))) return null;
+    console.warn("market index fetch:", e?.message || e);
+    return null;
+  }
+}
+
+// One row per scope — small (a few dozen), so it's fetched whole and indexed
+// client-side rather than queried per card.
+async function fetchMarketIndexLatest(){
+  const key = "packsink:mktindex:latest:v1";
+  const cached = readJsonCache(key, 12 * 60 * 60 * 1000);
+  if(cached) return cached;
+  try {
+    const rows = await sbFetchAll("market_index_latest", {
+      select: "scope,scope_key,date,value,n_components,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d",
+      order: "scope.asc",
+    });
+    const out = rows || [];
+    writeJsonCache(key, out);
+    return out;
+  } catch(e){
+    if(MARKET_INDEX_MISSING.test(String(e?.message || e))) return null;
+    console.warn("market index latest fetch:", e?.message || e);
+    return null;
+  }
+}
+
 // Bulk price history for the collection-value chart. Batches both the
 // product IN-list AND the date range — Supabase has a 10s statement
 // timeout, and a full-year × full-collection query blows past it. With
@@ -16196,6 +16246,40 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   useEffect(() => {
     try { localStorage.setItem("packsink:history:chartScale", chartScale); } catch {}
   }, [chartScale]);
+  // ── Benchmark overlay (migration 128) ──────────────────────────────────
+  // "off" | "all" | "set:<set_id>". Not persisted to localStorage: which set
+  // you benchmarked against last is meaningless against a different graph.
+  const [benchmark, setBenchmark] = useState("off");
+  const [benchSeries, setBenchSeries] = useState({});    // key -> [{x,y}] | null
+  const benchKey = benchmark === "off" ? null : benchmark;
+  // The control is offered until a fetch proves the matviews aren't deployed.
+  // We can't know before trying, so it starts visible and hides itself after a
+  // null — that way an unmigrated site shows the picker exactly once, with an
+  // explanation, instead of a permanently dead dropdown.
+  const benchAvailable = !Object.values(benchSeries).some(v => v === null);
+  useEffect(() => {
+    if(!benchKey || benchSeries[benchKey] !== undefined) return;
+    const [scope, scopeKey] = benchKey.startsWith("set:")
+      ? ["set", benchKey.slice(4)] : ["all", ""];
+    let cancelled = false;
+    fetchMarketIndexSeries(scope, scopeKey).then(rows => {
+      if(!cancelled) setBenchSeries(prev => ({...prev, [benchKey]: rows}));
+    });
+    return () => { cancelled = true; };
+  }, [benchKey, benchSeries]);
+  // Which sets the graphed cards belong to — the benchmark picker offers those
+  // rather than all thirty, since "vs a set I'm not looking at" is never the
+  // question.
+  const benchSetOptions = useMemo(() => {
+    const ids = new Map();
+    for(const c of compareCards){
+      if(c.kind === "set" && c.setId){ ids.set(c.setId, c.setName); continue; }
+      const row = (raw || []).find(r => r.tcgplayer_product_id === c.productId);
+      if(row && row.set_id && row.Set) ids.set(row.set_id, row.Set);
+    }
+    return Array.from(ids, ([id, name]) => ({id, name}));
+  }, [compareCards, raw]);
+
   const [setSearch, setSetSearch] = useState("");
   const [rangeKey, setRangeKey] = useState(() => readUrlEnum("hr", RANGE_OPTIONS.map(o => o[0])) || "all");
   const [customStart, setCustomStart] = useState(""); // YYYY-MM-DD when rangeKey="custom"
@@ -16867,7 +16951,30 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       // >= 1, not >= 2. A one-point series is drawn as a dot by LineChart; the
       // old >= 2 dropped it from the plot while its legend chip stayed, so a
       // single-sale graded tier produced a swatch and no mark.
-      const renderSeries = clipped.filter(s => s.data && s.data.length >= 1);
+      const plotted = clipped.filter(s => s.data && s.data.length >= 1);
+      // The benchmark rides along as one more series, but never as a compare
+      // item: it has no chip, no colour slot, and no row in the stats table. It
+      // is the thing you read the others AGAINST, so it's drawn muted + dashed.
+      //
+      // Only meaningful in Indexed mode. In dollars an index sitting near 100
+      // would be a flat line at the bottom of a $900 chart, which looks like
+      // data and isn't — so the control switches the scale for you rather than
+      // rendering something misleading.
+      const benchRows = benchKey ? benchSeries[benchKey] : undefined;
+      const benchClipped = (indexed && Array.isArray(benchRows) && benchRows.length)
+        ? (() => {
+            const inRange = startMs == null ? benchRows : benchRows.filter(p => p.x >= startMs);
+            const base = inRange.length ? inRange[0].y : null;
+            if(!base) return null;
+            return {
+              name: benchmark === "all" ? "Market index"
+                : "Set index · " + ((benchSetOptions.find(o => "set:"+o.id === benchmark) || {}).name || ""),
+              color: "var(--text-muted)", dash: "5,4", benchmark: true,
+              data: inRange.map(p => ({x: p.x, y: (p.y / base) * 100})),
+            };
+          })()
+        : null;
+      const renderSeries = benchClipped ? [benchClipped, ...plotted] : plotted;
       const isFull = compareCards.length >= COMPARE_MAX;
       const isCardInCompare = (cid) => compareCards.some(p => p.card_id === cid);
       const toggleCard = (c) => {
@@ -17168,6 +17275,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 </div>`}
                 ${compareCards.length >= 1 && html`<div class="compare-legend">
                   <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>On graph</span>
+                  ${benchClipped && html`<span class="compare-chip compare-chip--bench"
+                    title="Benchmark — not one of your picks. Every line above it outperformed the market over this range; every line below it lagged.">
+                    <span class="compare-swatch compare-swatch--bench"></span>
+                    <span class="compare-name">${benchClipped.name}</span>
+                    <button class="compare-remove" onClick=${()=>setBenchmark("off")}
+                      title="Remove the benchmark" aria-label="Remove benchmark">×</button>
+                  </span>`}
                   ${compareCards.map((c, i) => {
                     const st = compareSeriesStyle(i, paletteColors);
                     // Points actually plotted for this series after clipping —
@@ -17207,7 +17321,25 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     <button class=${chartScale === "indexed" ? "active" : ""} onClick=${()=>setChartScale("indexed")}
                       title="Rebase every line to 100 at the start of the range, so cards at completely different prices can be compared on performance. The table below stays in dollars.">Indexed</button>
                   </div>
+                  ${benchAvailable !== false && html`<label class="checkbox-group history-bench"
+                    title="Overlay a market benchmark — an equal-weighted, chain-linked return index of every priced card. Only meaningful against rebased lines, so turning it on switches the chart to Indexed.">
+                    <span class="muted">vs</span>
+                    <select value=${benchmark} onChange=${e=>{
+                      const v = e.target.value;
+                      setBenchmark(v);
+                      // Switch the scale rather than silently drawing a flat
+                      // line at the foot of a dollar chart.
+                      if(v !== "off" && chartScale !== "indexed") setChartScale("indexed");
+                    }}>
+                      <option value="off">No benchmark</option>
+                      <option value="all">Whole market</option>
+                      ${benchSetOptions.map(o => html`<option key=${o.id} value=${"set:"+o.id}>${o.name}</option>`)}
+                    </select>
+                  </label>`}
                 </div>
+                ${benchKey && benchRows === null && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
+                  Market indices aren't switched on for this site yet — ask an admin to run <code>supabase/128_market_index.sql</code>.
+                </div>`}
                 ${compareLoading
                   ? html`<div class="chart-empty large">Loading history…</div>`
                   : renderSeries.length === 0
@@ -26552,6 +26684,35 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return out;
   }, [rawEnrichedRows]);
 
+  // ── Market benchmark (migration 128) ────────────────────────────────────
+  // Fetched once. null = the matviews aren't deployed here, which hides the
+  // "vs Mkt" column entirely rather than rendering a column of dashes.
+  const [mktIndex, setMktIndex] = useState(undefined);   // undefined = loading
+  useEffect(() => {
+    let cancelled = false;
+    fetchMarketIndexLatest().then(rows => { if(!cancelled) setMktIndex(rows); });
+    return () => { cancelled = true; };
+  }, []);
+  const mktIndexByScope = useMemo(() => {
+    const m = new Map();
+    for(const r of (mktIndex || [])) m.set(r.scope + "|" + (r.scope_key || ""), r);
+    return m;
+  }, [mktIndex]);
+  const benchmarkReady = Array.isArray(mktIndex) && mktIndex.length > 0;
+  // Relative performance: the card's Δ% minus the market's Δ% over the same
+  // window. Positive = outperforming. Uses the OVERALL index rather than the
+  // card's set, because "beat the market" is the question people are actually
+  // asking; the per-set series is available on the chart for the narrower one.
+  const vsMarket = (r, winKey) => {
+    if(!benchmarkReady) return null;
+    const idx = mktIndexByScope.get("all|");
+    if(!idx) return null;
+    const cardPct = r[winKey];
+    const mktPct = idx[winKey.replace(/^mkt_pct_/, "pct_")];
+    if(cardPct == null || mktPct == null) return null;
+    return cardPct - mktPct;
+  };
+
   // ── Watchlist membership ────────────────────────────────────────────────
   // Declared ABOVE `filtered` on purpose: the "on my watchlist" chip is one
   // more predicate inside that memo, and a useMemo callback runs at its own
@@ -27223,9 +27384,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, [filtered, density, showAllWins, moverWin, preset, priceMode,
       sortKey, sortDesc, sortKey2, sortDesc2,
       showGraded, showSealed, gradedPremium, colPrefs,
-      // The star column appears/disappears with sign-in, which changes how many
-      // <th>s there are and therefore where every grip belongs.
-      user, watchlistsUnavailable]);
+      // The star column appears/disappears with sign-in, and the vs-Market
+      // column appears when its (async) fetch lands. Both change how many <th>s
+      // there are and therefore where every grip belongs.
+      user, watchlistsUnavailable, benchmarkReady]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -27468,6 +27630,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       td:(r)=>{ const k=priceMode==="market"?mk:lk; const v=priceMode==="market"?r[mk]:r[lk];
         return html`<td key=${"d_"+lk} class=${"td-num "+pctCls(v)+(isSortCol(k)?" sort-active":"")}>${fmtPct(v)}</td>`; },
     }));
+    // Relative performance vs the whole-market index over the ACTIVE mover
+    // window, so the column answers whichever timeframe the user is looking at
+    // rather than a fixed one. Default-hidden: it's a power-user column, and it
+    // is absent entirely where migration 128 hasn't run.
+    const vsMktWin = (moverWin || "pct_30d");
+    const vsMktLbl = ({"pct_1d":"1D","pct_7d":"1W","pct_30d":"1M","pct_90d":"3M","pct_180d":"6M","pct_365d":"1Y"})[vsMktWin] || "";
+    const vsMktCol = {key:"vsmkt", label:"vs Market", defaultHidden:true,
+      th:()=>html`<th key="vsmkt" class="th-num"
+        title=${`This card's ${vsMktLbl} Δ% minus the whole-market index over the same window. Positive means it outpaced the market; negative means it lagged. The index is an equal-weighted, chain-linked return index of every priced card.`}>vs Mkt</th>`,
+      td:(r)=>{ const v = vsMarket(r, vsMktWin);
+        return html`<td key="vsmkt" class=${"td-num "+pctCls(v)}>${v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(1) + "pp"}</td>`; }};
     const signalsCol = {key:"signals", label:"Signals",
       th:()=>html`<th key="signals">Signals</th>`,
       td:(r)=>html`<td key="signals">${priceDbSignals(r).map(([sk,icon,title])=>html`<${Tip} key=${sk} text=${title}>
@@ -27479,7 +27652,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       salesCol,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
-      ...winCols, signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
     // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is the
     // lowest active LISTING, and for high-value cards it sits frozen for weeks
     // — a parked listing, not fresh signal. Rows whose Low hasn't moved in >3
@@ -27498,7 +27671,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return [setCol, rarityCol,
       lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
-      ...winCols, signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
   })();
   // Full ordered column list (incl. hidden) for the popover; visible subset for the table.
   const allColsOrdered = (()=>{
