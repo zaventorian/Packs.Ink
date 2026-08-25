@@ -11172,7 +11172,20 @@ const COLLECTIBLE_GLYPHS = {
     <circle cx="12" cy="12" r="8.4"/><path d="M12 12l3.6-2.6"/>
     <path d="M12 3.6v1.8M20.4 12h-1.8M12 20.4v-1.8M3.6 12h1.8"/></svg>`,
 };
-const _collectibleRow = (c, kind, base, setId) => ({
+// Photographs of the pins and dials, cut out of Lorcana Player's product shots
+// with their permission (2026-08-24) and re-hosted on our own storage. The
+// white studio background is removed before upload -- see
+// scripts/cut_collectible_bg.py -- so a pin sits on any of the seven themes
+// instead of on a white card in the middle of a dark page.
+//
+// The URL is DERIVED from `n`, which is why that number is the stable id and
+// must never be renumbered: doing so silently repoints every photo. Adding an
+// entry to either list means uploading its photo in the same commit
+// (scripts/upload_collectible_photos.py), or its tile 404s.
+const collectibleArtUrl = (folder, n) =>
+  `${SUPABASE_URL}/storage/v1/object/public/card-art/collectibles/${folder}/${String(n).padStart(2,"0")}.png`;
+
+const _collectibleRow = (c, kind, base, setId, folder) => ({
   tcgplayer_product_id: base + c.n,
   name: c.name,
   clean_name: c.name,
@@ -11181,7 +11194,7 @@ const _collectibleRow = (c, kind, base, setId) => ({
   printing: "Normal",
   low_price: null,
   market_price: null,
-  image_url: c.img || null,
+  image_url: c.img || collectibleArtUrl(folder, c.n),
   buy_url: null,
   is_collectible: true,
   collectible_n: c.n,
@@ -11189,8 +11202,8 @@ const _collectibleRow = (c, kind, base, setId) => ({
   collectible_date: c.date,
 });
 const SEALED_COLLECTIBLES = [
-  ...LORCANA_PINS.map(c => _collectibleRow(c, "Pin", 950000000, "__pins__")),
-  ...LORCANA_LORE_COUNTERS.map(c => _collectibleRow(c, "Lore Counter", 960000000, "__lore_counters__")),
+  ...LORCANA_PINS.map(c => _collectibleRow(c, "Pin", 950000000, "__pins__", "pins")),
+  ...LORCANA_LORE_COUNTERS.map(c => _collectibleRow(c, "Lore Counter", 960000000, "__lore_counters__", "counters")),
 ];
 // Strip the "Disney Lorcana: " prefix that TCGCSV prepends to every product —
 // the set pill already says where this is from; the prefix is just noise.

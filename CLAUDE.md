@@ -113,6 +113,40 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 
 Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
+## Pin + lore-counter photos (2026-08-24)
+
+41 pins and 21 lore counters render as checklist tiles in the Sealed collection, from the static
+`LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
+**Lorcana Player's, re-hosted with their permission**, cut out and served from our own storage.
+
+- **`collectibleArtUrl(folder, n)`** derives the URL from `n`:
+  `card-art/collectibles/{pins|counters}/NN.png`. That makes **`n` the stable id twice over** —
+  it keys the owned mark AND names the photo — so renumbering an entry both moves someone's
+  collection and silently repoints its art. Append with the next free `n`, never renumber.
+  Adding an entry means uploading its photo in the same commit or the tile 404s.
+- **`scripts/cut_collectible_bg.py`** removes the white studio background. Two things make it
+  work: the background is found by **flood fill from the border**, not by "white → transparent"
+  (which punches straight through Baymax, every logo pin and every ink symbol's highlight); and
+  the alpha is **eroded one pixel** before feathering, because a JPEG of a dark object on white
+  has an edge ring of genuinely half-white pixels that reads as a bright fringe on a dark theme.
+- **The near-white threshold is a LADDER, not a constant, and the escalation is measured.** The
+  Winterspell counter is Stitch in *snow* photographed on white, and the loose setting leaked
+  through the subject and ate a hole in the drift. The leak signal is **raggedness** — the cut's
+  perimeter over that of an equal-area circle. Across all 62 real photos every clean cut measured
+  ≤ 1.65 and that one leak measured **4.40**, so the 1.8 cutoff sits in empty space. Enclosed-hole
+  detection alone does NOT catch it: the fill usually stays connected to the outside and eats a
+  bay rather than an island. Exactly one image escalates today.
+- Output is 400px, palette-quantized (FASTOCTREE is the one Pillow quantizer that keeps alpha) —
+  ~40 KB each, 2.4 MB for all 62, against ~15 MB unquantized at 600px.
+- **`--contact` writes a split light/dark sheet. Look at it.** Background removal fails per-image
+  and quietly, and the first pass shipped a shredded counter that I did not catch at thumbnail
+  size.
+- **lorcanaplayer.com 403s both curl and a headless browser**, and waiting out the challenge does
+  not work. Use a fetch tool for the page text; pull the image bytes from the Jetpack mirror at
+  `i0.wp.com/lorcanaplayer.com/wp-content/uploads/...`, which serves the same files. The Weekly
+  Play counters are not in the counters page's HTML at all — `product-sitemap.xml` enumerates
+  them and each `/product/` page carries its photo path.
+
 ## Icons — there are no emoji in the UI (2026-08-24)
 
 **`uiIcon(key, size)`** (Index.html, right below `NAV_ICONS`) is the one accessor for every
