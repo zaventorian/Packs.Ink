@@ -25736,7 +25736,7 @@ function decodeCompareItems(str){
   return out;
 }
 
-function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView}){
+function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView, watchlists, watchlistOps, watchlistsUnavailable}){
   // Decoded ONCE, before any state initialiser, and read by several of them.
   //
   // ⚠ showGraded / showSealed must come from here at INIT, not from an effect
@@ -26552,6 +26552,59 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return out;
   }, [rawEnrichedRows]);
 
+  // ── Watchlist membership ────────────────────────────────────────────────
+  // Declared ABOVE `filtered` on purpose: the "on my watchlist" chip is one
+  // more predicate inside that memo, and a useMemo callback runs at its own
+  // declaration point — so anything it reads has to already exist. Putting
+  // these below would hit the TDZ on first render.
+  //
+  // Which list the star writes to. Null = "no list picked yet", which the star
+  // resolves by creating a default one on first use rather than making the
+  // user set up a list before they can save their first card.
+  const [activeWatchlist, setActiveWatchlist] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:activeWatchlist") || null; } catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if(activeWatchlist) localStorage.setItem("packsink:screener:activeWatchlist", activeWatchlist);
+      else localStorage.removeItem("packsink:screener:activeWatchlist");
+    } catch {}
+  }, [activeWatchlist]);
+  // A remembered list id can outlive the list (deleted on another device).
+  // Fall back to the first one rather than leaving the star pointed at nothing.
+  useEffect(() => {
+    if(!watchlists || !watchlists.length) return;
+    if(activeWatchlist && watchlists.some(w => w.id === activeWatchlist)) return;
+    setActiveWatchlist(watchlists[0].id);
+  }, [watchlists, activeWatchlist]);
+  const activeList = useMemo(
+    () => (watchlists || []).find(w => w.id === activeWatchlist) || null,
+    [watchlists, activeWatchlist]);
+  // Membership keys for the ACTIVE list, so a row's star is O(1). Sealed rows
+  // have no card_id, so they key on their synthetic "sealed::<pid>" card_id —
+  // the same string the row already carries, which keeps one lookup for both.
+  const watchedKeys = useMemo(() => {
+    const s = new Set();
+    for(const it of (activeList ? activeList.items : [])){
+      s.add((it.card_id || ("sealed::" + it.productId)) + "|" + (it.printing || "Normal"));
+    }
+    return s;
+  }, [activeList]);
+  // Membership across ALL lists — drives the star's "on another list" state, so
+  // starring a card you already track elsewhere doesn't look like a no-op.
+  const watchedAnywhere = useMemo(() => {
+    const s = new Set();
+    for(const w of (watchlists || [])) for(const it of w.items){
+      s.add((it.card_id || ("sealed::" + it.productId)) + "|" + (it.printing || "Normal"));
+    }
+    return s;
+  }, [watchlists]);
+  // Narrow the table to the active list. Composes with every other filter
+  // rather than replacing them, so "what on my watchlist dropped this week"
+  // is one chip plus the Losers preset.
+  const [watchOnly, setWatchOnly] = useState(false);
+  useEffect(() => { if(!activeList) setWatchOnly(false); }, [activeList]);
+
   const filtered = useMemo(() => {
     let rows = rawEnrichedRows;
     if(!rows) return [];
@@ -26565,6 +26618,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       const setNames = filterSet;   // Set of selected set names (empty = all)
       const out = [];
       for(const r of sealedSynth){
+        // Watchlist narrowing applies in every mode — a list can mix cards and
+        // sealed, and "what on my list moved" shouldn't depend on which tab
+        // you happen to be on.
+        if(watchOnly && !watchedKeys.has(r.card_id + "|" + (r.printing || "Normal"))) continue;
         // Name search — sealed names are short ("First Chapter Booster Box")
         // so a substring match is enough; no need to route through
         // matchesCardFilter (which expects card-specific dimensions).
@@ -26722,6 +26779,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return true;
     };
     const passes = (r) => {
+      if(watchOnly && !watchedKeys.has(r.card_id + "|" + (r.printing || "Normal"))) return false;
       if(!passesFoilFilter(r)) return false;
       const catalogRow = catalogByCardId.get(r.card_id);
       if(catalogRow){
@@ -26895,7 +26953,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes,
+    watchOnly, watchedKeys]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -27163,7 +27222,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return ()=> ro.disconnect();
   }, [filtered, density, showAllWins, moverWin, preset, priceMode,
       sortKey, sortDesc, sortKey2, sortDesc2,
-      showGraded, showSealed, gradedPremium, colPrefs]);
+      showGraded, showSealed, gradedPremium, colPrefs,
+      // The star column appears/disappears with sign-in, which changes how many
+      // <th>s there are and therefore where every grip belongs.
+      user, watchlistsUnavailable]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -27173,6 +27235,48 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     dragRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   }, []);
+  const rowWatchKey = (r) => r.card_id + "|" + (r.printing || "Normal");
+  const toggleWatch = async (r) => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    if(watchlistsUnavailable){ flashToast("Watchlists aren't switched on for this site yet."); return; }
+    let listId = activeWatchlist;
+    if(!listId){
+      listId = await watchlistOps.create("My watchlist");
+      if(!listId) return;
+      setActiveWatchlist(listId);
+    }
+    const isSealedRow = typeof r.card_id === "string" && r.card_id.startsWith("sealed::");
+    const item = {
+      card_id: isSealedRow ? null : r.card_id,
+      printing: r.printing || "Normal",
+      productId: r.tcgplayer_product_id ?? null,
+    };
+    if(watchedKeys.has(rowWatchKey(r))) await watchlistOps.removeItem(listId, item);
+    else await watchlistOps.addItem(listId, item);
+  };
+  // Hand the whole list to Price Graphing. Cards resolve through the catalog
+  // for their display name; sealed items fall back to their pid, so a list
+  // still graphs when the sealed catalog hasn't loaded.
+  const graphWatchlist = (w) => {
+    if(!w || !w.items.length || !onCompareCards) return;
+    const items = w.items.slice(0, COMPARE_MAX).map(it => {
+      if(!it.card_id){
+        const p = (sealedPrices || []).find(x => x.tcgplayer_product_id === it.productId);
+        return {kind:"sealed", card_id: "sealed-" + it.productId, productId: it.productId,
+                printing: "Normal", name: p ? cleanSealedName(p.name) : ("Sealed #" + it.productId)};
+      }
+      const meta = catalogByCardId.get(it.card_id);
+      return {
+        kind: "card",
+        card_id: it.card_id + (it.printing && it.printing !== "Normal" ? "::" + it.printing : ""),
+        productId: it.productId ?? (meta ? meta.tcgplayer_product_id : null),
+        printing: it.printing || "Normal",
+        name: meta ? (meta["Product Name"] || it.card_id) : it.card_id,
+      };
+    }).filter(i => i.productId != null);
+    if(!items.length){ flashToast("Nothing on that list has price history yet."); return; }
+    onCompareCards(items);
+  };
   // ── Windowed rows ───────────────────────────────────────────────────────
   // The table used to render `filtered.slice(0, 1000)` and tell anyone past
   // that to "tighten filters to see more" — advice that doesn't fit the actual
@@ -27423,8 +27527,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     const mode = prev[colModeKey] || {};
     return {...prev, [colModeKey]: {...mode, widths: {...(mode.widths||{}), [key]: px}}};
   });
-  // check / img / name are fixed columns; the rest come from the registry.
-  const gripKeys = ["check", "img", "name", ...orderedCols.map(c=>c.key)];
+  // check / [watch] / img / name are fixed columns; the rest come from the
+  // registry. This list is positional — it feeds both the resize grips
+  // (indexOf → nth <th>) and the width <style> block's nth-child rules — so it
+  // MUST include the watch column on exactly the renders that draw one, or
+  // every grip past it resizes the column to its left.
+  const gripKeys = ["check", ...(user && !watchlistsUnavailable ? ["watch"] : []), "img", "name", ...orderedCols.map(c=>c.key)];
   gripKeysRef.current = gripKeys;
   const onGripDown = (e, key)=>{
     const thead = theadRef.current; if(!thead) return;
@@ -27445,6 +27553,45 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <button class="price-db-savedclose" onClick=${()=>deleteView(v.name)}
           title="Delete this saved view" aria-label="Delete">×</button>
       </span>`)}
+    </div>`}
+    ${user && !watchlistsUnavailable && html`<div class="price-db-watchbar">
+      <span class="price-db-watchbar-lbl">★ Watchlists</span>
+      ${(watchlists || []).map(w => html`<button key=${w.id}
+        class=${"price-db-watchchip"+(w.id === activeWatchlist ? " active" : "")}
+        title=${w.id === activeWatchlist
+          ? `${w.items.length} item${w.items.length===1?"":"s"} — the star column adds to this list`
+          : "Switch the star column to this list"}
+        onClick=${()=>setActiveWatchlist(w.id)}>
+        ${w.name}<span class="price-db-watchcount">${w.items.length}</span>
+      </button>`)}
+      <button class="price-db-advbtn" title="Create a new watchlist"
+        onClick=${async ()=>{
+          const n = prompt("Name this watchlist (e.g. 'Spec targets', 'Trade binder'):");
+          if(!n || !n.trim()) return;
+          const id = await watchlistOps.create(n);
+          if(id) setActiveWatchlist(id);
+        }}>+ New</button>
+      ${activeList && html`<${React.Fragment}>
+        <button class=${"price-db-advbtn"+(watchOnly?" has-active":"")}
+          title=${watchOnly
+            ? "Showing only cards on this list. Click to show everything again."
+            : "Narrow the table to this list — composes with the preset and every other filter."}
+          onClick=${()=>setWatchOnly(v=>!v)}>
+          ${watchOnly ? "✓ On this list" : "Filter to list"}
+        </button>
+        <button class="price-db-advbtn" title=${activeList.items.length
+            ? `Graph all ${Math.min(activeList.items.length, COMPARE_MAX)} on one chart in Price Graphing`
+            : "Star some rows first"}
+          disabled=${!activeList.items.length}
+          onClick=${()=>graphWatchlist(activeList)}>
+          ${uiIcon("chart")} Graph list
+          ${activeList.items.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:3}}>(first ${COMPARE_MAX})</span>`}
+        </button>
+        <button class="price-db-advbtn" title="Rename this watchlist"
+          onClick=${()=>{ const n = prompt("Rename watchlist:", activeList.name); if(n && n.trim()) watchlistOps.rename(activeList.id, n); }}>Rename</button>
+        <button class="price-db-advbtn" title="Delete this watchlist and everything on it"
+          onClick=${()=>{ if(confirm(`Delete "${activeList.name}" and its ${activeList.items.length} item(s)? This can't be undone.`)) watchlistOps.remove(activeList.id); }}>Delete</button>
+      <//>`}
     </div>`}
     <div class="price-db-modebar" role="group" aria-label="Screener mode">
       <button class=${"price-db-modebtn"+(!showGraded && !showSealed?" active":"")}
@@ -27892,6 +28039,29 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
               ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
             </a>
+            ${user && !watchlistsUnavailable && html`<button class="price-db-batchitem"
+              onClick=${async () => {
+                setBatchOpen(false);
+                let listId = activeWatchlist;
+                if(!listId){
+                  listId = await watchlistOps.create("My watchlist");
+                  if(!listId) return;
+                  setActiveWatchlist(listId);
+                }
+                // Sequential, not Promise.all: each mutator re-reads the list
+                // afterwards, so firing N in parallel would race N refreshes
+                // and leave the local copy behind whichever landed last.
+                for(const r of selRows){
+                  const isSealedRow = typeof r.card_id === "string" && r.card_id.startsWith("sealed::");
+                  await watchlistOps.addItem(listId, {
+                    card_id: isSealedRow ? null : r.card_id,
+                    printing: r.printing || "Normal",
+                    productId: r.tcgplayer_product_id ?? null,
+                  });
+                }
+                showToast(`Added ${selRows.length} to "${(watchlists||[]).find(w=>w.id===listId)?.name || "watchlist"}".`);
+                clearSelected();
+              }}>★ Add to watchlist</button>`}
             <button class="price-db-batchitem" onClick=${() => {
               const lines = selRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
               if(navigator.clipboard && navigator.clipboard.writeText){
@@ -27964,6 +28134,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
         <thead ref=${theadRef}><tr>
           <th class="th-check"></th>
+          ${user && !watchlistsUnavailable && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
           <th></th>
           <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
           ${orderedCols.map(c => c.th())}
@@ -27979,6 +28150,22 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
               <td class="td-check"><input type="checkbox" checked=${isSel}
                 onChange=${() => toggleSelect(key)}/></td>
+              ${user && !watchlistsUnavailable && (() => {
+                const wk = rowWatchKey(r);
+                const on = watchedKeys.has(wk);
+                // Three states, not two: on this list, on a different list, on
+                // none. Without the middle one, starring a card you already
+                // track elsewhere reads as a click that did nothing.
+                const elsewhere = !on && watchedAnywhere.has(wk);
+                return html`<td class="td-watch">
+                  <button class=${"price-db-star"+(on?" on":elsewhere?" elsewhere":"")}
+                    aria-pressed=${on ? "true" : "false"}
+                    title=${on ? `On "${activeList ? activeList.name : "your list"}" — click to remove`
+                      : elsewhere ? `Already on another watchlist — click to add to "${activeList ? activeList.name : "this list"}" too`
+                      : "Add to watchlist"}
+                    onClick=${()=>toggleWatch(r)}>${on ? "★" : "☆"}</button>
+                </td>`;
+              })()}
               <td class="td-img">${img
                 ? html`<img src=${img} loading="lazy" alt="" style=${{cursor:"pointer"}}
                     onClick=${openThisRow}
@@ -40966,6 +41153,122 @@ function App(){
     return ()=>{ cancelled = true; };
   }, [user]);
 
+  // ── Watchlists ─────────────────────────────────────────────────────────
+  // Lives in App rather than in the Screener because three surfaces read it:
+  // the Screener's star column and chip strip, the "graph this watchlist"
+  // handoff into Price Graphing, and the alert evaluator (which has to run on
+  // load, wherever the user happens to land).
+  //
+  // `watchlists` is null until the first fetch settles and [] when the feature
+  // isn't deployed — the UI needs to tell "loading" from "you have none" from
+  // "this site hasn't run migration 127", and collapsing those into [] makes
+  // the star silently do nothing.
+  const [watchlists, setWatchlists] = useState(null);
+  const [watchlistsUnavailable, setWatchlistsUnavailable] = useState(false);
+  const refreshWatchlists = useCallback(async () => {
+    if(!user){ setWatchlists(null); return; }
+    const {data, error} = await sbClient
+      .from("watchlists")
+      .select("id,name,position,created_at,watchlist_items(card_id,printing,tcgplayer_product_id,note,added_at)")
+      .order("position", {ascending:true})
+      .order("created_at", {ascending:true});
+    if(error){
+      // 42P01 no such table / 42501 no grant / PGRST202 no such relation in the
+      // schema cache: the feature isn't deployed here. Say so once and keep the
+      // rest of the Screener working, exactly as the deck-versions path does.
+      if(/42P01|42501|PGRST202|relation|permission denied/i.test(error.message || error.code || "")){
+        console.warn("watchlists unavailable — run supabase/127_watchlists.sql");
+        setWatchlistsUnavailable(true);
+        setWatchlists([]);
+        return;
+      }
+      console.warn("watchlists fetch failed:", error.message || error);
+      const mirror = await offlineMirrorRead("watchlists:"+user.id);
+      if(mirror) setWatchlists(mirror);
+      return;
+    }
+    const rows = (data || []).map(w => ({
+      id: w.id, name: w.name, position: w.position, created_at: w.created_at,
+      items: (w.watchlist_items || []).map(i => ({
+        card_id: i.card_id, printing: i.printing || "Normal",
+        productId: i.tcgplayer_product_id, note: i.note, added_at: i.added_at,
+      })),
+    }));
+    setWatchlists(rows);
+    setWatchlistsUnavailable(false);
+    offlineMirrorWrite("watchlists:"+user.id, rows);
+  }, [user]);
+  useEffect(() => {
+    if(!user){ setWatchlists(null); setWatchlistsUnavailable(false); return; }
+    refreshWatchlists();
+  }, [user, refreshWatchlists]);
+
+  // Every mutator writes through then re-reads. Watchlists are small (tens of
+  // rows) and mutated by deliberate clicks, so a re-read costs nothing and
+  // removes a whole class of optimistic-update bugs — the local copy can never
+  // disagree with what a CHECK constraint or a unique index actually accepted.
+  const watchlistOps = useMemo(() => ({
+    create: async (name) => {
+      if(!user) return null;
+      const clean = (name || "").trim().slice(0, 80);
+      if(!clean) return null;
+      const pos = (watchlists || []).length;
+      const {data, error} = await sbClient.from("watchlists")
+        .insert({user_id: user.id, name: clean, position: pos})
+        .select("id").single();
+      if(error){
+        // The unique index is the intended outcome of "add to a list that
+        // already exists", not an error worth showing.
+        if(!/duplicate key|23505/i.test(error.message || "")) {
+          flashToast("Couldn't create that watchlist.");
+          return null;
+        }
+        const existing = (watchlists || []).find(w => w.name === clean);
+        return existing ? existing.id : null;
+      }
+      await refreshWatchlists();
+      return data ? data.id : null;
+    },
+    rename: async (id, name) => {
+      if(!user) return;
+      const clean = (name || "").trim().slice(0, 80);
+      if(!clean) return;
+      const {error} = await sbClient.from("watchlists").update({name: clean}).eq("id", id);
+      if(error){ flashToast("Couldn't rename that watchlist."); return; }
+      await refreshWatchlists();
+    },
+    remove: async (id) => {
+      if(!user) return;
+      const {error} = await sbClient.from("watchlists").delete().eq("id", id);
+      if(error){ flashToast("Couldn't delete that watchlist."); return; }
+      await refreshWatchlists();
+    },
+    // (card_id, printing) is the item key. Sealed rows pass card_id null and
+    // carry their pid instead — the CHECK requires one of the two.
+    addItem: async (listId, item) => {
+      if(!user || !listId) return;
+      const {error} = await sbClient.from("watchlist_items").upsert({
+        watchlist_id: listId,
+        card_id: item.card_id || null,
+        printing: item.printing || "Normal",
+        tcgplayer_product_id: item.productId ?? null,
+        note: item.note || null,
+      }, {onConflict: "watchlist_id,card_id,printing"});
+      if(error){ flashToast("Couldn't add that to the watchlist."); return; }
+      await refreshWatchlists();
+    },
+    removeItem: async (listId, item) => {
+      if(!user || !listId) return;
+      let q = sbClient.from("watchlist_items").delete()
+        .eq("watchlist_id", listId).eq("printing", item.printing || "Normal");
+      q = item.card_id ? q.eq("card_id", item.card_id)
+                       : q.eq("tcgplayer_product_id", item.productId);
+      const {error} = await q;
+      if(error){ flashToast("Couldn't remove that from the watchlist."); return; }
+      await refreshWatchlists();
+    },
+  }), [user, watchlists, refreshWatchlists]);
+
   // Booster-pack art-variant ownership fetch. Separate effect so a missing
   // table (pre-migration-72) or transient error doesn't block the sealed qty
   // load above. Silently no-ops on 42P01 (table not deployed yet).
@@ -41975,7 +42278,9 @@ function App(){
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
       sealedMeta=${sealedMeta} updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
       incomingScreenerView=${incomingScreenerView}
-      onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
+      onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}
+      watchlists=${watchlists} watchlistOps=${watchlistOps}
+      watchlistsUnavailable=${watchlistsUnavailable}/>`}
     ${view==="faq"&&html`<${FAQView} user=${user}
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}

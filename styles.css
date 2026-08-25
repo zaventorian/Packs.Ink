@@ -854,6 +854,43 @@ html[data-mode="dark"] .price-db-advcount{color:#1a1206;}
    however many names match. */
 .price-db-artistsearch{width:100%;max-width:320px;margin-bottom:6px;}
 .price-db-artistchips{flex-wrap:wrap;gap:4px;max-height:150px;overflow-y:auto;}
+/* ── Watchlists ────────────────────────────────────────────────────────────
+   A saved view saves a query; a watchlist saves a set of specific cards. The
+   strip sits above the mode bar because picking WHICH list is upstream of
+   everything below it — the star column writes to whichever chip is active. */
+.price-db-watchbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px;}
+.price-db-watchbar-lbl{font-size:11px;font-weight:700;letter-spacing:0.3px;
+  text-transform:uppercase;color:var(--text-muted);margin-right:2px;}
+.price-db-watchchip{display:inline-flex;align-items:center;gap:5px;
+  font-size:12px;font-weight:600;padding:4px 10px;border-radius:12px;
+  background:var(--btn-bg);color:var(--text);border:1px solid var(--btn-border);cursor:pointer;}
+.price-db-watchchip:hover{border-color:var(--accent);}
+.price-db-watchchip.active{background:var(--accent);color:var(--bg-solid);border-color:var(--accent);}
+.price-db-watchcount{font-size:10px;font-weight:700;opacity:0.75;
+  font-variant-numeric:tabular-nums;}
+
+/* The star toggle. Three states: on the active list (accent, filled), on some
+   OTHER list (muted, filled — so adding it here doesn't read as a dead click),
+   and on none (hollow). Resting opacity is low so a column of 250 hollow stars
+   doesn't compete with the prices, which are what the table is for. */
+.th-watch{width:26px;}
+.td-watch{width:26px;text-align:center;padding:0;}
+.price-db-star{background:none;border:none;cursor:pointer;padding:2px 3px;
+  font-size:14px;line-height:1;color:var(--text-muted);opacity:0.45;
+  transition:opacity 0.12s,color 0.12s;}
+.price-db-star:hover{opacity:1;color:var(--accent);}
+.price-db-star.on{opacity:1;color:var(--accent);}
+.price-db-star.elsewhere{opacity:0.8;color:var(--text-muted);}
+tbody tr:hover .price-db-star{opacity:0.85;}
+tbody tr:hover .price-db-star.on{opacity:1;}
+/* Mobile already hides the checkbox column (invisible behind the sticky NAME
+   column anyway). The star is the opposite case — one tap, high value on a
+   phone where batch-select isn't usable — so it stays. */
+@media (max-width:720px){
+  .price-db-watchbar{gap:4px;}
+  .price-db-watchbar-lbl{display:none;}
+}
+
 /* Foot of the windowed table: progress line + the two escape hatches (load
    everything, or take the whole result set to CSV). Doubles as the
    IntersectionObserver sentinel, so it must stay in flow — display:none or a
@@ -1089,17 +1126,21 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
 .price-db-savedclose:hover{color:var(--red) !important;background:transparent !important;}
 
 /* Pin the name column horizontally — handy when scrolling right to see
-   far-out Δ% columns. Uses position:sticky on the third <td>/<th>. The
-   nth-child here matches the post-ink column order. */
-.price-db-table th:nth-child(3),
-.price-db-table td:nth-child(3){position:sticky;left:0;z-index:2;
+   far-out Δ% columns.
+   ⚠ Targets .th-name / .td-name, NOT nth-child(3). It was positional until the
+   watchlist star column landed between the checkbox and the image, which made
+   the third cell the IMAGE for signed-in users — so the wrong column pinned and
+   the card names scrolled away. Any future fixed column would have done the
+   same. The class is the identity; the position is an accident. */
+.price-db-table th.th-name,
+.price-db-table td.td-name{position:sticky;left:0;z-index:2;
   background:var(--bg-modal);
   /* Right-edge separator + shadow so other columns visually pass UNDER this
      sticky column instead of overlapping when horizontally scrolling. */
   box-shadow:1px 0 0 var(--border), 6px 0 8px -6px rgba(0,0,0,0.35);}
-.price-db-table tbody tr:hover td:nth-child(3){background:var(--bg-modal);}
-.price-db-table thead th:nth-child(3){z-index:4;background:var(--bg-modal);}
-.price-db-table tr.price-db-row-sel td:nth-child(3){background:var(--accent-glow);}
+.price-db-table tbody tr:hover td.td-name{background:var(--bg-modal);}
+.price-db-table thead th.th-name{z-index:4;background:var(--bg-modal);}
+.price-db-table tr.price-db-row-sel td.td-name{background:var(--accent-glow);}
 
 /* Mobile: trim padding and the Name width. Nothing is force-hidden here any
    more — ⚙ Columns is the single authority on which columns show, at every
@@ -1117,7 +1158,7 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
      Muntz -...". Names wrap to 2 lines, so a wider default costs no extra
      rows and still leaves Low + NM Market + 1W on a 375px phone. Users can
      drag it from here; a dragged width wins via .pdb-resized below. */
-  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:150px;max-width:175px;}
+  .price-db-table th.th-name, .price-db-table td.td-name{min-width:150px;max-width:175px;}
   /* Tighten the icon-only rarity chips so all 9 canonical rarities fit on a
      single row on phones. At the desktop 4px 10px padding + 3px gap, the
      9-chip strip (~380px) wrapped the last chip (Promo) onto a second line
