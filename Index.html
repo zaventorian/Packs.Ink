@@ -1764,6 +1764,7 @@ const UI_ICON_PATHS = {
   check:     _icoSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
   sun:       _icoSvg(html`<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4"/><path d="M12 19.1v2.4"/><path d="M4.2 4.2l1.7 1.7"/><path d="M18.1 18.1l1.7 1.7"/><path d="M2.5 12h2.4"/><path d="M19.1 12h2.4"/><path d="M4.2 19.8l1.7-1.7"/><path d="M18.1 5.9l1.7-1.7"/>`),
   moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
+  die:       _icoSvg(html`<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.6"/><path d="M8.2 8.2h.01"/><path d="M15.8 8.2h.01"/><path d="M12 12h.01"/><path d="M8.2 15.8h.01"/><path d="M15.8 15.8h.01"/>`, 2.4),
 };
 
 const uiIcon = (key, size) => {
@@ -4868,6 +4869,19 @@ const browseSibling = (group, dir) => {
 const isLandscapeCard = (row) =>
   !!row && String(row.card_type || "").split(" - ").includes("Location");
 
+// A Location is PRINTED landscape, but every art source frames it portrait
+// with the card turned on its side — so anywhere you are actually trying to
+// READ one (the detail modal, a decklist, the poster), it has to be turned
+// back. Rotating an <img> does not reflow anything, so the wrapper is what
+// reserves the space: it is the landscape box, and the image inside it is
+// laid out portrait at 5/7 of the wrapper's width, which after the quarter
+// turn lands exactly on the wrapper's edges.
+//
+// Grid TILES are deliberately left portrait: a 7:5 tile in a 5:7 grid either
+// breaks the row or shrinks every card to fit the odd one out, and on a
+// browse wall you are picking a card out, not reading it.
+const landscapeArt = (img) => html`<span class="lscape-wrap">${img}</span>`;
+
 // Copy the current page's link. Uses the clipboard synchronously inside the
 // click (Safari drops a write that happens after an await), and falls back to
 // the share sheet on touch, where a system share is what people actually want
@@ -6098,7 +6112,7 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing})
 // camera-copy image are the EXACT same pixels (no html2canvas, no CSS dependency
 // → can't be broken by a stale cached stylesheet). drawCardTileCanvas is defined
 // alongside the poster engine further down (resolved at render time).
-const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, bLabel, wins, singleDelta}) => {
+const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, bLabel, wins, singleDelta, landscape}) => {
   const canvasRef = useRef(null);
   // Show a plain <img> until the canvas has painted with REAL art. If the
   // canvas art load fails (e.g. a CORS / proxy hiccup on the crossOrigin
@@ -6113,7 +6127,7 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
     setDrawn(false);
     const draw = (artImg, logoImg) => {
       if(cancelled || !canvasRef.current) return;
-      drawCardTileCanvas(canvasRef.current, {artImg, logoImg, name, meta, low, market, dateStr, aLabel, bLabel, wins, singleDelta});
+      drawCardTileCanvas(canvasRef.current, {artImg, logoImg, name, meta, low, market, dateStr, aLabel, bLabel, wins, singleDelta, landscape});
       setDrawn(true);
     };
     Promise.all([loadPosterImage(artSrc), loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png?v=5")])
@@ -6123,7 +6137,7 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
       })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [artSrc, name, meta, low, market, dateStr, aLabel, bLabel, wins, singleDelta]);
+  }, [artSrc, name, meta, low, market, dateStr, aLabel, bLabel, wins, singleDelta, landscape]);
   const onCopy = (e) => {
     e.stopPropagation();
     const canvas = canvasRef.current;
@@ -6138,7 +6152,9 @@ const CardTilePreview = ({artSrc, fallbackSrc, name, meta, low, market, aLabel, 
   const fb = fallbackSrc || artSrc;
   return html`<div class="card-tile-preview">
     <canvas ref=${canvasRef} class="card-tile-canvas" style=${{display: drawn ? "block" : "none"}}/>
-    ${!drawn && fb && html`<img class="card-tile-canvas" src=${fb} alt=${name||""}/>`}
+    ${!drawn && fb && (landscape
+      ? landscapeArt(html`<img class="card-tile-canvas" src=${fb} alt=${name||""}/>`)
+      : html`<img class="card-tile-canvas" src=${fb} alt=${name||""}/>`)}
     ${drawn && html`<button class="card-tile-cam" onClick=${onCopy} data-h2c-ignore
       title="Copy this card as an image" aria-label="Copy this card as an image">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
@@ -6582,14 +6598,17 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           title="Click for enlarged view"
           style=${{cursor:"zoom-in"}}>
           ${(tileRow || gradedTile)
-            ? html`<${CardTilePreview} artSrc=${posterArt} fallbackSrc=${img || posterArt} name=${group["Product Name"]}
+            ? html`<${CardTilePreview} landscape=${isLandscapeCard(group)}
+                artSrc=${posterArt} fallbackSrc=${img || posterArt} name=${group["Product Name"]}
                 meta=${gradedTile ? gradedTile.meta : tileMeta}
                 low=${gradedTile ? gradedTile.low : tileRow.low}
                 market=${gradedTile ? gradedTile.market : tileRow.market}
                 aLabel=${gradedTile ? "LAST SOLD" : null} bLabel=${gradedTile ? "AVG LAST 5" : null}
                 wins=${gradedTile ? gradedTile.wins : null} singleDelta=${!!gradedTile}/>`
             : img
-              ? html`<img src=${img} alt=${group["Product Name"]}/>`
+              ? (isLandscapeCard(group)
+                  ? landscapeArt(html`<img src=${img} alt=${group["Product Name"]}/>`)
+                  : html`<img src=${img} alt=${group["Product Name"]}/>`)
               : html`<div class="card-img-placeholder" style=${{aspectRatio:"5/7",minHeight:300}}>${group["Product Name"]}</div>`}
           ${isGradedMode && (gradedCombos||[]).length > 0 && html`<div class="card-detail-gradedpick" onClick=${e=>e.stopPropagation()} style=${{cursor:"default"}}>
             <select class="cd-graded-tile-select gc-caps-select"
@@ -7241,7 +7260,7 @@ const deckDisplayTitle = (deck, tournamentContext) => {
 // is not tainted.
 const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentContext, onClose,
                           visibility, onChangeVisibility, isOwner,
-                          autoCopy, onAutoCopyDone}) => {
+                          autoCopy, onAutoCopyDone, viewOnly}) => {
   useEscToClose(onClose);
   // Card list: one entry per card_id with quantity, sorted into Lorcana's
   // standard section order (chars / actions / songs / items / locations).
@@ -7847,7 +7866,10 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             padding:"3px 8px",borderRadius:6,letterSpacing:0.4,
             boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>＋ BONUS</span>`}
         </div>`}
-        ${cards.map(c => html`<div key=${c.card_id} style=${{position:"relative"}}>
+        ${/* An absolutely-positioned rotated image gives its cell no height,
+              so a landscape cell has to declare the box itself. */""}
+        ${cards.map(c => html`<div key=${c.card_id} style=${isLandscapeCard(c.meta)
+          ? {position:"relative", aspectRatio:"7/5"} : {position:"relative"}}>
           ${c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
             alt=${c.meta["Product Name"]||""}
             onError=${(e)=>{
@@ -7861,8 +7883,12 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               t.removeAttribute("crossorigin");
               t.src = c.img;
             }}
-            style=${{width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
-              boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`}
+            style=${isLandscapeCard(c.meta || c)
+              ? {position:"absolute",top:"50%",left:"50%",width:"71.4286%",height:"auto",
+                 transform:"translate(-50%,-50%) rotate(90deg)",objectFit:"cover",borderRadius:8,
+                 boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}
+              : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
+                 boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`}
           ${/* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
                 only the multiples are worth calling out. */""}
           ${(!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
@@ -7885,10 +7911,72 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // Headless one-click capture: the poster lives off-screen so the user
   // sees nothing while the tile-level "Copy image" snapshots it. Width is
   // generous so the snapshot-time fit() leaves scale=1 (full-resolution).
+  // Preview mode: the poster, as big as the screen will take it, and nothing
+  // else. Opened from a deck tile, where "let me see it" is the whole ask --
+  // the export controls are a different job and live one click away behind
+  // Options. The poster is a fixed-width document (it has to be, so the
+  // exported PNG is identical on every device), so fitting it to the viewport
+  // is a measured transform rather than a responsive layout.
+  const stageRef = useRef(null);
+  const [showOpts, setShowOpts] = useState(false);
+  const [fit, setFit] = useState(0);
+  const previewing = !!viewOnly && !showOpts && !autoCopy;
+  useEffect(() => {
+    if(!previewing) return;
+    const stage = stageRef.current, art = posterRef.current;
+    if(!stage || !art) return;
+    const calc = () => {
+      const w = stage.clientWidth, h = stage.clientHeight;
+      const pw = art.offsetWidth, ph = art.offsetHeight;
+      if(!w || !h || !pw || !ph) return;
+      // Cap at 1: a 6-card deck's poster is already small, and blowing it past
+      // native size only magnifies the JPEG art.
+      setFit(Math.min(1, w / pw, h / ph));
+    };
+    calc();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(calc) : null;
+    if(ro){ ro.observe(stage); ro.observe(art); }
+    // Card art arrives after mount and changes the poster's height; a short
+    // keepalive re-fits without leaving a timer running for the modal's life.
+    const iv = setInterval(calc, 300);
+    const stop = setTimeout(() => clearInterval(iv), 6000);
+    return () => { if(ro) ro.disconnect(); clearInterval(iv); clearTimeout(stop); };
+  }, [previewing, cols, showStats, showCurve, bgStyle]);
+
   if(autoCopy){
     return html`<div aria-hidden="true" style=${{position:"fixed",left:"-100000px",top:"0",
       width:"1200px",pointerEvents:"none",zIndex:-1}}>
       ${posterDom}
+    </div>`;
+  }
+
+  if(previewing){
+    return html`<div class="poster-view-backdrop" onClick=${onClose}>
+      <div class="poster-view" onClick=${e=>e.stopPropagation()}>
+        <div class="poster-view-bar">
+          <span class="poster-view-title title-font">${deckDisplayTitle(deck, tournamentContext)}</span>
+          <button class="deck-act" onClick=${copyImage} disabled=${!!busy}
+            title="Copy the poster to your clipboard as a PNG">
+            ${uiIcon("copy")}<span>${busy==="copy" ? "Copying…" : "Copy"}</span></button>
+          <button class="deck-act" onClick=${saveImage} disabled=${!!busy}
+            title="Download the poster">
+            ${uiIcon("save")}<span>${busy==="save" ? "Saving…" : "Save"}</span></button>
+          <button class="deck-act" onClick=${()=>setShowOpts(true)}
+            title="Background, columns, stats, QR code and the deck-cost lines">
+            ${uiIcon("gear")}<span>Options</span></button>
+          <button class="poster-view-close" onClick=${onClose} aria-label="Close">×</button>
+        </div>
+        <div class="poster-view-stage" ref=${stageRef}>
+          ${/* Scaled about its centre; the stage clips and centres what is
+                left, so a tall poster and a wide one both land in the middle.
+                fit stays 0 until the first measure, which keeps a full-size
+                flash off the screen. */""}
+          <div class="poster-view-scale"
+            style=${{transform:"scale(" + (fit || 0.001) + ")", opacity: fit ? 1 : 0}}>
+            ${posterDom}
+          </div>
+        </div>
+      </div>
     </div>`;
   }
 
@@ -8269,7 +8357,10 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
   const saved = useMemo(readProxyPrefs, []);
   const [ink, setInk]             = useState(saved.ink === "bw" ? "bw" : "color");
   const [lighten, setLighten]     = useState(saved.lighten !== false);
-  const [watermark, setWatermark] = useState(["subtle","bold","none"].includes(saved.watermark) ? saved.watermark : "subtle");
+  // "none" was removed 2026-08-24 — an unmarked proxy is a counterfeit in a
+  // photograph, and the corner tag is already the discreet choice. An old
+  // stored pref of "none" falls through to the default.
+  const [watermark, setWatermark] = useState(saved.watermark === "bold" ? "bold" : "subtle");
   const [paper, setPaper]         = useState(PROXY_PAPERS[saved.paper] ? saved.paper : "letter");
   const [guides, setGuides]       = useState(saved.guides !== false);
   // Per-card print counts, keyed by card_id. Seeded from the deck's own
@@ -8446,6 +8537,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
           legal in sanctioned play and must never be sold or passed off as real cards.
         </p>
 
+        <div class="proxy-opts">
         <div class="proxy-opt">
           <div class="proxy-opt-lbl">Ink</div>
           <div class="proxy-opt-row">
@@ -8464,7 +8556,6 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
           <div class="proxy-opt-row">
             ${seg("subtle", watermark, setWatermark, "Corner tag", "A small PROXY tag at the bottom of each card")}
             ${seg("bold", watermark, setWatermark, "Across the card", "Repeated diagonal PROXY over the whole card")}
-            ${seg("none", watermark, setWatermark, "None", "No watermark — do not use these anywhere they could be mistaken for real cards")}
           </div>
         </div>
 
@@ -8490,7 +8581,9 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
             </button>
           </div>
         </div>
-        ${listOpen && cards.length > 0 && html`<div class="proxy-cardlist">
+        </div>
+        ${listOpen && cards.length > 0 && html`<div class="proxy-cardlist"
+          style=${{"--proxy-cols": cards.length > 8 ? 2 : 1}}>
           ${cards.map(c => {
             const n = qtyOf(c.card_id);
             return html`<div key=${c.card_id} class=${"proxy-cardrow"+(n>0?" on":"")}>
@@ -8521,6 +8614,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
           <span>Cut marks in the margins <span class="muted">— line a ruler up across the page to cut</span></span>
         </label>
 
+        <div class="proxy-foot">
         <div class="proxy-summary">
           ${!cards.length
             ? html`<span class="muted">Nothing to print yet.</span>`
@@ -8530,7 +8624,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
           ${missingArt > 0 && html`<div class="proxy-warn">${missingArt} card${missingArt === 1 ? " has" : "s have"} no art available — they print as a name card.</div>`}
         </div>
 
-        <div class="proxy-print-note">
+        <div class="proxy-print-note proxy-print-note--foot">
           ${uiIcon("warn")} When printing, set <strong>Scale: 100%</strong> (or “Actual size”) — “Fit to page”
           shrinks the cards and they won't match real ones.
         </div>
@@ -8563,6 +8657,7 @@ const ProxyPrintModal = ({deck, cardById, onClose}) => {
                   ${result.pages} page${result.pages === 1 ? "" : "s"} · ${(result.bytes / 1048576).toFixed(1)} MB
                 </span>
               </>`}
+        </div>
         </div>
       </div>
     </div>
@@ -9076,6 +9171,23 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
     const esc = (s) => String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     const escAttr = (s) => esc(s).replace(/"/g,"&quot;");
     const safeArtist = esc(picked);
+    // Column count follows the CARD count. A fixed 6-across grid made a
+    // 4-card artist's poster four postage stamps in a sea of green — the
+    // cards ARE the poster, so with fewer of them each one gets bigger
+    // rather than the page getting emptier. The cap keeps a 2-card poster
+    // from rendering two 600px cards, which reads as a mistake rather than
+    // as emphasis. Both numbers are derived here and used by screen AND
+    // print, so the two can't drift.
+    const nArt = cardsForArtist.length;
+    const artCols = nArt <= 2 ? nArt
+                  : nArt <= 4 ? 2
+                  : nArt <= 9 ? 3
+                  : nArt <= 12 ? 4
+                  : nArt <= 20 ? 5 : 6;
+    const artMax  = nArt <= 2 ? 340
+                  : nArt <= 4 ? 330
+                  : nArt <= 9 ? 300
+                  : nArt <= 12 ? 275 : 250;
     // Route external art (Lorcast + TCGPlayer) through our same-origin image
     // proxies so html2canvas (used by the "Copy as Image" button) can read
     // pixels without canvas-taint. The proxies are same-origin (Netlify
@@ -9101,7 +9213,8 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
         h1{font-size:48px;margin:0;font-weight:800;letter-spacing:-0.5px;line-height:1;}
         h2{font-size:28px;margin:4px 0 0;font-weight:500;color:#c4b5fd;line-height:1.1;}
         .meta{font-size:14px;color:rgba(255,255,255,0.6);text-align:right;line-height:1.5;}
-        .grid{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;}
+        .grid{display:grid;gap:12px;justify-content:center;
+          grid-template-columns:repeat(${artCols},minmax(0,${artMax}px));}
         figure{margin:0;display:flex;flex-direction:column;gap:6px;
           /* Don't split a card across page boundaries when printing. */
           break-inside:avoid;page-break-inside:avoid;}
@@ -9140,14 +9253,15 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
           figcaption{color:rgba(255,255,255,0.55);}
           .actions{display:none;}
           header{break-after:avoid;margin-bottom:18px;}
-          /* Pin print grid to 6 cols explicitly — the print preview's
-             ~816px viewport (8.5in × 96dpi) would otherwise match the
-             max-width:900px screen rule and drop to 4 cols. */
-          .grid{grid-template-columns:repeat(6,1fr) !important;gap:10px;}
+          /* Pin the print grid to the same column count as the screen —
+             the print preview's ~816px viewport (8.5in × 96dpi) would
+             otherwise match the max-width:900px screen rule below and drop
+             to a narrower grid than the poster was laid out for. */
+          .grid{grid-template-columns:repeat(${artCols},minmax(0,1fr)) !important;gap:10px;}
           figcaption{font-size:9px;}
         }
         @media screen and (max-width:900px){
-          .grid{grid-template-columns:repeat(4,1fr);}
+          .grid{grid-template-columns:repeat(${Math.min(artCols,4)},minmax(0,1fr));}
         }
       </style>
     </head><body>
@@ -23330,7 +23444,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
           ${canViewStore && html`<button class="sc-modal-cta sc-modal-cta--report"
             onClick=${()=>{ const st = sel.store_name; setSel(null); onStoreClick && onStoreClick(st); }}>${uiIcon("clipboard")} Store scouting report</button>`}
           ${canViewStore && sel.event_id && html`<button class="sc-modal-cta sc-modal-cta--roster"
-            onClick=${()=>{ const id = sel.event_id, meta = {store_name: sel.store_name, name: sel.name, capacity: sel.capacity}; setSel(null); setRosterMeta(meta); setRosterEventId(id); }}>👥 Who's signed up + field Elo</button>`}
+            onClick=${()=>{ const id = sel.event_id, meta = {store_name: sel.store_name, name: sel.name, capacity: sel.capacity}; setSel(null); setRosterMeta(meta); setRosterEventId(id); }}>${uiIcon("people")} Who's signed up + field Elo</button>`}
           <div class="sc-modal-actions">
             ${safeHttpUrl(sel.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(sel.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>`}
             <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${sel.latitude},${sel.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
@@ -28400,10 +28514,10 @@ const copyGradedPosterImage = (opts) => {
 // Used for BOTH the in-modal preview AND its copy-image (same canvas → identical
 // pixels, no html2canvas, no CSS dependency — robust against the SW cache).
 // Returns the laid-out height so the caller can size the element.
-function drawCardTileCanvas(canvas, {artImg, logoImg, name, meta, low, market, dateStr, aLabel, bLabel, wins:winsOverride, singleDelta}){
+function drawCardTileCanvas(canvas, {artImg, logoImg, name, meta, low, market, dateStr, aLabel, bLabel, wins:winsOverride, singleDelta, landscape}){
   const P = posterPalette();
   const SCALE = 2, W = 300, PAD = 12, R = 10;
-  const artW = W - PAD*2, artH = Math.round(artW * 7 / 5);
+  const artW = W - PAD*2, artH = Math.round(artW * (landscape ? 5 / 7 : 7 / 5));
   const wins = winsOverride || CARD_DELTA_WINDOWS.slice(0, 3);
   const A_LABEL = aLabel || "LOW", B_LABEL = bLabel || "MKT";
   const ROW_H = 16;
@@ -28434,7 +28548,15 @@ function drawCardTileCanvas(canvas, {artImg, logoImg, name, meta, low, market, d
 
   // card art
   roundRectPath(ctx, PAD, PAD, artW, artH, R); ctx.save(); ctx.clip();
-  if(artImg){ drawImageCover(ctx, artImg, PAD, PAD, artW, artH); }
+  if(artImg && landscape){
+    // Quarter-turn about the art box's centre. The pre-rotation box is
+    // artH wide x artW tall — portrait, 5:7 — so cover-fitting the portrait
+    // source into it is exact, and the turn lands it on the landscape box.
+    ctx.translate(PAD + artW/2, PAD + artH/2);
+    ctx.rotate(Math.PI / 2);
+    drawImageCover(ctx, artImg, -artH/2, -artW/2, artH, artW);
+  }
+  else if(artImg){ drawImageCover(ctx, artImg, PAD, PAD, artW, artH); }
   else { ctx.fillStyle = P.surface; ctx.fillRect(PAD, PAD, artW, artH);
     ctx.fillStyle = P.muted; ctx.font = "600 12px 'Nunito Sans', sans-serif"; ctx.textAlign = "center";
     ctx.fillText(name || "", PAD + artW/2, PAD + artH/2); ctx.textAlign = "left"; }
@@ -29079,11 +29201,19 @@ const HOME_PANELS = [
   // Off by default: it is empty for anyone with no graded slabs, and the
   // people who do want it turn it on from the banner in the Graded collection.
   {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true},
+  // Not a panel — a shortcut. It pins a die under the Edit-layout chip on
+  // PHONES only, because rolling for turn order is a thing you do at a table
+  // with the phone already in your hand, and burying it three taps deep in
+  // Analytics is what made people use a physical die instead. It has no
+  // column (fixed: true), so the layout editor offers it Show/Hide and
+  // nothing else.
+  {key:"dice", label:"Dice tray shortcut", col:"main", off:true, fixed:true},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
+const HOME_FIXED_KEYS = new Set(HOME_PANELS.filter(p => p.fixed).map(p => p.key));
 const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.label]));
 // Every panel except setChamps can be popped out and linked to.
-const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps"));
+const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps" && !HOME_FIXED_KEYS.has(k)));
 // A panel's TITLE is its permalink. Plain click pops the panel out over a
 // dimmed home page, where the Copy-link button lives; ctrl/cmd-click and
 // middle-click open /?panel=<key> in a new tab, and right-click offers "Copy
@@ -32254,17 +32384,19 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     return html`<div key=${"bar-"+p.key} class=${"home-edit-card"+(p.on?"":" is-off")}>
       <span class="home-edit-name">${meta.label}</span>
       <div class="home-edit-ctls">
-        <button class="home-edit-btn2" disabled=${!p.on || pos <= 0}
-          onClick=${()=>homeEdit.move(p.key, -1)} title="Move up within this column"
-          aria-label=${"Move "+meta.label+" up"}>▲</button>
-        <button class="home-edit-btn2" disabled=${!p.on || pos < 0 || pos >= sameCol.length-1}
-          onClick=${()=>homeEdit.move(p.key, 1)} title="Move down within this column"
-          aria-label=${"Move "+meta.label+" down"}>▼</button>
-        <select class="home-edit-col" value=${p.col} aria-label=${meta.label+" column"}
+        ${!meta.fixed && html`<${React.Fragment}>
+          <button class="home-edit-btn2" disabled=${!p.on || pos <= 0}
+            onClick=${()=>homeEdit.move(p.key, -1)} title="Move up within this column"
+            aria-label=${"Move "+meta.label+" up"}>▲</button>
+          <button class="home-edit-btn2" disabled=${!p.on || pos < 0 || pos >= sameCol.length-1}
+            onClick=${()=>homeEdit.move(p.key, 1)} title="Move down within this column"
+            aria-label=${"Move "+meta.label+" down"}>▼</button>
+        <//>`}
+        ${!meta.fixed && html`<select class="home-edit-col" value=${p.col} aria-label=${meta.label+" column"}
           title="Which part of the page this section sits in"
           onChange=${e=>homeEdit.setCol(p.key, e.target.value)}>
           ${HOME_COLUMNS.map(c => html`<option key=${c.key} value=${c.key}>${c.label}</option>`)}
-        </select>
+        </select>`}
         <button class="home-edit-btn2" onClick=${()=>homeEdit.toggle(p.key)}
           title=${p.on ? "Hide this section from the home page" : "Show this section again"}>
           ${p.on ? "Hide" : "Show"}
@@ -32277,11 +32409,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // open/closed state. The page behind is dimmed, so the gap is never seen.
   const columnNodes = (col) => {
     if(!editing) return homeLayout
-      .filter(p => panelCol[p.key] === col && p.key !== openPanel)
+      .filter(p => panelCol[p.key] === col && p.key !== openPanel && !HOME_FIXED_KEYS.has(p.key))
       .map(p => panelNode(p.key))
       .filter(Boolean);
     const out = [];
-    const inCol = homeLayout.filter(p => p.col === col);
+    const inCol = homeLayout.filter(p => p.col === col && !HOME_FIXED_KEYS.has(p.key));
     for(const p of inCol.filter(p => p.on)){
       const meta = HOME_PANELS.find(h => h.key === p.key);
       if(!meta || p.key === openPanel) continue;
@@ -32295,6 +32427,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     }
     return out;
   };
+  const diceEntry = homeLayout.find(p => p.key === "dice");
   const announceNodes = columnNodes("announce");
   const leftNodes     = columnNodes("left");
   const mainNodes     = columnNodes("main");
@@ -32327,6 +32460,16 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
           <//>`
         : html`<button class="home-edit-open" onClick=${homeEdit.start}
             title="Rearrange, hide, or move the home page sections">${uiIcon("edit")} Edit layout</button>`}
+    </div>`}
+    ${/* Phone-only shortcut, and its editor bar when the layout editor is
+          open -- the bar has to render even on desktop or it would be
+          impossible to switch on from a laptop. */""}
+    ${editing && diceEntry && html`<div class="home-dice-editrow">
+      ${editBar(diceEntry, HOME_PANELS.find(h => h.key === "dice"))}
+    </div>`}
+    ${!editing && diceEntry && diceEntry.on && html`<div class="home-dice-row">
+      <button class="home-dice-btn" onClick=${()=>openAnalyticsTool && openAnalyticsTool("dice")}
+        title="Open the dice tray" aria-label="Open the dice tray">${uiIcon("die", 26)}</button>
     </div>`}
     ${announceNodes.length > 0 && html`<div class="home-announce">${announceNodes}</div>`}
 
@@ -32961,9 +33104,10 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
         <button disabled=${!hasDeck} aria-label="Copy decklist as text"
           onClick=${e=>{e.stopPropagation(); onCopyDecklist && onCopyDecklist(r);}}
           title="Copy decklist as text">${uiIcon("clipboard", 13)}</button>
-        ${onViewDeckImage && html`<button disabled=${!hasDeck} aria-label="Preview the deck poster"
+        ${onViewDeckImage && html`<button class="tdc-preview" disabled=${!hasDeck}
+          aria-label="Preview the deck"
           onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
-          title="Preview the deck poster">${uiIcon("eye", 13)}</button>`}
+          title="Preview the deck">${uiIcon("eye", 18)}</button>`}
         <button disabled=${!hasDeck} aria-label="Copy deck poster image"
           onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
           title="Copy deck poster image">${uiIcon("image", 13)}</button>
@@ -32991,6 +33135,9 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
     ${inks.length > 0 && html`<div class="deck-card-chips">
       ${inkShields("deck-card-inks")}
     </div>`}
+    ${onViewDeckImage && html`<button class="deck-card-preview" disabled=${!hasDeck}
+      onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
+      title="Preview the deck" aria-label="Preview this deck">${uiIcon("eye", 24)}</button>`}
     <div class="deck-card-actions deck-act-row">
       <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckLink && onCopyDeckLink(r);}}
@@ -33001,9 +33148,6 @@ const TournamentDeckTile = ({r, theme, event, showEvent, isAdmin, compact,
       <button class="deck-act deck-act--sm" disabled=${!hasDeck}
         onClick=${e=>{e.stopPropagation(); onCopyDeckImage && onCopyDeckImage(r);}}
         title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
-      ${onViewDeckImage && html`<button class="deck-act deck-act--sm" disabled=${!hasDeck}
-        onClick=${e=>{e.stopPropagation(); onViewDeckImage(r);}}
-        title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>`}
       ${isAdmin && deckSep("t1")}
       ${isAdmin && html`<button class="deck-act deck-act--sm" title="Edit this deck"
         onClick=${e=>{e.stopPropagation(); onEditDeck && onEditDeck(r);}}>
@@ -35028,13 +35172,16 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <div class="deck-card-name">${d.name || "Untitled deck"}</div>
         ${visibilityPill(d.visibility)}
       </div>
-      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>
+      <div class="deck-card-meta">${s.total} / 60 cards · $${s.value.toFixed(2)} · ${ownedPct.toFixed(0)}% owned${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
       ${/* Two clusters: three things you COPY, then the ones that CHANGE the
             deck. The row wraps on a narrow tile, and because copy comes first
             the wrap lands on the group boundary instead of mid-thought. The
             labels shed their verb — the copy icon carries it. */""}
+      <button class="deck-card-preview"
+        onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
+        title="Preview the deck" aria-label=${"Preview " + (d.name || "this deck")}>${uiIcon("eye", 24)}</button>
       <div class="deck-card-actions deck-act-row">
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
@@ -35046,9 +35193,6 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, ownerDisplayName);}}
           title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
-        <button class="deck-act deck-act--sm"
-          onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, ownerDisplayName);}}
-          title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>
         ${deckSep("d1")}
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); renameDeck(d.id, d.name);}}
@@ -35114,10 +35258,13 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             ${tctx.place && html`<span class="dct-place">${tctx.place}</span>`}
             ${tctx.num_players ? html`<span class="muted">· ${tctx.num_players}p</span>` : null}
           </div>
-          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`
-        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?` · 👁 ${viewCount}`:""}</div>`}
+          <div class="deck-card-meta">by ${tctx.player_name || "Unknown player"} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`
+        : html`<div class="deck-card-meta">by ${creatorName} · ${s.total} / 60 cards · $${s.value.toFixed(2)}${extOwnedPct}${favCount>0?` · ★ ${favCount}`:""}${viewCount>0?html` · ${uiIcon("eye", 11)} ${viewCount}`:""}</div>`}
       ${renderDeckChips(s)}
       ${d.updated_at && html`<div class="deck-card-updated" title=${"Last updated " + absoluteLocalTime(d.updated_at) + " (your local time)"}>Updated ${relativeTime(d.updated_at)}</div>`}
+      <button class="deck-card-preview"
+        onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
+        title="Preview the deck" aria-label=${"Preview " + (d.name || "this deck")}>${uiIcon("eye", 24)}</button>
       <div class="deck-card-actions deck-act-row">
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckLinkToClipboard(d);}}
@@ -35128,9 +35275,6 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); copyDeckImageFromTile(d, creatorName);}}
           title="Copy the deck poster image">${DECK_ICONS.copy}<span>Image</span></button>
-        <button class="deck-act deck-act--sm"
-          onClick=${e=>{e.stopPropagation(); viewDeckImageFromTile(d, creatorName);}}
-          title="Preview the deck poster">${DECK_ICONS.preview}<span>Preview</span></button>
         ${deckSep("x1")}
         <button class="deck-act deck-act--sm"
           onClick=${e=>{e.stopPropagation(); duplicateExternalDeck(d);}}
@@ -36131,6 +36275,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
       onClose=${()=>setPosterAutoState(null)}/>`}
 
     ${posterViewState && html`<${DeckPosterModal}
+      viewOnly=${true}
       deck=${posterViewState.deck}
       cardById=${cardById}
       shareUrl=${buildShareUrlFor(posterViewState.deck)}
@@ -37271,12 +37416,20 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   const [deckTextValue, setDeckTextValue] = useState("");
   const [deckTextCopied, setDeckTextCopied] = useState(false);
 
+  // Straight to the clipboard. This used to open a modal holding a textarea
+  // and a Copy button — two extra clicks and a dead end, since nobody wanted
+  // to READ the list, they wanted it pasted somewhere. Falls back to the modal
+  // only when the clipboard is unavailable (http, or a browser that refuses),
+  // which is the one case where showing the text is genuinely the answer.
   const handleExport = useCallback(() => {
     const text = deckToText(deck, cardById);
     if(!text){ flashToast("Deck is empty."); return; }
-    setDeckTextValue(text);
-    setDeckTextCopied(false);
-    setDeckTextModal("export");
+    const showIt = () => { setDeckTextValue(text); setDeckTextCopied(false); setDeckTextModal("export"); };
+    try {
+      navigator.clipboard.writeText(text).then(
+        () => flashToast("Decklist copied to clipboard"),
+        showIt);
+    } catch { showIt(); }
   }, [deck, cardById]);
 
   const handleImport = useCallback(() => {
@@ -37731,7 +37884,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           ${DECK_ICONS.proxies}<span>Proxies</span></button>
         <button onClick=${handleExport} class="deck-act deck-toolbar-keep"
           title="Copy this deck as a plain-text decklist">
-          ${DECK_ICONS.decklist}<span>Decklist</span></button>
+          ${DECK_ICONS.copy}<span>Decklist</span></button>
         ${isOwnDeck && (onDuplicate || onDelete) && deckSep("s4")}
         ${isOwnDeck && onDuplicate && html`<button onClick=${onDuplicate} class="deck-act"
           title="Make a copy of this deck">${DECK_ICONS.duplicate}<span>Duplicate</span></button>`}
@@ -37914,7 +38067,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         if(viewLayout === "grid"){
           return html`<div key=${k} class=${"deck-grid-tile"+dimClass+(gridOverLimit?" coconut-over":"")}>
             ${tileImg
-              ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`
+              ? (isLandscapeCard(meta)
+                  ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`)
+                  : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy" onClick=${()=>openCardModal(item.card_id)}/>`)
               : html`<div style=${{aspectRatio:"5/7",background:"var(--bg-surface)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"var(--text-muted)",padding:6,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
             ${(!coconutCard || item.quantity > 1 || gridOverLimit) && html`
               <span class=${"deck-grid-tile-qty"+(gridOverLimit?" over":"")}
@@ -37939,7 +38094,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
               ${buildVariantChevron(item, meta, "deck-variant-btn--tile")}
               ${ownedFracBadge}
               ${tileImg
-                ? html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`
+                ? (isLandscapeCard(meta)
+                    ? landscapeArt(html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`)
+                    : html`<img src=${tileImg} alt=${meta["Product Name"]||""} loading="lazy"/>`)
                 : html`<div style=${{aspectRatio:"5/7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"var(--text-muted)",padding:8,textAlign:"center"}}>${meta["Product Name"]||"(unknown)"}</div>`}
               ${price!=null && aff && html`<a class="deck-stack-price" href=${aff} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${price.toFixed(2)}</a>`}
               ${makeCounter(item, cardMax, "deck-stack-counter")}

@@ -37,6 +37,7 @@ function grabLine(prefix) {
 const homePanels = grab("const HOME_PANELS = [", NL + "];");
 const homePanelLabels = grabLine("const HOME_PANEL_LABELS = ");
 const homePanelKeys = grabLine("const HOME_PANEL_KEYS = ");
+const homeFixedKeys  = grabLine("const HOME_FIXED_KEYS = ");
 const homePopoutKeys = grabLine("const HOME_POPOUT_KEYS = ");
 const labels = grab(
   "const VIEW_SHARE_LABELS = {",
@@ -63,6 +64,7 @@ const moduleSrc = [
   homePanels,
   homePanelKeys,
   homePanelLabels,
+  homeFixedKeys,
   homePopoutKeys,
   hrefFn,
   labelFn,

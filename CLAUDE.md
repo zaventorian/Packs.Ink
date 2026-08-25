@@ -141,6 +141,31 @@ text beside them**, which is why icon+label buttons never sat straight.
   `btn.textContent` would wipe the glyph.
 - **Comments and CLAUDE.md still use emoji freely.** They are documentation, not UI.
 
+## Location cards read landscape where you're READING one (2026-08-24)
+
+A Location is printed landscape, but every art source frames it portrait with the card turned
+on its side. `isLandscapeCard(row)` (`card_type` contains `Location`) decides; two mechanisms
+turn it back:
+
+- **`landscapeArt(img)`** wraps an `<img>` in `.lscape-wrap`. `rotate()` doesn't reflow, so the
+  WRAPPER is what reserves space: it's the 7:5 box, and the image inside is laid out portrait at
+  **71.4286%** (5/7) of the wrapper's width — after the quarter turn that lands exactly on the
+  wrapper's edges. Verified in-browser: a 208px wrapper measures 208x149 and the rotated image
+  measures 208x149. Don't "simplify" the percentage; it's the whole trick.
+- **`drawCardTileCanvas({landscape})`** does the same on canvas: `artH` flips to `artW*5/7`, then
+  translate to the art box's centre, `rotate(PI/2)`, and cover-fit into an `artH x artW`
+  (portrait) box. The card-poster canvas can't use CSS, and it must stay identical to the DOM
+  path or the copied PNG disagrees with what's on screen.
+
+Applied to: the card-detail modal (canvas tile AND the plain-`<img>` fallback), the deck
+editor's image-grid and stacked-pile views, and the deck poster's card cells. **A landscape
+poster cell must declare `aspectRatio:"7/5"` itself** — its image is absolutely positioned, so
+the cell would otherwise collapse to zero height.
+
+**Browse GRID tiles stay portrait deliberately.** A 7:5 tile in a 5:7 grid either breaks the row
+or shrinks every other card to accommodate the odd one out, and on a browse wall you're picking
+a card out, not reading it. Click through and it's landscape.
+
 ## Top-level nav
 
 **Two-row icon nav** (restructured 2026-05-25). Row 1 = "my stuff", Row 2 = "market intel". Home tab removed — the logo IS the home click target.
@@ -866,6 +891,38 @@ Both exits are hooked: **Done** (`toggleDeckEditMode`) and **Back** (`onBack`). 
 - **`decks.share_versions`, default FALSE.** Sharing a deck is one decision; sharing every draft it passed through is a bigger one, and it must never happen because somebody forgot a checkbox existed. `get_shared_deck_versions` requires all three of: not private, token matches, `share_versions` true. `get_shared_deck` reports the flag so a viewer's client knows whether to offer the History button.
 - **The flag is read on demand in DeckEditor, NOT plumbed through the deck lists.** Adding `share_versions` to those hot selects would 400 every list query until the migration lands. Same reason every version call routes through `deckVersionsUnavailable(err)` (42P01 / 42703 / PGRST202): pre-migration the History modal says "isn't switched on for this site yet" instead of throwing.
 
+## Deck tiles: Preview is the corner button, and it opens the IMAGE (2026-08-24)
+
+- **`.deck-card-preview`** is a 44px button pinned bottom-right of every deck tile (owned,
+  Discover, tournament). "Show me the deck" is the most-wanted thing on a tile and it was one
+  small chip among seven. `.deck-card-actions` carries `padding-right:52px` so a wrapping action
+  row never runs underneath it.
+- **`DeckPosterModal` takes `viewOnly`** and renders a full-screen preview instead of the export
+  screen: a bar (Copy / Save / **Options** / x) over a `.poster-view-stage` that clips and
+  centres the poster. The poster is a FIXED-WIDTH document on purpose (so the exported PNG is
+  identical on every device), so fitting it to the viewport is a measured `transform: scale()`,
+  not a responsive layout — a `ResizeObserver` plus a 6s keepalive (card art lands after mount
+  and changes the height). `fit` starts at 0 and the stage stays transparent until the first
+  measure, so a full-size flash never paints. **Options** flips to the old export modal.
+- **The toolbar's Decklist button copies straight to the clipboard.** It used to open a modal
+  holding a textarea and a Copy button — nobody wanted to READ the list. The modal is now only
+  the fallback for when `navigator.clipboard` refuses, which is the one case where showing the
+  text IS the answer.
+
+## Print proxies: one scroll surface, and the watermark is not optional (2026-08-24)
+
+- **The card list has NO nested scroll.** A scroll box inside a scrolling modal is what made this
+  unusable — the list was a ~130px peephole because a flex item with `overflow-y:auto` gets
+  `min-height:0` and collapsed far below its own `max-height`. The modal body is now the only
+  scroll surface; the list is a grid (`--proxy-cols`, set per deck: 1 column under 9 cards, +1
+  more past 1000px) so most decks fit whole. Measured: a 15-unique deck shows all 15 with no
+  scrolling at all on desktop.
+- **`.proxy-foot` is sticky** — summary, the Scale:100% warning and Build PDF stay put, so the
+  button is never below the fold on a 60-unique deck.
+- **The "None" watermark option is GONE.** An unmarked proxy is indistinguishable from a real
+  card in a photograph, and the corner tag was already the discreet choice. An old stored pref of
+  `"none"` falls through to the default.
+
 ## Deck action buttons — one system (2026-08-24)
 
 The deck toolbar and all three tile variants (owned / Discover / tournament) share `.deck-act`. Before this they were a mix of emoji labels and per-button inline styles where every button carried the same weight and nothing said which ones belonged together.
@@ -1248,6 +1305,27 @@ Every home section except the movers stack is a **user-arrangeable panel**: show
 - **Empty side columns are omitted from the tree**, and `.home-grid` gets `hg-no-left` / `hg-no-right` which narrow `grid-template-columns` to match — otherwise hiding everything on the left left a 240px hole. Columns are **auto-placed in DOM order**; don't reintroduce `grid-column:1` on `.home-left-col` or the omission breaks.
 - `moveHomePanel` swaps with the nearest neighbour that is **both in the same column AND visible**. Plain index±1 would swap past a panel in another column (or a hidden one) and read as a dead button.
 - Panels are keyed on the component (`key="following"` etc.), not wrapped in a div — several CSS rules are `.home-left-col > .home-feed` child selectors that a wrapper would break.
+
+### The dice shortcut is a `fixed` panel
+
+`HOME_PANELS` entries may carry **`fixed: true`** — they are not columns of the grid, they are
+shortcuts pinned into the home header. `dice` is the first: a die under the "Edit layout" chip,
+**phones only** (rolling for turn order happens at a table with the phone already in your hand;
+on a desktop the Analytics tab is right there). Off by default.
+
+- `HOME_FIXED_KEYS` keeps them out of `columnNodes` on both the render and the edit path, and out
+  of `HOME_POPOUT_KEYS` (there is no panel to pop out).
+- The layout editor gives a fixed entry **only Show/Hide** — no arrows, no column select. Its
+  control bar renders in the header row and **must render on desktop too**, or it would be
+  impossible to switch on from a laptop.
+
+### Artist Alley poster: columns follow the CARD COUNT
+
+`artCols` / `artMax` are derived from `cardsForArtist.length` and used by the screen grid, the
+`@media print` pin and the narrow-screen rule, so the three can't drift. A fixed 6-across grid
+made a 4-card artist's poster four postage stamps in a sea of green — the cards ARE the poster,
+so with fewer of them each one gets bigger rather than the page getting emptier. `artMax` caps
+the growth: two 600px cards read as a mistake, not as emphasis.
 
 ### Movers-banner chip filters (`MoverChipGroup`)
 
@@ -1633,7 +1711,7 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - Also: `scripts/synthetic_monitor.py` (+ workflow, every 2h), tournament `ArchetypeBreakdown`, deck shop-missing name-aggregation, F4 keyboard shortcuts (`/`, `?`).
 
 - ~~**`supabase/125_deck_versions.sql`**~~ — **APPLIED 2026-08-24 by Zaven.**
-- **`supabase/126_deck_versions_grants.sql`** — **STAGED.** 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
+- ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
 - ~~`supabase/112_drop_legacy_graded_feed.sql`~~ — **APPLIED 2026-08-22 by Zaven; verified via REST probe** (`graded_prices_daily` / `graded_prices_latest` both 404; `graded_sales_rollup` + `card_prices_latest` healthy). The 70,990-row archive remains at `Desktop/graded_prices_daily_archive_20260729.jsonl` (18.9 MB).
