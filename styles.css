@@ -891,6 +891,42 @@ tbody tr:hover .price-db-star.on{opacity:1;}
   .price-db-watchbar-lbl{display:none;}
 }
 
+/* ── Alerts modal ──────────────────────────────────────────────────────────
+   Inbox and rules in one dialog: an alert you can't find the rule for is
+   unactionable, and a rule you can't see the history of is unverifiable. */
+.alerts-modal{position:relative;width:min(560px,94vw);max-height:86vh;overflow-y:auto;
+  background:var(--bg-modal);border:1px solid var(--border);border-radius:12px;
+  padding:20px 22px;box-shadow:0 18px 50px -20px rgba(0,0,0,0.6);}
+.alerts-inbox,.alerts-rules{display:flex;flex-direction:column;gap:6px;}
+.alert-event{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;
+  padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);}
+/* Unread carries an accent rail rather than a background wash — the wash was
+   unreadable against the translucent card backgrounds in the dark themes. */
+.alert-event.unread{border-left:3px solid var(--accent);}
+.alert-event-main{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.alert-event-name{background:none;border:none;padding:0;text-align:left;cursor:pointer;
+  font-size:13px;font-weight:700;color:var(--text);}
+.alert-event-name:hover{color:var(--accent);text-decoration:underline;}
+.alert-event-rule{font-size:11px;color:var(--text-muted);}
+.alert-event-meta{display:flex;align-items:center;gap:8px;font-size:11px;flex-shrink:0;
+  font-variant-numeric:tabular-nums;}
+.alert-event-read{background:none;border:1px solid var(--border);border-radius:5px;
+  cursor:pointer;color:var(--text-muted);font-size:10px;padding:1px 5px;}
+.alert-event-read:hover{color:var(--accent);border-color:var(--accent);}
+.alert-new{display:flex;flex-direction:column;gap:7px;padding:11px 12px;margin-bottom:10px;
+  border:1px dashed var(--border);border-radius:8px;}
+.alert-new-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.alert-new-row label{font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:0.3px;color:var(--text-muted);min-width:48px;}
+.alert-new-row select,.alert-new-row input{padding:4px 8px;font-size:12px;
+  background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:5px;}
+.alert-rule{display:flex;gap:8px;align-items:center;justify-content:space-between;
+  padding:7px 10px;border:1px solid var(--border);border-radius:8px;}
+.alert-rule.off{opacity:0.55;}
+.alert-rule-text{font-size:12.5px;min-width:0;}
+.alert-rule-actions{display:flex;gap:4px;flex-shrink:0;}
+.alerts-foot{font-size:11px;margin:14px 0 0;line-height:1.5;}
+
 /* Foot of the windowed table: progress line + the two escape hatches (load
    everything, or take the whole result set to CSV). Doubles as the
    IntersectionObserver sentinel, so it must stay in flow — display:none or a
@@ -2591,6 +2627,20 @@ button.graded-home-title{cursor:pointer;}
 .profile-gear-badge svg{display:block;}
 .profile-btn:hover .profile-gear-badge,
 .profile-btn[aria-expanded="true"] .profile-gear-badge{color:var(--accent);border-color:var(--accent);}
+/* Unread price alerts. Pinned to the avatar's top-LEFT, opposite the gear, and
+   absolutely positioned so it costs no layout width. That constraint is the
+   whole reason it lives here rather than as a bell in the bubble row: a third
+   bubble there widens right-cluster row 2 and tips ANALYTICS off the edge of
+   the scrolling tabs on <=420px phones — the exact regression that moved the
+   install bubble to row 1. Renders only when the count is non-zero, so the
+   header is unchanged for everyone without a firing alert. */
+.profile-alert-badge{position:absolute;top:-5px;left:-6px;
+  min-width:14px;height:14px;padding:0 3px;border-radius:7px;box-sizing:border-box;
+  background:var(--red);color:#fff;border:1px solid var(--bg-solid);
+  font-size:9px;font-weight:800;line-height:1;letter-spacing:-0.2px;
+  display:flex;align-items:center;justify-content:center;
+  font-variant-numeric:tabular-nums;}
+@media (max-width:640px){ .profile-btn .profile-alert-badge{top:-3px;left:-3px;} }
 /* Signed-out CTA: replaces the old gear-only button. Reads as a clear action
    instead of a settings affordance, since the popover's primary purpose for
    signed-out users is auth. Theme controls inside the popover let them tweak

@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=352">
+<link rel="stylesheet" href="styles.css?v=353">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2757,9 +2757,19 @@ async function fetchCardHistory(productId, printing){
 // `null` = unavailable, `[]`/`{}` = available but empty.
 const MARKET_INDEX_MISSING = /42P01|PGRST(202|205)|does not exist|relation/i;
 
+// ⚠ readJsonCache returns {data, stale}, NOT the payload. Unwrapping is not
+// optional: handing the raw wrapper back made the first visit work (cache miss
+// → live array) and the second one crash the Screener to its error boundary
+// with "(mktIndex || []) is not iterable" — the worst shape of bug, since it
+// only appears on a return visit.
+const _mktCacheRead = (key) => {
+  const c = readJsonCache(key, 12 * 60 * 60 * 1000);
+  return c && Array.isArray(c.data) ? c.data : null;
+};
+
 async function fetchMarketIndexSeries(scope, scopeKey){
   const key = `packsink:mktindex:v1:${scope}:${scopeKey || "-"}`;
-  const cached = readJsonCache(key, 12 * 60 * 60 * 1000);
+  const cached = _mktCacheRead(key);
   if(cached) return cached;
   try {
     const rows = await sbFetchAll("market_index_daily", {
@@ -2783,7 +2793,7 @@ async function fetchMarketIndexSeries(scope, scopeKey){
 // client-side rather than queried per card.
 async function fetchMarketIndexLatest(){
   const key = "packsink:mktindex:latest:v1";
-  const cached = readJsonCache(key, 12 * 60 * 60 * 1000);
+  const cached = _mktCacheRead(key);
   if(cached) return cached;
   try {
     const rows = await sbFetchAll("market_index_latest", {
@@ -2798,6 +2808,86 @@ async function fetchMarketIndexLatest(){
     console.warn("market index latest fetch:", e?.message || e);
     return null;
   }
+}
+
+// ── Price alerts (migration 129) ────────────────────────────────────────
+// PURE. Given the user's rules, their watchlists, and today's price_movers
+// rows, return the firings. No I/O, no clock — `priceDate` and `nowMs` are
+// arguments precisely so this is testable and so two devices evaluating the
+// same snapshot reach the same answer. Guarded by scripts/test_alerts.mjs.
+//
+// Rules are evaluated client-side because the site has no push infrastructure
+// (see migration 129's header). That is a real limitation, not a shortcut: it
+// answers "what happened while I was away" on open, and nothing more.
+const ALERT_KINDS = [
+  ["above",    "Price rises to or above"],
+  ["below",    "Price falls to or below"],
+  ["pct_up",   "Gains at least"],
+  ["pct_down", "Drops at least"],
+];
+// A rule's observed value. `basis` picks Low vs NM Market; for the Δ% kinds
+// that also picks which family of window columns to read, so a market-basis
+// rule can't accidentally compare against the low-price series.
+function alertObservedValue(row, alert){
+  if(!row) return null;
+  if(alert.kind === "above" || alert.kind === "below"){
+    const v = alert.basis === "low" ? row.low_today : row.market_today;
+    return v == null ? null : Number(v);
+  }
+  const win = alert.window_key || "pct_7d";
+  const col = alert.basis === "low" ? win : win.replace(/^pct_/, "mkt_pct_");
+  const v = row[col];
+  return v == null ? null : Number(v);
+}
+function alertConditionMet(observed, alert){
+  if(observed == null || !Number.isFinite(observed)) return false;
+  const t = Number(alert.threshold);
+  if(!Number.isFinite(t)) return false;
+  if(alert.kind === "above")  return observed >= t;
+  if(alert.kind === "below")  return observed <= t;
+  if(alert.kind === "pct_up") return observed >= Math.abs(t);
+  // The user types "10" for "down 10%" — storing a negative would make the
+  // form ask for a minus sign nobody remembers to type.
+  if(alert.kind === "pct_down") return observed <= -Math.abs(t);
+  return false;
+}
+// `lastFiredByKey` maps "<alert_id>|<card_id>|<printing>" → ms of the most
+// recent firing. Cooldown is what stops a card parked above its threshold from
+// firing every day forever.
+function evaluateAlerts({alerts, watchlists, rowByKey, priceDate, lastFiredByKey, nowMs}){
+  const out = [];
+  const listById = new Map((watchlists || []).map(w => [w.id, w]));
+  for(const a of (alerts || [])){
+    if(!a || a.enabled === false) continue;
+    // A rule targets one card or a whole list. The list form keeps working as
+    // the list changes, which is why it's the default the UI offers.
+    const targets = a.watchlist_id
+      ? ((listById.get(a.watchlist_id) || {items: []}).items || [])
+          .filter(it => it.card_id)
+          .map(it => ({card_id: it.card_id, printing: it.printing || "Normal"}))
+      : [{card_id: a.card_id, printing: a.printing || "Normal"}];
+    for(const t of targets){
+      const row = rowByKey.get(t.card_id + "|" + t.printing)
+        // A list can hold a printing that price_movers doesn't carry a row for.
+        // Fall back to the card's Normal row rather than silently never firing.
+        || rowByKey.get(t.card_id + "|Normal");
+      const observed = alertObservedValue(row, a);
+      if(!alertConditionMet(observed, a)) continue;
+      const key = a.id + "|" + t.card_id + "|" + t.printing;
+      const last = lastFiredByKey ? lastFiredByKey.get(key) : null;
+      if(last != null){
+        // cooldown_days 0 still means "at most once per snapshot" — the unique
+        // index enforces that server-side, but checking here saves the write.
+        const days = Math.max(0, Number(a.cooldown_days ?? 7));
+        if(nowMs - last < days * 86400000) continue;
+      }
+      out.push({
+        alert_id: a.id, card_id: t.card_id, printing: t.printing,
+        observed: Math.round(observed * 100) / 100, price_date: priceDate,
+      });
+    }
+  }
+  return out;
 }
 
 // Bulk price history for the collection-value chart. Batches both the
@@ -3306,7 +3396,11 @@ const logTicks = (min, max, n=5) => {
       if(v >= min && v <= max) out.push(v);
     }
   }
-  if(!out.length) return [min, max];
+  // Inside a single decade the 1-2-5 ladder can yield one gridline or none —
+  // a $2.04–$8.26 range only contains the 5. A log axis with one line reads as
+  // broken, so fall back to even value steps, which is what a log chart's minor
+  // ticks are anyway: evenly spaced in value, unevenly spaced on screen.
+  if(out.length < 3) return niceTicks(min, max, n);
   const stride = Math.max(1, Math.ceil(out.length / n));
   const thinned = out.filter((_, i) => i % stride === 0);
   // Always keep the top tick — dropping it leaves the axis looking truncated.
@@ -25717,7 +25811,11 @@ const SCREENER_STATE_FIELDS = [
   ["collFilter","cf","str","all"],
   ["pctWin","pw","str","pct_30d"],
   ["density","dn","str","comfy"],
-  ["minPrice","p0","str",""],
+  // "5", not "", because that is what the component initialises to — the raw
+  // mode's default price floor. With "" here, a completely untouched Screener
+  // encoded ?v=p0:5 on every visit, so every plain page load looked like a
+  // filtered one and the address bar was never clean.
+  ["minPrice","p0","str","5"],
   ["maxPrice","p1","str",""],
   ["minPct","c0","str",""],
   ["maxPct","c1","str",""],
@@ -25868,7 +25966,168 @@ function decodeCompareItems(str){
   return out;
 }
 
-function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView, watchlists, watchlistOps, watchlistsUnavailable}){
+// ── Alerts inbox + rule editor ──────────────────────────────────────────
+// One modal, two tabs. They belong together: an alert you can't find the rule
+// for is unactionable, and a rule you can't see the history of is unverifiable.
+const ALERT_WINDOW_LABELS = {pct_1d:"1D", pct_7d:"1W", pct_30d:"1M", pct_90d:"3M", pct_180d:"6M", pct_365d:"1Y"};
+// Plain-English rule summary. The stored shape is four columns; nobody should
+// have to reassemble them in their head to know what a rule does.
+function describeAlert(a, watchlists, cardName){
+  if(!a) return "";
+  const subject = a.watchlist_id
+    ? ((watchlists || []).find(w => w.id === a.watchlist_id) || {}).name || "a deleted list"
+    : (cardName || a.card_id || "a card");
+  const basis = a.basis === "low" ? "Low" : "NM Market";
+  const win = ALERT_WINDOW_LABELS[a.window_key] || a.window_key;
+  const money = (n) => "$" + Number(n).toLocaleString(undefined, {maximumFractionDigits:2});
+  if(a.kind === "above")    return `${subject} — ${basis} at or above ${money(a.threshold)}`;
+  if(a.kind === "below")    return `${subject} — ${basis} at or below ${money(a.threshold)}`;
+  if(a.kind === "pct_up")   return `${subject} — ${basis} up ${Math.abs(a.threshold)}% or more over ${win}`;
+  if(a.kind === "pct_down") return `${subject} — ${basis} down ${Math.abs(a.threshold)}% or more over ${win}`;
+  return subject;
+}
+
+const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, unavailable, onClose, onOpenCard}) => {
+  const [tab, setTab] = useState(() => (alertEvents || []).some(e => !e.read_at) ? "inbox" : "rules");
+  const [draft, setDraft] = useState(() => ({
+    watchlist_id: (watchlists || [])[0]?.id || null,
+    card_id: null, printing: "Normal",
+    basis: "market", kind: "pct_up", threshold: "15", window_key: "pct_7d", cooldown_days: 7,
+  }));
+  useEffect(() => {
+    const onKey = (e) => { if(e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const unread = (alertEvents || []).filter(e => !e.read_at);
+  const alertById = useMemo(() => new Map((alerts || []).map(a => [a.id, a])), [alerts]);
+  const isPct = draft.kind === "pct_up" || draft.kind === "pct_down";
+  const canSave = (watchlists || []).length > 0 && draft.watchlist_id
+    && Number.isFinite(Number(draft.threshold)) && Number(draft.threshold) !== 0;
+
+  return html`<div class="card-detail-overlay" onClick=${onClose}>
+    <div class="alerts-modal" onClick=${e=>e.stopPropagation()}>
+      <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+      <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>Price alerts</h3>
+      ${unavailable
+        ? html`<p class="muted" style=${{fontSize:13}}>
+            Alerts aren't switched on for this site yet — ask an admin to run
+            <code>supabase/129_price_alerts.sql</code>.
+          </p>`
+        : html`<${React.Fragment}>
+        <div class="seg-toggle" style=${{marginBottom:12}}>
+          <button class=${tab==="inbox"?"active":""} onClick=${()=>setTab("inbox")}>
+            Inbox${unread.length ? ` (${unread.length})` : ""}
+          </button>
+          <button class=${tab==="rules"?"active":""} onClick=${()=>setTab("rules")}>
+            Rules${(alerts||[]).length ? ` (${alerts.length})` : ""}
+          </button>
+        </div>
+
+        ${tab === "inbox" && html`<div class="alerts-inbox">
+          ${unread.length > 0 && html`<button class="price-db-advbtn" style=${{marginBottom:8}}
+            onClick=${()=>alertOps.markRead(unread.map(e=>e.id))}>Mark all read</button>`}
+          ${!(alertEvents || []).length
+            ? html`<p class="muted" style=${{fontSize:13}}>
+                Nothing yet. Alerts are checked once per visit against the day's prices —
+                if a rule trips while you're away, it'll be here when you come back.
+              </p>`
+            : alertEvents.map(e => {
+                const a = alertById.get(e.alert_id);
+                return html`<div key=${e.id} class=${"alert-event"+(e.read_at?"":" unread")}>
+                  <div class="alert-event-main">
+                    <button class="alert-event-name" onClick=${()=>onOpenCard && onOpenCard(e.card_id)}
+                      title="Open this card">${cardNameFor(e.card_id) || e.card_id}</button>
+                    <span class="alert-event-rule">${a ? describeAlert(a, watchlists, cardNameFor(a.card_id)) : "rule deleted"}</span>
+                  </div>
+                  <div class="alert-event-meta">
+                    ${e.observed != null && html`<b>${a && (a.kind==="above"||a.kind==="below")
+                      ? "$" + Number(e.observed).toFixed(2)
+                      : (Number(e.observed) > 0 ? "+" : "") + Number(e.observed).toFixed(1) + "%"}</b>`}
+                    <span class="muted">${e.price_date}</span>
+                    ${!e.read_at && html`<button class="alert-event-read"
+                      onClick=${()=>alertOps.markRead([e.id])} title="Mark read">✓</button>`}
+                  </div>
+                </div>`;
+              })}
+        </div>`}
+
+        ${tab === "rules" && html`<div class="alerts-rules">
+          ${!(watchlists || []).length
+            ? html`<p class="muted" style=${{fontSize:13}}>
+                Alerts watch a watchlist, so make a list first — star a few rows on the
+                Screener and they'll appear here.
+              </p>`
+            : html`<div class="alert-new">
+                <div class="alert-new-row">
+                  <label>Watch</label>
+                  <select value=${draft.watchlist_id || ""} onChange=${e=>setDraft(d=>({...d, watchlist_id: e.target.value}))}>
+                    ${watchlists.map(w => html`<option key=${w.id} value=${w.id}>${w.name} (${w.items.length})</option>`)}
+                  </select>
+                </div>
+                <div class="alert-new-row">
+                  <label>When</label>
+                  <select value=${draft.kind} onChange=${e=>setDraft(d=>({...d, kind: e.target.value}))}>
+                    ${ALERT_KINDS.map(([k,l]) => html`<option key=${k} value=${k}>${l}</option>`)}
+                  </select>
+                  <input type="number" step="0.01" style=${{width:90}}
+                    value=${draft.threshold} onInput=${e=>setDraft(d=>({...d, threshold: e.target.value}))}/>
+                  <span class="muted">${isPct ? "%" : "$"}</span>
+                  ${isPct && html`<select value=${draft.window_key} onChange=${e=>setDraft(d=>({...d, window_key: e.target.value}))}>
+                    ${Object.entries(ALERT_WINDOW_LABELS).map(([k,l]) => html`<option key=${k} value=${k}>over ${l}</option>`)}
+                  </select>`}
+                </div>
+                <div class="alert-new-row">
+                  <label>Using</label>
+                  <select value=${draft.basis} onChange=${e=>setDraft(d=>({...d, basis: e.target.value}))}>
+                    <option value="market">NM Market</option>
+                    <option value="low">Low</option>
+                  </select>
+                  <label style=${{marginLeft:10}}>Then wait</label>
+                  <select value=${String(draft.cooldown_days)} onChange=${e=>setDraft(d=>({...d, cooldown_days: +e.target.value}))}
+                    title="How long to stay quiet after firing. Without this, a card parked above its threshold alerts every single day.">
+                    <option value="0">no delay</option>
+                    <option value="1">1 day</option>
+                    <option value="7">7 days</option>
+                    <option value="30">30 days</option>
+                  </select>
+                </div>
+                <div class="alert-new-row">
+                  <button class="price-db-advbtn" disabled=${!canSave}
+                    onClick=${async ()=>{
+                      await alertOps.create({
+                        watchlist_id: draft.watchlist_id, card_id: null, printing: "Normal",
+                        basis: draft.basis, kind: draft.kind,
+                        threshold: Number(draft.threshold),
+                        window_key: draft.window_key, cooldown_days: draft.cooldown_days,
+                      });
+                      setTab("rules");
+                    }}>+ Add alert</button>
+                  <span class="muted" style=${{fontSize:11}}>
+                    Checked once per visit, against the day's prices.
+                  </span>
+                </div>
+              </div>`}
+          ${(alerts || []).map(a => html`<div key=${a.id} class=${"alert-rule"+(a.enabled?"":" off")}>
+            <span class="alert-rule-text">${describeAlert(a, watchlists, cardNameFor(a.card_id))}</span>
+            <span class="alert-rule-actions">
+              <button class="price-db-advbtn" title=${a.enabled ? "Pause this alert" : "Resume this alert"}
+                onClick=${()=>alertOps.update(a.id, {enabled: !a.enabled})}>${a.enabled ? "Pause" : "Resume"}</button>
+              <button class="price-db-advbtn" title="Delete this alert and its history"
+                onClick=${()=>alertOps.remove(a.id)}>Delete</button>
+            </span>
+          </div>`)}
+        </div>`}
+      <//>`}
+      <p class="muted alerts-foot">
+        Alerts are evaluated in your browser when you open the site — Packs.Ink can't
+        notify you while it's closed.
+      </p>
+    </div>
+  </div>`;
+};
+
+function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView, watchlists, watchlistOps, watchlistsUnavailable, onOpenAlerts}){
   // Decoded ONCE, before any state initialiser, and read by several of them.
   //
   // ⚠ showGraded / showSealed must come from here at INIT, not from an effect
@@ -26219,55 +26478,6 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     })();
     return () => { cancelled = true; };
   }, [user]);
-  // The single description of "what the Screener is currently showing". Three
-  // consumers read it: Save view (localStorage + screener_views), the ?v= URL
-  // writer, and Copy link. Built once so they cannot drift — before this, the
-  // save payload was an inline object literal and adding a filter meant
-  // remembering to extend it.
-  const screenerPayload = useMemo(() => ({
-    preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
-    filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
-    collFilter, sigFilter: Array.from(sigFilter),
-    minPrice, maxPrice, minPct, maxPct, pctWin,
-    showAllWins, density, showGraded, showSealed,
-    sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
-    showFoil, showNonFoil,
-    filterCosts: Array.from(filterCosts),
-    filterCardTypes: Array.from(filterCardTypes),
-    filterStrengths: Array.from(filterStrengths),
-    filterWillpowers: Array.from(filterWillpowers),
-    filterLores: Array.from(filterLores),
-    filterInkable, filterLegality, filterDualInk,
-    filterKeywords: Array.from(filterKeywords),
-    filterClassifications: Array.from(filterClassifications),
-    filterIllustrators: Array.from(filterIllustrators),
-    filterSealedTypes: Array.from(filterSealedTypes),
-    filterGraders: Array.from(filterGraders),
-    filterGrades: Array.from(filterGrades),
-  }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
-    collFilter, sigFilter, minPrice, maxPrice, minPct, maxPct, pctWin, showAllWins,
-    density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
-    showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
-    filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
-    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades]);
-
-  // Mirror the whole screen into ?v=. replaceState, never push — a filter is
-  // not a page, and pushing would make Back walk backwards through every chip
-  // the user toggled instead of leaving the Screener. Debounced because the
-  // search box writes on every keystroke.
-  useEffect(() => {
-    const t = setTimeout(() => {
-      try {
-        const url = new URL(window.location.href);
-        if((url.pathname.replace(/\/$/, "") || "/") !== "/screener") return;
-        const enc = encodeScreenerState(screenerPayload);
-        if((url.searchParams.get("v") || "") === enc) return;
-        if(enc) url.searchParams.set("v", enc); else url.searchParams.delete("v");
-        window.history.replaceState(window.history.state, "", url.toString());
-      } catch {/* no-op */}
-    }, 400);
-    return () => clearTimeout(t);
-  }, [screenerPayload]);
 
   const saveCurrentView = async () => {
     const name = prompt("Name this view (e.g. 'My buyout watchlist', 'Sub-$20 trending'):");
@@ -26438,6 +26648,63 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [filterKeywords, setFilterKeywords] = useState(() => new Set());
   const [filterClassifications, setFilterClassifications] = useState(() => new Set());
   const [filterIllustrators, setFilterIllustrators] = useState(() => new Set());
+
+  // The single description of "what the Screener is currently showing". Three
+  // consumers read it: Save view (localStorage + screener_views), the ?v= URL
+  // writer, and Copy link. Built once so they cannot drift — before this, the
+  // save payload was an inline object literal and adding a filter meant
+  // remembering to extend it.
+  //
+  // ⚠ Must sit BELOW every filter useState it reads. A useMemo callback runs at
+  // its own declaration point, so placing this next to saveCurrentView (which
+  // is where it reads most naturally) threw "Cannot access 'minPrice' before
+  // initialization" and took the whole Screener to the error boundary.
+  // saveCurrentView keeps its position and closes over this: it only runs from
+  // a click, by which time the const is long since initialised.
+  const screenerPayload = useMemo(() => ({
+    preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
+    filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
+    collFilter, sigFilter: Array.from(sigFilter),
+    minPrice, maxPrice, minPct, maxPct, pctWin,
+    showAllWins, density, showGraded, showSealed,
+    sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
+    showFoil, showNonFoil,
+    filterCosts: Array.from(filterCosts),
+    filterCardTypes: Array.from(filterCardTypes),
+    filterStrengths: Array.from(filterStrengths),
+    filterWillpowers: Array.from(filterWillpowers),
+    filterLores: Array.from(filterLores),
+    filterInkable, filterLegality, filterDualInk,
+    filterKeywords: Array.from(filterKeywords),
+    filterClassifications: Array.from(filterClassifications),
+    filterIllustrators: Array.from(filterIllustrators),
+    filterSealedTypes: Array.from(filterSealedTypes),
+    filterGraders: Array.from(filterGraders),
+    filterGrades: Array.from(filterGrades),
+  }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
+    collFilter, sigFilter, minPrice, maxPrice, minPct, maxPct, pctWin, showAllWins,
+    density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
+    showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
+    filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
+    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades]);
+
+  // Mirror the whole screen into ?v=. replaceState, never push — a filter is
+  // not a page, and pushing would make Back walk backwards through every chip
+  // the user toggled instead of leaving the Screener. Debounced because the
+  // search box writes on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const url = new URL(window.location.href);
+        if((url.pathname.replace(/\/$/, "") || "/") !== "/screener") return;
+        const enc = encodeScreenerState(screenerPayload);
+        if((url.searchParams.get("v") || "") === enc) return;
+        if(enc) url.searchParams.set("v", enc); else url.searchParams.delete("v");
+        window.history.replaceState(window.history.state, "", url.toString());
+      } catch {/* no-op */}
+    }, 400);
+    return () => clearTimeout(t);
+  }, [screenerPayload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -26695,7 +26962,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, []);
   const mktIndexByScope = useMemo(() => {
     const m = new Map();
-    for(const r of (mktIndex || [])) m.set(r.scope + "|" + (r.scope_key || ""), r);
+    // Array.isArray, not a truthiness check: this memo is downstream of a
+    // cache, and a cache is exactly where a non-array can arrive.
+    if(Array.isArray(mktIndex)) for(const r of mktIndex) m.set(r.scope + "|" + (r.scope_key || ""), r);
     return m;
   }, [mktIndex]);
   const benchmarkReady = Array.isArray(mktIndex) && mktIndex.length > 0;
@@ -27764,6 +28033,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           onClick=${()=>{ const n = prompt("Rename watchlist:", activeList.name); if(n && n.trim()) watchlistOps.rename(activeList.id, n); }}>Rename</button>
         <button class="price-db-advbtn" title="Delete this watchlist and everything on it"
           onClick=${()=>{ if(confirm(`Delete "${activeList.name}" and its ${activeList.items.length} item(s)? This can't be undone.`)) watchlistOps.remove(activeList.id); }}>Delete</button>
+        ${onOpenAlerts && html`<button class="price-db-advbtn"
+          title="Set a price alert on this watchlist — checked once per visit against the day's prices."
+          onClick=${onOpenAlerts}>⚑ Alerts</button>`}
       <//>`}
     </div>`}
     <div class="price-db-modebar" role="group" aria-label="Screener mode">
@@ -41442,6 +41714,151 @@ function App(){
     },
   }), [user, watchlists, refreshWatchlists]);
 
+  // ── Price alerts ───────────────────────────────────────────────────────
+  // Rules live here rather than in the Screener because the evaluation has to
+  // run wherever the user lands — the whole point is "tell me what happened
+  // while I was away", and they may well open on the home page.
+  const [alerts, setAlerts] = useState(null);
+  const [alertEvents, setAlertEvents] = useState([]);
+  const [alertsUnavailable, setAlertsUnavailable] = useState(false);
+  const refreshAlerts = useCallback(async () => {
+    if(!user){ setAlerts(null); setAlertEvents([]); return; }
+    const [rules, events] = await Promise.all([
+      sbClient.from("price_alerts")
+        .select("id,watchlist_id,card_id,printing,basis,kind,threshold,window_key,enabled,cooldown_days,note,created_at")
+        .order("created_at", {ascending:false}),
+      sbClient.from("alert_events")
+        .select("id,alert_id,card_id,printing,observed,price_date,fired_at,read_at")
+        .order("fired_at", {ascending:false}).limit(200),
+    ]);
+    if(rules.error){
+      if(/42P01|42501|PGRST202|relation|permission denied/i.test(rules.error.message || rules.error.code || "")){
+        console.warn("price alerts unavailable — run supabase/129_price_alerts.sql");
+        setAlertsUnavailable(true); setAlerts([]); setAlertEvents([]);
+        return;
+      }
+      console.warn("alerts fetch failed:", rules.error.message || rules.error);
+      return;
+    }
+    setAlerts(rules.data || []);
+    setAlertEvents(events.error ? [] : (events.data || []));
+    setAlertsUnavailable(false);
+  }, [user]);
+  useEffect(() => {
+    if(!user){ setAlerts(null); setAlertEvents([]); setAlertsUnavailable(false); return; }
+    refreshAlerts();
+  }, [user, refreshAlerts]);
+
+  // Evaluate once per session, after both the rules and the lists have landed.
+  // Deliberately NOT on every render or every visibility change: prices update
+  // once a day, so re-evaluating more often can only ever re-derive the same
+  // answer, and each run costs a query.
+  const alertsEvaluated = useRef(false);
+  useEffect(() => {
+    if(alertsEvaluated.current) return;
+    if(!user || alertsUnavailable) return;
+    if(!alerts || !alerts.length || !watchlists) return;
+    alertsEvaluated.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Only the cards actually under a rule — bounded by watchlist size, so
+        // this stays a small query even though price_movers has ~5,800 rows.
+        const wanted = new Set();
+        const listById = new Map(watchlists.map(w => [w.id, w]));
+        for(const a of alerts){
+          if(a.enabled === false) continue;
+          if(a.watchlist_id){
+            for(const it of ((listById.get(a.watchlist_id) || {items:[]}).items || []))
+              if(it.card_id) wanted.add(it.card_id);
+          } else if(a.card_id) wanted.add(a.card_id);
+        }
+        if(!wanted.size) return;
+        const ids = Array.from(wanted);
+        const BATCH = 60;
+        const chunks = [];
+        for(let i = 0; i < ids.length; i += BATCH) chunks.push(ids.slice(i, i + BATCH));
+        const pages = await Promise.all(chunks.map(c => sbFetchAll("price_movers", {
+          select: "card_id,printing,low_today,market_today,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d",
+          card_id: "in.(" + c.join(",") + ")",
+          order: "card_id.asc",
+        })));
+        if(cancelled) return;
+        const rowByKey = new Map();
+        for(const r of pages.flat()) rowByKey.set(r.card_id + "|" + (r.printing || "Normal"), r);
+        if(!rowByKey.size) return;
+        // The price date the rules are judged against. price_movers carries no
+        // date column, so we take the catalog's latest snapshot — the same date
+        // the footer's staleness pill reports.
+        const priceDate = lastRawPriceDate || new Date().toISOString().slice(0, 10);
+        const lastFiredByKey = new Map();
+        for(const e of alertEvents){
+          const k = e.alert_id + "|" + e.card_id + "|" + (e.printing || "Normal");
+          const t = Date.parse(e.fired_at);
+          if(Number.isFinite(t) && (!lastFiredByKey.has(k) || t > lastFiredByKey.get(k))) lastFiredByKey.set(k, t);
+        }
+        const firings = evaluateAlerts({
+          alerts, watchlists, rowByKey, priceDate, lastFiredByKey, nowMs: Date.now(),
+        });
+        if(!firings.length || cancelled) return;
+        // ignoreDuplicates leans on alert_events_unique, so re-evaluating the
+        // same snapshot on a second device is a no-op rather than a second
+        // copy of every alert in the inbox.
+        const {error} = await sbClient.from("alert_events")
+          .upsert(firings.map(f => ({...f, user_id: user.id})),
+            {onConflict: "alert_id,card_id,printing,price_date", ignoreDuplicates: true});
+        if(error){ console.warn("alert insert failed:", error.message || error); return; }
+        if(!cancelled) refreshAlerts();
+      } catch(e){
+        console.warn("alert evaluation failed:", e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, alerts, watchlists, alertsUnavailable, alertEvents, lastRawPriceDate, refreshAlerts]);
+
+  const unreadAlerts = useMemo(
+    () => (alertEvents || []).filter(e => !e.read_at).length, [alertEvents]);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  // Resolve a card_id to a readable name for the inbox. The alert tables store
+  // ids only — a firing that reads "crd_7f3a91" is not a notification.
+  const alertCardName = useCallback((cid) => {
+    if(!cid) return null;
+    const r = (raw || []).find(x => x.card_id === cid);
+    return r ? (r["Product Name"] || null) : null;
+  }, [raw]);
+  const alertOps = useMemo(() => ({
+    create: async (rule) => {
+      if(!user) return;
+      const {error} = await sbClient.from("price_alerts").insert({...rule, user_id: user.id});
+      if(error){ flashToast("Couldn't save that alert."); return; }
+      // A new rule should be able to fire against today's prices immediately
+      // rather than waiting for the next session.
+      alertsEvaluated.current = false;
+      await refreshAlerts();
+    },
+    update: async (id, patch) => {
+      if(!user) return;
+      const {error} = await sbClient.from("price_alerts").update(patch).eq("id", id);
+      if(error){ flashToast("Couldn't update that alert."); return; }
+      if(patch.enabled) alertsEvaluated.current = false;
+      await refreshAlerts();
+    },
+    remove: async (id) => {
+      if(!user) return;
+      const {error} = await sbClient.from("price_alerts").delete().eq("id", id);
+      if(error){ flashToast("Couldn't delete that alert."); return; }
+      await refreshAlerts();
+    },
+    markRead: async (ids) => {
+      if(!user || !ids || !ids.length) return;
+      // Optimistic: the badge should clear on the click, not after a round trip.
+      const stamp = new Date().toISOString();
+      setAlertEvents(prev => prev.map(e => ids.includes(e.id) ? {...e, read_at: e.read_at || stamp} : e));
+      const {error} = await sbClient.from("alert_events").update({read_at: stamp}).in("id", ids);
+      if(error){ console.warn("mark-read failed:", error.message || error); refreshAlerts(); }
+    },
+  }), [user, refreshAlerts]);
+
   // Booster-pack art-variant ownership fetch. Separate effect so a missing
   // table (pre-migration-72) or transient error doesn't block the sealed qty
   // load above. Silently no-ops on 42P01 (table not deployed yet).
@@ -42143,6 +42560,8 @@ function App(){
                         style=${{width:20,height:20,borderRadius:"50%",objectFit:"cover",objectPosition:"top",background:"var(--bg-surface)"}}/>`
                     : html`<span style=${{width:20,height:20,borderRadius:"50%",background:"var(--accent-glow)",color:"var(--accent)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>${avatarInitial}</span>`}
                   <span class="profile-gear-badge" aria-hidden="true">${GEAR_BADGE_ICON}</span>
+                  ${unreadAlerts > 0 && html`<span class="profile-alert-badge"
+                    aria-hidden="true">${unreadAlerts > 9 ? "9+" : unreadAlerts}</span>`}
                 </span>
                 <span class="profile-btn-name">${profile?.display_name || "you"}</span>
               </button>`
@@ -42253,6 +42672,11 @@ function App(){
               title="Copy a link to whatever you're looking at right now">
               ${uiIcon("link")} Copy link to this page
             </button>
+            ${user && html`<button class="settings-action"
+              onClick=${()=>{ setSettingsOpen(false); setAlertsOpen(true); }}
+              title="Price alerts on your watchlists">
+              ${uiIcon("warn")} Price alerts${unreadAlerts > 0 ? ` (${unreadAlerts} new)` : ""}
+            </button>`}
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">Home page layout</span>
               <div class="settings-home-hint">Arrange the home page directly on the page —
@@ -42307,6 +42731,12 @@ function App(){
       onAccept=${acceptGradedTos}
       onDismiss=${()=>{ setGradedTosPromptOpen(false);
         try { localStorage.setItem("packsink:gradedTosDismissedAt", String(Date.now())); } catch {} }}/>`}
+    ${alertsOpen && user && html`<${AlertsModal}
+      alerts=${alerts || []} alertEvents=${alertEvents} alertOps=${alertOps}
+      watchlists=${watchlists || []} unavailable=${alertsUnavailable}
+      cardNameFor=${alertCardName}
+      onOpenCard=${(cid)=>{ setAlertsOpen(false); openCardsWithSearch("", cid); }}
+      onClose=${()=>setAlertsOpen(false)}/>`}
     ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
     ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}
       onGo=${(v)=>{ closeTour(); onTabClick(v); }}
@@ -42453,7 +42883,8 @@ function App(){
       incomingScreenerView=${incomingScreenerView}
       onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}
       watchlists=${watchlists} watchlistOps=${watchlistOps}
-      watchlistsUnavailable=${watchlistsUnavailable}/>`}
+      watchlistsUnavailable=${watchlistsUnavailable}
+      onOpenAlerts=${user ? (()=>setAlertsOpen(true)) : null}/>`}
     ${view==="faq"&&html`<${FAQView} user=${user}
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
