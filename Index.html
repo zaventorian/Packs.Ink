@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=350">
+<link rel="stylesheet" href="styles.css?v=351">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -32505,18 +32505,18 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     <div class="home-page-title">
       <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
     </div>
-    ${homeEdit && html`<div class=${"home-edit-row"+(editing?" is-editing":"")}>
-      ${editing
-        ? html`<${React.Fragment}>
-            <span class="home-edit-hint">Arrange your home page — changes save as you go.</span>
-            <button class="home-edit-btn2" onClick=${homeEdit.reset}
-              title="Restore the default arrangement">Reset</button>
-            <button class="home-edit-btn2" onClick=${homeEdit.cancel}
-              title="Undo everything from this editing session">Cancel</button>
-            <button class="home-edit-done" onClick=${homeEdit.done}>✓ Done</button>
-          <//>`
-        : html`<button class="home-edit-open" onClick=${homeEdit.start}
-            title="Rearrange, hide, or move the home page sections">${uiIcon("edit")} Edit layout</button>`}
+    ${/* Only the EDITING controls sit up here, and only while editing: sticky,
+          so Done and Cancel stay reachable while you rearrange. The launcher
+          lives at the FOOT of the page (see home-edit-foot) -- as a permanent
+          row above the movers it cost every visitor ~60px of the first screen
+          for a button most people press once. */""}
+    ${homeEdit && editing && html`<div class="home-edit-row is-editing">
+      <span class="home-edit-hint">Arrange your home page — changes save as you go.</span>
+      <button class="home-edit-btn2" onClick=${homeEdit.reset}
+        title="Restore the default arrangement">Reset</button>
+      <button class="home-edit-btn2" onClick=${homeEdit.cancel}
+        title="Undo everything from this editing session">Cancel</button>
+      <button class="home-edit-done" onClick=${homeEdit.done}>✓ Done</button>
     </div>`}
     ${/* Every FIXED panel's editor bar. They have no column, so columnNodes
           skips them and they would otherwise be unreachable from the layout
@@ -32684,6 +32684,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       </div>
       ${rightNodes.length > 0 && html`<div class="home-grid-right">${rightNodes}</div>`}
     </div>
+
+    ${homeEdit && !editing && html`<div class="home-edit-row home-edit-foot">
+      <button class="home-edit-open" onClick=${homeEdit.start}
+        title="Rearrange, hide, or move the home page sections">${uiIcon("edit")} Edit layout</button>
+    </div>`}
 
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>{ setSelectedGroup(null); setSelectedInitialTab(null); setSelectedInitialPrinting(null); }}
