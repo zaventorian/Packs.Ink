@@ -2405,6 +2405,23 @@ button.graded-home-title{cursor:pointer;}
 .graded-home-flbl:first-child{margin-left:0;}
 .gh-chip{font-size:10px;font-weight:600;padding:2px 8px;border:1px solid var(--border);border-radius:999px;background:var(--bg-surface);color:var(--text-muted);cursor:pointer;}
 .gh-chip.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+/* Chip-that-opens-a-checkbox-list. --bg-modal, not --bg-card: the latter is
+   translucent in the dark themes and the movers strip shows straight through. */
+.gh-multi{position:relative;display:inline-flex;}
+.gh-multi-btn{display:inline-flex;align-items:center;gap:3px;}
+.gh-multi-caret{font-size:8px;line-height:1;opacity:0.8;}
+.gh-multi-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:40;min-width:96px;
+  display:flex;flex-direction:column;gap:1px;padding:5px;
+  background:var(--bg-modal);border:1px solid var(--border);border-radius:8px;
+  box-shadow:0 8px 24px rgba(0,0,0,0.35);}
+.gh-multi-row{display:flex;align-items:center;gap:6px;padding:3px 6px;border-radius:5px;
+  font-size:11px;font-weight:600;color:var(--text);cursor:pointer;white-space:nowrap;}
+.gh-multi-row:hover{background:var(--accent-glow);}
+.gh-multi-row input{margin:0;flex:none;}
+.gh-multi-clear{margin-top:3px;font-size:10px;font-weight:700;padding:3px 6px;
+  border:1px solid var(--border);border-radius:5px;background:transparent;
+  color:var(--text-muted);cursor:pointer;}
+.gh-multi-clear:hover{color:var(--accent);border-color:var(--accent);}
 .gh-clear{color:var(--accent);background:none;border-color:var(--border-accent);}
 @media (max-width:640px){
   .graded-movers-banner-head{padding:8px 10px;}
@@ -2946,6 +2963,34 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-news-feed .home-news-title{font-size:11.5px;}
 .home-news-feed .home-news-link{padding:5px 6px;gap:5px;}
 .home-news-feed .home-news-link-name{font-size:12px;}
+/* ---- Panel paired with a movers banner ----------------------------------
+   Any pairable panel (News / Following / Tournament results) beside any
+   banner, either side. This generalises the hardcoded News + Rare-Legendary
+   row above it; unlike that one it is NOT width-gated, because it is a
+   deliberate choice the user made in the layout editor rather than a
+   fallback for phones. align-items:start so neither column stretches the
+   other, and the side column stays narrow enough that the banner keeps its
+   marquee. Below 560px the pair stacks -- a 32% column on a 400px phone is
+   ~110px, which is narrower than one mover tile. */
+.home-pair-row{display:grid;column-gap:8px;align-items:start;
+  grid-template-columns:minmax(0,1fr) minmax(150px,32%);}
+.home-pair-row--left{grid-template-columns:minmax(150px,32%) minmax(0,1fr);}
+.home-pair-main,.home-pair-side{min-width:0;}
+.home-pair-row--left .home-pair-main{order:2;}
+.home-pair-row--left .home-pair-side{order:1;}
+/* A PAIRED panel is shown wherever it was put, full stop. The News feed's
+   rail copy is display:none !important below 1100px (that rule exists so the
+   rail copy and the legacy Rare-Legendary copy can't both appear); a panel the
+   user deliberately paired has to beat it, hence the extra class + important.
+   Without this, pairing News on a phone renders it into the DOM invisibly. */
+.home-pair-side > .home-feed,
+.home-pair-side > .home-feed.home-news-feed--rail{display:block !important;}
+
+/* NOT stacked on phones. Beside-the-banner IS the mobile use case -- it is
+   where the rails sink below the fold -- and the existing News/Rare-Legendary
+   row has run at this geometry on phones for months. A ~120px side column is
+   narrow but it is a list of names, not a card. */
+
 @media (max-width:1100px){
   /* Two classes + !important: the stacked-column stretch rule further down
      (`.home-feed{display:block !important}` ≤1100px) would otherwise resurrect

@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=351">
+<link rel="stylesheet" href="styles.css?v=352">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29282,6 +29282,18 @@ const HOME_PANELS = [
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_FIXED_KEYS = new Set(HOME_PANELS.filter(p => p.fixed).map(p => p.key));
+// Panels that can be PAIRED with a movers banner — rendered beside it in a
+// two-column row instead of down in a rail. These are the three narrow list
+// boxes; a wide panel (Set EV, the collection chart) squeezed into a 32%
+// column is unreadable, so they are not offered.
+//
+// This generalises what the News feed already did with the Rare–Legendary
+// banner, which was hardcoded: on a phone the rail columns sink below the
+// movers, so a box you want to actually see has to ride a banner. Now any of
+// the three can ride any banner, on either side, and it is a layout choice
+// rather than something baked into one component.
+const HOME_PAIRABLE_KEYS = new Set(["news", "following", "tournaments"]);
+const HOME_PAIR_SIDES = ["right", "left"];
 const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.label]));
 // Every panel except setChamps can be popped out and linked to.
 const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps" && !HOME_FIXED_KEYS.has(k)));
@@ -29330,7 +29342,10 @@ const normalizeBannerOrder = (val) => {
   return clean;
 };
 const NEWS_DEFAULT_COL = HOME_PANELS.find(p => p.key === "news").col;
-const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:!p.off}));
+// Every entry carries the full shape, pairing included — a fresh browser must
+// not produce a layout that differs structurally from a stored one.
+const defaultHomeLayout = () => HOME_PANELS.map(p =>
+  ({key:p.key, col:p.col, on:!p.off, ...normalizeHomePair({key:p.key})}));
 // Coerce whatever is in storage (or user_metadata) into a complete, valid
 // layout: unknown keys dropped, missing keys appended at their default column,
 // bad column names reset. Never throws — a corrupt value falls back to default.
@@ -29343,13 +29358,15 @@ const normalizeHomeLayout = (val) => {
       const k = it && it.key;
       if(!byKey.has(k) || seen.has(k)) continue;
       seen.add(k);
-      out.push({key:k, col: cols.has(it.col) ? it.col : byKey.get(k).col, on: it.on !== false});
+      out.push({key:k, col: cols.has(it.col) ? it.col : byKey.get(k).col, on: it.on !== false,
+                ...normalizeHomePair({key:k, pair: it.pair, pairSide: it.pairSide})});
     }
   }
   // A panel marked `off` starts hidden when it is APPENDED to an existing
   // layout too, not just in a fresh one — otherwise shipping an opt-in panel
   // would silently switch it on for every returning browser.
-  for(const p of HOME_PANELS) if(!seen.has(p.key)) out.push({key:p.key, col:p.col, on:!p.off});
+  for(const p of HOME_PANELS) if(!seen.has(p.key))
+    out.push({key:p.key, col:p.col, on:!p.off, ...normalizeHomePair({key:p.key})});
   return out;
 };
 
@@ -29357,6 +29374,16 @@ const normalizeHomeLayout = (val) => {
 // state; these are the bridge so a surface elsewhere in the app (the Graded
 // collection's movers banner) can offer "show this on my home page" inline
 // instead of sending people to the layout editor.
+// A panel's pairing, validated. Anything unrecognised collapses to "not
+// paired" rather than throwing — same contract as the rest of
+// normalizeHomeLayout, which never rejects a stored layout, it repairs it.
+const normalizeHomePair = (p) => {
+  if(!p || !HOME_PAIRABLE_KEYS.has(p.key)) return {pair: null, pairSide: "right"};
+  const pair = HOME_BANNER_KEYS.includes(p.pair) ? p.pair : null;
+  const pairSide = HOME_PAIR_SIDES.includes(p.pairSide) ? p.pairSide : "right";
+  return {pair, pairSide};
+};
+
 const isHomePanelEnabled = (key) => {
   try {
     const p = normalizeHomeLayout(JSON.parse(localStorage.getItem(HOME_LAYOUT_KEY) || "null"))
@@ -31389,6 +31416,39 @@ const UpcomingSCsBox = () => {
 // (graded_sales_rollup) and biggest individual sales in the window
 // (graded_sales). Market-wide — not limited to the user's owned cards.
 const GRADED_HOME_WINS = [["1d","1D","pct_1d",1],["1w","1W","pct_7d",7],["1m","1M","pct_30d",30],["3m","3M","pct_90d",90]];
+// A chip that opens a checkbox list, for a dimension with too many values to
+// sit in a row. Six grade chips wrapped on a phone and left "9 8.5 8 7" alone
+// on a second line, which reads as a layout bug rather than as a filter.
+const GhMultiSelect = ({label, options, selected, onToggle, onClear}) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  useEffect(() => {
+    if(!open) return;
+    const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if(e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+  const n = selected.size;
+  return html`<span class="gh-multi" ref=${ref}>
+    <button class=${"gh-chip gh-multi-btn"+(n?" active":"")} onClick=${()=>setOpen(o=>!o)}
+      aria-expanded=${open} aria-haspopup="true"
+      title=${n ? label+": "+[...selected].join(", ") : "Filter by "+label.toLowerCase()}>
+      ${label}${n ? " · "+n : ""}<span class="gh-multi-caret" aria-hidden="true">▾</span>
+    </button>
+    ${open && html`<div class="gh-multi-pop" role="group" aria-label=${label}>
+      ${options.map(o => html`<label key=${o} class="gh-multi-row">
+        <input type="checkbox" checked=${selected.has(o)} onChange=${()=>onToggle(o)}/>
+        <span>${o}</span>
+      </label>`)}
+      ${n > 0 && html`<button class="gh-multi-clear" onClick=${()=>{ onClear(); setOpen(false); }}>Clear</button>`}
+    </div>`}
+  </span>`;
+};
 const GRADED_HOME_GRADERS = ["PSA","CGC","BGS","SGC","TAG"];
 const GRADED_HOME_GRADES = ["10","9.5","9","8.5","8","7"];
 // Graded movers are limited to the cards people actually grade + chase.
@@ -31519,8 +31579,10 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
     <div class="graded-home-filters">
       <span class="graded-home-flbl">Graders</span>
       ${GRADED_HOME_GRADERS.map(g => html`<button key=${g} class=${"gh-chip"+(graderF.has(g)?" active":"")} onClick=${()=>toggle(setGraderF)(g)}>${g}</button>`)}
-      <span class="graded-home-flbl">Grades</span>
-      ${GRADED_HOME_GRADES.map(g => html`<button key=${g} class=${"gh-chip"+(gradeF.has(g)?" active":"")} onClick=${()=>toggle(setGradeF)(g)}>${g}</button>`)}
+      ${/* Dropdown rather than a chip per grade: six chips wrapped the filter
+            row onto a second line on every phone. */""}
+      <${GhMultiSelect} label="Grades" options=${GRADED_HOME_GRADES}
+        selected=${gradeF} onToggle=${toggle(setGradeF)} onClear=${()=>setGradeF(new Set())}/>
       ${(graderF.size>0 || gradeF.size>0) && html`<button class="gh-chip gh-clear" onClick=${()=>{ setGraderF(new Set()); setGradeF(new Set()); }}>Clear</button>`}
     </div>
     ${cards == null
@@ -32358,7 +32420,12 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}
         onPopOut=${variant === "rail" ? popOutPanel : null}/>`
     : null;
-  const newsFeedRl = newsFeedAside("rl");
+  // The legacy CSS-gated ride on the Rare–Legendary banner stays the default
+  // (it is what every existing browser already renders on a phone), but an
+  // explicit pairing overrides it — otherwise choosing "beside Chase Movers"
+  // would put the news feed on the page twice.
+  const newsExplicitlyPaired = homeLayout.some(p => p.key === "news" && p.pair);
+  const newsFeedRl = newsExplicitlyPaired ? null : newsFeedAside("rl");
 
   // Pop-out state. The URL is the source of truth on first paint (so a
   // /?panel=news link opens straight into it) and history-backed after, so
@@ -32448,11 +32515,27 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             onClick=${()=>homeEdit.move(p.key, 1)} title="Move down within this column"
             aria-label=${"Move "+meta.label+" down"}>▼</button>
         <//>`}
-        ${!meta.fixed && html`<select class="home-edit-col" value=${p.col} aria-label=${meta.label+" column"}
+        ${!meta.fixed && !p.pair && html`<select class="home-edit-col" value=${p.col} aria-label=${meta.label+" column"}
           title="Which part of the page this section sits in"
           onChange=${e=>homeEdit.setCol(p.key, e.target.value)}>
           ${HOME_COLUMNS.map(c => html`<option key=${c.key} value=${c.key}>${c.label}</option>`)}
         </select>`}
+        ${/* Pairing replaces the column outright: a paired panel sits beside
+              its banner, so asking which rail it lives in is meaningless. */""}
+        ${HOME_PAIRABLE_KEYS.has(p.key) && html`<${React.Fragment}>
+          <select class="home-edit-col" value=${p.pair || ""} aria-label=${meta.label+" pairing"}
+            title="Sit this box beside a movers banner instead of in a rail"
+            onChange=${e=>homeEdit.setPair(p.key, e.target.value || null, p.pairSide)}>
+            <option value="">In a column</option>
+            ${HOME_BANNER_KEYS.map(k => html`<option key=${k} value=${k}>Beside ${HOME_BANNER_LABELS[k] || k}</option>`)}
+          </select>
+          ${p.pair && html`<select class="home-edit-col" value=${p.pairSide || "right"}
+            aria-label=${meta.label+" side"} title="Which side of the banner"
+            onChange=${e=>homeEdit.setPair(p.key, p.pair, e.target.value)}>
+            <option value="right">on the right</option>
+            <option value="left">on the left</option>
+          </select>`}
+        <//>`}
         <button class="home-edit-btn2" onClick=${()=>homeEdit.toggle(p.key)}
           title=${p.on ? "Hide this section from the home page" : "Show this section again"}>
           ${p.on ? "Hide" : "Show"}
@@ -32465,11 +32548,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // open/closed state. The page behind is dimmed, so the gap is never seen.
   const columnNodes = (col) => {
     if(!editing) return homeLayout
-      .filter(p => panelCol[p.key] === col && p.key !== openPanel && !HOME_FIXED_KEYS.has(p.key))
+      .filter(p => panelCol[p.key] === col && p.key !== openPanel
+                   && !HOME_FIXED_KEYS.has(p.key) && !p.pair)
       .map(p => panelNode(p.key))
       .filter(Boolean);
     const out = [];
-    const inCol = homeLayout.filter(p => p.col === col && !HOME_FIXED_KEYS.has(p.key));
+    // A paired panel's editor bar follows it to the banner, so it must not
+    // also appear in a column's bar list.
+    const inCol = homeLayout.filter(p => p.col === col && !HOME_FIXED_KEYS.has(p.key) && !p.pair);
     for(const p of inCol.filter(p => p.on)){
       const meta = HOME_PANELS.find(h => h.key === p.key);
       if(!meta || p.key === openPanel) continue;
@@ -32655,10 +32741,31 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                   // node-less keys (signed-out graded, no hot set) still hold
                   // order slots but must not be swap partners or end stops.
                   const visibleBannerKeys = order.filter(k => bannerNodes[k] != null);
+                  // Panels the user parked beside a banner, by banner key.
+                  // setHomePanelPair guarantees at most one per banner.
+                  const pairedByBanner = {};
+                  for(const p of homeLayout){
+                    if(p.pair && p.on && p.key !== openPanel) pairedByBanner[p.pair] = p;
+                  }
                   const stack = [];
                   order.forEach((k) => {
-                    const node = bannerNodes[k];
+                    let node = bannerNodes[k];
                     if(node == null) return;
+                    const paired = pairedByBanner[k];
+                    if(paired){
+                      const side = paired.pairSide === "left" ? "left" : "right";
+                      const panel = panelNode(paired.key);
+                      const meta = HOME_PANELS.find(h => h.key === paired.key);
+                      if(panel){
+                        // The paired panel's editor bar travels with it, above
+                        // the pair row: its column bar list no longer holds it.
+                        if(editing && meta) stack.push(editBar(paired, meta));
+                        node = html`<div class=${"home-pair-row home-pair-row--"+side}>
+                          <div class="home-pair-main">${node}</div>
+                          <div class="home-pair-side">${panel}</div>
+                        </div>`;
+                      }
+                    }
                     const vi = visibleBannerKeys.indexOf(k);
                     if(editing){
                       stack.push(html`<div key=${"bbar-"+k} class="home-edit-card home-edit-card--banner">
@@ -32675,6 +32782,18 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     }
                     stack.push(html`<${React.Fragment} key=${"bn-"+k}>${node}<//>`);
                   });
+                  // A panel paired with a banner that isn't rendering (signed
+                  // out of graded, no hot set) would otherwise vanish with no
+                  // way to get it back. Fall through to the bottom of the
+                  // stack rather than disappearing.
+                  for(const [bk, p] of Object.entries(pairedByBanner)){
+                    if(bannerNodes[bk] != null) continue;
+                    const panel = panelNode(p.key);
+                    const meta = HOME_PANELS.find(h => h.key === p.key);
+                    if(!panel) continue;
+                    if(editing && meta) stack.push(editBar(p, meta));
+                    stack.push(html`<${React.Fragment} key=${"orphan-"+p.key}>${panel}<//>`);
+                  }
                   // A fragment, not a wrapper div — the banners must stay
                   // DIRECT children of .home-grid-main so the edit-mode
                   // freeze rule dims each banner while its bar stays live.
@@ -39681,6 +39800,14 @@ function App(){
     setHomeLayout(l => l.map(p => p.key === key ? {...p, on: !p.on} : p));
   const setHomePanelCol = (key, col) =>
     setHomeLayout(l => l.map(p => p.key === key ? {...p, col} : p));
+  // Pair a panel with a movers banner, or unpair it (banner = null). Only one
+  // panel may ride a given banner — two boxes in a 32% column would leave
+  // neither readable — so claiming a banner releases whoever held it.
+  const setHomePanelPair = (key, pair, pairSide) => setHomeLayout(l => l.map(p => {
+    if(p.key === key) return {...p, pair: pair || null, pairSide: pairSide || p.pairSide || "right"};
+    if(pair && p.pair === pair) return {...p, pair: null};
+    return p;
+  }));
   // Move a panel one slot within its own column. Order is stored as a single
   // flat array, so "up" means swapping with the nearest previous entry that is
   // both in the same column AND visible — not simply index-1, which would swap
@@ -41183,7 +41310,7 @@ function App(){
       homeEdit=${{editing: homeEditMode, start: startHomeEdit,
         done: ()=>finishHomeEdit(true), cancel: ()=>finishHomeEdit(false),
         reset: resetHomeLayout, toggle: toggleHomePanel,
-        setCol: setHomePanelCol, move: moveHomePanel,
+        setCol: setHomePanelCol, move: moveHomePanel, setPair: setHomePanelPair,
         bannerOrder: homeBannerOrder, moveBanner: moveHomeBanner}}
       onEventArtistClick=${setIndyArtistPick}/>`}
     ${viewsReady&&view==="cards"&&html`<${CardsView} raw=${raw} sets=${sets} theme=${theme}

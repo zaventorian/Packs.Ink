@@ -27,8 +27,11 @@ function grab(startMarker, endMarker) {
 
 const consts = grab(
   "const HOME_COLUMNS = [",
-  "const defaultHomeLayout = () => HOME_PANELS.map(p => ({key:p.key, col:p.col, on:!p.off}));",
+  "  ({key:p.key, col:p.col, on:!p.off, ...normalizeHomePair({key:p.key})}));",
 );
+// normalizeHomeLayout delegates the pairing fields; normalizeHomePair is
+// defined further down the file, so grab it separately and emit it first.
+const pairNorm = grab("const normalizeHomePair = (p) => {", "\n};");
 const normalize = grab("const normalizeHomeLayout = (val) => {", "\n};");
 // The App initializer, rewritten only enough to be callable outside React.
 const init = grab("  const [homeLayout, setHomeLayout] = useState(() => {", "\n  });")
@@ -42,7 +45,7 @@ globalThis.localStorage = {
 
 const { initHomeLayout, HOME_PANELS } = await import(
   "data:text/javascript," +
-  encodeURIComponent(`${consts}\n${normalize}\n${init}\nexport {initHomeLayout, HOME_PANELS};`)
+  encodeURIComponent(`${consts}\n${pairNorm}\n${normalize}\n${init}\nexport {initHomeLayout, HOME_PANELS};`)
 );
 
 const NEWS_DEFAULT = HOME_PANELS.find((p) => p.key === "news").col;
@@ -111,6 +114,36 @@ for (const key of optIn) {
   check(`opt-in ${key}: a deliberate ON survives`,
     initHomeLayout().find((p) => p.key === key).on, true);
 }
+
+// -- pairing a panel with a movers banner ---------------------------------
+// A stored pairing has to survive a reload, and a bad one has to collapse to
+// "not paired" rather than render a panel next to nothing. Both failures are
+// silent: the panel simply isn't where the user put it.
+const layoutWith = (patch) => JSON.stringify(
+  HOME_PANELS.map((p) => ({ key: p.key, col: p.col, on: true, ...(patch[p.key] || {}) })),
+);
+const pairOf = (key) => {
+  const p = initHomeLayout().find((x) => x.key === key);
+  return p.pair + "|" + p.pairSide;
+};
+
+store = {};
+check("fresh browser: nothing is paired", pairOf("news"), "null|right");
+
+store = { "packsink:homeLayout": layoutWith({ tournaments: { pair: "chase", pairSide: "left" } }) };
+check("a stored pairing survives", pairOf("tournaments"), "chase|left");
+
+store = { "packsink:homeLayout": layoutWith({ news: { pair: "rareLeg" } }) };
+check("pairSide defaults to right", pairOf("news"), "rareLeg|right");
+
+store = { "packsink:homeLayout": layoutWith({ news: { pair: "nonsense", pairSide: "sideways" } }) };
+check("an unknown banner collapses to unpaired", pairOf("news"), "null|right");
+
+// Only the three narrow list boxes are pairable. A wide panel squeezed into a
+// 32% column is unreadable, so a stored pairing on one must be dropped.
+store = { "packsink:homeLayout": layoutWith({ collection: { pair: "chase" } }) };
+check("a non-pairable panel cannot be paired",
+  initHomeLayout().find((p) => p.key === "collection").pair, null);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

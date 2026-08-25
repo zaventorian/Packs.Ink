@@ -1385,6 +1385,34 @@ cards the only one that didn't look like a movers row.
   position comes from the banner ▲▼ instead. `HOME_FIXED_KEYS` panels render their editor bar in
   the home header, on every width.
 
+### Pairing a panel with a movers banner
+
+News / Following / Tournament results (`HOME_PAIRABLE_KEYS`) can sit **beside any movers banner,
+on either side**, chosen in the layout editor. This generalises what the News feed already did
+with the Rare–Legendary banner, which was hardcoded in one component.
+
+- Stored as `pair` (a `HOME_BANNER_KEYS` value or null) + `pairSide` on the panel's layout entry.
+  **`normalizeHomePair` validates both and never throws** — an unknown banner, a bogus side, or a
+  pairing on a non-pairable panel all collapse to "not paired", same contract as the rest of
+  `normalizeHomeLayout`: it repairs a stored layout, it never rejects one.
+- **A paired panel leaves its column** — both the render list and the editor-bar list — or it
+  renders twice. Its editor bar travels with it, above the pair row.
+- **Only the three narrow list boxes are offered.** Set EV or the collection chart in a 32% column
+  is unreadable.
+- **`setHomePanelPair` releases whoever held the banner**: two boxes in one 32% column leaves
+  neither readable, so claiming a banner un-pairs the previous occupant.
+- A panel paired to a banner that isn't rendering (signed out of graded, no hot set) **falls
+  through to the bottom of the stack** rather than vanishing with no way to get it back.
+- **The News feed's legacy Rare–Legendary ride stays the default** (it is what every existing
+  browser renders on a phone) but an explicit pairing overrides it — `newsExplicitlyPaired`.
+  Without that, picking "beside Chase Movers" puts the feed on the page twice.
+- **`.home-pair-side > .home-feed` needs `display:block !important`.** The News rail copy is
+  `display:none !important` below 1100px; a panel the user deliberately paired has to beat that,
+  or it renders into the DOM invisibly.
+- **The pair row does NOT stack on phones.** Beside-the-banner IS the mobile case — it exists
+  because the rails sink below the fold there — and this is the geometry the News row has run at
+  on phones for months. Measured at 412px: banner 226px, panel 150px, same top.
+
 ### The dice shortcut is a `fixed` panel
 
 `HOME_PANELS` entries may carry **`fixed: true`** — they are not columns of the grid, they are
