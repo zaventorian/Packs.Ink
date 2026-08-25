@@ -1124,7 +1124,18 @@ const shareUrlLabel = () => {
       decks:      () => DECK_SECTION_LABELS[q.get("s")] || null,
       collection: () => COLLECTION_SECTION_LABELS[q.get("c")] || null,
       market:     () => MARKET_SUB_LABELS[q.get("a")] || null,
-      screener:   () => SCREENER_MODE_LABELS[q.get("m")] || null,
+      // "your filters" is the load-bearing half of a ?v= link — the mode alone
+      // would describe a page the recipient won't recognise as what was sent.
+      screener:   () => {
+        const m = SCREENER_MODE_LABELS[q.get("m")] || null;
+        const filtered = q.get("v") ? "your filters" : null;
+        return [m, filtered].filter(Boolean).join(" · ") || null;
+      },
+      // Say how many products are on the graph — the whole point of the link.
+      history:    () => {
+        const n = decodeCompareItems(q.get("g") || "").length;
+        return n ? `${n} product${n === 1 ? "" : "s"}` : null;
+      },
     };
     const base = VIEW_SHARE_LABELS[view] || "this page";
     const sub = SUB[view] ? SUB[view]() : null;
@@ -3232,6 +3243,26 @@ const niceTicks = (min, max, n=4) => {
   for(let v = Math.ceil(min/step)*step; v <= max + 1e-9; v += step) ticks.push(v);
   return ticks;
 };
+// Ticks for a log10 axis: the 1-2-5 decade ladder, thinned to roughly `n`
+// labels so a 4-decade span ($0.20 → $2,000) doesn't print twelve of them.
+// Plain niceTicks can't do this job — an even linear step across a log axis
+// bunches every label into the top decade.
+const logTicks = (min, max, n=5) => {
+  if(!Number.isFinite(min) || !Number.isFinite(max) || max <= min || min <= 0) return [min];
+  const out = [];
+  for(let e = Math.floor(Math.log10(min)); e <= Math.ceil(Math.log10(max)); e++){
+    for(const m of [1, 2, 5]){
+      const v = m * Math.pow(10, e);
+      if(v >= min && v <= max) out.push(v);
+    }
+  }
+  if(!out.length) return [min, max];
+  const stride = Math.max(1, Math.ceil(out.length / n));
+  const thinned = out.filter((_, i) => i % stride === 0);
+  // Always keep the top tick — dropping it leaves the axis looking truncated.
+  if(thinned[thinned.length - 1] !== out[out.length - 1]) thinned.push(out[out.length - 1]);
+  return thinned;
+};
 const fmtTickPrice = (v) => v >= 100 ? "$"+v.toFixed(0) : v >= 10 ? "$"+v.toFixed(1) : "$"+v.toFixed(2);
 // Format an axis tick based on how wide the visible date range is.
 // Short ranges → "Month DD", medium → "Month DD 'YY", long → "Month 'YY".
@@ -3247,7 +3278,14 @@ const fmtTickDate = (ts, rangeMs) => {
 const fmtTooltipDate = (ts) =>
   new Date(ts).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"});
 
-const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null, maskValues=false}) => {
+// `logScale` plots the y axis on log10. Only meaningful when every value is
+// > 0, which the caller can't always guarantee (an indexed series can't go
+// negative, but a raw price series can carry a 0), so the flag is a REQUEST —
+// `useLog` below is what actually applies, and it declines on non-positive
+// data rather than emitting NaN coordinates.
+// `valueFmt` overrides the y-tick + tooltip formatter, so an indexed chart can
+// read "100" instead of "$100.00".
+const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null, maskValues=false, logScale=false, valueFmt=null}) => {
   const wrapRef = useRef(null);
   const [hover, setHover] = useState(null); // {x: viewBoxX, clientX, clientY}
   // Measure the wrapper's actual rendered width so the SVG viewBox matches
@@ -3271,7 +3309,12 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
   if(!series || !series.length) return null;
   const allPoints = series.flatMap(s => s.data || []);
   const valids = allPoints.filter(p => p && Number.isFinite(p.y));
-  if(valids.length < 2) return html`<div class="chart-empty">Not enough data yet</div>`;
+  // A one-point series used to be dropped by the caller before it got here and
+  // by this guard if it arrived anyway — so a card with a single price day, or
+  // (far more common) a graded tier with exactly one recorded sale, produced a
+  // legend chip and no mark. One point is renderable: it's a dot. Only a
+  // genuinely empty set is "not enough".
+  if(!valids.length) return html`<div class="chart-empty">Not enough data yet</div>`;
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for(const p of valids){
@@ -3281,16 +3324,32 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
     if(p.y > maxY) maxY = p.y;
   }
   if(maxX === minX){ maxX = minX + 1; }
-  const yPad = Math.max(0.01, (maxY - minY) * 0.08);
-  const yMin = Math.max(0, minY - yPad);
-  const yMax = maxY + yPad;
+  // log10 needs strictly positive values; a single 0 would send the whole axis
+  // to -Infinity. Decline rather than render NaN.
+  const useLog = logScale && minY > 0;
 
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
   const xScale = (x) => padding.left + ((x - minX) / (maxX - minX)) * innerW;
-  const yScale = (y) => padding.top + innerH - ((y - yMin) / (yMax - yMin || 1)) * innerH;
 
-  const yTicks = niceTicks(yMin, yMax, 4);
+  let yMin, yMax, yScale, yTicks;
+  if(useLog){
+    // Pad in log space so the 8% breathing room is proportional, not additive.
+    const lo = Math.log10(minY), hi = Math.log10(maxY);
+    const lpad = Math.max(0.02, (hi - lo) * 0.08);
+    yMin = Math.pow(10, lo - lpad);
+    yMax = Math.pow(10, hi + lpad);
+    const lMin = Math.log10(yMin), lMax = Math.log10(yMax);
+    yScale = (y) => padding.top + innerH - ((Math.log10(Math.max(y, yMin)) - lMin) / (lMax - lMin || 1)) * innerH;
+    yTicks = logTicks(yMin, yMax, 5);
+  } else {
+    const yPad = Math.max(0.01, (maxY - minY) * 0.08);
+    yMin = Math.max(0, minY - yPad);
+    yMax = maxY + yPad;
+    yScale = (y) => padding.top + innerH - ((y - yMin) / (yMax - yMin || 1)) * innerH;
+    yTicks = niceTicks(yMin, yMax, 4);
+  }
+  const fmtY = valueFmt || fmtTickPrice;
   const xTicks = showDateAxis ? [minX, (minX+maxX)/2, maxX] : [];
 
   // Find the data point closest to a given viewBoxX, per series. Also stash
@@ -3338,7 +3397,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         stroke="var(--border)" stroke-dasharray="2,3" stroke-width="0.6"/>`)}
       ${yTicks.map(t => html`<text key=${"l"+t}
         x=${padding.left - 4} y=${yScale(t)+3.5}
-        text-anchor="end" font-size="9" fill="var(--text-muted)">${maskValues ? "•••" : fmtTickPrice(t)}</text>`)}
+        text-anchor="end" font-size="9" fill="var(--text-muted)">${maskValues ? "•••" : fmtY(t)}</text>`)}
       ${xTicks.map((t,i) => html`<text key=${"xl"+i}
         x=${xScale(t)} y=${height-6}
         text-anchor=${i===0?"start":i===xTicks.length-1?"end":"middle"}
@@ -3358,12 +3417,19 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         </g>`;
       })}
       ${series.map((s,i) => {
-        const points = (s.data||[]).filter(p => Number.isFinite(p.y))
-          .map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(" ");
-        if(!points) return null;
+        const valid = (s.data||[]).filter(p => Number.isFinite(p.y));
+        if(!valid.length) return null;
+        // A polyline of one vertex draws nothing. Render the lone point as a
+        // dot so a single-sale graded tier is visible instead of invisible.
+        if(valid.length === 1) return html`<circle key=${"s"+i}
+          cx=${xScale(valid[0].x).toFixed(1)} cy=${yScale(valid[0].y).toFixed(1)}
+          r="3.4" fill=${s.color} stroke="var(--bg-solid)" stroke-width="1.2"/>`;
+        const points = valid.map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(" ");
+        // `dash` is an explicit dasharray (the compare palette's overflow
+        // encoding); `dashed` is the older boolean for Low-vs-Market pairs.
         return html`<polyline key=${"s"+i} fill="none" stroke=${s.color} stroke-width="1.6"
           stroke-linejoin="round" stroke-linecap="round"
-          stroke-dasharray=${s.dashed?"5,3":"0"} points=${points}/>`;
+          stroke-dasharray=${s.dash || (s.dashed?"5,3":"0")} points=${points}/>`;
       })}
       ${snapX != null && html`<line
         x1=${snapX} x2=${snapX} y1=${padding.top} y2=${height-padding.bottom}
@@ -3384,7 +3450,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         return html`<div key=${h.series.label} class="chart-tooltip-row">
           <span class="legend-swatch" style=${{background:h.series.color}}/>
           <span class="chart-tooltip-label">${h.series.label}</span>
-          <span class="chart-tooltip-value">${maskValues ? "$•••" : "$"+h.point.y.toFixed(2)}</span>
+          <span class="chart-tooltip-value">${maskValues ? "$•••" : (valueFmt ? valueFmt(h.point.y) : "$"+h.point.y.toFixed(2))}</span>
           ${pct != null && html`<span class=${"chart-tooltip-pct "+(pct>=0?"up":"down")}>${pct>=0?"+":""}${pct.toFixed(1)}%</span>`}
         </div>`;
       })}
@@ -3470,7 +3536,11 @@ const computeSeriesDeltas = (rows, field) => {
 const _xmlEscape = (s) => String(s == null ? "" : s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'})[c]);
 const _truncate = (s, n) => { const str = String(s||""); return str.length <= n ? str : str.slice(0, n-1) + "…"; };
 
-function buildCompareReportSvg({title, subtitle, items, series, colors, footerNote}){
+// `tableSeries` is the dollar-valued copy of `series`, used for the table's
+// Start / End / Change columns. They differ when the chart is indexed to 100:
+// the plot shows index points, the table stays in prices.
+function buildCompareReportSvg({title, subtitle, items, series, tableSeries, colors, footerNote}){
+  const tblSeries = tableSeries || series;
   const W = 1100;
   const headerH = 80;
   const chartH = 340;
@@ -3535,9 +3605,15 @@ function buildCompareReportSvg({title, subtitle, items, series, colors, footerNo
     parts.push(`<line x1="${innerLeft}" x2="${innerLeft}" y1="${innerTop}" y2="${innerBottom}" stroke="#cfd3d8"/>`);
     validSeries.forEach((s) => {
       const valid = s.data.filter(p => Number.isFinite(p.y));
-      if(valid.length < 2) return;
+      if(!valid.length) return;
+      const dash = s.dash ? ` stroke-dasharray="${s.dash}"` : '';
+      // Match the on-screen chart: one point is a dot, not a dropped series.
+      if(valid.length === 1){
+        parts.push(`<circle cx="${xScale(valid[0].x).toFixed(1)}" cy="${yScale(valid[0].y).toFixed(1)}" r="4" fill="${s.color}"/>`);
+        return;
+      }
       const pts = valid.map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(' ');
-      parts.push(`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
+      parts.push(`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"${dash}/>`);
     });
   } else {
     parts.push(`<text x="${(W/2).toFixed(0)}" y="${(headerH + chartH/2).toFixed(0)}" font-size="14" fill="#7a8088" text-anchor="middle">No history data available for the selected products.</text>`);
@@ -3561,14 +3637,23 @@ function buildCompareReportSvg({title, subtitle, items, series, colors, footerNo
 
   items.forEach((it, i) => {
     const rowY = tableTop + tableHeaderH + i * rowH + 18;
-    const color = colors[i % colors.length];
-    parts.push(`<rect x="46" y="${rowY-9}" width="14" height="5" fill="${color}" rx="2"/>`);
+    // Read the swatch off the resolved series so the table can't drift from
+    // the plotted line, and mirror the stroke pattern — past slot 8 the dash
+    // IS half the identity, so a solid swatch would claim two lines are one.
+    const srs = series[i] || {};
+    const color = srs.color || colors[i % colors.length];
+    if(srs.dash){
+      parts.push(`<rect x="46" y="${rowY-9}" width="6" height="5" fill="${color}" rx="1.5"/>`);
+      parts.push(`<rect x="55" y="${rowY-9}" width="5" height="5" fill="${color}" rx="1.5"/>`);
+    } else {
+      parts.push(`<rect x="46" y="${rowY-9}" width="14" height="5" fill="${color}" rx="2"/>`);
+    }
     parts.push(`<text x="${cols[0].x}" y="${rowY}" font-size="11" fill="#5a6068" text-anchor="start">${i+1}</text>`);
     parts.push(`<text x="${cols[1].x}" y="${rowY}" font-size="12" fill="#16181c" font-weight="600">${_xmlEscape(_truncate(it.name, 60))}</text>`);
     const kindBadge = it.kind === "sealed" ? "Sealed" : "Card";
     const typeStr = (it.sub ? it.sub + " · " : "") + kindBadge;
     parts.push(`<text x="${cols[2].x}" y="${rowY}" font-size="11" fill="#5a6068">${_xmlEscape(_truncate(typeStr, 44))}</text>`);
-    const sData = series[i] && series[i].data ? series[i].data.filter(p => Number.isFinite(p.y)) : [];
+    const sData = tblSeries[i] && tblSeries[i].data ? tblSeries[i].data.filter(p => Number.isFinite(p.y)) : [];
     if(sData.length){
       const start = sData[0].y, end = sData[sData.length-1].y;
       const pct = start !== 0 ? ((end - start)/start*100) : null;
@@ -3679,6 +3764,36 @@ const DARK_THEMES_GLOBAL = new Set(["aurora","velvet","black","dark"]);
 // Graphing builder AND the Screener batch handoff (different components) read
 // the same cap instead of hard-coding their own.
 const COMPARE_MAX = 18;
+
+// Categorical series palette for the compare chart. EIGHT hues in a fixed
+// order, stepped once per mode — NOT one array cycled with `i % n`, which is
+// what shipped before: 8 colours against COMPARE_MAX=18 put three separate
+// series on the same green with nothing else telling them apart.
+//
+// Past slot 8 the hue order repeats and a SECOND encoding carries identity —
+// stroke pattern, via compareSeriesStyle below. Solid → dashed → dotted covers
+// 24 unique (hue, pattern) pairs, so all 18 slots are distinguishable, and the
+// common case (≤8 series) is all-solid with no pattern noise at all.
+//
+// Both columns validated as categorical palettes against the real theme
+// surfaces (parchment #f4f1eb / velvet #180a22): lightness band, chroma floor,
+// adjacent CVD ΔE ≥ 8, normal-vision ΔE ≥ 15 all pass in both modes. The light
+// column carries a sub-3:1 contrast warning on four hues, which the relief rule
+// covers — every compare surface ships a named legend AND the stats table, so
+// identity is never colour-alone.
+const COMPARE_PALETTE = {
+  light: ["#2a78d6","#eb6834","#1baf7a","#eda100","#e87ba4","#008300","#4a3aa7","#e34948"],
+  dark:  ["#3987e5","#d95926","#199e70","#c98500","#d55181","#008300","#9085e9","#e66767"],
+};
+// The exported PNG/SVG report is a fixed white document whatever the viewer's
+// theme, so it always reads the light column.
+const compareColorsFor = (theme) => DARK_THEMES_GLOBAL.has(theme) ? COMPARE_PALETTE.dark : COMPARE_PALETTE.light;
+const COMPARE_DASH = [null, "6,4", "1.5,3.5"];   // solid · dashed · dotted
+const compareSeriesStyle = (i, colors) => ({
+  color: colors[i % colors.length],
+  dash: COMPARE_DASH[Math.floor(i / colors.length) % COMPARE_DASH.length],
+});
+
 const inkTint = (ink, theme) => (ink && (DARK_THEMES_GLOBAL.has(theme)?INK_TINT_DARK[ink]:INK_TINT_LIGHT[ink])) || "transparent";
 
 // ── Smart search aliases ────────────────────────────────────────────────
@@ -15754,9 +15869,14 @@ const clipSeriesFrom = (series, startMs) => {
   return series.map(s => ({...s, data: (s.data||[]).filter(p => p.x >= startMs)}));
 };
 
+const HISTORY_MODES = ["card","sealed","graded","set"];
 const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards}) => {
   const tips = useContext(TipsContext);
-  const [mode, setMode] = useState("card");
+  // Deep-link state, read once. The compare list itself needs the catalog to
+  // rehydrate (names / art / set) so it's applied in an effect further down
+  // once `raw` has landed; mode, range and scale can seed their state directly.
+  const urlGraph = useMemo(() => readUrlParam("g") || "", []);
+  const [mode, setMode] = useState(() => readUrlEnum("hm", HISTORY_MODES) || "card");
   useEffect(() => { if(mode === "graded") signalGradedSurface(); }, [mode]);
   // Sealed mode state — parallel to selectedGroup/cardQuery for cards.
   const [sealedSearch, setSealedSearch] = useState("");
@@ -15820,17 +15940,25 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   }, [incomingCompareCards, onConsumedIncomingCompareCards]);
   // Prerelease guard: a card's price history is meaningless before its set's
   // street date — TCGplayer's pre-release listings sit 10-20x above eventual
-  // floors. Build a (tcgplayer_product_id → earliest-shown-date) map keyed off
+  // floors. (tcgplayer_product_id → earliest-shown timestamp), keyed off
   // setsMeta.released_at + 1 day, MAINLINE_SETS only (promos / D23 / Challenge
   // don't have the spike pattern). Mirrors the collection-value chart guard.
-  const productEarliestDate = useMemo(() => {
+  //
+  // ⚠ This is the ONLY prerelease clip in Compare mode, and it is applied at
+  // RENDER, never at fetch. There used to be two: an unconditional one inside
+  // the history fetch and a hidePreorders-gated one here. Because the fetch
+  // stripped the rows before they reached `compareSeries` — and `compareSeries`
+  // is cached, with hidePreorders absent from that effect's deps — unchecking
+  // "Hide prerelease" could never reveal anything for a mainline card. The two
+  // maps also disagreed on scope (fetch-time was mainline-only, render-time was
+  // every dated set), so the checkbox was inert for mainline cards and live for
+  // promos: the exact inverse of the intent. Clip at render or the toggle lies.
+  const releaseFloorByPid = useMemo(() => {
     if(!setsMeta || !setsMeta.length || !raw || !raw.length) return {};
     const setIdToFloor = {};
     for(const s of setsMeta){
       if(!s.released_at || !MAINLINE_SETS.includes(s.name)) continue;
-      const d = new Date(s.released_at + "T00:00:00Z");
-      d.setUTCDate(d.getUTCDate() + 1);
-      setIdToFloor[s.id] = d.toISOString().slice(0, 10);
+      setIdToFloor[s.id] = Date.parse(s.released_at + "T00:00:00Z") + 86400000;
     }
     const m = {};
     for(const r of raw){
@@ -15907,13 +16035,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 };
               });
           } else {
-            // Drop pre-release rows for the card's set (TCGplayer pre-release
-            // prices sit 10-20x the eventual floor; including them spikes the
-            // very left edge of the chart). productEarliestDate is keyed by
-            // pid, so look up via the source card item.
-            const cardItem = compareCards.find(p => p.card_id === id);
-            const floor = cardItem ? productEarliestDate[cardItem.productId] : null;
-            next[id] = (rows || []).filter(r => !floor || r.date >= floor).map(r => ({
+            // Store the FULL history. The pre-release clip is applied at render
+            // (releaseFloorByPid) so the "Hide prerelease" checkbox can turn it
+            // off — clipping here would bake the decision into a cached series
+            // this effect never recomputes when the checkbox flips.
+            next[id] = (rows || []).map(r => ({
               x: new Date(r.date).getTime(),
               low: r.low_price == null ? null : +r.low_price,
               market: r.market_price == null ? null : +r.market_price,
@@ -15925,7 +16051,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       setCompareLoading(false);
     });
     return () => { cancelled = true; };
-  }, [compareCards, productEarliestDate]);
+  }, [compareCards]);
 
   // Fetch graded picker options lazily — only when the user first opens
   // the By Graded tab. Keeps the Price Graphing initial load fast for
@@ -16053,15 +16179,25 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     };
   }, [setIdByName]);
 
-  // Distinct colors for the multi-line chart. Stable mapping by index.
-  const COMPARE_COLORS = ["#1d8d4a","#7e54c4","#c64c5a","#4d83bf","#d4a93b","#0e6b6b","#787e88","#e07c2a"];
   const [setEv, setSetEv] = useState({rows:null, loading:false, error:null});
   // Low / Market checkbox state — shared across card mode and set EV mode.
   // Default = Low only. Toggle Market to add it as a dashed series.
   const [showLow, setShowLow] = useState(true);
   const [showMarket, setShowMarket] = useState(false);
+  // How the y axis is drawn: absolute dollars, log10 dollars, or every series
+  // rebased to 100 at the start of the visible range. "abs" is the default and
+  // the only one that existed before — the other two are what make an 18-series
+  // overlay across three orders of magnitude actually readable.
+  const [chartScale, setChartScale] = useState(() => {
+    const u = readUrlEnum("hs", ["abs","log","indexed"]);
+    if(u) return u;
+    try { return localStorage.getItem("packsink:history:chartScale") || "abs"; } catch { return "abs"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:history:chartScale", chartScale); } catch {}
+  }, [chartScale]);
   const [setSearch, setSetSearch] = useState("");
-  const [rangeKey, setRangeKey] = useState("all");
+  const [rangeKey, setRangeKey] = useState(() => readUrlEnum("hr", RANGE_OPTIONS.map(o => o[0])) || "all");
   const [customStart, setCustomStart] = useState(""); // YYYY-MM-DD when rangeKey="custom"
   const [hidePreorders, setHidePreorders] = useState(() => {
     try { return localStorage.getItem("packsink:history:hidePreorders") !== "0"; }
@@ -16492,6 +16628,88 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     };
   }, [gradedCompareId]);
 
+  // ── Deep link: ?g= → compare list ──────────────────────────────────────
+  // The URL carries identity only; everything a chip displays (name, set,
+  // collector number, art) is rebuilt here from the catalog. That keeps an
+  // 18-item link short AND means a shared graph picks up corrected card
+  // metadata instead of freezing whatever the sender's tab happened to hold.
+  //
+  // Waits for `raw`, and for sealedPrices when the link contains a sealed item
+  // — hydrating early would silently drop those. Graded items don't need the
+  // rollup: their tier is in the URL and their card metadata is in `raw`.
+  const urlGraphApplied = useRef(false);
+  useEffect(() => {
+    if(urlGraphApplied.current || !urlGraph) return;
+    if(!raw || !raw.length) return;
+    const wanted = decodeCompareItems(urlGraph);
+    if(!wanted.length){ urlGraphApplied.current = true; return; }
+    if(wanted.some(w => w.kind === "sealed") && !sealedPrices) return;
+    urlGraphApplied.current = true;
+    const byCardId = new Map();
+    const byPidPrinting = new Map();
+    for(const r of raw){
+      if(r.card_id != null && !byCardId.has(r.card_id)) byCardId.set(r.card_id, r);
+      const pid = r.tcgplayer_product_id;
+      if(pid != null) byPidPrinting.set(pid + "|" + (r.tcg_printing || "Normal"), r);
+    }
+    const setNameForId = {};
+    for(const r of raw) if(r.set_id && r.Set && !setNameForId[r.set_id]) setNameForId[r.set_id] = r.Set;
+    const built = [];
+    for(const w of wanted){
+      if(w.kind === "card"){
+        const row = byPidPrinting.get(w.productId + "|" + w.printing)
+          // A printing that no longer exists under that pid (a TCGCSV relabel)
+          // still graphs — the series is keyed on (pid, printing) regardless.
+          || [...byPidPrinting.values()].find(r => r.tcgplayer_product_id === w.productId);
+        if(!row) continue;
+        const tag = (w.printing !== "Normal" && w.printing !== "Non-Foil")
+          ? (w.printing === "Holofoil" ? " (Holo)" : " (" + w.printing + ")") : "";
+        built.push({
+          kind:"card",
+          card_id: row.card_id + (w.printing === "Normal" ? "" : "::" + w.printing),
+          productId: w.productId, printing: w.printing,
+          name: (row["Product Name"] || "") + tag,
+          sub: `${row.Set || ""}${row.Number?" · #"+String(row.Number).split("/")[0]:""}${row.Rarity?" · "+row.Rarity:""}`,
+          image: row.img_normal || row.img_small || null,
+        });
+      } else if(w.kind === "sealed"){
+        const p = (sealedPrices || []).find(x => x.tcgplayer_product_id === w.productId && x.printing === "Normal");
+        if(p) built.push(buildSealedCompareItem(p));
+      } else if(w.kind === "set"){
+        const nm = setNameForId[w.setId];
+        if(nm){ const it = buildSetCompareItem(nm); if(it) built.push(it); }
+      } else if(w.kind === "graded"){
+        const meta = byCardId.get(w.gradedCardId);
+        if(!meta) continue;
+        built.push(buildGradedCompareItem({
+          card_id: w.gradedCardId, printing: w.gradedPrinting || "",
+          grader: w.grader, grade: w.grade, _meta: meta,
+        }));
+      }
+    }
+    if(built.length) setCompareCards(built.filter(Boolean).slice(0, COMPARE_MAX));
+  }, [urlGraph, raw, sealedPrices, buildSealedCompareItem, buildSetCompareItem, buildGradedCompareItem]);
+
+  // Mirror the graph back into the URL. replaceState — the compare list is a
+  // filter on one page, not a stack of pages, so Back should leave Price
+  // Graphing rather than undo eighteen checkbox clicks. Held until the
+  // deep-link hydration has run, or the empty initial list would immediately
+  // overwrite the very ?g= we are about to read.
+  useEffect(() => {
+    if(urlGraph && !urlGraphApplied.current) return;
+    try {
+      const url = new URL(window.location.href);
+      if((url.pathname.replace(/\/$/, "") || "/") !== "/price-graphing") return;
+      const enc = encodeCompareItems(compareCards);
+      const set = (k, v, dflt) => { if(v && v !== dflt) url.searchParams.set(k, v); else url.searchParams.delete(k); };
+      set("g", enc, "");
+      set("hm", mode, "card");
+      set("hr", rangeKey, "all");
+      set("hs", chartScale, "abs");
+      if(url.toString() !== window.location.href) window.history.replaceState(window.history.state, "", url.toString());
+    } catch {/* no-op */}
+  }, [compareCards, mode, rangeKey, chartScale, urlGraph]);
+
   // Inline picker used inside Compare mode so users can add cards / sealed
   // without leaving the report. Top 8 card hits and top 4 sealed hits.
   const [compareSearch, setCompareSearch] = useState("");
@@ -16569,24 +16787,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       const priceLabel = mode === "graded"
         ? (showLow ? "Sale price" : "Avg of last 5")
         : (showLow ? "Low" : "NM Market");
-      // Per-pid earliest acceptable timestamp = release date + 1 day. Used to
-      // drop pre-release spike days from each compared card individually
-      // (different cards have different release dates so a single shared
-      // startMs can't do this). Promos / undated sets fall through (no clip).
-      const releaseFloorByPid = (() => {
-        const setRel = {};
-        for(const s of (setsMeta || [])) if(s && s.id && s.released_at) setRel[s.id] = s.released_at;
-        const m = {};
-        for(const r of (raw || [])){
-          const pid = r.tcgplayer_product_id;
-          if(pid == null || m[pid] !== undefined) continue;
-          const rel = setRel[r.set_id];
-          if(!rel) continue;
-          const d = new Date(rel + "T00:00:00Z").getTime();
-          m[pid] = d + 24 * 60 * 60 * 1000; // +1 day
-        }
-        return m;
-      })();
+      const paletteColors = compareColorsFor(theme);
       const builtSeries = compareCards.map((c, i) => {
         let data = [];
         if(c.kind === "set"){
@@ -16601,24 +16802,43 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
             .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
         }
         // Per-card pre-release clip: drop points before this card's set
-        // released_at + 1 day, unless the user has explicitly toggled
-        // pre-release inclusion ON via the "Include prerelease" checkbox
-        // (which flips hidePreorders to false).
+        // released_at + 1 day, unless the user has explicitly unchecked
+        // "Hide prerelease". This is the only place the clip happens — see
+        // the releaseFloorByPid memo for why it must not move to the fetch.
         if(hidePreorders && c.kind !== "set"){
           const floorMs = releaseFloorByPid[c.productId];
           if(floorMs != null) data = data.filter(p => p.x >= floorMs);
         }
-        return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
+        const st = compareSeriesStyle(i, paletteColors);
+        return {name: c.name, color: st.color, dash: st.dash, data};
       });
       const startMs = computeChartStartMs(rangeKey, customStart, hidePreorders, null);
-      const clipped = clipSeriesFrom(builtSeries, startMs);
+      // Actual dollars, range-clipped. The stats table, the CSV and the export
+      // report's table all read THIS — a reader wants prices in a spreadsheet
+      // even when the chart above is showing index points.
+      const priceClipped = clipSeriesFrom(builtSeries, startMs);
+      const indexed = chartScale === "indexed";
+      // Indexed mode: rebase every series to 100 at its first point INSIDE the
+      // visible range, so a $900 Enchanted and a $3 common become comparable
+      // performance curves instead of one line and one flat axis-hugger. Must
+      // run after the range clip — rebasing off a pre-clip base would make the
+      // visible series start at something other than 100.
+      const clipped = !indexed ? priceClipped : priceClipped.map(s => {
+        const valid = (s.data || []).filter(p => Number.isFinite(p.y));
+        const base = valid.length ? valid[0].y : null;
+        if(!base) return {...s, data: []};   // a 0 or missing base can't be rebased
+        return {...s, data: valid.map(p => ({x: p.x, y: (p.y / base) * 100}))};
+      });
       const rangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [,"All"])[1];
+      const scaleLabel = indexed ? "Indexed to 100" : chartScale === "log" ? "Log scale" : null;
+      const fmtIndexTick = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
       const reportArgs = {
         title: "Price Comparison Report",
-        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel} · Range: ${rangeLabel}`,
+        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel}${scaleLabel?" · "+scaleLabel:""} · Range: ${rangeLabel}`,
         items: compareCards,
         series: clipped,
-        colors: COMPARE_COLORS,
+        tableSeries: priceClipped,
+        colors: paletteColors,
         footerNote: "packs.ink · Unofficial fan site, not affiliated with Disney or Ravensburger",
       };
       const doExportPng = () => exportCompareReportPng(reportArgs);
@@ -16628,7 +16848,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         const esc = v => { const s = v==null?"":String(v); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
         const lines = [headers.join(",")];
         compareCards.forEach((c, i) => {
-          const data = clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : [];
+          // Dollars, never index points — a spreadsheet wants prices.
+          const data = priceClipped[i] && priceClipped[i].data ? priceClipped[i].data.filter(p => Number.isFinite(p.y)) : [];
           const start = data.length ? data[0].y : "";
           const end   = data.length ? data[data.length-1].y : "";
           const pct   = (data.length && start) ? ((end-start)/start*100).toFixed(2) : "";
@@ -16643,7 +16864,10 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         URL.revokeObjectURL(url);
       };
 
-      const renderSeries = clipped.filter(s => s.data && s.data.length >= 2);
+      // >= 1, not >= 2. A one-point series is drawn as a dot by LineChart; the
+      // old >= 2 dropped it from the plot while its legend chip stayed, so a
+      // single-sale graded tier produced a swatch and no mark.
+      const renderSeries = clipped.filter(s => s.data && s.data.length >= 1);
       const isFull = compareCards.length >= COMPARE_MAX;
       const isCardInCompare = (cid) => compareCards.some(p => p.card_id === cid);
       const toggleCard = (c) => {
@@ -16920,6 +17144,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                        <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
             </div>
             ${compareCards.length > 0 && html`<div class="compare-export-group">
+              <button class="settings-action" onClick=${copyCurrentPageLink}
+                title="Copy a link that reopens this exact graph — same products, range and scale. The PNG is a picture of the analysis; this is the analysis.">${uiIcon("link")} Copy link</button>
               <button class="settings-action" onClick=${doExportPng} title="Export the comparison chart + product list as a PNG report.">${uiIcon("save")} PNG</button>
               <button class="settings-action" onClick=${doExportSvg} title="Export as scalable vector (SVG).">SVG</button>
               <button class="settings-action" onClick=${doExportCsv} title="Export the products table as CSV.">CSV</button>
@@ -16942,11 +17168,22 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 </div>`}
                 ${compareCards.length >= 1 && html`<div class="compare-legend">
                   <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>On graph</span>
-                  ${compareCards.map((c, i) => html`<span key=${c.card_id} class="compare-chip"
-                    style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
-                    <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
+                  ${compareCards.map((c, i) => {
+                    const st = compareSeriesStyle(i, paletteColors);
+                    // Points actually plotted for this series after clipping —
+                    // drives the "1 pt" flag below.
+                    const nPts = (clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : []).length;
+                    return html`<span key=${c.card_id} class="compare-chip"
+                    style=${{borderColor: st.color}}>
+                    <span class="compare-swatch" style=${{background: st.color,
+                      // Past slot 8 the hue repeats and the stroke pattern is
+                      // what separates the lines — the swatch has to say so or
+                      // two chips claim the same identity.
+                      backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}></span>
                     <span class="compare-name">${c.name}</span>
                     ${c.kind === "sealed" ? html`<span class="compare-kind-tag">sealed</span>` : c.kind === "set" ? html`<span class="compare-kind-tag">set EV</span>` : null}
+                    ${nPts === 1 && html`<span class="compare-kind-tag" title="Only one price point in this range — drawn as a dot, not a line.">1 pt</span>`}
+                    ${nPts === 0 && html`<span class="compare-kind-tag compare-kind-tag--none" title="No price history in the selected range. Try a wider range, or untick Hide prerelease.">no data</span>`}
                     ${c.kind === "card" && compareCards.length < COMPARE_MAX && html`<button class="compare-add-variants"
                       onClick=${()=>addAllVariants(c)}
                       title="Add every other printing / rarity variant of this card (Normal, Foil, Cold Foil, Enchanted, Iconic, etc.) to the graph"
@@ -16954,19 +17191,30 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     <button class="compare-remove"
                       onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
                       title="Remove from graph" aria-label="Remove">×</button>
-                  </span>`)}
+                  </span>`;
+                  })}
                 </div>`}
                 <div class="history-chart-controls">
                   <div class="seg-toggle">
                     <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>${mode === "graded" ? "Sale price" : "Low"}</button>
                     <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>${mode === "graded" ? "Avg of last 5" : "NM Market"}</button>
                   </div>
+                  <div class="seg-toggle" role="group" aria-label="Chart scale">
+                    <button class=${chartScale === "abs" ? "active" : ""} onClick=${()=>setChartScale("abs")}
+                      title="Plot actual prices on a linear axis.">$</button>
+                    <button class=${chartScale === "log" ? "active" : ""} onClick=${()=>setChartScale("log")}
+                      title="Plot actual prices on a log axis, so a move from $2 to $4 takes the same vertical space as $200 to $400. Declines to linear if any value is zero.">Log</button>
+                    <button class=${chartScale === "indexed" ? "active" : ""} onClick=${()=>setChartScale("indexed")}
+                      title="Rebase every line to 100 at the start of the range, so cards at completely different prices can be compared on performance. The table below stays in dollars.">Indexed</button>
+                  </div>
                 </div>
                 ${compareLoading
                   ? html`<div class="chart-empty large">Loading history…</div>`
                   : renderSeries.length === 0
                     ? html`<div class="chart-empty large">No price history yet for the selected product${compareCards.length>1?"s":""}.</div>`
-                    : html`<${LineChart} series=${renderSeries} width=920 height=320/>`}
+                    : html`<${LineChart} series=${renderSeries} width=920 height=320
+                        logScale=${chartScale === "log"}
+                        valueFmt=${indexed ? fmtIndexTick : null}/>`}
                 <table class="compare-stats-table">
                   <thead><tr>
                     <th></th><th>#</th><th>Product</th><th>Type / Set</th>
@@ -16974,12 +17222,16 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                   </tr></thead>
                   <tbody>
                     ${compareCards.map((c, i) => {
-                      const data = clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : [];
+                      // Always the dollar series — the table stays in prices
+                      // even when the chart above is indexed to 100.
+                      const data = priceClipped[i] && priceClipped[i].data ? priceClipped[i].data.filter(p => Number.isFinite(p.y)) : [];
                       const start = data.length ? data[0].y : null;
                       const end   = data.length ? data[data.length-1].y : null;
                       const pct   = (data.length && start) ? ((end-start)/start*100) : null;
+                      const st = compareSeriesStyle(i, paletteColors);
                       return html`<tr key=${c.card_id}>
-                        <td><span class="legend-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length], display:"inline-block", width:14, height:5, borderRadius:2}}/></td>
+                        <td><span class="legend-swatch" style=${{background: st.color, display:"inline-block", width:14, height:5, borderRadius:2,
+                          backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}/></td>
                         <td>${i+1}</td>
                         <td><strong>${c.name}</strong>${c.kind === "sealed" && html` <span class="compare-kind-tag">sealed</span>`}</td>
                         <td class="muted">${c.sub || ""}</td>
@@ -25308,7 +25560,195 @@ function soldFilterLabel(f){
   return "";
 }
 
+// ── Screener share-state codec ──────────────────────────────────────────
+// The Screener's entire query — preset, window, every chip, both sort keys —
+// lived only in component state and (for signed-in users) the screener_views
+// table. So a screen could be SAVED but never SENT: the URL said /screener and
+// nothing else. This encodes the same payload `saveCurrentView` already builds
+// into one `?v=` param, which makes the analysis the shareable artefact rather
+// than a screenshot of it.
+//
+// Only fields that differ from the default table are written, so an ordinary
+// two-chip screen is a short URL and a bare /screener carries no param at all.
+// Round-tripped by scripts/test_screener_url.mjs, including adversarial search
+// text — the search box accepts every character, delimiters included.
+//
+// Tuple: [payloadKey, urlKey, kind, default]
+//   str   plain string        bool  "1"/"0"
+//   arr   comma-joined Set    tri   null | true | false  ("" / "1" / "0")
+//   nstr  string or null      sold  the soldFilter object
+const SCREENER_STATE_FIELDS = [
+  ["preset","p","str","all"],
+  ["moverWin","w","str","pct_1d"],
+  ["priceMode","pm","str","low"],
+  ["search","q","str",""],
+  ["collFilter","cf","str","all"],
+  ["pctWin","pw","str","pct_30d"],
+  ["density","dn","str","comfy"],
+  ["minPrice","p0","str",""],
+  ["maxPrice","p1","str",""],
+  ["minPct","c0","str",""],
+  ["maxPct","c1","str",""],
+  ["filterLegality","lg","str",""],
+  ["sortKey","sk","str","abs_pct_1d"],
+  ["sortKey2","sk2","nstr",null],
+  ["sortDesc","sd","bool",true],
+  ["sortDesc2","sd2","bool",true],
+  ["showAllWins","aw","bool",false],
+  ["showGraded","gr","bool",false],
+  ["showSealed","sl","bool",false],
+  ["showFoil","fo","bool",true],
+  ["showNonFoil","nf","bool",true],
+  ["filterDualInk","di","bool",false],
+  ["filterInkable","ik","tri",null],
+  ["filterSet","set","arr",[]],
+  ["filterRarities","rar","arr",[]],
+  ["filterInks","ink","arr",[]],
+  ["sigFilter","sig","arr",[]],
+  ["filterCosts","cost","arr",[]],
+  ["filterCardTypes","typ","arr",[]],
+  ["filterStrengths","str","arr",[]],
+  ["filterWillpowers","wil","arr",[]],
+  ["filterLores","lor","arr",[]],
+  ["filterKeywords","kw","arr",[]],
+  ["filterClassifications","cls","arr",[]],
+  ["filterIllustrators","art","arr",[]],
+  ["filterSealedTypes","sty","arr",[]],
+  ["filterGraders","gdr","arr",[]],
+  ["filterGrades","gde","arr",[]],
+  ["soldFilter","sf","sold",null],
+];
+// Escape ONLY this codec's own delimiters (and the escape character itself).
+// searchParams handles the rest of URL encoding; double-encoding here would
+// make a shared link's `%20` come back as a literal "%20".
+const _scEsc = (s) => String(s).replace(/[;:,~]/g, ch => "~" + ch.charCodeAt(0).toString(16).padStart(2,"0"));
+const _scUnesc = (s) => String(s).replace(/~([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+const _scArr = (v) => Array.isArray(v) ? v : (v instanceof Set ? Array.from(v) : []);
+const _scSameArr = (a, b) => { const x = _scArr(a), y = _scArr(b); return x.length === y.length && x.every((v,i) => v === y[i]); };
+
+function encodeScreenerState(payload){
+  if(!payload) return "";
+  const out = [];
+  for(const [key, urlKey, kind, dflt] of SCREENER_STATE_FIELDS){
+    const v = payload[key];
+    if(v === undefined) continue;
+    if(kind === "arr"){
+      const arr = _scArr(v);
+      if(!arr.length || _scSameArr(arr, dflt)) continue;
+      out.push(urlKey + ":" + arr.map(_scEsc).join(","));
+    } else if(kind === "bool"){
+      if(!!v === dflt) continue;
+      out.push(urlKey + ":" + (v ? "1" : "0"));
+    } else if(kind === "tri"){
+      if(v === dflt || v == null) continue;
+      out.push(urlKey + ":" + (v ? "1" : "0"));
+    } else if(kind === "nstr"){
+      if(v == null || v === dflt) continue;
+      out.push(urlKey + ":" + _scEsc(v));
+    } else if(kind === "sold"){
+      if(!v || !v.mode || v.mode === "any") continue;
+      out.push(urlKey + ":" + [v.mode, v.days ?? "", v.from ?? "", v.to ?? ""].map(_scEsc).join(","));
+    } else {
+      if(v == null || String(v) === String(dflt)) continue;
+      out.push(urlKey + ":" + _scEsc(String(v)));
+    }
+  }
+  return out.join(";");
+}
+
+// Always returns a COMPLETE payload (defaults + whatever the string carried),
+// so applying a link can't leave a filter behind from the previous screen.
+function decodeScreenerState(str){
+  const byUrlKey = new Map(SCREENER_STATE_FIELDS.map(f => [f[1], f]));
+  const out = {};
+  for(const [key, , kind, dflt] of SCREENER_STATE_FIELDS){
+    out[key] = kind === "arr" ? [] : kind === "sold" ? {...SOLD_FILTER_OFF} : dflt;
+  }
+  if(!str) return out;
+  for(const chunk of String(str).split(";")){
+    if(!chunk) continue;
+    const i = chunk.indexOf(":");
+    if(i < 0) continue;
+    const f = byUrlKey.get(chunk.slice(0, i));
+    if(!f) continue;                       // unknown key from a newer build — ignore, don't throw
+    const [key, , kind] = f;
+    const rawVal = chunk.slice(i + 1);
+    if(kind === "arr")        out[key] = rawVal === "" ? [] : rawVal.split(",").map(_scUnesc);
+    else if(kind === "bool")  out[key] = rawVal === "1";
+    else if(kind === "tri")   out[key] = rawVal === "1" ? true : rawVal === "0" ? false : null;
+    else if(kind === "nstr")  out[key] = _scUnesc(rawVal) || null;
+    else if(kind === "sold"){
+      const [mode, days, from, to] = rawVal.split(",").map(_scUnesc);
+      out[key] = {...SOLD_FILTER_OFF, mode: mode || "any", days: days || SOLD_FILTER_OFF.days, from: from || "", to: to || ""};
+    }
+    else out[key] = _scUnesc(rawVal);
+  }
+  return out;
+}
+
+// ── Price Graphing compare-list codec ───────────────────────────────────
+// Identity only — names, subtitles and art are rebuilt from the catalog on
+// arrival, so an 18-card comparison is a short link instead of a blob.
+// `~` separates fields inside an item, `,` separates items; both are legal
+// unescaped in a query string.
+const CMP_PRINTING_TO = {"Normal":"N","Foil":"F","Cold Foil":"C","Holofoil":"H","Non-Foil":"X"};
+const CMP_PRINTING_FROM = {N:"Normal", F:"Foil", C:"Cold Foil", H:"Holofoil", X:"Non-Foil"};
+// An unrecognised printing (a new TCGCSV subTypeName) round-trips verbatim
+// behind a `_` rather than collapsing to Normal and silently graphing the
+// wrong SKU.
+const encodeCmpPrinting = (p) => !p ? "-" : (CMP_PRINTING_TO[p] || "_" + encodeURIComponent(p));
+const decodeCmpPrinting = (c) => !c || c === "-" ? null
+  : c[0] === "_" ? decodeURIComponent(c.slice(1)) : (CMP_PRINTING_FROM[c] || null);
+
+function encodeCompareItems(items){
+  if(!items || !items.length) return "";
+  const out = [];
+  for(const c of items){
+    if(c.kind === "card" && c.productId != null)        out.push("c~" + c.productId + "~" + encodeCmpPrinting(c.printing));
+    else if(c.kind === "sealed" && c.productId != null) out.push("s~" + c.productId);
+    else if(c.kind === "set" && c.setId)                out.push("t~" + c.setId);
+    else if(c.kind === "graded" && c.gradedCardId)      out.push("g~" + c.gradedCardId + "~" + c.grader + "~" + c.grade + "~" + encodeCmpPrinting(c.gradedPrinting));
+  }
+  return out.join(",");
+}
+
+// Parses to identity descriptors. Turning those back into full compare items
+// needs the catalog, so that half lives in the component.
+function decodeCompareItems(str){
+  if(!str) return [];
+  const out = [];
+  for(const chunk of String(str).split(",")){
+    const parts = chunk.split("~");
+    const kind = parts[0];
+    if(kind === "c" && parts.length >= 3){
+      const pid = parseInt(parts[1], 10);
+      if(Number.isFinite(pid)) out.push({kind:"card", productId: pid, printing: decodeCmpPrinting(parts[2]) || "Normal"});
+    } else if(kind === "s" && parts.length >= 2){
+      const pid = parseInt(parts[1], 10);
+      if(Number.isFinite(pid)) out.push({kind:"sealed", productId: pid});
+    } else if(kind === "t" && parts.length >= 2 && parts[1]){
+      out.push({kind:"set", setId: parts[1]});
+    } else if(kind === "g" && parts.length >= 5 && parts[1]){
+      out.push({kind:"graded", gradedCardId: parts[1], grader: parts[2], grade: parts[3], gradedPrinting: decodeCmpPrinting(parts[4])});
+    }
+    if(out.length >= COMPARE_MAX) break;
+  }
+  return out;
+}
+
 function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView}){
+  // Decoded ONCE, before any state initialiser, and read by several of them.
+  //
+  // ⚠ showGraded / showSealed must come from here at INIT, not from an effect
+  // that calls applyView after mount. The mode-flip effect below keys on
+  // prevShowGraded and, when it sees a change, deliberately resets rarity, the
+  // price floor and the graded-only chips to that mode's defaults. Flipping the
+  // mode after mount would fire it and wipe exactly the filters the link was
+  // carrying. Initialising instead means prev === current and it never runs.
+  const urlScreenerState = useMemo(() => {
+    const v = readUrlParam("v");
+    return v ? decodeScreenerState(v) : null;
+  }, []);
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
   // key maps to Math.abs(r.pct_1d) so the first thing you see is whatever
@@ -25383,6 +25823,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // ?m= wins over the saved mode so /screener?m=graded is a sendable link.
     const m = readUrlEnum("m", SCREENER_MODES);
     if(m) return m === "graded";
+    if(urlScreenerState) return !!urlScreenerState.showGraded;
     try { return localStorage.getItem("packsink:screener:showGraded") === "1"; } catch { return false; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:showGraded", showGraded ? "1" : "0"); } catch{} }, [showGraded]);
@@ -25413,6 +25854,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [showSealed, setShowSealed] = useState(() => {
     const m = readUrlEnum("m", SCREENER_MODES);
     if(m) return m === "sealed";
+    if(urlScreenerState) return !!urlScreenerState.showSealed;
     try { return localStorage.getItem("packsink:screener:showSealed") === "1"; } catch { return false; }
   });
   // Mirror the mode into ?m= so Raw / Graded / Sealed are three linkable
@@ -25645,28 +26087,61 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     })();
     return () => { cancelled = true; };
   }, [user]);
+  // The single description of "what the Screener is currently showing". Three
+  // consumers read it: Save view (localStorage + screener_views), the ?v= URL
+  // writer, and Copy link. Built once so they cannot drift — before this, the
+  // save payload was an inline object literal and adding a filter meant
+  // remembering to extend it.
+  const screenerPayload = useMemo(() => ({
+    preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
+    filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
+    collFilter, sigFilter: Array.from(sigFilter),
+    minPrice, maxPrice, minPct, maxPct, pctWin,
+    showAllWins, density, showGraded, showSealed,
+    sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
+    showFoil, showNonFoil,
+    filterCosts: Array.from(filterCosts),
+    filterCardTypes: Array.from(filterCardTypes),
+    filterStrengths: Array.from(filterStrengths),
+    filterWillpowers: Array.from(filterWillpowers),
+    filterLores: Array.from(filterLores),
+    filterInkable, filterLegality, filterDualInk,
+    filterKeywords: Array.from(filterKeywords),
+    filterClassifications: Array.from(filterClassifications),
+    filterIllustrators: Array.from(filterIllustrators),
+    filterSealedTypes: Array.from(filterSealedTypes),
+    filterGraders: Array.from(filterGraders),
+    filterGrades: Array.from(filterGrades),
+  }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
+    collFilter, sigFilter, minPrice, maxPrice, minPct, maxPct, pctWin, showAllWins,
+    density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
+    showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
+    filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
+    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades]);
+
+  // Mirror the whole screen into ?v=. replaceState, never push — a filter is
+  // not a page, and pushing would make Back walk backwards through every chip
+  // the user toggled instead of leaving the Screener. Debounced because the
+  // search box writes on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const url = new URL(window.location.href);
+        if((url.pathname.replace(/\/$/, "") || "/") !== "/screener") return;
+        const enc = encodeScreenerState(screenerPayload);
+        if((url.searchParams.get("v") || "") === enc) return;
+        if(enc) url.searchParams.set("v", enc); else url.searchParams.delete("v");
+        window.history.replaceState(window.history.state, "", url.toString());
+      } catch {/* no-op */}
+    }, 400);
+    return () => clearTimeout(t);
+  }, [screenerPayload]);
+
   const saveCurrentView = async () => {
     const name = prompt("Name this view (e.g. 'My buyout watchlist', 'Sub-$20 trending'):");
     const clean = (name || "").trim();
     if(!clean) return;
-    const payload = {
-      preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
-      filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
-      collFilter, sigFilter: Array.from(sigFilter),
-      minPrice, maxPrice, minPct, maxPct, pctWin,
-      showAllWins, density, showGraded,
-      sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
-      showFoil, showNonFoil,
-      filterCosts: Array.from(filterCosts),
-      filterCardTypes: Array.from(filterCardTypes),
-      filterStrengths: Array.from(filterStrengths),
-      filterWillpowers: Array.from(filterWillpowers),
-      filterLores: Array.from(filterLores),
-      filterInkable, filterLegality, filterDualInk,
-      filterKeywords: Array.from(filterKeywords),
-      filterClassifications: Array.from(filterClassifications),
-      filterIllustrators: Array.from(filterIllustrators),
-    };
+    const payload = screenerPayload;
     setSavedViews(prev => [...prev.filter(v => v.name !== clean), {name: clean, ...payload}]);
     if(user){
       const {error} = await sbClient.from("screener_views")
@@ -25712,6 +26187,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterKeywords(new Set(v.filterKeywords || []));
     setFilterClassifications(new Set(v.filterClassifications || []));
     setFilterIllustrators(new Set(v.filterIllustrators || []));
+    // Mode + its mode-specific chips. A saved view or a shared link that lands
+    // you in Sealed or Graded has to bring that mode's filters with it, or the
+    // restored screen is the right rows under the wrong narrowing.
+    if(v.showSealed !== undefined) setShowSealed(!!v.showSealed);
+    setFilterSealedTypes(new Set(v.filterSealedTypes || []));
+    setFilterGraders(new Set(v.filterGraders || []));
+    setFilterGrades(new Set(v.filterGrades || []));
   };
   // Consume the App-pushed view payload from a banner-title click on Home.
   // Apply once, then notify parent so we don't re-fire on prop re-renders.
@@ -25721,6 +26203,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     onConsumedIncomingScreenerView && onConsumedIncomingScreenerView();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingScreenerView]);
+  // Apply a ?v= link once on mount. showGraded / showSealed already came from
+  // it at init (see urlScreenerState), so applyView's mode setters are no-ops
+  // here and the mode-flip reset stays asleep. A banner handoff wins — the user
+  // clicked that after the page was already open.
+  const urlStateApplied = useRef(false);
+  useEffect(() => {
+    if(urlStateApplied.current || !urlScreenerState || incomingScreenerView) return;
+    urlStateApplied.current = true;
+    applyView(urlScreenerState);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const deleteView = async (name) => {
     setSavedViews(prev => prev.filter(v => v.name !== name));
     if(user){
@@ -26486,6 +26979,31 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   }, [state.rows, filterRarities]);
   const inks = useMemo(() => Array.from(new Set((state.rows || []).map((r) => r.ink).filter(Boolean))).sort(), [state.rows]);
 
+  // Every illustrator in the catalog, for the Advanced panel's Artist filter.
+  // `filterIllustrators` was already threaded through chipFilter, the saved-view
+  // payload, clearUserFilters and the "Also filtering" strip — five consumers
+  // and no writer, so the Set could never be non-empty and the Screener was one
+  // dimension short of the Cards-tab parity it claims. This memo plus the chip
+  // group below is the missing tap.
+  const screenerIllustrators = useMemo(() => {
+    const s = new Set();
+    for(const r of (raw || [])){
+      if(!Array.isArray(r.illustrators)) continue;
+      for(const n of r.illustrators) if(n) s.add(n);
+    }
+    return Array.from(s).sort((a,b) => a.localeCompare(b));
+  }, [raw]);
+  const [illQuery, setIllQuery] = useState("");
+  // Cap the rendered chips — some sets push the roster past 100 names and the
+  // panel is a filter, not a directory. A selected artist always stays visible
+  // even when the query no longer matches it, or unticking it becomes impossible.
+  const visibleIllustrators = useMemo(() => {
+    const q = illQuery.trim().toLowerCase();
+    const hits = q ? screenerIllustrators.filter(n => n.toLowerCase().includes(q)) : screenerIllustrators;
+    const picked = screenerIllustrators.filter(n => filterIllustrators.has(n) && !hits.includes(n));
+    return [...picked, ...hits].slice(0, 80);
+  }, [screenerIllustrators, illQuery, filterIllustrators]);
+
   // Clear user-added filters but keep preset-baked defaults. The "preset
   // baseline" is whatever the preset itself filters on (Buyouts logic,
   // graded-mode Enchanted default, etc.) — those live in the filter
@@ -26655,6 +27173,39 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     dragRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   }, []);
+  // ── Windowed rows ───────────────────────────────────────────────────────
+  // The table used to render `filtered.slice(0, 1000)` and tell anyone past
+  // that to "tighten filters to see more" — advice that doesn't fit the actual
+  // need, which is usually to sort by a column and keep scrolling. Since
+  // migration 120 took price_movers from 622 rows to ~5,800, the default view
+  // is a live truncation. Same slab-and-sentinel shape as the Cards grid: mount
+  // 250 rows, grow through an IntersectionObserver below the table. Rows are
+  // much cheaper than card tiles (no images past the thumbnail), so the slab is
+  // bigger.
+  //
+  // root stays the viewport rather than .price-db-tablewrap. The sentinel sits
+  // INSIDE that scroller, so a viewport-rooted observer already has its rect
+  // clipped by the container and fires exactly when the sentinel is scrolled
+  // into view — correct in both layouts. Rooting on the wrap itself would break
+  // the ≤600px-tall case, where max-height is lifted and the wrap no longer
+  // scrolls: the sentinel would then be permanently "inside" the root and the
+  // observer would page in the entire result set on mount.
+  const ROWS_WINDOW = 250;
+  const [visibleRows, setVisibleRows] = useState(ROWS_WINDOW);
+  const rowSentinelRef = useRef(null);
+  // Any change to the result set starts the window over — otherwise narrowing a
+  // filter would leave you scrolled into rows that no longer exist.
+  useEffect(() => { setVisibleRows(ROWS_WINDOW); }, [filtered]);
+  useEffect(() => {
+    const el = rowSentinelRef.current;
+    if(!el) return;
+    const io = new IntersectionObserver((es) => {
+      if(es.some(e => e.isIntersecting)) setVisibleRows(c => c + ROWS_WINDOW);
+    }, {root: null, rootMargin: "600px 0px"});
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filtered.length]);
+
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
   const colsRef = useRef(null);
   useEffect(()=>{ if(!colsMenuOpen) return; const f=(e)=>{ if(colsRef.current && !colsRef.current.contains(e.target)) setColsMenuOpen(false); }; document.addEventListener("mousedown", f); return ()=>document.removeEventListener("mousedown", f); }, [colsMenuOpen]);
@@ -27132,6 +27683,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         title="Download the current filtered + sorted view as CSV">
         ⇩ CSV
       </button>
+      <button class="price-db-advbtn" onClick=${copyCurrentPageLink}
+        title="Copy a link that reopens this exact screen — preset, window, every chip and both sort keys. A saved view is yours; this is sendable.">
+        ${uiIcon("link")} Copy link
+      </button>
       ${!showGraded && html`<div class="market-sim-kind" role="group"
         title="Determines which column drives the preset logic (Buyouts, Discount, etc.) and which prices the advanced range filters apply to. Both columns are always shown in the table."
         style=${{marginLeft: "auto"}}>
@@ -27297,6 +27852,25 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             onClick=${()=>setFilterClassifications(new Set())}>Clear</button>`}
         </div>
       </div>
+      ${!showSealed && html`<div class="price-db-adv-row">
+        <label>Artist</label>
+        ${screenerIllustrators.length === 0
+          ? html`<span class="muted" style=${{fontSize:11}}>
+              Artist data isn't loaded yet — apply <code>supabase/31_card_illustrators.sql</code> and re-run the Lorcast loader.
+            </span>`
+          : html`<div style=${{flex:1,minWidth:0}}>
+              <input type="search" class="price-db-artistsearch" placeholder="Find an artist…"
+                value=${illQuery} onInput=${e=>setIllQuery(e.target.value)}/>
+              <div class="cards-chipgroup price-db-artistchips">
+                ${visibleIllustrators.map(n => html`<button key=${n}
+                  class=${"chip "+(filterIllustrators.has(n)?"active":"")}
+                  onClick=${()=>setFilterIllustrators(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}>${n}</button>`)}
+                ${visibleIllustrators.length === 0 && html`<span class="muted" style=${{fontSize:11}}>No artist matches "${illQuery}"</span>`}
+              </div>
+              ${filterIllustrators.size > 0 && html`<button class="price-db-advbtn" style=${{marginTop:6}}
+                onClick=${()=>setFilterIllustrators(new Set())}>Clear artists</button>`}
+            </div>`}
+      </div>`}
       <div class="price-db-adv-row">
         <button class="price-db-advbtn"
           onClick=${()=>{ setFilterCosts(new Set()); setFilterCardTypes(new Set()); setFilterStrengths(new Set()); setFilterWillpowers(new Set()); setFilterLores(new Set()); setFilterInkable(null); setFilterLegality(""); setFilterKeywords(new Set()); setFilterClassifications(new Set()); setFilterIllustrators(new Set()); }}>
@@ -27395,7 +27969,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
           ${orderedCols.map(c => c.th())}
         </tr></thead>
         <tbody>
-          ${filtered.slice(0, 1000).map((r) => {
+          ${filtered.slice(0, visibleRows).map((r) => {
             const img = r.image_small || r.image_normal;
             const key = r.card_id + ":" + r.printing + ":" + (r._variant || "");
             const isSel = selected.has(key);
@@ -27430,7 +28004,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </tbody>
       </table>
       </div>
-      ${filtered.length > 1000 && html`<div class="muted" style=${{padding: "10px 6px", textAlign: "center", fontSize: 11}}>Showing first 1,000 of ${filtered.length} — tighten filters to see more.</div>`}
+      ${filtered.length > visibleRows && html`<div ref=${rowSentinelRef} class="price-db-more muted">
+        Showing ${visibleRows.toLocaleString()} of ${filtered.length.toLocaleString()} — keep scrolling to load more.
+        <button class="price-db-advbtn" onClick=${()=>setVisibleRows(filtered.length)}>Show all</button>
+        <button class="price-db-advbtn" onClick=${exportCsv}>⇩ CSV (all ${filtered.length.toLocaleString()})</button>
+      </div>`}
     </div>
     <//>`}
     ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
@@ -39211,7 +39789,8 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "s","f","m","c","card","panel",
+                           "s","f","m","c","card","panel","v",
+                           "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -39223,7 +39802,13 @@ function App(){
         decks:      new Set(["deck","token","user","tourney","s","f"]),
         collection: new Set(["collection","token","set","c"]),
         market:     new Set(["a","trade","t"]),
-        screener:   new Set(["m"]),
+        // ?m= is the short mode link; ?v= is the whole screen (preset, window,
+        // every chip, both sort keys) — see encodeScreenerState.
+        screener:   new Set(["m","v"]),
+        // Price Graphing: ?g= the compare list, ?hm= mode, ?hr= range,
+        // ?hs= chart scale. This view owned NOTHING before — an 18-card
+        // comparison died on refresh and could not be sent to anyone.
+        history:    new Set(["g","hm","hr","hs"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
         home:       new Set(["panel"]),
       };
