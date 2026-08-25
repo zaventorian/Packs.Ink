@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=354">
+<link rel="stylesheet" href="styles.css?v=355">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2813,6 +2813,74 @@ async function fetchMarketIndexLatest(){
     console.warn("market index latest fetch:", e?.message || e);
     return null;
   }
+}
+
+// ── Custom indices ──────────────────────────────────────────────────────
+// A CUSTOM index is one the user defines by choosing a basket — today, any
+// watchlist. The server can't precompute those (one matview per user per list
+// is not a thing), so this builds them in the browser from price history.
+//
+// ⚠ It MUST reproduce migration 130's methodology exactly. Two series both
+// labelled "index" that compute differently is worse than not shipping the
+// second one — the whole value of a benchmark is that it is the same
+// measurement. These params are that migration's, and
+// scripts/test_market_index.mjs checks this function against output captured
+// from a real Postgres run of it, so the two cannot drift silently.
+const INDEX_PARAMS = {
+  maxGapDays: 7,       // lag() gives the previous OBSERVATION; cap the span it may represent
+  retClamp: 2.0,       // winsorize a daily return into [1/2, 2]
+  minAbs: 5,           // a 4-card universe is a number, not an index
+  minCoverage: 0.6,    // ...of the scope's own recent best participation
+  coverageWindow: 30,  // observations, matching the SQL's 30-row frame
+};
+
+// `history` maps a series key -> [{date:"YYYY-MM-DD", low, market}] ascending.
+// The key is only an identity for grouping; any stable string works.
+// Returns [{x, y, n, universe}] rebased so the first emitted day is 100.
+function buildCustomIndex(history, params){
+  const P = {...INDEX_PARAMS, ...(params || {})};
+  // Daily mean return across whatever priced on both this day and its previous
+  // observation. Built per-day so entries and exits never create a jump: a card
+  // that starts pricing in month 8 simply isn't in months 1-7's comparisons.
+  const byDate = new Map();
+  for(const rows of Object.values(history || {})){
+    const pts = (rows || [])
+      .map(r => ({t: Date.parse(r.date + "T00:00:00Z"), v: Number(r.market ?? r.market_price ?? r.low ?? r.low_price)}))
+      .filter(p => Number.isFinite(p.t) && Number.isFinite(p.v) && p.v > 0)
+      .sort((a, b) => a.t - b.t);
+    for(let i = 1; i < pts.length; i++){
+      const gapDays = (pts[i].t - pts[i-1].t) / 86400000;
+      if(gapDays > P.maxGapDays) continue;
+      const raw = pts[i].v / pts[i-1].v;
+      const ret = Math.min(Math.max(raw, 1 / P.retClamp), P.retClamp);
+      let slot = byDate.get(pts[i].t);
+      if(!slot){ slot = {sum: 0, n: 0}; byDate.set(pts[i].t, slot); }
+      slot.sum += ret; slot.n += 1;
+    }
+  }
+  const days = [...byDate.entries()].map(([t, s]) => ({t, mean: s.sum / s.n, n: s.n}))
+    .sort((a, b) => a.t - b.t);
+  // Coverage gate: keep a day only if it represents most of what this basket
+  // normally manages. A trailing max, so it self-calibrates instead of needing
+  // a per-basket threshold.
+  const kept = [];
+  for(let i = 0; i < days.length; i++){
+    const from = Math.max(0, i - P.coverageWindow);
+    let universe = 0;
+    for(let j = from; j <= i; j++) if(days[j].n > universe) universe = days[j].n;
+    if(days[i].n < P.minAbs) continue;
+    if(days[i].n < P.minCoverage * universe) continue;
+    kept.push({...days[i], universe});
+  }
+  if(!kept.length) return [];
+  // Chain, then divide by the FIRST cumulative value. Not x100 — the first
+  // emitted day already carries a return (a return needs a prior observation),
+  // so scaling the raw cumulative would bake that day's move into the base and
+  // open the series at 100.6 instead of 100.
+  let cum = 1;
+  const out = kept.map(d => { cum *= d.mean; return {x: d.t, cum, n: d.n, universe: d.universe}; });
+  const base = out[0].cum;
+  return out.map(p => ({x: p.x, y: (p.cum / base) * 100, n: p.n, universe: p.universe}));
 }
 
 // ── Price alerts (migration 129) ────────────────────────────────────────
@@ -16018,8 +16086,8 @@ const clipSeriesFrom = (series, startMs) => {
   return series.map(s => ({...s, data: (s.data||[]).filter(p => p.x >= startMs)}));
 };
 
-const HISTORY_MODES = ["card","sealed","graded","set"];
-const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards}) => {
+const HISTORY_MODES = ["card","sealed","graded","set","index"];
+const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards, watchlists}) => {
   const tips = useContext(TipsContext);
   // Deep-link state, read once. The compare list itself needs the catalog to
   // rehydrate (names / art / set) so it's applied in an effect further down
@@ -16130,6 +16198,37 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     let cancelled = false;
     setCompareLoading(true);
     const tasks = missing.map(c => {
+      if(c.kind === "index"){
+        // A server index is a straight read. A watchlist index has to be
+        // computed here — nothing precomputes one basket per user — so pull its
+        // members' history and run the same algorithm the SQL does.
+        if(c.watchlistId){
+          const wl = (watchlists || []).find(w => w.id === c.watchlistId);
+          const pids = Array.from(new Set((wl ? wl.items : [])
+            .map(it => it.productId).filter(n => Number.isFinite(n))));
+          if(!pids.length) return Promise.resolve({id: c.card_id, rows: [], kind: "index"});
+          const since = "2024-02-08";   // earliest price data on file
+          return fetchCollectionPriceHistory(pids, since)
+            .then(rows => {
+              // Group by (pid, printing): a Cold Foil and its non-foil are
+              // separate return series, exactly as they are server-side.
+              const byKey = {};
+              for(const r of (rows || [])){
+                const k = r.tcgplayer_product_id + "|" + (r.printing || "Normal");
+                (byKey[k] = byKey[k] || []).push({
+                  date: r.date,
+                  market: r.market_price != null ? Number(r.market_price) : null,
+                  low: r.low_price != null ? Number(r.low_price) : null,
+                });
+              }
+              return {id: c.card_id, rows: buildCustomIndex(byKey), kind: "index"};
+            })
+            .catch(() => ({id: c.card_id, rows: [], kind: "index"}));
+        }
+        return fetchMarketIndexSeries(c.indexScope, c.indexKey)
+          .then(rows => ({id: c.card_id, rows: rows || [], kind: "index"}))
+          .catch(() => ({id: c.card_id, rows: [], kind: "index"}));
+      }
       if(c.kind === "graded"){
         // Every individual sale for this (card_id, printing, grader, grade).
         // Was graded_prices_daily, whose feed died 2026-06-30 — so every graded
@@ -16183,6 +16282,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                   market: win.reduce((a,b) => a+b, 0) / win.length,
                 };
               });
+          } else if(kind === "index"){
+            // Already {x, y} index points. Stored under BOTH price fields so
+            // the Low / NM Market toggle is a no-op on an index rather than
+            // blanking it — an index has one value, not two.
+            next[id] = (rows || []).map(p => ({x: p.x, low: p.y, market: p.y, n: p.n, universe: p.universe}));
           } else {
             // Store the FULL history. The pre-release clip is applied at render
             // (releaseFloorByPid) so the "Hide prerelease" checkbox can turn it
@@ -16373,6 +16477,84 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Which sets the graphed cards belong to — the benchmark picker offers those
   // rather than all thirty, since "vs a set I'm not looking at" is never the
   // question.
+  // ── Indices as graphable subjects ──────────────────────────────────────
+  // Distinct from the benchmark overlay, deliberately. A BENCHMARK is a
+  // reference — one muted dashed line you read the others against, with no
+  // colour slot and no stats row. An INDEX ITEM is a subject: it gets a colour,
+  // a legend chip, a stats row, the CSV and the share link, and you can put
+  // several on one chart. "How did Enchanteds do against Commons" is a question
+  // about two subjects; "did this card beat the market" is a question about a
+  // reference. Both are real, so both exist.
+  const [indexCatalog, setIndexCatalog] = useState(undefined);  // undefined = loading
+  const [indexSearch, setIndexSearch] = useState("");
+  useEffect(() => {
+    if(mode !== "index" || indexCatalog !== undefined) return;
+    let cancelled = false;
+    fetchMarketIndexLatest().then(rows => { if(!cancelled) setIndexCatalog(rows); });
+    return () => { cancelled = true; };
+  }, [mode, indexCatalog]);
+  // Human labels for a (scope, scope_key). Set ids and the "set|rarity"
+  // composite are meaningless on screen, so they resolve through the catalog.
+  const setNameById2 = useMemo(() => {
+    const m = {};
+    for(const r of (raw || [])) if(r.set_id && r.Set && !m[r.set_id]) m[r.set_id] = r.Set;
+    return m;
+  }, [raw]);
+  // "Booster Box" + "s" is "Booster Boxs". Sibilant endings take -es; that
+  // covers every product_type and rarity these keys can hold.
+  const _plural = (w) => /(?:[sxz]|ch|sh)$/i.test(w) ? w + "es" : w + "s";
+  const indexLabel = useCallback((scope, key) => {
+    if(scope === "all")    return "Whole market";
+    if(scope === "chase")  return "Chase (Enchanted · Epic · Iconic)";
+    if(scope === "sealed") return "Sealed products";
+    if(scope === "set")    return setNameById2[key] || key;
+    if(scope === "rarity") return "All " + _plural(key);
+    if(scope === "ink")    return key + " ink";
+    if(scope === "sealedtype") return _plural(key);
+    if(scope === "setrarity"){
+      const [sid, rar] = String(key).split("|");
+      return (setNameById2[sid] || sid) + " " + _plural(rar);
+    }
+    return scope + " " + key;
+  }, [setNameById2]);
+  const INDEX_GROUP_LABEL = {
+    all:"Market", chase:"Market", sealed:"Market",
+    set:"By set", rarity:"By rarity", setrarity:"Set × rarity",
+    ink:"By ink", sealedtype:"Sealed type",
+  };
+  const buildIndexCompareItem = useCallback((row) => {
+    const key = row.scope + ":" + (row.scope_key || "");
+    return {
+      kind: "index",
+      card_id: "index-" + key,
+      indexScope: row.scope, indexKey: row.scope_key || "",
+      productId: null, printing: null,
+      name: indexLabel(row.scope, row.scope_key) + " index",
+      // Component count is part of an index's identity: a 14-card tier and a
+      // 5,800-card market are not equally solid, and the chip is where that has
+      // to be visible.
+      sub: (row.n_components != null
+        ? row.n_components + (row.universe && row.universe !== row.n_components ? " of " + row.universe : "") + " components"
+        : "index"),
+      image: null,
+    };
+  }, [indexLabel]);
+  // A watchlist graphed as its own index — the "custom index" case. Computed in
+  // the browser from the members' price history, using buildCustomIndex, which
+  // is checked against real PostgreSQL output by scripts/test_market_index.mjs.
+  const buildWatchlistIndexItem = useCallback((w) => {
+    if(!w || !w.items || !w.items.length) return null;
+    return {
+      kind: "index",
+      card_id: "index-wl-" + w.id,
+      watchlistId: w.id,
+      productId: null, printing: null,
+      name: w.name + " index",
+      sub: w.items.length + " item" + (w.items.length === 1 ? "" : "s") + " · your basket",
+      image: null,
+    };
+  }, []);
+
   // Benchmark menu, grouped. The market-wide entries are always offered; the
   // narrow ones are derived from what is actually ON the graph, because "versus
   // a set I'm not looking at" is never the question, and listing all ~275
@@ -16897,10 +17079,25 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
           card_id: w.gradedCardId, printing: w.gradedPrinting || "",
           grader: w.grader, grade: w.grade, _meta: meta,
         }));
+      } else if(w.kind === "index"){
+        if(w.watchlistId){
+          // Only resolvable by the owner. Someone else opening the link simply
+          // gets the rest of the graph, which is the correct degradation for a
+          // private basket.
+          const wl = (watchlists || []).find(x => x.id === w.watchlistId);
+          const it = wl ? buildWatchlistIndexItem(wl) : null;
+          if(it) built.push(it);
+        } else {
+          // Built without the catalog row: a link may land before
+          // market_index_latest has been fetched, and an index's identity is
+          // entirely in its (scope, key). The label resolves from the catalog,
+          // the component count fills in once the picker loads.
+          built.push(buildIndexCompareItem({scope: w.indexScope, scope_key: w.indexKey}));
+        }
       }
     }
     if(built.length) setCompareCards(built.filter(Boolean).slice(0, COMPARE_MAX));
-  }, [urlGraph, raw, sealedPrices, buildSealedCompareItem, buildSetCompareItem, buildGradedCompareItem]);
+  }, [urlGraph, raw, sealedPrices, watchlists, buildSealedCompareItem, buildSetCompareItem, buildGradedCompareItem, buildIndexCompareItem, buildWatchlistIndexItem]);
 
   // Mirror the graph back into the URL. replaceState — the compare list is a
   // filter on one page, not a stack of pages, so Back should leave Price
@@ -16969,6 +17166,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         <button class=${mode==="sealed"?"active":""}  onClick=${()=>setMode("sealed")}>By Sealed</button>
         <button class=${mode==="graded"?"active":""}  onClick=${()=>setMode("graded")}>By Graded</button>
         <button class=${mode==="set"?"active":""}     onClick=${()=>setMode("set")}>By Set EV</button>
+        <button class=${mode==="index"?"active":""}   onClick=${()=>setMode("index")}>By Index</button>
       </div>
       <div class="seg-toggle">
         ${RANGE_OPTIONS.map(([k,l]) => html`<button key=${k}
@@ -16992,7 +17190,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       </label>`}
     </div>
 
-    ${(mode === "sealed" || mode === "card" || mode === "set" || mode === "graded") ? (() => {
+    ${(mode === "sealed" || mode === "card" || mode === "set" || mode === "graded" || mode === "index") ? (() => {
       // Graded series carry individual sales in `low` and the rolling avg-of-5
       // in `market` (there is no raw Low / NM Market for a slab), so the toggle
       // has to say what it actually switches between.
@@ -17065,7 +17263,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
           const start = data.length ? data[0].y : "";
           const end   = data.length ? data[data.length-1].y : "";
           const pct   = (data.length && start) ? ((end-start)/start*100).toFixed(2) : "";
-          lines.push([i+1, c.name, c.sub||"", c.kind==="sealed"?"Sealed":"Card",
+          lines.push([i+1, c.name, c.sub||"",
+            c.kind==="sealed" ? "Sealed" : c.kind==="index" ? (c.watchlistId?"Custom index":"Index") : c.kind==="set" ? "Set EV" : "Card",
             start===""?"":start.toFixed(2), end===""?"":end.toFixed(2), pct].map(esc).join(","));
         });
         const blob = new Blob([lines.join("\n")], {type:"text/csv"});
@@ -17173,6 +17372,46 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       // Distinct graders / grades present in the dataset — drives the filter chip rows.
       const gradedAllGraders = ["psa","cgc","bgs","sgc","tag"];
       const gradedAllGrades = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
+
+      const toggleIndexItem = (item) => {
+        if(isCardInCompare(item.card_id)){
+          setCompareCards(prev => prev.filter(p => p.card_id !== item.card_id));
+        } else if(!isFull){
+          setCompareCards(prev => [...prev, item]);
+        }
+      };
+      // The user's own baskets come FIRST — a custom index is the one thing on
+      // this list nobody else could have made, and burying it under thirty
+      // set indices would hide the feature. Only lists with enough members to
+      // clear the component floor are offered; below it the series would come
+      // back empty and read as broken.
+      const indexPickerGroups = (() => {
+        const q = indexSearch.trim().toLowerCase();
+        const groups = [];
+        const mine = (watchlists || [])
+          .filter(w => w.items.length >= INDEX_PARAMS.minAbs)
+          .map(w => ({_wl: w, _label: w.name}))
+          .filter(r => !q || r._label.toLowerCase().includes(q));
+        if(mine.length) groups.push({label: "Your baskets", rows: mine});
+        const byGroup = new Map();
+        for(const row of (indexCatalog || [])){
+          const label = indexLabel(row.scope, row.scope_key);
+          if(q && !label.toLowerCase().includes(q) && !row.scope.includes(q)) continue;
+          const g = INDEX_GROUP_LABEL[row.scope] || row.scope;
+          if(!byGroup.has(g)) byGroup.set(g, []);
+          byGroup.get(g).push({...row, _label: label});
+        }
+        // Stable, meaningful order rather than whatever the fetch returned.
+        const ORDER = ["Market","By rarity","Set × rarity","By set","By ink","Sealed type"];
+        for(const g of ORDER){
+          const rows = byGroup.get(g);
+          if(!rows || !rows.length) continue;
+          rows.sort((a,b) => a._label.localeCompare(b._label));
+          groups.push({label: g, rows});
+        }
+        for(const [g, rows] of byGroup) if(!ORDER.includes(g)) groups.push({label: g, rows});
+        return groups;
+      })();
 
       const toggleSetItem = (setNameForToggle) => {
         const sid = setIdByName[setNameForToggle];
@@ -17340,6 +17579,49 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     })}
             </div>
           </div>`
+        : mode === "index"
+        ? html`<div class="history-picker">
+            <div class="history-picker-searchrow">
+              <input type="search" placeholder="Search indices — 'enchanted', 'booster box', a set name..."
+                value=${indexSearch} onInput=${e=>setIndexSearch(e.target.value)}/>
+            </div>
+            <div class="history-picker-hint">Click any index to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-list">
+              ${indexCatalog === undefined
+                ? html`<div class="history-picker-empty">Loading indices…</div>`
+                : indexCatalog === null
+                  ? html`<div class="history-picker-empty">
+                      Market indices aren't switched on for this site yet — ask an admin to run
+                      <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
+                    </div>`
+                  : indexPickerGroups.length === 0
+                    ? html`<div class="history-picker-empty">${(indexCatalog||[]).length
+                        ? `No index matches "${indexSearch}"`
+                        : "No indices have been computed yet — run select public.refresh_market_index();"}</div>`
+                    : indexPickerGroups.map(g => html`<div key=${g.label} class="history-picker-group">
+                        <div class="history-picker-group-head">${g.label}</div>
+                        ${g.rows.map(row => {
+                          const item = row._wl ? buildWatchlistIndexItem(row._wl) : buildIndexCompareItem(row);
+                          if(!item) return null;
+                          const sel = isCardInCompare(item.card_id);
+                          return html`<button key=${item.card_id}
+                            class=${"history-picker-item picker-multi "+(sel?"active":"")}
+                            disabled=${!sel && isFull}
+                            title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                            onClick=${()=>toggleIndexItem(item)}>
+                            <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
+                            <span class="picker-text">
+                              <span class="hpi-name">${item.name.replace(/ index$/, "")}</span>
+                              <span class="hpi-sub">
+                                ${item.sub}
+                                ${row.pct_30d != null ? html` · <span class=${row.pct_30d >= 0 ? "up" : "down"}>${(row.pct_30d>=0?"+":"")+row.pct_30d+"% 1M"}</span>` : ""}
+                              </span>
+                            </span>
+                          </button>`;
+                        })}
+                      </div>`)}
+            </div>
+          </div>`
         : html`<div class="history-picker">
             <div class="history-picker-searchrow">
               <input type="search" placeholder="Search sets..."
@@ -17502,10 +17784,18 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                         <td><span class="legend-swatch" style=${{background: st.color, display:"inline-block", width:14, height:5, borderRadius:2,
                           backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}/></td>
                         <td>${i+1}</td>
-                        <td><strong>${c.name}</strong>${c.kind === "sealed" && html` <span class="compare-kind-tag">sealed</span>`}</td>
+                        ${/* No "index" tag on an index — the name already ends
+                              in it, and "Whole market index index" is what that
+                              produced. Only the custom ones need marking. */ null}
+                        <td><strong>${c.name}</strong>${c.kind === "sealed" ? html` <span class="compare-kind-tag">sealed</span>`
+                          : c.watchlistId ? html` <span class="compare-kind-tag">custom</span>` : null}</td>
                         <td class="muted">${c.sub || ""}</td>
-                        <td class="num">${start==null?"—":"$"+start.toFixed(2)}</td>
-                        <td class="num">${end==null?"—":"$"+end.toFixed(2)}</td>
+                        ${/* An index has no dollar value — it is points from a
+                              base of 100. Printing "$100.00" would invite the
+                              reader to compare it against a card's price, which
+                              is a category error. */ null}
+                        <td class="num">${start==null?"—":(c.kind==="index"?start.toFixed(1):"$"+start.toFixed(2))}</td>
+                        <td class="num">${end==null?"—":(c.kind==="index"?end.toFixed(1):"$"+end.toFixed(2))}</td>
                         <td class=${"num "+(pct==null?"":(pct>=0?"up":"down"))}>${pct==null?"—":(pct>=0?"+":"")+pct.toFixed(1)+"%"}</td>
                       </tr>`;
                     })}
@@ -25981,6 +26271,13 @@ function encodeCompareItems(items){
     else if(c.kind === "sealed" && c.productId != null) out.push("s~" + c.productId);
     else if(c.kind === "set" && c.setId)                out.push("t~" + c.setId);
     else if(c.kind === "graded" && c.gradedCardId)      out.push("g~" + c.gradedCardId + "~" + c.grader + "~" + c.grade + "~" + encodeCmpPrinting(c.gradedPrinting));
+    // A market index travels as (scope, key). A CUSTOM one travels as its
+    // watchlist id, which only resolves for its owner — a shared link drops it
+    // rather than exposing someone's basket, and the receiving client just
+    // graphs the rest. Encoding the members instead would make it portable but
+    // would freeze a snapshot of a list whose whole point is that it changes.
+    else if(c.kind === "index" && c.watchlistId)        out.push("w~" + c.watchlistId);
+    else if(c.kind === "index" && c.indexScope)         out.push("i~" + c.indexScope + "~" + encodeURIComponent(c.indexKey || ""));
   }
   return out.join(",");
 }
@@ -26003,6 +26300,10 @@ function decodeCompareItems(str){
       out.push({kind:"set", setId: parts[1]});
     } else if(kind === "g" && parts.length >= 5 && parts[1]){
       out.push({kind:"graded", gradedCardId: parts[1], grader: parts[2], grade: parts[3], gradedPrinting: decodeCmpPrinting(parts[4])});
+    } else if(kind === "i" && parts.length >= 2 && parts[1]){
+      out.push({kind:"index", indexScope: parts[1], indexKey: decodeURIComponent(parts[2] || "")});
+    } else if(kind === "w" && parts.length >= 2 && parts[1]){
+      out.push({kind:"index", watchlistId: parts[1]});
     }
     if(out.length >= COMPARE_MAX) break;
   }
@@ -42938,6 +43239,7 @@ function App(){
       sealedPrices=${sealedPrices} setsMeta=${setsMeta}
       historyTarget=${historyTarget}
       incomingCompareCards=${incomingCompareCards}
+      watchlists=${watchlists}
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
     ${viewsReady&&view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}

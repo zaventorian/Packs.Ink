@@ -213,6 +213,10 @@ function eq(name, got, want) {
     { kind: "set", setId: "set_abc123" },
     { kind: "graded", gradedCardId: "crd_deadbeef", grader: "psa", grade: "9.5", gradedPrinting: "Foil" },
     { kind: "graded", gradedCardId: "crd_cafe", grader: "cgc", grade: "10", gradedPrinting: null },
+    { kind: "index", indexScope: "all", indexKey: "" },
+    // scope_key carries a "|" and a space; neither may be re-split or dropped.
+    { kind: "index", indexScope: "setrarity", indexKey: "set_abc123|Super Rare" },
+    { kind: "index", watchlistId: "3f1c0e88-0000-4000-8000-000000000abc" },
   ];
   const round = decodeCompareItems(encodeCompareItems(items));
   eq("compare list length", round.length, items.length);
@@ -232,6 +236,14 @@ function eq(name, got, want) {
     encodeCompareItems([{ kind: "card", productId: 5, printing: "Rainbow Foil" }])
   );
   eq("unknown printing survives", odd[0].printing, "Rainbow Foil");
+
+  eq("index scope round-trips", round[7], { kind: "index", indexScope: "all", indexKey: "" });
+  // The one that would break a naive codec: "|" separates the composite key and
+  // the rarity contains a space.
+  eq("setrarity key survives its pipe and space", round[8].indexKey, "set_abc123|Super Rare");
+  eq("custom index travels as its watchlist id", round[9],
+    { kind: "index", watchlistId: "3f1c0e88-0000-4000-8000-000000000abc" });
+  eq("an index with no scope is dropped", encodeCompareItems([{ kind: "index" }]), "");
 
   eq("empty encodes to nothing", encodeCompareItems([]), "");
   eq("empty decodes to nothing", decodeCompareItems(""), []);
