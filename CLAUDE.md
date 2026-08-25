@@ -1349,6 +1349,12 @@ on a desktop the Analytics tab is right there). Off by default.
 
 - `HOME_FIXED_KEYS` keeps them out of `columnNodes` on both the render and the edit path, and out
   of `HOME_POPOUT_KEYS` (there is no panel to pop out).
+- **It is `position:absolute` in the movers toolbar's empty top-right corner**, level with the
+  time-window chips. A row of its own pushed the whole movers stack down for a button most people
+  never switch on; the point of a shortcut is that it costs nothing. Measured: toolbar height and
+  document height are byte-identical with it on and off. `margin-left:auto` would NOT do — the
+  toolbar wraps, so the die would land at the end of whatever line it wrapped onto (next to
+  Pause) instead of level with 1Y.
 - The layout editor gives a fixed entry **only Show/Hide** — no arrows, no column select. Its
   control bar renders in the header row and **must render on desktop too**, or it would be
   impossible to switch on from a laptop.
