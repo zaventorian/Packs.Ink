@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=353">
+<link rel="stylesheet" href="styles.css?v=354">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2792,14 +2792,19 @@ async function fetchMarketIndexSeries(scope, scopeKey){
 // One row per scope — small (a few dozen), so it's fetched whole and indexed
 // client-side rather than queried per card.
 async function fetchMarketIndexLatest(){
-  const key = "packsink:mktindex:latest:v1";
+  const key = "packsink:mktindex:latest:v2";
   const cached = _mktCacheRead(key);
   if(cached) return cached;
+  const BASE = "scope,scope_key,date,value,n_components,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d";
   try {
-    const rows = await sbFetchAll("market_index_latest", {
-      select: "scope,scope_key,date,value,n_components,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d",
-      order: "scope.asc",
-    });
+    // `universe` arrives in migration 130. A site that ran 128 but not 130 has
+    // the matview WITHOUT that column, and selecting it there is a 42703 that
+    // would take the whole benchmark away rather than one label — so fall back.
+    const rows = await sbFetchAll("market_index_latest", {select: BASE + ",universe", order: "scope.asc"})
+      .catch(e => {
+        if(!/42703|universe/i.test(String(e?.message || e))) throw e;
+        return sbFetchAll("market_index_latest", {select: BASE, order: "scope.asc"});
+      });
     const out = rows || [];
     writeJsonCache(key, out);
     return out;
@@ -16353,8 +16358,12 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   const benchAvailable = !Object.values(benchSeries).some(v => v === null);
   useEffect(() => {
     if(!benchKey || benchSeries[benchKey] !== undefined) return;
-    const [scope, scopeKey] = benchKey.startsWith("set:")
-      ? ["set", benchKey.slice(4)] : ["all", ""];
+    // "<scope>:<scope_key>" — split on the FIRST colon only, because a
+    // setrarity key is "<set_id>|<rarity>" and a rarity key can contain a
+    // space, neither of which should be re-split.
+    const cut = benchKey.indexOf(":");
+    const scope = cut < 0 ? benchKey : benchKey.slice(0, cut);
+    const scopeKey = cut < 0 ? "" : benchKey.slice(cut + 1);
     let cancelled = false;
     fetchMarketIndexSeries(scope, scopeKey).then(rows => {
       if(!cancelled) setBenchSeries(prev => ({...prev, [benchKey]: rows}));
@@ -16364,14 +16373,39 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   // Which sets the graphed cards belong to — the benchmark picker offers those
   // rather than all thirty, since "vs a set I'm not looking at" is never the
   // question.
-  const benchSetOptions = useMemo(() => {
-    const ids = new Map();
+  // Benchmark menu, grouped. The market-wide entries are always offered; the
+  // narrow ones are derived from what is actually ON the graph, because "versus
+  // a set I'm not looking at" is never the question, and listing all ~275
+  // scopes would bury the four that matter.
+  //
+  // Value format is the fetch key: "<scope>:<scope_key>", with scope_key empty
+  // for the global ones.
+  const benchOptionGroups = useMemo(() => {
+    const byPid = new Map();
+    for(const r of (raw || [])) if(r.tcgplayer_product_id != null && !byPid.has(r.tcgplayer_product_id)) byPid.set(r.tcgplayer_product_id, r);
+    const sets = new Map(), rarities = new Map(), peers = new Map();
     for(const c of compareCards){
-      if(c.kind === "set" && c.setId){ ids.set(c.setId, c.setName); continue; }
-      const row = (raw || []).find(r => r.tcgplayer_product_id === c.productId);
-      if(row && row.set_id && row.Set) ids.set(row.set_id, row.Set);
+      if(c.kind === "set" && c.setId){ sets.set(c.setId, c.setName); continue; }
+      const row = byPid.get(c.productId);
+      if(!row) continue;
+      if(row.set_id && row.Set) sets.set(row.set_id, row.Set);
+      if(row.Rarity) rarities.set(row.Rarity, row.Rarity);
+      if(row.set_id && row.Rarity && row.Set)
+        peers.set(row.set_id + "|" + row.Rarity, row.Set + " " + row.Rarity + "s");
     }
-    return Array.from(ids, ([id, name]) => ({id, name}));
+    const groups = [
+      {label: "Market", options: [
+        {v: "all:",    l: "Whole market"},
+        {v: "chase:",  l: "Chase (Enchanted · Epic · Iconic)"},
+        {v: "sealed:", l: "Sealed products"},
+      ]},
+    ];
+    if(sets.size)     groups.push({label:"Set", options: Array.from(sets, ([id,n]) => ({v:"set:"+id, l:n}))});
+    if(rarities.size) groups.push({label:"Rarity", options: Array.from(rarities.keys()).map(r => ({v:"rarity:"+r, l:"All "+r+"s"}))});
+    // The sharpest comparison available: same set AND same rarity. Also the one
+    // most likely to be missing, for a tier with too few cards to index.
+    if(peers.size)    groups.push({label:"Peer group", options: Array.from(peers, ([k,n]) => ({v:"setrarity:"+k, l:n}))});
+    return groups;
   }, [compareCards, raw]);
 
   const [setSearch, setSetSearch] = useState("");
@@ -17060,9 +17094,11 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
             const inRange = startMs == null ? benchRows : benchRows.filter(p => p.x >= startMs);
             const base = inRange.length ? inRange[0].y : null;
             if(!base) return null;
+            // Read the label back off the menu, so a scope only has to be named
+            // in one place and a new one can never plot as "undefined index".
+            const opt = benchOptionGroups.flatMap(g => g.options).find(o => o.v === benchmark);
             return {
-              name: benchmark === "all" ? "Market index"
-                : "Set index · " + ((benchSetOptions.find(o => "set:"+o.id === benchmark) || {}).name || ""),
+              name: (opt ? opt.l : "Benchmark") + " index",
               color: "var(--text-muted)", dash: "5,4", benchmark: true,
               data: inRange.map(p => ({x: p.x, y: (p.y / base) * 100})),
             };
@@ -17426,13 +17462,20 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                       if(v !== "off" && chartScale !== "indexed") setChartScale("indexed");
                     }}>
                       <option value="off">No benchmark</option>
-                      <option value="all">Whole market</option>
-                      ${benchSetOptions.map(o => html`<option key=${o.id} value=${"set:"+o.id}>${o.name}</option>`)}
+                      ${benchOptionGroups.map(g => html`<optgroup key=${g.label} label=${g.label}>
+                        ${g.options.map(o => html`<option key=${o.v} value=${o.v}>${o.l}</option>`)}
+                      </optgroup>`)}
                     </select>
                   </label>`}
                 </div>
                 ${benchKey && benchRows === null && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
-                  Market indices aren't switched on for this site yet — ask an admin to run <code>supabase/128_market_index.sql</code>.
+                  Market indices aren't switched on for this site yet — ask an admin to run <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
+                </div>`}
+                ${/* A scope with too few cards to index returns an empty array
+                      rather than null. Say which, instead of silently drawing
+                      nothing after the user picked something. */
+                  benchKey && Array.isArray(benchRows) && benchRows.length === 0 && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
+                  No index for that group — it has too few cards priced to make one. Try a wider benchmark.
                 </div>`}
                 ${compareLoading
                   ? html`<div class="chart-empty large">Loading history…</div>`
@@ -26968,13 +27011,35 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return m;
   }, [mktIndex]);
   const benchmarkReady = Array.isArray(mktIndex) && mktIndex.length > 0;
-  // Relative performance: the card's Δ% minus the market's Δ% over the same
-  // window. Positive = outperforming. Uses the OVERALL index rather than the
-  // card's set, because "beat the market" is the question people are actually
-  // asking; the per-set series is available on the chart for the narrower one.
+  // What the "vs Mkt" column measures against. The narrow bases are the point:
+  // "is this Enchanted beating the whole market" is a much weaker question than
+  // "is it beating the other Enchanteds from its own set", and only the second
+  // one separates a card that is moving from a tier that is moving.
+  const VS_MKT_BASES = [
+    ["all",       "Whole market", "Every priced single."],
+    ["set",       "Its set",      "Other cards from the same set."],
+    ["rarity",    "Its rarity",   "Every card of the same rarity, across all sets."],
+    ["setrarity", "Its set + rarity", "Its closest peer group — same set AND same rarity. The sharpest read, and the one most likely to be missing for a very small tier."],
+  ];
+  const [vsMktBasis, setVsMktBasis] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:vsMktBasis") || "all"; } catch { return "all"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:vsMktBasis", vsMktBasis); } catch{} }, [vsMktBasis]);
+  // Relative performance: the card's Δ% minus its benchmark's over the same
+  // window, in percentage POINTS. Positive = outpacing its comparison group.
   const vsMarket = (r, winKey) => {
     if(!benchmarkReady) return null;
-    const idx = mktIndexByScope.get("all|");
+    // Resolved per row for the narrow bases, so each card is measured against
+    // its own peers rather than one global series.
+    const scopeKey =
+      vsMktBasis === "set"       ? "set|" + (r.set_id || "")
+      : vsMktBasis === "rarity"  ? "rarity|" + (r.rarity || "")
+      : vsMktBasis === "setrarity" ? "setrarity|" + (r.set_id || "") + "|" + (r.rarity || "")
+      : "all|";
+    const idx = mktIndexByScope.get(scopeKey);
+    // No fallback to the market index on a miss. A tier too small to have an
+    // index would otherwise show a number silently computed against a
+    // completely different universe, which is worse than a dash.
     if(!idx) return null;
     const cardPct = r[winKey];
     const mktPct = idx[winKey.replace(/^mkt_pct_/, "pct_")];
@@ -27905,9 +27970,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // is absent entirely where migration 128 hasn't run.
     const vsMktWin = (moverWin || "pct_30d");
     const vsMktLbl = ({"pct_1d":"1D","pct_7d":"1W","pct_30d":"1M","pct_90d":"3M","pct_180d":"6M","pct_365d":"1Y"})[vsMktWin] || "";
+    const vsBasis = VS_MKT_BASES.find(b => b[0] === vsMktBasis) || VS_MKT_BASES[0];
     const vsMktCol = {key:"vsmkt", label:"vs Market", defaultHidden:true,
       th:()=>html`<th key="vsmkt" class="th-num"
-        title=${`This card's ${vsMktLbl} Δ% minus the whole-market index over the same window. Positive means it outpaced the market; negative means it lagged. The index is an equal-weighted, chain-linked return index of every priced card.`}>vs Mkt</th>`,
+        title=${`This card's ${vsMktLbl} Δ% minus ${vsBasis[1].toLowerCase()} over the same window, in percentage points. Positive means it outpaced its comparison group. ${vsBasis[2]} A dash means that group has no index — usually too few cards to make one.`}
+        >vs ${vsMktBasis === "all" ? "Mkt" : vsMktBasis === "set" ? "Set" : vsMktBasis === "rarity" ? "Rar" : "Peers"}</th>`,
       td:(r)=>{ const v = vsMarket(r, vsMktWin);
         return html`<td key="vsmkt" class=${"td-num "+pctCls(v)}>${v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(1) + "pp"}</td>`; }};
     const signalsCol = {key:"signals", label:"Signals",
@@ -28279,6 +28346,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         title="Copy a link that reopens this exact screen — preset, window, every chip and both sort keys. A saved view is yours; this is sendable.">
         ${uiIcon("link")} Copy link
       </button>
+      ${benchmarkReady && !showSealed && !colHidden.has("vsmkt") && html`<label class="checkbox-group price-db-vsbasis"
+        title="What the vs column measures each card against.">
+        <span class="muted">vs</span>
+        <select value=${vsMktBasis} onChange=${e=>setVsMktBasis(e.target.value)}>
+          ${VS_MKT_BASES.map(([k,l]) => html`<option key=${k} value=${k}>${l}</option>`)}
+        </select>
+      </label>`}
       ${!showGraded && html`<div class="market-sim-kind" role="group"
         title="Determines which column drives the preset logic (Buyouts, Discount, etc.) and which prices the advanced range filters apply to. Both columns are always shown in the table."
         style=${{marginLeft: "auto"}}>
