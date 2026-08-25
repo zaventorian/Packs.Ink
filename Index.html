@@ -552,6 +552,20 @@ const gradedFoilBucket = (p) => GRADED_FOIL_PRINTINGS.has((p || "").toLowerCase(
 // never classified is not evidence of a non-foil sale) and leaves version variants
 // (Two Swords / Text Error) exact, since those are different cards, not finishes.
 const GRADED_NONFOIL_PRINTINGS = new Set(["normal", "non-foil", "nonfoil"]);
+// Cards whose versions are declared by NAME (Two Swords, Text Error) have
+// exactly two: the base print and the named one. Every other printing value
+// that can turn up on a sale is a FINISH, not a version -- and on an Enchanted,
+// which is cold foil by definition, "Foil" says nothing at all. Three sales
+// titled "foil" were enough to grow Peter Pan - Pirate's Bane a third version
+// tab, so the fold is explicit rather than left to whatever the scraper wrote.
+//
+// This is deliberately NOT applied to Challenge Promo (C1), where Foil and
+// Non-Foil ARE the two versions (Top Prize and Prize Wall) and are two
+// genuinely different markets.
+const VERSION_FINISH_WORDS = new Set([
+  "", "normal", "non-foil", "nonfoil", "foil", "cold foil", "holofoil", "holo", "unknown",
+]);
+const isFinishOnlyPrinting = (p) => VERSION_FINISH_WORDS.has((p || "").toLowerCase().trim());
 const gradedSlotBucket = (p) => {
   const s = (p || "").toLowerCase().trim();
   if(!s || s === "unknown") return null;
@@ -6190,7 +6204,12 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // scatter all share the same featured (grader, grade). Premium only.
   // VERSION-split = genuinely different cards sharing a card_id (C1 Prize Wall/
   // Top Prize, Genie Two Swords, Peter Pan Text Error) — keyed on the raw printing.
-  const isVersionSplit = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set) || SPLIT_PRINTING_CARD_IDS.has(group.card_id);
+  const isC1Split = SPLIT_BY_PRINTING_SETS_GLOBAL.has(group.Set);
+  // A card whose versions are named (Genie Two Swords, Peter Pan Text Error)
+  // rather than keyed on finish. Its base version absorbs every finish-word
+  // printing; see isFinishOnlyPrinting.
+  const isNamedSplit = !isC1Split && SPLIT_PRINTING_CARD_IDS.has(group.card_id);
+  const isVersionSplit = isC1Split || SPLIT_PRINTING_CARD_IDS.has(group.card_id);
   // FOIL-split = an ordinary x/204 card that has BOTH foil and non-foil graded
   // sales → gets Non-Foil / Foil tabs too (computed from the per-card sales, so
   // no rollup/matview change needed; the tile + scatter derive from these sales).
@@ -6214,18 +6233,29 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     if(isFoilSplit) return ["Non-Foil", "Foil"];
     if(!isVersionSplit) return [];
     const s = new Set();
+    if(isNamedSplit){
+      // Exactly the base plus whatever named variants actually sold. A sale
+      // labelled with a bare finish is the base, not a third version.
+      s.add("Normal");
+      for(const r of (gradedSales.rows||[]))
+        if(r.printing && !isFinishOnlyPrinting(r.printing)) s.add(r.printing);
+      return [...s].sort((a,b)=> (a==="Normal"?0:1)-(b==="Normal"?0:1) || a.localeCompare(b));
+    }
     for(const r of (gradedSales.rows||[])) if(r.printing) s.add(r.printing);
     return [...s].sort((a,b)=>{
       const rank = (p)=> (p==="Normal"||p==="Non-Foil") ? 0 : 1;
       return rank(a)-rank(b) || a.localeCompare(b);
     });
-  }, [isVersionSplit, isFoilSplit, gradedSales.rows]);
-  // Card-context label/badge for a version. C1 → Top Prize/Prize Wall; foil-split
-  // mainline → plain Foil/Non-Foil (NEVER the C1 names); version cards → variant.
-  const splitLabel = (p) => isFoilSplit ? p : (PRINTING_VARIANT_LABEL[p] || p);
-  // Badge shows the distinguishing version only: foil-split badges "Foil" (Non-Foil
-  // is baseline → no badge); version cards use the variant badge.
-  const splitBadge = (p) => isFoilSplit ? (p === "Foil" ? "Foil" : null) : variantBadge(p);
+  }, [isVersionSplit, isNamedSplit, isFoilSplit, gradedSales.rows]);
+  // Card-context label/badge for a version. Both route through
+  // gradedVariantLabel, which is the one place that knows "Top Prize" and
+  // "Prize Wall" are CHALLENGE PROMO words: applying them globally is what put
+  // a "Top Prize" tab on an Into the Inklands enchanted. Foil-split mainline
+  // reads plain Foil/Non-Foil; named-version cards read their variant.
+  const splitLabel = (p) => isFoilSplit ? p : (gradedVariantLabel(p, group.Set) || p);
+  // Badge shows the distinguishing version only — the baseline print gets none.
+  const splitBadge = (p) => isFoilSplit ? (p === "Foil" ? "Foil" : null)
+                                        : gradedVariantLabel(p, group.Set);
   // Once sales load, lock the version filter onto the version the card was
   // opened to (initialPrinting from a screener/tile click — normalized to a foil
   // bucket for foil-split cards), else the base printing. Never combined.
@@ -6242,17 +6272,25 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       if(initialPrinting){
         if(isFoilSplit) want = gradedFoilBucket(initialPrinting);
         else if(cardPrintings.includes(initialPrinting)) want = initialPrinting;
+        // A named-version card opened on a finish (a Cold Foil tile, a sale
+        // tagged "Foil") is the BASE version, not the named one. Without this
+        // the foil bucket below sent it to whatever tab sorted first, which is
+        // how clicking through to Text Error could land you on Normal.
+        else if(isNamedSplit && isFinishOnlyPrinting(initialPrinting)) want = "Normal";
         else if(cardPrintings.includes(gradedFoilBucket(initialPrinting))) want = gradedFoilBucket(initialPrinting);
       }
       if(want && cardPrintings.includes(want)) return want;
       return cardPrintings[0];
     });
-  }, [isSplitCard, isFoilSplit, cardPrintings, initialPrinting]);
+  }, [isSplitCard, isFoilSplit, isNamedSplit, cardPrintings, initialPrinting]);
   const gradedRowsView = useMemo(()=> {
     if(!isSplitCard || !gradedPrintingFilter) return gradedSales.rows;
     if(isFoilSplit) return gradedSales.rows.filter(r => gradedFoilBucket(r.printing) === gradedPrintingFilter);
+    if(isNamedSplit) return gradedPrintingFilter === "Normal"
+      ? gradedSales.rows.filter(r => isFinishOnlyPrinting(r.printing))
+      : gradedSales.rows.filter(r => r.printing === gradedPrintingFilter);
     return gradedSales.rows.filter(r => (r.printing || "Unknown") === gradedPrintingFilter);
-  }, [isSplitCard, isFoilSplit, gradedPrintingFilter, gradedSales.rows]);
+  }, [isSplitCard, isFoilSplit, isNamedSplit, gradedPrintingFilter, gradedSales.rows]);
   const gradedCombos = useMemo(()=> buildGradedCombos(gradedRowsView), [gradedRowsView]);
   const gradedDefaultKey = useMemo(()=> {
     const has = (k)=> gradedCombos.some(c=>c.key===k);
@@ -29004,7 +29042,12 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
     })}
   </div>`;
 
-const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick}) => {
+// renderTile lets a banner keep this chrome -- the title row, the drag-to-pan
+// marquee, the whole row treatment -- while drawing a tile the standard
+// MoverTile can't: a graded slab has one price and one set of deltas, where
+// MoverTile is built around LOW vs MKT. Everything outside the tile stays
+// identical, which is the point: a movers row should look like a movers row.
+const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey}) => {
   const wrapRef = useRef(null);
   // Track manual interaction so the rAF loop yields briefly after the user
   // scrolls / wheels — otherwise the auto-advance immediately yanks the
@@ -29130,7 +29173,9 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
         : html`<h2 class="title-font" style=${{fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3}}>${title}</h2>`) : null}
       ${controls ? html`<span>${controls}</span>` : null}
       ${subtitle ? html`<span class="muted" style=${{fontSize:10}}>${subtitle}</span>` : null}
-      ${cards.length > 0 && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
+      ${/* The banner export paints MoverTile-shaped cards, so it is offered
+            only for banners that use it. */""}
+      ${cards.length > 0 && !renderTile && html`<span class="movers-banner-cams" style=${{marginLeft:"auto",display:"inline-flex",gap:6,alignItems:"center"}}>
         ${[
           {lo:0, hi:10, lbl:"1–10"},
           ...(cards.length > 10 ? [{lo:10, hi:20, lbl:"11–20"}] : []),
@@ -29154,7 +29199,9 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
           onMouseEnter=${()=>{ hoverRef.current = true; }}
           onMouseLeave=${()=>{ hoverRef.current = false; }}>
           <div class="movers-track">
-            ${cards.map(c => html`<${MoverTile} key=${c.card_id+":"+c.printing} card=${c}
+            ${renderTile
+              ? cards.map(c => renderTile(c, tileKey ? tileKey(c) : (c.card_id+":"+c.printing)))
+              : cards.map(c => html`<${MoverTile} key=${c.card_id+":"+c.printing} card=${c}
               activeWindow=${activeWindow} visibleWindows=${visibleWindows}
               onClick=${()=>onTileClick && onTileClick(c)}/>`)}
             ${cards.map(c => html`<${MoverTile} key=${"dup:"+c.card_id+":"+c.printing} card=${c}
@@ -29213,7 +29260,11 @@ const HOME_PANELS = [
   {key:"collection",  label:"Your Collection value",col:"right"},
   // Off by default: it is empty for anyone with no graded slabs, and the
   // people who do want it turn it on from the banner in the Graded collection.
-  {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true},
+  // Rendered in the MOVERS STACK, not in a column — see bannerNodes. It keeps
+  // a HOME_PANELS entry purely for its on/off flag, which the Graded
+  // collection's "show on home" toggle flips; `fixed` drops the column picker
+  // and the arrows, because its position comes from the banner order instead.
+  {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true, fixed:true},
   // Not a panel — a shortcut. It pins a die under the Edit-layout chip on
   // PHONES only, because rolling for turn order is a thing you do at a table
   // with the phone already in your hand, and burying it three taps deep in
@@ -29253,13 +29304,14 @@ const HOME_LAYOUT_TOOLBOX_KEY = "packsink:homeLayoutToolbox";
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
 const HOME_BANNER_ORDER_KEY = "packsink:homeBannerOrder";
-const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","graded"];
+const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","graded","gowned"];
 const HOME_BANNER_LABELS = {
   valuable: "Newest set — Most Valuable",
   chase:    "Chase Movers",
   rareLeg:  "Rare – Legendary Movers",
   promo:    "Promo Movers",
   graded:   "Graded Movers",
+  gowned:   "Your Graded Movers",
 };
 const normalizeBannerOrder = (val) => {
   if(!Array.isArray(val)) return null;
@@ -31697,67 +31749,53 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick, onPopOut})
     [items, deltaIndex, cardById, win]);
 
   // Nothing to say to someone with no slabs — render nothing rather than an
-  // empty box, the same way the graded home banner hides for non-premium.
+  // empty row, the same way the graded market banner hides for non-premium.
   if(!gradedPremium || !user) return null;
   if(items != null && items.length === 0) return null;
 
-  return html`<aside class=${"home-feed home-feed--gowned"+(collapsed?" is-collapsed":"")}>
-    <div class="panel-header">
-      ${homePanelTitle({cls:"panel-title", label:"Your Graded Movers",
-          panelKey:"gradedOwned", onPopOut})
-        || (onTitleClick
-        ? html`<button class="panel-title home-title-link" onClick=${onTitleClick}
-            title="Open your graded collection"
-            style=${{background:"none",border:0,padding:0,cursor:"pointer",font:"inherit",color:"inherit",textAlign:"left"}}>Your Graded Movers</button>`
-        : html`<h2 class="panel-title">Your Graded Movers</h2>`)}
-      <button class="home-feed-collapse-btn" onClick=${()=>setCollapsed(c=>!c)}
-        title=${collapsed ? "Expand" : "Collapse"}
-        aria-label=${collapsed ? "Expand Your Graded Movers" : "Collapse Your Graded Movers"}>
-        ${collapsed ? "▸" : "▾"}
-      </button>
-    </div>
-    ${!collapsed && html`<div class="gowned-body">
-      <div class="gowned-controls">
-        <div class="seg-toggle gc-caps-seg" title="Δ% window">
-          ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
-            class=${win===k?"active":""} onClick=${()=>setWin(k)}>${lbl}</button>`)}
+  const loading = items == null || deltaIndex == null;
+  // Same chrome as every other movers row: title, inline window control,
+  // subtitle, and the drag-to-pan marquee. It used to render as a boxed
+  // sidebar panel with a collapse chevron, which made the one row about YOUR
+  // cards the only one that didn't look like a movers row.
+  return html`<${MoversBanner}
+    title="Your Graded Movers"
+    subtitle=${loading ? "Loading graded sales…"
+      : movers.length === 0
+        ? `No ${win.toUpperCase()} movement in your slabs — try a longer window`
+        : `Your slabs — top ${movers.length} by ${win.toUpperCase()} |Δ%|`}
+    controls=${html`<span class="seg-grp" role="group" aria-label="Δ% window">
+      ${GRADED_OWNED_WINDOWS.map(([k,lbl]) => html`<button key=${k}
+        class=${win===k?"active":""} onClick=${()=>setWin(k)}>${lbl}</button>`)}
+    </span>`}
+    cards=${loading ? [] : movers}
+    onTitleClick=${onTitleClick || null}
+    tileKey=${(c)=>`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
+    renderTile=${(c, key) => {
+      const img = c.img_normal || c.img_small;
+      return html`<button key=${key} class="gmover-tile"
+        onClick=${()=>{
+          const matching = (raw||[]).filter(r => r.card_id === c.card_id);
+          const groups = matching.length ? groupCards(matching) : [];
+          if(groups[0] && onCard) onCard(groups[0]);
+        }}
+        title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
+        ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
+        <div class="gmover-name">${c.name}</div>
+        <div class="gmover-meta">
+          <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
+          <span class="gmover-price">$${Math.round(c.price)}</span>
         </div>
-        <span class="muted gowned-sub">Your slabs by Δ%</span>
-      </div>
-      ${(items == null || deltaIndex == null)
-        ? html`<div class="muted" style=${{padding:"14px 4px",fontSize:12}}>Loading graded sales…</div>`
-        : movers.length === 0
-          ? html`<div class="muted" style=${{padding:"14px 4px",fontSize:12}}>
-              No ${win.toUpperCase()} movement in your graded slabs. Try a longer window.</div>`
-          : html`<${AutoScrollStrip} items=${movers}
-              keyFor=${(c)=>`${c.card_id}|${c.printing}|${c.grader}|${c.grade}`}
-              renderItem=${(c, key) => {
-                const img = c.img_normal || c.img_small;
-                return html`<button key=${key} class="gmover-tile"
-                  onClick=${()=>{
-                    const matching = (raw||[]).filter(r => r.card_id === c.card_id);
-                    const groups = matching.length ? groupCards(matching) : [];
-                    if(groups[0] && onCard) onCard(groups[0]);
-                  }}
-                  title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}`}>
-                  ${img ? html`<img src=${img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
-                  <div class="gmover-name">${c.name}</div>
-                  <div class="gmover-meta">
-                    <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
-                    <span class="gmover-price">$${Math.round(c.price)}</span>
-                  </div>
-                  <div class="gmover-deltas">
-                    <span class="gmover-dh">1D</span>
-                    <span class="gmover-dh">1W</span>
-                    <span class="gmover-dh">1M</span>
-                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_1d))}}>${fmtPct(sanePct(c.pct_1d))}</span>
-                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
-                    <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
-                  </div>
-                </button>`;
-              }}/>`}
-    </div>`}
-  </aside>`;
+        <div class="gmover-deltas">
+          <span class="gmover-dh">1D</span>
+          <span class="gmover-dh">1W</span>
+          <span class="gmover-dh">1M</span>
+          <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_1d))}}>${fmtPct(sanePct(c.pct_1d))}</span>
+          <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_7d))}}>${fmtPct(sanePct(c.pct_7d))}</span>
+          <span class="gmover-dv" style=${{color: pctColor(sanePct(c.pct_30d))}}>${fmtPct(sanePct(c.pct_30d))}</span>
+        </div>
+      </button>`;
+    }}/>`;
 };
 
 // One home panel, alone on a dimmed page, with the link to it. Opened by
@@ -32376,8 +32414,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} onPopOut=${popOutPanel}/>`;
-      case "gradedOwned": return html`<${GradedOwnedMoversHomePanel} key="gradedOwned"
-        raw=${raw} user=${user} onCard=${openCard} onPopOut=${popOutPanel}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
         collection=${collection} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
         sealedPrices=${sealedPrices} collectionLoading=${collectionLoading} setsMeta=${setsMeta}
@@ -32441,6 +32477,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     return out;
   };
   const diceEntry = homeLayout.find(p => p.key === "dice");
+  const gradedOwnedOn = !!(homeLayout.find(p => p.key === "gradedOwned") || {}).on;
   const announceNodes = columnNodes("announce");
   const leftNodes     = columnNodes("left");
   const mainNodes     = columnNodes("main");
@@ -32474,11 +32511,16 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
         : html`<button class="home-edit-open" onClick=${homeEdit.start}
             title="Rearrange, hide, or move the home page sections">${uiIcon("edit")} Edit layout</button>`}
     </div>`}
-    ${/* Phone-only shortcut, and its editor bar when the layout editor is
-          open -- the bar has to render even on desktop or it would be
-          impossible to switch on from a laptop. */""}
-    ${editing && diceEntry && html`<div class="home-dice-editrow">
-      ${editBar(diceEntry, HOME_PANELS.find(h => h.key === "dice"))}
+    ${/* Every FIXED panel's editor bar. They have no column, so columnNodes
+          skips them and they would otherwise be unreachable from the layout
+          editor entirely. Rendered here, and on every width -- the dice
+          shortcut only SHOWS on a phone, but you must be able to switch it on
+          from a laptop. */""}
+    ${editing && html`<div class="home-dice-editrow">
+      ${homeLayout.filter(p => HOME_FIXED_KEYS.has(p.key)).map(p => {
+        const meta = HOME_PANELS.find(h => h.key === p.key);
+        return meta ? editBar(p, meta) : null;
+      })}
     </div>`}
 
     ${announceNodes.length > 0 && html`<div class="home-announce">${announceNodes}</div>`}
@@ -32591,10 +32633,15 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       : rareLegBanner,
                     promo:    promoBanner,
                     graded:   gradedPremium ? html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>` : null,
+                    gowned:   gradedOwnedOn
+                      ? html`<${GradedOwnedMoversHomePanel} raw=${raw} user=${user} onCard=${openCard}/>`
+                      : null,
                   };
+                  // Your own slabs lead: it is the row about cards you actually
+                  // own, and it only renders for people who switched it on.
                   const defaultOrder = newestSetIsHot
-                    ? ["valuable","chase","rareLeg","promo","graded"]
-                    : ["chase","rareLeg","promo","graded","valuable"];
+                    ? ["gowned","valuable","chase","rareLeg","promo","graded"]
+                    : ["gowned","chase","rareLeg","promo","graded","valuable"];
                   const order = (homeEdit && homeEdit.bannerOrder && homeEdit.bannerOrder.length)
                     ? homeEdit.bannerOrder : defaultOrder;
                   // ▲▼ enable/target off the banners that actually rendered —

@@ -519,6 +519,25 @@ Both `graded_prices_daily` and `graded_collection_items` are printing-aware:
 - **`lookupGradedPx(pid, grader, grade, preferredPrinting)` pattern**: try the preferred printing first, then fall back through `["Normal", "Holofoil", "Cold Foil"]` until a match is found. Used by the header totals and the chart's slot resolver. Without the fallback, Holofoil-only cards (Enchanteds, Iconics) whose owned items default to printing='Normal' (mig-50 backfill) find no matching rows and silently drop out.
 - `buildGradedSeries(history, graderKey, gradeStr, label, printingKey)` accepts an optional 5th arg to filter to one printing — used by `GradedPricesTab` and the Compare flow so each printing graphs as a distinct line.
 
+## Card VERSIONS: what counts as one, and what it's called (2026-08-24)
+
+Two silent bugs shipped here, both on Peter Pan - Pirate's Bane (Enchanted, Into the Inklands).
+Guarded by `node scripts/test_card_versions.mjs`.
+
+- **"Top Prize" / "Prize Wall" are CHALLENGE PROMO words.** `PRINTING_VARIANT_LABEL` maps
+  Foil/Non-Foil to them, and applying it globally put a **"Top Prize" version tab on an Into the
+  Inklands card**. `gradedVariantLabel(printing, setName)` is the one place that knows the
+  vocabulary is C1-only — the card modal's `splitLabel` / `splitBadge` both route through it now.
+  Never call `PRINTING_VARIANT_LABEL` or bare `variantBadge` without a set in hand.
+- **A finish word is not a version.** `SPLIT_PRINTING_CARD_IDS` cards (Genie *Two Swords*, Peter
+  Pan *Text Error*) have exactly two versions: the base and the named one. Everything else that
+  can land in `printing` is a FINISH — and on an Enchanted, cold foil by definition, "Foil"
+  distinguishes nothing. **Three eBay sales whose titles said "foil" grew that card a third
+  version tab.** `isFinishOnlyPrinting(p)` folds them into the base; `isNamedSplit` gates it so
+  C1 (where Foil/Non-Foil ARE the two versions, and two different markets) is untouched.
+- The same fold applies when resolving the version a card was OPENED to — a click carrying a
+  finish resolves to the base, not to whichever tab sorted first.
+
 ## Graded UI: SPLIT_BY_PRINTING_SETS vs SECTION_SPLIT_SETS
 
 Two top-level constants (defined near `AUX_CACHE_VERSION`):
@@ -1339,6 +1358,22 @@ Every home section except the movers stack is a **user-arrangeable panel**: show
 - **Empty side columns are omitted from the tree**, and `.home-grid` gets `hg-no-left` / `hg-no-right` which narrow `grid-template-columns` to match — otherwise hiding everything on the left left a 240px hole. Columns are **auto-placed in DOM order**; don't reintroduce `grid-column:1` on `.home-left-col` or the omission breaks.
 - `moveHomePanel` swaps with the nearest neighbour that is **both in the same column AND visible**. Plain index±1 would swap past a panel in another column (or a hidden one) and read as a dead button.
 - Panels are keyed on the component (`key="following"` etc.), not wrapped in a div — several CSS rules are `.home-left-col > .home-feed` child selectors that a wrapper would break.
+
+### Your Graded Movers is a movers ROW, not a panel
+
+It renders in the banner stack (`bannerNodes.gowned`), with `MoversBanner`'s chrome — same title
+style, same inline window control, same drag-to-pan marquee as Chase / Rare–Legendary / Promo. It
+used to be a boxed sidebar `home-feed` with a collapse chevron, which made the one row about YOUR
+cards the only one that didn't look like a movers row.
+
+- **`MoversBanner` takes an optional `renderTile`** so a banner can keep the row treatment while
+  drawing a tile `MoverTile` can't: a graded slab has one price and one delta set, where MoverTile
+  is built around LOW vs MKT. The camera export is hidden when `renderTile` is set —
+  `copyMoverBannerImage` paints MoverTile-shaped cards.
+- **It keeps a `HOME_PANELS` entry purely for its on/off flag** (the Graded collection's "show on
+  home" toggle flips it) and is marked `fixed` so the layout editor offers Show/Hide only — its
+  position comes from the banner ▲▼ instead. `HOME_FIXED_KEYS` panels render their editor bar in
+  the home header, on every width.
 
 ### The dice shortcut is a `fixed` panel
 
