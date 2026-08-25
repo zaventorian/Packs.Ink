@@ -1370,6 +1370,11 @@ cards the only one that didn't look like a movers row.
   drawing a tile `MoverTile` can't: a graded slab has one price and one delta set, where MoverTile
   is built around LOW vs MKT. The camera export is hidden when `renderTile` is set —
   `copyMoverBannerImage` paints MoverTile-shaped cards.
+- **⚠️ The marquee renders `cards` TWICE** — that duplication is what makes the loop seamless.
+  Both passes have to honour `renderTile`. Missing the second one put a full raw `MoverTile`
+  beside every graded tile, and since a flex track stretches its children to the tallest, that
+  left ~70px of dead space under every slab. Symptom to recognise: the track holds 2x the item
+  count and half of them are the wrong component.
 - **It keeps a `HOME_PANELS` entry purely for its on/off flag** (the Graded collection's "show on
   home" toggle flips it) and is marked `fixed` so the layout editor offers Show/Hide only — its
   position comes from the banner ▲▼ instead. `HOME_FIXED_KEYS` panels render their editor bar in
