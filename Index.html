@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=359">
+<link rel="stylesheet" href="styles.css?v=360">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1071,7 +1071,7 @@ const SCREENER_MODE_LABELS = {raw: "Raw prices", graded: "Graded", sealed: "Seal
 const MARKET_SUB_LABELS = {
   overview: "Overview", ev: "Expected Value", trade: "Trade Compare",
   avg: "Set Breakdown", setval: "Playset Cost", sim: "Simulator",
-  swiss: "Swiss Odds", dice: "Dice Tray", elo: "Elo",
+  swiss: "Swiss Odds", lore: "Lore Tracker", dice: "Dice Tray", elo: "Elo",
 };
 const collectionSectionHref = (key, viewerContext) => {
   const q = new URLSearchParams();
@@ -26185,6 +26185,7 @@ const MARKET_SUBS = [
   ["setval", "Playset Cost"],
   ["sim",    "Simulator"],
   ["swiss",  "Swiss Odds"],
+  ["lore",   "Lore Tracker"],
   ["dice",   "Dice Tray"],
   // Elo is always a valid sub-key so /analytics?a=elo deep-links work even
   // when the user hasn't pinned it. The Analytics tab BAR hides it unless
@@ -29576,9 +29577,400 @@ const MARKET_TOOL_INFO = {
            pts:["Monte Carlo over any field size and round count","Draw safety and intentional-draw guidance","Prize-tier odds past the cut"]},
   dice:   {blurb:"Roll for turn order, or settle it with a coin.",
            pts:["Up to 8 dice, one per player, held in place","d4 through d100, plus coins and rock-paper-scissors","Highest roll called out, ties rerolled on their own"]},
+  lore:   {blurb:"Keep score at the table.",
+           pts:["One to four players, face-to-face on a phone","Every change logged, with one-tap undo","Knows the cards that move the 20-lore goal"]},
   elo:    {blurb:"Ratings for the Chicagoland scene.",
            pts:["Player leaderboard and event history","Store activity against the RPH tiers","Scout an upcoming event's field"]},
 };
+// ── Lore Tracker ────────────────────────────────────────────────────────────
+// An at-the-table score counter. The design rule that everything else follows:
+// TOTALS ARE DERIVED FROM THE EVENT LOG, never stored beside it. A counter that
+// keeps a running total AND a separate history can drift, and when it does the
+// history is what looks wrong even though the total is the lie. Here undo is a
+// pop, the log is the source of truth, and the two cannot disagree.
+const LORE_PREFS_KEY = "packsink:lore:v1";
+const LORE_GAME_KEY  = "packsink:lore:game:v1";
+const LORE_WIN       = 20;
+const LORE_MAX_PLAYERS = 4;
+// Cards that move the goalposts. Donald Duck - Flustered Sorcerer reads
+// "Opponents need 25 lore to win the game", and the official app grew a
+// dedicated button for it. A named list rather than one hardcoded button, so
+// the next one is a line of data — Lorcana has done this once and will again.
+const LORE_WIN_MODIFIERS = [
+  {id:"donald25", label:"Opponents need 25",
+   card:"Donald Duck - Flustered Sorcerer", win:25,
+   help:"Obfuscate! — sets every OTHER player's target to 25."},
+];
+const loreClamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
+const loreDefaultName = (i) => "Player " + (i + 1);
+
+// Totals for every seat, folded out of the log. O(events) and the log is a
+// handful of entries per game, so this runs on every render without ceremony.
+const loreTotals = (game) => {
+  const t = game.players.map(() => 0);
+  for(const e of game.events) if(t[e.p] != null) t[e.p] += e.d;
+  return t;
+};
+// A player's target: the highest modifier aimed at them, else 20. Applying a
+// modifier to a seat means "this seat's OPPONENTS need N", so the target lives
+// on everyone EXCEPT the seat that played it.
+const loreTargets = (game) => game.players.map((_, i) => {
+  let win = LORE_WIN;
+  for(const m of game.mods || []){
+    if(m.p === i) continue;
+    const def = LORE_WIN_MODIFIERS.find(d => d.id === m.id);
+    if(def && def.win > win) win = def.win;
+  }
+  return win;
+});
+const loreWinners = (game) => {
+  const t = loreTotals(game), w = loreTargets(game);
+  return t.reduce((a, v, i) => (v >= w[i] ? a.concat(i) : a), []);
+};
+const loreNewGame = (players, mods) => ({
+  v: 1,
+  startedAt: Date.now(),
+  players: players.map((name, i) => ({name: (name || "").trim() || loreDefaultName(i)})),
+  events: [],
+  mods: mods || [],
+});
+// A stored game is replayed, not trusted: anything malformed collapses to null
+// and the setup screen shows instead. Same contract as normalizeHomeLayout —
+// repair or discard, never throw on the way in.
+const loreReadGame = () => {
+  try {
+    const g = JSON.parse(localStorage.getItem(LORE_GAME_KEY) || "null");
+    if(!g || g.v !== 1 || !Array.isArray(g.players) || !Array.isArray(g.events)) return null;
+    if(g.players.length < 1 || g.players.length > LORE_MAX_PLAYERS) return null;
+    return {
+      v: 1,
+      startedAt: Number(g.startedAt) || Date.now(),
+      players: g.players.map((p, i) => ({name: String((p && p.name) || loreDefaultName(i)).slice(0, 24)})),
+      events: g.events
+        .filter(e => e && Number.isFinite(e.p) && Number.isFinite(e.d) && e.p < g.players.length)
+        .map(e => ({t: Number(e.t) || 0, p: e.p | 0, d: e.d | 0})),
+      mods: Array.isArray(g.mods)
+        ? g.mods.filter(m => m && LORE_WIN_MODIFIERS.some(d => d.id === m.id) && m.p < g.players.length)
+        : [],
+    };
+  } catch { return null; }
+};
+const loreReadPrefs = () => {
+  try {
+    const p = JSON.parse(localStorage.getItem(LORE_PREFS_KEY) || "{}");
+    // `|| default` would swallow a stored 0 and hand back the default instead
+    // of clamping it, so absent and out-of-range are separated explicitly.
+    const num = (v, dflt, lo, hi) => {
+      const n = Math.round(Number(v));
+      return Number.isFinite(n) ? loreClamp(n, lo, hi) : dflt;
+    };
+    return {
+      count:   num(p.count, 2, 1, LORE_MAX_PLAYERS),
+      names:   Array.isArray(p.names) ? p.names.slice(0, LORE_MAX_PLAYERS).map(n => String(n || "").slice(0, 24)) : [],
+      faceOff: p.faceOff !== false,
+      keepAwake: p.keepAwake !== false,
+      match:   num(p.match, 1, 1, 5),
+      wins:    Array.isArray(p.wins) ? p.wins.map(n => Number(n) || 0) : [],
+    };
+  } catch { return {count:2, names:[], faceOff:true, keepAwake:true, match:1, wins:[]}; }
+};
+
+// Keeps the screen on for the length of a game. The single most common
+// complaint about using a phone as a counter is that it sleeps between turns,
+// and no competitor's marketing mentions solving it. The lock dies on tab-hide
+// (spec), so it is re-taken on visibilitychange rather than assumed to persist.
+function useLoreWakeLock(active){
+  useEffect(() => {
+    if(!active || !navigator.wakeLock) return;
+    let lock = null, dead = false;
+    const take = async () => {
+      try { if(!dead && document.visibilityState === "visible") lock = await navigator.wakeLock.request("screen"); }
+      catch {}
+    };
+    const onVis = () => { if(document.visibilityState === "visible") take(); };
+    take();
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      dead = true;
+      document.removeEventListener("visibilitychange", onVis);
+      try { if(lock) lock.release(); } catch {}
+    };
+  }, [active]);
+}
+
+// Press-and-hold repeat. Pointer events (not touch+mouse) so one code path
+// covers finger, pen and mouse, and setPointerCapture keeps the repeat alive
+// when the thumb drifts off a button mid-hold — which it does constantly on a
+// number this size.
+function useLoreHold(fire){
+  const t = useRef(null);
+  const stop = useCallback(() => {
+    if(!t.current) return;
+    clearTimeout(t.current.to); clearInterval(t.current.iv);
+    t.current = null;
+  }, []);
+  useEffect(() => stop, [stop]);
+  const start = useCallback((e) => {
+    if(e.button != null && e.button !== 0) return;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    fire();
+    stop();
+    const to = setTimeout(() => {
+      const iv = setInterval(fire, 110);
+      if(t.current) t.current.iv = iv; else clearInterval(iv);
+    }, 420);
+    t.current = {to, iv: null};
+  }, [fire, stop]);
+  return [start, stop];
+}
+
+const loreFmtTime = (t) => {
+  try { return new Date(t).toLocaleTimeString(undefined, {hour:"numeric", minute:"2-digit"}); }
+  catch { return ""; }
+};
+const loreFmtClock = (ms) => {
+  const s = Math.max(0, Math.round(ms / 1000));
+  return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+};
+
+function LoreSeat({idx, name, total, target, delta, flip, winner, dim, onRename}){
+  const [incDown, incUp] = useLoreHold(useCallback(() => delta(idx, +1), [delta, idx]));
+  const [decDown, decUp] = useLoreHold(useCallback(() => delta(idx, -1), [delta, idx]));
+  const pct = loreClamp(total / target, 0, 1);
+  return html`<div class=${"lore-seat"+(flip?" lore-seat--flip":"")+(winner?" lore-seat--win":"")+(dim?" lore-seat--dim":"")}>
+    <div class="lore-seat-top">
+      <input class="lore-seat-name" value=${name} maxLength=${24} aria-label=${"Name for seat "+(idx+1)}
+        onChange=${e => onRename(idx, e.target.value)}/>
+      <span class="lore-seat-goal">${total} / ${target}</span>
+    </div>
+    <button class="lore-bump lore-bump--minus" disabled=${total<=0}
+      onPointerDown=${decDown} onPointerUp=${decUp} onPointerCancel=${decUp}
+      onLostPointerCapture=${decUp} aria-label=${"Remove lore from "+name}>−</button>
+    <button class="lore-num"
+      onPointerDown=${incDown} onPointerUp=${incUp} onPointerCancel=${incUp}
+      onLostPointerCapture=${incUp} aria-label=${"Add lore to "+name}>
+      <span class="lore-num-v">${total}</span>
+    </button>
+    <button class="lore-bump lore-bump--plus"
+      onPointerDown=${incDown} onPointerUp=${incUp} onPointerCancel=${incUp}
+      onLostPointerCapture=${incUp} aria-label=${"Add lore to "+name}>+</button>
+    <div class="lore-seat-meter" aria-hidden="true"><i style=${{transform:"scaleX("+pct+")"}}/></div>
+  </div>`;
+}
+
+function LoreTracker(){
+  const saved = useRef(loreReadGame()).current;
+  const prefs0 = useRef(loreReadPrefs()).current;
+  const [game, setGame]   = useState(saved);
+  const [count, setCount] = useState(prefs0.count);
+  const [names, setNames] = useState(() =>
+    Array.from({length: LORE_MAX_PLAYERS}, (_, i) => prefs0.names[i] || ""));
+  const [faceOff, setFaceOff]     = useState(prefs0.faceOff);
+  const [keepAwake, setKeepAwake] = useState(prefs0.keepAwake);
+  const [matchLen, setMatchLen]   = useState(prefs0.match);
+  const [wins, setWins]           = useState(() => prefs0.wins.slice(0, LORE_MAX_PLAYERS));
+  const [showLog, setShowLog]     = useState(false);
+  const [showMods, setShowMods]   = useState(false);
+  const [now, setNow]             = useState(() => Date.now());
+  const [ended, setEnded]         = useState(false);
+
+  const playing = !!game && !ended;
+  useLoreWakeLock(playing && keepAwake);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(LORE_PREFS_KEY, JSON.stringify({
+        count, names: names.slice(0, count), faceOff, keepAwake, match: matchLen, wins,
+      }));
+    } catch {}
+  }, [count, names, faceOff, keepAwake, matchLen, wins]);
+  // Autosave every change. "Remembers your score even if your phone dies" is a
+  // headline feature of the paid competitors; here it is four lines.
+  useEffect(() => {
+    try {
+      if(game) localStorage.setItem(LORE_GAME_KEY, JSON.stringify(game));
+      else localStorage.removeItem(LORE_GAME_KEY);
+    } catch {}
+  }, [game]);
+  useEffect(() => {
+    if(!playing) return;
+    const iv = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, [playing]);
+
+  const totals   = useMemo(() => game ? loreTotals(game) : [], [game]);
+  const targets  = useMemo(() => game ? loreTargets(game) : [], [game]);
+  const winners  = useMemo(() => game ? loreWinners(game) : [], [game]);
+
+  // Lore has a floor of 0, so a −1 at zero is not an event — recording a d:0
+  // would put a line in the history for something that did not happen, and
+  // undo would then need two presses to reach the last real change.
+  const delta = useCallback((p, d) => {
+    setGame(g => {
+      if(!g) return g;
+      const cur = loreTotals(g)[p] || 0;
+      const eff = loreClamp(cur + d, 0, 999) - cur;
+      if(!eff) return g;
+      try { if(navigator.vibrate) navigator.vibrate(8); } catch {}
+      return {...g, events: g.events.concat({t: Date.now(), p, d: eff})};
+    });
+  }, []);
+  const undo = useCallback(() => setGame(g =>
+    g && g.events.length ? {...g, events: g.events.slice(0, -1)} : g), []);
+  const rename = useCallback((i, v) => {
+    setGame(g => g ? {...g, players: g.players.map((p, n) => n === i ? {...p, name: v} : p)} : g);
+    setNames(ns => ns.map((n, x) => x === i ? v : n));
+  }, []);
+  const toggleMod = useCallback((id, p) => setGame(g => {
+    if(!g) return g;
+    const on = (g.mods || []).some(m => m.id === id && m.p === p);
+    return {...g, mods: on
+      ? g.mods.filter(m => !(m.id === id && m.p === p))
+      : (g.mods || []).concat({id, p})};
+  }), []);
+
+  const start = () => {
+    setWins(w => Array.from({length: count}, (_, i) => w[i] || 0));
+    setEnded(false); setShowLog(false);
+    setGame(loreNewGame(names.slice(0, count)));
+  };
+  // Finishing a game banks the result and clears the board, but leaves the
+  // match score standing — that is the whole point of best-of.
+  const finish = (winnerIdx) => {
+    if(winnerIdx != null) setWins(w => w.map((n, i) => i === winnerIdx ? (n || 0) + 1 : (n || 0)));
+    setEnded(true);
+  };
+  const nextGame = () => { setEnded(false); setShowLog(false); setGame(loreNewGame(names.slice(0, count))); };
+  const quit = () => { setEnded(false); setShowLog(false); setGame(null); };
+  const resetMatch = () => setWins(Array.from({length: count}, () => 0));
+
+  const modsOn = !!(game && game.mods && game.mods.length);
+  const matchTarget = Math.ceil(matchLen / 2);
+  const matchOver = matchLen > 1 && wins.some(w => (w || 0) >= matchTarget);
+
+  if(!game) return html`<${React.Fragment}>
+    <${MarketHeader} title="Lore Tracker"
+      sub="Keep score at the table — one to four players, every change logged."/>
+    <div class="lore-setup">
+      <div class="lore-set-row">
+        <span class="lore-set-lbl">Players</span>
+        <div class="seg-toggle lore-count">
+          ${[1,2,3,4].map(n => html`<button key=${n} class=${count===n?"active":""}
+            onClick=${()=>setCount(n)} aria-pressed=${count===n}>${n}</button>`)}
+        </div>
+      </div>
+      <div class="lore-set-row lore-set-row--names">
+        <span class="lore-set-lbl">Names</span>
+        <div class="lore-namegrid">
+          ${Array.from({length: count}, (_, i) => html`<input key=${i} class="lore-nameinput"
+            value=${names[i] || ""} placeholder=${loreDefaultName(i)} maxLength=${24}
+            aria-label=${"Name for "+loreDefaultName(i)}
+            onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>`)}
+        </div>
+      </div>
+      <div class="lore-set-row">
+        <span class="lore-set-lbl">Match</span>
+        <div class="seg-toggle lore-match">
+          ${[[1,"Single"],[3,"Best of 3"],[5,"Best of 5"]].map(([n,l]) => html`<button key=${n}
+            class=${matchLen===n?"active":""} onClick=${()=>setMatchLen(n)}
+            aria-pressed=${matchLen===n}>${l}</button>`)}
+        </div>
+      </div>
+      <div class="lore-set-row lore-set-opts">
+        ${count === 2 && html`<label class="checkbox-group">
+          <input type="checkbox" checked=${faceOff} onChange=${e=>setFaceOff(e.target.checked)}/>
+          Face-to-face (turn my opponent's side around)
+        </label>`}
+        <label class="checkbox-group">
+          <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
+          Keep the screen awake while playing
+        </label>
+      </div>
+      <button class="lore-start" onClick=${start}>Start game</button>
+      ${saved && html`<p class="lore-resume-note">Starting a new game replaces the one saved on this device.</p>`}
+    </div>
+    <${MarketExplainer} id="lore">
+      <p><strong>Where you may actually use this.</strong> Ravensburger's tournament rules
+      let you track lore with the <em>official Companion app</em> at Casual events, and at
+      Competitive events bar electronic devices capable of long-term storage or internet
+      access altogether. A browser on your phone is such a device, so treat this as a
+      kitchen-table and casual-play tool: at a Competitive event, use dice or paper and ask
+      the judge. Other trackers advertise themselves as "tournament legal" — as far as the
+      published rules go, that isn't a thing anyone can promise you.</p>
+      <p><strong>The log is the score.</strong> Totals are added up from the list of changes
+      rather than stored next to it, so the history can never disagree with the number on
+      screen, and undo is just dropping the last line.</p>
+      <p>Lore stops at 0, and a press that would go below it isn't recorded — so undo always
+      steps back to something that really happened. Games save themselves as you play; close
+      the tab or flatten the battery and the score is still here.</p>
+    <//>
+  <//>`;
+
+  const elapsed = loreFmtClock(now - game.startedAt);
+  const flipSeat = (i) => count === 2 && faceOff && i === 1;
+  return html`<div class=${"lore-play"+(playing?" is-live":"")}>
+    <div class="lore-bar">
+      <button class="lore-bar-btn" onClick=${quit}>Exit</button>
+      <button class="lore-bar-btn" onClick=${undo} disabled=${!game.events.length}>Undo</button>
+      <button class=${"lore-bar-btn"+(showLog?" active":"")} onClick=${()=>setShowLog(v=>!v)}
+        aria-expanded=${showLog}>History${game.events.length ? " ("+game.events.length+")" : ""}</button>
+      <button class=${"lore-bar-btn"+(showMods||modsOn?" active":"")} onClick=${()=>setShowMods(v=>!v)}
+        aria-expanded=${showMods} title="Cards that change how much lore it takes to win">
+        Goal ${modsOn ? "•" : LORE_WIN}</button>
+      <span class="lore-bar-clock" aria-label="Time this game">${elapsed}</span>
+      ${matchLen > 1 && html`<span class="lore-bar-match">
+        ${game.players.map((p, i) => (wins[i] || 0)).join("–")}
+      </span>`}
+    </div>
+    ${(showMods || modsOn) && LORE_WIN_MODIFIERS.map(m => html`<div key=${m.id} class="lore-mods">
+      <span class="lore-mods-lbl" title=${m.help}>${m.card}</span>
+      ${game.players.map((p, i) => html`<button key=${i}
+        class=${"lore-mod-btn"+((game.mods||[]).some(x=>x.id===m.id&&x.p===i)?" active":"")}
+        onClick=${()=>toggleMod(m.id, i)}
+        title=${p.name+" played it — everyone else needs "+m.win}>${p.name}</button>`)}
+    </div>`)}
+    <div class=${"lore-seats lore-seats--n"+game.players.length+(flipSeat(1)?" lore-seats--face":"")}>
+      ${game.players.map((p, i) => html`<${LoreSeat} key=${i} idx=${i} name=${p.name}
+        total=${totals[i]} target=${targets[i]} delta=${delta} flip=${flipSeat(i)}
+        winner=${winners.includes(i)} dim=${winners.length>0 && !winners.includes(i)}
+        onRename=${rename}/>`)}
+    </div>
+    ${winners.length > 0 && !ended && html`<div class="lore-winbar">
+      <span>${winners.map(i => game.players[i].name).join(" & ")}
+        ${winners.length > 1 ? " reach " : " reaches "}${targets[winners[0]]} lore.</span>
+      ${winners.length === 1
+        ? html`<button class="lore-winbtn" onClick=${()=>finish(winners[0])}>End game</button>`
+        : html`<button class="lore-winbtn" onClick=${()=>finish(null)}>End game</button>`}
+    </div>`}
+    ${ended && html`<div class="lore-winbar lore-winbar--done">
+      <span>${matchOver
+        ? game.players[wins.indexOf(Math.max(...wins))].name + " takes the match."
+        : "Game over."}</span>
+      <button class="lore-winbtn" onClick=${nextGame}>Next game</button>
+      ${matchLen > 1 && html`<button class="lore-winbtn lore-winbtn--ghost" onClick=${()=>{resetMatch(); nextGame();}}>
+        Reset match</button>`}
+      <button class="lore-winbtn lore-winbtn--ghost" onClick=${quit}>Done</button>
+    </div>`}
+    ${showLog && html`<div class="lore-log">
+      ${!game.events.length
+        ? html`<p class="lore-log-empty">Nothing yet — the first change lands here.</p>`
+        : html`<ol class="lore-log-list">
+            ${game.events.map((e, i) => {
+              // Running total AT that moment, which is the question you are
+              // actually asking when you open a history mid-argument.
+              const run = game.events.slice(0, i + 1).reduce((a, x) => a + (x.p === e.p ? x.d : 0), 0);
+              return html`<li key=${i} class="lore-log-row">
+                <span class="lore-log-t">${loreFmtTime(e.t)}</span>
+                <span class="lore-log-who">${game.players[e.p] ? game.players[e.p].name : "—"}</span>
+                <span class=${"lore-log-d"+(e.d>0?" up":" down")}>${e.d>0?"+":""}${e.d}</span>
+                <span class="lore-log-run">${run}</span>
+              </li>`;
+            }).reverse()}
+          </ol>`}
+    </div>`}
+  </div>`;
+}
+
 const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragment}>
   <${MarketHeader} title="Analytics"
     sub="Every calculator on the site, and the question each one answers."/>
@@ -29673,6 +30065,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     </div>
     ${sub==="overview" && html`<${AnalyticsOverview} subs=${subsList} onOpen=${setSub}
       onOpenSealed=${openScreenerSealed}/>`}
+    ${sub==="lore" && html`<${LoreTracker}/>`}
     ${sub==="dice" && html`<${DiceTray}/>`}
     ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
@@ -33499,6 +33892,13 @@ const HOME_TOOL_ICONS = {
     <path d="M5 7l2-3h10l2 3"/>
     <path d="M9 11v6"/>
     <path d="M15 11v6"/>`),
+  // Lore Tracker — the lore rosette from the card frame, plus a rising tick
+  lore: _navSvg(html`
+    <path d="M12 3l2.1 4.6 5 .6-3.7 3.4 1 4.9-4.4-2.5-4.4 2.5 1-4.9L4.9 8.2l5-.6L12 3z"/>
+    <path d="M4 21h16"/>
+    <path d="M7 21v-2.5"/>
+    <path d="M12 21v-4"/>
+    <path d="M17 21v-1.5"/>`),
   // Dice Tray — a pair of dice
   dice: _navSvg(html`
     <rect x="3" y="8" width="12" height="12" rx="3"/>
@@ -40417,6 +40817,7 @@ const MARKET_SUB_TITLES = {
   setval: "Lorcana Playset Cost — Packs.Ink",
   sim:    "Lorcana Pack Simulator — Packs.Ink",
   swiss:  "Lorcana Swiss Odds — Packs.Ink",
+  lore:   "Lorcana Lore Tracker — Packs.Ink",
   dice:   "Dice Tray — Packs.Ink",
   elo:    "Chicagoland Lorcana Elo — Packs.Ink",
 };

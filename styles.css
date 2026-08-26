@@ -7913,3 +7913,130 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
   .proxy-lede{font-size:11.5px;}
   .proxy-print-note--foot{font-size:11px;padding:7px 9px;}
 }
+
+/* ── Lore Tracker (Analytics » Lore) ───────────────────────────────────────
+   An at-the-table counter, so the sizing rules are different from the rest of
+   the site: the number is the control, and it has to be hittable without
+   looking at the phone. Seats are a grid rather than flex so 1/2/3/4 players
+   each get a sane shape with no per-count layout code. */
+.lore-setup{display:flex;flex-direction:column;gap:14px;max-width:560px;margin:0 0 18px;}
+.lore-set-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+.lore-set-row--names{align-items:flex-start;}
+.lore-set-lbl{font-size:10px;text-transform:uppercase;letter-spacing:0.6px;
+  color:var(--text-muted);font-weight:700;min-width:58px;}
+.lore-namegrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;flex:1;min-width:0;}
+.lore-nameinput{background:var(--bg-card);border:1px solid var(--border);
+  border-radius:8px;padding:7px 10px;color:var(--text);font:inherit;font-size:13px;min-width:0;}
+/* In play the name is a label you can happen to edit, not a form field — a
+   bordered white box here reads as the most important thing on the seat, and
+   it is competing with a 100px number. */
+.lore-seat-name{background:none;border:1px solid transparent;border-radius:8px;
+  padding:3px 6px;color:var(--text-dim);font:inherit;font-size:12px;font-weight:700;
+  min-width:0;text-transform:uppercase;letter-spacing:0.5px;}
+.lore-seat-name:hover{border-color:var(--border);}
+.lore-seat-name:focus{background:var(--bg-card);border-color:var(--accent);color:var(--text);outline:none;}
+.lore-set-opts{flex-direction:column;align-items:flex-start;gap:8px;}
+.lore-start{align-self:flex-start;background:var(--accent);color:#fff;border:none;border-radius:22px;
+  padding:11px 26px;font-size:14px;font-weight:700;cursor:pointer;}
+.lore-resume-note{margin:0;font-size:11px;color:var(--text-muted);}
+
+.lore-play{display:flex;flex-direction:column;gap:10px;}
+.lore-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.lore-bar-btn{background:var(--btn-bg);border:1px solid var(--btn-border);color:var(--btn-text);
+  border-radius:16px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;min-height:36px;}
+.lore-bar-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+.lore-bar-btn:disabled{opacity:0.45;cursor:default;}
+.lore-bar-clock,.lore-bar-match{font-size:12px;color:var(--text-dim);font-variant-numeric:tabular-nums;}
+.lore-bar-match{margin-left:auto;font-weight:700;color:var(--text);}
+
+.lore-mods{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;}
+.lore-mods-lbl{color:var(--text-muted);font-weight:600;}
+.lore-mod-btn{background:var(--btn-bg);border:1px solid var(--btn-border);color:var(--btn-text);
+  border-radius:12px;padding:4px 10px;font-size:11px;cursor:pointer;}
+.lore-mod-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+
+.lore-seats{display:grid;gap:10px;grid-template-columns:1fr;}
+.lore-seats--n3,.lore-seats--n4{grid-template-columns:repeat(2,minmax(0,1fr));}
+/* A counter you read across a table wants the height, not a tidy card stack in
+   the top third. Sized per seat (rather than stretching the container to the
+   viewport) so it stays correct under the site's nav, which is two rows tall on
+   phones and one on desktop. */
+.lore-seats--n1 .lore-seat{min-height:min(52vh,420px);}
+.lore-seats--n2 .lore-seat{min-height:min(34vh,300px);}
+.lore-seats--n3 .lore-seat,.lore-seats--n4 .lore-seat{min-height:min(26vh,230px);}
+.lore-seat{position:relative;display:grid;gap:6px;align-items:center;
+  grid-template-columns:auto minmax(0,1fr) auto;grid-template-rows:auto minmax(0,1fr);
+  grid-template-areas:"top top top" "minus num plus";
+  background:var(--bg-card);border:1px solid var(--border);border-radius:14px;padding:10px 12px 14px;
+  overflow:hidden;transition:opacity 0.2s ease,border-color 0.2s ease;}
+/* Across-the-table play: the opponent's half is upside down so they read their
+   own score the right way up without anyone turning the phone around. */
+.lore-seat--flip{transform:rotate(180deg);}
+.lore-seat--win{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent) inset;}
+.lore-seat--dim{opacity:0.5;}
+.lore-seat-top{grid-area:top;display:flex;align-items:center;gap:8px;}
+.lore-seat-name{flex:1;min-width:0;padding:4px 8px;font-size:12px;font-weight:600;}
+.lore-seat-goal{font-size:11px;color:var(--text-muted);font-variant-numeric:tabular-nums;white-space:nowrap;}
+/* The whole number is the +1 target — the biggest tap area on the screen. */
+.lore-num{grid-area:num;background:none;border:none;color:var(--text);cursor:pointer;
+  padding:2px 0;display:flex;align-items:center;justify-content:center;
+  align-self:stretch;height:100%;touch-action:none;
+  -webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}
+/* The global `button:hover` fill (specificity 0,1,1) would otherwise paint a
+   grey slab over the whole number. Press feedback goes on the digits instead,
+   where it reads as the number reacting rather than a button lighting up. */
+.lore-num:hover{background:none;}
+.lore-num-v{font-size:clamp(52px,17vw,104px);font-weight:800;line-height:1;
+  font-variant-numeric:tabular-nums;transition:transform 0.08s ease;}
+.lore-num:active .lore-num-v{transform:scale(0.93);}
+.lore-bump:active{transform:scale(0.93);}
+.lore-bump{background:var(--btn-bg);border:1px solid var(--btn-border);color:var(--btn-text);
+  width:52px;height:52px;border-radius:50%;font-size:26px;line-height:1;cursor:pointer;
+  touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;}
+.lore-bump--minus{grid-area:minus;}
+.lore-bump--plus{grid-area:plus;}
+.lore-bump:disabled{opacity:0.35;cursor:default;}
+.lore-seat-meter{position:absolute;left:0;right:0;bottom:0;height:3px;background:var(--border);}
+.lore-seat-meter i{display:block;height:100%;background:var(--accent);transform-origin:left center;
+  transition:transform 0.18s ease;}
+
+.lore-winbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--bg-surface);border:1px solid var(--accent);border-radius:12px;padding:10px 14px;
+  font-size:13px;font-weight:600;color:var(--text);}
+.lore-winbar--done{border-color:var(--border);}
+.lore-winbtn{background:var(--accent);color:#fff;border:none;border-radius:16px;
+  padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;min-height:36px;}
+.lore-winbtn--ghost{background:var(--btn-bg);color:var(--btn-text);border:1px solid var(--btn-border);}
+
+.lore-log{background:var(--bg-surface);border:1px solid var(--border);border-radius:12px;
+  padding:8px 12px;max-height:min(50vh,360px);overflow-y:auto;}
+.lore-log-empty{margin:6px 2px;font-size:12px;color:var(--text-muted);}
+.lore-log-list{list-style:none;margin:0;padding:0;}
+.lore-log-row{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;
+  align-items:center;padding:5px 2px;font-size:12px;border-bottom:1px solid var(--border);}
+.lore-log-row:last-child{border-bottom:none;}
+.lore-log-t{color:var(--text-muted);font-variant-numeric:tabular-nums;}
+.lore-log-who{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-dim);}
+.lore-log-d{font-weight:700;font-variant-numeric:tabular-nums;}
+.lore-log-d.up{color:var(--green);}
+.lore-log-d.down{color:var(--red);}
+.lore-log-run{font-weight:700;font-variant-numeric:tabular-nums;color:var(--text);min-width:2ch;text-align:right;}
+
+/* Three or four players: an odd seat spans the row so the grid never leaves a
+   hole, and the pair sits side by side the way four people sit around a table. */
+.lore-seats--n3 .lore-seat:nth-child(3){grid-column:1 / -1;}
+@media (max-width:640px){
+  /* Deliberately NOT collapsed to one column here. Stacking four seats makes
+     the table scroll to see an opponent's score, which is the one thing a
+     counter must never do. Shrinking is the correct trade. */
+  .lore-bump{width:46px;height:46px;font-size:23px;}
+  .lore-set-lbl{min-width:0;}
+  .lore-seats--n3 .lore-seat,.lore-seats--n4 .lore-seat{min-height:min(22vh,190px);padding:8px 8px 12px;}
+  .lore-seats--n3 .lore-bump,.lore-seats--n4 .lore-bump{width:38px;height:38px;font-size:20px;}
+  .lore-seats--n3 .lore-num-v,.lore-seats--n4 .lore-num-v{font-size:clamp(38px,11vw,60px);}
+  .lore-seats--n3 .lore-seat-name,.lore-seats--n4 .lore-seat-name{font-size:11px;padding:2px 4px;}
+}
+@media (prefers-reduced-motion:reduce){
+  .lore-seat,.lore-seat-meter i,.lore-num-v{transition:none;}
+  .lore-num:active .lore-num-v,.lore-bump:active{transform:none;}
+}
