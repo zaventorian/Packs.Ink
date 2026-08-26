@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=358">
+<link rel="stylesheet" href="styles.css?v=359">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -33689,7 +33689,7 @@ const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick, onPopOut})
 // duplicated, so nothing double-fetches and no component sees two mounts.
 // `cta` is whatever that title used to do before it became the permalink —
 // relocated, not removed.
-const HomePanelModal = ({panelKey, label, node, cta, onClose}) => {
+const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
   useEscToClose(onClose);
   const [copied, setCopied] = useState(false);
   const url = SITE_ORIGIN + homePanelHref(panelKey);
@@ -33715,7 +33715,7 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose}) => {
           ${copied ? uiIcon("check") : uiIcon("link")}
           <span>${copied ? "Copied" : "Copy link to this section"}</span>
         </button>
-        ${cta && html`<button class="home-panel-cta" onClick=${() => { onClose(); cta.go(); }}>
+        ${cta && html`<button class="home-panel-cta" onClick=${() => { (onNavAway||onClose)(); cta.go(); }}>
           ${cta.label} \u2192</button>`}
       </div>
     </div>
@@ -34278,6 +34278,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       else window.history.replaceState({}, "", "/");
     } catch {}
   }, []);
+  // Leaving for another view instead of closing in place. closePanel's
+  // history.back() is async: it lands AFTER the destination view has pushed
+  // its own entry, so the user is bounced straight back to home and the CTA
+  // reads as a dead button. Clean the URL and let the destination push.
+  const closePanelForNav = useCallback(() => {
+    setOpenPanel(null);
+    try { window.history.replaceState({}, "", "/"); } catch {}
+  }, []);
   // What each panel's title used to do, relocated into the modal footer.
   const panelCta = {
     following:   {label: "Open Decks \u00b7 Following", go: goFollowing},
@@ -34404,7 +34412,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   return html`<div class=${"scr scr-home"+(editing?" home-editing":"")}>
     ${openPanelNode && html`<${HomePanelModal} panelKey=${openPanel}
       label=${HOME_PANEL_LABELS[openPanel] || "Section"} node=${openPanelNode}
-      cta=${panelCta[openPanel] || null} onClose=${closePanel}/>`}
+      cta=${panelCta[openPanel] || null} onClose=${closePanel} onNavAway=${closePanelForNav}/>`}
     <div class="home-page-title">
       <${HomeQuickSearch} raw=${raw} openCardsWithSearch=${openCardsWithSearch}/>
     </div>
