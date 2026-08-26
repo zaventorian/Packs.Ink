@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=358">
+<link rel="stylesheet" href="styles.css?v=359">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -7329,8 +7329,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         </div>
         <div class="card-detail-history-toolbar">
           <div class="seg-toggle">
-            ${RANGE_OPTIONS.map(([k,l]) => html`<button key=${k}
-              class=${rangeKey===k?"active":""} onClick=${()=>setRangeKey(k)}>${l}</button>`)}
+            ${RANGE_OPTIONS.map(([k,l,sh]) => html`<button key=${k}
+              class=${rangeKey===k?"active":""} onClick=${()=>setRangeKey(k)}
+              ><span class="seg-lbl-full">${l}</span><span class="seg-lbl-short">${sh}</span></button>`)}
           </div>
           ${rangeKey === "custom" && html`<input type="date" class="custom-date-input"
             value=${customStart}
@@ -16277,14 +16278,16 @@ const inferEventSet = (eventName, eventDate) => {
 
 // "all" = since release; others are rolling windows ending today.
 // "custom" pairs with a date string from the date picker.
+// Third field is the phone label: seven chips only fit one row when the words
+// shrink, and CSS swaps which of the two spans shows (see .seg-lbl-short).
 const RANGE_OPTIONS = [
-  ["all",    "Since Release"],
-  ["1y",     "1 Year"],
-  ["6m",     "6 Months"],
-  ["3m",     "3 Months"],
-  ["1m",     "1 Month"],
-  ["1w",     "1 Week"],
-  ["custom", "Custom"],
+  ["all",    "Since Release", "All"],
+  ["1y",     "1 Year",        "1Y"],
+  ["6m",     "6 Months",      "6M"],
+  ["3m",     "3 Months",      "3M"],
+  ["1m",     "1 Month",       "1M"],
+  ["1w",     "1 Week",        "1W"],
+  ["custom", "Custom",        "Custom"],
 ];
 const rangeStartMs = (key, customStart) => {
   if(key === "all") return null;
@@ -17401,8 +17404,9 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         <button class=${mode==="index"?"active":""}   onClick=${()=>setMode("index")}>By Index</button>
       </div>
       <div class="seg-toggle">
-        ${RANGE_OPTIONS.map(([k,l]) => html`<button key=${k}
-          class=${rangeKey===k?"active":""} onClick=${()=>setRangeKey(k)}>${l}</button>`)}
+        ${RANGE_OPTIONS.map(([k,l,sh]) => html`<button key=${k}
+          class=${rangeKey===k?"active":""} onClick=${()=>setRangeKey(k)}
+          ><span class="seg-lbl-full">${l}</span><span class="seg-lbl-short">${sh}</span></button>`)}
       </div>
       ${rangeKey === "custom" && html`<input type="date" class="custom-date-input"
         value=${customStart}
