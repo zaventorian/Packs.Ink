@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=356">
+<link rel="stylesheet" href="styles.css?v=357">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -7684,6 +7684,22 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     return arr;
   }, [deck.cards, cardById, deck.coconut_card]);
 
+  // A card the catalog has not loaded yet is dropped by the `if(!meta) continue`
+  // above, silently. On a cold visit the decks arrive BEFORE the catalog does
+  // (the Discover format re-stamp exists for the same reason), so a preview
+  // opened in that window rendered an empty page -- which reads as "the preview
+  // button is broken", not as "wait a second". Count what the deck DECLARED so
+  // every surface can tell the two apart.
+  const declaredCards = useMemo(() => {
+    const ids = new Set();
+    for(const c of (deck.cards || [])) if(c.card_id) ids.add(c.card_id);
+    return ids.size;
+  }, [deck.cards]);
+  const unmatchedCards = Math.max(0, declaredCards - cards.length);
+  // Nothing resolved at all: the catalog is still loading (or failed). cardById
+  // is a prop, so this clears itself the moment the catalog lands.
+  const catalogPending = declaredCards > 0 && cards.length === 0;
+
   // Primary ink(s) for the background gradient.
   const deckInks = useMemo(() => {
     const counts = new Map();
@@ -7864,6 +7880,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
 
   const posterRef = useRef(null);
   const wrapRef = useRef(null);   // outer .deck-poster-wrap (holds the scale transform)
+  // Preview mode adds a SECOND scale (.poster-view-scale, fit-to-screen) above
+  // the wrap. html2canvas sizes its canvas from getBoundingClientRect, so a
+  // capture taken through it came out at fit-scale -- a phone-sized, soft PNG
+  // from a full-resolution poster. snapshot() unscales both.
+  const scaleRef = useRef(null);
+  // snapshot() keeps an empty dep array, so it reads the flag off a ref.
+  const catalogPendingRef = useRef(false);
+  catalogPendingRef.current = catalogPending;
   const [busy, setBusy] = useState(null); // "copy" | "save" | null
   const [toast, setToast] = useState(null);
   const showToast = (msg) => { setToast(msg); setTimeout(()=>setToast(null), 2200); };
@@ -7908,6 +7932,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // explicit buttons remain.
   const snapshot = useCallback(async () => {
     if(!posterRef.current) throw new Error("Preview not ready");
+    if(catalogPendingRef.current) throw new Error("Card database still loading — try again in a moment.");
     const h2c = await window.__loadHtml2Canvas();
     // Temporarily unscale the preview wrapper so html2canvas captures the
     // poster at its true 1000px+ width. Restore in finally{} so we don't
@@ -7916,6 +7941,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     const prevTransform = wrap ? wrap.style.transform : "";
     const prevHeight = wrap ? wrap.style.height : "";
     if(wrap){ wrap.style.transform = "none"; wrap.style.height = ""; }
+    const scaleWrap = scaleRef.current;
+    const prevScale = scaleWrap ? scaleWrap.style.transform : "";
+    if(scaleWrap) scaleWrap.style.transform = "none";
     try {
       // Adaptive density — see POSTER_TARGET_MP. Short posters keep the full 2×
       // for retina sharpness; tall ones render lower so the encode lands under
@@ -7942,6 +7970,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         wrap.style.transform = prevTransform;
         wrap.style.height = prevHeight;
       }
+      if(scaleWrap) scaleWrap.style.transform = prevScale;
     }
   }, []);
 
@@ -8014,6 +8043,15 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   useEffect(() => {
     if(!autoCopy) return;
     let cancelled = false;
+    // Snapshotting now would hand the clipboard a poster with no cards on it.
+    // The effect re-runs when the catalog lands; the timer is the backstop for
+    // a catalog that never does, so the caller's promise can't hang forever.
+    if(catalogPending){
+      const t = setTimeout(() => {
+        if(!cancelled) onAutoCopyDone && onAutoCopyDone(false, new Error("Card database still loading"));
+      }, 12000);
+      return () => { cancelled = true; clearTimeout(t); };
+    }
     (async () => {
       try {
         // Two animation frames so the off-screen container has laid out and
@@ -8038,7 +8076,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       }
     })();
     return () => { cancelled = true; };
-  }, [autoCopy, snapshot, onAutoCopyDone]);
+  }, [autoCopy, snapshot, onAutoCopyDone, catalogPending]);
 
   // QR code via api.qrserver.com — only included when the deck has a share URL
   // AND showQr is on. The QR endpoint sets Access-Control-Allow-Origin: *, so
@@ -8311,7 +8349,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     const iv = setInterval(calc, 300);
     const stop = setTimeout(() => clearInterval(iv), 6000);
     return () => { if(ro) ro.disconnect(); clearInterval(iv); clearTimeout(stop); };
-  }, [previewing, cols, showStats, showCurve, bgStyle]);
+  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle]);
 
   if(autoCopy){
     return html`<div aria-hidden="true" style=${{position:"fixed",left:"-100000px",top:"0",
@@ -8325,10 +8363,16 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       <div class="poster-view" onClick=${e=>e.stopPropagation()}>
         <div class="poster-view-bar">
           <span class="poster-view-title title-font">${deckDisplayTitle(deck, tournamentContext)}</span>
-          <button class="deck-act" onClick=${copyImage} disabled=${!!busy}
+          ${/* Cards the catalog couldn't match are dropped from the poster.
+                Saying so in the bar (never on the poster, which gets shared)
+                beats a picture that is quietly missing four cards. */""}
+          ${!catalogPending && unmatchedCards > 0 && html`<span class="poster-view-note"
+            title="These cards aren't in the loaded card database, so they can't be drawn.">
+            ${uiIcon("warn")} ${unmatchedCards} card${unmatchedCards===1?"":"s"} not shown</span>`}
+          <button class="deck-act" onClick=${copyImage} disabled=${!!busy || catalogPending}
             title="Copy the poster to your clipboard as a PNG">
             ${uiIcon("copy")}<span>${busy==="copy" ? "Copying…" : "Copy"}</span></button>
-          <button class="deck-act" onClick=${saveImage} disabled=${!!busy}
+          <button class="deck-act" onClick=${saveImage} disabled=${!!busy || catalogPending}
             title="Download the poster">
             ${uiIcon("save")}<span>${busy==="save" ? "Saving…" : "Save"}</span></button>
           <button class="deck-act" onClick=${()=>setShowOpts(true)}
@@ -8336,15 +8380,22 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             ${uiIcon("gear")}<span>Options</span></button>
           <button class="poster-view-close" onClick=${onClose} aria-label="Close">×</button>
         </div>
+        ${(toast || error) && html`<div class=${"poster-view-msg" + (error ? " is-error" : "")}>${error || toast}</div>`}
+        ${/* Scaled about its centre; the stage clips and centres what is left,
+              so a tall poster and a wide one both land in the middle. fit stays
+              0 until the first measure, which keeps a full-size flash off the
+              screen. */""}
         <div class="poster-view-stage" ref=${stageRef}>
-          ${/* Scaled about its centre; the stage clips and centres what is
-                left, so a tall poster and a wide one both land in the middle.
-                fit stays 0 until the first measure, which keeps a full-size
-                flash off the screen. */""}
-          <div class="poster-view-scale"
-            style=${{transform:"scale(" + (fit || 0.001) + ")", opacity: fit ? 1 : 0}}>
-            ${posterDom}
-          </div>
+          ${catalogPending
+            ? html`<div class="poster-view-wait">
+                <div class="poster-view-spin"></div>
+                <div>Loading the card database…</div>
+                <div class="muted">The deck image is drawn from it — this only takes a moment on a fresh visit.</div>
+              </div>`
+            : html`<div class="poster-view-scale" ref=${scaleRef}
+                style=${{transform:"scale(" + (fit || 0.001) + ")", opacity: fit ? 1 : 0}}>
+                ${posterDom}
+              </div>`}
         </div>
       </div>
     </div>`;
@@ -8363,14 +8414,18 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         <div class="deck-poster-layout">
         <div class="deck-poster-controls">
           <div class="deck-poster-actions">
-            <button class="active" onClick=${copyImage} disabled=${!!busy}>
+            <button class="active" onClick=${copyImage} disabled=${!!busy || catalogPending}>
               ${busy==="copy" ? "Copying…" : html`${uiIcon("copy")} Copy`}
             </button>
-            <button onClick=${saveImage} disabled=${!!busy}>
+            <button onClick=${saveImage} disabled=${!!busy || catalogPending}>
               ${busy==="save" ? "Saving…" : html`${uiIcon("save")} Save`}
             </button>
           </div>
-          <div class="deck-poster-hint">Right-click the preview for "Save image as…" if the buttons fail.</div>
+          ${catalogPending
+            ? html`<div class="deck-poster-hint">Loading the card database — the poster is drawn from it.</div>`
+            : (unmatchedCards > 0
+                ? html`<div class="deck-poster-hint">${unmatchedCards} card${unmatchedCards===1?"":"s"} in this deck aren't in the loaded card database, so they're missing from the poster.</div>`
+                : html`<div class="deck-poster-hint">Right-click the preview for "Save image as…" if the buttons fail.</div>`)}
           ${toast && html`<div class="poster-toast">${toast}</div>`}
           ${error && html`<div style=${{color:"var(--red)",fontSize:12}}>${error}</div>`}
         <div class="poster-options">
