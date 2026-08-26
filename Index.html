@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=359">
+<link rel="stylesheet" href="styles.css?v=360">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1242,17 +1242,15 @@ const setSetReleaseDates = (rows) => {
   _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam;
 };
 
-// Every printing of one card, newest-set last. ONE entry per card_id: an
-// Enchanted in the same set is a distinct printing and belongs in the list,
+// Collapse catalog rows into printings, newest-set last. ONE entry per card_id:
+// an Enchanted in the same set is a distinct printing and belongs in the list,
 // while Normal/Foil of the same card_id is one printing shown two ways (that
-// split is what the modal's "show all variants" already covers).
-const cardPrintingsFor = (catalog, productName) => {
-  if(!productName || !catalog || !catalog.length) return [];
+// split is what the modal's "show all variants" already covers). Split out of
+// cardPrintingsFor so a whole deck can be indexed in ONE catalog pass
+// (deckReprintNotes) without a second copy of these rules.
+const printingsFromRows = (rows) => {
   const byCard = new Map();
-  for(const r of catalog){
-    // Coconut leaders carry a "(Coconut)" name suffix so they can't collide
-    // here, but they're synthetic rows — skip them explicitly anyway.
-    if(!r || r.isCoconut || !r.card_id || r["Product Name"] !== productName) continue;
+  for(const r of rows || []){
     let e = byCard.get(r.card_id);
     if(!e){
       e = {
@@ -1283,6 +1281,53 @@ const cardPrintingsFor = (catalog, productName) => {
     || (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0));
 };
 
+const cardPrintingsFor = (catalog, productName) => {
+  if(!productName || !catalog || !catalog.length) return [];
+  // Coconut leaders carry a "(Coconut)" name suffix so they can't collide
+  // here, but they're synthetic rows — skip them explicitly anyway.
+  return printingsFromRows(catalog.filter(r =>
+    r && !r.isCoconut && r.card_id && r["Product Name"] === productName));
+};
+
+// A printing list is a reprint story only when it spans two RELEASES: a base
+// plus its Enchanted is one set, and a set's own prerelease promos fold onto
+// the parent (that's `family`). Same rule reprintVerdict opens with.
+const spansTwoReleases = (printings) =>
+  new Set((printings || []).map(e => e.family)).size >= 2;
+
+// Every card in a deck that exists in more than one set, with all of its
+// printings. Deck building happens at a table with a binder open — "I own this
+// one, but which set is it from?" — and the decklist itself only ever names the
+// one printing the deck happens to reference.
+const deckReprintNotes = (catalog, deckCards, cardById) => {
+  if(!catalog || !catalog.length || !deckCards || !deckCards.length) return [];
+  // Product Name -> the card_ids of it this deck actually uses. Keyed by NAME
+  // because that is what a player reads off a card in hand; a deck may also
+  // hold two printings of one name, and both should read as "in this deck".
+  const want = new Map();
+  for(const c of deckCards){
+    const meta = c && ((cardById || {})[c.card_id] || [])[0];
+    const name = meta && meta["Product Name"];
+    if(!name) continue;
+    if(!want.has(name)) want.set(name, new Set());
+    want.get(name).add(c.card_id);
+  }
+  if(!want.size) return [];
+  const rowsByName = new Map();
+  for(const r of catalog){
+    if(!r || r.isCoconut || !r.card_id || !want.has(r["Product Name"])) continue;
+    const arr = rowsByName.get(r["Product Name"]);
+    if(arr) arr.push(r); else rowsByName.set(r["Product Name"], [r]);
+  }
+  const out = [];
+  for(const [name, ids] of want){
+    const printings = printingsFromRows(rowsByName.get(name));
+    if(!spansTwoReleases(printings)) continue;
+    out.push({name, printings: printings.map(e => ({...e, inDeck: ids.has(e.card_id)}))});
+  }
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+};
+
 // Is the printing you're looking at the original, or a reprint of one? null
 // when the question doesn't arise. The verdict is about SETS, not printings: a
 // base + Enchanted in one set is not a reprint, and neither is a set's own
@@ -1290,7 +1335,7 @@ const cardPrintingsFor = (catalog, productName) => {
 // Two sets that still tie after the mainline-wins rank tiebreak are parallel
 // printings; calling either one "the original" would be a coin flip.
 const reprintVerdict = (printings, curSetId) => {
-  if(new Set((printings || []).map(e => e.family)).size < 2) return null;
+  if(!spansTwoReleases(printings)) return null;
   const curFam  = (curSetId && _setFamilyById.get(curSetId)) || curSetId;
   const curRank = (curSetId && _setRankById.get(curSetId)) || null;
   const setsOf = (list) => [...new Set(list.map(e => e.set))];
@@ -39639,6 +39684,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     }));
   }, [deck.cards, cardById, sortItems, groupBy]);
 
+  // Footnote: which cards here exist in more than one set. On-site only — the
+  // poster export and the proxy PDF build their own DOM and never see this,
+  // which is the point: it's for the person sitting with their binder open.
+  const reprintNotes = useMemo(() => deckReprintNotes(raw, deck.cards, cardById),
+    [raw, deck.cards, cardById]);
+
   // TCGPlayer mass-entry affiliate URL pre-filled with missing cards.
   // Format: ?productline=Lorcana TCG&c=4 Card Name||4 Card Name|...
   const massEntryUrl = useMemo(() => {
@@ -40014,6 +40065,35 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         const groups = groupCards(rows);
         if(groups[0]) setSelectedGroup(groups[0]);
       };
+
+      // The reprint footnote. Every chip opens THAT printing, so "which set is
+      // my copy from" ends on the card, not on a name you have to go search.
+      const reprintBlock = reprintNotes.length === 0 ? null : html`<div class="deck-reprints">
+        <div class="deck-reprints-head">
+          <span class="deck-reprints-star" aria-hidden="true">*</span>
+          <span><strong>Reprints</strong> \u2014 ${reprintNotes.length}${" "}
+            ${reprintNotes.length === 1 ? "card in this deck is" : "cards in this deck are"}${" "}
+            printed in more than one set. Any printing is legal \u2014 check the sets you already own.</span>
+        </div>
+        <ul class="deck-reprints-list">
+          ${reprintNotes.map(n => html`<li key=${n.name} class="deck-reprints-row">
+            <span class="deck-reprints-name">${n.name}</span>
+            <span class="deck-reprints-sets">
+              ${n.printings.map(pr => {
+                const num = pr.number ? String(pr.number).split("/")[0] : "";
+                return html`<button key=${pr.card_id} type="button"
+                  class=${"deck-reprint-set" + (pr.inDeck ? " in-deck" : "")}
+                  title=${[pr.set, num && "#" + num, pr.rarity, pr.variant,
+                           pr.inDeck && "in this deck"].filter(Boolean).join(" \u00b7 ")}
+                  onClick=${() => openCardModal(pr.card_id)}>
+                  ${pr.inDeck && html`<span class="deck-reprint-check" aria-hidden="true">\u2713</span>`}
+                  ${pr.set}${num ? " #" + num : ""}
+                </button>`;
+              })}
+            </span>
+          </li>`)}
+        </ul>
+      </div>`;
       // Counter shared across all three layouts. e.preventDefault prevents
       // any browser-default click behavior (which was scrolling the page
       // when the row re-rendered); stopPropagation keeps the parent tile's
@@ -40294,7 +40374,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       </div>
       <div class=${"deck-editor-grid"+(readOnly?" readonly":"")+" mobile-tab-"+mobileTab}>
         ${readOnly
-          ? html`<div class="deck-view-list">${listBlock}</div>
+          ? html`<div class="deck-view-list">${listBlock}${reprintBlock}</div>
                  <aside class="deck-editor-panel">${coconutShowcase(false)}${statsBlock}</aside>`
           : html`<div class="deck-editor-browser">
                    <${CardBrowser} raw=${deckRaw} collection=${collection}
@@ -40307,7 +40387,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      inkBudget=${coconutInkBudget}
                      defaultInks=${inkColorsInDeck}/>
                  </div>
-                 <aside class="deck-editor-panel">${coconutShowcase(true)}${listBlock}${statsBlock}</aside>`}
+                 <aside class="deck-editor-panel">${coconutShowcase(true)}${listBlock}${statsBlock}${reprintBlock}</aside>`}
       </div>`;
     })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
