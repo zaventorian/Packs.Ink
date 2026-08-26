@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=353">
+<link rel="stylesheet" href="styles.css?v=357">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1124,7 +1124,18 @@ const shareUrlLabel = () => {
       decks:      () => DECK_SECTION_LABELS[q.get("s")] || null,
       collection: () => COLLECTION_SECTION_LABELS[q.get("c")] || null,
       market:     () => MARKET_SUB_LABELS[q.get("a")] || null,
-      screener:   () => SCREENER_MODE_LABELS[q.get("m")] || null,
+      // "your filters" is the load-bearing half of a ?v= link — the mode alone
+      // would describe a page the recipient won't recognise as what was sent.
+      screener:   () => {
+        const m = SCREENER_MODE_LABELS[q.get("m")] || null;
+        const filtered = q.get("v") ? "your filters" : null;
+        return [m, filtered].filter(Boolean).join(" · ") || null;
+      },
+      // Say how many products are on the graph — the whole point of the link.
+      history:    () => {
+        const n = decodeCompareItems(q.get("g") || "").length;
+        return n ? `${n} product${n === 1 ? "" : "s"}` : null;
+      },
     };
     const base = VIEW_SHARE_LABELS[view] || "this page";
     const sub = SUB[view] ? SUB[view]() : null;
@@ -2739,6 +2750,219 @@ async function fetchCardHistory(productId, printing){
   return rows;
 }
 
+// ── Market indices (migration 128) ──────────────────────────────────────
+// A benchmark to read a card against. Both fetchers are schema-tolerant: the
+// matviews may not exist yet, and a missing benchmark must degrade to "no
+// benchmark offered", never to a broken Screener or a chart that won't draw.
+// `null` = unavailable, `[]`/`{}` = available but empty.
+const MARKET_INDEX_MISSING = /42P01|PGRST(202|205)|does not exist|relation/i;
+
+// ⚠ readJsonCache returns {data, stale}, NOT the payload. Unwrapping is not
+// optional: handing the raw wrapper back made the first visit work (cache miss
+// → live array) and the second one crash the Screener to its error boundary
+// with "(mktIndex || []) is not iterable" — the worst shape of bug, since it
+// only appears on a return visit.
+const _mktCacheRead = (key) => {
+  const c = readJsonCache(key, 12 * 60 * 60 * 1000);
+  return c && Array.isArray(c.data) ? c.data : null;
+};
+
+async function fetchMarketIndexSeries(scope, scopeKey){
+  const key = `packsink:mktindex:v1:${scope}:${scopeKey || "-"}`;
+  const cached = _mktCacheRead(key);
+  if(cached) return cached;
+  try {
+    const rows = await sbFetchAll("market_index_daily", {
+      select: "date,value,n_components",
+      scope: "eq." + scope,
+      scope_key: "eq." + (scopeKey || ""),
+      order: "date.asc",
+    });
+    const out = (rows || []).map(r => ({x: Date.parse(r.date), y: Number(r.value)}))
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+    writeJsonCache(key, out);
+    return out;
+  } catch(e){
+    if(MARKET_INDEX_MISSING.test(String(e?.message || e))) return null;
+    console.warn("market index fetch:", e?.message || e);
+    return null;
+  }
+}
+
+// One row per scope — small (a few dozen), so it's fetched whole and indexed
+// client-side rather than queried per card.
+async function fetchMarketIndexLatest(){
+  const key = "packsink:mktindex:latest:v2";
+  const cached = _mktCacheRead(key);
+  if(cached) return cached;
+  const BASE = "scope,scope_key,date,value,n_components,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d";
+  try {
+    // `universe` arrives in migration 130. A site that ran 128 but not 130 has
+    // the matview WITHOUT that column, and selecting it there is a 42703 that
+    // would take the whole benchmark away rather than one label — so fall back.
+    const rows = await sbFetchAll("market_index_latest", {select: BASE + ",universe", order: "scope.asc"})
+      .catch(e => {
+        if(!/42703|universe/i.test(String(e?.message || e))) throw e;
+        return sbFetchAll("market_index_latest", {select: BASE, order: "scope.asc"});
+      });
+    const out = rows || [];
+    writeJsonCache(key, out);
+    return out;
+  } catch(e){
+    if(MARKET_INDEX_MISSING.test(String(e?.message || e))) return null;
+    console.warn("market index latest fetch:", e?.message || e);
+    return null;
+  }
+}
+
+// ── Custom indices ──────────────────────────────────────────────────────
+// A CUSTOM index is one the user defines by choosing a basket — today, any
+// watchlist. The server can't precompute those (one matview per user per list
+// is not a thing), so this builds them in the browser from price history.
+//
+// ⚠ It MUST reproduce migration 130's methodology exactly. Two series both
+// labelled "index" that compute differently is worse than not shipping the
+// second one — the whole value of a benchmark is that it is the same
+// measurement. These params are that migration's, and
+// scripts/test_market_index.mjs checks this function against output captured
+// from a real Postgres run of it, so the two cannot drift silently.
+const INDEX_PARAMS = {
+  maxGapDays: 7,       // lag() gives the previous OBSERVATION; cap the span it may represent
+  retClamp: 2.0,       // winsorize a daily return into [1/2, 2]
+  minAbs: 5,           // a 4-card universe is a number, not an index
+  minCoverage: 0.6,    // ...of the scope's own recent best participation
+  coverageWindow: 30,  // observations, matching the SQL's 30-row frame
+};
+
+// `history` maps a series key -> [{date:"YYYY-MM-DD", low, market}] ascending.
+// The key is only an identity for grouping; any stable string works.
+// Returns [{x, y, n, universe}] rebased so the first emitted day is 100.
+function buildCustomIndex(history, params){
+  const P = {...INDEX_PARAMS, ...(params || {})};
+  // Daily mean return across whatever priced on both this day and its previous
+  // observation. Built per-day so entries and exits never create a jump: a card
+  // that starts pricing in month 8 simply isn't in months 1-7's comparisons.
+  const byDate = new Map();
+  for(const rows of Object.values(history || {})){
+    const pts = (rows || [])
+      .map(r => ({t: Date.parse(r.date + "T00:00:00Z"), v: Number(r.market ?? r.market_price ?? r.low ?? r.low_price)}))
+      .filter(p => Number.isFinite(p.t) && Number.isFinite(p.v) && p.v > 0)
+      .sort((a, b) => a.t - b.t);
+    for(let i = 1; i < pts.length; i++){
+      const gapDays = (pts[i].t - pts[i-1].t) / 86400000;
+      if(gapDays > P.maxGapDays) continue;
+      const raw = pts[i].v / pts[i-1].v;
+      const ret = Math.min(Math.max(raw, 1 / P.retClamp), P.retClamp);
+      let slot = byDate.get(pts[i].t);
+      if(!slot){ slot = {sum: 0, n: 0}; byDate.set(pts[i].t, slot); }
+      slot.sum += ret; slot.n += 1;
+    }
+  }
+  const days = [...byDate.entries()].map(([t, s]) => ({t, mean: s.sum / s.n, n: s.n}))
+    .sort((a, b) => a.t - b.t);
+  // Coverage gate: keep a day only if it represents most of what this basket
+  // normally manages. A trailing max, so it self-calibrates instead of needing
+  // a per-basket threshold.
+  const kept = [];
+  for(let i = 0; i < days.length; i++){
+    const from = Math.max(0, i - P.coverageWindow);
+    let universe = 0;
+    for(let j = from; j <= i; j++) if(days[j].n > universe) universe = days[j].n;
+    if(days[i].n < P.minAbs) continue;
+    if(days[i].n < P.minCoverage * universe) continue;
+    kept.push({...days[i], universe});
+  }
+  if(!kept.length) return [];
+  // Chain, then divide by the FIRST cumulative value. Not x100 — the first
+  // emitted day already carries a return (a return needs a prior observation),
+  // so scaling the raw cumulative would bake that day's move into the base and
+  // open the series at 100.6 instead of 100.
+  let cum = 1;
+  const out = kept.map(d => { cum *= d.mean; return {x: d.t, cum, n: d.n, universe: d.universe}; });
+  const base = out[0].cum;
+  return out.map(p => ({x: p.x, y: (p.cum / base) * 100, n: p.n, universe: p.universe}));
+}
+
+// ── Price alerts (migration 129) ────────────────────────────────────────
+// PURE. Given the user's rules, their watchlists, and today's price_movers
+// rows, return the firings. No I/O, no clock — `priceDate` and `nowMs` are
+// arguments precisely so this is testable and so two devices evaluating the
+// same snapshot reach the same answer. Guarded by scripts/test_alerts.mjs.
+//
+// Rules are evaluated client-side because the site has no push infrastructure
+// (see migration 129's header). That is a real limitation, not a shortcut: it
+// answers "what happened while I was away" on open, and nothing more.
+const ALERT_KINDS = [
+  ["above",    "Price rises to or above"],
+  ["below",    "Price falls to or below"],
+  ["pct_up",   "Gains at least"],
+  ["pct_down", "Drops at least"],
+];
+// A rule's observed value. `basis` picks Low vs NM Market; for the Δ% kinds
+// that also picks which family of window columns to read, so a market-basis
+// rule can't accidentally compare against the low-price series.
+function alertObservedValue(row, alert){
+  if(!row) return null;
+  if(alert.kind === "above" || alert.kind === "below"){
+    const v = alert.basis === "low" ? row.low_today : row.market_today;
+    return v == null ? null : Number(v);
+  }
+  const win = alert.window_key || "pct_7d";
+  const col = alert.basis === "low" ? win : win.replace(/^pct_/, "mkt_pct_");
+  const v = row[col];
+  return v == null ? null : Number(v);
+}
+function alertConditionMet(observed, alert){
+  if(observed == null || !Number.isFinite(observed)) return false;
+  const t = Number(alert.threshold);
+  if(!Number.isFinite(t)) return false;
+  if(alert.kind === "above")  return observed >= t;
+  if(alert.kind === "below")  return observed <= t;
+  if(alert.kind === "pct_up") return observed >= Math.abs(t);
+  // The user types "10" for "down 10%" — storing a negative would make the
+  // form ask for a minus sign nobody remembers to type.
+  if(alert.kind === "pct_down") return observed <= -Math.abs(t);
+  return false;
+}
+// `lastFiredByKey` maps "<alert_id>|<card_id>|<printing>" → ms of the most
+// recent firing. Cooldown is what stops a card parked above its threshold from
+// firing every day forever.
+function evaluateAlerts({alerts, watchlists, rowByKey, priceDate, lastFiredByKey, nowMs}){
+  const out = [];
+  const listById = new Map((watchlists || []).map(w => [w.id, w]));
+  for(const a of (alerts || [])){
+    if(!a || a.enabled === false) continue;
+    // A rule targets one card or a whole list. The list form keeps working as
+    // the list changes, which is why it's the default the UI offers.
+    const targets = a.watchlist_id
+      ? ((listById.get(a.watchlist_id) || {items: []}).items || [])
+          .filter(it => it.card_id)
+          .map(it => ({card_id: it.card_id, printing: it.printing || "Normal"}))
+      : [{card_id: a.card_id, printing: a.printing || "Normal"}];
+    for(const t of targets){
+      const row = rowByKey.get(t.card_id + "|" + t.printing)
+        // A list can hold a printing that price_movers doesn't carry a row for.
+        // Fall back to the card's Normal row rather than silently never firing.
+        || rowByKey.get(t.card_id + "|Normal");
+      const observed = alertObservedValue(row, a);
+      if(!alertConditionMet(observed, a)) continue;
+      const key = a.id + "|" + t.card_id + "|" + t.printing;
+      const last = lastFiredByKey ? lastFiredByKey.get(key) : null;
+      if(last != null){
+        // cooldown_days 0 still means "at most once per snapshot" — the unique
+        // index enforces that server-side, but checking here saves the write.
+        const days = Math.max(0, Number(a.cooldown_days ?? 7));
+        if(nowMs - last < days * 86400000) continue;
+      }
+      out.push({
+        alert_id: a.id, card_id: t.card_id, printing: t.printing,
+        observed: Math.round(observed * 100) / 100, price_date: priceDate,
+      });
+    }
+  }
+  return out;
+}
+
 // Bulk price history for the collection-value chart. Batches both the
 // product IN-list AND the date range — Supabase has a 10s statement
 // timeout, and a full-year × full-collection query blows past it. With
@@ -3232,6 +3456,30 @@ const niceTicks = (min, max, n=4) => {
   for(let v = Math.ceil(min/step)*step; v <= max + 1e-9; v += step) ticks.push(v);
   return ticks;
 };
+// Ticks for a log10 axis: the 1-2-5 decade ladder, thinned to roughly `n`
+// labels so a 4-decade span ($0.20 → $2,000) doesn't print twelve of them.
+// Plain niceTicks can't do this job — an even linear step across a log axis
+// bunches every label into the top decade.
+const logTicks = (min, max, n=5) => {
+  if(!Number.isFinite(min) || !Number.isFinite(max) || max <= min || min <= 0) return [min];
+  const out = [];
+  for(let e = Math.floor(Math.log10(min)); e <= Math.ceil(Math.log10(max)); e++){
+    for(const m of [1, 2, 5]){
+      const v = m * Math.pow(10, e);
+      if(v >= min && v <= max) out.push(v);
+    }
+  }
+  // Inside a single decade the 1-2-5 ladder can yield one gridline or none —
+  // a $2.04–$8.26 range only contains the 5. A log axis with one line reads as
+  // broken, so fall back to even value steps, which is what a log chart's minor
+  // ticks are anyway: evenly spaced in value, unevenly spaced on screen.
+  if(out.length < 3) return niceTicks(min, max, n);
+  const stride = Math.max(1, Math.ceil(out.length / n));
+  const thinned = out.filter((_, i) => i % stride === 0);
+  // Always keep the top tick — dropping it leaves the axis looking truncated.
+  if(thinned[thinned.length - 1] !== out[out.length - 1]) thinned.push(out[out.length - 1]);
+  return thinned;
+};
 const fmtTickPrice = (v) => v >= 100 ? "$"+v.toFixed(0) : v >= 10 ? "$"+v.toFixed(1) : "$"+v.toFixed(2);
 // Format an axis tick based on how wide the visible date range is.
 // Short ranges → "Month DD", medium → "Month DD 'YY", long → "Month 'YY".
@@ -3247,7 +3495,14 @@ const fmtTickDate = (ts, rangeMs) => {
 const fmtTooltipDate = (ts) =>
   new Date(ts).toLocaleDateString(undefined, {month:"short", day:"numeric", year:"numeric", timeZone:"UTC"});
 
-const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null, maskValues=false}) => {
+// `logScale` plots the y axis on log10. Only meaningful when every value is
+// > 0, which the caller can't always guarantee (an indexed series can't go
+// negative, but a raw price series can carry a 0), so the flag is a REQUEST —
+// `useLog` below is what actually applies, and it declines on non-positive
+// data rather than emitting NaN coordinates.
+// `valueFmt` overrides the y-tick + tooltip formatter, so an indexed chart can
+// read "100" instead of "$100.00".
+const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom:22,left:42}, showDateAxis=true, verticalMarkers=null, maskValues=false, logScale=false, valueFmt=null}) => {
   const wrapRef = useRef(null);
   const [hover, setHover] = useState(null); // {x: viewBoxX, clientX, clientY}
   // Measure the wrapper's actual rendered width so the SVG viewBox matches
@@ -3271,7 +3526,12 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
   if(!series || !series.length) return null;
   const allPoints = series.flatMap(s => s.data || []);
   const valids = allPoints.filter(p => p && Number.isFinite(p.y));
-  if(valids.length < 2) return html`<div class="chart-empty">Not enough data yet</div>`;
+  // A one-point series used to be dropped by the caller before it got here and
+  // by this guard if it arrived anyway — so a card with a single price day, or
+  // (far more common) a graded tier with exactly one recorded sale, produced a
+  // legend chip and no mark. One point is renderable: it's a dot. Only a
+  // genuinely empty set is "not enough".
+  if(!valids.length) return html`<div class="chart-empty">Not enough data yet</div>`;
 
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for(const p of valids){
@@ -3281,16 +3541,32 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
     if(p.y > maxY) maxY = p.y;
   }
   if(maxX === minX){ maxX = minX + 1; }
-  const yPad = Math.max(0.01, (maxY - minY) * 0.08);
-  const yMin = Math.max(0, minY - yPad);
-  const yMax = maxY + yPad;
+  // log10 needs strictly positive values; a single 0 would send the whole axis
+  // to -Infinity. Decline rather than render NaN.
+  const useLog = logScale && minY > 0;
 
   const innerW = width - padding.left - padding.right;
   const innerH = height - padding.top - padding.bottom;
   const xScale = (x) => padding.left + ((x - minX) / (maxX - minX)) * innerW;
-  const yScale = (y) => padding.top + innerH - ((y - yMin) / (yMax - yMin || 1)) * innerH;
 
-  const yTicks = niceTicks(yMin, yMax, 4);
+  let yMin, yMax, yScale, yTicks;
+  if(useLog){
+    // Pad in log space so the 8% breathing room is proportional, not additive.
+    const lo = Math.log10(minY), hi = Math.log10(maxY);
+    const lpad = Math.max(0.02, (hi - lo) * 0.08);
+    yMin = Math.pow(10, lo - lpad);
+    yMax = Math.pow(10, hi + lpad);
+    const lMin = Math.log10(yMin), lMax = Math.log10(yMax);
+    yScale = (y) => padding.top + innerH - ((Math.log10(Math.max(y, yMin)) - lMin) / (lMax - lMin || 1)) * innerH;
+    yTicks = logTicks(yMin, yMax, 5);
+  } else {
+    const yPad = Math.max(0.01, (maxY - minY) * 0.08);
+    yMin = Math.max(0, minY - yPad);
+    yMax = maxY + yPad;
+    yScale = (y) => padding.top + innerH - ((y - yMin) / (yMax - yMin || 1)) * innerH;
+    yTicks = niceTicks(yMin, yMax, 4);
+  }
+  const fmtY = valueFmt || fmtTickPrice;
   const xTicks = showDateAxis ? [minX, (minX+maxX)/2, maxX] : [];
 
   // Find the data point closest to a given viewBoxX, per series. Also stash
@@ -3338,7 +3614,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         stroke="var(--border)" stroke-dasharray="2,3" stroke-width="0.6"/>`)}
       ${yTicks.map(t => html`<text key=${"l"+t}
         x=${padding.left - 4} y=${yScale(t)+3.5}
-        text-anchor="end" font-size="9" fill="var(--text-muted)">${maskValues ? "•••" : fmtTickPrice(t)}</text>`)}
+        text-anchor="end" font-size="9" fill="var(--text-muted)">${maskValues ? "•••" : fmtY(t)}</text>`)}
       ${xTicks.map((t,i) => html`<text key=${"xl"+i}
         x=${xScale(t)} y=${height-6}
         text-anchor=${i===0?"start":i===xTicks.length-1?"end":"middle"}
@@ -3358,12 +3634,19 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         </g>`;
       })}
       ${series.map((s,i) => {
-        const points = (s.data||[]).filter(p => Number.isFinite(p.y))
-          .map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(" ");
-        if(!points) return null;
+        const valid = (s.data||[]).filter(p => Number.isFinite(p.y));
+        if(!valid.length) return null;
+        // A polyline of one vertex draws nothing. Render the lone point as a
+        // dot so a single-sale graded tier is visible instead of invisible.
+        if(valid.length === 1) return html`<circle key=${"s"+i}
+          cx=${xScale(valid[0].x).toFixed(1)} cy=${yScale(valid[0].y).toFixed(1)}
+          r="3.4" fill=${s.color} stroke="var(--bg-solid)" stroke-width="1.2"/>`;
+        const points = valid.map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(" ");
+        // `dash` is an explicit dasharray (the compare palette's overflow
+        // encoding); `dashed` is the older boolean for Low-vs-Market pairs.
         return html`<polyline key=${"s"+i} fill="none" stroke=${s.color} stroke-width="1.6"
           stroke-linejoin="round" stroke-linecap="round"
-          stroke-dasharray=${s.dashed?"5,3":"0"} points=${points}/>`;
+          stroke-dasharray=${s.dash || (s.dashed?"5,3":"0")} points=${points}/>`;
       })}
       ${snapX != null && html`<line
         x1=${snapX} x2=${snapX} y1=${padding.top} y2=${height-padding.bottom}
@@ -3384,7 +3667,7 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
         return html`<div key=${h.series.label} class="chart-tooltip-row">
           <span class="legend-swatch" style=${{background:h.series.color}}/>
           <span class="chart-tooltip-label">${h.series.label}</span>
-          <span class="chart-tooltip-value">${maskValues ? "$•••" : "$"+h.point.y.toFixed(2)}</span>
+          <span class="chart-tooltip-value">${maskValues ? "$•••" : (valueFmt ? valueFmt(h.point.y) : "$"+h.point.y.toFixed(2))}</span>
           ${pct != null && html`<span class=${"chart-tooltip-pct "+(pct>=0?"up":"down")}>${pct>=0?"+":""}${pct.toFixed(1)}%</span>`}
         </div>`;
       })}
@@ -3470,7 +3753,11 @@ const computeSeriesDeltas = (rows, field) => {
 const _xmlEscape = (s) => String(s == null ? "" : s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'})[c]);
 const _truncate = (s, n) => { const str = String(s||""); return str.length <= n ? str : str.slice(0, n-1) + "…"; };
 
-function buildCompareReportSvg({title, subtitle, items, series, colors, footerNote}){
+// `tableSeries` is the dollar-valued copy of `series`, used for the table's
+// Start / End / Change columns. They differ when the chart is indexed to 100:
+// the plot shows index points, the table stays in prices.
+function buildCompareReportSvg({title, subtitle, items, series, tableSeries, colors, footerNote}){
+  const tblSeries = tableSeries || series;
   const W = 1100;
   const headerH = 80;
   const chartH = 340;
@@ -3535,9 +3822,15 @@ function buildCompareReportSvg({title, subtitle, items, series, colors, footerNo
     parts.push(`<line x1="${innerLeft}" x2="${innerLeft}" y1="${innerTop}" y2="${innerBottom}" stroke="#cfd3d8"/>`);
     validSeries.forEach((s) => {
       const valid = s.data.filter(p => Number.isFinite(p.y));
-      if(valid.length < 2) return;
+      if(!valid.length) return;
+      const dash = s.dash ? ` stroke-dasharray="${s.dash}"` : '';
+      // Match the on-screen chart: one point is a dot, not a dropped series.
+      if(valid.length === 1){
+        parts.push(`<circle cx="${xScale(valid[0].x).toFixed(1)}" cy="${yScale(valid[0].y).toFixed(1)}" r="4" fill="${s.color}"/>`);
+        return;
+      }
       const pts = valid.map(p => `${xScale(p.x).toFixed(1)},${yScale(p.y).toFixed(1)}`).join(' ');
-      parts.push(`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`);
+      parts.push(`<polyline points="${pts}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"${dash}/>`);
     });
   } else {
     parts.push(`<text x="${(W/2).toFixed(0)}" y="${(headerH + chartH/2).toFixed(0)}" font-size="14" fill="#7a8088" text-anchor="middle">No history data available for the selected products.</text>`);
@@ -3561,14 +3854,23 @@ function buildCompareReportSvg({title, subtitle, items, series, colors, footerNo
 
   items.forEach((it, i) => {
     const rowY = tableTop + tableHeaderH + i * rowH + 18;
-    const color = colors[i % colors.length];
-    parts.push(`<rect x="46" y="${rowY-9}" width="14" height="5" fill="${color}" rx="2"/>`);
+    // Read the swatch off the resolved series so the table can't drift from
+    // the plotted line, and mirror the stroke pattern — past slot 8 the dash
+    // IS half the identity, so a solid swatch would claim two lines are one.
+    const srs = series[i] || {};
+    const color = srs.color || colors[i % colors.length];
+    if(srs.dash){
+      parts.push(`<rect x="46" y="${rowY-9}" width="6" height="5" fill="${color}" rx="1.5"/>`);
+      parts.push(`<rect x="55" y="${rowY-9}" width="5" height="5" fill="${color}" rx="1.5"/>`);
+    } else {
+      parts.push(`<rect x="46" y="${rowY-9}" width="14" height="5" fill="${color}" rx="2"/>`);
+    }
     parts.push(`<text x="${cols[0].x}" y="${rowY}" font-size="11" fill="#5a6068" text-anchor="start">${i+1}</text>`);
     parts.push(`<text x="${cols[1].x}" y="${rowY}" font-size="12" fill="#16181c" font-weight="600">${_xmlEscape(_truncate(it.name, 60))}</text>`);
     const kindBadge = it.kind === "sealed" ? "Sealed" : "Card";
     const typeStr = (it.sub ? it.sub + " · " : "") + kindBadge;
     parts.push(`<text x="${cols[2].x}" y="${rowY}" font-size="11" fill="#5a6068">${_xmlEscape(_truncate(typeStr, 44))}</text>`);
-    const sData = series[i] && series[i].data ? series[i].data.filter(p => Number.isFinite(p.y)) : [];
+    const sData = tblSeries[i] && tblSeries[i].data ? tblSeries[i].data.filter(p => Number.isFinite(p.y)) : [];
     if(sData.length){
       const start = sData[0].y, end = sData[sData.length-1].y;
       const pct = start !== 0 ? ((end - start)/start*100) : null;
@@ -3679,6 +3981,36 @@ const DARK_THEMES_GLOBAL = new Set(["aurora","velvet","black","dark"]);
 // Graphing builder AND the Screener batch handoff (different components) read
 // the same cap instead of hard-coding their own.
 const COMPARE_MAX = 18;
+
+// Categorical series palette for the compare chart. EIGHT hues in a fixed
+// order, stepped once per mode — NOT one array cycled with `i % n`, which is
+// what shipped before: 8 colours against COMPARE_MAX=18 put three separate
+// series on the same green with nothing else telling them apart.
+//
+// Past slot 8 the hue order repeats and a SECOND encoding carries identity —
+// stroke pattern, via compareSeriesStyle below. Solid → dashed → dotted covers
+// 24 unique (hue, pattern) pairs, so all 18 slots are distinguishable, and the
+// common case (≤8 series) is all-solid with no pattern noise at all.
+//
+// Both columns validated as categorical palettes against the real theme
+// surfaces (parchment #f4f1eb / velvet #180a22): lightness band, chroma floor,
+// adjacent CVD ΔE ≥ 8, normal-vision ΔE ≥ 15 all pass in both modes. The light
+// column carries a sub-3:1 contrast warning on four hues, which the relief rule
+// covers — every compare surface ships a named legend AND the stats table, so
+// identity is never colour-alone.
+const COMPARE_PALETTE = {
+  light: ["#2a78d6","#eb6834","#1baf7a","#eda100","#e87ba4","#008300","#4a3aa7","#e34948"],
+  dark:  ["#3987e5","#d95926","#199e70","#c98500","#d55181","#008300","#9085e9","#e66767"],
+};
+// The exported PNG/SVG report is a fixed white document whatever the viewer's
+// theme, so it always reads the light column.
+const compareColorsFor = (theme) => DARK_THEMES_GLOBAL.has(theme) ? COMPARE_PALETTE.dark : COMPARE_PALETTE.light;
+const COMPARE_DASH = [null, "6,4", "1.5,3.5"];   // solid · dashed · dotted
+const compareSeriesStyle = (i, colors) => ({
+  color: colors[i % colors.length],
+  dash: COMPARE_DASH[Math.floor(i / colors.length) % COMPARE_DASH.length],
+});
+
 const inkTint = (ink, theme) => (ink && (DARK_THEMES_GLOBAL.has(theme)?INK_TINT_DARK[ink]:INK_TINT_LIGHT[ink])) || "transparent";
 
 // ── Smart search aliases ────────────────────────────────────────────────
@@ -15809,9 +16141,14 @@ const clipSeriesFrom = (series, startMs) => {
   return series.map(s => ({...s, data: (s.data||[]).filter(p => p.x >= startMs)}));
 };
 
-const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards}) => {
+const HISTORY_MODES = ["card","sealed","graded","set","index"];
+const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, incomingCompareCards, onConsumedIncomingCompareCards, watchlists}) => {
   const tips = useContext(TipsContext);
-  const [mode, setMode] = useState("card");
+  // Deep-link state, read once. The compare list itself needs the catalog to
+  // rehydrate (names / art / set) so it's applied in an effect further down
+  // once `raw` has landed; mode, range and scale can seed their state directly.
+  const urlGraph = useMemo(() => readUrlParam("g") || "", []);
+  const [mode, setMode] = useState(() => readUrlEnum("hm", HISTORY_MODES) || "card");
   useEffect(() => { if(mode === "graded") signalGradedSurface(); }, [mode]);
   // Sealed mode state — parallel to selectedGroup/cardQuery for cards.
   const [sealedSearch, setSealedSearch] = useState("");
@@ -15875,17 +16212,25 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
   }, [incomingCompareCards, onConsumedIncomingCompareCards]);
   // Prerelease guard: a card's price history is meaningless before its set's
   // street date — TCGplayer's pre-release listings sit 10-20x above eventual
-  // floors. Build a (tcgplayer_product_id → earliest-shown-date) map keyed off
+  // floors. (tcgplayer_product_id → earliest-shown timestamp), keyed off
   // setsMeta.released_at + 1 day, MAINLINE_SETS only (promos / D23 / Challenge
   // don't have the spike pattern). Mirrors the collection-value chart guard.
-  const productEarliestDate = useMemo(() => {
+  //
+  // ⚠ This is the ONLY prerelease clip in Compare mode, and it is applied at
+  // RENDER, never at fetch. There used to be two: an unconditional one inside
+  // the history fetch and a hidePreorders-gated one here. Because the fetch
+  // stripped the rows before they reached `compareSeries` — and `compareSeries`
+  // is cached, with hidePreorders absent from that effect's deps — unchecking
+  // "Hide prerelease" could never reveal anything for a mainline card. The two
+  // maps also disagreed on scope (fetch-time was mainline-only, render-time was
+  // every dated set), so the checkbox was inert for mainline cards and live for
+  // promos: the exact inverse of the intent. Clip at render or the toggle lies.
+  const releaseFloorByPid = useMemo(() => {
     if(!setsMeta || !setsMeta.length || !raw || !raw.length) return {};
     const setIdToFloor = {};
     for(const s of setsMeta){
       if(!s.released_at || !MAINLINE_SETS.includes(s.name)) continue;
-      const d = new Date(s.released_at + "T00:00:00Z");
-      d.setUTCDate(d.getUTCDate() + 1);
-      setIdToFloor[s.id] = d.toISOString().slice(0, 10);
+      setIdToFloor[s.id] = Date.parse(s.released_at + "T00:00:00Z") + 86400000;
     }
     const m = {};
     for(const r of raw){
@@ -15908,6 +16253,37 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     let cancelled = false;
     setCompareLoading(true);
     const tasks = missing.map(c => {
+      if(c.kind === "index"){
+        // A server index is a straight read. A watchlist index has to be
+        // computed here — nothing precomputes one basket per user — so pull its
+        // members' history and run the same algorithm the SQL does.
+        if(c.watchlistId){
+          const wl = (watchlists || []).find(w => w.id === c.watchlistId);
+          const pids = Array.from(new Set((wl ? wl.items : [])
+            .map(it => it.productId).filter(n => Number.isFinite(n))));
+          if(!pids.length) return Promise.resolve({id: c.card_id, rows: [], kind: "index"});
+          const since = "2024-02-08";   // earliest price data on file
+          return fetchCollectionPriceHistory(pids, since)
+            .then(rows => {
+              // Group by (pid, printing): a Cold Foil and its non-foil are
+              // separate return series, exactly as they are server-side.
+              const byKey = {};
+              for(const r of (rows || [])){
+                const k = r.tcgplayer_product_id + "|" + (r.printing || "Normal");
+                (byKey[k] = byKey[k] || []).push({
+                  date: r.date,
+                  market: r.market_price != null ? Number(r.market_price) : null,
+                  low: r.low_price != null ? Number(r.low_price) : null,
+                });
+              }
+              return {id: c.card_id, rows: buildCustomIndex(byKey), kind: "index"};
+            })
+            .catch(() => ({id: c.card_id, rows: [], kind: "index"}));
+        }
+        return fetchMarketIndexSeries(c.indexScope, c.indexKey)
+          .then(rows => ({id: c.card_id, rows: rows || [], kind: "index"}))
+          .catch(() => ({id: c.card_id, rows: [], kind: "index"}));
+      }
       if(c.kind === "graded"){
         // Every individual sale for this (card_id, printing, grader, grade).
         // Was graded_prices_daily, whose feed died 2026-06-30 — so every graded
@@ -15961,14 +16337,17 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                   market: win.reduce((a,b) => a+b, 0) / win.length,
                 };
               });
+          } else if(kind === "index"){
+            // Already {x, y} index points. Stored under BOTH price fields so
+            // the Low / NM Market toggle is a no-op on an index rather than
+            // blanking it — an index has one value, not two.
+            next[id] = (rows || []).map(p => ({x: p.x, low: p.y, market: p.y, n: p.n, universe: p.universe}));
           } else {
-            // Drop pre-release rows for the card's set (TCGplayer pre-release
-            // prices sit 10-20x the eventual floor; including them spikes the
-            // very left edge of the chart). productEarliestDate is keyed by
-            // pid, so look up via the source card item.
-            const cardItem = compareCards.find(p => p.card_id === id);
-            const floor = cardItem ? productEarliestDate[cardItem.productId] : null;
-            next[id] = (rows || []).filter(r => !floor || r.date >= floor).map(r => ({
+            // Store the FULL history. The pre-release clip is applied at render
+            // (releaseFloorByPid) so the "Hide prerelease" checkbox can turn it
+            // off — clipping here would bake the decision into a cached series
+            // this effect never recomputes when the checkbox flips.
+            next[id] = (rows || []).map(r => ({
               x: new Date(r.date).getTime(),
               low: r.low_price == null ? null : +r.low_price,
               market: r.market_price == null ? null : +r.market_price,
@@ -15980,7 +16359,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       setCompareLoading(false);
     });
     return () => { cancelled = true; };
-  }, [compareCards, productEarliestDate]);
+  }, [compareCards]);
 
   // Fetch graded picker options lazily — only when the user first opens
   // the By Graded tab. Keeps the Price Graphing initial load fast for
@@ -16108,15 +16487,166 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     };
   }, [setIdByName]);
 
-  // Distinct colors for the multi-line chart. Stable mapping by index.
-  const COMPARE_COLORS = ["#1d8d4a","#7e54c4","#c64c5a","#4d83bf","#d4a93b","#0e6b6b","#787e88","#e07c2a"];
   const [setEv, setSetEv] = useState({rows:null, loading:false, error:null});
   // Low / Market checkbox state — shared across card mode and set EV mode.
   // Default = Low only. Toggle Market to add it as a dashed series.
   const [showLow, setShowLow] = useState(true);
   const [showMarket, setShowMarket] = useState(false);
+  // How the y axis is drawn: absolute dollars, log10 dollars, or every series
+  // rebased to 100 at the start of the visible range. "abs" is the default and
+  // the only one that existed before — the other two are what make an 18-series
+  // overlay across three orders of magnitude actually readable.
+  const [chartScale, setChartScale] = useState(() => {
+    const u = readUrlEnum("hs", ["abs","log","indexed"]);
+    if(u) return u;
+    try { return localStorage.getItem("packsink:history:chartScale") || "abs"; } catch { return "abs"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:history:chartScale", chartScale); } catch {}
+  }, [chartScale]);
+  // ── Benchmark overlay (migration 128) ──────────────────────────────────
+  // "off" | "all" | "set:<set_id>". Not persisted to localStorage: which set
+  // you benchmarked against last is meaningless against a different graph.
+  const [benchmark, setBenchmark] = useState("off");
+  const [benchSeries, setBenchSeries] = useState({});    // key -> [{x,y}] | null
+  const benchKey = benchmark === "off" ? null : benchmark;
+  // The control is offered until a fetch proves the matviews aren't deployed.
+  // We can't know before trying, so it starts visible and hides itself after a
+  // null — that way an unmigrated site shows the picker exactly once, with an
+  // explanation, instead of a permanently dead dropdown.
+  const benchAvailable = !Object.values(benchSeries).some(v => v === null);
+  useEffect(() => {
+    if(!benchKey || benchSeries[benchKey] !== undefined) return;
+    // "<scope>:<scope_key>" — split on the FIRST colon only, because a
+    // setrarity key is "<set_id>|<rarity>" and a rarity key can contain a
+    // space, neither of which should be re-split.
+    const cut = benchKey.indexOf(":");
+    const scope = cut < 0 ? benchKey : benchKey.slice(0, cut);
+    const scopeKey = cut < 0 ? "" : benchKey.slice(cut + 1);
+    let cancelled = false;
+    fetchMarketIndexSeries(scope, scopeKey).then(rows => {
+      if(!cancelled) setBenchSeries(prev => ({...prev, [benchKey]: rows}));
+    });
+    return () => { cancelled = true; };
+  }, [benchKey, benchSeries]);
+  // Which sets the graphed cards belong to — the benchmark picker offers those
+  // rather than all thirty, since "vs a set I'm not looking at" is never the
+  // question.
+  // ── Indices as graphable subjects ──────────────────────────────────────
+  // Distinct from the benchmark overlay, deliberately. A BENCHMARK is a
+  // reference — one muted dashed line you read the others against, with no
+  // colour slot and no stats row. An INDEX ITEM is a subject: it gets a colour,
+  // a legend chip, a stats row, the CSV and the share link, and you can put
+  // several on one chart. "How did Enchanteds do against Commons" is a question
+  // about two subjects; "did this card beat the market" is a question about a
+  // reference. Both are real, so both exist.
+  const [indexCatalog, setIndexCatalog] = useState(undefined);  // undefined = loading
+  const [indexSearch, setIndexSearch] = useState("");
+  useEffect(() => {
+    if(mode !== "index" || indexCatalog !== undefined) return;
+    let cancelled = false;
+    fetchMarketIndexLatest().then(rows => { if(!cancelled) setIndexCatalog(rows); });
+    return () => { cancelled = true; };
+  }, [mode, indexCatalog]);
+  // Human labels for a (scope, scope_key). Set ids and the "set|rarity"
+  // composite are meaningless on screen, so they resolve through the catalog.
+  const setNameById2 = useMemo(() => {
+    const m = {};
+    for(const r of (raw || [])) if(r.set_id && r.Set && !m[r.set_id]) m[r.set_id] = r.Set;
+    return m;
+  }, [raw]);
+  // "Booster Box" + "s" is "Booster Boxs". Sibilant endings take -es; that
+  // covers every product_type and rarity these keys can hold.
+  const _plural = (w) => /(?:[sxz]|ch|sh)$/i.test(w) ? w + "es" : w + "s";
+  const indexLabel = useCallback((scope, key) => {
+    if(scope === "all")    return "Whole market";
+    if(scope === "chase")  return "Chase (Enchanted · Epic · Iconic)";
+    if(scope === "sealed") return "Sealed products";
+    if(scope === "set")    return setNameById2[key] || key;
+    if(scope === "rarity") return "All " + _plural(key);
+    if(scope === "ink")    return key + " ink";
+    if(scope === "sealedtype") return _plural(key);
+    if(scope === "setrarity"){
+      const [sid, rar] = String(key).split("|");
+      return (setNameById2[sid] || sid) + " " + _plural(rar);
+    }
+    return scope + " " + key;
+  }, [setNameById2]);
+  const INDEX_GROUP_LABEL = {
+    all:"Market", chase:"Market", sealed:"Market",
+    set:"By set", rarity:"By rarity", setrarity:"Set × rarity",
+    ink:"By ink", sealedtype:"Sealed type",
+  };
+  const buildIndexCompareItem = useCallback((row) => {
+    const key = row.scope + ":" + (row.scope_key || "");
+    return {
+      kind: "index",
+      card_id: "index-" + key,
+      indexScope: row.scope, indexKey: row.scope_key || "",
+      productId: null, printing: null,
+      name: indexLabel(row.scope, row.scope_key) + " index",
+      // Component count is part of an index's identity: a 14-card tier and a
+      // 5,800-card market are not equally solid, and the chip is where that has
+      // to be visible.
+      sub: (row.n_components != null
+        ? row.n_components + (row.universe && row.universe !== row.n_components ? " of " + row.universe : "") + " components"
+        : "index"),
+      image: null,
+    };
+  }, [indexLabel]);
+  // A watchlist graphed as its own index — the "custom index" case. Computed in
+  // the browser from the members' price history, using buildCustomIndex, which
+  // is checked against real PostgreSQL output by scripts/test_market_index.mjs.
+  const buildWatchlistIndexItem = useCallback((w) => {
+    if(!w || !w.items || !w.items.length) return null;
+    return {
+      kind: "index",
+      card_id: "index-wl-" + w.id,
+      watchlistId: w.id,
+      productId: null, printing: null,
+      name: w.name + " index",
+      sub: w.items.length + " item" + (w.items.length === 1 ? "" : "s") + " · your basket",
+      image: null,
+    };
+  }, []);
+
+  // Benchmark menu, grouped. The market-wide entries are always offered; the
+  // narrow ones are derived from what is actually ON the graph, because "versus
+  // a set I'm not looking at" is never the question, and listing all ~275
+  // scopes would bury the four that matter.
+  //
+  // Value format is the fetch key: "<scope>:<scope_key>", with scope_key empty
+  // for the global ones.
+  const benchOptionGroups = useMemo(() => {
+    const byPid = new Map();
+    for(const r of (raw || [])) if(r.tcgplayer_product_id != null && !byPid.has(r.tcgplayer_product_id)) byPid.set(r.tcgplayer_product_id, r);
+    const sets = new Map(), rarities = new Map(), peers = new Map();
+    for(const c of compareCards){
+      if(c.kind === "set" && c.setId){ sets.set(c.setId, c.setName); continue; }
+      const row = byPid.get(c.productId);
+      if(!row) continue;
+      if(row.set_id && row.Set) sets.set(row.set_id, row.Set);
+      if(row.Rarity) rarities.set(row.Rarity, row.Rarity);
+      if(row.set_id && row.Rarity && row.Set)
+        peers.set(row.set_id + "|" + row.Rarity, row.Set + " " + row.Rarity + "s");
+    }
+    const groups = [
+      {label: "Market", options: [
+        {v: "all:",    l: "Whole market"},
+        {v: "chase:",  l: "Chase (Enchanted · Epic · Iconic)"},
+        {v: "sealed:", l: "Sealed products"},
+      ]},
+    ];
+    if(sets.size)     groups.push({label:"Set", options: Array.from(sets, ([id,n]) => ({v:"set:"+id, l:n}))});
+    if(rarities.size) groups.push({label:"Rarity", options: Array.from(rarities.keys()).map(r => ({v:"rarity:"+r, l:"All "+r+"s"}))});
+    // The sharpest comparison available: same set AND same rarity. Also the one
+    // most likely to be missing, for a tier with too few cards to index.
+    if(peers.size)    groups.push({label:"Peer group", options: Array.from(peers, ([k,n]) => ({v:"setrarity:"+k, l:n}))});
+    return groups;
+  }, [compareCards, raw]);
+
   const [setSearch, setSetSearch] = useState("");
-  const [rangeKey, setRangeKey] = useState("all");
+  const [rangeKey, setRangeKey] = useState(() => readUrlEnum("hr", RANGE_OPTIONS.map(o => o[0])) || "all");
   const [customStart, setCustomStart] = useState(""); // YYYY-MM-DD when rangeKey="custom"
   const [hidePreorders, setHidePreorders] = useState(() => {
     try { return localStorage.getItem("packsink:history:hidePreorders") !== "0"; }
@@ -16547,6 +17077,103 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
     };
   }, [gradedCompareId]);
 
+  // ── Deep link: ?g= → compare list ──────────────────────────────────────
+  // The URL carries identity only; everything a chip displays (name, set,
+  // collector number, art) is rebuilt here from the catalog. That keeps an
+  // 18-item link short AND means a shared graph picks up corrected card
+  // metadata instead of freezing whatever the sender's tab happened to hold.
+  //
+  // Waits for `raw`, and for sealedPrices when the link contains a sealed item
+  // — hydrating early would silently drop those. Graded items don't need the
+  // rollup: their tier is in the URL and their card metadata is in `raw`.
+  const urlGraphApplied = useRef(false);
+  useEffect(() => {
+    if(urlGraphApplied.current || !urlGraph) return;
+    if(!raw || !raw.length) return;
+    const wanted = decodeCompareItems(urlGraph);
+    if(!wanted.length){ urlGraphApplied.current = true; return; }
+    if(wanted.some(w => w.kind === "sealed") && !sealedPrices) return;
+    urlGraphApplied.current = true;
+    const byCardId = new Map();
+    const byPidPrinting = new Map();
+    for(const r of raw){
+      if(r.card_id != null && !byCardId.has(r.card_id)) byCardId.set(r.card_id, r);
+      const pid = r.tcgplayer_product_id;
+      if(pid != null) byPidPrinting.set(pid + "|" + (r.tcg_printing || "Normal"), r);
+    }
+    const setNameForId = {};
+    for(const r of raw) if(r.set_id && r.Set && !setNameForId[r.set_id]) setNameForId[r.set_id] = r.Set;
+    const built = [];
+    for(const w of wanted){
+      if(w.kind === "card"){
+        const row = byPidPrinting.get(w.productId + "|" + w.printing)
+          // A printing that no longer exists under that pid (a TCGCSV relabel)
+          // still graphs — the series is keyed on (pid, printing) regardless.
+          || [...byPidPrinting.values()].find(r => r.tcgplayer_product_id === w.productId);
+        if(!row) continue;
+        const tag = (w.printing !== "Normal" && w.printing !== "Non-Foil")
+          ? (w.printing === "Holofoil" ? " (Holo)" : " (" + w.printing + ")") : "";
+        built.push({
+          kind:"card",
+          card_id: row.card_id + (w.printing === "Normal" ? "" : "::" + w.printing),
+          productId: w.productId, printing: w.printing,
+          name: (row["Product Name"] || "") + tag,
+          sub: `${row.Set || ""}${row.Number?" · #"+String(row.Number).split("/")[0]:""}${row.Rarity?" · "+row.Rarity:""}`,
+          image: row.img_normal || row.img_small || null,
+        });
+      } else if(w.kind === "sealed"){
+        const p = (sealedPrices || []).find(x => x.tcgplayer_product_id === w.productId && x.printing === "Normal");
+        if(p) built.push(buildSealedCompareItem(p));
+      } else if(w.kind === "set"){
+        const nm = setNameForId[w.setId];
+        if(nm){ const it = buildSetCompareItem(nm); if(it) built.push(it); }
+      } else if(w.kind === "graded"){
+        const meta = byCardId.get(w.gradedCardId);
+        if(!meta) continue;
+        built.push(buildGradedCompareItem({
+          card_id: w.gradedCardId, printing: w.gradedPrinting || "",
+          grader: w.grader, grade: w.grade, _meta: meta,
+        }));
+      } else if(w.kind === "index"){
+        if(w.watchlistId){
+          // Only resolvable by the owner. Someone else opening the link simply
+          // gets the rest of the graph, which is the correct degradation for a
+          // private basket.
+          const wl = (watchlists || []).find(x => x.id === w.watchlistId);
+          const it = wl ? buildWatchlistIndexItem(wl) : null;
+          if(it) built.push(it);
+        } else {
+          // Built without the catalog row: a link may land before
+          // market_index_latest has been fetched, and an index's identity is
+          // entirely in its (scope, key). The label resolves from the catalog,
+          // the component count fills in once the picker loads.
+          built.push(buildIndexCompareItem({scope: w.indexScope, scope_key: w.indexKey}));
+        }
+      }
+    }
+    if(built.length) setCompareCards(built.filter(Boolean).slice(0, COMPARE_MAX));
+  }, [urlGraph, raw, sealedPrices, watchlists, buildSealedCompareItem, buildSetCompareItem, buildGradedCompareItem, buildIndexCompareItem, buildWatchlistIndexItem]);
+
+  // Mirror the graph back into the URL. replaceState — the compare list is a
+  // filter on one page, not a stack of pages, so Back should leave Price
+  // Graphing rather than undo eighteen checkbox clicks. Held until the
+  // deep-link hydration has run, or the empty initial list would immediately
+  // overwrite the very ?g= we are about to read.
+  useEffect(() => {
+    if(urlGraph && !urlGraphApplied.current) return;
+    try {
+      const url = new URL(window.location.href);
+      if((url.pathname.replace(/\/$/, "") || "/") !== "/price-graphing") return;
+      const enc = encodeCompareItems(compareCards);
+      const set = (k, v, dflt) => { if(v && v !== dflt) url.searchParams.set(k, v); else url.searchParams.delete(k); };
+      set("g", enc, "");
+      set("hm", mode, "card");
+      set("hr", rangeKey, "all");
+      set("hs", chartScale, "abs");
+      if(url.toString() !== window.location.href) window.history.replaceState(window.history.state, "", url.toString());
+    } catch {/* no-op */}
+  }, [compareCards, mode, rangeKey, chartScale, urlGraph]);
+
   // Inline picker used inside Compare mode so users can add cards / sealed
   // without leaving the report. Top 8 card hits and top 4 sealed hits.
   const [compareSearch, setCompareSearch] = useState("");
@@ -16594,6 +17221,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         <button class=${mode==="sealed"?"active":""}  onClick=${()=>setMode("sealed")}>By Sealed</button>
         <button class=${mode==="graded"?"active":""}  onClick=${()=>setMode("graded")}>By Graded</button>
         <button class=${mode==="set"?"active":""}     onClick=${()=>setMode("set")}>By Set EV</button>
+        <button class=${mode==="index"?"active":""}   onClick=${()=>setMode("index")}>By Index</button>
       </div>
       <div class="seg-toggle">
         ${RANGE_OPTIONS.map(([k,l]) => html`<button key=${k}
@@ -16617,31 +17245,14 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       </label>`}
     </div>
 
-    ${(mode === "sealed" || mode === "card" || mode === "set" || mode === "graded") ? (() => {
+    ${(mode === "sealed" || mode === "card" || mode === "set" || mode === "graded" || mode === "index") ? (() => {
       // Graded series carry individual sales in `low` and the rolling avg-of-5
       // in `market` (there is no raw Low / NM Market for a slab), so the toggle
       // has to say what it actually switches between.
       const priceLabel = mode === "graded"
         ? (showLow ? "Sale price" : "Avg of last 5")
         : (showLow ? "Low" : "NM Market");
-      // Per-pid earliest acceptable timestamp = release date + 1 day. Used to
-      // drop pre-release spike days from each compared card individually
-      // (different cards have different release dates so a single shared
-      // startMs can't do this). Promos / undated sets fall through (no clip).
-      const releaseFloorByPid = (() => {
-        const setRel = {};
-        for(const s of (setsMeta || [])) if(s && s.id && s.released_at) setRel[s.id] = s.released_at;
-        const m = {};
-        for(const r of (raw || [])){
-          const pid = r.tcgplayer_product_id;
-          if(pid == null || m[pid] !== undefined) continue;
-          const rel = setRel[r.set_id];
-          if(!rel) continue;
-          const d = new Date(rel + "T00:00:00Z").getTime();
-          m[pid] = d + 24 * 60 * 60 * 1000; // +1 day
-        }
-        return m;
-      })();
+      const paletteColors = compareColorsFor(theme);
       const builtSeries = compareCards.map((c, i) => {
         let data = [];
         if(c.kind === "set"){
@@ -16656,24 +17267,43 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
             .map(p => ({x: p.x, y: showLow ? p.low : p.market}));
         }
         // Per-card pre-release clip: drop points before this card's set
-        // released_at + 1 day, unless the user has explicitly toggled
-        // pre-release inclusion ON via the "Include prerelease" checkbox
-        // (which flips hidePreorders to false).
+        // released_at + 1 day, unless the user has explicitly unchecked
+        // "Hide prerelease". This is the only place the clip happens — see
+        // the releaseFloorByPid memo for why it must not move to the fetch.
         if(hidePreorders && c.kind !== "set"){
           const floorMs = releaseFloorByPid[c.productId];
           if(floorMs != null) data = data.filter(p => p.x >= floorMs);
         }
-        return {name: c.name, color: COMPARE_COLORS[i % COMPARE_COLORS.length], data};
+        const st = compareSeriesStyle(i, paletteColors);
+        return {name: c.name, color: st.color, dash: st.dash, data};
       });
       const startMs = computeChartStartMs(rangeKey, customStart, hidePreorders, null);
-      const clipped = clipSeriesFrom(builtSeries, startMs);
+      // Actual dollars, range-clipped. The stats table, the CSV and the export
+      // report's table all read THIS — a reader wants prices in a spreadsheet
+      // even when the chart above is showing index points.
+      const priceClipped = clipSeriesFrom(builtSeries, startMs);
+      const indexed = chartScale === "indexed";
+      // Indexed mode: rebase every series to 100 at its first point INSIDE the
+      // visible range, so a $900 Enchanted and a $3 common become comparable
+      // performance curves instead of one line and one flat axis-hugger. Must
+      // run after the range clip — rebasing off a pre-clip base would make the
+      // visible series start at something other than 100.
+      const clipped = !indexed ? priceClipped : priceClipped.map(s => {
+        const valid = (s.data || []).filter(p => Number.isFinite(p.y));
+        const base = valid.length ? valid[0].y : null;
+        if(!base) return {...s, data: []};   // a 0 or missing base can't be rebased
+        return {...s, data: valid.map(p => ({x: p.x, y: (p.y / base) * 100}))};
+      });
       const rangeLabel = (RANGE_OPTIONS.find(([k]) => k === rangeKey) || [,"All"])[1];
+      const scaleLabel = indexed ? "Indexed to 100" : chartScale === "log" ? "Log scale" : null;
+      const fmtIndexTick = (v) => (Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(1));
       const reportArgs = {
         title: "Price Comparison Report",
-        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel} · Range: ${rangeLabel}`,
+        subtitle: `${compareCards.length} product${compareCards.length===1?"":"s"} · ${priceLabel}${scaleLabel?" · "+scaleLabel:""} · Range: ${rangeLabel}`,
         items: compareCards,
         series: clipped,
-        colors: COMPARE_COLORS,
+        tableSeries: priceClipped,
+        colors: paletteColors,
         footerNote: "packs.ink · Unofficial fan site, not affiliated with Disney or Ravensburger",
       };
       const doExportPng = () => exportCompareReportPng(reportArgs);
@@ -16683,11 +17313,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         const esc = v => { const s = v==null?"":String(v); return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s; };
         const lines = [headers.join(",")];
         compareCards.forEach((c, i) => {
-          const data = clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : [];
+          // Dollars, never index points — a spreadsheet wants prices.
+          const data = priceClipped[i] && priceClipped[i].data ? priceClipped[i].data.filter(p => Number.isFinite(p.y)) : [];
           const start = data.length ? data[0].y : "";
           const end   = data.length ? data[data.length-1].y : "";
           const pct   = (data.length && start) ? ((end-start)/start*100).toFixed(2) : "";
-          lines.push([i+1, c.name, c.sub||"", c.kind==="sealed"?"Sealed":"Card",
+          lines.push([i+1, c.name, c.sub||"",
+            c.kind==="sealed" ? "Sealed" : c.kind==="index" ? (c.watchlistId?"Custom index":"Index") : c.kind==="set" ? "Set EV" : "Card",
             start===""?"":start.toFixed(2), end===""?"":end.toFixed(2), pct].map(esc).join(","));
         });
         const blob = new Blob([lines.join("\n")], {type:"text/csv"});
@@ -16698,7 +17330,35 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
         URL.revokeObjectURL(url);
       };
 
-      const renderSeries = clipped.filter(s => s.data && s.data.length >= 2);
+      // >= 1, not >= 2. A one-point series is drawn as a dot by LineChart; the
+      // old >= 2 dropped it from the plot while its legend chip stayed, so a
+      // single-sale graded tier produced a swatch and no mark.
+      const plotted = clipped.filter(s => s.data && s.data.length >= 1);
+      // The benchmark rides along as one more series, but never as a compare
+      // item: it has no chip, no colour slot, and no row in the stats table. It
+      // is the thing you read the others AGAINST, so it's drawn muted + dashed.
+      //
+      // Only meaningful in Indexed mode. In dollars an index sitting near 100
+      // would be a flat line at the bottom of a $900 chart, which looks like
+      // data and isn't — so the control switches the scale for you rather than
+      // rendering something misleading.
+      const benchRows = benchKey ? benchSeries[benchKey] : undefined;
+      const benchClipped = (indexed && Array.isArray(benchRows) && benchRows.length)
+        ? (() => {
+            const inRange = startMs == null ? benchRows : benchRows.filter(p => p.x >= startMs);
+            const base = inRange.length ? inRange[0].y : null;
+            if(!base) return null;
+            // Read the label back off the menu, so a scope only has to be named
+            // in one place and a new one can never plot as "undefined index".
+            const opt = benchOptionGroups.flatMap(g => g.options).find(o => o.v === benchmark);
+            return {
+              name: (opt ? opt.l : "Benchmark") + " index",
+              color: "var(--text-muted)", dash: "5,4", benchmark: true,
+              data: inRange.map(p => ({x: p.x, y: (p.y / base) * 100})),
+            };
+          })()
+        : null;
+      const renderSeries = benchClipped ? [benchClipped, ...plotted] : plotted;
       const isFull = compareCards.length >= COMPARE_MAX;
       const isCardInCompare = (cid) => compareCards.some(p => p.card_id === cid);
       const toggleCard = (c) => {
@@ -16767,6 +17427,46 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
       // Distinct graders / grades present in the dataset — drives the filter chip rows.
       const gradedAllGraders = ["psa","cgc","bgs","sgc","tag"];
       const gradedAllGrades = ["10","9.5","9","8.5","8","7","6","5","4","3","2","1"];
+
+      const toggleIndexItem = (item) => {
+        if(isCardInCompare(item.card_id)){
+          setCompareCards(prev => prev.filter(p => p.card_id !== item.card_id));
+        } else if(!isFull){
+          setCompareCards(prev => [...prev, item]);
+        }
+      };
+      // The user's own baskets come FIRST — a custom index is the one thing on
+      // this list nobody else could have made, and burying it under thirty
+      // set indices would hide the feature. Only lists with enough members to
+      // clear the component floor are offered; below it the series would come
+      // back empty and read as broken.
+      const indexPickerGroups = (() => {
+        const q = indexSearch.trim().toLowerCase();
+        const groups = [];
+        const mine = (watchlists || [])
+          .filter(w => w.items.length >= INDEX_PARAMS.minAbs)
+          .map(w => ({_wl: w, _label: w.name}))
+          .filter(r => !q || r._label.toLowerCase().includes(q));
+        if(mine.length) groups.push({label: "Your baskets", rows: mine});
+        const byGroup = new Map();
+        for(const row of (indexCatalog || [])){
+          const label = indexLabel(row.scope, row.scope_key);
+          if(q && !label.toLowerCase().includes(q) && !row.scope.includes(q)) continue;
+          const g = INDEX_GROUP_LABEL[row.scope] || row.scope;
+          if(!byGroup.has(g)) byGroup.set(g, []);
+          byGroup.get(g).push({...row, _label: label});
+        }
+        // Stable, meaningful order rather than whatever the fetch returned.
+        const ORDER = ["Market","By rarity","Set × rarity","By set","By ink","Sealed type"];
+        for(const g of ORDER){
+          const rows = byGroup.get(g);
+          if(!rows || !rows.length) continue;
+          rows.sort((a,b) => a._label.localeCompare(b._label));
+          groups.push({label: g, rows});
+        }
+        for(const [g, rows] of byGroup) if(!ORDER.includes(g)) groups.push({label: g, rows});
+        return groups;
+      })();
 
       const toggleSetItem = (setNameForToggle) => {
         const sid = setIdByName[setNameForToggle];
@@ -16934,6 +17634,49 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     })}
             </div>
           </div>`
+        : mode === "index"
+        ? html`<div class="history-picker">
+            <div class="history-picker-searchrow">
+              <input type="search" placeholder="Search indices — 'enchanted', 'booster box', a set name..."
+                value=${indexSearch} onInput=${e=>setIndexSearch(e.target.value)}/>
+            </div>
+            <div class="history-picker-hint">Click any index to add or remove it from the graph. Up to ${COMPARE_MAX}.</div>
+            <div class="history-picker-list">
+              ${indexCatalog === undefined
+                ? html`<div class="history-picker-empty">Loading indices…</div>`
+                : indexCatalog === null
+                  ? html`<div class="history-picker-empty">
+                      Market indices aren't switched on for this site yet — ask an admin to run
+                      <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
+                    </div>`
+                  : indexPickerGroups.length === 0
+                    ? html`<div class="history-picker-empty">${(indexCatalog||[]).length
+                        ? `No index matches "${indexSearch}"`
+                        : "No indices have been computed yet — run select public.refresh_market_index();"}</div>`
+                    : indexPickerGroups.map(g => html`<div key=${g.label} class="history-picker-group">
+                        <div class="history-picker-group-head">${g.label}</div>
+                        ${g.rows.map(row => {
+                          const item = row._wl ? buildWatchlistIndexItem(row._wl) : buildIndexCompareItem(row);
+                          if(!item) return null;
+                          const sel = isCardInCompare(item.card_id);
+                          return html`<button key=${item.card_id}
+                            class=${"history-picker-item picker-multi "+(sel?"active":"")}
+                            disabled=${!sel && isFull}
+                            title=${!sel && isFull ? `Graph full (${COMPARE_MAX} max) — remove one to add more` : ""}
+                            onClick=${()=>toggleIndexItem(item)}>
+                            <span class=${"picker-check "+(sel?"checked":"")}>${sel?"✓":""}</span>
+                            <span class="picker-text">
+                              <span class="hpi-name">${item.name.replace(/ index$/, "")}</span>
+                              <span class="hpi-sub">
+                                ${item.sub}
+                                ${row.pct_30d != null ? html` · <span class=${row.pct_30d >= 0 ? "up" : "down"}>${(row.pct_30d>=0?"+":"")+row.pct_30d+"% 1M"}</span>` : ""}
+                              </span>
+                            </span>
+                          </button>`;
+                        })}
+                      </div>`)}
+            </div>
+          </div>`
         : html`<div class="history-picker">
             <div class="history-picker-searchrow">
               <input type="search" placeholder="Search sets..."
@@ -16975,6 +17718,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                        <span class="muted" style=${{fontSize:11,marginLeft:8}}>· ${priceLabel} · ${rangeLabel}</span>`}
             </div>
             ${compareCards.length > 0 && html`<div class="compare-export-group">
+              <button class="settings-action" onClick=${copyCurrentPageLink}
+                title="Copy a link that reopens this exact graph — same products, range and scale. The PNG is a picture of the analysis; this is the analysis.">${uiIcon("link")} Copy link</button>
               <button class="settings-action" onClick=${doExportPng} title="Export the comparison chart + product list as a PNG report.">${uiIcon("save")} PNG</button>
               <button class="settings-action" onClick=${doExportSvg} title="Export as scalable vector (SVG).">SVG</button>
               <button class="settings-action" onClick=${doExportCsv} title="Export the products table as CSV.">CSV</button>
@@ -16997,11 +17742,29 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                 </div>`}
                 ${compareCards.length >= 1 && html`<div class="compare-legend">
                   <span class="muted" style=${{fontSize:11,fontWeight:600,letterSpacing:0.3,textTransform:"uppercase",marginRight:6}}>On graph</span>
-                  ${compareCards.map((c, i) => html`<span key=${c.card_id} class="compare-chip"
-                    style=${{borderColor: COMPARE_COLORS[i % COMPARE_COLORS.length]}}>
-                    <span class="compare-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length]}}></span>
+                  ${benchClipped && html`<span class="compare-chip compare-chip--bench"
+                    title="Benchmark — not one of your picks. Every line above it outperformed the market over this range; every line below it lagged.">
+                    <span class="compare-swatch compare-swatch--bench"></span>
+                    <span class="compare-name">${benchClipped.name}</span>
+                    <button class="compare-remove" onClick=${()=>setBenchmark("off")}
+                      title="Remove the benchmark" aria-label="Remove benchmark">×</button>
+                  </span>`}
+                  ${compareCards.map((c, i) => {
+                    const st = compareSeriesStyle(i, paletteColors);
+                    // Points actually plotted for this series after clipping —
+                    // drives the "1 pt" flag below.
+                    const nPts = (clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : []).length;
+                    return html`<span key=${c.card_id} class="compare-chip"
+                    style=${{borderColor: st.color}}>
+                    <span class="compare-swatch" style=${{background: st.color,
+                      // Past slot 8 the hue repeats and the stroke pattern is
+                      // what separates the lines — the swatch has to say so or
+                      // two chips claim the same identity.
+                      backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}></span>
                     <span class="compare-name">${c.name}</span>
                     ${c.kind === "sealed" ? html`<span class="compare-kind-tag">sealed</span>` : c.kind === "set" ? html`<span class="compare-kind-tag">set EV</span>` : null}
+                    ${nPts === 1 && html`<span class="compare-kind-tag" title="Only one price point in this range — drawn as a dot, not a line.">1 pt</span>`}
+                    ${nPts === 0 && html`<span class="compare-kind-tag compare-kind-tag--none" title="No price history in the selected range. Try a wider range, or untick Hide prerelease.">no data</span>`}
                     ${c.kind === "card" && compareCards.length < COMPARE_MAX && html`<button class="compare-add-variants"
                       onClick=${()=>addAllVariants(c)}
                       title="Add every other printing / rarity variant of this card (Normal, Foil, Cold Foil, Enchanted, Iconic, etc.) to the graph"
@@ -17009,19 +17772,55 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     <button class="compare-remove"
                       onClick=${()=>{ setCompareCards(prev => prev.filter(x => x.card_id !== c.card_id)); }}
                       title="Remove from graph" aria-label="Remove">×</button>
-                  </span>`)}
+                  </span>`;
+                  })}
                 </div>`}
                 <div class="history-chart-controls">
                   <div class="seg-toggle">
                     <button class=${showLow ? "active" : ""} onClick=${()=>{ setShowLow(true); setShowMarket(false); }}>${mode === "graded" ? "Sale price" : "Low"}</button>
                     <button class=${showMarket ? "active" : ""} onClick=${()=>{ setShowLow(false); setShowMarket(true); }}>${mode === "graded" ? "Avg of last 5" : "NM Market"}</button>
                   </div>
+                  <div class="seg-toggle" role="group" aria-label="Chart scale">
+                    <button class=${chartScale === "abs" ? "active" : ""} onClick=${()=>setChartScale("abs")}
+                      title="Plot actual prices on a linear axis.">$</button>
+                    <button class=${chartScale === "log" ? "active" : ""} onClick=${()=>setChartScale("log")}
+                      title="Plot actual prices on a log axis, so a move from $2 to $4 takes the same vertical space as $200 to $400. Declines to linear if any value is zero.">Log</button>
+                    <button class=${chartScale === "indexed" ? "active" : ""} onClick=${()=>setChartScale("indexed")}
+                      title="Rebase every line to 100 at the start of the range, so cards at completely different prices can be compared on performance. The table below stays in dollars.">Indexed</button>
+                  </div>
+                  ${benchAvailable !== false && html`<label class="checkbox-group history-bench"
+                    title="Overlay a market benchmark — an equal-weighted, chain-linked return index of every priced card. Only meaningful against rebased lines, so turning it on switches the chart to Indexed.">
+                    <span class="muted">vs</span>
+                    <select value=${benchmark} onChange=${e=>{
+                      const v = e.target.value;
+                      setBenchmark(v);
+                      // Switch the scale rather than silently drawing a flat
+                      // line at the foot of a dollar chart.
+                      if(v !== "off" && chartScale !== "indexed") setChartScale("indexed");
+                    }}>
+                      <option value="off">No benchmark</option>
+                      ${benchOptionGroups.map(g => html`<optgroup key=${g.label} label=${g.label}>
+                        ${g.options.map(o => html`<option key=${o.v} value=${o.v}>${o.l}</option>`)}
+                      </optgroup>`)}
+                    </select>
+                  </label>`}
                 </div>
+                ${benchKey && benchRows === null && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
+                  Market indices aren't switched on for this site yet — ask an admin to run <code>supabase/130_market_index_scopes.sql</code>, then <code>select public.refresh_market_index();</code>.
+                </div>`}
+                ${/* A scope with too few cards to index returns an empty array
+                      rather than null. Say which, instead of silently drawing
+                      nothing after the user picked something. */
+                  benchKey && Array.isArray(benchRows) && benchRows.length === 0 && html`<div class="muted" style=${{fontSize:11,marginBottom:6}}>
+                  No index for that group — it has too few cards priced to make one. Try a wider benchmark.
+                </div>`}
                 ${compareLoading
                   ? html`<div class="chart-empty large">Loading history…</div>`
                   : renderSeries.length === 0
                     ? html`<div class="chart-empty large">No price history yet for the selected product${compareCards.length>1?"s":""}.</div>`
-                    : html`<${LineChart} series=${renderSeries} width=920 height=320/>`}
+                    : html`<${LineChart} series=${renderSeries} width=920 height=320
+                        logScale=${chartScale === "log"}
+                        valueFmt=${indexed ? fmtIndexTick : null}/>`}
                 <table class="compare-stats-table">
                   <thead><tr>
                     <th></th><th>#</th><th>Product</th><th>Type / Set</th>
@@ -17029,17 +17828,29 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                   </tr></thead>
                   <tbody>
                     ${compareCards.map((c, i) => {
-                      const data = clipped[i] && clipped[i].data ? clipped[i].data.filter(p => Number.isFinite(p.y)) : [];
+                      // Always the dollar series — the table stays in prices
+                      // even when the chart above is indexed to 100.
+                      const data = priceClipped[i] && priceClipped[i].data ? priceClipped[i].data.filter(p => Number.isFinite(p.y)) : [];
                       const start = data.length ? data[0].y : null;
                       const end   = data.length ? data[data.length-1].y : null;
                       const pct   = (data.length && start) ? ((end-start)/start*100) : null;
+                      const st = compareSeriesStyle(i, paletteColors);
                       return html`<tr key=${c.card_id}>
-                        <td><span class="legend-swatch" style=${{background: COMPARE_COLORS[i % COMPARE_COLORS.length], display:"inline-block", width:14, height:5, borderRadius:2}}/></td>
+                        <td><span class="legend-swatch" style=${{background: st.color, display:"inline-block", width:14, height:5, borderRadius:2,
+                          backgroundImage: st.dash ? "repeating-linear-gradient(90deg,"+st.color+" 0 4px,transparent 4px 7px)" : "none"}}/></td>
                         <td>${i+1}</td>
-                        <td><strong>${c.name}</strong>${c.kind === "sealed" && html` <span class="compare-kind-tag">sealed</span>`}</td>
+                        ${/* No "index" tag on an index — the name already ends
+                              in it, and "Whole market index index" is what that
+                              produced. Only the custom ones need marking. */ null}
+                        <td><strong>${c.name}</strong>${c.kind === "sealed" ? html` <span class="compare-kind-tag">sealed</span>`
+                          : c.watchlistId ? html` <span class="compare-kind-tag">custom</span>` : null}</td>
                         <td class="muted">${c.sub || ""}</td>
-                        <td class="num">${start==null?"—":"$"+start.toFixed(2)}</td>
-                        <td class="num">${end==null?"—":"$"+end.toFixed(2)}</td>
+                        ${/* An index has no dollar value — it is points from a
+                              base of 100. Printing "$100.00" would invite the
+                              reader to compare it against a card's price, which
+                              is a category error. */ null}
+                        <td class="num">${start==null?"—":(c.kind==="index"?start.toFixed(1):"$"+start.toFixed(2))}</td>
+                        <td class="num">${end==null?"—":(c.kind==="index"?end.toFixed(1):"$"+end.toFixed(2))}</td>
                         <td class=${"num "+(pct==null?"":(pct>=0?"up":"down"))}>${pct==null?"—":(pct>=0?"+":"")+pct.toFixed(1)+"%"}</td>
                       </tr>`;
                     })}
@@ -25363,7 +26174,371 @@ function soldFilterLabel(f){
   return "";
 }
 
-function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView}){
+// ── Screener share-state codec ──────────────────────────────────────────
+// The Screener's entire query — preset, window, every chip, both sort keys —
+// lived only in component state and (for signed-in users) the screener_views
+// table. So a screen could be SAVED but never SENT: the URL said /screener and
+// nothing else. This encodes the same payload `saveCurrentView` already builds
+// into one `?v=` param, which makes the analysis the shareable artefact rather
+// than a screenshot of it.
+//
+// Only fields that differ from the default table are written, so an ordinary
+// two-chip screen is a short URL and a bare /screener carries no param at all.
+// Round-tripped by scripts/test_screener_url.mjs, including adversarial search
+// text — the search box accepts every character, delimiters included.
+//
+// Tuple: [payloadKey, urlKey, kind, default]
+//   str   plain string        bool  "1"/"0"
+//   arr   comma-joined Set    tri   null | true | false  ("" / "1" / "0")
+//   nstr  string or null      sold  the soldFilter object
+const SCREENER_STATE_FIELDS = [
+  ["preset","p","str","all"],
+  ["moverWin","w","str","pct_1d"],
+  ["priceMode","pm","str","low"],
+  ["search","q","str",""],
+  ["collFilter","cf","str","all"],
+  ["pctWin","pw","str","pct_30d"],
+  ["density","dn","str","comfy"],
+  // "5", not "", because that is what the component initialises to — the raw
+  // mode's default price floor. With "" here, a completely untouched Screener
+  // encoded ?v=p0:5 on every visit, so every plain page load looked like a
+  // filtered one and the address bar was never clean.
+  ["minPrice","p0","str","5"],
+  ["maxPrice","p1","str",""],
+  ["minPct","c0","str",""],
+  ["maxPct","c1","str",""],
+  ["filterLegality","lg","str",""],
+  ["sortKey","sk","str","abs_pct_1d"],
+  ["sortKey2","sk2","nstr",null],
+  ["sortDesc","sd","bool",true],
+  ["sortDesc2","sd2","bool",true],
+  ["showAllWins","aw","bool",false],
+  ["showGraded","gr","bool",false],
+  ["showSealed","sl","bool",false],
+  ["showFoil","fo","bool",true],
+  ["showNonFoil","nf","bool",true],
+  ["filterDualInk","di","bool",false],
+  ["filterInkable","ik","tri",null],
+  ["filterSet","set","arr",[]],
+  ["filterRarities","rar","arr",[]],
+  ["filterInks","ink","arr",[]],
+  ["sigFilter","sig","arr",[]],
+  ["filterCosts","cost","arr",[]],
+  ["filterCardTypes","typ","arr",[]],
+  ["filterStrengths","str","arr",[]],
+  ["filterWillpowers","wil","arr",[]],
+  ["filterLores","lor","arr",[]],
+  ["filterKeywords","kw","arr",[]],
+  ["filterClassifications","cls","arr",[]],
+  ["filterIllustrators","art","arr",[]],
+  ["filterSealedTypes","sty","arr",[]],
+  ["filterGraders","gdr","arr",[]],
+  ["filterGrades","gde","arr",[]],
+  ["soldFilter","sf","sold",null],
+];
+// Escape ONLY this codec's own delimiters (and the escape character itself).
+// searchParams handles the rest of URL encoding; double-encoding here would
+// make a shared link's `%20` come back as a literal "%20".
+const _scEsc = (s) => String(s).replace(/[;:,~]/g, ch => "~" + ch.charCodeAt(0).toString(16).padStart(2,"0"));
+const _scUnesc = (s) => String(s).replace(/~([0-9a-f]{2})/gi, (_, h) => String.fromCharCode(parseInt(h, 16)));
+const _scArr = (v) => Array.isArray(v) ? v : (v instanceof Set ? Array.from(v) : []);
+const _scSameArr = (a, b) => { const x = _scArr(a), y = _scArr(b); return x.length === y.length && x.every((v,i) => v === y[i]); };
+
+function encodeScreenerState(payload){
+  if(!payload) return "";
+  const out = [];
+  for(const [key, urlKey, kind, dflt] of SCREENER_STATE_FIELDS){
+    const v = payload[key];
+    if(v === undefined) continue;
+    if(kind === "arr"){
+      const arr = _scArr(v);
+      if(!arr.length || _scSameArr(arr, dflt)) continue;
+      out.push(urlKey + ":" + arr.map(_scEsc).join(","));
+    } else if(kind === "bool"){
+      if(!!v === dflt) continue;
+      out.push(urlKey + ":" + (v ? "1" : "0"));
+    } else if(kind === "tri"){
+      if(v === dflt || v == null) continue;
+      out.push(urlKey + ":" + (v ? "1" : "0"));
+    } else if(kind === "nstr"){
+      if(v == null || v === dflt) continue;
+      out.push(urlKey + ":" + _scEsc(v));
+    } else if(kind === "sold"){
+      if(!v || !v.mode || v.mode === "any") continue;
+      out.push(urlKey + ":" + [v.mode, v.days ?? "", v.from ?? "", v.to ?? ""].map(_scEsc).join(","));
+    } else {
+      if(v == null || String(v) === String(dflt)) continue;
+      out.push(urlKey + ":" + _scEsc(String(v)));
+    }
+  }
+  return out.join(";");
+}
+
+// Always returns a COMPLETE payload (defaults + whatever the string carried),
+// so applying a link can't leave a filter behind from the previous screen.
+function decodeScreenerState(str){
+  const byUrlKey = new Map(SCREENER_STATE_FIELDS.map(f => [f[1], f]));
+  const out = {};
+  for(const [key, , kind, dflt] of SCREENER_STATE_FIELDS){
+    out[key] = kind === "arr" ? [] : kind === "sold" ? {...SOLD_FILTER_OFF} : dflt;
+  }
+  if(!str) return out;
+  for(const chunk of String(str).split(";")){
+    if(!chunk) continue;
+    const i = chunk.indexOf(":");
+    if(i < 0) continue;
+    const f = byUrlKey.get(chunk.slice(0, i));
+    if(!f) continue;                       // unknown key from a newer build — ignore, don't throw
+    const [key, , kind] = f;
+    const rawVal = chunk.slice(i + 1);
+    if(kind === "arr")        out[key] = rawVal === "" ? [] : rawVal.split(",").map(_scUnesc);
+    else if(kind === "bool")  out[key] = rawVal === "1";
+    else if(kind === "tri")   out[key] = rawVal === "1" ? true : rawVal === "0" ? false : null;
+    else if(kind === "nstr")  out[key] = _scUnesc(rawVal) || null;
+    else if(kind === "sold"){
+      const [mode, days, from, to] = rawVal.split(",").map(_scUnesc);
+      out[key] = {...SOLD_FILTER_OFF, mode: mode || "any", days: days || SOLD_FILTER_OFF.days, from: from || "", to: to || ""};
+    }
+    else out[key] = _scUnesc(rawVal);
+  }
+  return out;
+}
+
+// ── Price Graphing compare-list codec ───────────────────────────────────
+// Identity only — names, subtitles and art are rebuilt from the catalog on
+// arrival, so an 18-card comparison is a short link instead of a blob.
+// `~` separates fields inside an item, `,` separates items; both are legal
+// unescaped in a query string.
+const CMP_PRINTING_TO = {"Normal":"N","Foil":"F","Cold Foil":"C","Holofoil":"H","Non-Foil":"X"};
+const CMP_PRINTING_FROM = {N:"Normal", F:"Foil", C:"Cold Foil", H:"Holofoil", X:"Non-Foil"};
+// An unrecognised printing (a new TCGCSV subTypeName) round-trips verbatim
+// behind a `_` rather than collapsing to Normal and silently graphing the
+// wrong SKU.
+const encodeCmpPrinting = (p) => !p ? "-" : (CMP_PRINTING_TO[p] || "_" + encodeURIComponent(p));
+const decodeCmpPrinting = (c) => !c || c === "-" ? null
+  : c[0] === "_" ? decodeURIComponent(c.slice(1)) : (CMP_PRINTING_FROM[c] || null);
+
+function encodeCompareItems(items){
+  if(!items || !items.length) return "";
+  const out = [];
+  for(const c of items){
+    if(c.kind === "card" && c.productId != null)        out.push("c~" + c.productId + "~" + encodeCmpPrinting(c.printing));
+    else if(c.kind === "sealed" && c.productId != null) out.push("s~" + c.productId);
+    else if(c.kind === "set" && c.setId)                out.push("t~" + c.setId);
+    else if(c.kind === "graded" && c.gradedCardId)      out.push("g~" + c.gradedCardId + "~" + c.grader + "~" + c.grade + "~" + encodeCmpPrinting(c.gradedPrinting));
+    // A market index travels as (scope, key). A CUSTOM one travels as its
+    // watchlist id, which only resolves for its owner — a shared link drops it
+    // rather than exposing someone's basket, and the receiving client just
+    // graphs the rest. Encoding the members instead would make it portable but
+    // would freeze a snapshot of a list whose whole point is that it changes.
+    else if(c.kind === "index" && c.watchlistId)        out.push("w~" + c.watchlistId);
+    else if(c.kind === "index" && c.indexScope)         out.push("i~" + c.indexScope + "~" + encodeURIComponent(c.indexKey || ""));
+  }
+  return out.join(",");
+}
+
+// Parses to identity descriptors. Turning those back into full compare items
+// needs the catalog, so that half lives in the component.
+function decodeCompareItems(str){
+  if(!str) return [];
+  const out = [];
+  for(const chunk of String(str).split(",")){
+    const parts = chunk.split("~");
+    const kind = parts[0];
+    if(kind === "c" && parts.length >= 3){
+      const pid = parseInt(parts[1], 10);
+      if(Number.isFinite(pid)) out.push({kind:"card", productId: pid, printing: decodeCmpPrinting(parts[2]) || "Normal"});
+    } else if(kind === "s" && parts.length >= 2){
+      const pid = parseInt(parts[1], 10);
+      if(Number.isFinite(pid)) out.push({kind:"sealed", productId: pid});
+    } else if(kind === "t" && parts.length >= 2 && parts[1]){
+      out.push({kind:"set", setId: parts[1]});
+    } else if(kind === "g" && parts.length >= 5 && parts[1]){
+      out.push({kind:"graded", gradedCardId: parts[1], grader: parts[2], grade: parts[3], gradedPrinting: decodeCmpPrinting(parts[4])});
+    } else if(kind === "i" && parts.length >= 2 && parts[1]){
+      out.push({kind:"index", indexScope: parts[1], indexKey: decodeURIComponent(parts[2] || "")});
+    } else if(kind === "w" && parts.length >= 2 && parts[1]){
+      out.push({kind:"index", watchlistId: parts[1]});
+    }
+    if(out.length >= COMPARE_MAX) break;
+  }
+  return out;
+}
+
+// ── Alerts inbox + rule editor ──────────────────────────────────────────
+// One modal, two tabs. They belong together: an alert you can't find the rule
+// for is unactionable, and a rule you can't see the history of is unverifiable.
+const ALERT_WINDOW_LABELS = {pct_1d:"1D", pct_7d:"1W", pct_30d:"1M", pct_90d:"3M", pct_180d:"6M", pct_365d:"1Y"};
+// Plain-English rule summary. The stored shape is four columns; nobody should
+// have to reassemble them in their head to know what a rule does.
+function describeAlert(a, watchlists, cardName){
+  if(!a) return "";
+  const subject = a.watchlist_id
+    ? ((watchlists || []).find(w => w.id === a.watchlist_id) || {}).name || "a deleted list"
+    : (cardName || a.card_id || "a card");
+  const basis = a.basis === "low" ? "Low" : "NM Market";
+  const win = ALERT_WINDOW_LABELS[a.window_key] || a.window_key;
+  const money = (n) => "$" + Number(n).toLocaleString(undefined, {maximumFractionDigits:2});
+  if(a.kind === "above")    return `${subject} — ${basis} at or above ${money(a.threshold)}`;
+  if(a.kind === "below")    return `${subject} — ${basis} at or below ${money(a.threshold)}`;
+  if(a.kind === "pct_up")   return `${subject} — ${basis} up ${Math.abs(a.threshold)}% or more over ${win}`;
+  if(a.kind === "pct_down") return `${subject} — ${basis} down ${Math.abs(a.threshold)}% or more over ${win}`;
+  return subject;
+}
+
+const AlertsModal = ({alerts, alertEvents, alertOps, watchlists, cardNameFor, unavailable, onClose, onOpenCard}) => {
+  const [tab, setTab] = useState(() => (alertEvents || []).some(e => !e.read_at) ? "inbox" : "rules");
+  const [draft, setDraft] = useState(() => ({
+    watchlist_id: (watchlists || [])[0]?.id || null,
+    card_id: null, printing: "Normal",
+    basis: "market", kind: "pct_up", threshold: "15", window_key: "pct_7d", cooldown_days: 7,
+  }));
+  useEffect(() => {
+    const onKey = (e) => { if(e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  const unread = (alertEvents || []).filter(e => !e.read_at);
+  const alertById = useMemo(() => new Map((alerts || []).map(a => [a.id, a])), [alerts]);
+  const isPct = draft.kind === "pct_up" || draft.kind === "pct_down";
+  const canSave = (watchlists || []).length > 0 && draft.watchlist_id
+    && Number.isFinite(Number(draft.threshold)) && Number(draft.threshold) !== 0;
+
+  return html`<div class="card-detail-overlay" onClick=${onClose}>
+    <div class="alerts-modal" onClick=${e=>e.stopPropagation()}>
+      <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+      <h3 class="title-font" style=${{margin:"0 0 10px",fontSize:18}}>Price alerts</h3>
+      ${unavailable
+        ? html`<p class="muted" style=${{fontSize:13}}>
+            Alerts aren't switched on for this site yet — ask an admin to run
+            <code>supabase/129_price_alerts.sql</code>.
+          </p>`
+        : html`<${React.Fragment}>
+        <div class="seg-toggle" style=${{marginBottom:12}}>
+          <button class=${tab==="inbox"?"active":""} onClick=${()=>setTab("inbox")}>
+            Inbox${unread.length ? ` (${unread.length})` : ""}
+          </button>
+          <button class=${tab==="rules"?"active":""} onClick=${()=>setTab("rules")}>
+            Rules${(alerts||[]).length ? ` (${alerts.length})` : ""}
+          </button>
+        </div>
+
+        ${tab === "inbox" && html`<div class="alerts-inbox">
+          ${unread.length > 0 && html`<button class="price-db-advbtn" style=${{marginBottom:8}}
+            onClick=${()=>alertOps.markRead(unread.map(e=>e.id))}>Mark all read</button>`}
+          ${!(alertEvents || []).length
+            ? html`<p class="muted" style=${{fontSize:13}}>
+                Nothing yet. Alerts are checked once per visit against the day's prices —
+                if a rule trips while you're away, it'll be here when you come back.
+              </p>`
+            : alertEvents.map(e => {
+                const a = alertById.get(e.alert_id);
+                return html`<div key=${e.id} class=${"alert-event"+(e.read_at?"":" unread")}>
+                  <div class="alert-event-main">
+                    <button class="alert-event-name" onClick=${()=>onOpenCard && onOpenCard(e.card_id)}
+                      title="Open this card">${cardNameFor(e.card_id) || e.card_id}</button>
+                    <span class="alert-event-rule">${a ? describeAlert(a, watchlists, cardNameFor(a.card_id)) : "rule deleted"}</span>
+                  </div>
+                  <div class="alert-event-meta">
+                    ${e.observed != null && html`<b>${a && (a.kind==="above"||a.kind==="below")
+                      ? "$" + Number(e.observed).toFixed(2)
+                      : (Number(e.observed) > 0 ? "+" : "") + Number(e.observed).toFixed(1) + "%"}</b>`}
+                    <span class="muted">${e.price_date}</span>
+                    ${!e.read_at && html`<button class="alert-event-read"
+                      onClick=${()=>alertOps.markRead([e.id])} title="Mark read">✓</button>`}
+                  </div>
+                </div>`;
+              })}
+        </div>`}
+
+        ${tab === "rules" && html`<div class="alerts-rules">
+          ${!(watchlists || []).length
+            ? html`<p class="muted" style=${{fontSize:13}}>
+                Alerts watch a watchlist, so make a list first — star a few rows on the
+                Screener and they'll appear here.
+              </p>`
+            : html`<div class="alert-new">
+                <div class="alert-new-row">
+                  <label>Watch</label>
+                  <select value=${draft.watchlist_id || ""} onChange=${e=>setDraft(d=>({...d, watchlist_id: e.target.value}))}>
+                    ${watchlists.map(w => html`<option key=${w.id} value=${w.id}>${w.name} (${w.items.length})</option>`)}
+                  </select>
+                </div>
+                <div class="alert-new-row">
+                  <label>When</label>
+                  <select value=${draft.kind} onChange=${e=>setDraft(d=>({...d, kind: e.target.value}))}>
+                    ${ALERT_KINDS.map(([k,l]) => html`<option key=${k} value=${k}>${l}</option>`)}
+                  </select>
+                  <input type="number" step="0.01" style=${{width:90}}
+                    value=${draft.threshold} onInput=${e=>setDraft(d=>({...d, threshold: e.target.value}))}/>
+                  <span class="muted">${isPct ? "%" : "$"}</span>
+                  ${isPct && html`<select value=${draft.window_key} onChange=${e=>setDraft(d=>({...d, window_key: e.target.value}))}>
+                    ${Object.entries(ALERT_WINDOW_LABELS).map(([k,l]) => html`<option key=${k} value=${k}>over ${l}</option>`)}
+                  </select>`}
+                </div>
+                <div class="alert-new-row">
+                  <label>Using</label>
+                  <select value=${draft.basis} onChange=${e=>setDraft(d=>({...d, basis: e.target.value}))}>
+                    <option value="market">NM Market</option>
+                    <option value="low">Low</option>
+                  </select>
+                  <label style=${{marginLeft:10}}>Then wait</label>
+                  <select value=${String(draft.cooldown_days)} onChange=${e=>setDraft(d=>({...d, cooldown_days: +e.target.value}))}
+                    title="How long to stay quiet after firing. Without this, a card parked above its threshold alerts every single day.">
+                    <option value="0">no delay</option>
+                    <option value="1">1 day</option>
+                    <option value="7">7 days</option>
+                    <option value="30">30 days</option>
+                  </select>
+                </div>
+                <div class="alert-new-row">
+                  <button class="price-db-advbtn" disabled=${!canSave}
+                    onClick=${async ()=>{
+                      await alertOps.create({
+                        watchlist_id: draft.watchlist_id, card_id: null, printing: "Normal",
+                        basis: draft.basis, kind: draft.kind,
+                        threshold: Number(draft.threshold),
+                        window_key: draft.window_key, cooldown_days: draft.cooldown_days,
+                      });
+                      setTab("rules");
+                    }}>+ Add alert</button>
+                  <span class="muted" style=${{fontSize:11}}>
+                    Checked once per visit, against the day's prices.
+                  </span>
+                </div>
+              </div>`}
+          ${(alerts || []).map(a => html`<div key=${a.id} class=${"alert-rule"+(a.enabled?"":" off")}>
+            <span class="alert-rule-text">${describeAlert(a, watchlists, cardNameFor(a.card_id))}</span>
+            <span class="alert-rule-actions">
+              <button class="price-db-advbtn" title=${a.enabled ? "Pause this alert" : "Resume this alert"}
+                onClick=${()=>alertOps.update(a.id, {enabled: !a.enabled})}>${a.enabled ? "Pause" : "Resume"}</button>
+              <button class="price-db-advbtn" title="Delete this alert and its history"
+                onClick=${()=>alertOps.remove(a.id)}>Delete</button>
+            </span>
+          </div>`)}
+        </div>`}
+      <//>`}
+      <p class="muted alerts-foot">
+        Alerts are evaluated in your browser when you open the site — Packs.Ink can't
+        notify you while it's closed.
+      </p>
+    </div>
+  </div>`;
+};
+
+function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn, onCompareCards, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, incomingScreenerView, onConsumedIncomingScreenerView, watchlists, watchlistOps, watchlistsUnavailable, onOpenAlerts}){
+  // Decoded ONCE, before any state initialiser, and read by several of them.
+  //
+  // ⚠ showGraded / showSealed must come from here at INIT, not from an effect
+  // that calls applyView after mount. The mode-flip effect below keys on
+  // prevShowGraded and, when it sees a change, deliberately resets rarity, the
+  // price floor and the graded-only chips to that mode's defaults. Flipping the
+  // mode after mount would fire it and wipe exactly the filters the link was
+  // carrying. Initialising instead means prev === current and it never runs.
+  const urlScreenerState = useMemo(() => {
+    const v = readUrlParam("v");
+    return v ? decodeScreenerState(v) : null;
+  }, []);
   const [state, setState] = useState({rows: null, loading: true, error: null});
   // Default sort: biggest 1D movers in either direction. Special "abs_pct_1d"
   // key maps to Math.abs(r.pct_1d) so the first thing you see is whatever
@@ -25438,6 +26613,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     // ?m= wins over the saved mode so /screener?m=graded is a sendable link.
     const m = readUrlEnum("m", SCREENER_MODES);
     if(m) return m === "graded";
+    if(urlScreenerState) return !!urlScreenerState.showGraded;
     try { return localStorage.getItem("packsink:screener:showGraded") === "1"; } catch { return false; }
   });
   useEffect(()=>{ try { localStorage.setItem("packsink:screener:showGraded", showGraded ? "1" : "0"); } catch{} }, [showGraded]);
@@ -25468,6 +26644,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [showSealed, setShowSealed] = useState(() => {
     const m = readUrlEnum("m", SCREENER_MODES);
     if(m) return m === "sealed";
+    if(urlScreenerState) return !!urlScreenerState.showSealed;
     try { return localStorage.getItem("packsink:screener:showSealed") === "1"; } catch { return false; }
   });
   // Mirror the mode into ?m= so Raw / Graded / Sealed are three linkable
@@ -25700,28 +26877,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     })();
     return () => { cancelled = true; };
   }, [user]);
+
   const saveCurrentView = async () => {
     const name = prompt("Name this view (e.g. 'My buyout watchlist', 'Sub-$20 trending'):");
     const clean = (name || "").trim();
     if(!clean) return;
-    const payload = {
-      preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
-      filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
-      collFilter, sigFilter: Array.from(sigFilter),
-      minPrice, maxPrice, minPct, maxPct, pctWin,
-      showAllWins, density, showGraded,
-      sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
-      showFoil, showNonFoil,
-      filterCosts: Array.from(filterCosts),
-      filterCardTypes: Array.from(filterCardTypes),
-      filterStrengths: Array.from(filterStrengths),
-      filterWillpowers: Array.from(filterWillpowers),
-      filterLores: Array.from(filterLores),
-      filterInkable, filterLegality, filterDualInk,
-      filterKeywords: Array.from(filterKeywords),
-      filterClassifications: Array.from(filterClassifications),
-      filterIllustrators: Array.from(filterIllustrators),
-    };
+    const payload = screenerPayload;
     setSavedViews(prev => [...prev.filter(v => v.name !== clean), {name: clean, ...payload}]);
     if(user){
       const {error} = await sbClient.from("screener_views")
@@ -25767,6 +26928,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     setFilterKeywords(new Set(v.filterKeywords || []));
     setFilterClassifications(new Set(v.filterClassifications || []));
     setFilterIllustrators(new Set(v.filterIllustrators || []));
+    // Mode + its mode-specific chips. A saved view or a shared link that lands
+    // you in Sealed or Graded has to bring that mode's filters with it, or the
+    // restored screen is the right rows under the wrong narrowing.
+    if(v.showSealed !== undefined) setShowSealed(!!v.showSealed);
+    setFilterSealedTypes(new Set(v.filterSealedTypes || []));
+    setFilterGraders(new Set(v.filterGraders || []));
+    setFilterGrades(new Set(v.filterGrades || []));
   };
   // Consume the App-pushed view payload from a banner-title click on Home.
   // Apply once, then notify parent so we don't re-fire on prop re-renders.
@@ -25776,6 +26944,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     onConsumedIncomingScreenerView && onConsumedIncomingScreenerView();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [incomingScreenerView]);
+  // Apply a ?v= link once on mount. showGraded / showSealed already came from
+  // it at init (see urlScreenerState), so applyView's mode setters are no-ops
+  // here and the mode-flip reset stays asleep. A banner handoff wins — the user
+  // clicked that after the page was already open.
+  const urlStateApplied = useRef(false);
+  useEffect(() => {
+    if(urlStateApplied.current || !urlScreenerState || incomingScreenerView) return;
+    urlStateApplied.current = true;
+    applyView(urlScreenerState);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const deleteView = async (name) => {
     setSavedViews(prev => prev.filter(v => v.name !== name));
     if(user){
@@ -25868,6 +27047,63 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   const [filterKeywords, setFilterKeywords] = useState(() => new Set());
   const [filterClassifications, setFilterClassifications] = useState(() => new Set());
   const [filterIllustrators, setFilterIllustrators] = useState(() => new Set());
+
+  // The single description of "what the Screener is currently showing". Three
+  // consumers read it: Save view (localStorage + screener_views), the ?v= URL
+  // writer, and Copy link. Built once so they cannot drift — before this, the
+  // save payload was an inline object literal and adding a filter meant
+  // remembering to extend it.
+  //
+  // ⚠ Must sit BELOW every filter useState it reads. A useMemo callback runs at
+  // its own declaration point, so placing this next to saveCurrentView (which
+  // is where it reads most naturally) threw "Cannot access 'minPrice' before
+  // initialization" and took the whole Screener to the error boundary.
+  // saveCurrentView keeps its position and closes over this: it only runs from
+  // a click, by which time the const is long since initialised.
+  const screenerPayload = useMemo(() => ({
+    preset, moverWin, priceMode, filterSet: Array.from(filterSet), search,
+    filterRarities: Array.from(filterRarities), filterInks: Array.from(filterInks),
+    collFilter, sigFilter: Array.from(sigFilter),
+    minPrice, maxPrice, minPct, maxPct, pctWin,
+    showAllWins, density, showGraded, showSealed,
+    sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
+    showFoil, showNonFoil,
+    filterCosts: Array.from(filterCosts),
+    filterCardTypes: Array.from(filterCardTypes),
+    filterStrengths: Array.from(filterStrengths),
+    filterWillpowers: Array.from(filterWillpowers),
+    filterLores: Array.from(filterLores),
+    filterInkable, filterLegality, filterDualInk,
+    filterKeywords: Array.from(filterKeywords),
+    filterClassifications: Array.from(filterClassifications),
+    filterIllustrators: Array.from(filterIllustrators),
+    filterSealedTypes: Array.from(filterSealedTypes),
+    filterGraders: Array.from(filterGraders),
+    filterGrades: Array.from(filterGrades),
+  }), [preset, moverWin, priceMode, filterSet, search, filterRarities, filterInks,
+    collFilter, sigFilter, minPrice, maxPrice, minPct, maxPct, pctWin, showAllWins,
+    density, showGraded, showSealed, sortKey, sortDesc, sortKey2, sortDesc2, soldFilter,
+    showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers,
+    filterLores, filterInkable, filterLegality, filterDualInk, filterKeywords,
+    filterClassifications, filterIllustrators, filterSealedTypes, filterGraders, filterGrades]);
+
+  // Mirror the whole screen into ?v=. replaceState, never push — a filter is
+  // not a page, and pushing would make Back walk backwards through every chip
+  // the user toggled instead of leaving the Screener. Debounced because the
+  // search box writes on every keystroke.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      try {
+        const url = new URL(window.location.href);
+        if((url.pathname.replace(/\/$/, "") || "/") !== "/screener") return;
+        const enc = encodeScreenerState(screenerPayload);
+        if((url.searchParams.get("v") || "") === enc) return;
+        if(enc) url.searchParams.set("v", enc); else url.searchParams.delete("v");
+        window.history.replaceState(window.history.state, "", url.toString());
+      } catch {/* no-op */}
+    }, 400);
+    return () => clearTimeout(t);
+  }, [screenerPayload]);
 
   useEffect(() => {
     let cancelled = false;
@@ -26114,6 +27350,112 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return out;
   }, [rawEnrichedRows]);
 
+  // ── Market benchmark (migration 128) ────────────────────────────────────
+  // Fetched once. null = the matviews aren't deployed here, which hides the
+  // "vs Mkt" column entirely rather than rendering a column of dashes.
+  const [mktIndex, setMktIndex] = useState(undefined);   // undefined = loading
+  useEffect(() => {
+    let cancelled = false;
+    fetchMarketIndexLatest().then(rows => { if(!cancelled) setMktIndex(rows); });
+    return () => { cancelled = true; };
+  }, []);
+  const mktIndexByScope = useMemo(() => {
+    const m = new Map();
+    // Array.isArray, not a truthiness check: this memo is downstream of a
+    // cache, and a cache is exactly where a non-array can arrive.
+    if(Array.isArray(mktIndex)) for(const r of mktIndex) m.set(r.scope + "|" + (r.scope_key || ""), r);
+    return m;
+  }, [mktIndex]);
+  const benchmarkReady = Array.isArray(mktIndex) && mktIndex.length > 0;
+  // What the "vs Mkt" column measures against. The narrow bases are the point:
+  // "is this Enchanted beating the whole market" is a much weaker question than
+  // "is it beating the other Enchanteds from its own set", and only the second
+  // one separates a card that is moving from a tier that is moving.
+  const VS_MKT_BASES = [
+    ["all",       "Whole market", "Every priced single."],
+    ["set",       "Its set",      "Other cards from the same set."],
+    ["rarity",    "Its rarity",   "Every card of the same rarity, across all sets."],
+    ["setrarity", "Its set + rarity", "Its closest peer group — same set AND same rarity. The sharpest read, and the one most likely to be missing for a very small tier."],
+  ];
+  const [vsMktBasis, setVsMktBasis] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:vsMktBasis") || "all"; } catch { return "all"; }
+  });
+  useEffect(()=>{ try { localStorage.setItem("packsink:screener:vsMktBasis", vsMktBasis); } catch{} }, [vsMktBasis]);
+  // Relative performance: the card's Δ% minus its benchmark's over the same
+  // window, in percentage POINTS. Positive = outpacing its comparison group.
+  const vsMarket = (r, winKey) => {
+    if(!benchmarkReady) return null;
+    // Resolved per row for the narrow bases, so each card is measured against
+    // its own peers rather than one global series.
+    const scopeKey =
+      vsMktBasis === "set"       ? "set|" + (r.set_id || "")
+      : vsMktBasis === "rarity"  ? "rarity|" + (r.rarity || "")
+      : vsMktBasis === "setrarity" ? "setrarity|" + (r.set_id || "") + "|" + (r.rarity || "")
+      : "all|";
+    const idx = mktIndexByScope.get(scopeKey);
+    // No fallback to the market index on a miss. A tier too small to have an
+    // index would otherwise show a number silently computed against a
+    // completely different universe, which is worse than a dash.
+    if(!idx) return null;
+    const cardPct = r[winKey];
+    const mktPct = idx[winKey.replace(/^mkt_pct_/, "pct_")];
+    if(cardPct == null || mktPct == null) return null;
+    return cardPct - mktPct;
+  };
+
+  // ── Watchlist membership ────────────────────────────────────────────────
+  // Declared ABOVE `filtered` on purpose: the "on my watchlist" chip is one
+  // more predicate inside that memo, and a useMemo callback runs at its own
+  // declaration point — so anything it reads has to already exist. Putting
+  // these below would hit the TDZ on first render.
+  //
+  // Which list the star writes to. Null = "no list picked yet", which the star
+  // resolves by creating a default one on first use rather than making the
+  // user set up a list before they can save their first card.
+  const [activeWatchlist, setActiveWatchlist] = useState(() => {
+    try { return localStorage.getItem("packsink:screener:activeWatchlist") || null; } catch { return null; }
+  });
+  useEffect(() => {
+    try {
+      if(activeWatchlist) localStorage.setItem("packsink:screener:activeWatchlist", activeWatchlist);
+      else localStorage.removeItem("packsink:screener:activeWatchlist");
+    } catch {}
+  }, [activeWatchlist]);
+  // A remembered list id can outlive the list (deleted on another device).
+  // Fall back to the first one rather than leaving the star pointed at nothing.
+  useEffect(() => {
+    if(!watchlists || !watchlists.length) return;
+    if(activeWatchlist && watchlists.some(w => w.id === activeWatchlist)) return;
+    setActiveWatchlist(watchlists[0].id);
+  }, [watchlists, activeWatchlist]);
+  const activeList = useMemo(
+    () => (watchlists || []).find(w => w.id === activeWatchlist) || null,
+    [watchlists, activeWatchlist]);
+  // Membership keys for the ACTIVE list, so a row's star is O(1). Sealed rows
+  // have no card_id, so they key on their synthetic "sealed::<pid>" card_id —
+  // the same string the row already carries, which keeps one lookup for both.
+  const watchedKeys = useMemo(() => {
+    const s = new Set();
+    for(const it of (activeList ? activeList.items : [])){
+      s.add((it.card_id || ("sealed::" + it.productId)) + "|" + (it.printing || "Normal"));
+    }
+    return s;
+  }, [activeList]);
+  // Membership across ALL lists — drives the star's "on another list" state, so
+  // starring a card you already track elsewhere doesn't look like a no-op.
+  const watchedAnywhere = useMemo(() => {
+    const s = new Set();
+    for(const w of (watchlists || [])) for(const it of w.items){
+      s.add((it.card_id || ("sealed::" + it.productId)) + "|" + (it.printing || "Normal"));
+    }
+    return s;
+  }, [watchlists]);
+  // Narrow the table to the active list. Composes with every other filter
+  // rather than replacing them, so "what on my watchlist dropped this week"
+  // is one chip plus the Losers preset.
+  const [watchOnly, setWatchOnly] = useState(false);
+  useEffect(() => { if(!activeList) setWatchOnly(false); }, [activeList]);
+
   const filtered = useMemo(() => {
     let rows = rawEnrichedRows;
     if(!rows) return [];
@@ -26127,6 +27469,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       const setNames = filterSet;   // Set of selected set names (empty = all)
       const out = [];
       for(const r of sealedSynth){
+        // Watchlist narrowing applies in every mode — a list can mix cards and
+        // sealed, and "what on my list moved" shouldn't depend on which tab
+        // you happen to be on.
+        if(watchOnly && !watchedKeys.has(r.card_id + "|" + (r.printing || "Normal"))) continue;
         // Name search — sealed names are short ("First Chapter Booster Box")
         // so a substring match is enough; no need to route through
         // matchesCardFilter (which expects card-specific dimensions).
@@ -26284,6 +27630,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return true;
     };
     const passes = (r) => {
+      if(watchOnly && !watchedKeys.has(r.card_id + "|" + (r.printing || "Normal"))) return false;
       if(!passesFoilFilter(r)) return false;
       const catalogRow = catalogByCardId.get(r.card_id);
       if(catalogRow){
@@ -26457,7 +27804,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return 0;
     });
     return out;
-  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes]);
+  }, [rawEnrichedRows, search, filterSet, filterRarities, filterInks, preset, sortKey, sortDesc, sortKey2, sortDesc2, priceMode, setNameById, catalogByCardId, moverWin, minPrice, maxPrice, minPct, maxPct, pctWin, collFilter, sigFilter, collection, showGraded, premiumGraded, gradedRollup, movRowByPid, movRowByCardId, filterGraders, filterGrades, soldFilter, showFoil, showNonFoil, filterCosts, filterCardTypes, filterStrengths, filterWillpowers, filterLores, filterInkable, filterDualInk, filterLegality, filterKeywords, filterClassifications, filterIllustrators, ownedGradedKeySet, showSealed, sealedSynth, sealedCollection, filterSealedTypes,
+    watchOnly, watchedKeys]);
 
   // Plain click sets the primary sort; shift-click sets the tiebreaker applied
   // within equal primary values. A column can't be both, so promoting the
@@ -26540,6 +27888,31 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return [...ordered, ...tail];
   }, [state.rows, filterRarities]);
   const inks = useMemo(() => Array.from(new Set((state.rows || []).map((r) => r.ink).filter(Boolean))).sort(), [state.rows]);
+
+  // Every illustrator in the catalog, for the Advanced panel's Artist filter.
+  // `filterIllustrators` was already threaded through chipFilter, the saved-view
+  // payload, clearUserFilters and the "Also filtering" strip — five consumers
+  // and no writer, so the Set could never be non-empty and the Screener was one
+  // dimension short of the Cards-tab parity it claims. This memo plus the chip
+  // group below is the missing tap.
+  const screenerIllustrators = useMemo(() => {
+    const s = new Set();
+    for(const r of (raw || [])){
+      if(!Array.isArray(r.illustrators)) continue;
+      for(const n of r.illustrators) if(n) s.add(n);
+    }
+    return Array.from(s).sort((a,b) => a.localeCompare(b));
+  }, [raw]);
+  const [illQuery, setIllQuery] = useState("");
+  // Cap the rendered chips — some sets push the roster past 100 names and the
+  // panel is a filter, not a directory. A selected artist always stays visible
+  // even when the query no longer matches it, or unticking it becomes impossible.
+  const visibleIllustrators = useMemo(() => {
+    const q = illQuery.trim().toLowerCase();
+    const hits = q ? screenerIllustrators.filter(n => n.toLowerCase().includes(q)) : screenerIllustrators;
+    const picked = screenerIllustrators.filter(n => filterIllustrators.has(n) && !hits.includes(n));
+    return [...picked, ...hits].slice(0, 80);
+  }, [screenerIllustrators, illQuery, filterIllustrators]);
 
   // Clear user-added filters but keep preset-baked defaults. The "preset
   // baseline" is whatever the preset itself filters on (Buyouts logic,
@@ -26700,7 +28073,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return ()=> ro.disconnect();
   }, [filtered, density, showAllWins, moverWin, preset, priceMode,
       sortKey, sortDesc, sortKey2, sortDesc2,
-      showGraded, showSealed, gradedPremium, colPrefs]);
+      showGraded, showSealed, gradedPremium, colPrefs,
+      // The star column appears/disappears with sign-in, and the vs-Market
+      // column appears when its (async) fetch lands. Both change how many <th>s
+      // there are and therefore where every grip belongs.
+      user, watchlistsUnavailable, benchmarkReady]);
   const onGripMove = useCallback((e)=>{
     const d = dragRef.current; if(!d) return;
     // 44px floor keeps a column from collapsing into an untouchable sliver.
@@ -26710,6 +28087,81 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     dragRef.current = null;
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   }, []);
+  const rowWatchKey = (r) => r.card_id + "|" + (r.printing || "Normal");
+  const toggleWatch = async (r) => {
+    if(!user){ onSignIn && onSignIn(); return; }
+    if(watchlistsUnavailable){ flashToast("Watchlists aren't switched on for this site yet."); return; }
+    let listId = activeWatchlist;
+    if(!listId){
+      listId = await watchlistOps.create("My watchlist");
+      if(!listId) return;
+      setActiveWatchlist(listId);
+    }
+    const isSealedRow = typeof r.card_id === "string" && r.card_id.startsWith("sealed::");
+    const item = {
+      card_id: isSealedRow ? null : r.card_id,
+      printing: r.printing || "Normal",
+      productId: r.tcgplayer_product_id ?? null,
+    };
+    if(watchedKeys.has(rowWatchKey(r))) await watchlistOps.removeItem(listId, item);
+    else await watchlistOps.addItem(listId, item);
+  };
+  // Hand the whole list to Price Graphing. Cards resolve through the catalog
+  // for their display name; sealed items fall back to their pid, so a list
+  // still graphs when the sealed catalog hasn't loaded.
+  const graphWatchlist = (w) => {
+    if(!w || !w.items.length || !onCompareCards) return;
+    const items = w.items.slice(0, COMPARE_MAX).map(it => {
+      if(!it.card_id){
+        const p = (sealedPrices || []).find(x => x.tcgplayer_product_id === it.productId);
+        return {kind:"sealed", card_id: "sealed-" + it.productId, productId: it.productId,
+                printing: "Normal", name: p ? cleanSealedName(p.name) : ("Sealed #" + it.productId)};
+      }
+      const meta = catalogByCardId.get(it.card_id);
+      return {
+        kind: "card",
+        card_id: it.card_id + (it.printing && it.printing !== "Normal" ? "::" + it.printing : ""),
+        productId: it.productId ?? (meta ? meta.tcgplayer_product_id : null),
+        printing: it.printing || "Normal",
+        name: meta ? (meta["Product Name"] || it.card_id) : it.card_id,
+      };
+    }).filter(i => i.productId != null);
+    if(!items.length){ flashToast("Nothing on that list has price history yet."); return; }
+    onCompareCards(items);
+  };
+  // ── Windowed rows ───────────────────────────────────────────────────────
+  // The table used to render `filtered.slice(0, 1000)` and tell anyone past
+  // that to "tighten filters to see more" — advice that doesn't fit the actual
+  // need, which is usually to sort by a column and keep scrolling. Since
+  // migration 120 took price_movers from 622 rows to ~5,800, the default view
+  // is a live truncation. Same slab-and-sentinel shape as the Cards grid: mount
+  // 250 rows, grow through an IntersectionObserver below the table. Rows are
+  // much cheaper than card tiles (no images past the thumbnail), so the slab is
+  // bigger.
+  //
+  // root stays the viewport rather than .price-db-tablewrap. The sentinel sits
+  // INSIDE that scroller, so a viewport-rooted observer already has its rect
+  // clipped by the container and fires exactly when the sentinel is scrolled
+  // into view — correct in both layouts. Rooting on the wrap itself would break
+  // the ≤600px-tall case, where max-height is lifted and the wrap no longer
+  // scrolls: the sentinel would then be permanently "inside" the root and the
+  // observer would page in the entire result set on mount.
+  const ROWS_WINDOW = 250;
+  const [visibleRows, setVisibleRows] = useState(ROWS_WINDOW);
+  const rowSentinelRef = useRef(null);
+  // Any change to the result set starts the window over — otherwise narrowing a
+  // filter would leave you scrolled into rows that no longer exist.
+  useEffect(() => { setVisibleRows(ROWS_WINDOW); }, [filtered]);
+  useEffect(() => {
+    const el = rowSentinelRef.current;
+    if(!el) return;
+    const io = new IntersectionObserver((es) => {
+      if(es.some(e => e.isIntersecting)) setVisibleRows(c => c + ROWS_WINDOW);
+    }, {root: null, rootMargin: "600px 0px"});
+    io.observe(el);
+    return () => io.disconnect();
+  }, [filtered.length]);
+
   const [colsMenuOpen, setColsMenuOpen] = useState(false);
   const colsRef = useRef(null);
   useEffect(()=>{ if(!colsMenuOpen) return; const f=(e)=>{ if(colsRef.current && !colsRef.current.contains(e.target)) setColsMenuOpen(false); }; document.addEventListener("mousedown", f); return ()=>document.removeEventListener("mousedown", f); }, [colsMenuOpen]);
@@ -26868,6 +28320,19 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       td:(r)=>{ const k=priceMode==="market"?mk:lk; const v=priceMode==="market"?r[mk]:r[lk];
         return html`<td key=${"d_"+lk} class=${"td-num "+pctCls(v)+(isSortCol(k)?" sort-active":"")}>${fmtPct(v)}</td>`; },
     }));
+    // Relative performance vs the whole-market index over the ACTIVE mover
+    // window, so the column answers whichever timeframe the user is looking at
+    // rather than a fixed one. Default-hidden: it's a power-user column, and it
+    // is absent entirely where migration 128 hasn't run.
+    const vsMktWin = (moverWin || "pct_30d");
+    const vsMktLbl = ({"pct_1d":"1D","pct_7d":"1W","pct_30d":"1M","pct_90d":"3M","pct_180d":"6M","pct_365d":"1Y"})[vsMktWin] || "";
+    const vsBasis = VS_MKT_BASES.find(b => b[0] === vsMktBasis) || VS_MKT_BASES[0];
+    const vsMktCol = {key:"vsmkt", label:"vs Market", defaultHidden:true,
+      th:()=>html`<th key="vsmkt" class="th-num"
+        title=${`This card's ${vsMktLbl} Δ% minus ${vsBasis[1].toLowerCase()} over the same window, in percentage points. Positive means it outpaced its comparison group. ${vsBasis[2]} A dash means that group has no index — usually too few cards to make one.`}
+        >vs ${vsMktBasis === "all" ? "Mkt" : vsMktBasis === "set" ? "Set" : vsMktBasis === "rarity" ? "Rar" : "Peers"}</th>`,
+      td:(r)=>{ const v = vsMarket(r, vsMktWin);
+        return html`<td key="vsmkt" class=${"td-num "+pctCls(v)}>${v == null ? "—" : (v > 0 ? "+" : "") + v.toFixed(1) + "pp"}</td>`; }};
     const signalsCol = {key:"signals", label:"Signals",
       th:()=>html`<th key="signals">Signals</th>`,
       td:(r)=>html`<td key="signals">${priceDbSignals(r).map(([sk,icon,title])=>html`<${Tip} key=${sk} text=${title}>
@@ -26879,7 +28344,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       salesCol,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
-      ...winCols, signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
     // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is the
     // lowest active LISTING, and for high-value cards it sits frozen for weeks
     // — a parked listing, not fresh signal. Rows whose Low hasn't moved in >3
@@ -26898,7 +28363,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     return [setCol, rarityCol,
       lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
-      ...winCols, signalsCol];
+      ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
   })();
   // Full ordered column list (incl. hidden) for the popover; visible subset for the table.
   const allColsOrdered = (()=>{
@@ -26927,8 +28392,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     const mode = prev[colModeKey] || {};
     return {...prev, [colModeKey]: {...mode, widths: {...(mode.widths||{}), [key]: px}}};
   });
-  // check / img / name are fixed columns; the rest come from the registry.
-  const gripKeys = ["check", "img", "name", ...orderedCols.map(c=>c.key)];
+  // check / [watch] / img / name are fixed columns; the rest come from the
+  // registry. This list is positional — it feeds both the resize grips
+  // (indexOf → nth <th>) and the width <style> block's nth-child rules — so it
+  // MUST include the watch column on exactly the renders that draw one, or
+  // every grip past it resizes the column to its left.
+  const gripKeys = ["check", ...(user && !watchlistsUnavailable ? ["watch"] : []), "img", "name", ...orderedCols.map(c=>c.key)];
   gripKeysRef.current = gripKeys;
   const onGripDown = (e, key)=>{
     const thead = theadRef.current; if(!thead) return;
@@ -26949,6 +28418,48 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         <button class="price-db-savedclose" onClick=${()=>deleteView(v.name)}
           title="Delete this saved view" aria-label="Delete">×</button>
       </span>`)}
+    </div>`}
+    ${user && !watchlistsUnavailable && html`<div class="price-db-watchbar">
+      <span class="price-db-watchbar-lbl">★ Watchlists</span>
+      ${(watchlists || []).map(w => html`<button key=${w.id}
+        class=${"price-db-watchchip"+(w.id === activeWatchlist ? " active" : "")}
+        title=${w.id === activeWatchlist
+          ? `${w.items.length} item${w.items.length===1?"":"s"} — the star column adds to this list`
+          : "Switch the star column to this list"}
+        onClick=${()=>setActiveWatchlist(w.id)}>
+        ${w.name}<span class="price-db-watchcount">${w.items.length}</span>
+      </button>`)}
+      <button class="price-db-advbtn" title="Create a new watchlist"
+        onClick=${async ()=>{
+          const n = prompt("Name this watchlist (e.g. 'Spec targets', 'Trade binder'):");
+          if(!n || !n.trim()) return;
+          const id = await watchlistOps.create(n);
+          if(id) setActiveWatchlist(id);
+        }}>+ New</button>
+      ${activeList && html`<${React.Fragment}>
+        <button class=${"price-db-advbtn"+(watchOnly?" has-active":"")}
+          title=${watchOnly
+            ? "Showing only cards on this list. Click to show everything again."
+            : "Narrow the table to this list — composes with the preset and every other filter."}
+          onClick=${()=>setWatchOnly(v=>!v)}>
+          ${watchOnly ? "✓ On this list" : "Filter to list"}
+        </button>
+        <button class="price-db-advbtn" title=${activeList.items.length
+            ? `Graph all ${Math.min(activeList.items.length, COMPARE_MAX)} on one chart in Price Graphing`
+            : "Star some rows first"}
+          disabled=${!activeList.items.length}
+          onClick=${()=>graphWatchlist(activeList)}>
+          ${uiIcon("chart")} Graph list
+          ${activeList.items.length > COMPARE_MAX && html`<span class="muted" style=${{fontSize:10,marginLeft:3}}>(first ${COMPARE_MAX})</span>`}
+        </button>
+        <button class="price-db-advbtn" title="Rename this watchlist"
+          onClick=${()=>{ const n = prompt("Rename watchlist:", activeList.name); if(n && n.trim()) watchlistOps.rename(activeList.id, n); }}>Rename</button>
+        <button class="price-db-advbtn" title="Delete this watchlist and everything on it"
+          onClick=${()=>{ if(confirm(`Delete "${activeList.name}" and its ${activeList.items.length} item(s)? This can't be undone.`)) watchlistOps.remove(activeList.id); }}>Delete</button>
+        ${onOpenAlerts && html`<button class="price-db-advbtn"
+          title="Set a price alert on this watchlist — checked once per visit against the day's prices."
+          onClick=${onOpenAlerts}>⚑ Alerts</button>`}
+      <//>`}
     </div>`}
     <div class="price-db-modebar" role="group" aria-label="Screener mode">
       <button class=${"price-db-modebtn"+(!showGraded && !showSealed?" active":"")}
@@ -27187,6 +28698,17 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         title="Download the current filtered + sorted view as CSV">
         ⇩ CSV
       </button>
+      <button class="price-db-advbtn" onClick=${copyCurrentPageLink}
+        title="Copy a link that reopens this exact screen — preset, window, every chip and both sort keys. A saved view is yours; this is sendable.">
+        ${uiIcon("link")} Copy link
+      </button>
+      ${benchmarkReady && !showSealed && !colHidden.has("vsmkt") && html`<label class="checkbox-group price-db-vsbasis"
+        title="What the vs column measures each card against.">
+        <span class="muted">vs</span>
+        <select value=${vsMktBasis} onChange=${e=>setVsMktBasis(e.target.value)}>
+          ${VS_MKT_BASES.map(([k,l]) => html`<option key=${k} value=${k}>${l}</option>`)}
+        </select>
+      </label>`}
       ${!showGraded && html`<div class="market-sim-kind" role="group"
         title="Determines which column drives the preset logic (Buyouts, Discount, etc.) and which prices the advanced range filters apply to. Both columns are always shown in the table."
         style=${{marginLeft: "auto"}}>
@@ -27352,6 +28874,25 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             onClick=${()=>setFilterClassifications(new Set())}>Clear</button>`}
         </div>
       </div>
+      ${!showSealed && html`<div class="price-db-adv-row">
+        <label>Artist</label>
+        ${screenerIllustrators.length === 0
+          ? html`<span class="muted" style=${{fontSize:11}}>
+              Artist data isn't loaded yet — apply <code>supabase/31_card_illustrators.sql</code> and re-run the Lorcast loader.
+            </span>`
+          : html`<div style=${{flex:1,minWidth:0}}>
+              <input type="search" class="price-db-artistsearch" placeholder="Find an artist…"
+                value=${illQuery} onInput=${e=>setIllQuery(e.target.value)}/>
+              <div class="cards-chipgroup price-db-artistchips">
+                ${visibleIllustrators.map(n => html`<button key=${n}
+                  class=${"chip "+(filterIllustrators.has(n)?"active":"")}
+                  onClick=${()=>setFilterIllustrators(prev=>{ const m=new Set(prev); m.has(n)?m.delete(n):m.add(n); return m; })}>${n}</button>`)}
+                ${visibleIllustrators.length === 0 && html`<span class="muted" style=${{fontSize:11}}>No artist matches "${illQuery}"</span>`}
+              </div>
+              ${filterIllustrators.size > 0 && html`<button class="price-db-advbtn" style=${{marginTop:6}}
+                onClick=${()=>setFilterIllustrators(new Set())}>Clear artists</button>`}
+            </div>`}
+      </div>`}
       <div class="price-db-adv-row">
         <button class="price-db-advbtn"
           onClick=${()=>{ setFilterCosts(new Set()); setFilterCardTypes(new Set()); setFilterStrengths(new Set()); setFilterWillpowers(new Set()); setFilterLores(new Set()); setFilterInkable(null); setFilterLegality(""); setFilterKeywords(new Set()); setFilterClassifications(new Set()); setFilterIllustrators(new Set()); }}>
@@ -27373,6 +28914,29 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
               onClick=${(e) => { if(!buyUrl) e.preventDefault(); setBatchOpen(false); }}>
               ${uiIcon("cart")} Buy on TCGplayer (affiliate cart)
             </a>
+            ${user && !watchlistsUnavailable && html`<button class="price-db-batchitem"
+              onClick=${async () => {
+                setBatchOpen(false);
+                let listId = activeWatchlist;
+                if(!listId){
+                  listId = await watchlistOps.create("My watchlist");
+                  if(!listId) return;
+                  setActiveWatchlist(listId);
+                }
+                // Sequential, not Promise.all: each mutator re-reads the list
+                // afterwards, so firing N in parallel would race N refreshes
+                // and leave the local copy behind whichever landed last.
+                for(const r of selRows){
+                  const isSealedRow = typeof r.card_id === "string" && r.card_id.startsWith("sealed::");
+                  await watchlistOps.addItem(listId, {
+                    card_id: isSealedRow ? null : r.card_id,
+                    printing: r.printing || "Normal",
+                    productId: r.tcgplayer_product_id ?? null,
+                  });
+                }
+                showToast(`Added ${selRows.length} to "${(watchlists||[]).find(w=>w.id===listId)?.name || "watchlist"}".`);
+                clearSelected();
+              }}>★ Add to watchlist</button>`}
             <button class="price-db-batchitem" onClick=${() => {
               const lines = selRows.map(r => `1 ${(r.name||"") + (r.version ? " - " + r.version : "")}`).join("\n");
               if(navigator.clipboard && navigator.clipboard.writeText){
@@ -27445,12 +29009,13 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       <table class=${"price-db-table"+(hasCustomWidths?" pdb-resized":"")}>
         <thead ref=${theadRef}><tr>
           <th class="th-check"></th>
+          ${user && !watchlistsUnavailable && html`<th class="th-watch" title="Add to the active watchlist"></th>`}
           <th></th>
           <th class="sortable th-name" title="Click to sort by name — shift-click any column to set a tiebreaker" onClick=${(e) => onSort("name", e)}>Name${arrow("name")}</th>
           ${orderedCols.map(c => c.th())}
         </tr></thead>
         <tbody>
-          ${filtered.slice(0, 1000).map((r) => {
+          ${filtered.slice(0, visibleRows).map((r) => {
             const img = r.image_small || r.image_normal;
             const key = r.card_id + ":" + r.printing + ":" + (r._variant || "");
             const isSel = selected.has(key);
@@ -27460,6 +29025,22 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             return html`<tr key=${key} class=${isSel ? "price-db-row-sel" : ""}>
               <td class="td-check"><input type="checkbox" checked=${isSel}
                 onChange=${() => toggleSelect(key)}/></td>
+              ${user && !watchlistsUnavailable && (() => {
+                const wk = rowWatchKey(r);
+                const on = watchedKeys.has(wk);
+                // Three states, not two: on this list, on a different list, on
+                // none. Without the middle one, starring a card you already
+                // track elsewhere reads as a click that did nothing.
+                const elsewhere = !on && watchedAnywhere.has(wk);
+                return html`<td class="td-watch">
+                  <button class=${"price-db-star"+(on?" on":elsewhere?" elsewhere":"")}
+                    aria-pressed=${on ? "true" : "false"}
+                    title=${on ? `On "${activeList ? activeList.name : "your list"}" — click to remove`
+                      : elsewhere ? `Already on another watchlist — click to add to "${activeList ? activeList.name : "this list"}" too`
+                      : "Add to watchlist"}
+                    onClick=${()=>toggleWatch(r)}>${on ? "★" : "☆"}</button>
+                </td>`;
+              })()}
               <td class="td-img">${img
                 ? html`<img src=${img} loading="lazy" alt="" style=${{cursor:"pointer"}}
                     onClick=${openThisRow}
@@ -27485,7 +29066,11 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
         </tbody>
       </table>
       </div>
-      ${filtered.length > 1000 && html`<div class="muted" style=${{padding: "10px 6px", textAlign: "center", fontSize: 11}}>Showing first 1,000 of ${filtered.length} — tighten filters to see more.</div>`}
+      ${filtered.length > visibleRows && html`<div ref=${rowSentinelRef} class="price-db-more muted">
+        Showing ${visibleRows.toLocaleString()} of ${filtered.length.toLocaleString()} — keep scrolling to load more.
+        <button class="price-db-advbtn" onClick=${()=>setVisibleRows(filtered.length)}>Show all</button>
+        <button class="price-db-advbtn" onClick=${exportCsv}>⇩ CSV (all ${filtered.length.toLocaleString()})</button>
+      </div>`}
     </div>
     <//>`}
     ${batchToast && html`<div class="price-db-toast">${batchToast}</div>`}
@@ -39266,7 +40851,8 @@ function App(){
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
       const dirtyParams = ["deck","token","user","collection","set","tourney","trade","t","a",
-                           "s","f","m","c","card","panel",
+                           "s","f","m","c","card","panel","v",
+                           "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
                            ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
@@ -39278,7 +40864,13 @@ function App(){
         decks:      new Set(["deck","token","user","tourney","s","f"]),
         collection: new Set(["collection","token","set","c"]),
         market:     new Set(["a","trade","t"]),
-        screener:   new Set(["m"]),
+        // ?m= is the short mode link; ?v= is the whole screen (preset, window,
+        // every chip, both sort keys) — see encodeScreenerState.
+        screener:   new Set(["m","v"]),
+        // Price Graphing: ?g= the compare list, ?hm= mode, ?hr= range,
+        // ?hs= chart scale. This view owned NOTHING before — an 18-card
+        // comparison died on refresh and could not be sent to anyone.
+        history:    new Set(["g","hm","hr","hs"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
         home:       new Set(["panel"]),
       };
@@ -40436,6 +42028,267 @@ function App(){
     return ()=>{ cancelled = true; };
   }, [user]);
 
+  // ── Watchlists ─────────────────────────────────────────────────────────
+  // Lives in App rather than in the Screener because three surfaces read it:
+  // the Screener's star column and chip strip, the "graph this watchlist"
+  // handoff into Price Graphing, and the alert evaluator (which has to run on
+  // load, wherever the user happens to land).
+  //
+  // `watchlists` is null until the first fetch settles and [] when the feature
+  // isn't deployed — the UI needs to tell "loading" from "you have none" from
+  // "this site hasn't run migration 127", and collapsing those into [] makes
+  // the star silently do nothing.
+  const [watchlists, setWatchlists] = useState(null);
+  const [watchlistsUnavailable, setWatchlistsUnavailable] = useState(false);
+  const refreshWatchlists = useCallback(async () => {
+    if(!user){ setWatchlists(null); return; }
+    const {data, error} = await sbClient
+      .from("watchlists")
+      .select("id,name,position,created_at,watchlist_items(card_id,printing,tcgplayer_product_id,note,added_at)")
+      .order("position", {ascending:true})
+      .order("created_at", {ascending:true});
+    if(error){
+      // 42P01 no such table / 42501 no grant / PGRST202 no such relation in the
+      // schema cache: the feature isn't deployed here. Say so once and keep the
+      // rest of the Screener working, exactly as the deck-versions path does.
+      if(/42P01|42501|PGRST202|relation|permission denied/i.test(error.message || error.code || "")){
+        console.warn("watchlists unavailable — run supabase/127_watchlists.sql");
+        setWatchlistsUnavailable(true);
+        setWatchlists([]);
+        return;
+      }
+      console.warn("watchlists fetch failed:", error.message || error);
+      const mirror = await offlineMirrorRead("watchlists:"+user.id);
+      if(mirror) setWatchlists(mirror);
+      return;
+    }
+    const rows = (data || []).map(w => ({
+      id: w.id, name: w.name, position: w.position, created_at: w.created_at,
+      items: (w.watchlist_items || []).map(i => ({
+        card_id: i.card_id, printing: i.printing || "Normal",
+        productId: i.tcgplayer_product_id, note: i.note, added_at: i.added_at,
+      })),
+    }));
+    setWatchlists(rows);
+    setWatchlistsUnavailable(false);
+    offlineMirrorWrite("watchlists:"+user.id, rows);
+  }, [user]);
+  useEffect(() => {
+    if(!user){ setWatchlists(null); setWatchlistsUnavailable(false); return; }
+    refreshWatchlists();
+  }, [user, refreshWatchlists]);
+
+  // Every mutator writes through then re-reads. Watchlists are small (tens of
+  // rows) and mutated by deliberate clicks, so a re-read costs nothing and
+  // removes a whole class of optimistic-update bugs — the local copy can never
+  // disagree with what a CHECK constraint or a unique index actually accepted.
+  const watchlistOps = useMemo(() => ({
+    create: async (name) => {
+      if(!user) return null;
+      const clean = (name || "").trim().slice(0, 80);
+      if(!clean) return null;
+      const pos = (watchlists || []).length;
+      const {data, error} = await sbClient.from("watchlists")
+        .insert({user_id: user.id, name: clean, position: pos})
+        .select("id").single();
+      if(error){
+        // The unique index is the intended outcome of "add to a list that
+        // already exists", not an error worth showing.
+        if(!/duplicate key|23505/i.test(error.message || "")) {
+          flashToast("Couldn't create that watchlist.");
+          return null;
+        }
+        const existing = (watchlists || []).find(w => w.name === clean);
+        return existing ? existing.id : null;
+      }
+      await refreshWatchlists();
+      return data ? data.id : null;
+    },
+    rename: async (id, name) => {
+      if(!user) return;
+      const clean = (name || "").trim().slice(0, 80);
+      if(!clean) return;
+      const {error} = await sbClient.from("watchlists").update({name: clean}).eq("id", id);
+      if(error){ flashToast("Couldn't rename that watchlist."); return; }
+      await refreshWatchlists();
+    },
+    remove: async (id) => {
+      if(!user) return;
+      const {error} = await sbClient.from("watchlists").delete().eq("id", id);
+      if(error){ flashToast("Couldn't delete that watchlist."); return; }
+      await refreshWatchlists();
+    },
+    // (card_id, printing) is the item key. Sealed rows pass card_id null and
+    // carry their pid instead — the CHECK requires one of the two.
+    addItem: async (listId, item) => {
+      if(!user || !listId) return;
+      const {error} = await sbClient.from("watchlist_items").upsert({
+        watchlist_id: listId,
+        card_id: item.card_id || null,
+        printing: item.printing || "Normal",
+        tcgplayer_product_id: item.productId ?? null,
+        note: item.note || null,
+      }, {onConflict: "watchlist_id,card_id,printing"});
+      if(error){ flashToast("Couldn't add that to the watchlist."); return; }
+      await refreshWatchlists();
+    },
+    removeItem: async (listId, item) => {
+      if(!user || !listId) return;
+      let q = sbClient.from("watchlist_items").delete()
+        .eq("watchlist_id", listId).eq("printing", item.printing || "Normal");
+      q = item.card_id ? q.eq("card_id", item.card_id)
+                       : q.eq("tcgplayer_product_id", item.productId);
+      const {error} = await q;
+      if(error){ flashToast("Couldn't remove that from the watchlist."); return; }
+      await refreshWatchlists();
+    },
+  }), [user, watchlists, refreshWatchlists]);
+
+  // ── Price alerts ───────────────────────────────────────────────────────
+  // Rules live here rather than in the Screener because the evaluation has to
+  // run wherever the user lands — the whole point is "tell me what happened
+  // while I was away", and they may well open on the home page.
+  const [alerts, setAlerts] = useState(null);
+  const [alertEvents, setAlertEvents] = useState([]);
+  const [alertsUnavailable, setAlertsUnavailable] = useState(false);
+  const refreshAlerts = useCallback(async () => {
+    if(!user){ setAlerts(null); setAlertEvents([]); return; }
+    const [rules, events] = await Promise.all([
+      sbClient.from("price_alerts")
+        .select("id,watchlist_id,card_id,printing,basis,kind,threshold,window_key,enabled,cooldown_days,note,created_at")
+        .order("created_at", {ascending:false}),
+      sbClient.from("alert_events")
+        .select("id,alert_id,card_id,printing,observed,price_date,fired_at,read_at")
+        .order("fired_at", {ascending:false}).limit(200),
+    ]);
+    if(rules.error){
+      if(/42P01|42501|PGRST202|relation|permission denied/i.test(rules.error.message || rules.error.code || "")){
+        console.warn("price alerts unavailable — run supabase/129_price_alerts.sql");
+        setAlertsUnavailable(true); setAlerts([]); setAlertEvents([]);
+        return;
+      }
+      console.warn("alerts fetch failed:", rules.error.message || rules.error);
+      return;
+    }
+    setAlerts(rules.data || []);
+    setAlertEvents(events.error ? [] : (events.data || []));
+    setAlertsUnavailable(false);
+  }, [user]);
+  useEffect(() => {
+    if(!user){ setAlerts(null); setAlertEvents([]); setAlertsUnavailable(false); return; }
+    refreshAlerts();
+  }, [user, refreshAlerts]);
+
+  // Evaluate once per session, after both the rules and the lists have landed.
+  // Deliberately NOT on every render or every visibility change: prices update
+  // once a day, so re-evaluating more often can only ever re-derive the same
+  // answer, and each run costs a query.
+  const alertsEvaluated = useRef(false);
+  useEffect(() => {
+    if(alertsEvaluated.current) return;
+    if(!user || alertsUnavailable) return;
+    if(!alerts || !alerts.length || !watchlists) return;
+    alertsEvaluated.current = true;
+    let cancelled = false;
+    (async () => {
+      try {
+        // Only the cards actually under a rule — bounded by watchlist size, so
+        // this stays a small query even though price_movers has ~5,800 rows.
+        const wanted = new Set();
+        const listById = new Map(watchlists.map(w => [w.id, w]));
+        for(const a of alerts){
+          if(a.enabled === false) continue;
+          if(a.watchlist_id){
+            for(const it of ((listById.get(a.watchlist_id) || {items:[]}).items || []))
+              if(it.card_id) wanted.add(it.card_id);
+          } else if(a.card_id) wanted.add(a.card_id);
+        }
+        if(!wanted.size) return;
+        const ids = Array.from(wanted);
+        const BATCH = 60;
+        const chunks = [];
+        for(let i = 0; i < ids.length; i += BATCH) chunks.push(ids.slice(i, i + BATCH));
+        const pages = await Promise.all(chunks.map(c => sbFetchAll("price_movers", {
+          select: "card_id,printing,low_today,market_today,pct_1d,pct_7d,pct_30d,pct_90d,pct_180d,pct_365d,mkt_pct_1d,mkt_pct_7d,mkt_pct_30d,mkt_pct_90d,mkt_pct_180d,mkt_pct_365d",
+          card_id: "in.(" + c.join(",") + ")",
+          order: "card_id.asc",
+        })));
+        if(cancelled) return;
+        const rowByKey = new Map();
+        for(const r of pages.flat()) rowByKey.set(r.card_id + "|" + (r.printing || "Normal"), r);
+        if(!rowByKey.size) return;
+        // The price date the rules are judged against. price_movers carries no
+        // date column, so we take the catalog's latest snapshot — the same date
+        // the footer's staleness pill reports.
+        const priceDate = lastRawPriceDate || new Date().toISOString().slice(0, 10);
+        const lastFiredByKey = new Map();
+        for(const e of alertEvents){
+          const k = e.alert_id + "|" + e.card_id + "|" + (e.printing || "Normal");
+          const t = Date.parse(e.fired_at);
+          if(Number.isFinite(t) && (!lastFiredByKey.has(k) || t > lastFiredByKey.get(k))) lastFiredByKey.set(k, t);
+        }
+        const firings = evaluateAlerts({
+          alerts, watchlists, rowByKey, priceDate, lastFiredByKey, nowMs: Date.now(),
+        });
+        if(!firings.length || cancelled) return;
+        // ignoreDuplicates leans on alert_events_unique, so re-evaluating the
+        // same snapshot on a second device is a no-op rather than a second
+        // copy of every alert in the inbox.
+        const {error} = await sbClient.from("alert_events")
+          .upsert(firings.map(f => ({...f, user_id: user.id})),
+            {onConflict: "alert_id,card_id,printing,price_date", ignoreDuplicates: true});
+        if(error){ console.warn("alert insert failed:", error.message || error); return; }
+        if(!cancelled) refreshAlerts();
+      } catch(e){
+        console.warn("alert evaluation failed:", e?.message || e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user, alerts, watchlists, alertsUnavailable, alertEvents, lastRawPriceDate, refreshAlerts]);
+
+  const unreadAlerts = useMemo(
+    () => (alertEvents || []).filter(e => !e.read_at).length, [alertEvents]);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  // Resolve a card_id to a readable name for the inbox. The alert tables store
+  // ids only — a firing that reads "crd_7f3a91" is not a notification.
+  const alertCardName = useCallback((cid) => {
+    if(!cid) return null;
+    const r = (raw || []).find(x => x.card_id === cid);
+    return r ? (r["Product Name"] || null) : null;
+  }, [raw]);
+  const alertOps = useMemo(() => ({
+    create: async (rule) => {
+      if(!user) return;
+      const {error} = await sbClient.from("price_alerts").insert({...rule, user_id: user.id});
+      if(error){ flashToast("Couldn't save that alert."); return; }
+      // A new rule should be able to fire against today's prices immediately
+      // rather than waiting for the next session.
+      alertsEvaluated.current = false;
+      await refreshAlerts();
+    },
+    update: async (id, patch) => {
+      if(!user) return;
+      const {error} = await sbClient.from("price_alerts").update(patch).eq("id", id);
+      if(error){ flashToast("Couldn't update that alert."); return; }
+      if(patch.enabled) alertsEvaluated.current = false;
+      await refreshAlerts();
+    },
+    remove: async (id) => {
+      if(!user) return;
+      const {error} = await sbClient.from("price_alerts").delete().eq("id", id);
+      if(error){ flashToast("Couldn't delete that alert."); return; }
+      await refreshAlerts();
+    },
+    markRead: async (ids) => {
+      if(!user || !ids || !ids.length) return;
+      // Optimistic: the badge should clear on the click, not after a round trip.
+      const stamp = new Date().toISOString();
+      setAlertEvents(prev => prev.map(e => ids.includes(e.id) ? {...e, read_at: e.read_at || stamp} : e));
+      const {error} = await sbClient.from("alert_events").update({read_at: stamp}).in("id", ids);
+      if(error){ console.warn("mark-read failed:", error.message || error); refreshAlerts(); }
+    },
+  }), [user, refreshAlerts]);
+
   // Booster-pack art-variant ownership fetch. Separate effect so a missing
   // table (pre-migration-72) or transient error doesn't block the sealed qty
   // load above. Silently no-ops on 42P01 (table not deployed yet).
@@ -41137,6 +42990,8 @@ function App(){
                         style=${{width:20,height:20,borderRadius:"50%",objectFit:"cover",objectPosition:"top",background:"var(--bg-surface)"}}/>`
                     : html`<span style=${{width:20,height:20,borderRadius:"50%",background:"var(--accent-glow)",color:"var(--accent)",display:"inline-flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:700}}>${avatarInitial}</span>`}
                   <span class="profile-gear-badge" aria-hidden="true">${GEAR_BADGE_ICON}</span>
+                  ${unreadAlerts > 0 && html`<span class="profile-alert-badge"
+                    aria-hidden="true">${unreadAlerts > 9 ? "9+" : unreadAlerts}</span>`}
                 </span>
                 <span class="profile-btn-name">${profile?.display_name || "you"}</span>
               </button>`
@@ -41247,6 +43102,11 @@ function App(){
               title="Copy a link to whatever you're looking at right now">
               ${uiIcon("link")} Copy link to this page
             </button>
+            ${user && html`<button class="settings-action"
+              onClick=${()=>{ setSettingsOpen(false); setAlertsOpen(true); }}
+              title="Price alerts on your watchlists">
+              ${uiIcon("warn")} Price alerts${unreadAlerts > 0 ? ` (${unreadAlerts} new)` : ""}
+            </button>`}
             <div class="settings-row settings-row--block">
               <span class="settings-row-label">Home page layout</span>
               <div class="settings-home-hint">Arrange the home page directly on the page —
@@ -41301,6 +43161,12 @@ function App(){
       onAccept=${acceptGradedTos}
       onDismiss=${()=>{ setGradedTosPromptOpen(false);
         try { localStorage.setItem("packsink:gradedTosDismissedAt", String(Date.now())); } catch {} }}/>`}
+    ${alertsOpen && user && html`<${AlertsModal}
+      alerts=${alerts || []} alertEvents=${alertEvents} alertOps=${alertOps}
+      watchlists=${watchlists || []} unavailable=${alertsUnavailable}
+      cardNameFor=${alertCardName}
+      onOpenCard=${(cid)=>{ setAlertsOpen(false); openCardsWithSearch("", cid); }}
+      onClose=${()=>setAlertsOpen(false)}/>`}
     ${showShortcuts && html`<${KbdShortcutsModal} onClose=${()=>setShowShortcuts(false)}/>`}
     ${tourOpen && html`<${WelcomeTourModal} onClose=${closeTour}
       onGo=${(v)=>{ closeTour(); onTabClick(v); }}
@@ -41428,6 +43294,7 @@ function App(){
       sealedPrices=${sealedPrices} setsMeta=${setsMeta}
       historyTarget=${historyTarget}
       incomingCompareCards=${incomingCompareCards}
+      watchlists=${watchlists}
       onConsumedIncomingCompareCards=${() => setIncomingCompareCards(null)}/>`}
     ${viewsReady&&view==="market"&&html`<${MarketView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       nc=${nc} setNc=${setNc} ne=${ne} setNe=${setNe}
@@ -41445,7 +43312,10 @@ function App(){
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection}
       sealedMeta=${sealedMeta} updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
       incomingScreenerView=${incomingScreenerView}
-      onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}/>`}
+      onConsumedIncomingScreenerView=${() => setIncomingScreenerView(null)}
+      watchlists=${watchlists} watchlistOps=${watchlistOps}
+      watchlistsUnavailable=${watchlistsUnavailable}
+      onOpenAlerts=${user ? (()=>setAlertsOpen(true)) : null}/>`}
     ${view==="faq"&&html`<${FAQView} user=${user}
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}

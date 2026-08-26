@@ -849,6 +849,90 @@ html[data-mode="dark"] .price-db-advcount{color:#1a1206;}
 .price-db-adv-row input[type="number"]{width:90px;}
 .price-db-adv-row input:focus,
 .price-db-adv-row select:focus{border-color:var(--accent);}
+/* Artist filter: a typeahead over a roster too long to chip out in full.
+   The chip list scrolls in place so the panel keeps a predictable height
+   however many names match. */
+.price-db-artistsearch{width:100%;max-width:320px;margin-bottom:6px;}
+.price-db-artistchips{flex-wrap:wrap;gap:4px;max-height:150px;overflow-y:auto;}
+/* ── Watchlists ────────────────────────────────────────────────────────────
+   A saved view saves a query; a watchlist saves a set of specific cards. The
+   strip sits above the mode bar because picking WHICH list is upstream of
+   everything below it — the star column writes to whichever chip is active. */
+.price-db-watchbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:8px;}
+.price-db-watchbar-lbl{font-size:11px;font-weight:700;letter-spacing:0.3px;
+  text-transform:uppercase;color:var(--text-muted);margin-right:2px;}
+.price-db-watchchip{display:inline-flex;align-items:center;gap:5px;
+  font-size:12px;font-weight:600;padding:4px 10px;border-radius:12px;
+  background:var(--btn-bg);color:var(--text);border:1px solid var(--btn-border);cursor:pointer;}
+.price-db-watchchip:hover{border-color:var(--accent);}
+.price-db-watchchip.active{background:var(--accent);color:var(--bg-solid);border-color:var(--accent);}
+.price-db-watchcount{font-size:10px;font-weight:700;opacity:0.75;
+  font-variant-numeric:tabular-nums;}
+
+/* The star toggle. Three states: on the active list (accent, filled), on some
+   OTHER list (muted, filled — so adding it here doesn't read as a dead click),
+   and on none (hollow). Resting opacity is low so a column of 250 hollow stars
+   doesn't compete with the prices, which are what the table is for. */
+.th-watch{width:26px;}
+.td-watch{width:26px;text-align:center;padding:0;}
+.price-db-star{background:none;border:none;cursor:pointer;padding:2px 3px;
+  font-size:14px;line-height:1;color:var(--text-muted);opacity:0.45;
+  transition:opacity 0.12s,color 0.12s;}
+.price-db-star:hover{opacity:1;color:var(--accent);}
+.price-db-star.on{opacity:1;color:var(--accent);}
+.price-db-star.elsewhere{opacity:0.8;color:var(--text-muted);}
+tbody tr:hover .price-db-star{opacity:0.85;}
+tbody tr:hover .price-db-star.on{opacity:1;}
+/* Mobile already hides the checkbox column (invisible behind the sticky NAME
+   column anyway). The star is the opposite case — one tap, high value on a
+   phone where batch-select isn't usable — so it stays. */
+@media (max-width:720px){
+  .price-db-watchbar{gap:4px;}
+  .price-db-watchbar-lbl{display:none;}
+}
+
+/* ── Alerts modal ──────────────────────────────────────────────────────────
+   Inbox and rules in one dialog: an alert you can't find the rule for is
+   unactionable, and a rule you can't see the history of is unverifiable. */
+.alerts-modal{position:relative;width:min(560px,94vw);max-height:86vh;overflow-y:auto;
+  background:var(--bg-modal);border:1px solid var(--border);border-radius:12px;
+  padding:20px 22px;box-shadow:0 18px 50px -20px rgba(0,0,0,0.6);}
+.alerts-inbox,.alerts-rules{display:flex;flex-direction:column;gap:6px;}
+.alert-event{display:flex;gap:10px;align-items:flex-start;justify-content:space-between;
+  padding:8px 10px;border:1px solid var(--border);border-radius:8px;background:var(--bg-surface);}
+/* Unread carries an accent rail rather than a background wash — the wash was
+   unreadable against the translucent card backgrounds in the dark themes. */
+.alert-event.unread{border-left:3px solid var(--accent);}
+.alert-event-main{display:flex;flex-direction:column;gap:2px;min-width:0;}
+.alert-event-name{background:none;border:none;padding:0;text-align:left;cursor:pointer;
+  font-size:13px;font-weight:700;color:var(--text);}
+.alert-event-name:hover{color:var(--accent);text-decoration:underline;}
+.alert-event-rule{font-size:11px;color:var(--text-muted);}
+.alert-event-meta{display:flex;align-items:center;gap:8px;font-size:11px;flex-shrink:0;
+  font-variant-numeric:tabular-nums;}
+.alert-event-read{background:none;border:1px solid var(--border);border-radius:5px;
+  cursor:pointer;color:var(--text-muted);font-size:10px;padding:1px 5px;}
+.alert-event-read:hover{color:var(--accent);border-color:var(--accent);}
+.alert-new{display:flex;flex-direction:column;gap:7px;padding:11px 12px;margin-bottom:10px;
+  border:1px dashed var(--border);border-radius:8px;}
+.alert-new-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center;}
+.alert-new-row label{font-size:11px;font-weight:600;text-transform:uppercase;
+  letter-spacing:0.3px;color:var(--text-muted);min-width:48px;}
+.alert-new-row select,.alert-new-row input{padding:4px 8px;font-size:12px;
+  background:var(--bg-card);color:var(--text);border:1px solid var(--border);border-radius:5px;}
+.alert-rule{display:flex;gap:8px;align-items:center;justify-content:space-between;
+  padding:7px 10px;border:1px solid var(--border);border-radius:8px;}
+.alert-rule.off{opacity:0.55;}
+.alert-rule-text{font-size:12.5px;min-width:0;}
+.alert-rule-actions{display:flex;gap:4px;flex-shrink:0;}
+.alerts-foot{font-size:11px;margin:14px 0 0;line-height:1.5;}
+
+/* Foot of the windowed table: progress line + the two escape hatches (load
+   everything, or take the whole result set to CSV). Doubles as the
+   IntersectionObserver sentinel, so it must stay in flow — display:none or a
+   zero-height box would never intersect and the table would stop growing. */
+.price-db-more{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:center;
+  padding:12px 6px;font-size:11px;text-align:center;}
 
 /* Batch action bar — surfaces when 1+ rows are selected. Sits above the
    table count line so the user always sees how many are picked + the
@@ -1078,17 +1162,21 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
 .price-db-savedclose:hover{color:var(--red) !important;background:transparent !important;}
 
 /* Pin the name column horizontally — handy when scrolling right to see
-   far-out Δ% columns. Uses position:sticky on the third <td>/<th>. The
-   nth-child here matches the post-ink column order. */
-.price-db-table th:nth-child(3),
-.price-db-table td:nth-child(3){position:sticky;left:0;z-index:2;
+   far-out Δ% columns.
+   ⚠ Targets .th-name / .td-name, NOT nth-child(3). It was positional until the
+   watchlist star column landed between the checkbox and the image, which made
+   the third cell the IMAGE for signed-in users — so the wrong column pinned and
+   the card names scrolled away. Any future fixed column would have done the
+   same. The class is the identity; the position is an accident. */
+.price-db-table th.th-name,
+.price-db-table td.td-name{position:sticky;left:0;z-index:2;
   background:var(--bg-modal);
   /* Right-edge separator + shadow so other columns visually pass UNDER this
      sticky column instead of overlapping when horizontally scrolling. */
   box-shadow:1px 0 0 var(--border), 6px 0 8px -6px rgba(0,0,0,0.35);}
-.price-db-table tbody tr:hover td:nth-child(3){background:var(--bg-modal);}
-.price-db-table thead th:nth-child(3){z-index:4;background:var(--bg-modal);}
-.price-db-table tr.price-db-row-sel td:nth-child(3){background:var(--accent-glow);}
+.price-db-table tbody tr:hover td.td-name{background:var(--bg-modal);}
+.price-db-table thead th.th-name{z-index:4;background:var(--bg-modal);}
+.price-db-table tr.price-db-row-sel td.td-name{background:var(--accent-glow);}
 
 /* Mobile: trim padding and the Name width. Nothing is force-hidden here any
    more — ⚙ Columns is the single authority on which columns show, at every
@@ -1106,7 +1194,7 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
      Muntz -...". Names wrap to 2 lines, so a wider default costs no extra
      rows and still leaves Low + NM Market + 1W on a 375px phone. Users can
      drag it from here; a dragged width wins via .pdb-resized below. */
-  .price-db-table th:nth-child(3), .price-db-table td:nth-child(3){min-width:150px;max-width:175px;}
+  .price-db-table th.th-name, .price-db-table td.td-name{min-width:150px;max-width:175px;}
   /* Tighten the icon-only rarity chips so all 9 canonical rarities fit on a
      single row on phones. At the desktop 4px 10px padding + 3px gap, the
      9-chip strip (~380px) wrapped the last chip (Promo) onto a second line
@@ -2539,6 +2627,20 @@ button.graded-home-title{cursor:pointer;}
 .profile-gear-badge svg{display:block;}
 .profile-btn:hover .profile-gear-badge,
 .profile-btn[aria-expanded="true"] .profile-gear-badge{color:var(--accent);border-color:var(--accent);}
+/* Unread price alerts. Pinned to the avatar's top-LEFT, opposite the gear, and
+   absolutely positioned so it costs no layout width. That constraint is the
+   whole reason it lives here rather than as a bell in the bubble row: a third
+   bubble there widens right-cluster row 2 and tips ANALYTICS off the edge of
+   the scrolling tabs on <=420px phones — the exact regression that moved the
+   install bubble to row 1. Renders only when the count is non-zero, so the
+   header is unchanged for everyone without a firing alert. */
+.profile-alert-badge{position:absolute;top:-5px;left:-6px;
+  min-width:14px;height:14px;padding:0 3px;border-radius:7px;box-sizing:border-box;
+  background:var(--red);color:#fff;border:1px solid var(--bg-solid);
+  font-size:9px;font-weight:800;line-height:1;letter-spacing:-0.2px;
+  display:flex;align-items:center;justify-content:center;
+  font-variant-numeric:tabular-nums;}
+@media (max-width:640px){ .profile-btn .profile-alert-badge{top:-3px;left:-3px;} }
 /* Signed-out CTA: replaces the old gear-only button. Reads as a clear action
    instead of a settings affordance, since the popover's primary purpose for
    signed-out users is auth. Theme controls inside the popover let them tweak
@@ -3956,6 +4058,13 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .history-picker-item.active{background:var(--btn-active-bg);border-color:var(--btn-active-border);}
 .history-picker-item .hpi-name{font-size:12px;font-weight:600;color:var(--text);line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .history-picker-item .hpi-sub{font-size:10px;color:var(--text-muted);line-height:1.4;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* The index picker prints each index's 1M move in its subtitle. `.up` / `.down`
+   exist elsewhere in this file only SCOPED to a parent (.chart-tooltip-pct,
+   .compare-stats-table td.num, .elo-delta), so a bare span here inherited the
+   muted subtitle colour and +12% looked identical to -12% — markup that
+   promises a signal and delivers none. */
+.history-picker-item .hpi-sub .up{color:var(--green);font-weight:700;}
+.history-picker-item .hpi-sub .down{color:var(--red);font-weight:700;}
 .history-picker-item.active .hpi-name{color:var(--btn-active-text);}
 .history-picker-group{margin-bottom:6px;}
 .history-picker-group-head{position:sticky;top:0;background:var(--bg-solid);font-size:10px;text-transform:uppercase;letter-spacing:0.6px;color:var(--accent);font-weight:700;padding:5px 8px 3px;border-bottom:1px solid var(--border);z-index:2;box-shadow:0 1px 0 var(--border);}
@@ -4005,6 +4114,22 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .compare-kind-tag{display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
   padding:1px 5px;border-radius:8px;background:var(--bg-surface);color:var(--text-muted);
   border:1px solid var(--border);margin-left:4px;vertical-align:middle;}
+/* A series that plots nothing in the current range. The chip stays in the
+   legend (removing it would make the card look un-added), but it must not
+   claim a line exists — so it reads in the warning colour. */
+.compare-kind-tag--none{color:var(--red);border-color:var(--red);}
+/* The benchmark is a reference line, not one of the user's picks — dashed and
+   muted so it reads as the thing the others are measured against rather than
+   as a ninth series competing for attention. It still gets a legend chip: it
+   is drawn on the chart, and an unlabelled line is an unanswerable question. */
+.compare-chip--bench{border-style:dashed;opacity:0.85;}
+.compare-swatch--bench{background:repeating-linear-gradient(90deg,
+  var(--text-muted) 0 5px, transparent 5px 9px) !important;}
+.history-bench{gap:5px;}
+.history-bench select{font-size:11px;padding:3px 6px;max-width:230px;}
+/* Screener: what the vs column compares each card against. */
+.price-db-vsbasis{gap:4px;}
+.price-db-vsbasis select{font-size:11px;padding:3px 6px;}
 .compare-picker-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px 10px;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;margin-bottom:10px;}
 .compare-summary{flex:1;min-width:0;}
