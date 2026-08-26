@@ -331,7 +331,7 @@ def main() -> None:
 
 
 def _refresh_matviews(sb: "Supabase") -> None:
-    """Refresh the 4 price matviews. Exits non-zero if any refresh fails
+    """Refresh the price matviews. Exits non-zero if any REQUIRED refresh fails
     (matview staleness is a real failure worth alerting on, unlike the
     duplicate-snapshot skip)."""
     refresh_failures: list[str] = []
@@ -347,6 +347,22 @@ def _refresh_matviews(sb: "Supabase") -> None:
         except Exception as e:
             refresh_failures.append(fn)
             print(f"Could not call {fn} (run {hint} to enable): {e}")
+
+    # The market indices are OPTIONAL, on purpose. Every matview above is
+    # load-bearing for a price the site displays, so a stale one is a data bug
+    # worth an alert. The indices are a benchmark overlay: if they go stale the
+    # site still prices every card correctly, it just can't say "vs market" for
+    # a day. Failing the whole ETL over that would train us to ignore its
+    # alerts, and this refresh is the slowest one on the site (full history over
+    # ~3M rows), so it is also the likeliest to trip a timeout.
+    try:
+        sb.rpc("refresh_market_index")
+        print("Refreshed via refresh_market_index().")
+    except Exception as e:
+        print(
+            "WARN: refresh_market_index failed (run supabase/128_market_index.sql "
+            f"to enable): {e}"
+        )
 
     if refresh_failures:
         sys.exit(

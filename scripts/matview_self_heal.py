@@ -98,6 +98,16 @@ def main() -> None:
     except Exception as e:
         print(f"  WARN: cleanup_old_trades failed (non-fatal): {e}", file=sys.stderr)
 
+    # Same deal for the alert inbox (migration 129): 180-day retention, so an
+    # inbox nobody prunes doesn't become a table nobody can query. Also
+    # non-fatal, and expected to fail with "function does not exist" on any
+    # deployment that hasn't run 129 yet.
+    try:
+        _sb_rpc("cleanup_old_alert_events")
+        print("cleanup_old_alert_events: pruned alert events older than 180 days.")
+    except Exception as e:
+        print(f"  WARN: cleanup_old_alert_events failed (non-fatal): {e}", file=sys.stderr)
+
     mv_date, pd_date = latest_dates()
     print(f"card_prices_latest.max(price_date) = {mv_date}")
     print(f"prices_daily.max(date)             = {pd_date}")
