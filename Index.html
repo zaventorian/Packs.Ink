@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=357">
+<link rel="stylesheet" href="styles.css?v=358">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1206,6 +1206,118 @@ const setPromoBaseSet = (rows) => {
   }
   _promoBaseSet = m;
 };
+// set_id -> released_at (YYYY-MM-DD), stamped from `setsMeta` during App's
+// render (not an effect — an effect fires after children, so a modal already
+// open when setsMeta lands would read an empty map and never re-read it).
+// This is the ONLY correct ordering for "which printing came first": SET_ORDER
+// is browse order (Extras and the promo sets sort above every mainline set) and
+// SET_RELEASE_DATES covers mainline sets only.
+let _setReleaseById = new Map();  // set_id -> "YYYY-MM-DD"
+let _setRankById    = new Map();  // set_id -> sortable release key (see below)
+let _setFamilyById  = new Map();  // set_id -> family id; SET_PARENT children fold onto the parent
+// "2023-08-18" -> "Aug 2023". Pinned to UTC: the date is a plain calendar day,
+// and letting it drift into the viewer's zone renames a set's month west of it.
+const releaseLabel = (d) => {
+  if(!d) return "";
+  try { return new Date(d + "T00:00:00Z").toLocaleDateString(undefined, {year:"numeric", month:"short", timeZone:"UTC"}); }
+  catch { return String(d).slice(0, 7); }
+};
+const setSetReleaseDates = (rows) => {
+  const rel = new Map(), rank = new Map(), fam = new Map(), idByName = new Map();
+  for(const s of rows || []) if(s && s.id) idByName.set(SET_DISPLAY_NAMES[s.name] || s.name, s.id);
+  for(const s of rows || []){
+    if(!s || !s.id) continue;
+    const name = SET_DISPLAY_NAMES[s.name] || s.name;
+    const d = s.released_at ? String(s.released_at).slice(0, 10) : null;
+    if(d) rel.set(s.id, d);
+    // A promo set is dated to the wave it OPENED, so Promo Set 1 ties with The
+    // First Chapter and D23 ties with Shimmering Skies. Mainline wins the tie:
+    // the promo is a promo OF the booster card, never the other way round.
+    // Without this every set-1 promo read as an equal "alt printing" of the
+    // card it reprints.
+    rank.set(s.id, (d || "9999-99-99") + "|" + (MAINLINE_SETS.includes(name) ? "0" : "1"));
+    const parent = SET_PARENT[name];
+    fam.set(s.id, (parent && idByName.get(parent)) || s.id);
+  }
+  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam;
+};
+
+// Every printing of one card, newest-set last. ONE entry per card_id: an
+// Enchanted in the same set is a distinct printing and belongs in the list,
+// while Normal/Foil of the same card_id is one printing shown two ways (that
+// split is what the modal's "show all variants" already covers).
+const cardPrintingsFor = (catalog, productName) => {
+  if(!productName || !catalog || !catalog.length) return [];
+  const byCard = new Map();
+  for(const r of catalog){
+    // Coconut leaders carry a "(Coconut)" name suffix so they can't collide
+    // here, but they're synthetic rows — skip them explicitly anyway.
+    if(!r || r.isCoconut || !r.card_id || r["Product Name"] !== productName) continue;
+    let e = byCard.get(r.card_id);
+    if(!e){
+      e = {
+        card_id: r.card_id,
+        // An Extras row keeps its ORIGIN set_id (so it doesn't read as a
+        // separate set for the verdict) but displays as "Extras & Oddities",
+        // which is what the rest of the app calls it.
+        set_id: r.set_id || r.Set, set: r.Set,
+        family: (r.set_id && _setFamilyById.get(r.set_id)) || r.set_id || r.Set,
+        rank: (r.set_id && _setRankById.get(r.set_id)) || null,
+        number: r.Number || "", rarity: r.Rarity || "",
+        variant: r.variant_label || null,
+        released: (r.set_id && _setReleaseById.get(r.set_id)) || null,
+        price: null,
+      };
+      byCard.set(r.card_id, e);
+    }
+    const p = r["Low Price"] ?? r["TCGPlayer Market"];
+    if(p != null && (e.price == null || p < e.price)) e.price = p;
+  }
+  return [...byCard.values()].sort((a, b) =>
+    String(a.rank || "9999").localeCompare(String(b.rank || "9999"))
+    // Within one release, the plain printing leads and the labelled oddity
+    // follows it. Alphabetical alone put "Extras & Oddities" above the very set
+    // it came out of, which reads as the Extras entry being the earlier print.
+    || (a.variant ? 1 : 0) - (b.variant ? 1 : 0)
+    || a.set.localeCompare(b.set)
+    || (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0));
+};
+
+// Is the printing you're looking at the original, or a reprint of one? null
+// when the question doesn't arise. The verdict is about SETS, not printings: a
+// base + Enchanted in one set is not a reprint, and neither is a set's own
+// prerelease promo (SET_PARENT folds those onto the parent — that's `family`).
+// Two sets that still tie after the mainline-wins rank tiebreak are parallel
+// printings; calling either one "the original" would be a coin flip.
+const reprintVerdict = (printings, curSetId) => {
+  if(new Set((printings || []).map(e => e.family)).size < 2) return null;
+  const curFam  = (curSetId && _setFamilyById.get(curSetId)) || curSetId;
+  const curRank = (curSetId && _setRankById.get(curSetId)) || null;
+  const setsOf = (list) => [...new Set(list.map(e => e.set))];
+  const others = printings.filter(e => e.family !== curFam);
+  const cmp = (e) => (curRank && e.rank) ? String(e.rank).localeCompare(curRank) : 0;
+  const earlier = setsOf(others.filter(e => cmp(e) < 0));
+  const later   = setsOf(others.filter(e => cmp(e) > 0));
+  const beside  = setsOf(others.filter(e => cmp(e) === 0));
+  const phrase = (names) => names.length <= 2 ? names.join(" and ")
+    : names.slice(0, 2).join(", ") + " +" + (names.length - 2) + " more";
+  if(earlier.length) return {
+    kind: "reprint", icon: "reprint", label: "Reprint",
+    // `others` keeps `printings`' release order, so earlier[0] is the first
+    // printing there has ever been. Middle printings are left to the list
+    // rather than turned into a sentence nobody reads.
+    text: "First printed in " + earlier[0]
+      + (later.length ? " · reprinted again in " + phrase(later) : ""),
+  };
+  if(later.length) return {
+    kind: "original", icon: "pennant", label: "Original print",
+    text: "Reprinted in " + phrase(later),
+  };
+  return {
+    kind: "alt", icon: "reprint", label: "Alt printing",
+    text: "Also printed in " + phrase(beside),
+  };
+};
 // The extra set a card should ALSO be filterable under, if any: an explicit
 // child->parent (SET_PARENT, e.g. AotV Promos) OR a promo folded under its base
 // card's mainline set (by Product Name). null for ordinary cards.
@@ -1789,6 +1901,8 @@ const UI_ICON_PATHS = {
   check:     _icoSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
   sun:       _icoSvg(html`<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4"/><path d="M12 19.1v2.4"/><path d="M4.2 4.2l1.7 1.7"/><path d="M18.1 18.1l1.7 1.7"/><path d="M2.5 12h2.4"/><path d="M19.1 12h2.4"/><path d="M4.2 19.8l1.7-1.7"/><path d="M18.1 5.9l1.7-1.7"/>`),
   moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
+  reprint:   _icoSvg(html`<path d="M4 10.2a6.4 6.4 0 0 1 10.8-3.5l2.7 2.5"/><path d="M17.9 4.6v4.6h-4.6"/><path d="M20 13.8a6.4 6.4 0 0 1-10.8 3.5l-2.7-2.5"/><path d="M6.1 19.4v-4.6h4.6"/>`),
+  pennant:   _icoSvg(html`<path d="M6 21V3.4"/><path d="M6 4.4h11.6l-2.4 3.9 2.4 3.9H6"/>`),
   die:       _icoSvg(html`<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.6"/><path d="M8.2 8.2h.01"/><path d="M15.8 8.2h.01"/><path d="M12 12h.01"/><path d="M8.2 15.8h.01"/><path d="M15.8 15.8h.01"/>`, 2.4),
 };
 
@@ -6842,6 +6956,39 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     return out;
   }, [group.card_id, group["Product Name"], catalog]);
 
+  // ── Reprints: every SET this card has been printed in ────────────────
+  // Lorcana reprints heavily (Fabled is a reprint set outright, and most promos
+  // are reprints of a mainline card) — 315 of 2507 card names exist in more
+  // than one set. Each printing is its own catalog row with its own card_id, so
+  // from inside any one of them the others were invisible: nothing told you the
+  // Fabled copy you're looking at first came out in The First Chapter, or that
+  // the First Chapter copy you own got reprinted two years later.
+  const printings = useMemo(() => cardPrintingsFor(catalog, group["Product Name"]),
+    [catalog, group["Product Name"]]);
+  const reprintInfo = useMemo(() => reprintVerdict(printings, group.set_id || group.Set),
+    [printings, group.set_id, group.Set]);
+
+  const [printingsOpen, setPrintingsOpen] = useState(() => {
+    try { return localStorage.getItem("packsink:cardDetail:printings") !== "0"; }
+    catch { return true; }
+  });
+  const togglePrintings = useCallback(() => setPrintingsOpen(v => {
+    try { localStorage.setItem("packsink:cardDetail:printings", v ? "0" : "1"); } catch {}
+    return !v;
+  }), []);
+
+  // Jump to another printing. In place when the host view gave us onNavigate
+  // (the Cards browse modal), else via the ?card= route App already owns, so
+  // the row works from the Collection / Screener / home mounts too.
+  const openPrinting = useCallback((e) => {
+    if(!e || e.card_id === group.card_id) return;
+    const rows = (catalog || []).filter(r => r.card_id === e.card_id);
+    const g = rows.length ? groupCards(rows)[0] : null;
+    if(g && onNavigate){ onNavigate(g); return; }
+    window.dispatchEvent(new CustomEvent("packsink:open-card", {detail: e.card_id}));
+    onClose && onClose();
+  }, [catalog, group.card_id, onNavigate, onClose]);
+
   const toggleVariants = useCallback(() => {
     if(variants.open){ setVariants(v => ({...v, open:false})); return; }
     if(Object.keys(variants.data).length >= variantRows.length){ setVariants(v => ({...v, open:true})); return; }
@@ -7009,6 +7156,29 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ${group.variant_label && html`<span class="card-detail-variant-tag"
             title=${group.localized_exclusive ? "Region-locked printing — no U.S. TCGplayer market" : ""}>${group.variant_label}</span>`}
         </div>
+
+        ${reprintInfo && html`<div class=${"cd-reprint cd-reprint--" + reprintInfo.kind}>
+          <button class="cd-reprint-head" onClick=${togglePrintings}
+            aria-expanded=${printingsOpen}
+            title=${printingsOpen ? "Hide the full printing list" : "Show every set this card was printed in"}>
+            <span class="cd-reprint-badge">${uiIcon(reprintInfo.icon, 13)}${reprintInfo.label}</span>
+            <span class="cd-reprint-text">${reprintInfo.text}</span>
+            <span class="cd-reprint-chev">${printingsOpen ? "▾" : "▸"}</span>
+          </button>
+          ${printingsOpen && html`<div class="cd-reprint-list">
+            ${printings.map(e => {
+              const here = e.card_id === group.card_id;
+              return html`<button key=${e.card_id} class=${"cd-print-row" + (here ? " here" : "")}
+                disabled=${here} onClick=${()=>openPrinting(e)}
+                title=${here ? "You're looking at this printing" : "Open the " + e.set + " printing"}>
+                <span class="cd-print-set">${e.set}${e.number ? " #" + String(e.number).split("/")[0] : ""}</span>
+                <span class="cd-print-rar">${e.variant || e.rarity}</span>
+                <span class="cd-print-rel">${releaseLabel(e.released)}</span>
+                <span class="cd-print-px">${e.price != null ? fmtUSD(e.price) : "—"}</span>
+              </button>`;
+            })}
+          </div>`}
+        </div>`}
 
         <div class="card-detail-stats">
           ${cost!=null && html`<div class="stat-pill"><span class="lbl">Cost</span><span class="val">${cost}</span></div>`}
@@ -10696,11 +10866,17 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     } catch {}
   }, [selectedGroup]);
   useEffect(() => {
-    const syncFromUrl = () => {
+    // allowClear is the difference between "the user went Back" and "we just
+    // mounted". Only a popstate may CLOSE the modal. The mount pass ran with
+    // allowClear on and, because the incomingOpenCardId effect above commits in
+    // the same pass, it closed every modal that effect had just opened —
+    // silently breaking every cross-view open (the scanner's "open detail", the
+    // detail modal's other-printing rows) while an in-view one worked fine.
+    const syncFromUrl = (allowClear) => {
       try {
         const id = new URLSearchParams(window.location.search).get("card");
         setSelectedGroup(prev => {
-          if(!id) return null;
+          if(!id) return allowClear ? null : prev;
           if(prev && prev.card_id === id) return prev;
           const row = (raw || []).find(r => r.card_id === id);
           if(row && row.tcgplayer_product_id){
@@ -10715,9 +10891,10 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
     // re-mounts this component AFTER the popstate has fired, so the listener
     // alone would leave the URL saying "card" with no modal. Idempotent —
     // no ?card in the URL is a no-op.
-    if(raw && raw.length) syncFromUrl();
-    window.addEventListener("popstate", syncFromUrl);
-    return () => window.removeEventListener("popstate", syncFromUrl);
+    if(raw && raw.length) syncFromUrl(false);
+    const onPop = () => syncFromUrl(true);
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
   }, [raw]);
   // Shared links get a per-card tab title; restore the view title on close.
   useEffect(() => {
@@ -40451,6 +40628,10 @@ function App(){
     })();
     return () => { cancelled = true; };
   }, []);
+  // Stamp the module-level set_id -> released_at map DURING render, before any
+  // child renders — the card detail modal's reprint verdict reads it straight
+  // out of a useMemo, so an effect would land a frame late.
+  useMemo(() => setSetReleaseDates(setsMeta), [setsMeta]);
   const [sealedPrices, setSealedPrices] = useState(()=>{
     const cached = readSealedCache();
     return (cached && cached.rows.length) ? cached.rows : [];
@@ -40649,6 +40830,14 @@ function App(){
     setView("cards");
     setTabClickNonce(n => n + 1);
   }, []);
+  // The card detail modal is mounted by nine different views and only the Cards
+  // one passes onNavigate, so its "open another printing of this card" rows
+  // fall back to this event rather than being plumbed through all nine.
+  useEffect(() => {
+    const onOpen = (e) => { if(e && e.detail) openCardsWithSearch("", e.detail); };
+    window.addEventListener("packsink:open-card", onOpen);
+    return () => window.removeEventListener("packsink:open-card", onOpen);
+  }, [openCardsWithSearch]);
   // Open the Cards tab pre-filtered to one set (home "News" tile → Set 13).
   // Push /cards?set=<name> first so the cards view's URL-sync seeds the chip;
   // cards "owns" ?set= in VIEW_OWNED so the view-sync effect won't strip it.
