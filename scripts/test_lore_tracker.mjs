@@ -32,9 +32,17 @@ globalThis.localStorage = {
   removeItem: k => store.delete(k),
 };
 
+// The block depends on the site's INKS list (a seat is identified by an ink),
+// so that comes out of Index.html too rather than being restated here — a copy
+// would let the tracker and the rest of the site disagree about ink names.
+const inksLine = src.slice(grab('const INKS = ['));
+const INKS_SRC = inksLine.slice(0, inksLine.indexOf("\n") + 1);
+
 const mod = await import("data:text/javascript;base64," + Buffer.from(
-  block + "\nexport { LORE_WIN, LORE_MAX_PLAYERS, LORE_WIN_MODIFIERS, loreClamp, loreTotals,"
-        + " loreTargets, loreWinners, loreNewGame, loreReadGame, loreReadPrefs, loreDefaultName };"
+  INKS_SRC + block
+        + "\nexport { INKS, LORE_WIN, LORE_MAX_PLAYERS, LORE_WIN_MODIFIERS, LORE_SEAT_INKS,"
+        + " loreClamp, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame,"
+        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk };"
 ).toString("base64"));
 
 let failed = 0;
@@ -44,9 +52,10 @@ const eq = (name, got, want) => {
   failed++; console.log("  FAIL " + name + "\n         got  " + g + "\n         want " + w);
 };
 
-const { LORE_WIN, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame, loreReadPrefs } = mod;
+const { INKS, LORE_WIN, LORE_SEAT_INKS, loreTotals, loreTargets, loreWinners,
+        loreNewGame, loreReadGame, loreReadPrefs, loreDefaultInk, loreInkOk } = mod;
 const game = (events, mods, n = 2) => ({
-  ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), mods),
+  ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), null, mods),
   events: events.map(([p, d], i) => ({t: i, p, d})),
 });
 
@@ -106,6 +115,25 @@ eq("count is clamped up", prefs(JSON.stringify({count:0})).count, 1);
 eq("count is clamped down", prefs(JSON.stringify({count:99})).count, 4);
 eq("faceOff defaults on", prefs("{}").faceOff, true);
 eq("faceOff is respected when off", prefs(JSON.stringify({faceOff:false})).faceOff, false);
+
+console.log("\nseats are identified by ink");
+// A duplicate default would put two seats in the same colour at a fresh table,
+// which is the one thing the ink scheme exists to prevent.
+eq("the four default seat inks are distinct", new Set(LORE_SEAT_INKS).size, 4);
+eq("every default seat ink is a real Lorcana ink", LORE_SEAT_INKS.every(i => INKS.includes(i)), true);
+eq("defaults are assigned per seat", [0,1,2,3].map(loreDefaultInk), LORE_SEAT_INKS);
+eq("a bogus ink is rejected", loreInkOk("Rainbow"), false);
+eq("a real ink is accepted", loreInkOk("Sapphire"), true);
+eq("new game keeps a chosen ink", loreNewGame(["a","b"], ["Steel","Sapphire"]).players.map(p => p.ink),
+  ["Steel", "Sapphire"]);
+eq("new game replaces a bogus ink with the seat default",
+  loreNewGame(["a","b"], ["Rainbow", "Sapphire"]).players.map(p => p.ink),
+  [loreDefaultInk(0), "Sapphire"]);
+eq("a stored game with a junk ink is repaired, not discarded",
+  bad(JSON.stringify({v:1, players:[{name:"A", ink:"Puce"}], events:[]})).players[0].ink,
+  loreDefaultInk(0));
+eq("prefs repair a junk ink in place",
+  prefs(JSON.stringify({inks:["Ruby","Nope","Steel"]})).inks, ["Ruby", loreDefaultInk(1), "Steel"]);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall lore-tracker checks passed");
 process.exit(failed ? 1 : 0);
