@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=366">
+<link rel="stylesheet" href="styles.css?v=367">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29651,6 +29651,17 @@ const MARKET_TOOL_INFO = {
 const LORE_PREFS_KEY = "packsink:lore:v1";
 const LORE_GAME_KEY  = "packsink:lore:game:v1";
 const LORE_WIN       = 20;
+const LORE_WIN_MIN   = 1;
+const LORE_WIN_MAX   = 99;
+// Targets people actually play to. Standard is 20; the two house formats on
+// this site move it, and Custom covers a playgroup that has its own number.
+// This is the BASE target — a whole-table setting, and a different thing from
+// LORE_WIN_MODIFIERS below, which retarget individual seats mid-game.
+const LORE_WIN_PRESETS = [
+  {win:15, label:"Pack Rush"},
+  {win:20, label:"Standard"},
+  {win:25, label:"Coconut"},
+];
 const LORE_MAX_PLAYERS = 4;
 // Cards that move the goalposts. Donald Duck - Flustered Sorcerer reads
 // "Opponents need 25 lore to win the game", and the official app grew a
@@ -29687,11 +29698,15 @@ const loreTotals = (game) => {
   for(const e of game.events) if(t[e.p] != null) t[e.p] += e.d;
   return t;
 };
-// A player's target: the highest modifier aimed at them, else 20. Applying a
-// modifier to a seat means "this seat's OPPONENTS need N", so the target lives
-// on everyone EXCEPT the seat that played it.
+// The game's base target, defaulting for any game stored before the setting
+// existed. Read through this, never `game.win` directly.
+const loreWinOf = (game) => loreClamp(Math.round(Number(game && game.win)) || LORE_WIN,
+  LORE_WIN_MIN, LORE_WIN_MAX);
+// A player's target: the highest modifier aimed at them, else the base. A
+// modifier can only ever RAISE it — Donald asking for 25 does nothing at a
+// Coconut table that is already playing to 25.
 const loreTargets = (game) => game.players.map((_, i) => {
-  let win = LORE_WIN;
+  let win = loreWinOf(game);
   for(const m of game.mods || []){
     if(m.p === i) continue;
     const def = LORE_WIN_MODIFIERS.find(d => d.id === m.id);
@@ -29706,9 +29721,10 @@ const loreWinners = (game) => {
 // Named options, not positional: this grew from (players, mods) to
 // (players, inks, arts, mods) in two steps, and each time a caller kept
 // passing mods in the old slot and silently got a game with no modifiers.
-const loreNewGame = (players, {inks, arts, mods} = {}) => ({
+const loreNewGame = (players, {inks, arts, mods, win} = {}) => ({
   v: 1,
   startedAt: Date.now(),
+  win: loreClamp(Math.round(Number(win)) || LORE_WIN, LORE_WIN_MIN, LORE_WIN_MAX),
   players: players.map((name, i) => ({
     name: (name || "").trim() || loreDefaultName(i),
     ink: loreInkOk((inks || [])[i]) ? inks[i] : loreDefaultInk(i),
@@ -29728,6 +29744,7 @@ const loreReadGame = () => {
     return {
       v: 1,
       startedAt: Number(g.startedAt) || Date.now(),
+      win: loreWinOf(g),
       players: g.players.map((p, i) => ({
         name: String((p && p.name) || loreDefaultName(i)).slice(0, 24),
         ink: loreInkOk(p && p.ink) ? p.ink : loreDefaultInk(i),
@@ -29748,6 +29765,11 @@ const loreReadGame = () => {
 // people who want elapsed and remaining at once.
 const LORE_TIMER_MODES = [["off","Off"],["up","Count up"],["down","Count down"],["both","Both"]];
 const LORE_TIMER_MINS = [30, 40, 50, 60, 75];
+// A round clock is not always one of the five. Anything in range is storable —
+// the preset chips are shortcuts, not the set of legal values, so "Custom" is
+// simply the state of holding a number that isn't one of them.
+const LORE_MINS_MIN = 1;
+const LORE_MINS_MAX = 600;
 
 const loreReadPrefs = () => {
   try {
@@ -29765,13 +29787,14 @@ const loreReadPrefs = () => {
       arts:    Array.isArray(p.arts) ? p.arts.map(loreCleanArt) : [],
       faceOff: p.faceOff !== false,
       keepAwake: p.keepAwake !== false,
-      match:   num(p.match, 1, 1, 5),
+      win:     num(p.win, LORE_WIN, LORE_WIN_MIN, LORE_WIN_MAX),
       timerMode: LORE_TIMER_MODES.some(m => m[0] === p.timerMode) ? p.timerMode : "up",
-      timerMins: LORE_TIMER_MINS.includes(Math.round(Number(p.timerMins))) ? Math.round(Number(p.timerMins)) : 50,
-      wins:    Array.isArray(p.wins) ? p.wins.map(n => Number(n) || 0) : [],
+      // Clamped, NOT membership-tested — a custom 45 must survive a reload,
+      // and the old test silently reset anything off the preset list to 50.
+      timerMins: num(p.timerMins, 50, LORE_MINS_MIN, LORE_MINS_MAX),
     };
   } catch { return {count:2, names:[], inks:[], arts:[], faceOff:true, keepAwake:true,
-                    match:1, timerMode:"up", timerMins:50, wins:[]}; }
+                    win:LORE_WIN, timerMode:"up", timerMins:50}; }
 };
 
 // Keeps the screen on for the length of a game. The single most common
@@ -30002,7 +30025,7 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
   </div>`;
 }
 
-function LoreTracker({onOpen}){
+function LoreTracker({onOpen, onHome}){
   const prefs0 = useRef(loreReadPrefs()).current;
   const [game, setGame]   = useState(() => loreReadGame());
   const [count, setCount] = useState(prefs0.count);
@@ -30015,19 +30038,19 @@ function LoreTracker({onOpen}){
     Array.from({length: LORE_MAX_PLAYERS}, (_, i) => loreCleanArt(prefs0.arts[i])));
   const [faceOff, setFaceOff]     = useState(prefs0.faceOff);
   const [keepAwake, setKeepAwake] = useState(prefs0.keepAwake);
-  const [matchLen, setMatchLen]   = useState(prefs0.match);
+  const [winTarget, setWinTarget] = useState(prefs0.win);
   const [timerMode, setTimerMode] = useState(prefs0.timerMode);
   const [timerMins, setTimerMins] = useState(prefs0.timerMins);
-  const [wins, setWins]           = useState(() => prefs0.wins.slice(0, LORE_MAX_PLAYERS));
+  // "Custom" is not a stored mode, it is the state of holding a number that
+  // isn't one of the preset chips — except that you have to be able to ENTER
+  // it from a preset, which is what these two flags are for.
+  const [minsCustom, setMinsCustom] = useState(() => !LORE_TIMER_MINS.includes(prefs0.timerMins));
+  const [winCustom, setWinCustom]   = useState(() => !LORE_WIN_PRESETS.some(w => w.win === prefs0.win));
   const [showLog, setShowLog]     = useState(false);
   const [showMods, setShowMods]   = useState(false);
   const [menuOpen, setMenuOpen]   = useState(false);
   const [artFor, setArtFor]       = useState(null);
   const [ended, setEnded]         = useState(false);
-  // The board covers the page, including the nav. Without a way out you are
-  // stuck on the tracker until you reload, which is not a thing a tab should
-  // do to you.
-  const [full, setFull]           = useState(true);
   const [now, setNow]             = useState(() => Date.now());
   const gameRef = useRef(null);
 
@@ -30041,23 +30064,25 @@ function LoreTracker({onOpen}){
 
   const playing = !!game && !ended;
   useLoreWakeLock(playing && keepAwake);
+  // The board is a full-bleed surface that covers the page, nav included — it
+  // was a toggle, and is now unconditional, because the way out is Exit rather
+  // than shrinking the board back into a page you then still have to navigate.
   useEffect(() => {
-    if(!full) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
-  }, [full]);
+  }, []);
   useEffect(() => { gameRef.current = game; }, [game]);
 
   useEffect(() => {
     try {
       localStorage.setItem(LORE_PREFS_KEY, JSON.stringify({
         count, names: names.slice(0, count), inks: inks.slice(0, count),
-        arts: arts.slice(0, count), faceOff, keepAwake, match: matchLen,
-        timerMode, timerMins, wins,
+        arts: arts.slice(0, count), faceOff, keepAwake, win: winTarget,
+        timerMode, timerMins,
       }));
     } catch {}
-  }, [count, names, inks, arts, faceOff, keepAwake, matchLen, timerMode, timerMins, wins]);
+  }, [count, names, inks, arts, faceOff, keepAwake, winTarget, timerMode, timerMins]);
   useEffect(() => {
     try {
       if(game) localStorage.setItem(LORE_GAME_KEY, JSON.stringify(game));
@@ -30098,6 +30123,12 @@ function LoreTracker({onOpen}){
     });
   }, [count, inks, arts, names]);
 
+  // Same contract as the seat settings above: changing the target moves the
+  // goalposts on the board you are looking at, not just on the next game.
+  useEffect(() => {
+    setGame(g => (!g || loreWinOf(g) === winTarget) ? g : {...g, win: winTarget});
+  }, [winTarget]);
+
   const totals  = useMemo(() => game ? loreTotals(game) : [], [game]);
   const targets = useMemo(() => game ? loreTargets(game) : [], [game]);
   const winners = useMemo(() => game ? loreWinners(game) : [], [game]);
@@ -30133,21 +30164,14 @@ function LoreTracker({onOpen}){
 
   const newGame = useCallback(() => {
     setEnded(false); setShowLog(false); setShowMods(false); setMenuOpen(false); setArtFor(null);
-    setWins(w => Array.from({length: count}, (_, i) => w[i] || 0));
     setGame(loreNewGame(names.slice(0, count),
-      {inks: inks.slice(0, count), arts: arts.slice(0, count)}));
-  }, [count, names, inks, arts]);
-  const finish = (winnerIdx) => {
-    if(winnerIdx != null) setWins(w => w.map((n, i) => i === winnerIdx ? (n || 0) + 1 : (n || 0)));
-    setEnded(true);
-  };
-  const resetMatch = () => setWins(Array.from({length: count}, () => 0));
+      {inks: inks.slice(0, count), arts: arts.slice(0, count), win: winTarget}));
+  }, [count, names, inks, arts, winTarget]);
 
   const modsOn = !!(game && game.mods && game.mods.length);
-  const matchTarget = Math.ceil(matchLen / 2);
-  const matchOver = matchLen > 1 && wins.some(w => (w || 0) >= matchTarget);
   if(!game) return html`<div class="lore-play"/>`;
 
+  const baseWin = loreWinOf(game);
   const elapsedMs = now - game.startedAt;
   const leftMs = timerMins * 60000 - elapsedMs;
   const flipSeat = (i) => count === 2 && faceOff && i === 1;
@@ -30195,14 +30219,10 @@ function LoreTracker({onOpen}){
         })}
       </div>
     </div>
-    <div class="lore-set-row">
-      <span class="lore-set-lbl">Match</span>
-      <div class="seg-toggle lore-match">
-        ${[[1,"Single"],[3,"Best of 3"],[5,"Best of 5"]].map(([n,l]) => html`<button key=${n}
-          class=${matchLen===n?"active":""} onClick=${()=>setMatchLen(n)}
-          aria-pressed=${matchLen===n}>${l}</button>`)}
-      </div>
-    </div>
+    ${/* Best-of-3/5 was here and is gone (2026-08-27, Zaven): it changed
+          nothing about the board — the scores it kept lived in a corner of the
+          bar and every game still ran to the same target — so it was a setting
+          that cost a row and answered a question a table can hold in its head. */""}
     <div class="lore-set-row">
       <span class="lore-set-lbl">Timer</span>
       <div class="seg-toggle lore-timerseg">
@@ -30212,9 +30232,23 @@ function LoreTracker({onOpen}){
     </div>
     ${(timerMode === "down" || timerMode === "both") && html`<div class="lore-set-row">
       <span class="lore-set-lbl">Round</span>
-      <div class="seg-toggle lore-timerseg">
-        ${LORE_TIMER_MINS.map(n => html`<button key=${n} class=${timerMins===n?"active":""}
-          onClick=${()=>setTimerMins(n)} aria-pressed=${timerMins===n}>${n}m</button>`)}
+      <div class="lore-set-stack">
+        <div class="seg-toggle lore-timerseg">
+          ${LORE_TIMER_MINS.map(n => html`<button key=${n}
+            class=${(!minsCustom && timerMins===n)?"active":""}
+            onClick=${()=>{setMinsCustom(false); setTimerMins(n);}}
+            aria-pressed=${!minsCustom && timerMins===n}>${n}m</button>`)}
+          <button class=${minsCustom?"active":""} onClick=${()=>setMinsCustom(true)}
+            aria-pressed=${minsCustom}>Custom</button>
+        </div>
+        ${minsCustom && html`<label class="lore-numrow">
+          <input class="lore-numinput" type="number" inputMode="numeric"
+            min=${LORE_MINS_MIN} max=${LORE_MINS_MAX} value=${timerMins}
+            aria-label="Round length in minutes"
+            onChange=${e => setTimerMins(loreClamp(Math.round(Number(e.target.value)) || LORE_MINS_MIN,
+              LORE_MINS_MIN, LORE_MINS_MAX))}/>
+          <span>minutes</span>
+        </label>`}
       </div>
     </div>`}
     <div class="lore-set-row lore-set-opts">
@@ -30229,13 +30263,13 @@ function LoreTracker({onOpen}){
     </div>
     <div class="lore-menu-acts">
       <button class="lore-winbtn" onClick=${newGame}>New game</button>
-      ${matchLen > 1 && html`<button class="lore-winbtn lore-winbtn--ghost"
-        onClick=${()=>{resetMatch(); newGame();}}>Reset match</button>`}
-      <button class="lore-winbtn lore-winbtn--ghost"
-        onClick=${()=>{setFull(f => !f); setMenuOpen(false); setArtFor(null);}}>
-        ${full ? "Exit full screen" : "Full screen"}</button>
       ${onOpen && html`<button class="lore-winbtn lore-winbtn--ghost"
         onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} Roll for first player</button>`}
+      ${/* Was "Exit full screen", which un-covered the page and left you on
+            the Analytics tab still looking at a board — a step, not an exit.
+            The board covers the nav, so the way out has to BE the way out. */""}
+      ${onHome && html`<a class="lore-winbtn lore-winbtn--ghost lore-exit" href="/"
+        onClick=${navHandler(()=>onHome())}>${uiIcon("close", 14)} Exit to home</a>`}
     </div>
     ${/* The legality note used to sit under the setup screen. The screen is
           gone; the note isn't, because it's the honest part. */ ""}
@@ -30254,7 +30288,7 @@ function LoreTracker({onOpen}){
     </details>
   </div>`;
 
-  return html`<div class=${"lore-play"+(full?" is-live":"")}>
+  return html`<div class="lore-play is-live">
     <div class="lore-bar">
       <button class=${"lore-hud"+(menuOpen?" active":"")} onClick=${()=>setMenuOpen(v=>!v)}
         aria-expanded=${menuOpen} title="Menu and settings" aria-label="Menu and settings">
@@ -30268,7 +30302,10 @@ function LoreTracker({onOpen}){
       <button class=${"lore-hud lore-hud--goal"+(showMods||modsOn?" active":"")}
         onClick=${()=>setShowMods(v=>!v)} aria-expanded=${showMods}
         title="Cards that change how much lore it takes to win" aria-label="Win target">
-        <${LoreDiamond} size=${15}/>${modsOn ? "" : LORE_WIN}</button>
+        ${/* The number is dropped only when the seats actually DISAGREE — a
+              modifier that every seat already meets (Donald at a Coconut
+              table) leaves one honest number to show. */""}
+        <${LoreDiamond} size=${15}/>${targets.every(t => t === targets[0]) ? targets[0] : ""}</button>
       ${timerMode !== "off" && html`<span class="lore-timer" aria-live="off">
         ${(timerMode === "up" || timerMode === "both")
           && html`<span class="lore-timer-up">${loreFmtClock(elapsedMs)}</span>`}
@@ -30276,10 +30313,27 @@ function LoreTracker({onOpen}){
           && html`<span class=${"lore-timer-down"+(leftMs <= 0 ? " over" : leftMs < 300000 ? " low" : "")}>
             ${leftMs < 0 ? "+" : ""}${loreFmtClock(Math.abs(leftMs))}</span>`}
       </span>`}
-      ${matchLen > 1 && html`<span class="lore-bar-match">
-        ${game.players.map((p, i) => (wins[i] || 0)).join("–")}
-      </span>`}
     </div>
+    ${/* Two different things live behind the goal button, in this order: the
+          table's BASE target (a format choice — Pack Rush 15, Standard 20,
+          Coconut 25, or your own number) and then the cards that retarget
+          individual seats mid-game. A modifier can only raise a seat's target,
+          so Donald's 25 is a no-op at a Coconut table, which is correct. */""}
+    ${showMods && html`<div class="lore-mods lore-mods--target">
+      <span class="lore-mods-lbl">Play to</span>
+      ${LORE_WIN_PRESETS.map(w => html`<button key=${w.win}
+        class=${"lore-mod-btn"+((!winCustom && winTarget===w.win)?" active":"")}
+        onClick=${()=>{setWinCustom(false); setWinTarget(w.win);}}
+        aria-pressed=${!winCustom && winTarget===w.win}
+        title=${w.label+" — "+w.win+" lore"}>${w.label} <b>${w.win}</b></button>`)}
+      <button class=${"lore-mod-btn"+(winCustom?" active":"")}
+        onClick=${()=>setWinCustom(true)} aria-pressed=${winCustom}>Custom</button>
+      ${winCustom && html`<input class="lore-numinput lore-numinput--sm" type="number"
+        inputMode="numeric" min=${LORE_WIN_MIN} max=${LORE_WIN_MAX} value=${winTarget}
+        aria-label="Lore needed to win"
+        onChange=${e => setWinTarget(loreClamp(Math.round(Number(e.target.value)) || LORE_WIN_MIN,
+          LORE_WIN_MIN, LORE_WIN_MAX))}/>`}
+    </div>`}
     ${(showMods || modsOn) && LORE_WIN_MODIFIERS.map(m => html`<div key=${m.id} class="lore-mods">
       <span class="lore-mods-lbl" title=${m.help}>${m.card}</span>
       ${game.players.map((p, i) => html`<button key=${i}
@@ -30297,16 +30351,14 @@ function LoreTracker({onOpen}){
     ${winners.length > 0 && !ended && html`<div class="lore-winbar">
       <span>${winners.map(i => game.players[i].name).join(" & ")}
         ${winners.length > 1 ? " reach " : " reaches "}${targets[winners[0]]} lore.</span>
-      <button class="lore-winbtn" onClick=${()=>finish(winners.length === 1 ? winners[0] : null)}>
-        End game</button>
+      <button class="lore-winbtn" onClick=${()=>setEnded(true)}>End game</button>
     </div>`}
     ${ended && html`<div class="lore-winbar lore-winbar--done">
-      <span>${matchOver
-        ? game.players[wins.indexOf(Math.max(...wins))].name + " takes the match."
+      <span>${winners.length
+        ? winners.map(i => game.players[i].name).join(" & ")
+          + (winners.length > 1 ? " win." : " wins.")
         : "Game over."}</span>
       <button class="lore-winbtn" onClick=${newGame}>Next game</button>
-      ${matchLen > 1 && html`<button class="lore-winbtn lore-winbtn--ghost"
-        onClick=${()=>{resetMatch(); newGame();}}>Reset match</button>`}
     </div>`}
     ${showLog && html`<div class="lore-log">
       ${!game.events.length
@@ -30361,7 +30413,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
                     excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
                     user, collection, updateQty, onSignIn, openSetHistory, sealedPrices,
                     incomingTradeToken, incomingTradeBlob, sub, setSub,
-                    eloPinned, setEloPinned, openScreenerSealed}){
+                    eloPinned, setEloPinned, openScreenerSealed, onHome}){
   // When the user has pinned the Chicagoland Lorcana Elo leaderboard, show it
   // as the rightmost sub-tab. Stays hidden for everyone else (but the
   // ?a=elo deep link still works via MARKET_SUBS).
@@ -30431,7 +30483,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     </div>
     ${sub==="overview" && html`<${AnalyticsOverview} subs=${subsList} onOpen=${setSub}
       onOpenSealed=${openScreenerSealed}/>`}
-    ${sub==="lore" && html`<${LoreTracker} onOpen=${setSub}/>`}
+    ${sub==="lore" && html`<${LoreTracker} onOpen=${setSub} onHome=${onHome}/>`}
     ${sub==="dice" && html`<${DiceTray} onOpen=${setSub}/>`}
     ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
@@ -41849,6 +41901,9 @@ function App(){
   // Analytics Sealed tab retired 2026-08-20). Flips the mode flags before the
   // Screener mounts, so its useState initializers pick them up. Used by the
   // ?a=sealed redirect below and Analytics' "Sealed ↗" pointer chip.
+  // The Lore Tracker's board covers the nav, so it needs a way out that does
+  // not depend on the nav being reachable.
+  const openHome = useCallback(() => setView("home"), []);
   const openScreenerSealed = useCallback(() => {
     try {
       localStorage.setItem("packsink:screener:showSealed", "1");
@@ -44345,7 +44400,8 @@ function App(){
       incomingTradeToken=${initialUrlParams.tradeToken} incomingTradeBlob=${initialUrlParams.trade}
       sub=${marketSub} setSub=${setMarketSub}
       eloPinned=${eloPinned} setEloPinned=${setEloPinned}
-      openSetHistory=${openSetHistory} openScreenerSealed=${openScreenerSealed}/>`}
+      openSetHistory=${openSetHistory} openScreenerSealed=${openScreenerSealed}
+      onHome=${openHome}/>`}
     ${viewsReady&&view==="screener"&&html`<${PriceDatabase} raw=${raw} sets=${sets} theme=${theme}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${signIn}
       onCompareCards=${startCompareCards}

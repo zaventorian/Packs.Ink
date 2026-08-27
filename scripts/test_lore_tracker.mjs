@@ -41,7 +41,7 @@ const INKS_SRC = inksLine.slice(0, inksLine.indexOf("\n") + 1);
 const mod = await import("data:text/javascript;base64," + Buffer.from(
   INKS_SRC + block
         + "\nexport { INKS, LORE_WIN, LORE_MAX_PLAYERS, LORE_WIN_MODIFIERS, LORE_SEAT_INKS,"
-        + " loreClamp, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame,"
+        + " loreClamp, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame, loreWinOf,"
         + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk, loreArtOk, loreCleanArt };"
 ).toString("base64"));
 
@@ -54,7 +54,8 @@ const eq = (name, got, want) => {
 
 const { INKS, LORE_WIN, LORE_SEAT_INKS, loreTotals, loreTargets, loreWinners,
         loreNewGame, loreReadGame, loreReadPrefs, loreDefaultInk, loreInkOk,
-        loreArtOk, loreCleanArt } = mod;
+        loreArtOk, loreCleanArt, loreWinOf } = mod;
+const newGame = loreNewGame, targets = loreTargets;
 const game = (events, mods, n = 2) => ({
   ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), {mods}),
   events: events.map(([p, d], i) => ({t: i, p, d})),
@@ -146,8 +147,36 @@ eq("timer defaults to counting up", prefs("{}").timerMode, "up");
 eq("a bogus timer mode falls back", prefs(JSON.stringify({timerMode:"sideways"})).timerMode, "up");
 eq("a real timer mode is kept", prefs(JSON.stringify({timerMode:"down"})).timerMode, "down");
 eq("round length defaults to the 50-minute Lorcana round", prefs("{}").timerMins, 50);
-eq("an off-list round length falls back", prefs(JSON.stringify({timerMins:7})).timerMins, 50);
 eq("an on-list round length is kept", prefs(JSON.stringify({timerMins:75})).timerMins, 75);
+// The preset chips are shortcuts, not the set of legal values. Until 2026-08-27
+// this membership-tested and silently reset a custom 45 to 50 on every reload,
+// which is the whole failure mode a Custom control has to not have.
+eq("a custom round length survives", prefs(JSON.stringify({timerMins:45})).timerMins, 45);
+eq("an absurd round length clamps, not resets", prefs(JSON.stringify({timerMins:99999})).timerMins, 600);
+eq("a zero round length clamps up", prefs(JSON.stringify({timerMins:0})).timerMins, 1);
+eq("a junk round length falls back", prefs(JSON.stringify({timerMins:"soon"})).timerMins, 50);
+
+console.log("\nthe base win target");
+// The target is a whole-table format choice and lives on the GAME, so a stored
+// game replays at the target it was played at rather than at whatever the
+// settings say now.
+eq("target defaults to 20", prefs("{}").win, 20);
+eq("Pack Rush is stored", prefs(JSON.stringify({win:15})).win, 15);
+eq("Coconut is stored", prefs(JSON.stringify({win:25})).win, 25);
+eq("a custom target is stored", prefs(JSON.stringify({win:13})).win, 13);
+eq("an out-of-range target clamps", prefs(JSON.stringify({win:1000})).win, 99);
+eq("a new game carries the target", newGame(["a","b"], {win:15}).win, 15);
+eq("a new game with no target plays to 20", newGame(["a","b"]).win, 20);
+eq("a game stored before the setting existed reads as 20", loreWinOf({}), 20);
+// A modifier may only RAISE a seat's target, so Donald asking for 25 is a
+// no-op at a Coconut table that is already playing to 25.
+{
+  const g = {...newGame(["a","b"], {win:15}), mods:[{id:"donald25", p:0}]};
+  eq("Donald raises the opponent's target", targets(g)[1], 25);
+  eq("...and not the seat that played it", targets(g)[0], 15);
+  const c = {...newGame(["a","b"], {win:25}), mods:[{id:"donald25", p:0}]};
+  eq("Donald is a no-op at a Coconut table", targets(c)[1], 25);
+}
 
 console.log("\nseat background art");
 // The art URL is written straight into an <img src>, and a stored preference is

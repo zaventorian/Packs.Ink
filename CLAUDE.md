@@ -113,6 +113,39 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 
 Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
+## Lore Tracker (Analytics » Lore Tracker)
+
+A full-bleed scoreboard for a table. Guarded by `node scripts/test_lore_tracker.mjs`, which
+extracts the real pure functions out of Index.html.
+
+- **The board covers the page, nav included, and always has** — the full-screen toggle is gone
+  (2026-08-27). "Exit full screen" un-covered the page and left you on the Analytics tab still
+  looking at a board, which is a step rather than an exit. The way out is **Exit to home** in the
+  menu, an `<a href="/">` + `navHandler` driving App's `openHome` (`setView("home")`), passed down
+  through MarketView. The `body{overflow:hidden}` effect is unconditional now and its cleanup is
+  what restores scrolling on the way out.
+- **The base win target lives on the GAME (`game.win`), not just in prefs**, so a stored game
+  replays at the target it was played at. Read it through **`loreWinOf(game)`**, never
+  `game.win` — a game stored before the setting existed has no such field and must read as 20.
+  `LORE_WIN_PRESETS` is Pack Rush 15 / Standard 20 / Coconut 25, plus a Custom number
+  (`LORE_WIN_MIN`..`LORE_WIN_MAX`). A settings change moves the goalposts on the board you are
+  looking at, same contract as the seat settings.
+- **`LORE_WIN_PRESETS` and `LORE_WIN_MODIFIERS` are different things.** The presets are the
+  table's base target, a format choice. The modifiers (Donald Duck - Flustered Sorcerer) retarget
+  individual SEATS mid-game, and `loreTargets` takes the MAX — so a modifier can only ever raise a
+  seat's target, and Donald asking for 25 is correctly a no-op at a Coconut table already on 25.
+  Both live behind the goal button in the bar, presets first.
+- **The goal button drops its number only when the seats actually disagree.** `modsOn ? "" : win`
+  blanked it whenever any modifier was on, even when every seat still shared a target.
+- **Preset chips are shortcuts, not the set of legal values.** `loreReadPrefs` CLAMPS the round
+  length and the win target rather than membership-testing them — the old test silently reset a
+  custom 45-minute round to 50 on every reload, which is the one failure mode a Custom control
+  must not have. "Custom" is not a stored mode: it is the state of holding a number that isn't a
+  preset, held in a `minsCustom` / `winCustom` flag purely so you can ENTER it from a preset.
+- **Best-of-3/5 was removed** (2026-08-27, Zaven): the match score it kept lived in a corner of
+  the bar and changed nothing about play, so it cost a settings row to answer a question a table
+  holds in its head. `matchLen` / `wins` / `resetMatch` and the `match` + `wins` prefs are gone.
+
 ## Pin + lore-counter photos (2026-08-24)
 
 41 pins and 21 lore counters render as checklist tiles in the Sealed collection, from the static
@@ -1685,7 +1718,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v366`; `styles.css?v=366`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v367`; `styles.css?v=367`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=4**, bumped 2026-05-26 with the full-booster-pack rebake; v=3 was the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
