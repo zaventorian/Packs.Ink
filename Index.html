@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=362">
+<link rel="stylesheet" href="styles.css?v=363">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29687,6 +29687,13 @@ const loreReadGame = () => {
     };
   } catch { return null; }
 };
+// Timer modes. A round clock is a real want (both LoreElk and Lore Tracker
+// ship one) and Lorcana rounds are 50 minutes, so counting DOWN is the mode
+// that matters at an event; up is the kitchen-table default and "both" is for
+// people who want elapsed and remaining at once.
+const LORE_TIMER_MODES = [["off","Off"],["up","Count up"],["down","Count down"],["both","Both"]];
+const LORE_TIMER_MINS = [30, 40, 50, 60, 75];
+
 const loreReadPrefs = () => {
   try {
     const p = JSON.parse(localStorage.getItem(LORE_PREFS_KEY) || "{}");
@@ -29704,9 +29711,12 @@ const loreReadPrefs = () => {
       faceOff: p.faceOff !== false,
       keepAwake: p.keepAwake !== false,
       match:   num(p.match, 1, 1, 5),
+      timerMode: LORE_TIMER_MODES.some(m => m[0] === p.timerMode) ? p.timerMode : "up",
+      timerMins: LORE_TIMER_MINS.includes(Math.round(Number(p.timerMins))) ? Math.round(Number(p.timerMins)) : 50,
       wins:    Array.isArray(p.wins) ? p.wins.map(n => Number(n) || 0) : [],
     };
-  } catch { return {count:2, names:[], inks:[], arts:[], faceOff:true, keepAwake:true, match:1, wins:[]}; }
+  } catch { return {count:2, names:[], inks:[], arts:[], faceOff:true, keepAwake:true,
+                    match:1, timerMode:"up", timerMins:50, wins:[]}; }
 };
 
 // Keeps the screen on for the length of a game. The single most common
@@ -29811,7 +29821,8 @@ function LoreArtPicker({seat, current, onPick, onClose}){
                 + (current && current.id === c.id ? " active" : "")}
               title=${c.name + (c.set ? " · " + c.set : "")}
               onClick=${()=>{ onPick({id: c.id, img: c.img, name: c.name}); onClose(); }}>
-              <img src=${c.img} alt=${c.name} loading="lazy"/>
+              <img src=${c.img} alt="" loading="lazy"/>
+              <span class="lore-artpick-name">${c.name.split(" - ")[0]}</span>
             </button>`)}
           </div>`}
   </div>`;
@@ -29930,52 +29941,61 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
 }
 
 function LoreTracker(){
-  const saved = useRef(loreReadGame()).current;
   const prefs0 = useRef(loreReadPrefs()).current;
-  const [game, setGame]   = useState(saved);
+  const [game, setGame]   = useState(() => loreReadGame());
   const [count, setCount] = useState(prefs0.count);
   const [names, setNames] = useState(() =>
     Array.from({length: LORE_MAX_PLAYERS}, (_, i) => prefs0.names[i] || ""));
-  const [faceOff, setFaceOff]     = useState(prefs0.faceOff);
-  const [keepAwake, setKeepAwake] = useState(prefs0.keepAwake);
-  const [matchLen, setMatchLen]   = useState(prefs0.match);
-  const [wins, setWins]           = useState(() => prefs0.wins.slice(0, LORE_MAX_PLAYERS));
-  const [showLog, setShowLog]     = useState(false);
-  const [showMods, setShowMods]   = useState(false);
   const [inks, setInks] = useState(() =>
     Array.from({length: LORE_MAX_PLAYERS}, (_, i) =>
       loreInkOk(prefs0.inks[i]) ? prefs0.inks[i] : loreDefaultInk(i)));
   const [arts, setArts] = useState(() =>
     Array.from({length: LORE_MAX_PLAYERS}, (_, i) => loreCleanArt(prefs0.arts[i])));
-  // Setup opens COLLAPSED: the whole point of remembering your seats is that
-  // the common path is one button. Editing is deliberate.
-  const [editing, setEditing] = useState(false);
-  const [artFor, setArtFor] = useState(null);
-  const gameRef = useRef(null);
-  const [now, setNow]             = useState(() => Date.now());
+  const [faceOff, setFaceOff]     = useState(prefs0.faceOff);
+  const [keepAwake, setKeepAwake] = useState(prefs0.keepAwake);
+  const [matchLen, setMatchLen]   = useState(prefs0.match);
+  const [timerMode, setTimerMode] = useState(prefs0.timerMode);
+  const [timerMins, setTimerMins] = useState(prefs0.timerMins);
+  const [wins, setWins]           = useState(() => prefs0.wins.slice(0, LORE_MAX_PLAYERS));
+  const [showLog, setShowLog]     = useState(false);
+  const [showMods, setShowMods]   = useState(false);
+  const [menuOpen, setMenuOpen]   = useState(false);
+  const [artFor, setArtFor]       = useState(null);
   const [ended, setEnded]         = useState(false);
+  // The board covers the page, including the nav. Without a way out you are
+  // stuck on the tracker until you reload, which is not a thing a tab should
+  // do to you.
+  const [full, setFull]           = useState(true);
+  const [now, setNow]             = useState(() => Date.now());
+  const gameRef = useRef(null);
+
+  // Open the tab and you are already keeping score. There is no front door:
+  // the settings that a setup screen used to ask for are remembered, and the
+  // one in a hundred times you want to change them, the menu is right there.
+  useEffect(() => {
+    if(!game) setGame(loreNewGame(names.slice(0, count),
+      {inks: inks.slice(0, count), arts: arts.slice(0, count)}));
+  }, [game, names, count, inks, arts]);
 
   const playing = !!game && !ended;
   useLoreWakeLock(playing && keepAwake);
-  // The live board is position:fixed over the page; without this the document
-  // behind it still scrolls under a thumb that misses a seat.
   useEffect(() => {
-    if(!playing) return;
+    if(!full) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
-  }, [playing]);
+  }, [full]);
+  useEffect(() => { gameRef.current = game; }, [game]);
 
   useEffect(() => {
     try {
       localStorage.setItem(LORE_PREFS_KEY, JSON.stringify({
         count, names: names.slice(0, count), inks: inks.slice(0, count),
-        arts: arts.slice(0, count), faceOff, keepAwake, match: matchLen, wins,
+        arts: arts.slice(0, count), faceOff, keepAwake, match: matchLen,
+        timerMode, timerMins, wins,
       }));
     } catch {}
-  }, [count, names, inks, arts, faceOff, keepAwake, matchLen, wins]);
-  // Autosave every change. "Remembers your score even if your phone dies" is a
-  // headline feature of the paid competitors; here it is four lines.
+  }, [count, names, inks, arts, faceOff, keepAwake, matchLen, timerMode, timerMins, wins]);
   useEffect(() => {
     try {
       if(game) localStorage.setItem(LORE_GAME_KEY, JSON.stringify(game));
@@ -29988,18 +30008,38 @@ function LoreTracker(){
     return () => clearInterval(iv);
   }, [playing]);
 
-  useEffect(() => { gameRef.current = game; }, [game]);
-  const totals   = useMemo(() => game ? loreTotals(game) : [], [game]);
-  const targets  = useMemo(() => game ? loreTargets(game) : [], [game]);
-  const winners  = useMemo(() => game ? loreWinners(game) : [], [game]);
+  // Settings edit the board you are looking at, not just the next one. Picking
+  // an ink or a card in the menu and watching nothing change reads as broken —
+  // and "change settings" was the whole reason the menu exists.
+  useEffect(() => {
+    setGame(g => {
+      if(!g) return g;
+      const want = count;
+      const players = Array.from({length: want}, (_, i) => {
+        const prev = g.players[i];
+        return {
+          name: prev ? prev.name : ((names[i] || "").trim() || loreDefaultName(i)),
+          ink: loreInkOk(inks[i]) ? inks[i] : loreDefaultInk(i),
+          art: loreCleanArt(arts[i]),
+        };
+      });
+      const same = players.length === g.players.length && players.every((p, i) =>
+        p.name === g.players[i].name && p.ink === g.players[i].ink
+        && (p.art && p.art.img) === (g.players[i].art && g.players[i].art.img));
+      if(same) return g;
+      // Dropping a seat drops its events with it — they are keyed by index, and
+      // leaving them would re-attach that score to whoever takes the seat next.
+      const events = players.length < g.players.length
+        ? g.events.filter(e => e.p < players.length) : g.events;
+      const mods = (g.mods || []).filter(m => m.p < players.length);
+      return {...g, players, events, mods};
+    });
+  }, [count, inks, arts, names]);
 
-  // Lore has a floor of 0, so a −1 at zero is not an event — recording a d:0
-  // would put a line in the history for something that did not happen, and
-  // undo would then need two presses to reach the last real change.
-  // Returns whether the press actually moved anything, so a tap at 0 produces
-  // no "-1" floater. The ref check only gates that feedback; the clamp inside
-  // the updater is the authoritative one, because two presses landing in the
-  // same frame both read the same stale ref and would otherwise both apply.
+  const totals  = useMemo(() => game ? loreTotals(game) : [], [game]);
+  const targets = useMemo(() => game ? loreTargets(game) : [], [game]);
+  const winners = useMemo(() => game ? loreWinners(game) : [], [game]);
+
   const delta = useCallback((p, d) => {
     const g = gameRef.current;
     if(!g) return false;
@@ -30008,8 +30048,8 @@ function LoreTracker(){
     try { if(navigator.vibrate) navigator.vibrate(d > 0 ? 11 : 6); } catch {}
     setGame(x => {
       if(!x) return x;
-      const now = loreTotals(x)[p] || 0;
-      const eff = loreClamp(now + d, 0, 999) - now;
+      const nowT = loreTotals(x)[p] || 0;
+      const eff = loreClamp(nowT + d, 0, 999) - nowT;
       if(!eff) return x;
       return {...x, events: x.events.concat({t: Date.now(), p, d: eff})};
     });
@@ -30029,148 +30069,149 @@ function LoreTracker(){
       : (g.mods || []).concat({id, p})};
   }), []);
 
-  const start = () => {
+  const newGame = useCallback(() => {
+    setEnded(false); setShowLog(false); setShowMods(false); setMenuOpen(false); setArtFor(null);
     setWins(w => Array.from({length: count}, (_, i) => w[i] || 0));
-    setEnded(false); setShowLog(false);
     setGame(loreNewGame(names.slice(0, count),
       {inks: inks.slice(0, count), arts: arts.slice(0, count)}));
-  };
-  // Finishing a game banks the result and clears the board, but leaves the
-  // match score standing — that is the whole point of best-of.
+  }, [count, names, inks, arts]);
   const finish = (winnerIdx) => {
     if(winnerIdx != null) setWins(w => w.map((n, i) => i === winnerIdx ? (n || 0) + 1 : (n || 0)));
     setEnded(true);
   };
-  const nextGame = () => { setEnded(false); setShowLog(false);
-    setGame(loreNewGame(names.slice(0, count),
-      {inks: inks.slice(0, count), arts: arts.slice(0, count)})); };
-  const quit = () => { setEnded(false); setShowLog(false); setGame(null); };
   const resetMatch = () => setWins(Array.from({length: count}, () => 0));
 
   const modsOn = !!(game && game.mods && game.mods.length);
   const matchTarget = Math.ceil(matchLen / 2);
   const matchOver = matchLen > 1 && wins.some(w => (w || 0) >= matchTarget);
+  if(!game) return html`<div class="lore-play"/>`;
 
-  if(!game) return html`<${React.Fragment}>
-    <${MarketHeader} title="Lore Tracker"
-      sub="Keep score at the table — one to four players, every change logged."/>
-    <div class="lore-setup">
-      ${/* Collapsed: your seats as they were last time, and one button. */ ""}
-      <div class="lore-lineup">
+  const elapsedMs = now - game.startedAt;
+  const leftMs = timerMins * 60000 - elapsedMs;
+  const flipSeat = (i) => count === 2 && faceOff && i === 1;
+  const seatLabel = (i) => (names[i] || "").trim() || loreDefaultName(i);
+
+  const settings = html`<div class="lore-menu-body">
+    <div class="lore-set-row">
+      <span class="lore-set-lbl">Players</span>
+      <div class="seg-toggle lore-count">
+        ${[1,2,3,4].map(n => html`<button key=${n} class=${count===n?"active":""}
+          onClick=${()=>setCount(n)} aria-pressed=${count===n}>${n}</button>`)}
+      </div>
+    </div>
+    <div class="lore-set-row lore-set-row--names">
+      <span class="lore-set-lbl">Seats</span>
+      <div class="lore-seatsetup">
         ${Array.from({length: count}, (_, i) => {
           const c = INK_COLORS[inks[i]] || INK_COLORS.Amber;
-          return html`<div key=${i} class=${"lore-lineup-seat"+(arts[i]?" has-art":"")}
-            style=${{"--seat-ink": c.border}}>
-            ${arts[i] && html`<img class="lore-lineup-art" src=${arts[i].img} alt="" aria-hidden="true"/>`}
-            <img class="lore-lineup-shield" src=${INK_ICONS[inks[i]]} alt=${inks[i]} title=${inks[i]}/>
-            <span class="lore-lineup-name">${names[i] || loreDefaultName(i)}</span>
+          return html`<div key=${i} class="lore-setseat"
+            style=${{"--seat-ink": c.border, "--seat-ink-soft": c.bg}}>
+            <input class="lore-nameinput" value=${names[i] || ""}
+              placeholder=${loreDefaultName(i)} maxLength=${24}
+              aria-label=${"Name for "+loreDefaultName(i)}
+              onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>
+            <div class="lore-inkpick" role="group" aria-label=${"Ink for "+seatLabel(i)}>
+              ${INKS.map(k => html`<button key=${k}
+                class=${"lore-inkbtn"+(inks[i]===k?" active":"")}
+                style=${{"--ink":INK_COLORS[k].border}}
+                title=${k} aria-label=${k} aria-pressed=${inks[i]===k}
+                onClick=${()=>setInks(v => v.map((x, n) => n === i ? k : x))}>
+                <img src=${INK_ICONS[k]} alt=""/>
+              </button>`)}
+            </div>
+            <button class=${"lore-artbtn"+(arts[i]?" has-art":"")}
+              onClick=${()=>setArtFor(artFor === i ? null : i)} aria-expanded=${artFor === i}>
+              ${arts[i]
+                ? html`<img class="lore-artbtn-thumb" src=${arts[i].img} alt=""/>`
+                : uiIcon("image", 14)}
+              <span>${arts[i] ? (arts[i].name || "Card art") : "Card art"}</span>
+            </button>
+            ${artFor === i && html`<${LoreArtPicker} seat=${seatLabel(i)}
+              current=${arts[i]} onClose=${()=>setArtFor(null)}
+              onPick=${a => setArts(v => v.map((x, n) => n === i ? a : x))}/>`}
           </div>`;
         })}
       </div>
-      <div class="lore-go">
-        <button class="lore-start" onClick=${start}>Start game</button>
-        <button class=${"lore-editbtn"+(editing?" active":"")} onClick=${()=>setEditing(v=>!v)}
-          aria-expanded=${editing}>${uiIcon("edit", 14)} ${editing ? "Done" : "Edit seats"}</button>
-      </div>
-      ${matchLen > 1 && html`<p class="lore-resume-note">Best of ${matchLen}.</p>`}
-
-      ${editing && html`<div class="lore-edit">
-        <div class="lore-set-row">
-          <span class="lore-set-lbl">Players</span>
-          <div class="seg-toggle lore-count">
-            ${[1,2,3,4].map(n => html`<button key=${n} class=${count===n?"active":""}
-              onClick=${()=>setCount(n)} aria-pressed=${count===n}>${n}</button>`)}
-          </div>
-        </div>
-        <div class="lore-set-row lore-set-row--names">
-          <span class="lore-set-lbl">Seats</span>
-          <div class="lore-seatsetup">
-            ${Array.from({length: count}, (_, i) => {
-              const c = INK_COLORS[inks[i]] || INK_COLORS.Amber;
-              return html`<div key=${i} class="lore-setseat"
-                style=${{"--seat-ink": c.border, "--seat-ink-soft": c.bg}}>
-                <input class="lore-nameinput" value=${names[i] || ""}
-                  placeholder=${loreDefaultName(i)} maxLength=${24}
-                  aria-label=${"Name for "+loreDefaultName(i)}
-                  onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>
-                <div class="lore-inkpick" role="group" aria-label=${"Ink for "+(names[i] || loreDefaultName(i))}>
-                  ${INKS.map(k => html`<button key=${k}
-                    class=${"lore-inkbtn"+(inks[i]===k?" active":"")}
-                    style=${{"--ink":INK_COLORS[k].border}}
-                    title=${k} aria-label=${k} aria-pressed=${inks[i]===k}
-                    onClick=${()=>setInks(v => v.map((x, n) => n === i ? k : x))}>
-                    <img src=${INK_ICONS[k]} alt=""/>
-                  </button>`)}
-                </div>
-                <button class=${"lore-artbtn"+(arts[i]?" has-art":"")}
-                  onClick=${()=>setArtFor(artFor === i ? null : i)}
-                  aria-expanded=${artFor === i}>
-                  ${arts[i]
-                    ? html`<img class="lore-artbtn-thumb" src=${arts[i].img} alt=""/>`
-                    : uiIcon("image", 14)}
-                  <span>${arts[i] ? (arts[i].name || "Card art") : "Card art"}</span>
-                </button>
-                ${artFor === i && html`<${LoreArtPicker} seat=${names[i] || loreDefaultName(i)}
-                  current=${arts[i]} onClose=${()=>setArtFor(null)}
-                  onPick=${a => setArts(v => v.map((x, n) => n === i ? a : x))}/>`}
-              </div>`;
-            })}
-          </div>
-        </div>
-        <div class="lore-set-row">
-          <span class="lore-set-lbl">Match</span>
-          <div class="seg-toggle lore-match">
-            ${[[1,"Single"],[3,"Best of 3"],[5,"Best of 5"]].map(([n,l]) => html`<button key=${n}
-              class=${matchLen===n?"active":""} onClick=${()=>setMatchLen(n)}
-              aria-pressed=${matchLen===n}>${l}</button>`)}
-          </div>
-        </div>
-        <div class="lore-set-row lore-set-opts">
-          ${count === 2 && html`<label class="checkbox-group">
-            <input type="checkbox" checked=${faceOff} onChange=${e=>setFaceOff(e.target.checked)}/>
-            Face-to-face (turn my opponent's side around)
-          </label>`}
-          <label class="checkbox-group">
-            <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
-            Keep the screen awake while playing
-          </label>
-        </div>
-      </div>`}
     </div>
-    <${MarketExplainer} id="lore">
-      <p><strong>Where you may actually use this.</strong> Ravensburger's tournament rules
-      let you track lore with the <em>official Companion app</em> at Casual events, and at
-      Competitive events bar electronic devices capable of long-term storage or internet
-      access altogether. A browser on your phone is such a device, so treat this as a
-      kitchen-table and casual-play tool: at a Competitive event, use dice or paper and ask
-      the judge. Other trackers advertise themselves as "tournament legal" — as far as the
-      published rules go, that isn't a thing anyone can promise you.</p>
-      <p><strong>The log is the score.</strong> Totals are added up from the list of changes
-      rather than stored next to it, so the history can never disagree with the number on
-      screen, and undo is just dropping the last line.</p>
-      <p>Lore stops at 0, and a press that would go below it isn't recorded — so undo always
-      steps back to something that really happened. Games save themselves as you play; close
-      the tab or flatten the battery and the score is still here.</p>
-    <//>
-  <//>`;
+    <div class="lore-set-row">
+      <span class="lore-set-lbl">Match</span>
+      <div class="seg-toggle lore-match">
+        ${[[1,"Single"],[3,"Best of 3"],[5,"Best of 5"]].map(([n,l]) => html`<button key=${n}
+          class=${matchLen===n?"active":""} onClick=${()=>setMatchLen(n)}
+          aria-pressed=${matchLen===n}>${l}</button>`)}
+      </div>
+    </div>
+    <div class="lore-set-row">
+      <span class="lore-set-lbl">Timer</span>
+      <div class="seg-toggle lore-timerseg">
+        ${LORE_TIMER_MODES.map(([k,l]) => html`<button key=${k} class=${timerMode===k?"active":""}
+          onClick=${()=>setTimerMode(k)} aria-pressed=${timerMode===k}>${l}</button>`)}
+      </div>
+    </div>
+    ${(timerMode === "down" || timerMode === "both") && html`<div class="lore-set-row">
+      <span class="lore-set-lbl">Round</span>
+      <div class="seg-toggle lore-timerseg">
+        ${LORE_TIMER_MINS.map(n => html`<button key=${n} class=${timerMins===n?"active":""}
+          onClick=${()=>setTimerMins(n)} aria-pressed=${timerMins===n}>${n}m</button>`)}
+      </div>
+    </div>`}
+    <div class="lore-set-row lore-set-opts">
+      ${count === 2 && html`<label class="checkbox-group">
+        <input type="checkbox" checked=${faceOff} onChange=${e=>setFaceOff(e.target.checked)}/>
+        Face-to-face (turn my opponent's side around)
+      </label>`}
+      <label class="checkbox-group">
+        <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
+        Keep the screen awake while playing
+      </label>
+    </div>
+    <div class="lore-menu-acts">
+      <button class="lore-winbtn" onClick=${newGame}>New game</button>
+      ${matchLen > 1 && html`<button class="lore-winbtn lore-winbtn--ghost"
+        onClick=${()=>{resetMatch(); newGame();}}>Reset match</button>`}
+      <button class="lore-winbtn lore-winbtn--ghost"
+        onClick=${()=>{setFull(f => !f); setMenuOpen(false); setArtFor(null);}}>
+        ${full ? "Exit full screen" : "Full screen"}</button>
+    </div>
+    ${/* The legality note used to sit under the setup screen. The screen is
+          gone; the note isn't, because it's the honest part. */ ""}
+    <details class="lore-menu-note">
+      <summary>Where you may actually use this</summary>
+      <p>Ravensburger's tournament rules let you track lore with the <em>official
+      Companion app</em> at Casual events, and at Competitive events bar electronic
+      devices capable of long-term storage or internet access altogether. A browser on
+      your phone is such a device, so treat this as a kitchen-table and casual-play
+      tool: at a Competitive event, use dice or paper and ask the judge. Other trackers
+      advertise themselves as "tournament legal" — as far as the published rules go,
+      that isn't a thing anyone can promise you.</p>
+      <p>Totals are added up from the list of changes rather than stored beside it, so
+      the history can never disagree with the number on screen. Lore stops at 0, and a
+      press that would go below it isn't recorded. Games save themselves as you play.</p>
+    </details>
+  </div>`;
 
-  const elapsed = loreFmtClock(now - game.startedAt);
-  const flipSeat = (i) => count === 2 && faceOff && i === 1;
-  return html`<div class=${"lore-play"+(playing?" is-live":"")}>
+  return html`<div class=${"lore-play"+(full?" is-live":"")}>
     <div class="lore-bar">
-      <button class="lore-hud" onClick=${quit} title="Leave this game" aria-label="Leave this game">
-        ${uiIcon("close", 17)}</button>
+      <button class=${"lore-hud"+(menuOpen?" active":"")} onClick=${()=>setMenuOpen(v=>!v)}
+        aria-expanded=${menuOpen} title="Menu and settings" aria-label="Menu and settings">
+        ${uiIcon("list", 17)}</button>
       <button class="lore-hud" onClick=${undo} disabled=${!game.events.length}
         title="Undo the last change" aria-label="Undo the last change">${uiIcon("undo", 17)}</button>
       <button class=${"lore-hud"+(showLog?" active":"")} onClick=${()=>setShowLog(v=>!v)}
         aria-expanded=${showLog} title="Every change this game" aria-label="History">
-        ${uiIcon("list", 17)}
+        ${uiIcon("clipboard", 17)}
         ${!!game.events.length && html`<span class="lore-hud-n">${game.events.length}</span>`}</button>
       <button class=${"lore-hud lore-hud--goal"+(showMods||modsOn?" active":"")}
         onClick=${()=>setShowMods(v=>!v)} aria-expanded=${showMods}
         title="Cards that change how much lore it takes to win" aria-label="Win target">
         <${LoreDiamond} size=${15}/>${modsOn ? "" : LORE_WIN}</button>
-      <span class="lore-bar-clock" aria-label="Time this game">${elapsed}</span>
+      ${timerMode !== "off" && html`<span class="lore-timer" aria-live="off">
+        ${(timerMode === "up" || timerMode === "both")
+          && html`<span class="lore-timer-up">${loreFmtClock(elapsedMs)}</span>`}
+        ${(timerMode === "down" || timerMode === "both")
+          && html`<span class=${"lore-timer-down"+(leftMs <= 0 ? " over" : leftMs < 300000 ? " low" : "")}>
+            ${leftMs < 0 ? "+" : ""}${loreFmtClock(Math.abs(leftMs))}</span>`}
+      </span>`}
       ${matchLen > 1 && html`<span class="lore-bar-match">
         ${game.players.map((p, i) => (wins[i] || 0)).join("–")}
       </span>`}
@@ -30192,26 +30233,22 @@ function LoreTracker(){
     ${winners.length > 0 && !ended && html`<div class="lore-winbar">
       <span>${winners.map(i => game.players[i].name).join(" & ")}
         ${winners.length > 1 ? " reach " : " reaches "}${targets[winners[0]]} lore.</span>
-      ${winners.length === 1
-        ? html`<button class="lore-winbtn" onClick=${()=>finish(winners[0])}>End game</button>`
-        : html`<button class="lore-winbtn" onClick=${()=>finish(null)}>End game</button>`}
+      <button class="lore-winbtn" onClick=${()=>finish(winners.length === 1 ? winners[0] : null)}>
+        End game</button>
     </div>`}
     ${ended && html`<div class="lore-winbar lore-winbar--done">
       <span>${matchOver
         ? game.players[wins.indexOf(Math.max(...wins))].name + " takes the match."
         : "Game over."}</span>
-      <button class="lore-winbtn" onClick=${nextGame}>Next game</button>
-      ${matchLen > 1 && html`<button class="lore-winbtn lore-winbtn--ghost" onClick=${()=>{resetMatch(); nextGame();}}>
-        Reset match</button>`}
-      <button class="lore-winbtn lore-winbtn--ghost" onClick=${quit}>Done</button>
+      <button class="lore-winbtn" onClick=${newGame}>Next game</button>
+      ${matchLen > 1 && html`<button class="lore-winbtn lore-winbtn--ghost"
+        onClick=${()=>{resetMatch(); newGame();}}>Reset match</button>`}
     </div>`}
     ${showLog && html`<div class="lore-log">
       ${!game.events.length
         ? html`<p class="lore-log-empty">Nothing yet — the first change lands here.</p>`
         : html`<ol class="lore-log-list">
             ${game.events.map((e, i) => {
-              // Running total AT that moment, which is the question you are
-              // actually asking when you open a history mid-argument.
               const run = game.events.slice(0, i + 1).reduce((a, x) => a + (x.p === e.p ? x.d : 0), 0);
               return html`<li key=${i} class="lore-log-row">
                 <span class="lore-log-t">${loreFmtTime(e.t)}</span>
@@ -30221,6 +30258,17 @@ function LoreTracker(){
               </li>`;
             }).reverse()}
           </ol>`}
+    </div>`}
+    ${menuOpen && html`<div class="lore-menu-wrap">
+      <div class="lore-menu-scrim" onClick=${()=>{setMenuOpen(false); setArtFor(null);}}/>
+      <div class="lore-menu" role="dialog" aria-label="Lore tracker menu">
+        <div class="lore-menu-head">
+          <span>Settings</span>
+          <button class="lore-hud" onClick=${()=>{setMenuOpen(false); setArtFor(null);}}
+            aria-label="Close menu">${uiIcon("close", 17)}</button>
+        </div>
+        ${settings}
+      </div>
     </div>`}
   </div>`;
 }

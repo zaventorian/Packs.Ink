@@ -141,6 +141,14 @@ eq("a stored game with a junk ink is repaired, not discarded",
 eq("prefs repair a junk ink in place",
   prefs(JSON.stringify({inks:["Ruby","Nope","Steel"]})).inks, ["Ruby", loreDefaultInk(1), "Steel"]);
 
+console.log("\ntimer preferences");
+eq("timer defaults to counting up", prefs("{}").timerMode, "up");
+eq("a bogus timer mode falls back", prefs(JSON.stringify({timerMode:"sideways"})).timerMode, "up");
+eq("a real timer mode is kept", prefs(JSON.stringify({timerMode:"down"})).timerMode, "down");
+eq("round length defaults to the 50-minute Lorcana round", prefs("{}").timerMins, 50);
+eq("an off-list round length falls back", prefs(JSON.stringify({timerMins:7})).timerMins, 50);
+eq("an on-list round length is kept", prefs(JSON.stringify({timerMins:75})).timerMins, 75);
+
 console.log("\nseat background art");
 // The art URL is written straight into an <img src>, and a stored preference is
 // the one input a page can't vouch for — so anything that isn't plainly an
@@ -165,6 +173,19 @@ eq("a stored game with unsafe art loads with none",
 eq("prefs drop unsafe art too",
   prefs(JSON.stringify({arts:[{id:"c", img:"javascript:x"}, {id:"d", img:"/ok.png"}]})).arts,
   [null, {id:"d", img:"/ok.png", name:""}]);
+
+console.log("\ndropping a seat drops its events with it");
+// Events are keyed by seat INDEX, so a stored event pointing past the end of a
+// shrunken table would silently re-attach that score to whoever sits there
+// next. loreReadGame is the backstop for that on the way in.
+const shrunk = bad(JSON.stringify({
+  v:1, players:[{name:"A", ink:"Ruby"}],
+  events:[{t:1,p:0,d:3},{t:2,p:1,d:9}],
+  mods:[{id:"donald25", p:1}],
+}));
+eq("events for a seat that no longer exists are dropped", shrunk.events.map(e => e.p), [0]);
+eq("its score does not leak into the surviving seat", loreTotals(shrunk), [3]);
+eq("a modifier on a dropped seat goes too", shrunk.mods, []);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall lore-tracker checks passed");
 process.exit(failed ? 1 : 0);
