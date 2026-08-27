@@ -35,13 +35,16 @@ const mainline = grab("const MAINLINE_SETS = [", "\n];");
 const parents  = grab("const SET_PARENT = {", "\n};");
 const display  = grab("const SET_DISPLAY_NAMES = {", "\n};");
 const maps     = grab("let _setReleaseById = new Map();", "_setReleaseById = rel; _setRankById = rank; _setFamilyById = fam;\n};");
+const fromRows = grab("const printingsFromRows = (rows) => {", "\n};");
 const printFn  = grab("const cardPrintingsFor = (catalog, productName) => {", "\n};");
+const spansFn  = grab("const spansTwoReleases = (printings) =>", ";");
+const deckFn   = grab("const deckReprintNotes = (catalog, deckCards, cardById) => {", "\n};");
 const verdictFn = grab("const reprintVerdict = (printings, curSetId) => {", "\n};");
 
-const { setSetReleaseDates, cardPrintingsFor, reprintVerdict } =
+const { setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes } =
   await import("data:text/javascript," + encodeURIComponent(
-    [mainline, parents, display, maps, printFn, verdictFn,
-     "export {setSetReleaseDates, cardPrintingsFor, reprintVerdict};"].join("\n")));
+    [mainline, parents, display, maps, fromRows, printFn, spansFn, deckFn, verdictFn,
+     "export {setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes};"].join("\n")));
 
 // The real sets table, trimmed to the rows these cases exercise. Dates are the
 // live released_at values — note the three deliberate ties.
@@ -174,6 +177,54 @@ const verdictFor = (rows, setId) => {
                 row("s_tfc", "The First Chapter", "a", {"Low Price": 3, tcg_printing: "Cold Foil"})];
   ok("normal + foil collapse to one entry at the lower price",
      cardPrintingsFor(rows, "Card").map(e => [e.card_id, e.price]), [["a", 3]]);
+}
+
+// ── 11. The deck footnote: which cards here exist in more than one set ──
+//
+// Same three rules as the verdict, applied per deck card. What makes this
+// worth guarding separately: it takes its names from `cardById` (deck rows
+// carry card_ids, not names), and both failure modes are silent — a deck that
+// lists nothing looks like a deck with no reprints, and one that lists a card
+// printed once sends the player hunting through a binder for a set that
+// doesn't exist.
+{
+  const named = (set_id, set, card_id, name, extra = {}) =>
+    ({...row(set_id, set, card_id, extra), "Product Name": name});
+  const catalog = [
+    named("s_tfc",    "The First Chapter",     "elsa_tfc",   "Elsa"),
+    named("s_fabled", "Fabled",                "elsa_fab",   "Elsa"),
+    named("s_witw",   "Whispers in the Well",  "belle_witw", "Belle"),
+    named("s_witw",   "Whispers in the Well",  "belle_ench", "Belle", {Rarity: "Enchanted", Number: "220"}),
+    named("s_aotv",   "Attack of the Vine!",   "stitch_a",   "Stitch"),
+    named("s_aotvp",  "Attack of the Vine! Promos", "stitch_p", "Stitch"),
+  ];
+  const cardById = {};
+  for (const r of catalog) (cardById[r.card_id] ||= []).push(r);
+  const notes = (cards) => deckReprintNotes(catalog, cards, cardById)
+    .map(n => [n.name, n.printings.map(p => p.set + (p.inDeck ? "*" : ""))]);
+
+  ok("a reprinted card lists every set, marking the one the deck uses",
+     notes([{card_id: "elsa_fab", quantity: 4}]),
+     [["Elsa", ["The First Chapter", "Fabled*"]]]);
+  ok("...and from the original's side the mark moves, not the list",
+     notes([{card_id: "elsa_tfc", quantity: 4}]),
+     [["Elsa", ["The First Chapter*", "Fabled"]]]);
+  ok("base + Enchanted in one set is not a reprint, so Belle stays out",
+     notes([{card_id: "belle_witw", quantity: 4}]), []);
+  ok("a set's own prerelease promo is not a reprint either",
+     notes([{card_id: "stitch_a", quantity: 4}]), []);
+  ok("a deck holding BOTH printings marks both",
+     notes([{card_id: "elsa_tfc", quantity: 2}, {card_id: "elsa_fab", quantity: 2}]),
+     [["Elsa", ["The First Chapter*", "Fabled*"]]]);
+  ok("cards are listed alphabetically, reprinted ones only",
+     deckReprintNotes(catalog,
+       [{card_id: "elsa_fab", quantity: 4}, {card_id: "belle_witw", quantity: 4},
+        {card_id: "stitch_a", quantity: 4}], cardById).map(n => n.name),
+     ["Elsa"]);
+  ok("an unknown card_id is skipped, not thrown on",
+     notes([{card_id: "nope", quantity: 4}]), []);
+  ok("empty deck", deckReprintNotes(catalog, [], cardById), []);
+  ok("no catalog", deckReprintNotes(null, [{card_id: "elsa_fab", quantity: 4}], cardById), []);
 }
 
 console.log("\n" + pass + " passed, " + fail + " failed");
