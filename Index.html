@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=367">
+<link rel="stylesheet" href="styles.css?v=368">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29702,6 +29702,13 @@ const loreTotals = (game) => {
 // existed. Read through this, never `game.win` directly.
 const loreWinOf = (game) => loreClamp(Math.round(Number(game && game.win)) || LORE_WIN,
   LORE_WIN_MIN, LORE_WIN_MAX);
+// The board dresses itself for the format it is being played at. Derived from
+// the BASE target, never from a seat's target — Donald raising one opponent to
+// 25 is not the table switching to Coconut. A hand-typed 25 does count as
+// Coconut, which is the right call: someone typing it is playing it, and the
+// alternative is storing a preset id that a custom number can then contradict.
+const LORE_FORMAT_BY_WIN = {15: "packrush", 25: "coconut"};
+const loreFormatOf = (game) => LORE_FORMAT_BY_WIN[loreWinOf(game)] || null;
 // A player's target: the highest modifier aimed at them, else the base. A
 // modifier can only ever RAISE it — Donald asking for 25 does nothing at a
 // Coconut table that is already playing to 25.
@@ -29923,7 +29930,8 @@ const LoreDiamond = ({size = 14}) => html`<svg class="lore-dia" width=${size} he
   <path d=${LORE_PIP_INNER} opacity="0.5"/>
 </svg>`;
 
-function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim, onRename}){
+function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim, onRename,
+                   format, modArt}){
   // Transient tap feedback. The ask was "know you hit it and the number went
   // up", so a press produces THREE simultaneous signals: a ripple from the
   // exact point touched (you hit it, here), a +1 that rises off that point
@@ -29988,7 +29996,8 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
     + (artOk ? " lore-seat--art" : "")
     + (flip ? " lore-seat--flip" : "")
     + (winner ? " lore-seat--win" : "")
-    + (dim ? " lore-seat--dim" : "");
+    + (dim ? " lore-seat--dim" : "")
+    + (format ? " lore-seat--" + format : "");
   // The ink drives the whole seat through two custom properties, so the tint,
   // the rail, the ripple and the glow can never disagree about who this is.
   const style = {"--seat-ink": c.border, "--seat-ink-soft": c.bg};
@@ -29999,10 +30008,21 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
       : html`<img class="lore-seat-crest" src=${INK_ICONS[ink]} alt="" aria-hidden="true"/>`}
     <div class="lore-seat-top">
       <img class="lore-seat-shield" src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>
+      ${/* Coconut is a format about coconuts, so the seats get one. Drawn
+            glyph from UI_ICON_PATHS, never an emoji — see the icons rule. */""}
+      ${format === "coconut" && html`<span class="lore-seat-coco" aria-hidden="true"
+        title="Format Coconut">${uiIcon("coconut", 14)}</span>`}
       <input class="lore-seat-name" value=${name} maxLength=${24} size=${1}
         aria-label=${"Name for seat " + (idx + 1)}
         onPointerDown=${e => e.stopPropagation()}
         onChange=${e => onRename(idx, e.target.value)}/>
+      ${/* The card this seat played, beside the number it changed. Pure
+            flourish: the art may be missing (offline, a cold catalog) and then
+            nothing renders, because the modifier row above is what actually
+            tells you the rule is on. */""}
+      ${(modArt || []).map(m => html`<img key=${m.id} class="lore-seat-mod"
+        src=${m.img} alt="" aria-hidden="true" title=${m.card}
+        onError=${e => { e.target.style.display = "none"; }}/>`)}
       <span class="lore-seat-goal"><${LoreDiamond} size=${13}/>${total}<i>/${target}</i></span>
     </div>
     ${/* The whole panel is the +1 target — the biggest thing on the screen is
@@ -30026,6 +30046,7 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
 }
 
 function LoreTracker({onOpen, onHome}){
+  const raw = useContext(CatalogContext);
   const prefs0 = useRef(loreReadPrefs()).current;
   const [game, setGame]   = useState(() => loreReadGame());
   const [count, setCount] = useState(prefs0.count);
@@ -30123,6 +30144,20 @@ function LoreTracker({onOpen, onHome}){
     });
   }, [count, inks, arts, names]);
 
+  // Art for the cards that move the goalposts, resolved once against the
+  // catalog by Product Name — LORE_WIN_MODIFIERS names its card, so a future
+  // entry gets its badge for free. A card may simply not be there (offline, a
+  // cold cache) and the badge then doesn't render.
+  const modImgById = useMemo(() => {
+    const want = new Map(LORE_WIN_MODIFIERS.map(m => [m.card, m.id]));
+    const out = {};
+    for(const r of raw || []){
+      const id = r && want.get(r["Product Name"]);
+      if(id && !out[id]) out[id] = r.img_small || r.img_normal || r.img_large || null;
+    }
+    return out;
+  }, [raw]);
+
   // Same contract as the seat settings above: changing the target moves the
   // goalposts on the board you are looking at, not just on the next game.
   useEffect(() => {
@@ -30172,6 +30207,13 @@ function LoreTracker({onOpen, onHome}){
   if(!game) return html`<div class="lore-play"/>`;
 
   const baseWin = loreWinOf(game);
+  const format  = loreFormatOf(game);
+  // The badges a seat has EARNED — one per modifier that seat played, and only
+  // where the art actually resolved.
+  const seatMods = (i) => (game.mods || [])
+    .filter(m => m.p === i && modImgById[m.id])
+    .map(m => ({id: m.id, img: modImgById[m.id],
+                card: (LORE_WIN_MODIFIERS.find(d => d.id === m.id) || {}).card || ""}));
   const elapsedMs = now - game.startedAt;
   const leftMs = timerMins * 60000 - elapsedMs;
   const flipSeat = (i) => count === 2 && faceOff && i === 1;
@@ -30346,6 +30388,7 @@ function LoreTracker({onOpen, onHome}){
         art=${p.art}
         total=${totals[i]} target=${targets[i]} delta=${delta} flip=${flipSeat(i)}
         winner=${winners.includes(i)} dim=${winners.length>0 && !winners.includes(i)}
+        format=${format} modArt=${seatMods(i)}
         onRename=${rename}/>`)}
     </div>
     ${winners.length > 0 && !ended && html`<div class="lore-winbar">

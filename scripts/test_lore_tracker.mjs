@@ -42,7 +42,7 @@ const mod = await import("data:text/javascript;base64," + Buffer.from(
   INKS_SRC + block
         + "\nexport { INKS, LORE_WIN, LORE_MAX_PLAYERS, LORE_WIN_MODIFIERS, LORE_SEAT_INKS,"
         + " loreClamp, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame, loreWinOf,"
-        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk, loreArtOk, loreCleanArt };"
+        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk, loreArtOk, loreCleanArt, loreFormatOf };"
 ).toString("base64"));
 
 let failed = 0;
@@ -54,7 +54,7 @@ const eq = (name, got, want) => {
 
 const { INKS, LORE_WIN, LORE_SEAT_INKS, loreTotals, loreTargets, loreWinners,
         loreNewGame, loreReadGame, loreReadPrefs, loreDefaultInk, loreInkOk,
-        loreArtOk, loreCleanArt, loreWinOf } = mod;
+        loreArtOk, loreCleanArt, loreWinOf, loreFormatOf } = mod;
 const newGame = loreNewGame, targets = loreTargets;
 const game = (events, mods, n = 2) => ({
   ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), {mods}),
@@ -177,6 +177,18 @@ eq("a game stored before the setting existed reads as 20", loreWinOf({}), 20);
   const c = {...newGame(["a","b"], {win:25}), mods:[{id:"donald25", p:0}]};
   eq("Donald is a no-op at a Coconut table", targets(c)[1], 25);
 }
+
+console.log("\nthe format the board dresses for");
+// Cosmetic only — coconut glyphs on the seats, italics for Pack Rush — but it
+// keys off the BASE target, and reading a SEAT's target instead would let one
+// Donald put the whole table in coconuts.
+eq("15 is Pack Rush", loreFormatOf(newGame(["a","b"], {win:15})), "packrush");
+eq("25 is Coconut", loreFormatOf(newGame(["a","b"], {win:25})), "coconut");
+eq("20 is undressed", loreFormatOf(newGame(["a","b"], {win:20})), null);
+eq("a custom number is undressed", loreFormatOf(newGame(["a","b"], {win:13})), null);
+eq("a pre-setting game is undressed", loreFormatOf({}), null);
+eq("Donald does NOT put a Pack Rush table in coconuts",
+  loreFormatOf({...newGame(["a","b"], {win:15}), mods:[{id:"donald25", p:0}]}), "packrush");
 
 console.log("\nseat background art");
 // The art URL is written straight into an <img src>, and a stored preference is
