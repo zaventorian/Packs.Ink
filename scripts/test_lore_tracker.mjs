@@ -42,7 +42,7 @@ const mod = await import("data:text/javascript;base64," + Buffer.from(
   INKS_SRC + block
         + "\nexport { INKS, LORE_WIN, LORE_MAX_PLAYERS, LORE_WIN_MODIFIERS, LORE_SEAT_INKS,"
         + " loreClamp, loreTotals, loreTargets, loreWinners, loreNewGame, loreReadGame,"
-        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk };"
+        + " loreReadPrefs, loreDefaultName, loreDefaultInk, loreInkOk, loreArtOk, loreCleanArt };"
 ).toString("base64"));
 
 let failed = 0;
@@ -53,9 +53,10 @@ const eq = (name, got, want) => {
 };
 
 const { INKS, LORE_WIN, LORE_SEAT_INKS, loreTotals, loreTargets, loreWinners,
-        loreNewGame, loreReadGame, loreReadPrefs, loreDefaultInk, loreInkOk } = mod;
+        loreNewGame, loreReadGame, loreReadPrefs, loreDefaultInk, loreInkOk,
+        loreArtOk, loreCleanArt } = mod;
 const game = (events, mods, n = 2) => ({
-  ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), null, mods),
+  ...loreNewGame(Array.from({length: n}, (_, i) => "P" + (i + 1)), {mods}),
   events: events.map(([p, d], i) => ({t: i, p, d})),
 });
 
@@ -124,16 +125,46 @@ eq("every default seat ink is a real Lorcana ink", LORE_SEAT_INKS.every(i => INK
 eq("defaults are assigned per seat", [0,1,2,3].map(loreDefaultInk), LORE_SEAT_INKS);
 eq("a bogus ink is rejected", loreInkOk("Rainbow"), false);
 eq("a real ink is accepted", loreInkOk("Sapphire"), true);
-eq("new game keeps a chosen ink", loreNewGame(["a","b"], ["Steel","Sapphire"]).players.map(p => p.ink),
+eq("new game keeps a chosen ink",
+  loreNewGame(["a","b"], {inks:["Steel","Sapphire"]}).players.map(p => p.ink),
   ["Steel", "Sapphire"]);
 eq("new game replaces a bogus ink with the seat default",
-  loreNewGame(["a","b"], ["Rainbow", "Sapphire"]).players.map(p => p.ink),
+  loreNewGame(["a","b"], {inks:["Rainbow", "Sapphire"]}).players.map(p => p.ink),
   [loreDefaultInk(0), "Sapphire"]);
+// The signature is options-based precisely because it grew twice; pin that a
+// bare second argument can no longer be mistaken for the old mods slot.
+eq("options are named — a stray array can't land in the wrong slot",
+  loreNewGame(["a","b"], {mods:[{id:"donald25", p:0}]}).mods.length, 1);
 eq("a stored game with a junk ink is repaired, not discarded",
   bad(JSON.stringify({v:1, players:[{name:"A", ink:"Puce"}], events:[]})).players[0].ink,
   loreDefaultInk(0));
 eq("prefs repair a junk ink in place",
   prefs(JSON.stringify({inks:["Ruby","Nope","Steel"]})).inks, ["Ruby", loreDefaultInk(1), "Steel"]);
+
+console.log("\nseat background art");
+// The art URL is written straight into an <img src>, and a stored preference is
+// the one input a page can't vouch for — so anything that isn't plainly an
+// http(s) or root-relative URL is dropped rather than rendered.
+eq("a normal proxied art path is kept", loreArtOk({id:"c", img:"/img-proxy/a.png"}), true);
+eq("an https art URL is kept", loreArtOk({id:"c", img:"https://cards.lorcast.io/a.png"}), true);
+eq("javascript: is rejected", loreArtOk({id:"c", img:"javascript:alert(1)"}), false);
+eq("data: is rejected", loreArtOk({id:"c", img:"data:image/svg+xml,<svg onload=alert(1)>"}), false);
+eq("a protocol-relative URL is rejected", loreArtOk({id:"c", img:"//evil.example/a.png"}), false);
+eq("a missing img is rejected", loreArtOk({id:"c"}), false);
+eq("a non-string id is rejected", loreArtOk({id:7, img:"/a.png"}), false);
+eq("clean art keeps only id, img and name",
+  Object.keys(loreCleanArt({id:"c", img:"/a.png", name:"X", evil:1})).sort(), ["id","img","name"]);
+eq("clean art of junk is null", loreCleanArt({id:"c", img:"javascript:x"}), null);
+eq("a game carries the chosen art",
+  loreNewGame(["a"], {arts:[{id:"c", img:"/a.png", name:"X"}]}).players[0].art.id, "c");
+eq("a game drops unsafe art rather than rendering it",
+  loreNewGame(["a"], {arts:[{id:"c", img:"javascript:x"}]}).players[0].art, null);
+eq("a stored game with unsafe art loads with none",
+  bad(JSON.stringify({v:1, players:[{name:"A", ink:"Ruby", art:{id:"c", img:"javascript:x"}}], events:[]}))
+    .players[0].art, null);
+eq("prefs drop unsafe art too",
+  prefs(JSON.stringify({arts:[{id:"c", img:"javascript:x"}, {id:"d", img:"/ok.png"}]})).arts,
+  [null, {id:"d", img:"/ok.png", name:""}]);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall lore-tracker checks passed");
 process.exit(failed ? 1 : 0);

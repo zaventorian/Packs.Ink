@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=361">
+<link rel="stylesheet" href="styles.css?v=362">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1868,6 +1868,11 @@ const _icoSvg = (path, sw) => (size) => html`<svg viewBox="0 0 24 24"
   aria-hidden="true" focusable="false">${path}</svg>`;
 
 const UI_ICON_PATHS = {
+  // Lore Tracker HUD. The live board is a full-bleed game surface, so its
+  // controls are drawn glyphs rather than the site's labelled pills.
+  close:     _icoSvg(html`<path d="M6 6l12 12"/><path d="M18 6L6 18"/>`),
+  undo:      _icoSvg(html`<path d="M3 8h11a6 6 0 0 1 0 12h-6"/><path d="M7 4L3 8l4 4"/>`),
+  list:      _icoSvg(html`<path d="M8 6h12"/><path d="M8 12h12"/><path d="M8 18h12"/><path d="M4 6h.01"/><path d="M4 12h.01"/><path d="M4 18h.01"/>`),
   link:      _icoSvg(html`<path d="M10 13.5a4 4 0 0 0 5.7.3l2.6-2.6a4 4 0 0 0-5.7-5.7l-1.5 1.5"/><path d="M14 10.5a4 4 0 0 0-5.7-.3l-2.6 2.6a4 4 0 0 0 5.7 5.7l1.5-1.5"/>`),
   copy:      _icoSvg(html`<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`),
   clipboard: _icoSvg(html`<path d="M9 4h6v3H9z"/><path d="M9 5.5H6.5a1.5 1.5 0 0 0-1.5 1.5v12a1.5 1.5 0 0 0 1.5 1.5h11a1.5 1.5 0 0 0 1.5-1.5V7a1.5 1.5 0 0 0-1.5-1.5H15"/><path d="M8.5 12h7"/><path d="M8.5 16h4.5"/>`),
@@ -29610,6 +29615,15 @@ const loreDefaultName = (i) => "Player " + (i + 1);
 const LORE_SEAT_INKS = ["Amber", "Amethyst", "Emerald", "Ruby"];
 const loreDefaultInk = (i) => LORE_SEAT_INKS[i % LORE_SEAT_INKS.length];
 const loreInkOk = (v) => INKS.includes(v);
+// A seat may carry a card as its backdrop. Only the id and the art URL are
+// stored: the name is for the picker's own label and everything else would go
+// stale against a catalog that keeps moving.
+// A single leading slash only — `//host/x.png` is protocol-relative and points
+// at an arbitrary origin, so it must not pass a "starts with /" test.
+const loreArtOk = (a) => !!(a && typeof a.id === "string" && typeof a.img === "string"
+  && /^(https?:\/\/|\/(?!\/))/.test(a.img));
+const loreCleanArt = (a) => loreArtOk(a)
+  ? {id: a.id, img: a.img, name: String(a.name || "").slice(0, 80)} : null;
 
 // Totals for every seat, folded out of the log. O(events) and the log is a
 // handful of entries per game, so this runs on every render without ceremony.
@@ -29634,12 +29648,16 @@ const loreWinners = (game) => {
   const t = loreTotals(game), w = loreTargets(game);
   return t.reduce((a, v, i) => (v >= w[i] ? a.concat(i) : a), []);
 };
-const loreNewGame = (players, inks, mods) => ({
+// Named options, not positional: this grew from (players, mods) to
+// (players, inks, arts, mods) in two steps, and each time a caller kept
+// passing mods in the old slot and silently got a game with no modifiers.
+const loreNewGame = (players, {inks, arts, mods} = {}) => ({
   v: 1,
   startedAt: Date.now(),
   players: players.map((name, i) => ({
     name: (name || "").trim() || loreDefaultName(i),
     ink: loreInkOk((inks || [])[i]) ? inks[i] : loreDefaultInk(i),
+    art: loreCleanArt((arts || [])[i]),
   })),
   events: [],
   mods: mods || [],
@@ -29658,6 +29676,7 @@ const loreReadGame = () => {
       players: g.players.map((p, i) => ({
         name: String((p && p.name) || loreDefaultName(i)).slice(0, 24),
         ink: loreInkOk(p && p.ink) ? p.ink : loreDefaultInk(i),
+        art: loreCleanArt(p && p.art),
       })),
       events: g.events
         .filter(e => e && Number.isFinite(e.p) && Number.isFinite(e.d) && e.p < g.players.length)
@@ -29681,12 +29700,13 @@ const loreReadPrefs = () => {
       count:   num(p.count, 2, 1, LORE_MAX_PLAYERS),
       names:   Array.isArray(p.names) ? p.names.slice(0, LORE_MAX_PLAYERS).map(n => String(n || "").slice(0, 24)) : [],
       inks:    Array.isArray(p.inks) ? p.inks.map((v, i) => loreInkOk(v) ? v : loreDefaultInk(i)) : [],
+      arts:    Array.isArray(p.arts) ? p.arts.map(loreCleanArt) : [],
       faceOff: p.faceOff !== false,
       keepAwake: p.keepAwake !== false,
       match:   num(p.match, 1, 1, 5),
       wins:    Array.isArray(p.wins) ? p.wins.map(n => Number(n) || 0) : [],
     };
-  } catch { return {count:2, names:[], faceOff:true, keepAwake:true, match:1, wins:[]}; }
+  } catch { return {count:2, names:[], inks:[], arts:[], faceOff:true, keepAwake:true, match:1, wins:[]}; }
 };
 
 // Keeps the screen on for the length of a game. The single most common
@@ -29747,6 +29767,56 @@ const loreFmtClock = (ms) => {
   return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
 };
 
+// Card-art picker for a seat's backdrop. Routes through the canonical
+// matchesCardFilter (per the single-matcher rule) rather than a local substring
+// scan, so the same smart search works here — "amber princess", "ench elsa".
+function LoreArtPicker({seat, current, onPick, onClose}){
+  const raw = useContext(CatalogContext);
+  const [q, setQ] = useState("");
+  const parsed = useMemo(() => q.trim() ? parseSearchQuery(q) : null, [q]);
+  const blank = useMemo(() => emptyFilter(), []);
+  const hits = useMemo(() => {
+    if(!Array.isArray(raw) || !raw.length) return [];
+    const out = [];
+    const seen = new Set();
+    for(const r of raw){
+      const img = r.img_normal || r.img_large || r.img_small;
+      if(!img) continue;
+      // One entry per card, not per printing — a foil and its non-foil are the
+      // same picture, and a picker full of duplicates is unusable.
+      const key = r["Product Name"] || r.card_id;
+      if(seen.has(key)) continue;
+      if(parsed && !matchesCardFilter(r, blank, parsed)) continue;
+      seen.add(key);
+      out.push({id: r.card_id, img, name: r["Product Name"] || "", set: r.Set || ""});
+      if(out.length >= 60) break;
+    }
+    return out;
+  }, [raw, parsed, blank]);
+  return html`<div class="lore-artpick" role="dialog" aria-label=${"Background art for " + seat}>
+    <div class="lore-artpick-bar">
+      <input class="lore-artpick-q" type="search" autoFocus value=${q}
+        placeholder="Search cards — name, ink, rarity…"
+        aria-label="Search cards" onChange=${e => setQ(e.target.value)}/>
+      ${current && html`<button class="lore-artpick-clear" onClick=${()=>{onPick(null); onClose();}}>
+        Remove</button>`}
+      <button class="lore-artpick-x" onClick=${onClose} aria-label="Close">${uiIcon("close", 16)}</button>
+    </div>
+    ${!Array.isArray(raw) || !raw.length
+      ? html`<p class="lore-artpick-empty">The card catalogue hasn't loaded yet.</p>`
+      : !hits.length
+        ? html`<p class="lore-artpick-empty">No cards match that.</p>`
+        : html`<div class="lore-artpick-grid">
+            ${hits.map(c => html`<button key=${c.id + c.img} class=${"lore-artpick-card"
+                + (current && current.id === c.id ? " active" : "")}
+              title=${c.name + (c.set ? " · " + c.set : "")}
+              onClick=${()=>{ onPick({id: c.id, img: c.img, name: c.name}); onClose(); }}>
+              <img src=${c.img} alt=${c.name} loading="lazy"/>
+            </button>`)}
+          </div>`}
+  </div>`;
+}
+
 // The lore diamond off the card frame — the bottom-right symbol that carries a
 // character's quest value. Drawn rather than an asset so it takes currentColor
 // and sits inline with text at any size.
@@ -29757,7 +29827,7 @@ const LoreDiamond = ({size = 14}) => html`<svg class="lore-dia" width=${size} he
   <path d="M12 6.8 17.2 12 12 17.2 6.8 12 12 6.8z" opacity="0.55"/>
 </svg>`;
 
-function LoreSeat({idx, name, ink, total, target, delta, flip, winner, dim, onRename}){
+function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim, onRename}){
   // Transient tap feedback. The ask was "know you hit it and the number went
   // up", so a press produces THREE simultaneous signals: a ripple from the
   // exact point touched (you hit it, here), a +1 that rises off that point
@@ -29766,6 +29836,15 @@ function LoreSeat({idx, name, ink, total, target, delta, flip, winner, dim, onRe
   // looked at and the others are caught peripherally.
   const [fx, setFx] = useState([]);
   const seq = useRef(0);
+  // Art comes from the catalogue and can 404 (a card repointed, an offline
+  // cache miss). A broken <img> paints the browser's broken-image glyph, so
+  // fall back to the ink crest instead of showing a torn page on the board.
+  // The FAILED URL is stored, not a boolean: a boolean needs an effect to
+  // clear it when the art changes, and that effect runs after commit — so it
+  // raced the error event and reset the flag right back to false. Keying on
+  // the url means a new picture is un-dead by construction.
+  const [deadArt, setDeadArt] = useState(null);
+  const artOk = !!art && deadArt !== art.img;
   const addFx = useCallback((d, x, y) => {
     const id = ++seq.current;
     setFx(f => f.concat({id, d, x, y}).slice(-6));
@@ -29810,6 +29889,7 @@ function LoreSeat({idx, name, ink, total, target, delta, flip, winner, dim, onRe
   const c = INK_COLORS[ink] || INK_COLORS.Amber;
   const pct = loreClamp(total / target, 0, 1);
   const cls = "lore-seat"
+    + (artOk ? " lore-seat--art" : "")
     + (flip ? " lore-seat--flip" : "")
     + (winner ? " lore-seat--win" : "")
     + (dim ? " lore-seat--dim" : "");
@@ -29817,7 +29897,10 @@ function LoreSeat({idx, name, ink, total, target, delta, flip, winner, dim, onRe
   // the rail, the ripple and the glow can never disagree about who this is.
   const style = {"--seat-ink": c.border, "--seat-ink-soft": c.bg};
   return html`<div class=${cls} style=${style} data-ink=${ink}>
-    <img class="lore-seat-crest" src=${INK_ICONS[ink]} alt="" aria-hidden="true"/>
+    ${artOk
+      ? html`<img class="lore-seat-art" src=${art.img} alt="" aria-hidden="true"
+          onError=${()=>setDeadArt(art.img)}/>`
+      : html`<img class="lore-seat-crest" src=${INK_ICONS[ink]} alt="" aria-hidden="true"/>`}
     <div class="lore-seat-top">
       <img class="lore-seat-shield" src=${INK_ICONS[ink]} alt=${ink} title=${ink}/>
       <input class="lore-seat-name" value=${name} maxLength=${24} size=${1}
@@ -29862,6 +29945,12 @@ function LoreTracker(){
   const [inks, setInks] = useState(() =>
     Array.from({length: LORE_MAX_PLAYERS}, (_, i) =>
       loreInkOk(prefs0.inks[i]) ? prefs0.inks[i] : loreDefaultInk(i)));
+  const [arts, setArts] = useState(() =>
+    Array.from({length: LORE_MAX_PLAYERS}, (_, i) => loreCleanArt(prefs0.arts[i])));
+  // Setup opens COLLAPSED: the whole point of remembering your seats is that
+  // the common path is one button. Editing is deliberate.
+  const [editing, setEditing] = useState(false);
+  const [artFor, setArtFor] = useState(null);
   const gameRef = useRef(null);
   const [now, setNow]             = useState(() => Date.now());
   const [ended, setEnded]         = useState(false);
@@ -29881,10 +29970,10 @@ function LoreTracker(){
     try {
       localStorage.setItem(LORE_PREFS_KEY, JSON.stringify({
         count, names: names.slice(0, count), inks: inks.slice(0, count),
-        faceOff, keepAwake, match: matchLen, wins,
+        arts: arts.slice(0, count), faceOff, keepAwake, match: matchLen, wins,
       }));
     } catch {}
-  }, [count, names, inks, faceOff, keepAwake, matchLen, wins]);
+  }, [count, names, inks, arts, faceOff, keepAwake, matchLen, wins]);
   // Autosave every change. "Remembers your score even if your phone dies" is a
   // headline feature of the paid competitors; here it is four lines.
   useEffect(() => {
@@ -29943,7 +30032,8 @@ function LoreTracker(){
   const start = () => {
     setWins(w => Array.from({length: count}, (_, i) => w[i] || 0));
     setEnded(false); setShowLog(false);
-    setGame(loreNewGame(names.slice(0, count), inks.slice(0, count)));
+    setGame(loreNewGame(names.slice(0, count),
+      {inks: inks.slice(0, count), arts: arts.slice(0, count)}));
   };
   // Finishing a game banks the result and clears the board, but leaves the
   // match score standing — that is the whole point of best-of.
@@ -29952,7 +30042,8 @@ function LoreTracker(){
     setEnded(true);
   };
   const nextGame = () => { setEnded(false); setShowLog(false);
-    setGame(loreNewGame(names.slice(0, count), inks.slice(0, count))); };
+    setGame(loreNewGame(names.slice(0, count),
+      {inks: inks.slice(0, count), arts: arts.slice(0, count)})); };
   const quit = () => { setEnded(false); setShowLog(false); setGame(null); };
   const resetMatch = () => setWins(Array.from({length: count}, () => 0));
 
@@ -29964,57 +30055,87 @@ function LoreTracker(){
     <${MarketHeader} title="Lore Tracker"
       sub="Keep score at the table — one to four players, every change logged."/>
     <div class="lore-setup">
-      <div class="lore-set-row">
-        <span class="lore-set-lbl">Players</span>
-        <div class="seg-toggle lore-count">
-          ${[1,2,3,4].map(n => html`<button key=${n} class=${count===n?"active":""}
-            onClick=${()=>setCount(n)} aria-pressed=${count===n}>${n}</button>`)}
+      ${/* Collapsed: your seats as they were last time, and one button. */ ""}
+      <div class="lore-lineup">
+        ${Array.from({length: count}, (_, i) => {
+          const c = INK_COLORS[inks[i]] || INK_COLORS.Amber;
+          return html`<div key=${i} class=${"lore-lineup-seat"+(arts[i]?" has-art":"")}
+            style=${{"--seat-ink": c.border}}>
+            ${arts[i] && html`<img class="lore-lineup-art" src=${arts[i].img} alt="" aria-hidden="true"/>`}
+            <img class="lore-lineup-shield" src=${INK_ICONS[inks[i]]} alt=${inks[i]} title=${inks[i]}/>
+            <span class="lore-lineup-name">${names[i] || loreDefaultName(i)}</span>
+          </div>`;
+        })}
+      </div>
+      <div class="lore-go">
+        <button class="lore-start" onClick=${start}>Start game</button>
+        <button class=${"lore-editbtn"+(editing?" active":"")} onClick=${()=>setEditing(v=>!v)}
+          aria-expanded=${editing}>${uiIcon("edit", 14)} ${editing ? "Done" : "Edit seats"}</button>
+      </div>
+      ${matchLen > 1 && html`<p class="lore-resume-note">Best of ${matchLen}.</p>`}
+
+      ${editing && html`<div class="lore-edit">
+        <div class="lore-set-row">
+          <span class="lore-set-lbl">Players</span>
+          <div class="seg-toggle lore-count">
+            ${[1,2,3,4].map(n => html`<button key=${n} class=${count===n?"active":""}
+              onClick=${()=>setCount(n)} aria-pressed=${count===n}>${n}</button>`)}
+          </div>
         </div>
-      </div>
-      <div class="lore-set-row lore-set-row--names">
-        <span class="lore-set-lbl">Seats</span>
-        <div class="lore-seatsetup">
-          ${Array.from({length: count}, (_, i) => {
-            const c = INK_COLORS[inks[i]] || INK_COLORS.Amber;
-            return html`<div key=${i} class="lore-setseat"
-              style=${{"--seat-ink": c.border, "--seat-ink-soft": c.bg}}>
-              <input class="lore-nameinput" value=${names[i] || ""}
-                placeholder=${loreDefaultName(i)} maxLength=${24}
-                aria-label=${"Name for "+loreDefaultName(i)}
-                onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>
-              <div class="lore-inkpick" role="group" aria-label=${"Ink for "+(names[i] || loreDefaultName(i))}>
-                ${INKS.map(k => html`<button key=${k}
-                  class=${"lore-inkbtn"+(inks[i]===k?" active":"")}
-                  style=${{"--ink":INK_COLORS[k].border}}
-                  title=${k} aria-label=${k} aria-pressed=${inks[i]===k}
-                  onClick=${()=>setInks(v => v.map((x, n) => n === i ? k : x))}>
-                  <img src=${INK_ICONS[k]} alt=""/>
-                </button>`)}
-              </div>
-            </div>`;
-          })}
+        <div class="lore-set-row lore-set-row--names">
+          <span class="lore-set-lbl">Seats</span>
+          <div class="lore-seatsetup">
+            ${Array.from({length: count}, (_, i) => {
+              const c = INK_COLORS[inks[i]] || INK_COLORS.Amber;
+              return html`<div key=${i} class="lore-setseat"
+                style=${{"--seat-ink": c.border, "--seat-ink-soft": c.bg}}>
+                <input class="lore-nameinput" value=${names[i] || ""}
+                  placeholder=${loreDefaultName(i)} maxLength=${24}
+                  aria-label=${"Name for "+loreDefaultName(i)}
+                  onChange=${e => setNames(ns => ns.map((n, x) => x === i ? e.target.value : n))}/>
+                <div class="lore-inkpick" role="group" aria-label=${"Ink for "+(names[i] || loreDefaultName(i))}>
+                  ${INKS.map(k => html`<button key=${k}
+                    class=${"lore-inkbtn"+(inks[i]===k?" active":"")}
+                    style=${{"--ink":INK_COLORS[k].border}}
+                    title=${k} aria-label=${k} aria-pressed=${inks[i]===k}
+                    onClick=${()=>setInks(v => v.map((x, n) => n === i ? k : x))}>
+                    <img src=${INK_ICONS[k]} alt=""/>
+                  </button>`)}
+                </div>
+                <button class=${"lore-artbtn"+(arts[i]?" has-art":"")}
+                  onClick=${()=>setArtFor(artFor === i ? null : i)}
+                  aria-expanded=${artFor === i}>
+                  ${arts[i]
+                    ? html`<img class="lore-artbtn-thumb" src=${arts[i].img} alt=""/>`
+                    : uiIcon("image", 14)}
+                  <span>${arts[i] ? (arts[i].name || "Card art") : "Card art"}</span>
+                </button>
+                ${artFor === i && html`<${LoreArtPicker} seat=${names[i] || loreDefaultName(i)}
+                  current=${arts[i]} onClose=${()=>setArtFor(null)}
+                  onPick=${a => setArts(v => v.map((x, n) => n === i ? a : x))}/>`}
+              </div>`;
+            })}
+          </div>
         </div>
-      </div>
-      <div class="lore-set-row">
-        <span class="lore-set-lbl">Match</span>
-        <div class="seg-toggle lore-match">
-          ${[[1,"Single"],[3,"Best of 3"],[5,"Best of 5"]].map(([n,l]) => html`<button key=${n}
-            class=${matchLen===n?"active":""} onClick=${()=>setMatchLen(n)}
-            aria-pressed=${matchLen===n}>${l}</button>`)}
+        <div class="lore-set-row">
+          <span class="lore-set-lbl">Match</span>
+          <div class="seg-toggle lore-match">
+            ${[[1,"Single"],[3,"Best of 3"],[5,"Best of 5"]].map(([n,l]) => html`<button key=${n}
+              class=${matchLen===n?"active":""} onClick=${()=>setMatchLen(n)}
+              aria-pressed=${matchLen===n}>${l}</button>`)}
+          </div>
         </div>
-      </div>
-      <div class="lore-set-row lore-set-opts">
-        ${count === 2 && html`<label class="checkbox-group">
-          <input type="checkbox" checked=${faceOff} onChange=${e=>setFaceOff(e.target.checked)}/>
-          Face-to-face (turn my opponent's side around)
-        </label>`}
-        <label class="checkbox-group">
-          <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
-          Keep the screen awake while playing
-        </label>
-      </div>
-      <button class="lore-start" onClick=${start}>Start game</button>
-      ${saved && html`<p class="lore-resume-note">Starting a new game replaces the one saved on this device.</p>`}
+        <div class="lore-set-row lore-set-opts">
+          ${count === 2 && html`<label class="checkbox-group">
+            <input type="checkbox" checked=${faceOff} onChange=${e=>setFaceOff(e.target.checked)}/>
+            Face-to-face (turn my opponent's side around)
+          </label>`}
+          <label class="checkbox-group">
+            <input type="checkbox" checked=${keepAwake} onChange=${e=>setKeepAwake(e.target.checked)}/>
+            Keep the screen awake while playing
+          </label>
+        </div>
+      </div>`}
     </div>
     <${MarketExplainer} id="lore">
       <p><strong>Where you may actually use this.</strong> Ravensburger's tournament rules
@@ -30037,13 +30158,18 @@ function LoreTracker(){
   const flipSeat = (i) => count === 2 && faceOff && i === 1;
   return html`<div class=${"lore-play"+(playing?" is-live":"")}>
     <div class="lore-bar">
-      <button class="lore-bar-btn" onClick=${quit}>Exit</button>
-      <button class="lore-bar-btn" onClick=${undo} disabled=${!game.events.length}>Undo</button>
-      <button class=${"lore-bar-btn"+(showLog?" active":"")} onClick=${()=>setShowLog(v=>!v)}
-        aria-expanded=${showLog}>History${game.events.length ? " ("+game.events.length+")" : ""}</button>
-      <button class=${"lore-bar-btn"+(showMods||modsOn?" active":"")} onClick=${()=>setShowMods(v=>!v)}
-        aria-expanded=${showMods} title="Cards that change how much lore it takes to win">
-        Goal ${modsOn ? "•" : LORE_WIN}</button>
+      <button class="lore-hud" onClick=${quit} title="Leave this game" aria-label="Leave this game">
+        ${uiIcon("close", 17)}</button>
+      <button class="lore-hud" onClick=${undo} disabled=${!game.events.length}
+        title="Undo the last change" aria-label="Undo the last change">${uiIcon("undo", 17)}</button>
+      <button class=${"lore-hud"+(showLog?" active":"")} onClick=${()=>setShowLog(v=>!v)}
+        aria-expanded=${showLog} title="Every change this game" aria-label="History">
+        ${uiIcon("list", 17)}
+        ${!!game.events.length && html`<span class="lore-hud-n">${game.events.length}</span>`}</button>
+      <button class=${"lore-hud lore-hud--goal"+(showMods||modsOn?" active":"")}
+        onClick=${()=>setShowMods(v=>!v)} aria-expanded=${showMods}
+        title="Cards that change how much lore it takes to win" aria-label="Win target">
+        <${LoreDiamond} size=${15}/>${modsOn ? "" : LORE_WIN}</button>
       <span class="lore-bar-clock" aria-label="Time this game">${elapsed}</span>
       ${matchLen > 1 && html`<span class="lore-bar-match">
         ${game.players.map((p, i) => (wins[i] || 0)).join("–")}
@@ -30058,6 +30184,7 @@ function LoreTracker(){
     </div>`)}
     <div class=${"lore-seats lore-seats--n"+game.players.length+(flipSeat(1)?" lore-seats--face":"")}>
       ${game.players.map((p, i) => html`<${LoreSeat} key=${i} idx=${i} name=${p.name} ink=${p.ink}
+        art=${p.art}
         total=${totals[i]} target=${targets[i]} delta=${delta} flip=${flipSeat(i)}
         winner=${winners.includes(i)} dim=${winners.length>0 && !winners.includes(i)}
         onRename=${rename}/>`)}
