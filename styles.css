@@ -1254,8 +1254,11 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
    (SVG base fill + sheen/stroke copy + faint interior edges) instead of a
    number in a rounded box; the coin is a gold coin in every theme. Slot
    stability still holds: flex order IS the seat, one die per player. */
-.dice-stage{max-width:660px;margin:10px auto 0;display:flex;flex-direction:column;
-  align-items:center;gap:16px;}
+.dice-stage{position:relative;max-width:660px;margin:10px auto 0;display:flex;
+  flex-direction:column;align-items:center;gap:16px;
+  /* Room for the corner lore bubble, so a full row of type chips can never
+     wrap underneath it. */
+  padding-top:48px;}
 /* Type picker — uniform icon chips instead of a 9-button pill strip. */
 .dice-kindgrid{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;}
 .dice-kindbtn{display:flex;flex-direction:column;align-items:center;gap:4px;
@@ -7897,7 +7900,21 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
 /* Both at-the-table shortcuts share one rail, so adding a second still costs
    the page zero height — the whole reason the die was absolutely positioned. */
 .home-shortcuts{display:none;position:absolute;top:0;right:0;z-index:2;gap:6px;}
-@media (max-width:900px){ .home-shortcuts{display:flex;} }
+@media (max-width:900px){
+  .home-shortcuts{display:flex;}
+  /* The rail is absolutely positioned, so the toolbar's first line has no idea
+     it is there — and with two bubbles (90px) instead of one it reached far
+     enough left to sit on top of the 1Y chip at 320px, i.e. an unclickable
+     filter. Reserve the rail's width on the FIRST-LINE item only: the chips
+     wrap inside their own pill when the room genuinely isn't there (≤360px)
+     and stay on one row when it is (375px and up). :has() scopes it to a
+     toolbar that actually draws a rail, so hiding both shortcuts gives the
+     width straight back.
+     94px = the rail's 90px plus a hair; measured, because the chip pill's
+     natural width is 251.3px and reserving 96 clipped it by 0.3px and wrapped
+     a 375px phone that has the room. */
+  .home-toolbar:has(.home-shortcuts) .seg-grp{max-width:calc(100% - 94px);flex-wrap:wrap;}
+}
 .home-dice-btn{display:none;position:static;z-index:2;
   width:42px;height:42px;border-radius:12px;cursor:pointer;
   align-items:center;justify-content:center;flex:0 0 auto;
@@ -7906,13 +7923,16 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
 .home-dice-btn:hover,.home-dice-btn:active{border-color:var(--accent);color:var(--accent);
   background:var(--accent-glow);}
 @media (max-width:900px){ .home-dice-btn{display:inline-flex;} }
-/* Hand-off from the dice tray: you roll for turn order and start counting
-   thirty seconds later. */
-.dice-next{display:inline-flex;align-items:center;gap:8px;margin-top:4px;
-  padding:9px 16px;border-radius:20px;min-height:40px;text-decoration:none;
-  background:var(--btn-bg);border:1px solid var(--btn-border);color:var(--btn-text);
-  font-size:12px;font-weight:600;}
-.dice-next:hover{border-color:var(--accent);color:var(--accent);}
+/* Hand-off from the dice tray, as a corner bubble rather than a row under the
+   tray — see the comment at its call site. Same shape and states as the home
+   shortcut so the lore pip is one recognisable control across the site. */
+.dice-lore-btn{position:absolute;top:0;right:0;z-index:2;
+  display:inline-flex;align-items:center;justify-content:center;text-decoration:none;
+  width:42px;height:42px;border-radius:12px;cursor:pointer;flex:0 0 auto;
+  border:1px solid var(--btn-border);background:var(--bg-modal);color:var(--text-muted);
+  box-shadow:0 2px 10px rgba(0,0,0,0.22);transition:all 0.12s;}
+.dice-lore-btn:hover,.dice-lore-btn:active{border-color:var(--accent);color:var(--accent);
+  background:var(--accent-glow);}
 
 .lscape-wrap{display:block;position:relative;width:100%;aspect-ratio:7/5;}
 .lscape-wrap > img{position:absolute;top:50%;left:50%;

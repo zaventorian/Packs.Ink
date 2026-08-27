@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=364">
+<link rel="stylesheet" href="styles.css?v=365">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29555,6 +29555,16 @@ function DiceTray({onOpen}){
 
   return html`<${React.Fragment}>
     <div class="dice-stage">
+      ${/* A corner bubble, not the "Rolled? Keep score in the Lore Tracker"
+            row that used to sit under the tray: the row read as a next STEP,
+            which it isn't — you roll for turn order once and then keep score
+            all game. As a corner control it's available the whole time you're
+            on this tab and costs the stage no height. Same bubble as the home
+            shortcut so the pip means one thing everywhere. */""}
+      ${onOpen && html`<a class="dice-lore-btn" href="/analytics?a=lore"
+        onClick=${navHandler(()=>onOpen("lore"))}
+        title="Open the Lore Tracker — keep score at the table"
+        aria-label="Open the Lore Tracker">${HOME_TOOL_ICONS.lore}</a>`}
       <svg width="0" height="0" style=${{position:"absolute"}} aria-hidden="true" focusable="false"><defs>
         <linearGradient id="diceSheen" x1="0" y1="0" x2="1" y2="1">
           <stop offset="0" stop-color="#ffffff" stop-opacity="0.18"/>
@@ -29596,9 +29606,6 @@ function DiceTray({onOpen}){
       </div>
       <div class="dice-summary" aria-live="polite">${summary}</div>
       ${count > 1 && html`<div class="dice-hint">Tap any die to ${kind==="coin"?"flip":"reroll"} just that one.</div>`}
-      ${onOpen && html`<a class="dice-next" href="/analytics?a=lore"
-        onClick=${navHandler(()=>onOpen("lore"))}>
-        ${HOME_TOOL_ICONS.lore} Rolled? Keep score in the Lore Tracker</a>`}
     </div>
     <${MarketExplainer} id="dice">
       <p>Every roll comes from the browser's cryptographic random source, drawn so that each
@@ -29876,14 +29883,21 @@ function LoreArtPicker({seat, current, onPick, onClose}){
   </div>`;
 }
 
-// The lore diamond off the card frame — the bottom-right symbol that carries a
-// character's quest value. Drawn rather than an asset so it takes currentColor
-// and sits inline with text at any size.
+// The lore pip off the card frame — the symbol beside a character's quest
+// value, taller than it is wide as it is in print. Drawn rather than an asset
+// so it takes currentColor and sits inline with text at any size.
+//
+// It is NOT a rhombus: the four sides bow INWARD, and that waist is the whole
+// difference between "lore" and "a diamond". The bow is a measured 13% of the
+// way to the centre — much more and the points grow into a sparkle (rendered
+// at 37% it read as a twinkle emoji), much less and it is a plain diamond.
+const LORE_PIP_PATH = "M12 2C13.78 6.2 16.18 9.53 19.2 12 16.18 14.47 13.78 17.8 12 22 10.22 17.8 7.82 14.47 4.8 12 7.82 9.53 10.22 6.2 12 2z";
+const LORE_PIP_INNER = "M12 7.8C12.75 9.56 13.76 10.96 15.02 12 13.76 13.04 12.75 14.44 12 16.2 11.25 14.44 10.24 13.04 8.98 12 10.24 10.96 11.25 9.56 12 7.8z";
 const LoreDiamond = ({size = 14}) => html`<svg class="lore-dia" width=${size} height=${size}
-  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+  viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
   stroke-linejoin="round" aria-hidden="true" focusable="false">
-  <path d="M12 2.5 21.5 12 12 21.5 2.5 12 12 2.5z"/>
-  <path d="M12 6.8 17.2 12 12 17.2 6.8 12 12 6.8z" opacity="0.55"/>
+  <path d=${LORE_PIP_PATH}/>
+  <path d=${LORE_PIP_INNER} opacity="0.5"/>
 </svg>`;
 
 function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim, onRename}){
@@ -31844,10 +31858,16 @@ const HOME_PANELS = [
   // Analytics is what made people use a physical die instead. It has no
   // column (fixed: true), so the layout editor offers it Show/Hide and
   // nothing else.
-  {key:"dice", label:"Dice tray shortcut", col:"main", off:true, fixed:true},
+  // ON by default since 2026-08-27 (Zaven): they cost the page no height —
+  // both sit absolutely positioned in the movers toolbar's empty top-right
+  // corner — so opt-in was buying nothing and hiding the two controls people
+  // most want with the phone already in their hand. Existing browsers stored
+  // them off, so App's homeLayout init carries a one-shot stamp; see
+  // HOME_LAYOUT_TABLE_SHORTCUTS_KEY.
+  {key:"dice", label:"Dice tray shortcut", col:"main", fixed:true},
   // Same reasoning as the die, same corner: you keep score at a table with the
   // phone already in your hand, and Analytics is three taps away.
-  {key:"lore", label:"Lore tracker shortcut", col:"main", off:true, fixed:true},
+  {key:"lore", label:"Lore tracker shortcut", col:"main", fixed:true},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_FIXED_KEYS = new Set(HOME_PANELS.filter(p => p.fixed).map(p => p.key));
@@ -31888,6 +31908,14 @@ const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
 // APPENDS unknown keys, which would bury the new panel at the bottom of
 // every existing layout — hoist it to the top of the right rail once.
 const HOME_LAYOUT_TOOLBOX_KEY = "packsink:homeLayoutToolbox";
+// One-shot stamp for the two table shortcuts (2026-08-27). Both shipped
+// `off:true`, and normalizeHomeLayout deliberately honours `off` when it
+// APPENDS a key to a stored layout — so flipping the default alone reaches
+// only browsers that have never loaded the site. Switch them on once.
+// Stamped rather than coerced, so someone who then hides a shortcut keeps it
+// hidden on the next load.
+const HOME_LAYOUT_TABLE_SHORTCUTS_KEY = "packsink:homeLayoutTableShortcuts";
+const HOME_TABLE_SHORTCUT_KEYS = ["dice", "lore"];
 // Movers-banner ordering (edit mode ▲▼). null = the built-in order, where
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
@@ -34247,13 +34275,15 @@ const HOME_TOOL_ICONS = {
     <path d="M5 7l2-3h10l2 3"/>
     <path d="M9 11v6"/>
     <path d="M15 11v6"/>`),
-  // Lore Tracker — the lore rosette from the card frame, plus a rising tick
+  // Lore Tracker — the lore pip off the card frame (see LORE_PIP_PATH: a tall
+  // diamond whose four sides bow INWARD, not a star and not a plain rhombus)
+  // over a rising tick, which is the half that says "tracker".
   lore: _navSvg(html`
-    <path d="M12 3l2.1 4.6 5 .6-3.7 3.4 1 4.9-4.4-2.5-4.4 2.5 1-4.9L4.9 8.2l5-.6L12 3z"/>
+    <path d="M12 1.5C13.25 4.44 14.93 6.77 17.04 8.5 14.93 10.23 13.25 12.56 12 15.5 10.75 12.56 9.07 10.23 6.96 8.5 9.07 6.77 10.75 4.44 12 1.5z"/>
     <path d="M4 21h16"/>
-    <path d="M7 21v-2.5"/>
-    <path d="M12 21v-4"/>
-    <path d="M17 21v-1.5"/>`),
+    <path d="M7 21v-2.2"/>
+    <path d="M12 21v-3.6"/>
+    <path d="M17 21v-1.3"/>`),
   // Dice Tray — a pair of dice
   dice: _navSvg(html`
     <rect x="3" y="8" width="12" height="12" rx="3"/>
@@ -34281,8 +34311,11 @@ const HOME_TOOLS = [
   {k:"avg",    label:"Set Breakdown",  sub:"$ + share by rarity"},
   {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
   {k:"lore",   label:"Lore Tracker",   sub:"Keep score at the table"},
-  {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
   {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
+  // Simulator is NOT here (removed 2026-08-27, Zaven) — it still lives in the
+  // Analytics tab bar and in the Overview. The toolbox is a shortcut strip on
+  // the home page, not a mirror of the tab bar, so it holds the tools you open
+  // cold; a pack sim is somewhere you arrive from an EV row's "Sim" chip.
   // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven). /ticker
   // still works and is still the thing you paste into OBS — it just isn't a
   // toolbox entry, because the toolbox is the calculators an ordinary visitor
@@ -42388,12 +42421,14 @@ function App(){
   // any more, so move news to the rail once. Stamped rather than coerced, so a
   // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
-    let fixNews = false, hoistTools = false;
+    let fixNews = false, hoistTools = false, onShortcuts = false;
     try {
       fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
       if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
       hoistTools = !localStorage.getItem(HOME_LAYOUT_TOOLBOX_KEY);
       if(hoistTools) localStorage.setItem(HOME_LAYOUT_TOOLBOX_KEY, "1");
+      onShortcuts = !localStorage.getItem(HOME_LAYOUT_TABLE_SHORTCUTS_KEY);
+      if(onShortcuts) localStorage.setItem(HOME_LAYOUT_TABLE_SHORTCUTS_KEY, "1");
     } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
@@ -42413,6 +42448,11 @@ function App(){
             const i = list.findIndex(p => p.col === "right");
             if(i >= 0) list.splice(i, 0, tools); else list.push(tools);
           }
+        }
+        // The die and the lore pip were opt-in and are now on by default.
+        if(onShortcuts){
+          list = list.map(p => HOME_TABLE_SHORTCUT_KEYS.includes(p.key)
+              ? {...p, on: true} : p);
         }
         return list;
       }
