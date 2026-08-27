@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=365">
+<link rel="stylesheet" href="styles.css?v=366">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -34275,15 +34275,12 @@ const HOME_TOOL_ICONS = {
     <path d="M5 7l2-3h10l2 3"/>
     <path d="M9 11v6"/>
     <path d="M15 11v6"/>`),
-  // Lore Tracker — the lore pip off the card frame (see LORE_PIP_PATH: a tall
-  // diamond whose four sides bow INWARD, not a star and not a plain rhombus)
-  // over a rising tick, which is the half that says "tracker".
-  lore: _navSvg(html`
-    <path d="M12 1.5C13.25 4.44 14.93 6.77 17.04 8.5 14.93 10.23 13.25 12.56 12 15.5 10.75 12.56 9.07 10.23 6.96 8.5 9.07 6.77 10.75 4.44 12 1.5z"/>
-    <path d="M4 21h16"/>
-    <path d="M7 21v-2.2"/>
-    <path d="M12 21v-3.6"/>
-    <path d="M17 21v-1.3"/>`),
+  // Lore Tracker — the lore pip off the card frame, and nothing else. It used
+  // to sit over a rising tick baseline (the "tracker" half), dropped 2026-08-27
+  // (Zaven): the ticks cost the pip a third of the box and read as noise at
+  // 17px. Alone it fills the 24 box and is literally LORE_PIP_PATH, so the
+  // glyph and the tracker's own pip can never drift apart.
+  lore: _navSvg(html`<path d=${LORE_PIP_PATH}/>`),
   // Dice Tray — a pair of dice
   dice: _navSvg(html`
     <rect x="3" y="8" width="12" height="12" rx="3"/>
@@ -34305,13 +34302,19 @@ const HOME_TOOL_ICONS = {
     <path d="M8 21h8"/>
     <path d="M9.5 18h5"/>`),
 };
+// Order is the render order of a TWO-column grid, so the first pair is the top
+// row: the die and the lore pip lead (2026-08-27, Zaven) because they are the
+// two you reach for mid-game with the phone already in your hand. No subtitles
+// — the labels already name the tool, and a second line of 9.5px grey doubled
+// every chip's height for a gloss nobody reads twice. What each tool actually
+// answers lives in Analytics » Overview, which is what that page is for.
 const HOME_TOOLS = [
-  {k:"ev",     label:"Expected Value", sub:"Box EV vs box price"},
-  {k:"trade",  label:"Trade Compare",  sub:"Value both sides"},
-  {k:"avg",    label:"Set Breakdown",  sub:"$ + share by rarity"},
-  {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
-  {k:"lore",   label:"Lore Tracker",   sub:"Keep score at the table"},
-  {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
+  {k:"dice",   label:"Dice Tray"},
+  {k:"lore",   label:"Lore Tracker"},
+  {k:"ev",     label:"Expected Value"},
+  {k:"trade",  label:"Trade Compare"},
+  {k:"avg",    label:"Set Breakdown"},
+  {k:"swiss",  label:"Swiss Odds"},
   // Simulator is NOT here (removed 2026-08-27, Zaven) — it still lives in the
   // Analytics tab bar and in the Overview. The toolbox is a shortcut strip on
   // the home page, not a mirror of the tab bar, so it holds the tools you open
@@ -34349,10 +34352,7 @@ const HomeToolboxPanel = ({onOpenTool, onPopOut}) => {
         href=${"/analytics"+(t.k==="ev"?"":"?a="+t.k)}
         onClick=${navHandler(()=>onOpenTool && onOpenTool(t.k))}>
         <span class="home-tool-ico" aria-hidden="true">${HOME_TOOL_ICONS[t.k]}</span>
-        <span class="home-tool-txt">
-          <span class="home-tool-name">${t.label}</span>
-          <span class="home-tool-sub">${t.sub}</span>
-        </span>
+        <span class="home-tool-name">${t.label}</span>
       </a>`)}
     </div>`}
   </aside>`;
