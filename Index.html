@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=363">
+<link rel="stylesheet" href="styles.css?v=364">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29422,7 +29422,7 @@ const DieFace = ({kind, v}) => {
     <span class=${"dice-face-overlay dice-ov--"+kind}>${overlay}</span>
   </span>`;
 };
-function DiceTray(){
+function DiceTray({onOpen}){
   const [kind, setKind]   = useState(() => readDicePrefs().kind);
   const [count, setCount] = useState(() => readDicePrefs().count);
   const [vals, setVals]   = useState(() => {
@@ -29551,6 +29551,9 @@ function DiceTray(){
       </div>
       <div class="dice-summary" aria-live="polite">${summary}</div>
       ${count > 1 && html`<div class="dice-hint">Tap any die to ${kind==="coin"?"flip":"reroll"} just that one.</div>`}
+      ${onOpen && html`<a class="dice-next" href="/analytics?a=lore"
+        onClick=${navHandler(()=>onOpen("lore"))}>
+        ${HOME_TOOL_ICONS.lore} Rolled? Keep score in the Lore Tracker</a>`}
     </div>
     <${MarketExplainer} id="dice">
       <p>Every roll comes from the browser's cryptographic random source, drawn so that each
@@ -29940,7 +29943,7 @@ function LoreSeat({idx, name, ink, art, total, target, delta, flip, winner, dim,
   </div>`;
 }
 
-function LoreTracker(){
+function LoreTracker({onOpen}){
   const prefs0 = useRef(loreReadPrefs()).current;
   const [game, setGame]   = useState(() => loreReadGame());
   const [count, setCount] = useState(prefs0.count);
@@ -30172,6 +30175,8 @@ function LoreTracker(){
       <button class="lore-winbtn lore-winbtn--ghost"
         onClick=${()=>{setFull(f => !f); setMenuOpen(false); setArtFor(null);}}>
         ${full ? "Exit full screen" : "Full screen"}</button>
+      ${onOpen && html`<button class="lore-winbtn lore-winbtn--ghost"
+        onClick=${()=>onOpen("dice")}>${uiIcon("die", 14)} Roll for first player</button>`}
     </div>
     ${/* The legality note used to sit under the setup screen. The screen is
           gone; the note isn't, because it's the honest part. */ ""}
@@ -30367,8 +30372,8 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     </div>
     ${sub==="overview" && html`<${AnalyticsOverview} subs=${subsList} onOpen=${setSub}
       onOpenSealed=${openScreenerSealed}/>`}
-    ${sub==="lore" && html`<${LoreTracker}/>`}
-    ${sub==="dice" && html`<${DiceTray}/>`}
+    ${sub==="lore" && html`<${LoreTracker} onOpen=${setSub}/>`}
+    ${sub==="dice" && html`<${DiceTray} onOpen=${setSub}/>`}
     ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
@@ -31795,6 +31800,9 @@ const HOME_PANELS = [
   // column (fixed: true), so the layout editor offers it Show/Hide and
   // nothing else.
   {key:"dice", label:"Dice tray shortcut", col:"main", off:true, fixed:true},
+  // Same reasoning as the die, same corner: you keep score at a table with the
+  // phone already in your hand, and Analytics is three taps away.
+  {key:"lore", label:"Lore tracker shortcut", col:"main", off:true, fixed:true},
 ];
 const HOME_PANEL_KEYS = HOME_PANELS.map(p => p.key);
 const HOME_FIXED_KEYS = new Set(HOME_PANELS.filter(p => p.fixed).map(p => p.key));
@@ -34227,6 +34235,7 @@ const HOME_TOOLS = [
   {k:"trade",  label:"Trade Compare",  sub:"Value both sides"},
   {k:"avg",    label:"Set Breakdown",  sub:"$ + share by rarity"},
   {k:"dice",   label:"Dice Tray",      sub:"Turn order, coins, RPS"},
+  {k:"lore",   label:"Lore Tracker",   sub:"Keep score at the table"},
   {k:"sim",    label:"Simulator",      sub:"Packs, boxes, odds"},
   {k:"swiss",  label:"Swiss Odds",     sub:"Will you make the cut?"},
   // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven). /ticker
@@ -35093,6 +35102,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     return out;
   };
   const diceEntry = homeLayout.find(p => p.key === "dice");
+  const loreEntry = homeLayout.find(p => p.key === "lore");
   const gradedOwnedOn = !!(homeLayout.find(p => p.key === "gradedOwned") || {}).on;
   const announceNodes = columnNodes("announce");
   const leftNodes     = columnNodes("left");
@@ -35152,9 +35162,15 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                 no height at all. Pinned to the FIRST line (level with the time
                 window chips) — margin-left:auto would drop it to the end of
                 whatever line the toolbar happens to wrap onto. */""}
-          ${!editing && diceEntry && diceEntry.on && html`<button class="home-dice-btn"
-            onClick=${()=>openAnalyticsTool && openAnalyticsTool("dice")}
-            title="Open the dice tray" aria-label="Open the dice tray">${uiIcon("die", 24)}</button>`}
+          ${!editing && (diceEntry?.on || loreEntry?.on) && html`<div class="home-shortcuts">
+            ${loreEntry && loreEntry.on && html`<button class="home-dice-btn"
+              onClick=${()=>openAnalyticsTool && openAnalyticsTool("lore")}
+              title="Open the lore tracker" aria-label="Open the lore tracker">
+              ${HOME_TOOL_ICONS.lore}</button>`}
+            ${diceEntry && diceEntry.on && html`<button class="home-dice-btn"
+              onClick=${()=>openAnalyticsTool && openAnalyticsTool("dice")}
+              title="Open the dice tray" aria-label="Open the dice tray">${uiIcon("die", 24)}</button>`}
+          </div>`}
           <div class="seg-grp" role="group" aria-label="Time window">
             ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
               class=${windowKey===w.key?"active":""}
