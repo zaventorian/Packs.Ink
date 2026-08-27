@@ -39,9 +39,13 @@ const homePanelLabels = grabLine("const HOME_PANEL_LABELS = ");
 const homePanelKeys = grabLine("const HOME_PANEL_KEYS = ");
 const homeFixedKeys  = grabLine("const HOME_FIXED_KEYS = ");
 const homePopoutKeys = grabLine("const HOME_POPOUT_KEYS = ");
+// End on the STABLE TAIL of MARKET_SUB_LABELS, not the whole line: the line
+// grows every time an Analytics sub-tab is added, and matching it verbatim
+// made this suite fail on a change it has no opinion about (adding the Lore
+// Tracker did exactly that).
 const labels = grab(
   "const VIEW_SHARE_LABELS = {",
-  'swiss: "Swiss Odds", dice: "Dice Tray", elo: "Elo",' + NL + "};",
+  'elo: "Elo",' + NL + "};",
 );
 const hrefFn = grab("const collectionSectionHref = (key, viewerContext) => {", NL + "};");
 const labelFn = grab("const shareUrlLabel = () => {", NL + "};");
