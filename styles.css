@@ -1254,8 +1254,11 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
    (SVG base fill + sheen/stroke copy + faint interior edges) instead of a
    number in a rounded box; the coin is a gold coin in every theme. Slot
    stability still holds: flex order IS the seat, one die per player. */
-.dice-stage{max-width:660px;margin:10px auto 0;display:flex;flex-direction:column;
-  align-items:center;gap:16px;}
+.dice-stage{position:relative;max-width:660px;margin:10px auto 0;display:flex;
+  flex-direction:column;align-items:center;gap:16px;
+  /* Room for the corner lore bubble, so a full row of type chips can never
+     wrap underneath it. */
+  padding-top:48px;}
 /* Type picker — uniform icon chips instead of a 9-button pill strip. */
 .dice-kindgrid{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;}
 .dice-kindbtn{display:flex;flex-direction:column;align-items:center;gap:4px;
@@ -3158,11 +3161,12 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-tool-chip:hover{border-color:var(--border-accent);background:var(--accent-glow);}
 .home-tool-ico{line-height:0;flex:0 0 auto;color:var(--accent);}
 .home-tool-ico svg{width:17px;height:17px;}
-.home-tool-txt{display:flex;flex-direction:column;gap:1px;min-width:0;}
-.home-tool-name{font-size:11.5px;font-weight:700;color:var(--text);line-height:1.2;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.home-tool-sub{font-size:9.5px;color:var(--text-muted);line-height:1.25;
-  white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+/* One line per chip since the subtitles went (2026-08-27) — the name is the
+   chip's only text now, so it needs min-width:0 of its own to keep ellipsing
+   ("Expected Value" is the long one); the .home-tool-txt column wrapper it
+   used to sit in is gone with the second line. */
+.home-tool-name{min-width:0;font-size:11.5px;font-weight:700;color:var(--text);
+  line-height:1.2;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 
 /* ── Home layout edit mode ─────────────────────────────────────────────
    Entered from the "✎ Edit layout" chip (or the settings launcher). Every
@@ -7897,7 +7901,21 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
 /* Both at-the-table shortcuts share one rail, so adding a second still costs
    the page zero height — the whole reason the die was absolutely positioned. */
 .home-shortcuts{display:none;position:absolute;top:0;right:0;z-index:2;gap:6px;}
-@media (max-width:900px){ .home-shortcuts{display:flex;} }
+@media (max-width:900px){
+  .home-shortcuts{display:flex;}
+  /* The rail is absolutely positioned, so the toolbar's first line has no idea
+     it is there — and with two bubbles (90px) instead of one it reached far
+     enough left to sit on top of the 1Y chip at 320px, i.e. an unclickable
+     filter. Reserve the rail's width on the FIRST-LINE item only: the chips
+     wrap inside their own pill when the room genuinely isn't there (≤360px)
+     and stay on one row when it is (375px and up). :has() scopes it to a
+     toolbar that actually draws a rail, so hiding both shortcuts gives the
+     width straight back.
+     94px = the rail's 90px plus a hair; measured, because the chip pill's
+     natural width is 251.3px and reserving 96 clipped it by 0.3px and wrapped
+     a 375px phone that has the room. */
+  .home-toolbar:has(.home-shortcuts) .seg-grp{max-width:calc(100% - 94px);flex-wrap:wrap;}
+}
 .home-dice-btn{display:none;position:static;z-index:2;
   width:42px;height:42px;border-radius:12px;cursor:pointer;
   align-items:center;justify-content:center;flex:0 0 auto;
@@ -7906,13 +7924,16 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
 .home-dice-btn:hover,.home-dice-btn:active{border-color:var(--accent);color:var(--accent);
   background:var(--accent-glow);}
 @media (max-width:900px){ .home-dice-btn{display:inline-flex;} }
-/* Hand-off from the dice tray: you roll for turn order and start counting
-   thirty seconds later. */
-.dice-next{display:inline-flex;align-items:center;gap:8px;margin-top:4px;
-  padding:9px 16px;border-radius:20px;min-height:40px;text-decoration:none;
-  background:var(--btn-bg);border:1px solid var(--btn-border);color:var(--btn-text);
-  font-size:12px;font-weight:600;}
-.dice-next:hover{border-color:var(--accent);color:var(--accent);}
+/* Hand-off from the dice tray, as a corner bubble rather than a row under the
+   tray — see the comment at its call site. Same shape and states as the home
+   shortcut so the lore pip is one recognisable control across the site. */
+.dice-lore-btn{position:absolute;top:0;right:0;z-index:2;
+  display:inline-flex;align-items:center;justify-content:center;text-decoration:none;
+  width:42px;height:42px;border-radius:12px;cursor:pointer;flex:0 0 auto;
+  border:1px solid var(--btn-border);background:var(--bg-modal);color:var(--text-muted);
+  box-shadow:0 2px 10px rgba(0,0,0,0.22);transition:all 0.12s;}
+.dice-lore-btn:hover,.dice-lore-btn:active{border-color:var(--accent);color:var(--accent);
+  background:var(--accent-glow);}
 
 .lscape-wrap{display:block;position:relative;width:100%;aspect-ratio:7/5;}
 .lscape-wrap > img{position:absolute;top:50%;left:50%;
@@ -8130,9 +8151,20 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
 .lore-menu-note summary{cursor:pointer;font-weight:700;color:var(--text-dim);}
 .lore-menu-note p{margin:8px 0 0;line-height:1.5;}
 .lore-timerseg{flex-wrap:wrap;}
-
-.lore-bar-match{margin-left:auto;font-size:13px;font-weight:800;color:var(--accent);
-  font-variant-numeric:tabular-nums;letter-spacing:1px;}
+/* A settings row whose control is a chip strip PLUS a follow-up input (round
+   length, once "Custom" is picked). The stack keeps the input under its own
+   chips instead of trailing off the end of a wrapped row. */
+.lore-set-stack{display:flex;flex-direction:column;align-items:flex-start;gap:8px;min-width:0;}
+.lore-numrow{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-dim);}
+.lore-numinput{width:84px;min-height:36px;padding:6px 10px;font-size:14px;font-weight:700;
+  font-family:inherit;color:var(--text);background:var(--bg-modal);
+  border:1px solid var(--btn-border);border-radius:10px;
+  font-variant-numeric:tabular-nums;}
+.lore-numinput:focus-visible{border-color:var(--accent);outline:none;}
+.lore-numinput--sm{width:68px;min-height:32px;padding:4px 8px;font-size:13px;}
+/* Exit is an <a href="/"> so it keeps every link affordance, but it sits in a
+   row of buttons and must not read as body text. */
+.lore-exit{display:inline-flex;align-items:center;gap:6px;text-decoration:none;}
 
 .lore-mods{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:11px;
   background:var(--bg-surface);border:1px solid var(--border);border-radius:10px;padding:7px 10px;}
@@ -8141,6 +8173,11 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
   border-radius:12px;padding:5px 11px;font-size:11px;cursor:pointer;min-height:32px;}
 .lore-mod-btn.active{background:var(--btn-active-bg);color:var(--btn-active-text);
   border-color:var(--btn-active-border);}
+/* The base-target row sits above the card modifiers behind the same button.
+   Its chips carry "<name> <number>", and the number is the part you read at a
+   glance across a table, so it gets the weight. */
+.lore-mods--target .lore-mod-btn b{font-weight:800;font-variant-numeric:tabular-nums;}
+.lore-mods--target .lore-mod-btn:not(.active) b{color:var(--accent);}
 
 .lore-seats{display:grid;gap:10px;grid-template-columns:1fr;}
 .lore-seats--n3,.lore-seats--n4{grid-template-columns:repeat(2,minmax(0,1fr));}
@@ -8202,6 +8239,39 @@ body:has(.deck-editor-mobile-tabs) .offline-pill{
   font-size:13px;font-weight:800;color:var(--text);font-variant-numeric:tabular-nums;}
 .lore-seat-goal i{font-style:normal;font-weight:600;color:var(--text-muted);font-size:11px;}
 .lore-dia{color:var(--seat-ink);flex:0 0 auto;}
+
+/* ── Format flourishes ────────────────────────────────────────────────
+   Three little tells that the table is not playing standard 20, keyed off
+   the seat's format class. All decoration: the goal button in the bar is
+   what actually states the target, so none of this is load-bearing. */
+/* Coconut — the drawn glyph from UI_ICON_PATHS, tinted to the seat's ink so
+   it belongs to that player rather than floating over them. */
+.lore-seat-coco{display:inline-flex;flex:0 0 auto;color:var(--seat-ink);opacity:0.9;}
+/* The card a seat played, beside the number it changed. A round crop, and
+   object-position sits high because a card's art puts the face near the top —
+   a centred crop of a Lorcana card is mostly costume. */
+.lore-seat-mod{width:26px;height:26px;flex:0 0 auto;border-radius:50%;object-fit:cover;
+  object-position:50% 16%;border:1.5px solid var(--seat-ink);
+  background:var(--bg-modal);box-shadow:0 1px 6px rgba(0,0,0,0.3);}
+/* Pack Rush — a fast format, so the names and the numbers lean. The oblique
+   is on the seat, not the whole board, so the menu and the bar stay upright
+   and legible. */
+.lore-seat--packrush .lore-seat-name,
+.lore-seat--packrush .lore-seat-goal,
+.lore-seat--packrush .lore-num-v{font-style:italic;}
+/* The goal chip's "/20" resets font-style:normal for its own reasons, so it
+   has to be leaned again explicitly or the total leans and the target doesn't. */
+.lore-seat--packrush .lore-seat-goal i{font-style:italic;}
+/* At 3-4 seats the grid halves each header's width and the name input is the
+   only thing that can give — an <input> clips rather than ellipsing, so a
+   flourish eating 22px there costs you letters of an actual name. Measured at
+   390px/4 seats: 59px of name with these at full size, 81px without them at
+   all, and "Player 1" wants 89 — the squeeze predates them, but they must not
+   deepen it any further than they have to. */
+.lore-seats--n3 .lore-seat-top,.lore-seats--n4 .lore-seat-top{gap:5px;}
+.lore-seats--n3 .lore-seat-coco svg,.lore-seats--n4 .lore-seat-coco svg{width:12px;height:12px;}
+.lore-seats--n3 .lore-seat-mod,.lore-seats--n4 .lore-seat-mod{width:20px;height:20px;
+  border-width:1px;}
 
 /* The panel IS the button. touch-action:none keeps a fast repeat from being
    stolen by the scroller, and the number never selects under a hold. */

@@ -113,6 +113,56 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 
 Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
+## Lore Tracker (Analytics » Lore Tracker)
+
+A full-bleed scoreboard for a table. Guarded by `node scripts/test_lore_tracker.mjs`, which
+extracts the real pure functions out of Index.html.
+
+- **The board covers the page, nav included, and always has** — the full-screen toggle is gone
+  (2026-08-27). "Exit full screen" un-covered the page and left you on the Analytics tab still
+  looking at a board, which is a step rather than an exit. The way out is **Exit to home** in the
+  menu, an `<a href="/">` + `navHandler` driving App's `openHome` (`setView("home")`), passed down
+  through MarketView. The `body{overflow:hidden}` effect is unconditional now and its cleanup is
+  what restores scrolling on the way out.
+- **The base win target lives on the GAME (`game.win`), not just in prefs**, so a stored game
+  replays at the target it was played at. Read it through **`loreWinOf(game)`**, never
+  `game.win` — a game stored before the setting existed has no such field and must read as 20.
+  `LORE_WIN_PRESETS` is Pack Rush 15 / Standard 20 / Coconut 25, plus a Custom number
+  (`LORE_WIN_MIN`..`LORE_WIN_MAX`). A settings change moves the goalposts on the board you are
+  looking at, same contract as the seat settings.
+- **`LORE_WIN_PRESETS` and `LORE_WIN_MODIFIERS` are different things.** The presets are the
+  table's base target, a format choice. The modifiers (Donald Duck - Flustered Sorcerer) retarget
+  individual SEATS mid-game, and `loreTargets` takes the MAX — so a modifier can only ever raise a
+  seat's target, and Donald asking for 25 is correctly a no-op at a Coconut table already on 25.
+  Both live behind the goal button in the bar, presets first.
+- **The goal button drops its number only when the seats actually disagree.** `modsOn ? "" : win`
+  blanked it whenever any modifier was on, even when every seat still shared a target.
+- **Preset chips are shortcuts, not the set of legal values.** `loreReadPrefs` CLAMPS the round
+  length and the win target rather than membership-testing them — the old test silently reset a
+  custom 45-minute round to 50 on every reload, which is the one failure mode a Custom control
+  must not have. "Custom" is not a stored mode: it is the state of holding a number that isn't a
+  preset, held in a `minsCustom` / `winCustom` flag purely so you can ENTER it from a preset.
+- **The board dresses for the format** (2026-08-27) — three flourishes, all decoration, none
+  load-bearing (the bar's goal button is what actually states the target). `loreFormatOf(game)`
+  maps the BASE target to a name: 15 → Pack Rush (seat names and numbers go italic), 25 → Coconut
+  (a drawn coconut glyph beside each seat name, from `UI_ICON_PATHS` — never an emoji, per the
+  icons rule), anything else → nothing. It reads `loreWinOf`, NOT a seat's target, or one Donald
+  would put the whole table in coconuts. A hand-typed 25 counts as Coconut, deliberately: someone
+  typing it is playing it, and storing a preset id would let a custom number contradict it.
+- **A seat that played a modifier wears its card**, a round crop beside that seat's lore total.
+  The art is resolved once in LoreTracker from `CatalogContext` by the modifier's own `card` name,
+  so a future `LORE_WIN_MODIFIERS` entry gets a badge for free. `object-position` sits high —
+  a centred crop of a Lorcana card is mostly costume. Missing art renders nothing; it is a
+  flourish, and the modifier row above is what tells you the rule is on.
+- **⚠ At 3–4 seats the grid halves each header and the name input is the only thing that can
+  give** — and an `<input>` clips rather than ellipsing, so a badge eating 22px there costs
+  letters of a real name. The flourishes shrink in `.lore-seats--n3/--n4`. Measured at 390px/4
+  seats: 59px of name at full size, 70px shrunk, 81px with none at all, against 89px wanted by
+  "Player 1" — the squeeze predates them, but don't deepen it.
+- **Best-of-3/5 was removed** (2026-08-27, Zaven): the match score it kept lived in a corner of
+  the bar and changed nothing about play, so it cost a settings row to answer a question a table
+  holds in its head. `matchLen` / `wins` / `resetMatch` and the `match` + `wins` prefs are gone.
+
 ## Pin + lore-counter photos (2026-08-24)
 
 41 pins and 21 lore counters render as checklist tiles in the Sealed collection, from the static
@@ -883,6 +933,27 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 - **Sub-tabs are `<a href="/analytics?a=…">`** via `navHandler` (SPA-nav convention — modifier-click opens a tool in a new tab). On ≤640px the bar is a single scrolling row (was a 3-row 127px wrap); the trailing gutter is a `::after` flex child per the scroll-container-padding gotcha. The 36px tap floor moved from `.market-subtabs > button` to `> .market-subtab`.
 - **Shared chrome**: `MarketHeader` (the EV header pattern as a component — emits `.ev-header.mkt-header`) + `MarketExplainer` (collapsible "ⓘ How this works", collapsed by default, persisted per tool at `packsink:market:explain:<id>`). Every tool now has the header; the always-on `.market-explainer` walls are gone. `MARKET_SUB_TITLES` gives each sub-tab its own `document.title`.
 - **EV rows carry a `⚄ Sim` chip** (`.ev-row-simbtn`) → `simulateSet(setName)` jumps to Simulator/Box with the set preselected. The set selection is SHARED across the three sim modes: MarketView owns `simSet`, each mode consumes it as `presetSet` in its `useState` initializer (modes remount on switch) and reports picks back via `onSetChange` — so Pack ↔ Box ↔ Odds keeps the set. BoxSim's `onOpenOdds` flips to bulk mode. The EV row's `onKeyDown` guards `e.target===e.currentTarget` so Enter on a focusable child doesn't also fire the row's open-history.
+- **The home Toolbox is NOT a mirror of this tab bar.** `HOME_TOOLS` deliberately omits
+  **Simulator** (removed 2026-08-27, Zaven) as it omits the Stream Ticker: the toolbox is the
+  short list of tools an ordinary visitor opens cold, and a pack sim is somewhere you arrive from
+  an EV row's ⚄ Sim chip. Simulator still lives in the tab bar and in Overview — dropping a chip
+  from `HOME_TOOLS` must never drop the tool.
+- **The Lore Tracker's glyph IS `LORE_PIP_PATH`** — `HOME_TOOL_ICONS.lore` references the same
+  const the tracker's own `LoreDiamond` draws, so the two can never drift. A tall diamond whose
+  four sides bow INWARD by 13%: the waist is the whole difference between "lore" and "a diamond",
+  and past ~30% it stops being a pip and becomes a sparkle. Verified by rasterising the path, not
+  by eye at 17px. The pip is the WHOLE glyph — it sat over a rising-tick baseline until
+  2026-08-27, which cost it a third of the box for detail invisible at chip size.
+- **`HOME_TOOLS` order is the render order of a two-column grid**, so the first pair is the top
+  row — Dice Tray then Lore Tracker, the two you reach for mid-game. Chips carry a label and no
+  subtitle (dropped 2026-08-27): the second line doubled every chip's height, and what each tool
+  answers is what Analytics » Overview is for.
+- **The Dice Tray hands off to it with a corner bubble**, not the row that used to sit under the
+  tray ("Rolled? Keep score in the Lore Tracker"). A row reads as a next STEP, and it isn't — you
+  roll for turn order once and keep score all game. `.dice-lore-btn` is absolute at the stage's
+  top-right (`.dice-stage` carries the `position:relative` and a 48px top pad so a full row of
+  type chips can never wrap under it), and stays an `<a href="/analytics?a=lore">` + `navHandler`
+  so modifier-click still opens a tab — the Lore Tracker has a real route, unlike the Scan tab.
 - **The tab bar also renders a right-aligned "Sealed ↗" pointer chip** (`.market-subtab-ext`) — a muscle-memory bridge to the Screener's Sealed mode. It and the `?a=sealed` redirect share App's `openScreenerSealed` callback (writes the two screener localStorage flags, then `setView("screener")` — must run before the Screener mounts, since its mode flags are read in `useState` initializers).
 - **Coachmark fixes that shipped with this work** (tour infra, not Analytics-specific): an open auto-tour now DISMISSES on top-nav view change instead of following the user into a view where its selectors match nothing (context-free floating card; dismissal does NOT stamp `sectionTourSeen` — abort semantics). And the tip re-measures on a slow keepalive for its whole life instead of stopping 1.1s after mount, so async data reflowing the page can't strand the spotlight.
 - Dead code cleaned with it: the unused v1 `CompareView` (absorbed into Card Averages long ago), `.trade-intro`, `.card-avg-chip-reset`, `.sim-kind-*` CSS.
@@ -1474,12 +1545,27 @@ with the Rare–Legendary banner, which was hardcoded in one component.
   because the rails sink below the fold there — and this is the geometry the News row has run at
   on phones for months. Measured at 412px: banner 226px, panel 150px, same top.
 
-### The dice shortcut is a `fixed` panel
+### The at-the-table shortcuts are `fixed` panels
 
 `HOME_PANELS` entries may carry **`fixed: true`** — they are not columns of the grid, they are
-shortcuts pinned into the home header. `dice` is the first: a die under the "Edit layout" chip,
-**phones only** (rolling for turn order happens at a table with the phone already in your hand;
-on a desktop the Analytics tab is right there). Off by default.
+shortcuts pinned into the home header. Two of them: `dice` and `lore` (a die and a lore pip),
+**phones only** — rolling for turn order and keeping score both happen at a table with the phone
+already in your hand, and on a desktop the Analytics tab is right there.
+
+- **Both are ON by default as of 2026-08-27** (Zaven). They cost the page no height (see the
+  absolute positioning below), so opt-in bought nothing and hid the two controls people most want
+  mid-game. Existing browsers had them stored off — `normalizeHomeLayout` deliberately honours
+  `off` when it APPENDS a key, so flipping the default alone reaches nobody who has ever loaded
+  the site. A **one-shot stamp** (`packsink:homeLayoutTableShortcuts`) switches them on once.
+  Stamped, not coerced, per the standing rule: a later deliberate Hide has to stick.
+- **The rail is 90px wide now, and the toolbar's first line has to be told.** The rail is
+  absolutely positioned, so the time-window chips don't know it is there — with two bubbles it sat
+  on top of the 1Y chip at 320px, making a filter unclickable. `.home-toolbar:has(.home-shortcuts)
+  .seg-grp{max-width:calc(100% - 94px);flex-wrap:wrap}` reserves the width on the first-line item
+  only, so the chips wrap inside their own pill at ≤360px and stay on one row from 375px up. The
+  94 is measured: the pill's natural width is 251.3px and reserving 96 clipped it by 0.3px and
+  wrapped a 375px phone that had the room. `:has()` scopes it so hiding both shortcuts gives the
+  width straight back.
 
 - `HOME_FIXED_KEYS` keeps them out of `columnNodes` on both the render and the edit path, and out
   of `HOME_POPOUT_KEYS` (there is no panel to pop out).
@@ -1649,7 +1735,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v356`; `styles.css?v=356`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v368`; `styles.css?v=368`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=4**, bumped 2026-05-26 with the full-booster-pack rebake; v=3 was the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
