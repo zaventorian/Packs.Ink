@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=368">
+<link rel="stylesheet" href="styles.css?v=370">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1938,6 +1938,7 @@ const UI_ICON_PATHS = {
   print:     _icoSvg(html`<path d="M7 9V4h10v5"/><rect x="4" y="9" width="16" height="7" rx="1.5"/><path d="M7 16h10v4H7z"/>`),
   image:     _icoSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><circle cx="8.5" cy="10" r="1.6"/><path d="M4 17l4.5-4.5L13 17"/><path d="M13.5 14.5L16 12l4 4.5"/>`),
   eye:       _icoSvg(html`<path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="2.8"/>`),
+  search:    _icoSvg(html`<circle cx="10.8" cy="10.8" r="6.8"/><path d="M15.7 15.7l4.8 4.8"/>`),
   edit:      _icoSvg(html`<path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3z"/><path d="M14.5 6.5l3 3"/>`),
   trash:     _icoSvg(html`<path d="M4 7h16"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l1 13h9l1-13"/><path d="M10.5 11v6"/><path d="M13.5 11v6"/>`),
   gear:      _icoSvg(html`<path d="M4 7.5h9"/><path d="M18.5 7.5h1.5"/><circle cx="15.6" cy="7.5" r="2.4"/><path d="M4 16.5h1.5"/><path d="M11 16.5h9"/><circle cx="8.4" cy="16.5" r="2.4"/>`),
@@ -39817,6 +39818,7 @@ const DECK_ICONS = {
   trash:     _deckSvg(html`<path d="M4 7h16"/><path d="M9.5 7V5h5v2"/><path d="M6.5 7l1 13h9l1-13"/><path d="M10.5 11v6"/><path d="M13.5 11v6"/>`),
   unfollow:  _deckSvg(html`<path d="M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20"/><circle cx="9.5" cy="7.5" r="3.5"/><path d="M17 8.5h5"/>`),
   star:      _deckSvg(html`<path d="M12 4l2.4 5 5.6.8-4 3.9 1 5.5-5-2.6-5 2.6 1-5.5-4-3.9 5.6-.8z"/>`),
+  focus:     _deckSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M15.5 4.5v15"/><path d="M6 9h6"/><path d="M6 13h6"/>`),
 };
 const VIS_ICONS = {
   public:   _deckSvg(html`<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5a13 13 0 0 1 0 17a13 13 0 0 1 0-17z"/>`),
@@ -39965,6 +39967,144 @@ const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, on
   </div>`;
 };
 
+// Deck-focus mode's card adder. The browse layout hands two thirds of the
+// screen to the CardBrowser; this exists so the deck list can own the page
+// instead, which means it has to stay a BAR — an omnibox docked to the bottom
+// whose results open upward, not a second grid. Search routes through
+// parseSearchQuery + matchesCardFilter like every other card surface (the
+// single-canonical-matcher rule), so "amber rush 3" works here too.
+const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onOpenCard}) => {
+  const blank = useMemo(() => emptyFilter(), []);
+  const groups = useMemo(() => groupCards(rows || []), [rows]);
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const [cursor, setCursor] = useState(0);
+  const wrapRef = useRef(null);
+  const listRef = useRef(null);
+
+  const parsed = useMemo(() => parseSearchQuery(query || ""), [query]);
+  const matches = useMemo(() => {
+    if(!query.trim()) return null;
+    return groups
+      .filter(g => matchesCardFilter(g, blank, parsed))
+      .sort((a,b) => (setRank(b) - setRank(a)) || (collectorNum(a) - collectorNum(b)))
+      .slice(0, 30);
+  }, [groups, query, parsed, blank]);
+
+  useEffect(() => { setCursor(0); }, [query]);
+
+  // Keep the keyboard cursor visible without scrolling the page behind it.
+  useEffect(() => {
+    const el = listRef.current && listRef.current.querySelector(".deck-quickadd-row.on");
+    if(el && el.scrollIntoView) el.scrollIntoView({block:"nearest"});
+  }, [cursor, matches]);
+
+  useEffect(() => {
+    if(!open) return;
+    const onDown = (e) => {
+      if(wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    document.addEventListener("touchstart", onDown);
+    return () => {
+      document.removeEventListener("mousedown", onDown);
+      document.removeEventListener("touchstart", onDown);
+    };
+  }, [open]);
+
+  // maxFor already accounts for copies of the same Product Name held under a
+  // different card_id (variants share the 4-of cap), so + can never push the
+  // deck past the limit and then have onUpdateCard silently clip it back.
+  const bump = (g, delta) => {
+    const cur = qtyOf(g.card_id, "Normal");
+    const next = Math.max(0, Math.min(maxFor(g), cur + delta));
+    if(next !== cur) onChangeQty(g, next);
+  };
+
+  const onKeyDown = (e) => {
+    const list = matches || [];
+    if(e.key === "Escape"){
+      e.preventDefault();
+      if(query) setQuery(""); else { setOpen(false); e.currentTarget.blur(); }
+      return;
+    }
+    if(!list.length) return;
+    if(e.key === "ArrowDown"){
+      e.preventDefault(); setOpen(true);
+      setCursor(c => Math.min(list.length - 1, c + 1));
+    } else if(e.key === "ArrowUp"){
+      e.preventDefault();
+      setCursor(c => Math.max(0, c - 1));
+    } else if(e.key === "Enter"){
+      // Enter is the whole point of the bar: type three letters, hit it four
+      // times, move on. It deliberately does NOT close the list or clear the
+      // query — adding a playset is four presses, not four searches.
+      e.preventDefault(); setOpen(true);
+      const g = list[cursor] || list[0];
+      if(g) bump(g, e.shiftKey ? -1 : 1);
+    }
+  };
+
+  return html`<div class="deck-quickadd" ref=${wrapRef}>
+    <div class="deck-quickadd-inner">
+      ${open && matches != null && html`<div class="deck-quickadd-results" ref=${listRef}>
+        ${matches.length === 0
+          ? html`<div class="deck-quickadd-empty">No cards match "${query}"</div>`
+          : matches.map((g, i) => {
+              const qty = qtyOf(g.card_id, "Normal");
+              const max = maxFor(g);
+              const num = g.Number ? String(g.Number).split("/")[0] : "";
+              const img = g.img_small || g.img_normal;
+              return html`<div key=${g.card_id + "::" + (g.Printing || "")}
+                class=${"deck-quickadd-row" + (i === cursor ? " on" : "") + (qty > 0 ? " in-deck" : "")}
+                onMouseEnter=${() => setCursor(i)}>
+                <span class="deck-quickadd-thumbwrap"
+                  onClick=${() => onOpenCard && onOpenCard(g)}
+                  title=${"Open " + (g["Product Name"] || "card")}>
+                  ${img
+                    ? html`<img class="deck-quickadd-thumb" src=${proxyImg(img)} alt="" loading="lazy"/>`
+                    : html`<span class="deck-quickadd-thumb deck-quickadd-thumb--empty"></span>`}
+                </span>
+                <span class="deck-quickadd-cost" title=${g.inkable === false ? "Uninkable" : "Inkable"}>
+                  <${CostInkShield} cost=${g.cost} inkable=${g.inkable !== false}/>
+                </span>
+                <span class="deck-quickadd-meta">
+                  <span class="deck-quickadd-name">${g["Product Name"] || "(unknown card)"}</span>
+                  <span class="deck-quickadd-sub">${g.Set || "—"}${num ? " · #" + num : ""}${g.Rarity ? " · " + g.Rarity : ""}</span>
+                </span>
+                <span class="deck-quickadd-counter">
+                  <button type="button" aria-label=${"Remove one " + (g["Product Name"] || "card")}
+                    onClick=${() => bump(g, -1)} disabled=${qty <= 0}>−</button>
+                  <span class="deck-quickadd-qty" aria-live="polite">${qty}</span>
+                  <button type="button" aria-label=${"Add one " + (g["Product Name"] || "card")}
+                    onClick=${() => bump(g, 1)} disabled=${qty >= max}>+</button>
+                </span>
+              </div>`;
+            })}
+      </div>`}
+      <div class="deck-quickadd-bar">
+        <span class="deck-quickadd-ico" aria-hidden="true">${uiIcon("search", 15)}</span>
+        ${/* The placeholder starts with "Search" on purpose — App's global "/"
+              shortcut focuses the first visible input matching /^search/i, and
+              in this layout the CardBrowser is unmounted so this is it. */""}
+        <input type="search" class="deck-quickadd-input"
+          placeholder="Search a card to add — name, ink, rarity, cost…"
+          value=${query}
+          onInput=${e => { setQuery(e.target.value); setOpen(true); }}
+          onFocus=${() => setOpen(true)}
+          onKeyDown=${onKeyDown}/>
+        ${query && html`<button type="button" class="deck-quickadd-clear"
+          aria-label="Clear search" onClick=${() => { setQuery(""); setOpen(false); }}>${uiIcon("close", 13)}</button>`}
+        <span class="deck-quickadd-hint">
+          ${matches && matches.length
+            ? html`<kbd>↵</kbd> add · <kbd>⇧↵</kbd> remove · <kbd>↑↓</kbd> pick`
+            : html`<kbd>/</kbd> jumps here`}
+        </span>
+      </div>
+    </div>
+  </div>`;
+};
+
 const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, raw, theme, pending,
                      user, onSignIn,
                      onBack, onRename, onDelete, onDuplicate,
@@ -39986,6 +40126,26 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // can start adding immediately) and "deck" in read-only view mode (so
   // visitors see the deck contents on open).
   const [mobileTab, setMobileTab] = useState(readOnly ? "deck" : "cards");
+  // Desktop edit-mode workspace layout. "browse" (default) is the original
+  // shape — CardBrowser owns the page, the deck is a 460px sidebar. "focus"
+  // inverts it: the deck list IS the page (same two-column shape read-only
+  // mode already uses) and cards are added from a quick-add bar docked to
+  // the bottom. A preference, not a cache — localStorage only, deliberately
+  // NOT in the user_metadata prefs sync, since a laptop and a second monitor
+  // wanting different workspaces is normal rather than drift to reconcile.
+  const [workLayout, setWorkLayout] = useState(() => {
+    try { return localStorage.getItem("packsink:deckeditor:layout") === "focus" ? "focus" : "browse"; }
+    catch { return "browse"; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:deckeditor:layout", workLayout); } catch {}
+  }, [workLayout]);
+  // Below 1100px the grid is one column and below 700px the Deck/Cards tabs
+  // already give you a full-width deck list, so focus mode has nothing to
+  // offer there — and unmounting the CardBrowser would leave the "Cards" tab
+  // showing nothing. Fall back to browse on narrow viewports.
+  const narrowEditor = useMaxWidth(1100);
+  const focusMode = !readOnly && !narrowEditor && workLayout === "focus";
   // Force scroll to the top of the page whenever we enter / switch decks.
   // Without this, opening a deck inherits the previous view's scroll
   // position — which on mobile means landing buried mid-card-list.
@@ -40294,6 +40454,12 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     return m;
   }, [deck.cards, cardById]);
   const deckQtyByNameForGroup = useCallback(g => deckQtyByName.get(g["Product Name"]) || 0, [deckQtyByName]);
+  const quickAddMaxFor = useCallback((g) => {
+    const cap = getDeckLimit(g["Product Name"]);
+    const totalForName = deckQtyByName.get(g["Product Name"]) || 0;
+    const otherVariants = totalForName - qtyOf(g.card_id, "Normal");
+    return Math.max(0, Math.min(getDeckLimitForUI(g["Product Name"]), cap - otherVariants));
+  }, [deckQtyByName, qtyOf]);
   const onDeckQtyChangeStable = useCallback((g, n) => {
     // Clip n against the across-variants cap so + can't push the deck
     // past the per-name limit (4 by default; SPECIAL_DECK_LIMITS overrides).
@@ -40714,6 +40880,14 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           class=${"deck-act deck-toolbar-keep deck-toolbar-undo"+(undoArmed?" armed":"")}
           title=${undoArmed ? "Click again to discard every change made this edit session" : "Revert to the deck's state when you clicked Edit"}>
           ${DECK_ICONS.undo}<span>${undoArmed ? "Confirm?" : "Undo"}</span>
+        </button>`}
+        ${!readOnly && !narrowEditor && html`<button onClick=${()=>setWorkLayout(m => m==="focus" ? "browse" : "focus")}
+          class=${"deck-act "+(focusMode ? "active" : "")}
+          aria-pressed=${focusMode}
+          title=${focusMode
+            ? "Back to the card browser — the deck moves to the sidebar"
+            : "Deck focus — the deck list fills the page and you add cards from a search bar at the bottom"}>
+          ${DECK_ICONS.focus}<span>Deck focus</span>
         </button>`}
         ${isOwnDeck && deckSep("s1")}
         ${isOwnDeck && html`<div ref=${shareRef} class="deck-toolbar-pop">
@@ -41190,7 +41364,9 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
       </div>`}
       ${sectioned.length === 0
         ? html`<div class="muted" style=${{fontSize:12,padding:"20px 4px",textAlign:"center"}}>
-            ${readOnly ? "This deck is empty." : html`Deck is empty. Click <strong>+</strong> on any card in the browser to add it.`}</div>`
+            ${readOnly ? "This deck is empty."
+              : focusMode ? html`Deck is empty. Search in the bar at the bottom of the page, then hit <strong>+</strong> to add cards.`
+              : html`Deck is empty. Click <strong>+</strong> on any card in the browser to add it.`}</div>`
         : sectioned.map(section => html`<div key=${section.key} class="deck-section">
             <div class="deck-section-title">${section.label} <span class="muted">${section.items.reduce((s,i)=>s+i.quantity,0)}</span></div>
             ${viewLayout === "grid"
@@ -41245,11 +41421,14 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           class=${"deck-editor-mobile-tab"+(mobileTab==="cards"?" active":"")}
           onClick=${()=>setMobileTab("cards")}>${readOnly?"Deck Info":"Cards"}</button>
       </div>
-      <div class=${"deck-editor-grid"+(readOnly?" readonly":"")+" mobile-tab-"+mobileTab}>
+      <div class=${"deck-editor-grid"+(readOnly?" readonly":"")+(focusMode?" focus":"")+" mobile-tab-"+mobileTab}>
         ${readOnly
           ? html`<div class="deck-view-list">${listBlock}${reprintBlock}</div>
                  <aside class="deck-editor-panel">${coconutShowcase(false)}${statsBlock}</aside>`
-          : html`<div class="deck-editor-browser">
+          : focusMode
+            ? html`<div class="deck-view-list">${coconutShowcase(false)}${listBlock}${reprintBlock}</div>
+                   <aside class="deck-editor-panel">${statsBlock}</aside>`
+            : html`<div class="deck-editor-browser">
                    <${CardBrowser} raw=${deckRaw} collection=${collection}
                      onSelectGroup=${onSelectGroupStable}
                      deckQty=${deckQtyForGroup}
@@ -41261,7 +41440,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      defaultInks=${inkColorsInDeck}/>
                  </div>
                  <aside class="deck-editor-panel">${coconutShowcase(true)}${listBlock}${statsBlock}${reprintBlock}</aside>`}
-      </div>`;
+      </div>
+      ${focusMode && html`<${DeckQuickAdd} rows=${deckRaw}
+        qtyOf=${qtyOf} maxFor=${quickAddMaxFor}
+        onChangeQty=${onDeckQtyChangeStable} onOpenCard=${onSelectGroupStable}/>`}`;
     })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}

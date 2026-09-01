@@ -1344,6 +1344,50 @@ Click own deck → defaults to **view** (no card browser, no rename); toolbar ha
 - Three list layouts (View ▾): compact list, image grid, stacked pile.
 - **CardBrowser ink pre-fill**: `DeckEditor` passes the deck's current `inkColorsInDeck` (1-2 colors) as the `defaultInks` prop. `CardBrowser`'s initial filter state seeds `filter.inks` from that prop *once on mount*. Re-opening the editor re-mounts CardBrowser → re-applies the deck's inks. Edits to chips during the session win after that. Gated to length 1-2 so a malformed/in-flux deck with 3+ inks doesn't auto-apply a weird filter.
 
+### Deck focus — the second desktop edit layout (2026-09-01)
+
+Edit mode had exactly one shape: CardBrowser on 2/3 of the screen, the deck as a
+460px sidebar. Great for *finding* cards, wrong once you know what the deck is and
+are tuning counts — the thing you're working on was the small column. **`workLayout`**
+(`packsink:deckeditor:layout`, `browse` | `focus`) flips it, toggled by the
+**Deck focus** button in the toolbar's EDIT cluster.
+
+- **Focus mode reuses read-only view's shape** — `deck-view-list` + a 340px stats
+  rail — because that shape is already proven at 60 cards. The difference is that
+  the rows keep their counters, and cards come from a docked bar instead of a grid.
+  `.deck-section-list` is `auto-fill minmax(320px,1fr)`, so at ~900px the deck
+  flows into two columns for free.
+- **The ± grows from 16x18 to 24x24 in this layout.** Nudging counts is the entire
+  job here; at sidebar size it's an afterthought you have to aim at.
+- **Desktop only, enforced in JS not CSS.** `narrowEditor = useMaxWidth(1100)`
+  forces `browse` below 1100px — the grid is single-column there and ≤700px already
+  has the Deck/Cards tabs, and unmounting the CardBrowser would leave that "Cards"
+  tab showing nothing. The *stored preference survives* the fallback, so widening
+  the window brings focus mode back.
+
+**`DeckQuickAdd`** (just above `DeckEditor`) is the adder. It is a BAR, deliberately
+— a second grid would just be the browse layout again.
+
+- Search routes through `parseSearchQuery` + `matchesCardFilter` against
+  `groupCards(deckRaw)` — the single-canonical-matcher rule, and the same
+  mainline-sets-only universe the CardBrowser gets. Behaviour matches the browser
+  it replaces exactly, strict-keyword quirks included.
+- **Results open UPWARD.** The bar is the last thing on screen; a downward list has
+  nowhere to go.
+- **Enter adds and does NOT clear the query or close the list** — a playset is four
+  presses, not four searches. `⇧Enter` removes, `↑↓` pick, `Esc` clears then blurs.
+- **The placeholder must keep starting with "Search"** — App's global `/` shortcut
+  focuses the first visible input matching `/^search/i`, and with the CardBrowser
+  unmounted this is the only one. That's a free keyboard entry point, not a coincidence.
+- **`quickAddMaxFor` mirrors the clip inside `onDeckQtyChangeStable`** (the 4-of cap
+  is per Product Name, across variant card_ids) so `+` greys out at the cap instead
+  of clicking to no effect.
+- **Bottom-anchored chrome has to clear the dock.** `.offline-pill` and
+  `.packsink-flash-toast` get a `body:has(.deck-quickadd)` lift, and the sticky stats
+  rail is capped at `100vh - 96px`, same lesson the mobile Deck/Cards bar already
+  taught. The card-detail overlay is z-index 100 against the dock's 38, so modals
+  still cover it.
+
 ### Deck editor mobile bottom bar
 
 At ≤700px the editor renders a `.deck-editor-mobile-tabs` toggle bar that's `position: fixed; bottom: 0; left: 0; right: 0; z-index: 40`. **Was previously sticky top:60px** which got clipped by the variable-height (~80-90px) two-row top-nav, leaving the toggle perpetually half-hidden. Bottom-fixed dodges that entirely and puts the toggle in the thumb zone.

@@ -1999,6 +1999,8 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   font-size:13px;font-weight:600;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,0.3);
   opacity:0;pointer-events:none;transition:opacity 0.18s ease,transform 0.18s ease;}
 .packsink-flash-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+body:has(.deck-quickadd) .packsink-flash-toast{
+  bottom:calc(86px + env(safe-area-inset-bottom));}
 .mover-tile .mt-name{font-size:9px;font-weight:600;line-height:1.15;
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;}
 .mover-tile .mt-meta{font-size:8px;color:var(--text-muted);overflow:hidden;white-space:nowrap;text-overflow:ellipsis;}
@@ -5274,6 +5276,94 @@ html[data-mode="dark"] .deck-row-ink.dual::after{background:rgba(255,255,255,0.3
 @media (max-width: 1100px){ .deck-editor-grid.readonly{grid-template-columns:1fr;} }
 .deck-view-list{min-width:0;}
 
+/* ── Deck focus: the deck list IS the page ────────────────────────────────
+   Desktop edit-mode alternative to the CardBrowser-left layout. Same shape
+   as read-only view (list + 340px stats rail) because that shape already
+   works; the difference is that the rows keep their counters and cards come
+   from the bottom bar instead of a grid taking two thirds of the screen. */
+.deck-editor-grid.focus{grid-template-columns:minmax(0,1fr) 340px;}
+@media (max-width: 1100px){ .deck-editor-grid.focus{grid-template-columns:1fr;} }
+/* Adding and cutting copies is the ENTIRE job in this layout, so the ± that
+   is a 16x18px afterthought in the sidebar becomes a real target here. The
+   quantity moves inside the counter so the number you are changing and the
+   buttons that change it are one control. */
+.deck-editor-grid.focus .deck-row{padding:5px 8px;gap:7px;font-size:12.5px;}
+.deck-editor-grid.focus .deck-row-counter{gap:2px;}
+.deck-editor-grid.focus .deck-row-counter button{width:24px;height:24px;font-size:14px;
+  border-radius:5px;}
+.deck-editor-grid.focus .deck-grid-tile-counter button,
+.deck-editor-grid.focus .deck-stack-counter button{width:24px;height:24px;font-size:15px;}
+.deck-editor-grid.focus .deck-editor-panel{max-height:calc(100vh - 96px);}
+
+/* ── Quick-add bar (deck focus only) ──────────────────────────────────────
+   Docked to the viewport bottom, full-bleed so it reads as a dock, with the
+   controls held to the body's own 1300px column. Results open UPWARD — the
+   bar is the last thing on screen, so a downward list would have nowhere
+   to go. */
+.deck-quickadd{position:fixed;left:0;right:0;bottom:0;z-index:38;
+  background:var(--bg-solid);border-top:1px solid var(--border);
+  box-shadow:0 -4px 18px rgba(0,0,0,0.16);
+  padding:0 max(16px, env(safe-area-inset-left))
+          calc(8px + env(safe-area-inset-bottom))
+          max(16px, env(safe-area-inset-right));}
+.deck-quickadd-inner{max-width:1300px;margin:0 auto;}
+.deck-quickadd-bar{display:flex;align-items:center;gap:9px;padding:9px 2px 1px;}
+.deck-quickadd-ico{display:inline-flex;color:var(--text-muted);flex:0 0 auto;}
+.deck-quickadd-input{flex:1 1 auto;min-width:0;padding:9px 12px;font-size:13.5px;
+  border:1px solid var(--border);border-radius:9px;background:var(--bg-card);
+  color:var(--text);}
+.deck-quickadd-input:focus{outline:none;border-color:var(--accent);
+  box-shadow:0 0 0 2px var(--accent-glow);}
+.deck-quickadd-input::-webkit-search-cancel-button{display:none;}
+.deck-quickadd-clear{flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;
+  width:26px;height:26px;padding:0;border:1px solid var(--border);border-radius:7px;
+  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;}
+.deck-quickadd-clear:hover{border-color:var(--accent);color:var(--accent);}
+.deck-quickadd-hint{flex:0 0 auto;font-size:10.5px;color:var(--text-muted);
+  letter-spacing:0.2px;white-space:nowrap;}
+.deck-quickadd-hint kbd{font-family:inherit;font-size:10px;font-weight:700;
+  padding:1px 5px;border:1px solid var(--border);border-bottom-width:2px;
+  border-radius:4px;background:var(--bg-card);color:var(--text-dim);}
+@media (max-width: 900px){ .deck-quickadd-hint{display:none;} }
+
+.deck-quickadd-results{max-height:min(46vh, 420px);overflow-y:auto;
+  margin:8px 0 0;padding:5px;border:1px solid var(--border);border-radius:10px;
+  background:var(--bg-modal);}
+.deck-quickadd-empty{padding:16px 10px;text-align:center;font-size:12px;
+  color:var(--text-muted);}
+.deck-quickadd-row{display:grid;grid-template-columns:34px 30px minmax(0,1fr) auto;
+  gap:10px;align-items:center;padding:5px 8px;border-radius:8px;
+  border:1px solid transparent;}
+.deck-quickadd-row.on{background:var(--bg-card);border-color:var(--border-accent);}
+.deck-quickadd-row.in-deck .deck-quickadd-name{color:var(--accent);}
+.deck-quickadd-thumbwrap{display:block;cursor:pointer;line-height:0;}
+.deck-quickadd-thumb{width:34px;aspect-ratio:5/7;object-fit:cover;border-radius:3px;
+  display:block;}
+.deck-quickadd-thumb--empty{background:var(--bg-surface);border:1px solid var(--border);}
+.deck-quickadd-cost{display:inline-flex;align-items:center;justify-content:center;
+  color:#c8a846;}
+.deck-quickadd-cost .cost-hex-shield-inkable{height:28px;width:auto;display:block;}
+.deck-quickadd-cost .cost-hex-shield-uninkable{height:24px;width:24px;display:block;}
+.deck-quickadd-meta{min-width:0;display:flex;flex-direction:column;gap:1px;}
+.deck-quickadd-name{font-size:12.5px;font-weight:600;color:var(--text);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.deck-quickadd-sub{font-size:10.5px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.deck-quickadd-counter{display:flex;align-items:center;gap:3px;}
+.deck-quickadd-counter button{width:26px;height:26px;padding:0;line-height:1;
+  border:1px solid var(--border);border-radius:6px;background:var(--bg-card);
+  color:var(--text-dim);font-size:15px;font-weight:700;cursor:pointer;}
+.deck-quickadd-counter button:hover:not(:disabled){border-color:var(--accent);
+  color:var(--accent);}
+.deck-quickadd-counter button:disabled{opacity:0.3;cursor:not-allowed;}
+.deck-quickadd-qty{min-width:18px;text-align:center;font-size:13px;font-weight:800;
+  font-variant-numeric:tabular-nums;
+  color:var(--text);}
+/* Reserve the dock's height so the last deck rows (and the footer under the
+   grid) aren't sitting under it. Scoped with :has() like the mobile Deck /
+   Cards bar so no other page gains phantom bottom padding. */
+body:has(.deck-quickadd){padding-bottom:calc(78px + env(safe-area-inset-bottom));}
+
 /* Reprint footnote — last thing under the decklist in both view and edit mode.
    Deliberately absent from the poster export and the proxy PDF: it answers a
    question you only have with the binder open, not one you print. Each set is
@@ -7756,6 +7846,8 @@ input:focus-visible,select:focus-visible,textarea:focus-visible{
   box-shadow:0 4px 14px rgba(0,0,0,0.35);pointer-events:none}
 body:has(.deck-editor-mobile-tabs) .offline-pill{
   bottom:calc(74px + env(safe-area-inset-bottom))}
+body:has(.deck-quickadd) .offline-pill{
+  bottom:calc(76px + env(safe-area-inset-bottom))}
 
 /* Offline image pack (settings popover) */
 .offline-img-actions{display:flex;flex-direction:column;gap:6px;align-items:stretch}
