@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=370">
+<link rel="stylesheet" href="styles.css?v=371">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -39819,6 +39819,7 @@ const DECK_ICONS = {
   unfollow:  _deckSvg(html`<path d="M16 20v-1.5a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4V20"/><circle cx="9.5" cy="7.5" r="3.5"/><path d="M17 8.5h5"/>`),
   star:      _deckSvg(html`<path d="M12 4l2.4 5 5.6.8-4 3.9 1 5.5-5-2.6-5 2.6 1-5.5-4-3.9 5.6-.8z"/>`),
   focus:     _deckSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M15.5 4.5v15"/><path d="M6 9h6"/><path d="M6 13h6"/>`),
+  browse:    _deckSvg(html`<rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M13.5 4.5v15"/><path d="M3 9.5h10.5"/><path d="M3 14.5h10.5"/>`),
 };
 const VIS_ICONS = {
   public:   _deckSvg(html`<circle cx="12" cy="12" r="8.5"/><path d="M3.5 12h17"/><path d="M12 3.5a13 13 0 0 1 0 17a13 13 0 0 1 0-17z"/>`),
@@ -39973,7 +39974,7 @@ const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, on
 // whose results open upward, not a second grid. Search routes through
 // parseSearchQuery + matchesCardFilter like every other card surface (the
 // single-canonical-matcher rule), so "amber rush 3" works here too.
-const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onOpenCard}) => {
+const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard}) => {
   const blank = useMemo(() => emptyFilter(), []);
   const groups = useMemo(() => groupCards(rows || []), [rows]);
   const [query, setQuery] = useState("");
@@ -40045,6 +40046,8 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onOpenCard}) => {
     }
   };
 
+  useEffect(() => () => { if(onHoverCard) onHoverCard(null); }, []);
+
   return html`<div class="deck-quickadd" ref=${wrapRef}>
     <div class="deck-quickadd-inner">
       ${open && matches != null && html`<div class="deck-quickadd-results" ref=${listRef}>
@@ -40055,16 +40058,24 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onOpenCard}) => {
               const max = maxFor(g);
               const num = g.Number ? String(g.Number).split("/")[0] : "";
               const img = g.img_small || g.img_normal;
+              const big = g.img_large || g.img_normal || g.img_small;
+              const full = qty >= max;
+              const hover = (e) => { if(big && onHoverCard) onHoverCard({src: proxyImg(big), x: e.clientX, y: e.clientY}); };
               return html`<div key=${g.card_id + "::" + (g.Printing || "")}
-                class=${"deck-quickadd-row" + (i === cursor ? " on" : "") + (qty > 0 ? " in-deck" : "")}
-                onMouseEnter=${() => setCursor(i)}>
-                <span class="deck-quickadd-thumbwrap"
-                  onClick=${() => onOpenCard && onOpenCard(g)}
-                  title=${"Open " + (g["Product Name"] || "card")}>
-                  ${img
-                    ? html`<img class="deck-quickadd-thumb" src=${proxyImg(img)} alt="" loading="lazy"/>`
-                    : html`<span class="deck-quickadd-thumb deck-quickadd-thumb--empty"></span>`}
-                </span>
+                class=${"deck-quickadd-row" + (i === cursor ? " on" : "") + (qty > 0 ? " in-deck" : "") + (full ? " full" : "")}
+                role="button" tabIndex=${-1}
+                title=${full ? (g["Product Name"] || "card") + " — already at the limit of " + max
+                             : "Add " + (g["Product Name"] || "card") + " to the deck"}
+                onMouseEnter=${(e) => { setCursor(i); hover(e); }}
+                onMouseMove=${hover}
+                onMouseLeave=${() => onHoverCard && onHoverCard(null)}
+                onClick=${() => bump(g, 1)}>
+                ${/* NOT loading="lazy": at most 30 rows, all one scroll apart, and a
+                      deferred lazy image renders this row as a blank slot where the
+                      card should be — which is exactly what it did. */""}
+                ${img
+                  ? html`<img class="deck-quickadd-thumb" src=${proxyImg(img)} alt=""/>`
+                  : html`<span class="deck-quickadd-thumb deck-quickadd-thumb--empty"></span>`}
                 <span class="deck-quickadd-cost" title=${g.inkable === false ? "Uninkable" : "Inkable"}>
                   <${CostInkShield} cost=${g.cost} inkable=${g.inkable !== false}/>
                 </span>
@@ -40072,12 +40083,13 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onOpenCard}) => {
                   <span class="deck-quickadd-name">${g["Product Name"] || "(unknown card)"}</span>
                   <span class="deck-quickadd-sub">${g.Set || "—"}${num ? " · #" + num : ""}${g.Rarity ? " · " + g.Rarity : ""}</span>
                 </span>
-                <span class="deck-quickadd-counter">
+                ${/* The row itself adds, so these must not double-fire through it. */""}
+                <span class="deck-quickadd-counter" onClick=${e => e.stopPropagation()}>
                   <button type="button" aria-label=${"Remove one " + (g["Product Name"] || "card")}
-                    onClick=${() => bump(g, -1)} disabled=${qty <= 0}>−</button>
+                    onClick=${(e) => { e.stopPropagation(); bump(g, -1); }} disabled=${qty <= 0}>−</button>
                   <span class="deck-quickadd-qty" aria-live="polite">${qty}</span>
                   <button type="button" aria-label=${"Add one " + (g["Product Name"] || "card")}
-                    onClick=${() => bump(g, 1)} disabled=${qty >= max}>+</button>
+                    onClick=${(e) => { e.stopPropagation(); bump(g, 1); }} disabled=${full}>+</button>
                 </span>
               </div>`;
             })}
@@ -40097,7 +40109,7 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onOpenCard}) => {
           aria-label="Clear search" onClick=${() => { setQuery(""); setOpen(false); }}>${uiIcon("close", 13)}</button>`}
         <span class="deck-quickadd-hint">
           ${matches && matches.length
-            ? html`<kbd>↵</kbd> add · <kbd>⇧↵</kbd> remove · <kbd>↑↓</kbd> pick`
+            ? html`click a row to add · <kbd>↵</kbd> add · <kbd>⇧↵</kbd> remove · <kbd>↑↓</kbd> pick`
             : html`<kbd>/</kbd> jumps here`}
         </span>
       </div>
@@ -40881,14 +40893,6 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           title=${undoArmed ? "Click again to discard every change made this edit session" : "Revert to the deck's state when you clicked Edit"}>
           ${DECK_ICONS.undo}<span>${undoArmed ? "Confirm?" : "Undo"}</span>
         </button>`}
-        ${!readOnly && !narrowEditor && html`<button onClick=${()=>setWorkLayout(m => m==="focus" ? "browse" : "focus")}
-          class=${"deck-act "+(focusMode ? "active" : "")}
-          aria-pressed=${focusMode}
-          title=${focusMode
-            ? "Back to the card browser — the deck moves to the sidebar"
-            : "Deck focus — the deck list fills the page and you add cards from a search bar at the bottom"}>
-          ${DECK_ICONS.focus}<span>Deck focus</span>
-        </button>`}
         ${isOwnDeck && deckSep("s1")}
         ${isOwnDeck && html`<div ref=${shareRef} class="deck-toolbar-pop">
           <button onClick=${()=>setShareOpen(o=>!o)}
@@ -41413,6 +41417,18 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
         </div>`;
       })()}`;
 
+      const layoutSwitch = (!readOnly && !narrowEditor) ? html`<div class="deck-layout-switch">
+        <span class="deck-layout-switch-lbl">Layout</span>
+        <div class="seg-toggle deck-layout-seg">
+          <button class=${!focusMode ? "active" : ""} onClick=${()=>setWorkLayout("browse")}
+            title="Card browser fills the page, deck list in this panel">
+            ${DECK_ICONS.browse}<span>Browse</span></button>
+          <button class=${focusMode ? "active" : ""} onClick=${()=>setWorkLayout("focus")}
+            title="Deck list fills the page — add cards from the search bar at the bottom">
+            ${DECK_ICONS.focus}<span>Deck focus</span></button>
+        </div>
+      </div>` : null;
+
       return html`<div class="deck-editor-mobile-tabs" role="tablist" aria-label="Deck editor view">
         <button role="tab" aria-selected=${mobileTab==="deck"}
           class=${"deck-editor-mobile-tab"+(mobileTab==="deck"?" active":"")}
@@ -41426,7 +41442,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           ? html`<div class="deck-view-list">${listBlock}${reprintBlock}</div>
                  <aside class="deck-editor-panel">${coconutShowcase(false)}${statsBlock}</aside>`
           : focusMode
-            ? html`<div class="deck-view-list">${coconutShowcase(false)}${listBlock}${reprintBlock}</div>
+            ? html`<div class="deck-view-list">${layoutSwitch}${coconutShowcase(false)}${listBlock}${reprintBlock}</div>
                    <aside class="deck-editor-panel">${statsBlock}</aside>`
             : html`<div class="deck-editor-browser">
                    <${CardBrowser} raw=${deckRaw} collection=${collection}
@@ -41439,11 +41455,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                      inkBudget=${coconutInkBudget}
                      defaultInks=${inkColorsInDeck}/>
                  </div>
-                 <aside class="deck-editor-panel">${coconutShowcase(true)}${listBlock}${statsBlock}${reprintBlock}</aside>`}
+                 <aside class="deck-editor-panel">${layoutSwitch}${coconutShowcase(true)}${listBlock}${statsBlock}${reprintBlock}</aside>`}
       </div>
       ${focusMode && html`<${DeckQuickAdd} rows=${deckRaw}
         qtyOf=${qtyOf} maxFor=${quickAddMaxFor}
-        onChangeQty=${onDeckQtyChangeStable} onOpenCard=${onSelectGroupStable}/>`}`;
+        onChangeQty=${onDeckQtyChangeStable} onHoverCard=${setHoverPreview}/>`}`;
     })()}
     ${selectedGroup && html`<${CardDetailModal} group=${selectedGroup} theme=${theme}
       onClose=${()=>setSelectedGroup(null)}

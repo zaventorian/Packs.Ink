@@ -1349,8 +1349,14 @@ Click own deck → defaults to **view** (no card browser, no rename); toolbar ha
 Edit mode had exactly one shape: CardBrowser on 2/3 of the screen, the deck as a
 460px sidebar. Great for *finding* cards, wrong once you know what the deck is and
 are tuning counts — the thing you're working on was the small column. **`workLayout`**
-(`packsink:deckeditor:layout`, `browse` | `focus`) flips it, toggled by the
-**Deck focus** button in the toolbar's EDIT cluster.
+(`packsink:deckeditor:layout`, `browse` | `focus`) flips it.
+
+- **The switcher heads the DECK PANEL, not the action row.** As a twelfth `.deck-act`
+  chip it read as one more export button and nobody would find it; at the top of the
+  deck column it is the first thing in the panel you are trying to make bigger.
+  Rendered above `listBlock` rather than inside it, because `.deck-view-toolbar` only
+  exists when `sectioned.length > 0` — inside, a brand-new empty deck could never
+  switch layouts.
 
 - **Focus mode reuses read-only view's shape** — `deck-view-list` + a 340px stats
   rail — because that shape is already proven at 60 cards. The difference is that
@@ -1374,8 +1380,20 @@ are tuning counts — the thing you're working on was the small column. **`workL
   it replaces exactly, strict-keyword quirks included.
 - **Results open UPWARD.** The bar is the last thing on screen; a downward list has
   nowhere to go.
+- **The whole ROW adds a copy**, art included — the `+` is the affordance, not the
+  only target. `−`/`+` therefore `stopPropagation`, or `−` would remove one and the
+  row would immediately put it back. At the copy limit the row goes `.full`: dimmed,
+  default cursor, click inert.
 - **Enter adds and does NOT clear the query or close the list** — a playset is four
   presses, not four searches. `⇧Enter` removes, `↑↓` pick, `Esc` clears then blurs.
+- **⚠ The thumbnail must NOT be `loading="lazy"`.** Chrome defers lazy images in
+  plenty of situations (a backgrounded tab is only the documented one) and a
+  deferred thumb renders the row as a blank slot where the card should be — which
+  is exactly what shipped first. At most 30 rows, all within one scroll: eager is
+  correct here. Hovering a row shows the full card through DeckEditor's existing
+  `hoverPreview` (z-index 1000, so it clears the dock's 38); that replaced opening
+  the detail modal, which could not keep the click once the row became the add
+  target.
 - **The placeholder must keep starting with "Search"** — App's global `/` shortcut
   focuses the first visible input matching `/^search/i`, and with the CardBrowser
   unmounted this is the only one. That's a free keyboard entry point, not a coincidence.
