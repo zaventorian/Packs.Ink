@@ -279,11 +279,23 @@ const SB_PAGE = 1000;
 // views like card_prices_latest; one or two retries with backoff get the
 // query through the next time the server is less loaded.
 const SB_MAX_RETRIES = 3;
+// 5xx bodies that are DETERMINISTIC — the identical request will fail the same
+// way until a human changes something, so the retry ladder spends three
+// requests and ~1.2s of backoff to arrive at the answer it already had.
+// 55000 (object_not_in_prerequisite_state) is the one that bites: an
+// unpopulated matview reads as a 500, so every Screener load paid the full
+// ladder while the market index sat empty. The retry exists for Supabase's
+// INTERMITTENT 57014 statement timeouts — keep those retrying.
+const SB_NO_RETRY = /"code"\s*:\s*"55000"|has not been populated/i;
 async function sbFetchWithRetry(url, headers, attempt = 0){
   try {
     const r = await fetch(url, {headers});
     if(r.status >= 500 && attempt < SB_MAX_RETRIES){
-      const body = await r.text().catch(() => "");
+      // ⚠ Read the body off a CLONE. The no-retry branch below hands `r` back
+      // to the caller, which will call .json() on it — and a Response whose
+      // body has already been consumed throws there instead.
+      const body = await r.clone().text().catch(() => "");
+      if(SB_NO_RETRY.test(body)) return r;
       const wait = 400 * Math.pow(2, attempt); // 400ms, 800ms, 1600ms
       console.warn(`Supabase ${r.status}: retrying in ${wait}ms (attempt ${attempt+1}/${SB_MAX_RETRIES})`, body.slice(0,200));
       await new Promise(res => setTimeout(res, wait));
@@ -2919,7 +2931,18 @@ async function fetchCardHistory(productId, printing){
 // matviews may not exist yet, and a missing benchmark must degrade to "no
 // benchmark offered", never to a broken Screener or a chart that won't draw.
 // `null` = unavailable, `[]`/`{}` = available but empty.
-const MARKET_INDEX_MISSING = /42P01|PGRST(202|205)|does not exist|relation/i;
+//
+// "Not deployed" has THREE shapes, not two. Alongside a missing relation
+// (42P01/PGRST202/205), migration 130 creates both matviews WITH NO DATA and
+// leaves the populate as a separate step — so between the DDL landing and that
+// step running, the relation EXISTS but every read is a 500 with 55000
+// "materialized view … has not been populated". That is the same fact from the
+// client's side: there is no benchmark to offer. Without 55000 here it fell
+// through to the console.warn branch and cried on every page load about a
+// state that is expected mid-rollout. (It was never a crash — both branches
+// return null — but the warning is noise that buries real ones.)
+const MARKET_INDEX_MISSING =
+  /42P01|PGRST(202|205)|does not exist|relation|55000|has not been populated/i;
 
 // ⚠ readJsonCache returns {data, stale}, NOT the payload. Unwrapping is not
 // optional: handing the raw wrapper back made the first visit work (cache miss

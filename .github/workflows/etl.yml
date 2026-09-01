@@ -291,6 +291,36 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
         run: python scripts/matview_self_heal.py
+      # The market index (market_index_daily / market_index_latest) is the ONE
+      # matview whose refresh is deliberately OPTIONAL, and it must stay that
+      # way. Every other matview here is load-bearing for a displayed price; a
+      # stale benchmark costs a column for a day. It is also the slowest
+      # refresh on the site, so failing the ETL over it would train us to
+      # ignore this job's alerts — hence continue-on-error, NOT a bare `|| true`
+      # (which would hide the outcome entirely; this way the step goes yellow
+      # and the run still passes).
+      #
+      # It lives outside matview_self_heal.py on purpose: that script exits
+      # non-zero when a refresh fails, which is exactly the behaviour this one
+      # must not have.
+      - name: Refresh market index (optional — never fails the run)
+        if: always()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          body=$(curl -sS -X POST "$SUPABASE_URL/rest/v1/rpc/refresh_market_index" \
+            -H "apikey: $SUPABASE_SERVICE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_SERVICE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{}' --max-time 900)
+          if [ -z "$body" ]; then
+            echo "market index refreshed"
+          else
+            echo "market index refresh did not succeed: $body"
+            exit 1
+          fi
       # The scanner's beta notice promises scan photos are deleted after 12
       # months. This is the only thing that makes that true, so it runs on the
       # daily housekeeping job and is NOT allowed to fail quietly — a red run
