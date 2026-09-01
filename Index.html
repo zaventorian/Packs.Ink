@@ -182,7 +182,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=371">
+<link rel="stylesheet" href="styles.css?v=372">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1227,6 +1227,11 @@ const setPromoBaseSet = (rows) => {
 let _setReleaseById = new Map();  // set_id -> "YYYY-MM-DD"
 let _setRankById    = new Map();  // set_id -> sortable release key (see below)
 let _setFamilyById  = new Map();  // set_id -> family id; SET_PARENT children fold onto the parent
+// set_id -> is this a BOOSTER set. A promo is a variant of a booster card, not a
+// release of its own, so this is what decides "reprint" and what decides Core
+// legality. Extras rows keep their ORIGIN set_id, so they read as mainline here
+// — an Extras foil of a Whispers card is a Whispers card.
+let _setMainlineById = new Map();
 // "2023-08-18" -> "Aug 2023". Pinned to UTC: the date is a plain calendar day,
 // and letting it drift into the viewer's zone renames a set's month west of it.
 const releaseLabel = (d) => {
@@ -1235,7 +1240,7 @@ const releaseLabel = (d) => {
   catch { return String(d).slice(0, 7); }
 };
 const setSetReleaseDates = (rows) => {
-  const rel = new Map(), rank = new Map(), fam = new Map(), idByName = new Map();
+  const rel = new Map(), rank = new Map(), fam = new Map(), main = new Map(), idByName = new Map();
   for(const s of rows || []) if(s && s.id) idByName.set(SET_DISPLAY_NAMES[s.name] || s.name, s.id);
   for(const s of rows || []){
     if(!s || !s.id) continue;
@@ -1247,11 +1252,13 @@ const setSetReleaseDates = (rows) => {
     // the promo is a promo OF the booster card, never the other way round.
     // Without this every set-1 promo read as an equal "alt printing" of the
     // card it reprints.
-    rank.set(s.id, (d || "9999-99-99") + "|" + (MAINLINE_SETS.includes(name) ? "0" : "1"));
+    const isMain = MAINLINE_SETS.includes(name);
+    rank.set(s.id, (d || "9999-99-99") + "|" + (isMain ? "0" : "1"));
+    main.set(s.id, isMain);
     const parent = SET_PARENT[name];
     fam.set(s.id, (parent && idByName.get(parent)) || s.id);
   }
-  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam;
+  _setReleaseById = rel; _setRankById = rank; _setFamilyById = fam; _setMainlineById = main;
 };
 
 // Collapse catalog rows into printings, newest-set last. ONE entry per card_id:
@@ -1273,6 +1280,11 @@ const printingsFromRows = (rows) => {
         set_id: r.set_id || r.Set, set: r.Set,
         family: (r.set_id && _setFamilyById.get(r.set_id)) || r.set_id || r.Set,
         rank: (r.set_id && _setRankById.get(r.set_id)) || null,
+        // Falls back to the display name so this still answers before setsMeta
+        // lands. (The fallback can't see an Extras row's origin set; the map can,
+        // and it is the path that runs in practice.)
+        mainline: (r.set_id && _setMainlineById.has(r.set_id))
+          ? !!_setMainlineById.get(r.set_id) : MAINLINE_SETS.includes(r.Set),
         number: r.Number || "", rarity: r.Rarity || "",
         variant: r.variant_label || null,
         released: (r.set_id && _setReleaseById.get(r.set_id)) || null,
@@ -1301,11 +1313,23 @@ const cardPrintingsFor = (catalog, productName) => {
     r && !r.isCoconut && r.card_id && r["Product Name"] === productName));
 };
 
-// A printing list is a reprint story only when it spans two RELEASES: a base
-// plus its Enchanted is one set, and a set's own prerelease promos fold onto
-// the parent (that's `family`). Same rule reprintVerdict opens with.
+// Is there anything to say at all — does this card exist in more than one place?
+// A base plus its Enchanted is one set, and a set's own prerelease promos fold
+// onto the parent (that's `family`).
 const spansTwoReleases = (printings) =>
   new Set((printings || []).map(e => e.family)).size >= 2;
+// A REPRINT is a second BOOSTER printing, and only that (2026-09-01, Zaven).
+// A promo is a variant of the booster card: you may always play it in place of
+// the original, but it is not a new release of the card, so it can neither make
+// a card "a reprint" nor make one "the original" — and an old card getting a
+// promo today (Curator's Collection, say) does not put it back in rotation.
+// Measured on the live catalog the day this landed: of 2,489 card names, 315
+// span two families but only 177 span two BOOSTER sets. The other 138 were
+// being called reprints on the card page and in every deck's footnote —
+// Ariel - Spectacular Singer (The First Chapter + Curator's Collection) is the
+// shape of all of them.
+const spansTwoMainlineReleases = (printings) =>
+  new Set((printings || []).filter(e => e.mainline).map(e => e.family)).size >= 2;
 
 // Every card in a deck that exists in more than one set, with all of its
 // printings. Deck building happens at a table with a binder open — "I own this
@@ -1334,7 +1358,9 @@ const deckReprintNotes = (catalog, deckCards, cardById) => {
   const out = [];
   for(const [name, ids] of want){
     const printings = printingsFromRows(rowsByName.get(name));
-    if(!spansTwoReleases(printings)) continue;
+    // Booster printings only — a promo does not make a card a reprint, and
+    // listing all 155 of them here buries the handful that are.
+    if(!spansTwoMainlineReleases(printings)) continue;
     out.push({name, printings: printings.map(e => ({...e, inDeck: ids.has(e.card_id)}))});
   }
   return out.sort((a, b) => a.name.localeCompare(b.name));
@@ -1351,29 +1377,55 @@ const reprintVerdict = (printings, curSetId) => {
   const curFam  = (curSetId && _setFamilyById.get(curSetId)) || curSetId;
   const curRank = (curSetId && _setRankById.get(curSetId)) || null;
   const setsOf = (list) => [...new Set(list.map(e => e.set))];
-  const others = printings.filter(e => e.family !== curFam);
-  const cmp = (e) => (curRank && e.rank) ? String(e.rank).localeCompare(curRank) : 0;
-  const earlier = setsOf(others.filter(e => cmp(e) < 0));
-  const later   = setsOf(others.filter(e => cmp(e) > 0));
-  const beside  = setsOf(others.filter(e => cmp(e) === 0));
   const phrase = (names) => names.length <= 2 ? names.join(" and ")
     : names.slice(0, 2).join(", ") + " +" + (names.length - 2) + " more";
-  if(earlier.length) return {
-    kind: "reprint", icon: "reprint", label: "Reprint",
-    // `others` keeps `printings`' release order, so earlier[0] is the first
-    // printing there has ever been. Middle printings are left to the list
-    // rather than turned into a sentence nobody reads.
-    text: "First printed in " + earlier[0]
-      + (later.length ? " · reprinted again in " + phrase(later) : ""),
+  const onPromo = printings.some(e => e.family === curFam && !e.mainline)
+    && !printings.some(e => e.family === curFam && e.mainline);
+
+  // The reprint story is told in BOOSTER printings only, so a promo set can
+  // never be named as where a card was "first printed" or "reprinted".
+  const mains = printings.filter(e => e.mainline);
+  if(spansTwoMainlineReleases(printings) && !onPromo){
+    const others = mains.filter(e => e.family !== curFam);
+    const cmp = (e) => (curRank && e.rank) ? String(e.rank).localeCompare(curRank) : 0;
+    const earlier = setsOf(others.filter(e => cmp(e) < 0));
+    const later   = setsOf(others.filter(e => cmp(e) > 0));
+    const beside  = setsOf(others.filter(e => cmp(e) === 0));
+    if(earlier.length) return {
+      kind: "reprint", icon: "reprint", label: "Reprint",
+      // `others` keeps `printings`' release order, so earlier[0] is the first
+      // printing there has ever been. Middle printings are left to the list
+      // rather than turned into a sentence nobody reads.
+      text: "First printed in " + earlier[0]
+        + (later.length ? " · reprinted again in " + phrase(later) : ""),
+    };
+    if(later.length) return {
+      kind: "original", icon: "pennant", label: "Original print",
+      text: "Reprinted in " + phrase(later),
+    };
+    if(beside.length) return {
+      kind: "alt", icon: "reprint", label: "Alt printing",
+      text: "Also printed in " + phrase(beside),
+    };
+  }
+
+  // Everything else that spans two families is a promo relationship. Said from
+  // whichever side you're standing on — and never as "original"/"reprint",
+  // which would be a claim about rotation that isn't true.
+  const promoSets = setsOf(printings.filter(e => !e.mainline && e.family !== curFam));
+  if(onPromo){
+    const home = setsOf(mains);
+    return {
+      kind: "promo", icon: "reprint", label: "Promo printing",
+      text: home.length ? "Promo of the " + home[0] + " card"
+        : (promoSets.length ? "Also printed in " + phrase(promoSets) : "Promo printing"),
+    };
+  }
+  if(promoSets.length) return {
+    kind: "promo", icon: "reprint", label: "Has promos",
+    text: "Also printed as a promo in " + phrase(promoSets),
   };
-  if(later.length) return {
-    kind: "original", icon: "pennant", label: "Original print",
-    text: "Reprinted in " + phrase(later),
-  };
-  return {
-    kind: "alt", icon: "reprint", label: "Alt printing",
-    text: "Also printed in " + phrase(beside),
-  };
+  return null;
 };
 // The extra set a card should ALSO be filterable under, if any: an explicit
 // child->parent (SET_PARENT, e.g. AotV Promos) OR a promo folded under its base
@@ -39325,9 +39377,14 @@ function checkDeckLegality(deck, cardById, setsByProductName){
       if(!meta) return false;
       const sets = (setsByProductName && setsByProductName[meta["Product Name"]])
         || new Set([meta.Set]);
-      // A variant/promo printing (e.g. an AotV promo) is legal wherever its
-      // parent set is — either copy counts as the mainline set's card.
-      for(const s of sets) if(coreLegal.has(s) || coreLegal.has(SET_PARENT[s] || s)) return true;
+      // Only BOOSTER printings grant legality. A promo is a variant of the
+      // booster card — you may play it in place of the original, but it rotates
+      // with the card it promotes, so an old card getting a promo today does not
+      // put it back in Core. SET_PARENT is deliberately not consulted: a set's
+      // own promos are promos of that set's cards, which are in the pool
+      // already. Verified a no-op across all 2,489 catalog names the day this
+      // landed — it closes the hole rather than changing today's answers.
+      for(const s of sets) if(MAINLINE_SETS.includes(s) && coreLegal.has(s)) return true;
       return false;
     });
     format = allInCore ? "core" : "infinity";
@@ -41124,7 +41181,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           <span class="deck-reprints-star" aria-hidden="true">*</span>
           <span><strong>Reprints</strong> \u2014 ${reprintNotes.length}${" "}
             ${reprintNotes.length === 1 ? "card in this deck is" : "cards in this deck are"}${" "}
-            printed in more than one set. Any printing is legal \u2014 check the sets you already own.</span>
+            printed in more than one booster set. Any printing is legal \u2014 check the sets you already own.</span>
         </div>
         <ul class="deck-reprints-list">
           ${reprintNotes.map(n => html`<li key=${n.name} class="deck-reprints-row">

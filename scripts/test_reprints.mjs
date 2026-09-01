@@ -15,6 +15,11 @@
 //      "alt printing" of the card it reprints.
 //   3. A set's own prerelease promos (SET_PARENT) are the same release, so
 //      AotV Promos must not make an Attack of the Vine! card "a reprint".
+//   4. A REPRINT IS A SECOND BOOSTER PRINTING AND ONLY THAT. A promo is a
+//      variant you may play in place of the original, not a new release of the
+//      card — so it can never make a card "a reprint" or "the original", and it
+//      does not put a rotated card back in Core. On the live catalog this was
+//      the difference between 315 names and 177.
 //
 // Reads the real code out of Index.html rather than restating it, so it cannot
 // drift from what ships. Run after touching setSetReleaseDates,
@@ -34,16 +39,17 @@ function grab(startMarker, endMarker) {
 const mainline = grab("const MAINLINE_SETS = [", "\n];");
 const parents  = grab("const SET_PARENT = {", "\n};");
 const display  = grab("const SET_DISPLAY_NAMES = {", "\n};");
-const maps     = grab("let _setReleaseById = new Map();", "_setReleaseById = rel; _setRankById = rank; _setFamilyById = fam;\n};");
+const maps     = grab("let _setReleaseById = new Map();", "_setMainlineById = main;\n};");
 const fromRows = grab("const printingsFromRows = (rows) => {", "\n};");
 const printFn  = grab("const cardPrintingsFor = (catalog, productName) => {", "\n};");
 const spansFn  = grab("const spansTwoReleases = (printings) =>", ";");
+const spansMain = grab("const spansTwoMainlineReleases = (printings) =>", ";");
 const deckFn   = grab("const deckReprintNotes = (catalog, deckCards, cardById) => {", "\n};");
 const verdictFn = grab("const reprintVerdict = (printings, curSetId) => {", "\n};");
 
 const { setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes } =
   await import("data:text/javascript," + encodeURIComponent(
-    [mainline, parents, display, maps, fromRows, printFn, spansFn, deckFn, verdictFn,
+    [mainline, parents, display, maps, fromRows, printFn, spansFn, spansMain, deckFn, verdictFn,
      "export {setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes};"].join("\n")));
 
 // The real sets table, trimmed to the rows these cases exercise. Dates are the
@@ -98,13 +104,13 @@ const verdictFor = (rows, setId) => {
      ["The First Chapter", "Fabled"]);
 }
 
-// ── 3. Promo Set 1 ties with The First Chapter; mainline wins ────────
+// ── 3. A promo of a booster card is a PROMO, not a reprint ───────────
 {
   const rows = [row("s_tfc", "The First Chapter", "a"), row("s_promo1", "Promo Set 1", "b")];
-  ok("a same-day promo is a reprint of the booster card", verdictFor(rows, "s_promo1"),
-     ["reprint", "First printed in The First Chapter"]);
-  ok("...and the booster card is the original", verdictFor(rows, "s_tfc"),
-     ["original", "Reprinted in Promo Set 1"]);
+  ok("a promo is a promo, never a reprint", verdictFor(rows, "s_promo1"),
+     ["promo", "Promo of the The First Chapter card"]);
+  ok("...and the booster card is not 'the original' because of it", verdictFor(rows, "s_tfc"),
+     ["promo", "Also printed as a promo in Promo Set 1"]);
 }
 
 // ── 4. A set's own prerelease promos are not a reprint of it ─────────
@@ -130,7 +136,7 @@ const verdictFor = (rows, setId) => {
   const rows = [row("s_epcot", "EPCOT Festival of the Arts", "a"),
                 row("s_c2", "Lorcana Challenge Promo (C2)", "b")];
   ok("neither promo set is claimed as the original", verdictFor(rows, "s_epcot"),
-     ["alt", "Also printed in Lorcana Challenge Promo (C2)"]);
+     ["promo", "Also printed in Lorcana Challenge Promo (C2)"]);
 }
 
 // ── 7. Reprinted more than once ──────────────────────────────────────
@@ -139,12 +145,12 @@ const verdictFor = (rows, setId) => {
                 row("s_c1", "Lorcana Challenge Promo (C1)", "b"),
                 row("s_witw", "Whispers in the Well", "c"),
                 row("s_c2", "Lorcana Challenge Promo (C2)", "d")];
-  ok("the original names every later set, then caps the list", verdictFor(rows, "s_tfc"),
-     ["original", "Reprinted in Lorcana Challenge Promo (C1), Whispers in the Well +1 more"]);
-  ok("a middle printing reports both directions", verdictFor(rows, "s_witw"),
-     ["reprint", "First printed in The First Chapter · reprinted again in Lorcana Challenge Promo (C2)"]);
-  ok("the newest printing names the FIRST print, not the nearest one",
-     verdictFor(rows, "s_c2"), ["reprint", "First printed in The First Chapter"]);
+  ok("the original names later BOOSTER sets only — promos are not reprints",
+     verdictFor(rows, "s_tfc"), ["original", "Reprinted in Whispers in the Well"]);
+  ok("the booster reprint names the first booster print, skipping the promo between",
+     verdictFor(rows, "s_witw"), ["reprint", "First printed in The First Chapter"]);
+  ok("standing on a promo of a reprinted card still reads as a promo",
+     verdictFor(rows, "s_c2"), ["promo", "Promo of the The First Chapter card"]);
 }
 
 // ── 8. Extras rows carry their origin set, so they can't fake one ────
@@ -197,6 +203,8 @@ const verdictFor = (rows, setId) => {
     named("s_witw",   "Whispers in the Well",  "belle_ench", "Belle", {Rarity: "Enchanted", Number: "220"}),
     named("s_aotv",   "Attack of the Vine!",   "stitch_a",   "Stitch"),
     named("s_aotvp",  "Attack of the Vine! Promos", "stitch_p", "Stitch"),
+    named("s_tfc",    "The First Chapter",     "ariel_tfc",  "Ariel"),
+    named("s_promo1", "Promo Set 1",           "ariel_promo","Ariel"),
   ];
   const cardById = {};
   for (const r of catalog) (cardById[r.card_id] ||= []).push(r);
@@ -221,6 +229,12 @@ const verdictFor = (rows, setId) => {
        [{card_id: "elsa_fab", quantity: 4}, {card_id: "belle_witw", quantity: 4},
         {card_id: "stitch_a", quantity: 4}], cardById).map(n => n.name),
      ["Elsa"]);
+  ok("a card with a PROMO second printing is not a reprint — the live case that "
+     + "put 138 extra cards in this list (Ariel - Spectacular Singer, TFC + "
+     + "Curator's Collection)",
+     notes([{card_id: "ariel_tfc", quantity: 4}]), []);
+  ok("...not from the promo's side either",
+     notes([{card_id: "ariel_promo", quantity: 4}]), []);
   ok("an unknown card_id is skipped, not thrown on",
      notes([{card_id: "nope", quantity: 4}]), []);
   ok("empty deck", deckReprintNotes(catalog, [], cardById), []);
