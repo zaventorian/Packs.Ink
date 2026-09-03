@@ -87,20 +87,22 @@ if (-not (Cdp-Alive)) {
 }
 
 # --- Stage 1c: confirm the research tool is actually loaded + logged in -------
+$ResearchTitleRe = "Product Research|Research products"
 $title = $null
 for ($i = 0; $i -lt 40; $i++) {
   Start-Sleep -Seconds 2
   try {
     $pages = Invoke-RestMethod "$Cdp/json" -TimeoutSec 5 | Where-Object { $_.type -eq "page" }
   } catch { continue }
-  $hit = $pages | Where-Object { $_.title -match "Product Research" }
+  # eBay has used both "Product Research" and "Research products" as the page title.
+  $hit = $pages | Where-Object { $_.title -match $ResearchTitleRe }
   if ($hit) { $title = $hit[0].title; break }
   $blocked = $pages | Where-Object { $_.url -match "splashui|captcha|signin" }
   if ($blocked) { $title = $blocked[0].title; break }
 }
 
 if (-not $title) { Die "Chrome never showed the Terapeak research page. Open it by hand at https://www.ebay.com/sh/research and re-run." 2 }
-if ($title -notmatch "Product Research") {
+if ($title -notmatch $ResearchTitleRe) {
   Die "eBay is challenging the session (page: '$title'). Solve it by hand in the Chrome window, then re-run. Do NOT clear cookies/cache and do NOT change VPN/IP - the block is IP-based and temporary." 2
 }
 Say "Chrome ready: $title"
