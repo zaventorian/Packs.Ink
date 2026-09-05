@@ -27,6 +27,12 @@ name: Discover Lorcana events
 permissions:
   contents: read
 
+# A manual dispatch overlapping the daily run would double-run a ~20-minute
+# scan and its prune step. Queue instead.
+concurrency:
+  group: discover-events
+  cancel-in-progress: false
+
 on:
   schedule:
     # 09:00 UTC daily = 4:00 AM CDT. Off-peak, away from the 01:00/06:00 price
@@ -144,11 +150,14 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Dispatch inputs reach the shell through env, never interpolated
+          # into the command line (same pattern as SET_NAME above).
+          SCRAPE_ATTENDANCE: ${{ inputs.scrape_attendance }}
         run: |
-          if [ "${{ inputs.scrape_attendance }}" = "true" ]; then
+          if [ "$SCRAPE_ATTENDANCE" = "true" ]; then
             python scripts/elo/scrape_event_attendance.py
           else
-            python scripts/elo/scrape_event_attendance.py --limit "${{ inputs.scrape_attendance }}"
+            python scripts/elo/scrape_event_attendance.py --limit "$SCRAPE_ATTENDANCE"
           fi
 
       # Read-only: breaks one store's Fans number down into account-keyed vs
@@ -159,7 +168,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        run: python scripts/elo/diagnose_store_fans.py --store "${{ inputs.diagnose_store }}" --list 500 --probe
+          DIAGNOSE_STORE: ${{ inputs.diagnose_store }}
+        run: python scripts/elo/diagnose_store_fans.py --store "$DIAGNOSE_STORE" --list 500 --probe
 
       - name: Report store tier metrics
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.tier_report == 'true' }}

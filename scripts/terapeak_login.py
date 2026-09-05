@@ -7,7 +7,7 @@ Run this manually whenever the saved session expires (typically every few
 weeks). The scraper exits with a clear error when re-login is needed.
 
 Usage:
-    pip install -r scripts/requirements.txt
+    pip install -r scripts/requirements-scrape.txt
     playwright install chromium
     python scripts/terapeak_login.py
 

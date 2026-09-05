@@ -29,10 +29,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://umwqowkiatjjltologrd.supabase.co")
-SUPABASE_ANON = os.environ.get(
-    "SUPABASE_ANON",
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVtd3Fvd2tpYXRqamx0b2xvZ3JkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg1NDUwMDMsImV4cCI6MjA5NDEyMTAwM30.b2DFdZm69Mj-1uzSTEu8ltYDjbao9ZX1Fpev6kA4LKk",
-)
+# Publishable (anon) key — public by design, but read from the environment so
+# no key literal sits in a public repo. SUPABASE_ANON_KEY is the name every
+# other script and the GitHub workflows use; SUPABASE_ANON is kept as an alias.
+SUPABASE_ANON = os.environ.get("SUPABASE_ANON_KEY") or os.environ.get("SUPABASE_ANON") or ""
+if not SUPABASE_ANON:
+    sys.exit("SUPABASE_ANON_KEY (publishable key) is required — put it in scripts/.env")
 APIFY_TOKEN = os.environ.get("APIFY_TOKEN", "")
 ACTOR = "scraped~tcgplayer-sales-history"
 RUN_SYNC = f"https://api.apify.com/v2/acts/{ACTOR}/run-sync-get-dataset-items?token={{tok}}"

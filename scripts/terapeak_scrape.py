@@ -17,7 +17,7 @@ Why Playwright instead of httpx:
     reliable and identical to a human seller using the tool.
 
 Usage:
-    pip install -r scripts/requirements.txt
+    pip install -r scripts/requirements-scrape.txt
     playwright install chromium
     python scripts/terapeak_login.py             # one-time, save session
     python scripts/terapeak_scrape.py            # default: 6 graded queries, 3y

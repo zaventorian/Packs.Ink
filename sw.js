@@ -1,6 +1,6 @@
 // packs.ink - service worker
 // Bump CACHE_VERSION whenever Index.html or core assets change to force clients to update.
-const CACHE_VERSION = 'packsink-v372';
+const CACHE_VERSION = 'packsink-v373';
 // Card art + other images live in their own cache that is NOT wiped on
 // deploys. Before this existed, every CACHE_VERSION bump threw away every
 // runtime-cached card image, so devices never accumulated art for offline
@@ -17,16 +17,18 @@ const CORE_ASSETS = [
   '/vendor/react-dom.production.min.js?v=254',
   '/vendor/htm.js?v=254',
   '/vendor/supabase.js?v=254',
-  '/styles.css?v=372',
+  '/styles.css?v=373',
   '/logo.js?v=348',
-  // scanner*.js intentionally NOT precached (2026-07-14): the scanner is
-  // admin-gated to ~2 users — they runtime-cache on first use instead of
-  // costing every visitor ~58KB at SW install.
+  // scanner*.js intentionally NOT precached: the scanner is a modal most
+  // visits never open — it runtime-caches on first use instead of costing
+  // every visitor ~58KB at SW install.
   '/manifest.json',
   '/icon-192.png?v=5',
   '/icon-512.png?v=5',
   '/apple-touch-icon.png?v=5',
-  '/Logos/packs-ink-logo.png?v=5'
+  // the 240px wordmark the nav/footer/boot card use; the 1200px original is
+  // only fetched (and runtime-cached) when a poster or tile export needs it
+  '/Logos/packs-ink-logo-sm.png?v=5'
 ];
 
 self.addEventListener('install', (event) => {
@@ -68,6 +70,14 @@ self.addEventListener('fetch', (event) => {
   const url = new URL(req.url);
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
 
+  // Never cache: SIGNED private-storage URLs (scanner review photos —
+  // createSignedUrl(…, 600) — must expire with their signature, not live on
+  // in the image cache) and the old third-party QR service (a deck's share
+  // URL, token included, was the cache key). Both were destination:"image",
+  // so they slipped past the data-API skip below. The QR is drawn locally
+  // since v373; the host stays here for any document cached from before.
+  if (url.pathname.includes('/storage/v1/object/sign/') || url.hostname.endsWith('qrserver.com')) return;
+
   // Images — card art (same-origin /img-proxy/ + /tcg-img-proxy/, Logos,
   // ink/rarity icons, direct tcgplayer-cdn art, Supabase-storage prestaged
   // art, lorcast.io). Stale-while-revalidate into IMG_CACHE so art
@@ -98,8 +108,7 @@ self.addEventListener('fetch', (event) => {
   if (
     url.hostname.endsWith('supabase.co') ||
     url.hostname.endsWith('tcgcsv.com') ||
-    url.hostname.endsWith('lorcast.com') ||
-    url.hostname.endsWith('qrserver.com')
+    url.hostname.endsWith('lorcast.com')
   ) return;
 
   // Navigation / HTML requests: network-first.
@@ -124,12 +133,11 @@ self.addEventListener('fetch', (event) => {
           return res;
         })
         // Fall back to '/' when the '/Index.html' key is absent. On Cloudflare
-        // the asset layer 307s /Index.html -> /, so the CORE_ASSETS precache of
-        // it fails (cache.add rejects redirected responses) and this key only
-        // exists once an intercepted navigation has populated it above. '/' is
-        // precached successfully either way, so this closes the window between
-        // SW install and the first intercepted navigation, where an offline
-        // visitor would otherwise get nothing.
+        // /Index.html is an asset MISS (dist/ ships index.html lowercase) that
+        // the worker answers with the SPA shell, so the precache normally
+        // succeeds — but '/' is precached either way, so this closes the
+        // window between SW install and the first intercepted navigation,
+        // where an offline visitor would otherwise get nothing.
         .catch(() => caches.match('/Index.html').then((r) => r || caches.match('/')))
     );
     return;
@@ -154,14 +162,16 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Same-origin assets: cache-first.
+  // Same-origin assets: cache-first. An HTML document is never stored under a
+  // non-document URL: a request for a missing file could otherwise pin the SPA
+  // shell under that asset's key until the next CACHE_VERSION bump.
   if (url.origin === self.location.origin) {
     event.respondWith(
       caches.match(req).then((cached) => {
         return (
           cached ||
           fetch(req).then((res) => {
-            if (res.ok) {
+            if (res.ok && !(res.headers.get('content-type') || '').includes('text/html')) {
               const copy = res.clone();
               caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
             }
