@@ -51,6 +51,9 @@ const FILES = [
   "robots.txt",
   "sitemap.xml",
   "og-image.png",
+  // Browsers request /favicon.ico on their own (bookmarks, some tab UIs); with
+  // no file it used to fall through to the SPA shell as text/html.
+  "favicon.ico",
   "favicon-32.png",
   "favicon-64.png",
   "icon-192.png",
@@ -67,7 +70,9 @@ const FILES = [
 // commissioned wordmark ships as .ai/.pdf sources next to the .png the site
 // actually uses, and PacksInk.ai alone is 18.6 MB of Illustrator data.
 const DIRS = [
-  ["Logos", { excludeExt: [".ai", ".pdf"] }],
+  // "Logo on Black.png" is the old footer wordmark: nothing has referenced it
+  // since the footer logo was removed (2026-08-21), and it is 941 KB.
+  ["Logos", { excludeExt: [".ai", ".pdf"], exclude: ["Logo on Black.png"] }],
   ["vendor", {}],   // react/react-dom/htm/supabase/html2canvas + ort WASM
   ["scanner", {}],  // ONNX weights, admin-gated but must be fetchable
 ];

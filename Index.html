@@ -25,27 +25,27 @@
 </script>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>Packs.Ink — The Ultimate Disney Lorcana Tool</title>
+<title>Packs.Ink — Lorcana Card Prices, Collection &amp; Decks</title>
 <!-- SEO + social share metadata. og:image is a static 1200×630 baked by
      scripts/make_og_image.py — rebake + bump the ?v= if the logo changes.
      Social scrapers don't run JS, so these static tags are what Discord /
      X / iMessage render. document.title + canonical are updated per-view
      at runtime (see VIEW_TITLES in the app). -->
-<meta name="description" content="Real-time price tracking, daily price movement, graded sales history, collection tracking, card search, and deckbuilding — all in one.">
+<meta name="description" content="Daily TCGplayer prices for every Disney Lorcana card — price history and movers, graded sales, collection tracking, deck building and tournament results. Unofficial fan site.">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="Packs.Ink">
-<meta property="og:title" content="Packs.Ink — The Ultimate Disney Lorcana Tool">
-<meta property="og:description" content="Real-time price tracking, daily price movement, graded sales history, collection tracking, card search, and deckbuilding — all in one.">
+<meta property="og:title" content="Packs.Ink — Lorcana Card Prices, Collection &amp; Decks">
+<meta property="og:description" content="Daily TCGplayer prices for every Disney Lorcana card — price history and movers, graded sales, collection tracking, deck building and tournament results. Unofficial fan site.">
 <meta property="og:url" content="https://packs.ink/">
 <meta property="og:image" content="https://packs.ink/og-image.png?v=2">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Packs.Ink — The Ultimate Disney Lorcana Tool">
-<meta name="twitter:description" content="Real-time price tracking, daily price movement, graded sales history, collection tracking, card search, and deckbuilding — all in one.">
+<meta name="twitter:title" content="Packs.Ink — Lorcana Card Prices, Collection &amp; Decks">
+<meta name="twitter:description" content="Daily TCGplayer prices for every Disney Lorcana card — price history and movers, graded sales, collection tracking, deck building and tournament results. Unofficial fan site.">
 <meta name="twitter:image" content="https://packs.ink/og-image.png?v=2">
 <script type="application/ld+json">
-{"@context":"https://schema.org","@type":"WebSite","name":"Packs.Ink","url":"https://packs.ink/","description":"The ultimate Disney Lorcana tool: real-time price tracking, daily price movement, graded sales history, collection tracking, card search, and deckbuilding."}
+{"@context":"https://schema.org","@type":"WebSite","name":"Packs.Ink","url":"https://packs.ink/","description":"Daily TCGplayer prices for every Disney Lorcana card: price history and movers, graded sales, collection tracking, deck building and tournament results. Unofficial fan site."}
 </script>
 <!-- PWA: installable on mobile + offline shell via service worker. -->
 <link rel="manifest" href="/manifest.json">
@@ -95,7 +95,7 @@
       });
     }
     const checkForUpdate = () => {
-      navigator.serviceWorker.getRegistration().then((r) => { if (r) r.update(); }).catch(() => {});
+      navigator.serviceWorker.getRegistration().then((r) => (r ? r.update() : null)).catch(() => {});
     };
     document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') checkForUpdate(); });
     window.addEventListener('focus', checkForUpdate);
@@ -165,7 +165,24 @@
               event.request.headers.Referer = scrub(event.request.headers.Referer);
             if (Array.isArray(event.breadcrumbs))
               event.breadcrumbs.forEach(function (b) {
-                if (b && b.data && typeof b.data.url === "string") b.data.url = scrub(b.data.url);
+                if (!b || !b.data) return;
+                // navigation breadcrumbs carry the URL as from/to, not url
+                ["url", "from", "to"].forEach(function (k) {
+                  if (typeof b.data[k] === "string") b.data[k] = scrub(b.data[k]);
+                });
+              });
+            // An error thrown from the inline app script reports the DOCUMENT
+            // URL — query string included — as the frame's filename.
+            var vals = event.exception && event.exception.values;
+            if (Array.isArray(vals))
+              vals.forEach(function (v) {
+                var frames = v && v.stacktrace && v.stacktrace.frames;
+                if (!Array.isArray(frames)) return;
+                frames.forEach(function (f) {
+                  if (!f) return;
+                  if (typeof f.filename === "string") f.filename = scrub(f.filename);
+                  if (typeof f.abs_path === "string") f.abs_path = scrub(f.abs_path);
+                });
               });
           } catch (e) {}
           return event;
@@ -182,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=372">
+<link rel="stylesheet" href="styles.css?v=373">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -233,6 +250,21 @@
       document.head.appendChild(s);
     });
     return window.__html2canvasLoading;
+  };
+  // qrcode-generator (vendor/qrcode.js): the deck-poster QR is drawn locally so
+  // a share URL — and the secret token of an Unlisted deck — never leaves the
+  // origin. Lazy like html2canvas: only a poster with QR on ever needs it.
+  window.__loadQrcode = function(){
+    if(window.qrcode) return Promise.resolve(window.qrcode);
+    if(window.__qrcodeLoading) return window.__qrcodeLoading;
+    window.__qrcodeLoading = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "/vendor/qrcode.js?v=373";
+      s.onload = () => resolve(window.qrcode);
+      s.onerror = () => reject(new Error("qrcode failed to load"));
+      document.head.appendChild(s);
+    });
+    return window.__qrcodeLoading;
   };
 </script>
 <script src="/vendor/supabase.js?v=254"></script>
@@ -5588,7 +5620,7 @@ const PriceBadge = ({row, label, klass}) => {
   const market = row["TCGPlayer Market"];
   if(low==null && market==null) return null;
   const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
-  return html`<a class=${"price-badge "+(klass||"")} href=${url} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>
+  return html`<a class=${"price-badge "+(klass||"")} href=${url} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>
     ${label && html`<span class="label">${label}</span>`}
     <span class="low">${low!=null?"$"+low.toFixed(2):"—"}<span class="ext">↗</span></span>
     ${market!=null && html`<span class="market">Mkt $${market.toFixed(2)}</span>`}
@@ -5931,7 +5963,7 @@ const PrintingBlock = ({row, title, subtitle, qty, onQtyChange}) => {
   const url = tcgUrl(row.tcgplayer_product_id, row.tcg_printing);
   return html`<div class="printing-wrap">
     ${onQtyChange && html`<${CollectionCounter} qty=${qty||0} onChange=${onQtyChange}/>`}
-    <a class="printing-block" href=${url} target="_blank" rel="noopener nofollow">
+    <a class="printing-block" href=${url} target="_blank" rel="noopener nofollow sponsored">
       <div class="printing-block-head">
         <span class="printing-title">${title}</span>
         <span class="printing-ext">↗</span>
@@ -6673,7 +6705,7 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing})
       ${color ? html`<span class="cd-stat-dot" style=${{color}}>●</span>` : null}
       <span class="cd-stat-name">${label}</span>
       ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
-      ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow"
+      ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow sponsored"
         onClick=${e=>e.stopPropagation()} title="Buy this printing on TCGplayer (affiliate link)">
         Buy on TCGplayer
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
@@ -7405,6 +7437,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     </div>`}
 
     ${!isGradedMode && statRows.length > 0 && html`<div class="card-detail-screener">
+      <div class="cd-affiliate-note">Buy links open TCGplayer through our affiliate program — we may earn a commission at no extra cost to you.</div>
       <div class="card-detail-screener-head">
         <span class="cd-screener-title">Price changes</span>
         ${variantRows.length > 0 && html`<button class="cd-variants-btn"
@@ -8349,6 +8382,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       }, 12000);
       return () => { cancelled = true; clearTimeout(t); };
     }
+    // The local QR resolves asynchronously (lazy script + encode); the effect
+    // re-runs when it lands. Same backstop shape as the catalog wait.
+    if(qrPending){
+      const t = setTimeout(() => {
+        if(!cancelled) onAutoCopyDone && onAutoCopyDone(false, new Error("QR code still rendering"));
+      }, 8000);
+      return () => { cancelled = true; clearTimeout(t); };
+    }
     (async () => {
       try {
         // Two animation frames so the off-screen container has laid out and
@@ -8373,14 +8414,35 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       }
     })();
     return () => { cancelled = true; };
-  }, [autoCopy, snapshot, onAutoCopyDone, catalogPending]);
+  }, [autoCopy, snapshot, onAutoCopyDone, catalogPending, qrPending]);
 
-  // QR code via api.qrserver.com — only included when the deck has a share URL
-  // AND showQr is on. The QR endpoint sets Access-Control-Allow-Origin: *, so
-  // it draws to canvas cleanly without a proxy.
-  const qrSrc = (showQr && shareUrl)
-    ? `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(shareUrl)}&size=200x200&margin=8`
-    : null;
+  // QR code drawn LOCALLY (vendor/qrcode.js, lazy-loaded) — only when the deck
+  // has a share URL AND showQr is on. It used to be an api.qrserver.com image
+  // request, which sent the share URL — including the secret token of an
+  // Unlisted deck — to a third party, and the service worker then kept that
+  // PNG (URL and all) in the deploy-surviving image cache. A data: URL draws to
+  // canvas cleanly and never touches the network.
+  const [qrSrc, setQrSrc] = useState(null);
+  const [qrDone, setQrDone] = useState(false);
+  useEffect(() => {
+    if(!(showQr && shareUrl)){ setQrSrc(null); setQrDone(false); return; }
+    let cancelled = false;
+    setQrDone(false);
+    window.__loadQrcode().then((qrcode) => {
+      if(cancelled) return;
+      const qr = qrcode(0, "M");
+      qr.addData(shareUrl);
+      qr.make();
+      setQrSrc(qr.createDataURL(4, 4));
+      setQrDone(true);
+    }).catch(() => {
+      // No encoder, no QR — the poster still ships (with the URL footer).
+      if(!cancelled){ setQrSrc(null); setQrDone(true); }
+    });
+    return () => { cancelled = true; };
+  }, [showQr, shareUrl]);
+  // The headless autoCopy path must not snapshot before the QR has resolved.
+  const qrPending = !!(showQr && shareUrl) && !qrDone;
   // Coconut decks get a third ink, so the label can't stay capped at 2.
   const posterCoconut = getCoconutCard(deck.coconut_card);
   // Robin Hood's bow. It is not one of the 60, so it can't come from `cards` —
@@ -10012,8 +10074,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
         background:rgba(124,58,237,0.95);color:#fff;font-size:13px;font-weight:600;
         border-radius:8px;box-shadow:0 4px 14px rgba(0,0,0,0.3);
         opacity:0;transition:opacity 0.2s;pointer-events:none;z-index:11;"></div>
-      <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
-        crossorigin="anonymous"><\/script>
+      <script src="${window.location.origin}/vendor/html2canvas.min.js?v=254"><\/script>
       <script>
         const TOAST = document.getElementById('toast');
         const showToast = (msg, ms = 2000) => {
@@ -10112,7 +10173,7 @@ const ArtistAlleyModal = ({allIllustrators, raw, onClose, initialArtist, onBrows
             const a = document.createElement('a');
             const safe = (s) => String(s||'artist').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g,'');
             a.href = url;
-            a.download = 'packsink-artist-alley-' + safe(${JSON.stringify(picked)}) + '.jpg';
+            a.download = 'packsink-artist-alley-' + safe(${JSON.stringify(picked).replace(/</g, "\\u003c").replace(/\u2028/g, "\\u2028").replace(/\u2029/g, "\\u2029")}) + '.jpg';
             document.body.appendChild(a); a.click(); a.remove();
             setTimeout(() => URL.revokeObjectURL(url), 2000);
             const mb = (blob.size / 1048576).toFixed(1);
@@ -11230,7 +11291,11 @@ const FeedbackModal = ({user, onClose})=>{
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr]   = useState(null);
-  const page = (typeof window !== "undefined") ? (window.location.pathname + window.location.search) : "";
+  // Same scrub as the Sentry beforeSend: a report filed from a share-link page
+  // must not store the deck/collection/trade token alongside the comment.
+  const page = (typeof window !== "undefined")
+    ? (window.location.pathname + window.location.search).replace(/([?&])(t|token|collection)=[^&#]*/gi, "$1$2=[redacted]")
+    : "";
   const submit = useCallback(async ()=>{
     const comment = text.trim();
     if(!comment){ setErr("Please type something first."); return; }
@@ -11375,10 +11440,14 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
       <div class="footer-social">
         follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener">@packs_ink</a>
         · <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener">@HighScoreZAP</a>
-        · <a href="/privacy">Privacy</a>
+        · <a href="/privacy">Privacy & Terms</a>
       </div>
       <div class="footer-disclosure">
         Packs.Ink is a TCGplayer affiliate — purchases made through TCGplayer links on this site may earn us a commission at no extra cost to you.
+      </div>
+      <div class="footer-disclosure">
+        Unofficial fan site — not affiliated with, endorsed by, or sponsored by Disney or Ravensburger. Disney Lorcana is a trademark of Disney.
+        Card data & art via Lorcast; prices via TCGCSV / TCGplayer.
       </div>
       ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
@@ -11390,16 +11459,16 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
             color:"var(--text-muted)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
           ${uiIcon("inbox")} Feedback inbox</button>`}
       </div>`}
-      ${stale && html`<div class="footer-stale" title=${"Last successful ETL on " + lastEtlDate + " (your local time). The daily price refresh may be failing — check the ETL cron."}>
+      ${stale && html`<div class="footer-stale" title=${"Last successful price update on " + lastEtlDate + " (your local time). The daily refresh may be late or failing."}>
         ${uiIcon("warn", 12)} Prices may be stale (last update ${relativeTime(lastEtlDate)})
       </div>`}
       ${matviewLag && !stale && html`<div class="footer-stale"
-        title=${"prices_daily has " + lastRawPriceDate + " but card_prices_latest only has " + lastEtlDate + ". Refresh the matview to recover."}>
-        ${uiIcon("warn", 12)} Display layer is behind raw data (${lastEtlDate} vs ${lastRawPriceDate}) — run refresh_card_prices_latest()
+        title=${"Newer prices (" + lastRawPriceDate + ") are loaded but not yet published to the display layer (" + lastEtlDate + "). Ops: run refresh_card_prices_latest()."}>
+        ${uiIcon("warn", 12)} Today's prices are still processing — showing ${lastEtlDate}
       </div>`}
     </div>
     <div class="footer-logos">
-      <img class="footer-logo footer-logo-packsink" src="Logos/packs-ink-logo.png?v=5" alt="Packs.Ink"/>
+      <img class="footer-logo footer-logo-packsink" src="Logos/packs-ink-logo-sm.png?v=5" alt="Packs.Ink"/>
     </div>
   </div>`;
 };
@@ -11638,7 +11707,7 @@ function EVView({raw, sets, avgs, nc, setNc,
             ? html`<div class="ev-row-val">
                 <span class="ev-row-val-lbl-inline">box price</span>
                 ${box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow"
+                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored"
                       onClick=${e=>e.stopPropagation()}
                       class="ev-box-link" title=${box.name}>${fmt(box.price)}<span class="ev-box-link-ext">↗</span></a>`
                   : fmt(box.price)}
@@ -11672,7 +11741,7 @@ function EVView({raw, sets, avgs, nc, setNc,
       ${hist.status === "loading" && "Loading history…"}
       ${hist.status === "error" && ("History unavailable: " + hist.error)}
       ${hist.status === "empty" && "No historical data yet — check back after the next daily update."}
-      ${hist.status === "ready" && `Prices via Lorcast (TCGplayer ${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
+      ${hist.status === "ready" && `Prices via TCGCSV (TCGplayer ${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
     </p>
   </div>`;
 }
@@ -15036,7 +15105,7 @@ const CardGrid=({cards,showImages,theme,onCardClick})=>html`<div style=${{displa
       <${Badge} rarity=${c.rarity} foil=${foil} theme=${theme}/><div style=${{fontSize:11,fontWeight:500,lineHeight:1.4,display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden",minHeight:26}}>${c.name}</div>
       ${!showImages&&ink&&html`<div class="muted" style=${{fontSize:10}}>${ink}</div>`}
       ${url
-        ? html`<a href=${url} target="_blank" rel="noopener nofollow" class="sim-buy-btn" onClick=${e=>e.stopPropagation()}>${fmt(c.price)}<span class="sim-buy-ext">↗</span></a>`
+        ? html`<a href=${url} target="_blank" rel="noopener nofollow sponsored" class="sim-buy-btn" onClick=${e=>e.stopPropagation()}>${fmt(c.price)}<span class="sim-buy-ext">↗</span></a>`
         : html`<div class="sim-buy-btn disabled">${fmt(c.price)}</div>`}
     </div>`;
   })}</div>`;
@@ -15245,8 +15314,8 @@ const SetDetailListRow = ({group, normalQty, foilQty, onNormal, onFoil, onOpen, 
       ${subtitle && html`<span class="sd-row-subtitle">${subtitle}</span>`}
     </div>
     <div class="sd-row-prices">
-      ${showN && html`<a class="sd-row-price normal" href=${tcgUrl(group.normal.tcgplayer_product_id,"Normal")} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
-      ${showF && html`<a class="sd-row-price foil" href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)} target="_blank" rel="noopener nofollow" onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
+      ${showN && html`<a class="sd-row-price normal" href=${tcgUrl(group.normal.tcgplayer_product_id,"Normal")} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${nLow.toFixed(2)}</a>`}
+      ${showF && html`<a class="sd-row-price foil" href=${tcgUrl(group.foil.tcgplayer_product_id, group.foil.tcg_printing)} target="_blank" rel="noopener nofollow sponsored" onClick=${e=>e.stopPropagation()}>$${fLow.toFixed(2)}</a>`}
       ${!showN && !showF && html`<span class="sd-row-price muted">—</span>`}
     </div>
     ${hoverPos && previewImg ? ReactDOM.createPortal(
@@ -18043,7 +18112,7 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     <div class="history-preview-name">${previewItem.name}</div>
                     <div class="history-preview-meta">${previewItem.sub || ""}</div>
                     ${tcgUrl(previewItem.productId) && html`<div class="history-preview-type">
-                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow">View on TCGplayer ↗</a>
+                      <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow sponsored">View on TCGplayer ↗</a>
                     </div>`}
                   </div>
                 </div>`}
@@ -18362,7 +18431,7 @@ function GradedTosModal({onAccept, onDismiss}){
     <div class="graded-tos-modal">
       <h3 class="title-font" style=${{margin:"0 0 6px",fontSize:19}}>Graded data — Terms of Use</h3>
       <p class="graded-tos-intro">
-        You have access to Packs.Ink's premium graded-card sales data (per-sale eBay
+        You're about to view Packs.Ink's graded-card sales data (per-sale eBay
         prices). It's provided for your <b>personal, non-commercial use only</b>. By
         continuing you agree that you will <b>not</b>:
       </p>
@@ -24613,6 +24682,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
           value=${zip} aria-label="ZIP code" onInput=${e=>setZip(e.target.value.replace(/[^0-9]/g,"").slice(0,5))}/>
         <button class="sc-search-btn" type="submit">Go</button>
       </form>
+      <div class="sc-zip-note">Your ZIP is sent to zippopotam.us to find nearby events; it isn't stored with your account.</div>
       ${origin && html`<div class="elo-up-distopts">
         <div class="seg-toggle elo-up-seg">
           <button class=${sortByDist?"":"active"} onClick=${()=>setSortByDist(false)}>By date</button>
@@ -25583,31 +25653,20 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p><strong>Pull rates (Sets 12+, Wilds Unknown onward)</strong>: same C/U/SR counts, <strong>~30 Rares</strong> (down from ~32), <strong>6 Legendaries</strong>, <strong>0.333 Enchanteds</strong>, <strong>2.5 Epics</strong>, with foil counts adjusted proportionally. These are community-estimated averages — your mileage will vary box-to-box.</p>
 
     <h2>Install as an app</h2>
-    <p>Hit the <strong>install</strong> button (a phone with a down-arrow) in the top-right of the page for step-by-step instructions. iOS, Android, and desktop all supported. Once installed, Packs.Ink opens in its own window/app icon with a faster startup and home-screen presence.</p>
+    <p>On iPhone and Android, tap the <strong>install</strong> button (a phone with a down-arrow) in the top-right of the page for step-by-step instructions. On desktop Chrome or Edge, use the install icon in the address bar. Once installed, Packs.Ink opens in its own window/app icon with a faster startup and home-screen presence.</p>
 
     <h2>Affiliate disclosure</h2>
     <p>Packs.Ink participates in the TCGplayer Affiliate Program. As a TCGplayer Affiliate, we earn a commission from qualifying purchases made through TCGplayer links on this site (the price-tag buttons on every card). This costs you nothing extra and helps keep the site running. Thanks for clicking through!</p>
 
-    <h2 id="privacy">Privacy policy</h2>
-    <p>This policy covers what data Packs.Ink stores about you and how it's handled.</p>
-    <p><strong>What we collect.</strong> The site is fully browseable without an account; only signed-in features collect anything.</p>
-    <ul>
-      <li><strong>If you sign in with Google:</strong> your Google email, profile display name, and (optionally) profile photo URL. We never see your Google password.</li>
-      <li><strong>If you use Collection / Decks features:</strong> the cards, sealed products, graded copies, decks, follows, and favorites you save. All scoped to your account.</li>
-      <li><strong>Error telemetry (Sentry):</strong> if the site crashes in your browser, we receive an anonymized stack trace and a one-line description so we can fix the bug. No prices, deck contents, or page contents are sent.</li>
-      <li><strong>Affiliate clicks (TCGplayer Impact):</strong> when you click a TCGplayer "Buy" link, Impact records an anonymous referral so we can earn commission. We don't see who clicked.</li>
-    </ul>
-    <p><strong>What we don't collect.</strong> No analytics tracking, no advertising trackers, no third-party cookies, no IP geo-tracking, no fingerprinting. The browse experience is entirely anonymous.</p>
-    <p><strong>Where it's stored.</strong> Account + collection data lives in a Supabase Postgres database (US-based). Access is gated by Postgres Row-Level Security so only you can read or modify your own data. The browser holds a recent-data cache in localStorage (purely for speed; cleared when you clear site data).</p>
-    <p><strong>Who we share with.</strong> Nobody. We don't sell, rent, or share data with third parties. Publicly visible deck lists, collection shares, and creator profiles are only shared when you explicitly mark a deck/collection as Public or share an Unlisted link.</p>
-    <p><strong>How to delete your data.</strong> You can delete individual decks, collection items, etc. from inside the app at any time. To delete your entire account and all associated data, DM <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a> on X with the email address on file — we'll wipe everything within 7 days and confirm by reply.</p>
-    <p><strong>Children.</strong> Packs.Ink is intended for users 13 and older.</p>
-    <p><strong>Changes.</strong> If this policy meaningfully changes, the change will be noted at the top of this section with the effective date.</p>
-    <p class="muted" style=${{fontSize:11}}>Last updated 2026-05-22.</p>
+    <h2 id="privacy">Privacy & terms</h2>
+    <p>The full, current policy lives at <a href="/privacy" style=${{color:"var(--accent)"}}>packs.ink/privacy</a> — what we store, the card-scanner photo notice, the graded-data terms of use, the general terms of use, and how to delete your account. In short: browsing needs no account; signing in stores your Google email and display name; only the features you actually use store anything; we never sell data.</p>
 
     <h2>About</h2>
     <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on X for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
     <p>Logo by Valley Creatives.</p>
+
+    <h2>Data & image credits</h2>
+    <p>Card names, text and artwork are served from <a href="https://lorcast.com" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>Lorcast</a>, the community Lorcana card database. Prices are TCGplayer market data via TCGCSV, refreshed daily. Pin and lore-counter photos are © Lorcana Player, used with permission. Event listings and tournament records come from Ravensburger Play. Disney Lorcana and all card imagery are © Disney / Ravensburger.</p>
 
     <h2>Disclaimer</h2>
     <p>Packs.Ink is an unofficial fan site. Disney Lorcana TCG is a trademark of Disney; the game is operated by Ravensburger. This site is not affiliated with, endorsed by, or sponsored by Disney or Ravensburger.</p>
@@ -25650,7 +25709,7 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
           <td style=${{textAlign:"left",maxWidth:340,overflow:"hidden",whiteSpace:"nowrap"}}>
             ${c.img_small?html`<img src=${c.img_small} alt="" style=${{width:24,height:34,borderRadius:3,verticalAlign:"middle",marginRight:6,objectFit:"cover"}}/>`:null}
             <span style=${{verticalAlign:"middle"}}>${c.name}</span>
-            ${url && html`<a href=${url} target="_blank" rel="noopener nofollow"
+            ${url && html`<a href=${url} target="_blank" rel="noopener nofollow sponsored"
               onClick=${e=>e.stopPropagation()}
               class="playset-tcg-btn"
               title="Open on TCGplayer">TCG ↗</a>`}
@@ -26135,7 +26194,7 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
         <span class="trade-pr-low"><${Tip} text=${TIP_LOW} class="trade-pr-tag">Low<//> ${tradeMoney(row["Low Price"])}</span>
         <span class="trade-pr-mkt"><${Tip} text=${TIP_MARKET} class="trade-pr-tag">NM<//> ${tradeMoney(row["TCGPlayer Market"])}</span>
       </span>
-      ${url && html`<a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow" title=${"View "+label+" on TCGplayer"}>↗</a>`}
+      ${url && html`<a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>↗</a>`}
     </div>`;
   };
 
@@ -33040,7 +33099,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, onPopOut
           <div class="num">
             ${box
               ? (box.url
-                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow" class="home-ev-strip-box-link">${fmt(box.price)}<span class="ext">↗</span></a>`
+                  ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link">${fmt(box.price)}<span class="ext">↗</span></a>`
                   : fmt(box.price))
               : html`<span class="muted">—</span>`}
           </div>
@@ -34044,6 +34103,7 @@ const UpcomingSCsBox = () => {
           onInput=${e=>setZip(country==="US" ? e.target.value.replace(/[^0-9]/g,"").slice(0,5) : e.target.value.slice(0,10))}/>
         <button class="sc-search-btn" type="submit">Search</button>
       </form>
+      <div class="sc-zip-note">Your postal code is sent to zippopotam.us to find nearby events; it isn't stored with your account.</div>
       <div class="sc-radius-row" role="group" aria-label="Distance">
         ${SC_RADII.map(r => html`<button key=${r} type="button"
           class=${"sc-radius-btn"+(radius===r && !customOpen?" active":"")}
@@ -41156,7 +41216,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </div>`}
           ${videoId
             ? html`<div class="deck-video-wrap">
-                <iframe src=${"https://www.youtube.com/embed/" + videoId}
+                <iframe src=${"https://www.youtube-nocookie.com/embed/" + videoId}
                   title="Deck profile video" allowfullscreen
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
               </div>`
@@ -44376,7 +44436,7 @@ function App(){
       <a class="tabs-logo-btn" href="/"
         onClick=${navHandler(()=>onTabClick("home"))}
         title="Home" aria-label="Home">
-        <img src="Logos/packs-ink-logo.png?v=5" alt="packs.ink"
+        <img src="Logos/packs-ink-logo-sm.png?v=5" alt="packs.ink"
           height="60" style=${{height:60,width:"auto",display:"block",pointerEvents:"none"}}/>
       </a>
       <div class="tabs tabs-grid">
@@ -44617,7 +44677,7 @@ function App(){
         setIndyArtistPick(null);
       }}/>`}
     ${bootFailed && html`<div class="boot-error">
-      <img src="Logos/packs-ink-logo.png?v=5" alt="" class="boot-error-logo"/>
+      <img src="Logos/packs-ink-logo-sm.png?v=5" alt="" class="boot-error-logo"/>
       <h2 class="title-font">${isOnline ? "Can't reach the card database" : "You're offline"}</h2>
       <p class="muted">${isOnline
         ? "Packs.Ink couldn't load its price data — your connection may be offline, or our data service is having a brief hiccup. Nothing is lost; it usually clears in a moment."
@@ -44626,7 +44686,7 @@ function App(){
       <div class="boot-error-detail muted">${err}</div>
     </div>`}
     ${bootLoading && html`<div class="boot-error boot-loading">
-      <img src="Logos/packs-ink-logo.png?v=5" alt="" class="boot-error-logo"/>
+      <img src="Logos/packs-ink-logo-sm.png?v=5" alt="" class="boot-error-logo"/>
       <div class="boot-loading-spinner" aria-hidden="true"></div>
       <h2 class="title-font">Loading the card database…</h2>
       <p class="muted">${loadProgress.current || "Fetching the latest prices"} — the first visit
@@ -44825,7 +44885,7 @@ function SeasonReviewView({ meta }){
 
   return html`<div class="season-review">
     <header class="sr-header">
-      <a class="sr-brand" href="/"><img src="Logos/packs-ink-logo.png" alt="Packs.Ink"/><span class="sr-brand-txt">Packs.Ink</span></a>
+      <a class="sr-brand" href="/"><img src="Logos/packs-ink-logo-sm.png?v=5" alt="Packs.Ink"/><span class="sr-brand-txt">Packs.Ink</span></a>
       <span class="sr-badge">Chicagoland Elo · Season Review</span>
     </header>
 

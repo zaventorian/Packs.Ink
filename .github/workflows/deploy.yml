@@ -53,8 +53,12 @@ jobs:
     steps:
       - name: Check the confirmation word
         if: inputs.confirm != 'deploy'
+        env:
+          # Through env, not interpolated into the script — a dispatch input is
+          # free text and must never be spliced into a shell command line.
+          CONFIRM: ${{ inputs.confirm }}
         run: |
-          echo "::error::Aborted — the confirm box must say exactly 'deploy' (got '${{ inputs.confirm }}')."
+          echo "::error::Aborted — the confirm box must say exactly 'deploy' (got '${CONFIRM}')."
           exit 1
 
       - uses: actions/checkout@v5

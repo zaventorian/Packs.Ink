@@ -12,8 +12,8 @@ Usage:
     python scripts/dev_server.py 8000       # custom port
 
 Real subfolders that ship as part of the deploy keep serving their own
-files (Logos, scripts, supabase, _redirects) so e.g. ink-shield PNGs
-still resolve.
+files (Logos, vendor, scanner) so e.g. ink-shield PNGs still resolve;
+scripts/ and supabase/ are deliberately NOT served (prod doesn't ship them).
 """
 import http.server
 import os
@@ -23,8 +23,11 @@ import urllib.parse
 import urllib.request
 
 # Folders that must serve their own files (and 404 if a child is missing).
-# Match the same list as _redirects so dev mirrors prod.
-PASSTHROUGH_FOLDERS = ("Logos", "scripts", "supabase", ".github")
+# Only what prod ships (scripts/build_dist.mjs is an include-list): scripts/,
+# supabase/ and .github/ used to be listed here as well, which served
+# scripts/.env — the file that holds the service key — to anything on
+# loopback. Nothing at runtime ever fetched them.
+PASSTHROUGH_FOLDERS = ("Logos", "vendor", "scanner")
 
 
 class SPAHandler(http.server.SimpleHTTPRequestHandler):
@@ -104,7 +107,10 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         # missing files, which is the same behavior as Netlify).
         first = rel.split("/", 1)[0] if rel else ""
         is_passthrough = first in PASSTHROUGH_FOLDERS
-        if os.path.exists(disk) or is_passthrough or rel == "":
+        # Bare "/" must NOT reach the stdlib handler: on a case-sensitive
+        # filesystem it looks for a lowercase index.html, misses Index.html,
+        # and serves a directory listing of the repo instead.
+        if rel and (os.path.exists(disk) or is_passthrough):
             return super().do_GET()
 
         # SPA fallback — rewrite to Index.html, keep the query so the client
