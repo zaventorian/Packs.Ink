@@ -28,8 +28,19 @@ compatibility_date = "2026-08-01"
 # Rollback: grey-cloud `A packs.ink → 75.2.60.5` in the dashboard. Instant, and
 # no redeploy needed.
 routes = [
-  { pattern = "packs.ink/*", zone_name = "packs.ink" }
+  { pattern = "packs.ink/*", zone_name = "packs.ink" },
+  # www: inert while the www record is grey-clouded (routes only see proxied
+  # traffic — same trick as the apex cutover). Orange-cloud the record and
+  # the worker's 301 takes over from Netlify with no DNS change. Needs the
+  # deploy token's Zone -> Workers Routes -> Edit (granted 2026-08-23).
+  { pattern = "www.packs.ink/*", zone_name = "packs.ink" }
 ]
+
+# No packs-ink.<account>.workers.dev twin of the site: it was a full duplicate
+# origin (duplicate content for crawlers, a second origin for OAuth/CSP) that
+# nothing used after the cutover. Redeploying with this set disables it.
+workers_dev = false
+preview_urls = false
 
 [assets]
 directory = "./dist"

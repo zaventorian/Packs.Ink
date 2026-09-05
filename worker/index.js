@@ -93,6 +93,15 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
+    // www → apex. The www record still points at Netlify's load balancer,
+    // grey-clouded, which is what has been serving this 301 since the
+    // cutover. wrangler.toml routes www.packs.ink/* here as well, so the
+    // moment that record is orange-clouded this answers first and Netlify is
+    // never reached — the last step before the Netlify site can be deleted.
+    if (url.hostname === "www.packs.ink") {
+      return Response.redirect("https://packs.ink" + url.pathname + url.search, 301);
+    }
+
     // A static site has nothing to POST to. Answering early also keeps the
     // request body untouched: the fallback below re-uses `request` as the init
     // for a second fetch, and a body that was already consumed by the first
