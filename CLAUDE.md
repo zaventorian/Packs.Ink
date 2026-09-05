@@ -25,7 +25,7 @@ This does NOT weaken the rule above: without the word, still commit and stop. It
 ## Stack
 
 - **Frontend**: `Index.html` + `styles.css` + `logo.js`, React via `htm` template literals, no build step. Served by `python scripts/dev_server.py` (port 8766 — AnkiConnect squats 8765). CSS extraction is deliberate for caching + editor sanity — do NOT inline CSS back into Index.html.
-- **Prod is the Cloudflare Worker** (`packs-ink`), not Netlify — cutover 2026-08-04. Netlify still exists only to serve `www`'s 301 → apex; see `scripts/CLOUDFLARE_MIGRATION.md`.
+- **Prod is the Cloudflare Worker** (`packs-ink`), not Netlify — cutover 2026-08-04. Netlify still exists only to serve `www`'s 301 → apex; see `scripts/CLOUDFLARE_MIGRATION.md`. **Netlify no longer builds anything**: `netlify.toml` carries `[build] ignore = "exit 0"` (2026-09-05) because every push and PR was still running a full metered build + Deploy Preview (whose `_headers` check fails on the Cloudflare-only `!` lines). The last Netlify deploy stays live for the www redirect. Delete the file to build on Netlify again.
 
 ### ⚠️ Deploying — a git push does NOT ship the site
 

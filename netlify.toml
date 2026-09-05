@@ -1,0 +1,16 @@
+# Netlify no longer hosts packs.ink — production is the Cloudflare Worker
+# (scripts/CLOUDFLARE_MIGRATION.md). The Netlify site only survives to serve
+# the www → apex 301 from its LAST deploy, yet every push and every pull
+# request was still triggering a full metered build plus a Deploy Preview,
+# whose "Header rules" check fails on the Cloudflare-only "!" lines in
+# _headers (the /swiss carve-out). Found by the 2026-09-04 release audit.
+#
+# An ignore command that always exits 0 tells Netlify to skip the build
+# entirely (exit 0 = "nothing to build"): no build minutes, no preview, no
+# check — and the existing deploy, with the www redirect, stays live.
+#
+# To build on Netlify again, delete this file (or flip "Active builds" in
+# the Netlify dashboard, which overrides it). This file is not part of the
+# Cloudflare bundle: scripts/build_dist.mjs is an include-list.
+[build]
+  ignore = "exit 0"
