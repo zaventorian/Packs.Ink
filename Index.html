@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=373">
+<link rel="stylesheet" href="styles.css?v=374">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -8363,6 +8363,37 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     } finally { setBusy(null); }
   }, [snapshot, deck.name]);
 
+  // QR code drawn LOCALLY (vendor/qrcode.js, lazy-loaded) — only when the deck
+  // has a share URL AND showQr is on. It used to be an api.qrserver.com image
+  // request, which sent the share URL — including the secret token of an
+  // Unlisted deck — to a third party, and the service worker then kept that
+  // PNG (URL and all) in the deploy-surviving image cache. A data: URL draws to
+  // canvas cleanly and never touches the network.
+  const [qrSrc, setQrSrc] = useState(null);
+  const [qrDone, setQrDone] = useState(false);
+  useEffect(() => {
+    if(!(showQr && shareUrl)){ setQrSrc(null); setQrDone(false); return; }
+    let cancelled = false;
+    setQrDone(false);
+    window.__loadQrcode().then((qrcode) => {
+      if(cancelled) return;
+      const qr = qrcode(0, "M");
+      qr.addData(shareUrl);
+      qr.make();
+      setQrSrc(qr.createDataURL(4, 4));
+      setQrDone(true);
+    }).catch(() => {
+      // No encoder, no QR — the poster still ships (with the URL footer).
+      if(!cancelled){ setQrSrc(null); setQrDone(true); }
+    });
+    return () => { cancelled = true; };
+  }, [showQr, shareUrl]);
+  // The headless autoCopy path must not snapshot before the QR has resolved.
+  // ⚠ Declared ABOVE the autoCopy effect: that effect lists qrPending in its
+  // deps, and a deps array is read at the useEffect call site — a `const`
+  // below it is in the temporal dead zone and threw on every poster open.
+  const qrPending = !!(showQr && shareUrl) && !qrDone;
+
   // Headless one-click capture path used by the deck-tile "Copy image" button.
   // The parent passes the unresolved blobPromise to navigator.clipboard.write
   // SYNCHRONOUSLY inside the tile click (same pattern as the mover tile camera
@@ -8416,33 +8447,6 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     return () => { cancelled = true; };
   }, [autoCopy, snapshot, onAutoCopyDone, catalogPending, qrPending]);
 
-  // QR code drawn LOCALLY (vendor/qrcode.js, lazy-loaded) — only when the deck
-  // has a share URL AND showQr is on. It used to be an api.qrserver.com image
-  // request, which sent the share URL — including the secret token of an
-  // Unlisted deck — to a third party, and the service worker then kept that
-  // PNG (URL and all) in the deploy-surviving image cache. A data: URL draws to
-  // canvas cleanly and never touches the network.
-  const [qrSrc, setQrSrc] = useState(null);
-  const [qrDone, setQrDone] = useState(false);
-  useEffect(() => {
-    if(!(showQr && shareUrl)){ setQrSrc(null); setQrDone(false); return; }
-    let cancelled = false;
-    setQrDone(false);
-    window.__loadQrcode().then((qrcode) => {
-      if(cancelled) return;
-      const qr = qrcode(0, "M");
-      qr.addData(shareUrl);
-      qr.make();
-      setQrSrc(qr.createDataURL(4, 4));
-      setQrDone(true);
-    }).catch(() => {
-      // No encoder, no QR — the poster still ships (with the URL footer).
-      if(!cancelled){ setQrSrc(null); setQrDone(true); }
-    });
-    return () => { cancelled = true; };
-  }, [showQr, shareUrl]);
-  // The headless autoCopy path must not snapshot before the QR has resolved.
-  const qrPending = !!(showQr && shareUrl) && !qrDone;
   // Coconut decks get a third ink, so the label can't stay capped at 2.
   const posterCoconut = getCoconutCard(deck.coconut_card);
   // Robin Hood's bow. It is not one of the 60, so it can't come from `cards` —
