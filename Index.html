@@ -1001,7 +1001,7 @@ const GRADED_TOS_VERSION = "2026-06-23";
 const GradedAdminContext = React.createContext(false);
 
 // Standard tooltip strings — keep wording consistent across views.
-const TIP_LOW = "Lowest active listing on TCGplayer across any condition. The cheapest copy you could buy right now — a leading-edge price signal, but may be a played copy. For an NM-quality reference, see Market.";
+const TIP_LOW = "TCGplayer's published Low Price for the card. It tracks the cheap end of the market. For an NM-quality reference, see NM Market.";
 const TIP_MARKET = "TCGplayer's NM Market price — a smoothed algorithmic average of recent Near Mint sales. Lags the Low price but is more stable and reflects what a clean copy actually trades for.";
 
 // Custom hover tooltip rendered via portal. Native title= had a long delay
@@ -5114,8 +5114,8 @@ const groupSetsForFilter = (rawRows) => {
 // Min/max price across a card's printings. Works on a group ({normal,foil}
 // sub-rows) or a flat catalog row. null when wholly unpriced.
 //
-// `basis` picks which number a printing contributes: "low" = TCGCSV's lowest
-// active listing (any condition), "market" = NM Market, "any"/undefined =
+// `basis` picks which number a printing contributes: "low" = TCGCSV's published
+// Low Price, "market" = NM Market, "any"/undefined =
 // Low ?? Market (the widest net — a card priced on only one side still
 // counts). Callers that omit it keep the original Low→Market behaviour.
 const _cardPriceRange = (g, basis) => {
@@ -5153,7 +5153,7 @@ const PRICE_BANDS = [
 ];
 const PRICE_BASIS_OPTS = [
   ["any",    "Either",     "Match on whichever of Low / NM Market the printing has (Low preferred). Widest net."],
-  ["low",    "Low",        "Match on Low only — the cheapest active listing in any condition."],
+  ["low",    "Low",        "Match on Low only — TCGplayer's published Low Price."],
   ["market", "NM Market",  "Match on NM Market only — the near-mint reference price."],
 ];
 // A price chip for the smart-search strip. `value` doubles as the chip's label
@@ -25584,7 +25584,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p><strong>Sealed</strong> tracks unopened products (booster boxes, decks, gift sets) and, at the bottom of that section, the <strong>puzzles, pins and lore dials</strong> Ravensburger has released through Organized Play, Illumineer's Troves and convention drops — checklist-only for now, since none of them have a public price feed. <strong>Graded</strong> tracks PSA / BGS / CGC certifications with per-grade price tracking.</p>
     <p><strong>CSV goes both ways.</strong> <em>Import CSV</em> takes a paste-in list; <em>Export CSV</em> downloads everything you own in the same format, which also loads into Dreamborn and other tools that read it. Exporting and re-importing is a round trip — nothing is lost in between.</p>
     <p>The Home page's <strong>Collection Value</strong> chart graphs the value of everything you own over time. Pre-release price spikes are filtered out so a brand-new set doesn't inflate your historical value.</p>
-    <p><strong>Phantom-spike smoothing.</strong> TCGplayer's <strong>Low</strong> is the lowest active listing, not the lowest sale — sometimes a single mispriced listing pins Low at $200 or $2,000 for a few days while nothing actually trades at that number. Without intervention, that single bad listing would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
+    <p><strong>Phantom-spike smoothing.</strong> TCGplayer's <strong>Low</strong> is a published price aggregate, not a sale price — sometimes it detaches from what's actually trading and pins at $200 or $2,000 for a few days while nothing sells at that number. Without intervention, that phantom reading would show up on your Collection Value chart as a brief multi-thousand-dollar windfall and crash. So once enough time has passed to confirm the spike was a phantom (the price snaps back to its prior baseline within a couple of weeks), the chart retroactively replaces those days with the surrounding baseline value. The duration cap means genuine multi-week price moves — a card heating up in a meta shift, for example — are <em>not</em> smoothed; only short blips that resolve quickly.</p>
     <p>This smoothing is scoped to the Collection Value chart only. Every other surface on the site (card detail price history, Price Graphing, the Screener, mover banners) keeps showing the raw Low, because in those views the spike <em>is</em> the signal you came to see. There's also a settling lag: the smoothing waits until there's enough data after the spike to verify it was a phantom, so today's chart still shows in-progress spikes honestly — they only get retroactively corrected once the dust settles.</p>
 
     <h2>Card scanner (beta)</h2>
@@ -25644,7 +25644,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <h2>How are prices computed?</h2>
     <p>Prices come from <strong>TCGplayer</strong> via TCGCSV and refresh once a day. Two numbers are surfaced for every card; most surfaces let you toggle which one drives totals and charts via the <strong>Low / NM Market</strong> control.</p>
     <ul>
-      <li><strong>Low</strong> — the cheapest active TCGplayer listing for the card, <strong>across any condition</strong>. This matches what TCGplayer calls "Low Price" on its own listings page. It's the most actionable number for buyers (it's literally the floor), but be aware that the lowest copy may be Lightly Played or worse — clicking through to TCGplayer will show you the actual condition.</li>
+      <li><strong>Low</strong> — TCGplayer's published Low Price for the card. It tracks the cheap end of the market.</li>
       <li><strong>NM Market</strong> — TCGplayer's algorithmic average of recent <strong>Near Mint sales</strong>. Smoother and slower than Low, but the right number for "what's a clean copy actually worth right now."</li>
     </ul>
     <p>Per-condition pricing (NM-only Low, LP-only Low, etc.) isn't published by TCGplayer's public pricing feed, so we don't track it. If you specifically want NM-quality reference value, lean on <strong>NM Market</strong>.</p>
@@ -25833,7 +25833,7 @@ function SetValuesView({rawData,sets,theme,priceMode,setPriceMode,user,collectio
 
 // Compact Low / Market segmented control rendered inline in each sub-view's
 // filter row. Centralised so the styling and Tip copy stay consistent.
-const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text="Low = lowest active TCGplayer listing across any condition (may be a played copy). NM Market = TCGplayer's smoothed average of recent Near Mint sales. Low is more aggressive; NM Market lags but reflects clean-copy value.">
+const PriceModeToggle = ({priceMode, setPriceMode, style}) => html`<${Tip} text="Low = TCGplayer's published Low Price, tracking the cheap end of the market. NM Market = TCGplayer's smoothed average of recent Near Mint sales — the reference for what a clean copy is worth.">
   <div class="price-mode-toggle" role="group" aria-label="Price source" style=${style||null}>
     <span class="price-mode-label">Price</span>
     <button class=${priceMode==="low"?"active":""}    onClick=${()=>setPriceMode("low")}>Low</button>
@@ -26407,10 +26407,10 @@ const PRICE_DB_PRESETS = [
   ["movers",   "Movers",    "Biggest movers over the selected window in EITHER direction — gains and drops interleaved by absolute Δ%. Same ordering the home page banners use."],
   ["gainers",  "Gainers",   "Biggest gainers over the selected window. Top of the leaderboard for that period."],
   ["losers",   "Losers",    "Biggest losers over the selected window. Cards correcting from a peak or fading interest."],
-  ["buyouts",  "Buyouts",   "Fresh sweeps in progress: the floor has jumped 25%+ this week AND now sits at or above the market sale average — sellers re-priced upward before recent sales caught up. Includes cards with no market data whose floor jumped 1.5× their 30-day baseline."],
+  ["buyouts",  "Buyouts",   "Fresh sweeps in progress: Low has jumped 25%+ this week AND now sits at or above the market sale average — sellers re-priced upward before recent sales caught up. Includes cards with no market data whose Low jumped 1.5× their 30-day baseline."],
   ["crashing", "Crashing",  "Cards down 20% or more on low_price over the past week."],
-  ["discount", "Discount",  "Cheapest listing (low) is 15%+ below the market sale price. Possible undercut bargain — or a stale-but-active listing."],
-  ["premium",  "Premium",   "Settled above-market pricing: the floor is 10%+ above market AND hasn't moved much this week. Card is just expensive — not actively being swept (those show up under Buyouts)."],
+  ["discount", "Discount",  "Low is 15%+ below the market sale price. Possible undercut bargain — or just a stale Low."],
+  ["premium",  "Premium",   "Settled above-market pricing: Low is 10%+ above market AND hasn't moved much this week. Card is just expensive — not actively being swept (those show up under Buyouts)."],
 ];
 // Graded-specific presets shown when the Graded toggle is on. Tuned for the
 // reality of graded data: sparse sales, slow-moving — so 1D / 1W presets
@@ -26456,24 +26456,24 @@ function priceDbSignals(r){
   // so low/market expands above 1. Pairing the ratio with a 1W move keeps
   // this from firing on cards that have just been settled above market
   // for a long time (those are Premium, below). Fallback: cards with no
-  // market data still qualify if the floor jumped 1.5× its 30d baseline.
+  // market data still qualify if Low jumped 1.5× its 30d baseline.
   const ratioBuyout    = hasMarket && ratio >= 1.05 && weekUp;
   const baselineBuyout =
     (r.low_today != null && r.low_30d  && r.low_today >= 1.5 * r.low_30d) ||
     (r.low_today != null && r.low_90d  && r.low_today >= 2   * r.low_90d) ||
     (r.low_today != null && r.low_180d && r.low_today >= 3   * r.low_180d);
   if(ratioBuyout || baselineBuyout) out.push(["buy", "BUY",
-    "Buyout — the floor jumped this week and now sits at or above the market sale average. Market hasn't caught up yet, so someone is sweeping inventory."]);
+    "Buyout — Low jumped this week and now sits at or above the market sale average. Market hasn't caught up yet, so someone is sweeping inventory."]);
   if(r.pct_7d != null && r.pct_7d <= -20) out.push(["crash", "CRSH",
     "Crashing — low_price down 20% or more on the week."]);
   if(hasMarket){
     if(ratio <= 0.85) out.push(["disc", "DISC",
-      "Discount — the cheapest active listing is well below the recent sale-price average."]);
+      "Discount — Low is well below the recent sale-price average."]);
     // Premium = settled-high pricing. The pct_7d < 10 gate is what makes
-    // it mutually exclusive with Buyout — if the floor *also* spiked this
+    // it mutually exclusive with Buyout — if Low *also* spiked this
     // week, the card is being swept (BUY), not just expensive (PREM).
     if(ratio >= 1.10 && (r.pct_7d == null || r.pct_7d < 10)) out.push(["prem", "PREM",
-      "Premium — the floor sits above the market sale average and has been there for a while. The card is just expensive; not an active sweep."]);
+      "Premium — Low sits above the market sale average and has been there for a while. The card is just expensive; not an active sweep."]);
   }
   if(r.pct_30d != null && r.pct_30d >= 15) out.push(["trend", "TRND",
     "Trending up — sustained appreciation over the past month, not a one-day blip."]);
@@ -28717,9 +28717,9 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       money("raw_low","Raw Low","raw_low","raw_low","Raw (ungraded) TCGplayer Low",true),
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
       ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
-    // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is the
-    // lowest active LISTING, and for high-value cards it sits frozen for weeks
-    // — a parked listing, not fresh signal. Rows whose Low hasn't moved in >3
+    // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is a
+    // published price aggregate, and it sits frozen for weeks on most cards
+    // — not fresh signal. Rows whose Low hasn't moved in >3
     // days get a dim ⏱ with the day count in the title. Rows without the
     // field (pre-migration, sealed synth, IDB cache from before) never flag.
     const lowStaleDays = (r) => {
@@ -28728,10 +28728,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       return d > 3 ? d : null;
     };
     const lowCol = {key:"low", label:"Low",
-      th:()=>html`<th key="low" class="sortable th-num" title="TCGplayer Low — lowest active listing across any condition. ⏱ marks a Low that hasn't changed in over 3 days (a parked listing)." onClick=${(e)=>onSort("low", e)}>Low${arrow("low")}</th>`,
+      th:()=>html`<th key="low" class="sortable th-num" title="TCGplayer's published Low Price. ⏱ marks a Low that hasn't changed in over 3 days." onClick=${(e)=>onSort("low", e)}>Low${arrow("low")}</th>`,
       td:(r)=>{ const sd = lowStaleDays(r);
         return html`<td key="low" class="td-num">${fmtMoney(r.low_today)}${sd != null ? html`<span class="td-low-stale"
-          title=${"Low unchanged for "+sd+" days — a parked listing, not fresh signal"}>⏱</span>` : null}</td>`; }};
+          title=${"Low unchanged for "+sd+" days — not fresh signal"}>⏱</span>` : null}</td>`; }};
     return [setCol, rarityCol,
       lowCol,
       money("market","NM Market","market","market_today","TCGplayer NM Market — smoothed average of recent Near Mint sales"),
