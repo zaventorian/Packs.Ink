@@ -1248,27 +1248,44 @@ The nested-interactive HTML (button inside `<a>`) is technically invalid but eve
 
 **Common bug**: when converting `<button>` → `<a>`, also flip the matching `</button>` → `</a>`. The first pass missed the closing tag on `.tournament-card` and the page broke until the close tag was flipped.
 
-## Home panels: the title IS the permalink (`?panel=`, 2026-08-24)
+## Home panels: the title is a link, and the width decides where to (2026-09-06)
 
 You could not link anyone to one box on the home page — "the tournament box" was "scroll down".
-Now every configurable panel except `setChamps` has a title that is an
-**`<a href="/?panel=<key>">` + `navHandler`**, so:
+Every configurable panel except `setChamps` therefore has a title that is an **`<a href>` +
+`navHandler`**, so ctrl/⌘-click and middle-click open the destination in a new tab and right-click
+offers **Copy link address** without opening anything. That last point is the whole reason **no
+box carries a link icon** — Zaven's constraint. Don't add one.
 
-- plain click **pops the panel out** over the dimmed page, where the Copy-link button lives;
-- ctrl/⌘-click and middle-click open the deep link in a new tab;
-- right-click offers **Copy link address** without opening anything.
+**Where the link goes depends on the width, and `panelTitleNav` (HomeView) is the one place that
+decides.**
 
-That last point is the whole reason **no box carries a link icon** — Zaven's constraint. Don't add
-one.
+- **Above 1100px the title goes to the panel's SECTION** — Tournament Results to
+  `/decks?s=tournaments`, Toolbox to `/analytics?a=overview`, Recent set EV to `/analytics?a=ev`.
+  Up there the rails are real columns and every box is already fully visible, so popping one out
+  over a dimmed page only re-showed you what you were looking at, and reaching the section took
+  two clicks instead of one.
+- **At or below 1100px the title still POPS THE PANEL OUT** at `/?panel=<key>`, over the dimmed
+  page, where the Copy-link button lives. Down there the rails stack under the movers or ride a
+  banner in a 32% column, and a box that cramped genuinely earns a whole screen.
+- **News pops out at every width** — it is the one panel with no section of its own
+  (`panelDest.news` is null), so there is nothing else for its title to do.
+- An existing `/?panel=<key>` link **still opens the modal at any width**; only the title's own
+  behaviour is width-dependent. The pop-out is simply not reachable from a wide home page's title
+  any more, which is fine — right-click there copies the section link, which is the more useful
+  one to send.
 
-- **`homePanelTitle({cls, label, panelKey, onPopOut})`** (next to `HOME_PANELS`) builds it; each
-  panel renders `${homePanelTitle(...) || <its old title>}`, so a panel with no `onPopOut` (the
-  `--rl` copy of NewsFeed, any future non-home mount) still renders exactly as before.
+- **`homePanelTitle({cls, label, panelKey, panelNav})`** (next to `HOME_PANELS`) builds it and
+  knows nothing about the decision: it calls `panelNav(key, label)` and renders whatever
+  `{href, go, title}` comes back. Each panel renders `${homePanelTitle(...) || <its old title>}`,
+  so a mount with no `panelNav` (the `--rl` copy of NewsFeed, any future non-home mount) still
+  renders exactly as before.
+- **`panelDest` is the one map of where a panel points**, and it feeds BOTH consumers — the
+  title's link when wide, and the pop-out modal's footer button (`panelCta`, derived from it) at
+  every width. One entry per panel means the two can't drift into naming different destinations.
 - **The panel is MOVED into the modal, not copied.** `columnNodes` skips `openPanel`; a second
   mount would re-run its fetches and fork the collapsible ones' open/closed state.
-- **Whatever the title used to do is relocated to the modal footer** as `panelCta[key]` —
-  Following still reaches Decks·Following, Toolbox still reaches Analytics. Nothing was removed,
-  it moved one click deeper and got a bigger tap target.
+- **⚠ `useMaxWidth(1100)` is a HOOK** and sits with the other HomeView hooks, above `panelNode`.
+  HomeView has no early return before it today; adding one above it would break hook order.
 - **`.home-title-link`'s reset sits ABOVE the per-title colour rules** in styles.css on purpose:
   it is an `<a>` now, so it needs `text-decoration:none` + `color:inherit`, but
   `.home-feed-title--chase` must keep its gold. Declared late, `color:inherit` wins and the gold

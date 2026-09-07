@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=374">
+<link rel="stylesheet" href="styles.css?v=375">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -32121,21 +32121,27 @@ const HOME_PAIR_SIDES = ["right", "left"];
 const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.label]));
 // Every panel except setChamps can be popped out and linked to.
 const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps" && !HOME_FIXED_KEYS.has(k)));
-// A panel's TITLE is its permalink. Plain click pops the panel out over a
-// dimmed home page, where the Copy-link button lives; ctrl/cmd-click and
-// middle-click open /?panel=<key> in a new tab, and right-click offers "Copy
-// link address" — which is why no box needs a link icon of its own. Same
-// <a href> + navHandler convention as the top nav.
+// A panel's TITLE is a link, and `panelNav` (see HomeView) decides where to.
+// Where the box summarises a section of the site, that is where it goes —
+// Tournament Results to Decks · Tournaments — because on a wide home page the
+// box is already fully visible and popping it out over a dimmed page only
+// shows you what you were already looking at. Where there is no such section
+// (News), or where the box is too cramped to read in place (narrow widths),
+// the title pops the panel out at /?panel=<key> instead, which is where the
+// Copy-link button lives. Either way it is one <a href> + navHandler, the same
+// convention as the top nav — so ctrl/middle-click opens the destination in a
+// new tab and right-click offers "Copy link address" for it, which is why no
+// box needs a link icon of its own.
 //
-// setChamps is deliberately absent: Upcoming events already expands on its
-// own title click and already carries richer deep links (?sczip / scc / scdist
-// / scdate / scmode) that a bare ?panel= would flatten.
+// setChamps is deliberately absent from both: Upcoming events already expands
+// on its own title click and already carries richer deep links (?sczip / scc /
+// scdist / scdate / scmode) that a bare ?panel= would flatten.
 const homePanelHref = (key) => "/?panel=" + encodeURIComponent(key);
-const homePanelTitle = ({cls, label, panelKey, onPopOut}) => (panelKey && onPopOut)
-  ? html`<a class=${cls + " home-title-link"} href=${homePanelHref(panelKey)}
-      title=${"Open " + label + " on its own \u2014 and copy a link to it"}
-      onClick=${navHandler(() => onPopOut(panelKey))}>${label}</a>`
-  : null;
+const homePanelTitle = ({cls, label, panelKey, panelNav}) => {
+  const to = (panelKey && panelNav) ? panelNav(panelKey, label) : null;
+  return to ? html`<a class=${cls + " home-title-link"} href=${to.href} title=${to.title}
+      onClick=${navHandler(to.go)}>${label}</a>` : null;
+};
 const HOME_LAYOUT_KEY = "packsink:homeLayout";
 // One-shot migration stamp: see the news-feed fix in App's homeLayout init.
 const HOME_LAYOUT_NEWS_FIX_KEY = "packsink:homeLayoutNewsRail";
@@ -32229,8 +32235,8 @@ const setHomePanelEnabled = (key, on) => {
 
 // Right-side panel on Home: current collection value, line chart over a
 // user-selected range, and a tiny "top movers in your collection" list.
-const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, onPopOut, setsMeta}) => {
-  const popTitle = homePanelTitle({cls:"panel-title", label:"Your Collection", panelKey:"collection", onPopOut});
+const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, sealedPrices, collectionLoading, moversByKey, onTileClick, onSignIn, onTitleClick, panelNav, setsMeta}) => {
+  const popTitle = homePanelTitle({cls:"panel-title", label:"Your Collection", panelKey:"collection", panelNav});
   sealedMeta = sealedMeta || {};
   // Premium accounts value graded slabs off the new per-sale dataset (Avg-of-5)
   // instead of the legacy TCGPriceLookup graded_prices_daily.
@@ -33013,7 +33019,7 @@ const _CollectionMoversSection_unused = ({user, raw, collection, moversByKey, pa
 // current pricing, plus the TCGPlayer Booster Box price (linked through
 // the affiliate wrapper when available). Tiny inline toggles let the
 // user adjust the EV semantics without leaving the page.
-const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, onPopOut}) => {
+const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav}) => {
   const [nc, setNc] = useState(false);
   const [excludeBoth, setExcludeBoth] = useState(false);
   const lastFour = useMemo(() => {
@@ -33072,7 +33078,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, onPopOut
   if(!lastFour.length) return null;
   return html`<div class="home-ev-strip">
     <div class="home-ev-strip-head">
-      ${homePanelTitle({cls:"home-ev-strip-title", label:"Recent set EV", panelKey:"setEv", onPopOut})
+      ${homePanelTitle({cls:"home-ev-strip-title", label:"Recent set EV", panelKey:"setEv", panelNav})
         || (onTitleClick
         ? html`<button class="home-ev-strip-title home-title-link" onClick=${onTitleClick}
             title="Open Analytics → Expected Value">Recent set EV</button>`
@@ -33127,8 +33133,8 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, onPopOut
 //   unlisted deck → fetch via the SECURITY DEFINER get_shared_deck RPC,
 //   which bypasses RLS as long as the token matches. This lets users see
 //   updates to unlisted decks they're authorised to view.
-const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, onPopOut}) => {
-  const titleEl = homePanelTitle({cls:"home-feed-title", label:"Following", panelKey:"following", onPopOut})
+const FollowingFeed = ({user, onSignIn, raw, openDeckById, onTitleClick, panelNav}) => {
+  const titleEl = homePanelTitle({cls:"home-feed-title", label:"Following", panelKey:"following", panelNav})
     || (onTitleClick
     ? html`<button class="home-feed-title home-feed-title-link" onClick=${onTitleClick}
         title="Open Decks → Following">Following</button>`
@@ -33456,7 +33462,7 @@ const useMaxWidth = (px) => {
 // collapsible — full-width under a tall stack of banners, a user who doesn't
 // follow tournaments should be able to fold it away for good.
 const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTournamentsList,
-                                  chaseStyleTitle, collapsible, onPopOut}) => {
+                                  chaseStyleTitle, collapsible, panelNav}) => {
   const [groups, setGroups] = useState(null);  // [{tournament, decks:[...]}]
   const [err, setErr] = useState(null);
   // Always render full top-8 per event. The "Show more" toggle was removed
@@ -33542,7 +33548,7 @@ const TournamentResultsBanner = ({raw, openDeckById, openTournamentById, openTou
   // banners it now sits under instead of a different design language.
   const titleClass = chaseStyleTitle ? "home-feed-title home-feed-title--chase" : "home-feed-title";
   const titleEl = homePanelTitle({cls:titleClass, label:"Tournament Results",
-      panelKey:"tournaments", onPopOut})
+      panelKey:"tournaments", panelNav})
     || (openTournamentsList
     ? html`<button class=${titleClass+" home-feed-title-link"}
         onClick=${openTournamentsList}
@@ -34448,7 +34454,7 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
 // hide their scrollbars until you're already scrolling. `edge` tracks which
 // ends have content past the fold so the fade + the ⌄ chip appear only when
 // there really is more to see.
-const NewsFeed = ({variant, tiles, onPopOut}) => {
+const NewsFeed = ({variant, tiles, panelNav}) => {
   const listRef = useRef(null);
   const [edge, setEdge] = useState("");
   const sync = useCallback(() => {
@@ -34468,7 +34474,7 @@ const NewsFeed = ({variant, tiles, onPopOut}) => {
     return () => { if(ro) ro.disconnect(); window.removeEventListener("resize", sync); };
   }, [sync, tiles.length]);
   return html`<aside class=${"home-feed home-news-feed home-news-feed--"+variant+(edge?" news-edge-"+edge:"")} aria-label="News">
-    ${homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", onPopOut})
+    ${homePanelTitle({cls:"home-feed-title--chase", label:"News", panelKey:"news", panelNav})
       || html`<div class="home-feed-title--chase">News</div>`}
     <div class="home-news-feed-scroll">
       <div class="home-news-feed-list" ref=${listRef} onScroll=${sync}>${tiles}</div>
@@ -34560,7 +34566,7 @@ const HOME_TOOLS = [
   // toolbox entry, because the toolbox is the calculators an ordinary visitor
   // uses and the ticker is a tool for the handful of people who stream.
 ];
-const HomeToolboxPanel = ({onOpenTool, onPopOut}) => {
+const HomeToolboxPanel = ({onOpenTool, panelNav}) => {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem("packsink:home:toolboxCollapsed") === "1"; }
     catch { return false; }
@@ -34571,7 +34577,7 @@ const HomeToolboxPanel = ({onOpenTool, onPopOut}) => {
   return html`<aside class="home-feed home-toolbox">
     <div class="home-feed-head">
       ${homePanelTitle({cls:"home-feed-title home-feed-title--chase home-toolbox-title",
-          label:"Toolbox", panelKey:"tools", onPopOut})
+          label:"Toolbox", panelKey:"tools", panelNav})
         || html`<a class="home-feed-title home-feed-title--chase home-toolbox-title"
         href="/analytics?a=overview"
         title="Open Analytics — what every tool does"
@@ -34601,7 +34607,7 @@ const HomeToolboxPanel = ({onOpenTool, onPopOut}) => {
 //
 // It fetches its own graded items + rollup rather than reading CollectionPanel's
 // — the two panels are independently placeable and either can be switched off.
-const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick, onPopOut}) => {
+const GradedOwnedMoversHomePanel = ({raw, user, onCard, onTitleClick}) => {
   const gradedPremium = useContext(GradedPremiumContext);
   const [items, setItems] = useState(null);
   const [rollup, setRollup] = useState(null);
@@ -34766,7 +34772,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const gradedPremium = useContext(GradedPremiumContext);
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
-  const goAnalytics  = openView ? (()=>openView("market"))     : null;
   const goCollection = openView ? (()=>openView("collection")) : null;
   const goFollowing  = openDecksSection ? (()=>openDecksSection("following")) : null;
   // Build a Screener filter payload from the home banner's current state.
@@ -35264,7 +35269,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // never disappear behind a data hiccup on phones.
   const newsFeedAside = (variant) => (panelCol["news"] != null && newsTiles.length > 0)
     ? html`<${NewsFeed} key=${"news-"+variant} variant=${variant} tiles=${newsTiles}
-        onPopOut=${variant === "rail" ? popOutPanel : null}/>`
+        panelNav=${variant === "rail" ? panelTitleNav : null}/>`
     : null;
   // The legacy CSS-gated ride on the Rare–Legendary banner stays the default
   // (it is what every existing browser already renders on a phone), but an
@@ -35315,15 +35320,40 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     setOpenPanel(null);
     try { window.history.replaceState({}, "", "/"); } catch {}
   }, []);
-  // What each panel's title used to do, relocated into the modal footer.
-  const panelCta = {
-    following:   {label: "Open Decks \u00b7 Following", go: goFollowing},
-    tournaments: openTournamentsList ? {label: "See all tournaments", go: openTournamentsList} : null,
-    tools:       {label: "Open Analytics", go: () => openAnalyticsTool && openAnalyticsTool("overview")},
-    setEv:       {label: "Open Expected Value", go: goAnalytics},
-    collection:  {label: "Open your Collection", go: goCollection},
-    gradedOwned: {label: "Open your graded collection", go: goCollection},
+  // Where each panel points: the section of the site the box is a summary of.
+  // One map, two consumers — the title's link on a wide home page, and the
+  // pop-out modal's footer button at every width (which is what these titles
+  // used to do before they became permalinks).
+  const panelDest = {
+    following:   goFollowing && {href: "/decks?s=following", go: goFollowing,
+                                 cta: "Open Decks \u00b7 Following"},
+    tournaments: openTournamentsList && {href: "/decks?s=tournaments", go: openTournamentsList,
+                                 cta: "See all tournaments"},
+    tools:       openAnalyticsTool && {href: "/analytics?a=overview",
+                                 go: () => openAnalyticsTool("overview"), cta: "Open Analytics"},
+    setEv:       openAnalyticsTool && {href: "/analytics?a=ev",
+                                 go: () => openAnalyticsTool("ev"), cta: "Open Expected Value"},
+    collection:  goCollection && {href: "/collection", go: goCollection,
+                                 cta: "Open your Collection"},
+    gradedOwned: goCollection && {href: "/collection", go: goCollection,
+                                 cta: "Open your graded collection"},
     news:        null,
+  };
+  const panelCta = Object.fromEntries(Object.entries(panelDest)
+    .map(([k, d]) => [k, d ? {label: d.cta, go: d.go} : null]));
+  // What a panel's title IS. Above 1100px the rails are real columns and every
+  // box is fully visible, so the title goes to its section — the pop-out would
+  // only re-show what is already on screen. Below that the rails stack under
+  // the movers or ride a banner in a 32% column, and a box down there is
+  // genuinely cramped: that is where the pop-out earns its place, so narrow
+  // widths keep it. News has no section of its own and pops out at every width.
+  const wideHome = !useMaxWidth(1100);
+  const panelTitleNav = (key, label) => {
+    const dest = wideHome ? panelDest[key] : null;
+    if(dest) return {href: dest.href, go: dest.go, title: dest.cta};
+    if(!HOME_POPOUT_KEYS.has(key)) return null;
+    return {href: homePanelHref(key), go: () => popOutPanel(key),
+      title: "Open " + label + " on its own \u2014 and copy a link to it"};
   };
 
   // One node per configurable panel. `null` means "nothing to draw" — either
@@ -35332,21 +35362,21 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     switch(key){
       case "news":       return newsFeedAside("rail");
       case "following":  return html`<${FollowingFeed} key="following" user=${user} onSignIn=${onSignIn}
-        raw=${raw} openDeckById=${openDeckById} onPopOut=${popOutPanel}/>`;
+        raw=${raw} openDeckById=${openDeckById} panelNav=${panelTitleNav}/>`;
       case "tournaments": return html`<${TournamentResultsBanner} key="tournaments" raw=${raw}
         openDeckById=${openDeckById} openTournamentById=${openTournamentById}
         openTournamentsList=${openTournamentsList} collapsible=${true}
-        onPopOut=${popOutPanel}/>`;
+        panelNav=${panelTitleNav}/>`;
       case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}
-        onPopOut=${popOutPanel}/>`;
+        panelNav=${panelTitleNav}/>`;
       case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
-        sealedPrices=${sealedPrices} setsMeta=${setsMeta} onPopOut=${popOutPanel}/>`;
+        sealedPrices=${sealedPrices} setsMeta=${setsMeta} panelNav=${panelTitleNav}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
         collection=${collection} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
         sealedPrices=${sealedPrices} collectionLoading=${collectionLoading} setsMeta=${setsMeta}
         moversByKey=${moversByKey} onTileClick=${openCard} onSignIn=${onSignIn}
-        onPopOut=${popOutPanel}/>`;
+        panelNav=${panelTitleNav}/>`;
       default: return null;
     }
   };
