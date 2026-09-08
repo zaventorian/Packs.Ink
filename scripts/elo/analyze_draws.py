@@ -145,6 +145,24 @@ def main():
         pl, n = places.get((eid, pid)), cut_size.get(eid, 0)
         return bool(pl and n and pl <= n)
 
+    # Contention is judged ENTERING the round, not by who finally made the cut.
+    # A player can ID in the second-to-last round and still lose the last one and
+    # miss — an outcome gate calls that real, which is backwards: the draw was
+    # agreed while both were playing for the same slot. The cut line is the
+    # points held by the player sitting at the cut position going in.
+    cut_line = {}
+    for (eid, pid, rn), pts in entering.items():
+        cut_line.setdefault((eid, rn), []).append(pts)
+    for key, vals in cut_line.items():
+        n = cut_size.get(key[0], 0)
+        vals.sort(reverse=True)
+        cut_line[key] = vals[n - 1] if n and len(vals) >= n else None
+
+    def contending(m, pid):
+        line = cut_line.get((m["event_id"], m["round_number"]))
+        pts = entering.get((m["event_id"], pid, m["round_number"]))
+        return line is not None and pts is not None and pts >= line
+
     draws = played
     per_round = Counter((m["event_id"], m["round_number"]) for m in draws)
     n_all = sum(1 for r in rows if not r["is_bye"])
@@ -156,7 +174,7 @@ def main():
             return "in-cut"          # elimination can't draw — data error, inspect
         if not m["_closing"]:
             return "real"            # too early to be worth a draw
-        both = made_cut(m["event_id"], m["player1_id"]) and made_cut(m["event_id"], m["player2_id"])
+        both = contending(m, m["player1_id"]) and contending(m, m["player2_id"])
         if both and per_round[(m["event_id"], m["round_number"])] > 1:
             return "ID-strong"
         return "ID-likely" if both else "unclear"
@@ -168,9 +186,14 @@ def main():
     print(f"1. TIERS  (closing window = last {args.id_window} Swiss rounds)")
     for t in ("ID-strong", "ID-likely", "unclear", "real", "in-cut"):
         print(f"   {t:<10} {tiers[t]:5d}")
-    print("   ID-strong = closing round + both players made the cut + another draw that round")
+    print("   ID-strong = closing round + both in cut contention + another draw that round")
     print("   ID-likely = same, but the only draw in its round")
-    print("   unclear   = closing round, but at least one player missed the cut")
+    print("   unclear   = closing round, but at least one player was out of contention")
+    missed = sum(1 for m in draws if m["_tier"].startswith("ID")
+                 and not (made_cut(m["event_id"], m["player1_id"])
+                          and made_cut(m["event_id"], m["player2_id"])))
+    print(f"   {missed} ID-tier draws involve a player who ultimately MISSED the cut "
+          f"— an outcome gate would wrongly call those real")
     # A league night with no cut has nothing to draw INTO, so "made the cut" is
     # unanswerable there and every closing draw falls to unclear. That is the
     # honest outcome, but it has to be visible or the tier reads as a miss.
@@ -188,7 +211,8 @@ def main():
         c = Counter((m["games_won_p1"], m["games_won_p2"]) for m in draws if m["_tier"] == t)
         if c:
             print(f"   {t:<10} " + ", ".join(f"{a}-{b}:{n}" for (a, b), n in c.most_common(5)))
-    print("   -> if ID-strong and real look alike, the score carries nothing (the 1-1-1 case)")
+    print("   -> 0-0 and 1-1-1 both read as agreed, so expect no split here; a tier that")
+    print("      is all one shape is evidence the score is decoration, not signal")
 
     print("\n3. POSITION")
     off = Counter()
