@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=375">
+<link rel="stylesheet" href="styles.css?v=376">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -274,7 +274,7 @@
      the scanner on any given visit. Both scripts only attach globals used when
      the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
      the ONNX OCR models) load later still, inside the workers. -->
-<script src="scanner.js?v=299" defer></script>
+<script src="scanner.js?v=300" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -39490,6 +39490,161 @@ function checkDeckLegality(deck, cardById, setsByProductName){
 // Serialize a deck to the plain-text "QTY NAME" format common in Lorcana
 // community shares (and what we accept on import). Cards are sorted by
 // section then cost for stable output.
+// Import a deck from a PICTURE of one — a poster from dreamborn / duels.ink /
+// a tournament graphic, or a screenshot of any of them.
+//
+// It reuses the card scanner's shipped index wholesale, because that index is
+// built from the FULL Lorcast card face (build_index.py descriptors the whole
+// image, not an art crop) — so a poster cell is the same picture the reference
+// vector came from, scaled. No glare, no perspective, no white balance. The
+// hard part is finding the lattice, which scanner.js does; the matching is the
+// easy half (measured: 83/83 across five real posters).
+//
+// Review is mandatory, same call as the camera scanner's SCANNER_QA_ONLY: the
+// grid shows what it read and you fix it before anything touches the deck.
+function DeckImageImport({raw, onUseText}){
+  const [phase, setPhase] = useState("idle");      // idle | scanning | review | error
+  const [note, setNote] = useState("");
+  const [rows, setRows] = useState([]);
+  const fileRef = useRef(null);
+  const [drag, setDrag] = useState(false);
+
+  // card_id -> catalog row, so a match resolves to the REAL "Product Name"
+  // parseDeckText expects rather than to a name we reassemble ourselves.
+  const byCardId = useMemo(() => {
+    const m = new Map();
+    for(const r of raw || []) if(r.card_id != null && !m.has(r.card_id)) m.set(r.card_id, r);
+    return m;
+  }, [raw]);
+
+  const runImage = useCallback(async (img) => {
+    if(!window.CardScanner){ setPhase("error"); setNote("The card index didn't load. Try reloading the page."); return; }
+    setPhase("scanning"); setNote("Loading the card index…");
+    try {
+      await window.CardScanner.load();
+      setNote("Finding the card grid…");
+      const res = await window.CardScanner.scanDeckImage(img, { onProgress: (p) => {
+        setNote(p.phase === "detect"
+          ? `Finding the card grid… (${p.tried} layout${p.tried === 1 ? "" : "s"} tried)`
+          : `Reading cards… ${p.done}/${p.total}`);
+      }});
+      if(!res || !res.cells.length){
+        setPhase("error");
+        setNote("Couldn't find a grid of cards in that image. It works on deck posters and screenshots of them — the cards need to be laid out in a grid and roughly 150px wide or bigger.");
+        return;
+      }
+      const out = res.cells.map((c, i) => {
+        const cv = document.createElement("canvas");
+        cv.width = 96; cv.height = Math.round(96 * 681 / 488);
+        try {
+          cv.getContext("2d").drawImage(img, c.rect.x, c.rect.y, c.rect.w, c.rect.h, 0, 0, cv.width, cv.height);
+        } catch(_e){}
+        const row = byCardId.get(c.card.id);
+        const name = (row && row["Product Name"])
+          || (c.card.version ? `${c.card.name} - ${c.card.version}` : c.card.name);
+        let thumb = "";
+        try { thumb = cv.toDataURL("image/jpeg", 0.82); } catch(_e){}
+        return { key: `${c.card.id}:${i}`, name, thumb, qty: 4,
+                 cos: c.cos, ham: c.ham, inCatalog: !!row };
+      });
+      setRows(out);
+      setPhase("review");
+      setNote("");
+    } catch(e){
+      setPhase("error");
+      setNote(`Something went wrong reading that image${e && e.message ? ": " + e.message : "."}`);
+    }
+  }, [byCardId]);
+
+  const loadFile = useCallback((file) => {
+    if(!file || !/^image\//.test(file.type || "")){
+      setPhase("error"); setNote("That doesn't look like an image file."); return;
+    }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { runImage(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); setPhase("error"); setNote("Couldn't open that image."); };
+    img.src = url;
+  }, [runImage]);
+
+  // Paste is the headline interaction — screenshot, ⌘V, done.
+  useEffect(() => {
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for(const it of items){
+        if(it.kind === "file" && /^image\//.test(it.type)){
+          const f = it.getAsFile();
+          if(f){ e.preventDefault(); loadFile(f); return; }
+        }
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [loadFile]);
+
+  const total = rows.reduce((s, r) => s + (r.qty || 0), 0);
+  const setQty = (key, d) => setRows(rs => rs.map(r =>
+    r.key === key ? {...r, qty: Math.max(0, Math.min(99, (r.qty || 0) + d))} : r));
+  // Counts run 4 down to 1 far more often than they run up, so tapping the
+  // number walks that way and wraps — one tap per card instead of three.
+  const cycleQty = (key) => setRows(rs => rs.map(r =>
+    r.key === key ? {...r, qty: r.qty > 1 ? r.qty - 1 : 4} : r));
+
+  if(phase === "review") return html`<div class="deckimg">
+    <div class="deckimg-reviewbar">
+      <div>
+        <strong>${rows.length}</strong> card${rows.length === 1 ? "" : "s"} found ·${" "}
+        <span class=${total === 60 ? "deckimg-total ok" : "deckimg-total"}>${total} / 60</span>
+      </div>
+      <div class="deckimg-reviewbar-actions">
+        <button onClick=${()=>{ setRows([]); setPhase("idle"); }}>Start over</button>
+        <button class="active" disabled=${!rows.length}
+          onClick=${()=>onUseText(rows.filter(r=>r.qty>0).map(r=>`${r.qty} ${r.name}`).join("\n"))}>
+          Use these cards
+        </button>
+      </div>
+    </div>
+    <p class="muted deckimg-hint">
+      Every card starts at 4 — set the counts, and the total above should reach 60.
+      The thumbnail is the crop it matched, so you can check it against the name.
+    </p>
+    <div class="deckimg-grid">
+      ${rows.map(r => html`<div class=${"deckimg-cell" + (r.qty ? "" : " out")} key=${r.key}>
+        ${r.thumb ? html`<img class="deckimg-thumb" src=${r.thumb} alt=""/>` : html`<div class="deckimg-thumb"></div>`}
+        <div class="deckimg-name" title=${r.name}>${r.name}</div>
+        ${!r.inCatalog && html`<div class="deckimg-warn">not in your catalog</div>`}
+        <div class="deckimg-qty">
+          <button onClick=${()=>setQty(r.key,-1)} aria-label="One fewer">−</button>
+          <button class="deckimg-n" title="Cycle 4 → 3 → 2 → 1"
+            onClick=${()=>cycleQty(r.key)}>${r.qty}</button>
+          <button onClick=${()=>setQty(r.key,1)} aria-label="One more">+</button>
+        </div>
+      </div>`)}
+    </div>
+  </div>`;
+
+  return html`<div class="deckimg">
+    <div class=${"deckimg-drop" + (drag ? " over" : "") + (phase === "scanning" ? " busy" : "")}
+      onDragOver=${e=>{e.preventDefault(); setDrag(true);}}
+      onDragLeave=${()=>setDrag(false)}
+      onDrop=${e=>{e.preventDefault(); setDrag(false); loadFile(e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]);}}
+      onClick=${()=>phase !== "scanning" && fileRef.current && fileRef.current.click()}>
+      ${phase === "scanning"
+        ? html`<div class="deckimg-busy"><span class="deckimg-spin"></span><span>${note}</span></div>`
+        : html`<div>
+            <div class="deckimg-drop-title">${uiIcon("image", 18)} Paste or drop a deck image</div>
+            <div class="muted deckimg-drop-sub">
+              A deck poster from dreamborn, duels.ink or a tournament graphic — or a screenshot of one.
+              Reads the cards on your device; the picture never leaves your browser.
+            </div>
+          </div>`}
+      <input type="file" accept="image/*" ref=${fileRef} style=${{display:"none"}}
+        onChange=${e=>{ const f = e.target.files && e.target.files[0]; e.target.value = ""; loadFile(f); }}/>
+    </div>
+    ${phase === "error" && html`<p class="deckimg-err">${note}</p>`}
+  </div>`;
+}
+
 function deckToText(deck, cardById){
   const lines = [];
   const sections = DECK_SECTIONS.map(s => ({...s, items: []}));
@@ -40706,8 +40861,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
     setDeckTextModal("import");
   }, []);
 
-  const handleImportApply = useCallback(async () => {
-    const text = deckTextValue;
+  const handleImportApply = useCallback(async (textArg) => {
+    // The image importer applies its reviewed list directly; a click handler
+    // passes an event, so only a real string overrides the textarea.
+    const text = typeof textArg === "string" ? textArg : deckTextValue;
     if(text == null || !text.trim()) return;
     const result = parseDeckText(text, raw);
     if(!result.entries.length){
@@ -41625,8 +41782,10 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           <button onClick=${()=>setDeckTextModal(null)} class="theme-toggle" title="Close">×</button>
         </div>
         <div class="modal-body" style=${{padding:18}}>
+          ${deckTextModal === "import" && html`<${DeckImageImport} raw=${raw}
+            onUseText=${(t)=>{ setDeckTextValue(t); handleImportApply(t); }}/>`}
           ${deckTextModal === "import" && html`<p class="muted" style=${{fontSize:12,margin:"0 0 10px",lineHeight:1.5}}>
-            Paste one card per line: <code>4 Cinderella - Stouthearted</code>. Importing${" "}
+            …or paste one card per line: <code>4 Cinderella - Stouthearted</code>. Importing${" "}
             <strong>replaces</strong> this deck's current contents.
           </p>`}
           ${deckTextModal === "export" && html`<p class="muted" style=${{fontSize:12,margin:"0 0 10px",lineHeight:1.5}}>
