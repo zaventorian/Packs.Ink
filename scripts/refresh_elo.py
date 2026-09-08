@@ -70,8 +70,9 @@ def main() -> None:
     ap.add_argument("--ids", nargs="*", type=int, default=[],
                     help="RPH event ids to ingest as ONE-OFFS. They count toward Elo "
                          "like any other event, but add each id to ONE_OFF_EVENT_IDS in "
-                         "discover_store_scs.py or its store joins the tracked set and "
-                         "every future set's SCs there get pulled in automatically.")
+                         "scripts/elo/elo_scope.py or its store joins the tracked set — "
+                         "both the discovery that ingests its future SCs and the sync "
+                         "that puts it on the Upcoming SCs tab.")
     ap.add_argument("--ids-season", default=None,
                     help="season label for --ids; defaults to the current set's")
     ap.add_argument("--skip-storage", action="store_true",

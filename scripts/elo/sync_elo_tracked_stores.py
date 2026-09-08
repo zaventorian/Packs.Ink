@@ -52,6 +52,8 @@ try:
 except Exception:
     pass
 
+from elo_scope import ONE_OFF_EVENT_IDS
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
 REGION = {"IL", "IN", "WI", "MI"}  # broad state gate (paired with history match)
@@ -116,8 +118,12 @@ def fetch_tracked_store_names() -> set[str]:
     """Normalized names of every store in our ELO history (Supabase mirror of
     lorcana_elo.db). This is the allowlist that defines "a store we track".
     Ignored events (is_ignored=true) are NOT history — a store whose events are
-    all ignored (e.g. an out-of-scope store we dropped) must not re-qualify."""
-    return {norm(r.get("store")) for r in _page("elo_events", "store", "is_ignored=eq.false") if r.get("store")}
+    all ignored (e.g. an out-of-scope store we dropped) must not re-qualify.
+    Neither are hand-added one-offs: those count for Elo but confer no scope, so
+    a single guest event must not put its shop on the Upcoming SCs tab."""
+    return {norm(r.get("store"))
+            for r in _page("elo_events", "event_id,store", "is_ignored=eq.false")
+            if r.get("store") and r.get("event_id") not in ONE_OFF_EVENT_IDS}
 
 
 MELEE_OFFSET = 100_000_000  # melee event_ids are stored +100M; only RPH ids resolve via the RPH API
@@ -131,6 +137,8 @@ def history_store_samples(per: int = 3) -> dict[str, list[int]]:
     for r in _page("elo_events", "event_id,store", "is_ignored=eq.false"):
         nm = norm(r.get("store"))
         eid = r.get("event_id")
+        if eid in ONE_OFF_EVENT_IDS:
+            continue  # counts for Elo, but its store is not one we track
         if nm and eid and eid < MELEE_OFFSET:
             lst = out.setdefault(nm, [])
             if len(lst) < per:

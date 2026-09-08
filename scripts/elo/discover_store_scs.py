@@ -63,18 +63,10 @@ EXCLUDED_STORE_IDS = {
     28480,  # Storming Good Games (Greencastle, IN)
 }
 
-# Events added BY HAND as one-offs (refresh_elo.py --ids). They count toward Elo
-# exactly like any other event — matches, ratings, standings — but their store is
-# NOT one we track. Scope is derived from the events we have ingested, so without
-# this list a single guest event would silently enrol its store in every future
-# set's discovery, which is the opposite of what "just this one" means.
-#
-# Distinct from EXCLUDED_STORE_IDS above, which drops a store's events entirely.
-# Here the event counts and only the STORE is out of scope, so it keys on the
-# event id — which also means adding one needs no lookup of the store's id.
-ONE_OFF_EVENT_IDS = {
-    796836,  # Zaven 2026-09-08: count this event, never the store
-}
+# Hand-added one-offs: the event counts, its store does not become one we track.
+# Shared with sync_elo_tracked_stores, which derives the SAME scope from the
+# Supabase mirror — see elo_scope.py for why it has to be one list.
+from elo_scope import ONE_OFF_EVENT_IDS  # noqa: E402
 
 
 def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
