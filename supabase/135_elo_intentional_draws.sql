@@ -18,7 +18,7 @@ comment on column public.elo_matches.is_intentional_draw is
   'Draw agreed rather than played. Scored 0.5 in elo_ratings like any draw, but '
   'the rating is held flat, so it counts in the record and not in the rating.';
 
--- The site asks "which of this player''s draws were agreed", never "find every
+-- The site asks "which of this player's draws were agreed", never "find every
 -- ID across the whole table", so the index is only worth its keep on the true
 -- rows — which are a small minority of matches.
 create index if not exists elo_matches_intentional_draw_idx
