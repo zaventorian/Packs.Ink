@@ -1888,6 +1888,57 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 Lives in the site footer (every SPA view), on `privacy.html`, and on the **How It Works** page: "Packs.Ink is an unofficial fan site. Disney Lorcana TCG is a trademark of Disney; the game is operated by Ravensburger. This site is not affiliated with, endorsed by, or sponsored by Disney or Ravensburger."
 
+## Elo weekly refresh — set rotation is the failure mode (2026-09-08)
+
+`.github/workflows/elo_weekly_refresh.yml` (Mon 11:00 UTC) runs `scripts/refresh_elo.py`:
+download the canonical SQLite from Supabase Storage → ingest → renames → aliases →
+recompute → export to Supabase → upload the DB back. Two steps feed it events, and
+**only the second one still matters**:
+
+1. `ingest.py --xlsx season_files/wilds_unknown.xlsx --season "Wilds Unknown Summer 2026"`
+   — the hand-curated season sheet. It is a permanent no-op now (`skip=50` every week);
+   it is the historical Wilds Unknown seed, not a live intake.
+2. `discover_store_scs.py --ingest` — the real intake. Store-driven: it derives the RPH
+   `store_id`s we already count from non-ignored events in the DB, pulls the CURRENT set's
+   SCs off RPH, and ingests the ones at those stores. `fetch_current_set()` reads the
+   newest released *numbered* set from Supabase `sets`, so it auto-advances at rotation.
+
+**⚠ The board froze at the Attack of the Vine! rotation and NOTHING went red.** Step 2
+found all 68 AotV SCs at tracked stores — including the 14 played 09-05/09-06 — and then
+refused to ingest one of them, because `season_label_for()` found no existing
+`"Attack of the Vine! …"` label in the DB and the code skipped the whole set with
+*"seed its first event via the spreadsheet first"*. Step 1 skipped its 50 already-ingested
+events, step 2 is deliberately `run_soft`, so the workflow was green while ingesting zero.
+The guard was over-cautious: **scope comes from the tracked `store_id` set and
+`EXCLUDED_STORE_IDS`, never from the label** — it was refusing to ingest a set for want of
+a display string. It now SEEDS instead: `season_label_from_date()` names the season
+`"<set> <northern-hemisphere season> <year>"` off the first SC it is about to ingest
+(reproduces `Fabled Fall 2025`, `Wilds Unknown Summer 2026`, `Whispers in the Well Spring 2026`
+exactly), overridable with `--season-label`.
+
+- **Only the SET half of a season label is load-bearing.** `eloSeasonSetLabel()` longest-prefix
+  matches it against `MAINLINE_SETS` to head the Stores columns, and the Stores tab assigns
+  seasons by DATE (`eloSeasonForDate`), not by this string. The tag is display text on the
+  season chip and in the events table. `SEASON_REVIEWS` is the one place it must match
+  exactly — and that is curated per published recap, so add the entry when you publish one.
+- **`--season-label` cannot rename a season that already has events** — it only names a set
+  being seeded. Renaming an existing one is a DB edit, not a flag.
+- **`name_nets()` generates the three spellings per set** (`X Set Championship`,
+  `X - Set Championship`, `Set Championship X`) instead of the old hand-kept map that
+  covered only Wilds Unknown and Winterspell — RPH's name-relevance filter drops ~4% on a
+  single phrasing, and a dropped SC is a store falling off the board. Byte-identical nets
+  for those two sets; a rotation needs no edit.
+- **`CURRENT_SET_FALLBACK` in `discover_wu_scs.py` is stale by nature** (it is only reached
+  when the Supabase `sets` read fails) but a stale value files this set's SCs under the
+  previous set. Bump it at rotation.
+- Guarded by `python scripts/elo/test_season_seed.py` (stubbed pulls + temp SQLite, no
+  network): the seeding path, that seeding does not widen scope, the label shape the UI
+  prefix-matches, and that an existing set keeps its stored label.
+- **The remaining hole is alerting, not ingest.** A weekly refresh that ingests zero events
+  for the current set still exits 0. If this bites again, the fix is a floor check in
+  `refresh_elo.py` (current set has ≥1 event, or ≥1 new event in the last N days), not more
+  discovery.
+
 ## Chicagoland Elo — Stores tab (2026-08-19)
 
 `EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views). Adding a tab means touching four places: `applyUrlToState`, the state→URL effect, the `.elo-innertabs` nav, and the render list. `eloUrlFor` also has to know the target or `EloLink`'s href points at the wrong view on a middle-click — it deletes `store` along with `p`/`e`/`sub` for exactly that reason. `.elo-innertabs` is `flex-wrap:wrap` — at 5 tabs it clipped on phones, and a clipped tab reads as a deleted feature.
