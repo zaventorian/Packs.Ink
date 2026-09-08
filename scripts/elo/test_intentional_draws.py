@@ -49,6 +49,18 @@ check("32-player Swiss not eaten by a Top-16 cut",
       sorted(ad.cut_rounds({1: 16, 2: 16, 3: 16, 4: 16, 5: 8, 6: 4, 7: 2, 8: 1})),
       [5, 6, 7, 8])
 check("a league night with no cut", sorted(ad.cut_rounds({1: 8, 2: 8, 3: 8})), [])
+# ...and counting ALONE cannot tell that apart from a Swiss round that landed on
+# the expected count once players dropped. A drawn match is the tiebreaker:
+# single elimination has to produce a winner, so a round holding a draw is Swiss.
+_shrunk = {1: 11, 2: 11, 3: 11, 4: 11, 5: 8, 6: 4, 7: 2, 8: 1}
+check("a shrunken last Swiss round IS swallowed on counts alone",
+      sorted(ad.cut_rounds(_shrunk)), [5, 6, 7, 8])
+check("a draw in it stops the walk (e200747 R5)",
+      sorted(ad.cut_rounds(_shrunk, {5})), [6, 7, 8])
+check("a bogus draw inside a real cut costs only its own round",
+      sorted(ad.cut_rounds(_shrunk, {7})), [8])
+check("a draw in the final leaves no cut at all",
+      sorted(ad.cut_rounds(_shrunk, {8})), [])
 
 print("points entering the round")
 ms = [
@@ -194,5 +206,48 @@ with tempfile.TemporaryDirectory() as td:
           round(got[(3, 4)][0] + got[(4, 4)][0], 6), 0.0)
 
 print()
+
+print("a swallowed last Swiss round still yields its ID")
+# The e200747 shape, minimised: R3 holds 4 matches sitting above a 2/1 cut, so
+# the halving walk reads it as the top-4 opener and the draw in it disappears as
+# `in-cut` — losing a confirmed ID. R2 holds 5, so the repeat guard cannot help.
+with tempfile.TemporaryDirectory() as td:
+    db = Path(td) / "swallow.db"
+    c = sqlite3.connect(db)
+    c.executescript((HERE / "schema.sql").read_text())
+    c.execute("INSERT INTO events (event_id,name,event_date,season,is_ignored)"
+              " VALUES (4,'SC Shrunk','2026-08-10','X',0)")
+    for i in range(1, 11):
+        c.execute("INSERT INTO players (player_id,display_name) VALUES (?,?)", (i, f"Q{i}"))
+    n = [0]
+
+    def addm(rn, t, p1, p2, w, g1=2, g2=1):
+        n[0] += 1
+        c.execute("INSERT INTO matches (match_id,event_id,round_id,round_number,table_number,"
+                  "player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye)"
+                  " VALUES (?,4,?,?,?,?,?,?,?,?,0)", (n[0], rn, rn, t, p1, p2, w, g1, g2))
+
+    for t, (a, b) in enumerate([(1, 6), (2, 7), (3, 8), (4, 9), (5, 10)], 1):
+        addm(1, t, a, b, a)
+    for t, (a, b) in enumerate([(1, 2), (3, 4), (5, 6), (7, 8), (9, 10)], 1):
+        addm(2, t, a, b, a)
+    # R3: two players dropped, so 4 matches — the count the walk is expecting.
+    # Table 1 is the agreed draw, both sides on 6 points at the top of the field.
+    addm(3, 1, 1, 3, None, 0, 0)
+    for t, (a, b) in enumerate([(5, 2), (4, 7), (6, 9)], 2):
+        addm(3, t, a, b, a)
+    for t, (a, b) in enumerate([(1, 5), (3, 4)], 1):   # cut: semis
+        addm(4, t, a, b, a)
+    addm(5, 1, 1, 3, 1)                                 # cut: final
+    c.commit(); c.close()
+
+    out2 = subprocess.run(
+        [sys.executable, str(HERE / "analyze_draws.py"), "--db", str(db)],
+        capture_output=True, text=True).stdout
+    check("the draw is no longer discarded as in-cut", tier_count("in-cut", out2), 0)
+    check("it classifies as intentional",
+          (tier_count("ID-strong", out2) or 0) + (tier_count("ID-likely", out2) or 0), 1)
+
+
 print(f"{len(failures)} failure(s)" if failures else "all passed")
 sys.exit(1 if failures else 0)

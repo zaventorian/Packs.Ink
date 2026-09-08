@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=376">
+<link rel="stylesheet" href="styles.css?v=377">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -23666,13 +23666,21 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
         // NOT by rating_id (bigserial reflects Supabase insertion order, which
         // breaks when a chronologically-earlier season is added in a later
         // export). rating_id is the final tiebreaker.
-        const {data: rd, error: e3} = await sbClient.from("elo_player_rounds_v")
-          .select("rating_id,event_id,event_name,event_date,round_number,table_number,opponent_id,opponent_name,opponent_platform,opponent_rating,my_games_won,opp_games_won,score,rating_before,rating_after,elo_delta,is_bye")
+        // is_intentional_draw arrives with migration 136. Until it is applied
+        // PostgREST 42703s the whole select, which would blank the profile —
+        // so ask for it, and retry without it rather than losing the page.
+        const ROUND_COLS = "rating_id,event_id,event_name,event_date,round_number,table_number,opponent_id,opponent_name,opponent_platform,opponent_rating,my_games_won,opp_games_won,score,rating_before,rating_after,elo_delta,is_bye";
+        const fetchRounds = (cols) => sbClient.from("elo_player_rounds_v")
+          .select(cols)
           .eq("player_id", canon)
           .order("event_date", {ascending: false, nullsFirst: false})
           .order("round_number", {ascending: true})
           .order("table_number", {ascending: true, nullsFirst: false})
           .order("rating_id", {ascending: true});
+        let {data: rd, error: e3} = await fetchRounds(ROUND_COLS + ",is_intentional_draw");
+        if(e3 && /42703|is_intentional_draw/i.test(String(e3.message || e3))){
+          ({data: rd, error: e3} = await fetchRounds(ROUND_COLS));
+        }
         if(e3) throw e3;
         if(cancelled) return;
         setRounds(rd || []);
@@ -23917,8 +23925,9 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
             ${h2hMatches.map(r => {
               const isWin  = r.score === 1.0;
               const isLoss = r.score === 0.0;
-              const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
-              const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
+              const isId = !isWin && !isLoss && r.is_intentional_draw === true;
+              const resultText = isWin ? "Win" : (isLoss ? "Loss" : (isId ? "ID" : "Draw"));
+              const resultClass = isWin ? "win" : (isLoss ? "loss" : (isId ? "draw intentional" : "draw"));
               const score = (r.my_games_won != null && r.opp_games_won != null) ? `${r.my_games_won}-${r.opp_games_won}` : "";
               return html`<tr key=${r.rating_id}>
                 <td class="elo-h2h-date">${r.event_date || "—"}</td>
@@ -23927,7 +23936,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                     onClick=${()=>onEventClick && onEventClick(r.event_id)}>${fmtEventLabel(r.event_id, r.event_name)}</${EloLink}>
                 </td>
                 <td>${r.round_number}</td>
-                <td class="elo-rounds-result"><span class="elo-result ${resultClass}">${resultText}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
+                <td class="elo-rounds-result"><span class="elo-result ${resultClass}" title=${isId ? "Intentional draw — agreed at the table, so it moves neither rating." : null}>${resultText}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
                 <td class="elo-rounds-elo">${Math.round(r.rating_after)}<span class=${"elo-delta " + (r.elo_delta>=0?"up":"down")}>${r.elo_delta>=0?"+":""}${r.elo_delta.toFixed(1)}</span></td>
               </tr>`;
             })}
@@ -23991,8 +24000,9 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                 }
                 const isWin  = r.score === 1.0;
                 const isLoss = r.score === 0.0;
-                const resultText = isWin ? "Win" : (isLoss ? "Loss" : "Draw");
-                const resultClass = isWin ? "win" : (isLoss ? "loss" : "draw");
+                const isId = !isWin && !isLoss && r.is_intentional_draw === true;
+                const resultText = isWin ? "Win" : (isLoss ? "Loss" : (isId ? "ID" : "Draw"));
+                const resultClass = isWin ? "win" : (isLoss ? "loss" : (isId ? "draw intentional" : "draw"));
                 const score = (r.my_games_won != null && r.opp_games_won != null) ?
                   `${r.my_games_won}-${r.opp_games_won}` : "";
                 return html`<tr key=${r.rating_id}>
@@ -24004,7 +24014,7 @@ function EloPlayerProfile({playerId, onBack, onEventClick, onPlayerClick, aliasM
                       : html`<span class="elo-opp">${r.opponent_name || "—"}</span>`}
                     ${r.opponent_rating != null && html`<span class="elo-opp-rating">(${Math.round(r.opponent_rating)})</span>`}
                   </td>
-                  <td class="elo-rounds-result"><span class="elo-result ${resultClass}">${resultText}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
+                  <td class="elo-rounds-result"><span class="elo-result ${resultClass}" title=${isId ? "Intentional draw — agreed at the table, so it moves neither rating." : null}>${resultText}</span>${score && html` <span class="elo-score">${score}</span>`}</td>
                   <td class="elo-rounds-elo">${Math.round(r.rating_after)}<span class=${"elo-delta " + (r.elo_delta>=0?"up":"down")}>${r.elo_delta>=0?"+":""}${r.elo_delta.toFixed(1)}</span></td>
                 </tr>`;
               })}
