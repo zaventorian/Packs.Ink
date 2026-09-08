@@ -21,10 +21,13 @@ stopped moving with nothing red anywhere. Four things are locked down:
      to head the Stores columns. A label that doesn't match reads "Unsorted".
   4. EXISTING SETS. A set we already have events for keeps its stored label —
      backfilling Wilds Unknown must never invent a second season for it.
-  5. ONE-OFFS. A hand-added event counts for Elo but must not enrol its store in
-     the tracked set. Scope is derived from ingested events, so the failure mode
-     is a guest store quietly joining every future set's discovery — invisible
-     until months later, when its events are already on the board.
+  5. ONE-OFFS, BOTH WAYS. A hand-added event counts for Elo but must not enrol
+     its store in the tracked set — and scope is derived TWICE, from the local
+     SQLite (discover_store_scs) and from the Supabase mirror
+     (sync_elo_tracked_stores, which drives the Upcoming SCs tab and the store
+     history behind the Stores tab). Honouring the list on one side only is the
+     easy miss, and it fails invisibly: the store just quietly appears months
+     later with its whole event history attached.
 """
 from __future__ import annotations
 import os, sqlite3, sys, tempfile
@@ -178,6 +181,26 @@ with tempfile.TemporaryDirectory() as td:
     check("an ordinary event still tracks its store", 10 in tracked, True)
     check("the one-off is not silently dropped from the DB",
           seeded_event_ids(m.DB) == {4242, one_off}, True)
+
+print("\nthe Supabase-side derivation honours the same list")
+import sync_elo_tracked_stores as sync  # noqa: E402
+
+check("both sides read one list", sync.ONE_OFF_EVENT_IDS is m.ONE_OFF_EVENT_IDS, True)
+_rows = [{"event_id": 4242, "store": "Tracked Store"},
+         {"event_id": one_off, "store": "Guest Store"}]
+_orig_page = sync._page
+sync._page = lambda table, cols, where=None: list(_rows)
+try:
+    names = sync.fetch_tracked_store_names()
+    samples = sync.history_store_samples()
+finally:
+    sync._page = _orig_page
+check("guest store is not an Upcoming-SCs allowlist name",
+      sync.norm("Guest Store") in names, False)
+check("ordinary store still is", sync.norm("Tracked Store") in names, True)
+check("guest store gets no store_id resolution sample",
+      sync.norm("Guest Store") in samples, False)
+check("ordinary store still does", sync.norm("Tracked Store") in samples, True)
 
 print()
 if failures:

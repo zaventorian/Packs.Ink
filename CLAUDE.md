@@ -1944,7 +1944,7 @@ exactly), overridable with `--season-label`.
 "Count this event, but not this store" — a guest/out-of-area shop, or an SC discovery
 didn't classify. Two halves, and doing only the first is the trap:
 
-1. **Add the id to `ONE_OFF_EVENT_IDS`** in `discover_store_scs.py`, then
+1. **Add the id to `ONE_OFF_EVENT_IDS`** in `scripts/elo/elo_scope.py`, then
 2. **Actions → ELO weekly refresh → Run workflow**, `event_ids: <id>` (space-separated
    for several; `event_season` blank inherits the current set's label).
 
@@ -1954,10 +1954,18 @@ ingest run anywhere else is silently overwritten by the next refresh. That is wh
 a dispatch input on the existing workflow rather than a script you run on its own.
 
 - **`ONE_OFF_EVENT_IDS` is the "don't count the store" half, and it is not optional.**
-  `tracked_store_ids()` derives scope from every non-ignored event in the DB, so a plain
-  ingest enrols that store — and from the next set on, discovery pulls in every SC it runs,
-  automatically and invisibly. The list keys on the EVENT id, which also means adding one
-  needs no lookup of the store's id.
+  Scope is derived from ingested events, so a plain ingest enrols that store. The list keys
+  on the EVENT id, which also means adding one needs no lookup of the store's id.
+- **⚠ Scope is derived TWICE, and the list has to reach both** — which is why it lives in
+  its own `elo_scope.py` rather than in either consumer:
+  - `discover_store_scs.tracked_store_ids()` reads the **local SQLite** and decides whose
+    SCs future discovery ingests.
+  - `sync_elo_tracked_stores` reads the **Supabase `elo_events` mirror** and decides whose
+    SCs reach the site's Upcoming SCs tab — and through `elo_tracked_stores`, the store-history
+    backfill behind the Stores tab's events/tickets/fans. Its rule 1 matches on store NAME, and
+    rule 4 tracks an in-region history store even with no upcoming SC, so filling the store name
+    (below) is exactly what would have enrolled the shop a day later, via the daily
+    `discover_scs.yml`, with nothing in the Elo refresh to show for it.
 - **It is NOT `EXCLUDED_STORE_IDS`.** That one drops a store's events entirely (paired with
   `is_ignored=1`); here the event fully counts — matches, ratings, the player's rating —
   and only the STORE is out of scope. Different question, different list.
@@ -1970,8 +1978,10 @@ a dispatch input on the existing workflow rather than a script you run on its ow
   only fills the gap the manual paths left.
 - `event_ids` is validated as digits-and-spaces in the workflow and reaches the shell
   through `env:`, never interpolated into the command line.
-- Guarded by `python scripts/elo/test_season_seed.py` — a one-off must not track its store,
-  an ordinary event still must, and the one-off must stay in the DB.
+- Guarded by `python scripts/elo/test_season_seed.py` — on BOTH sides: a one-off must not
+  track its store locally, must not reach the Upcoming-SCs allowlist name set or the
+  store_id-resolution samples, an ordinary event must still do all three, and the one-off
+  must stay in the DB.
 
 ## Chicagoland Elo — Stores tab (2026-08-19)
 
