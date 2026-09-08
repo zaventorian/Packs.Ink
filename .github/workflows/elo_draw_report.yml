@@ -33,6 +33,21 @@ on:
         required: false
         default: "2"
         type: string
+      event:
+        description: "Dump every draw in this event id"
+        required: false
+        default: ""
+        type: string
+      probe_event:
+        description: "Instead of the report: dump RPH's raw match payload for this event id"
+        required: false
+        default: ""
+        type: string
+      probe_round:
+        description: "With probe_event: limit to this round number"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   report:
@@ -62,16 +77,31 @@ jobs:
           PLAYER: ${{ inputs.player }}
           SINCE: ${{ inputs.since }}
           ID_WINDOW: ${{ inputs.id_window }}
+          EVENT: ${{ inputs.event }}
+          PROBE_EVENT: ${{ inputs.probe_event }}
+          PROBE_ROUND: ${{ inputs.probe_round }}
         run: |
-          python scripts/elo_db_storage.py download
+          # The probe hits RPH only, so it skips the DB download entirely
+          # rather than paying for a 10 MB fetch it never opens.
+          if [ -z "$PROBE_EVENT" ]; then
+            python scripts/elo_db_storage.py download
+          fi
           python - <<'PY'
           import os, subprocess, sys
-          cmd = [sys.executable, "scripts/elo/analyze_draws.py",
-                 "--rule", os.environ.get("RULE") or "position",
-                 "--id-window", os.environ.get("ID_WINDOW") or "2"]
-          if os.environ.get("PLAYER"):
-              cmd += ["--player", os.environ["PLAYER"]]
-          if os.environ.get("SINCE"):
-              cmd += ["--since", os.environ["SINCE"]]
+          if os.environ.get("PROBE_EVENT"):
+              cmd = [sys.executable, "scripts/elo/probe_rph_draw_fields.py",
+                     "--event", os.environ["PROBE_EVENT"]]
+              if os.environ.get("PROBE_ROUND"):
+                  cmd += ["--round", os.environ["PROBE_ROUND"]]
+          else:
+              cmd = [sys.executable, "scripts/elo/analyze_draws.py",
+                     "--rule", os.environ.get("RULE") or "position",
+                     "--id-window", os.environ.get("ID_WINDOW") or "2"]
+              if os.environ.get("PLAYER"):
+                  cmd += ["--player", os.environ["PLAYER"]]
+              if os.environ.get("SINCE"):
+                  cmd += ["--since", os.environ["SINCE"]]
+              if os.environ.get("EVENT"):
+                  cmd += ["--event", os.environ["EVENT"]]
           sys.exit(subprocess.run(cmd).returncode)
           PY

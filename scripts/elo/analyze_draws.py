@@ -43,6 +43,7 @@ def main():
     ap.add_argument("--player", default=None,
                     help="dump this player's draws individually (substring, case-insensitive)")
     ap.add_argument("--since", default=None, help="with --player: only events on/after YYYY-MM-DD")
+    ap.add_argument("--event", default=None, help="dump every draw in this event id")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db)
@@ -92,6 +93,18 @@ def main():
     print("   rounds before the last Swiss round: " +
           ", ".join(f"-{k}:{v}" for k, v in sorted(off.items())))
     print("   -> a fat tail at -3/-4 is unintentional draws; they cannot be IDs")
+
+    if args.event:
+        sel = [m for m in draws if str(m["event_id"]) == str(args.event)]
+        sel.sort(key=lambda m: (m["round_number"], m["table_number"] or 0))
+        print(f"\n6. EVERY DRAW IN EVENT {args.event} — {len(sel)}")
+        for m in sel:
+            rn = m["round_number"]
+            a = meta["entering"].get((m["event_id"], m["player1_id"], rn))
+            b = meta["entering"].get((m["event_id"], m["player2_id"], rn))
+            print(f"   R{rn} t{m['table_number']:<3} {score_key(m):<5} "
+                  f"pts={a}v{b} closing={str(m['_closing']):<5} cut={str(m['_made_cut']):<5} "
+                  f"{m['_tier']:<10} {m['p1_name']} vs {m['p2_name']}")
 
     if args.player:
         # A named false negative is the most informative bug report this can get,
