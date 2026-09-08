@@ -1,16 +1,21 @@
 """Are intentional draws separable from real draws in what RPH gives us?
 
-Read-only, no network. RPH records no intent flag, so this measures the two
-signals that stand in for one: the game score (an ID is agreed before play, a
-timed-out match usually is not) and where in the event the draw sits (IDs are a
-last-Swiss-round phenomenon and they come in correlated clusters at the top
-tables; a real draw is an isolated accident at a random table).
+Read-only, no network. RPH records no intent flag, and the game score does NOT
+supply one either: an ID is commonly entered as 1-1-1 (a game each plus a drawn
+game), which is byte-identical to a Bo3 that ran out of time at one game each.
+`matches` has no games_drawn column, so both land as games_won 1/1. Section 2
+prints the score distribution per tier precisely so that stays visible — if the
+strong tier is all 1-1 the score is confirmed dead as a signal, and if some IDs
+land 0-0 it is worth a second look.
 
-The game-score signal only exists if matches are best-of-three — under Bo1 an
-ID and a time draw are both 0-0 and the column says nothing. Section 2 is what
-settles that, so read it before trusting section 4.
+What is left is position and company:
+  - IDs sit in the CLOSING rounds of Swiss (commonly the last two, not just the
+    last), where a draw is enough to lock a slot.
+  - Both players make the cut. That is the point of the draw.
+  - They come in correlated clusters at the top tables; a real draw is an
+    isolated accident at a random table.
 
-    python scripts/elo/analyze_draws.py [--db PATH] [--season "Wilds Unknown Summer 2026"]
+    python scripts/elo/analyze_draws.py [--db PATH] [--season "..."] [--id-window 2]
 """
 import argparse, sqlite3, sys
 from collections import Counter, defaultdict
@@ -22,6 +27,7 @@ except Exception:
     pass
 
 DB_PATH = Path(__file__).parent / "lorcana_elo.db"
+WIN_PTS, DRAW_PTS = 3, 1
 
 
 def cut_rounds(round_sizes):
@@ -45,91 +51,168 @@ def cut_rounds(round_sizes):
     return cut
 
 
+def points_entering(matches, swiss_rounds):
+    """{(player_id, round_number): match points held going into that round}."""
+    pts, out = defaultdict(int), {}
+    for rn in sorted(swiss_rounds):
+        for m in matches:
+            if m["round_number"] != rn:
+                continue
+            for p in (m["player1_id"], m["player2_id"]):
+                if p is not None:
+                    out[(p, rn)] = pts[p]
+        for m in matches:
+            if m["round_number"] != rn:
+                continue
+            p1, p2, w = m["player1_id"], m["player2_id"], m["winner_id"]
+            if m["is_bye"]:
+                pts[p1] += WIN_PTS
+            elif w is not None:
+                pts[w] += WIN_PTS
+            elif p1 is not None and p2 is not None:
+                pts[p1] += DRAW_PTS; pts[p2] += DRAW_PTS
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--db", default=str(DB_PATH))
     ap.add_argument("--season", default=None, help="restrict to one season label")
+    ap.add_argument("--id-window", type=int, default=2,
+                    help="how many closing Swiss rounds can hold an ID (default 2)")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db)
     conn.row_factory = sqlite3.Row
+    has_standings = bool(conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='event_standings_official'"
+    ).fetchone())
 
-    where = "e.is_ignored = 0 AND m.is_bye = 0 AND m.source != 'forfeit'"
+    where = "e.is_ignored = 0 AND m.source != 'forfeit'"
     params = []
     if args.season:
         where += " AND e.season = ?"; params.append(args.season)
 
     rows = [dict(r) for r in conn.execute(f"""
-        SELECT m.match_id, m.event_id, m.round_number, m.table_number,
-               m.winner_id, m.games_won_p1, m.games_won_p2, m.source,
-               e.name AS event_name, e.event_date, e.season
+        SELECT m.match_id, m.event_id, m.round_number, m.table_number, m.is_bye,
+               m.player1_id, m.player2_id, m.winner_id,
+               m.games_won_p1, m.games_won_p2,
+               e.name AS event_name, e.event_date
         FROM matches m JOIN events e ON e.event_id = m.event_id
         WHERE {where}
         ORDER BY e.event_date, m.event_id, m.round_number, m.table_number
     """, params)]
+    places = {}
+    if has_standings:
+        places = {(r["event_id"], r["player_id"]): r["place"] for r in conn.execute(
+            "SELECT event_id, player_id, place FROM event_standings_official")}
     conn.close()
 
     if not rows:
         print("no matches — wrong --db path, or the season label doesn't exist"); return
 
-    sizes = defaultdict(Counter)
+    by_event = defaultdict(list)
     for r in rows:
-        sizes[r["event_id"]][r["round_number"]] += 1
-    cuts = {eid: cut_rounds(dict(c)) for eid, c in sizes.items()}
-    last_swiss = {eid: max([rn for rn in c if rn not in cuts[eid]], default=None)
-                  for eid, c in sizes.items()}
+        by_event[r["event_id"]].append(r)
 
-    draws = [r for r in rows if r["winner_id"] is None]
-    print(f"{len(rows)} matches over {len(sizes)} events · {len(draws)} draws "
-          f"({100*len(draws)/len(rows):.2f}%)\n")
+    played, cut_of, cut_size, entering = [], {}, {}, {}
+    for eid, ms in by_event.items():
+        sizes = Counter(m["round_number"] for m in ms if not m["is_bye"])
+        cut = cut_rounds(dict(sizes))
+        cut_of[eid] = cut
+        swiss = sorted(set(sizes) - cut)
+        # first cut round pairs the whole cut, so 2x its matches is the cut size
+        cut_size[eid] = 2 * sizes[min(cut)] if cut else 0
+        entering.update({(eid,) + k: v for k, v in points_entering(ms, swiss).items()})
+        closing = set(swiss[-args.id_window:])
+        for m in ms:
+            if m["is_bye"] or m["winner_id"] is not None:
+                continue
+            m["_closing"] = m["round_number"] in closing
+            m["_cut_rd"] = m["round_number"] in cut
+            m["_last"] = swiss[-1] if swiss else None
+            played.append(m)
 
-    print("1. WHERE DRAWS SIT")
-    in_cut = sum(1 for r in draws if r["round_number"] in cuts[r["event_id"]])
-    final = sum(1 for r in draws if r["round_number"] == last_swiss[r["event_id"]])
-    print(f"   final Swiss round : {final:5d}  ({100*final/len(draws):.1f}%)")
-    print(f"   earlier Swiss     : {len(draws)-final-in_cut:5d}")
-    print(f"   inside the cut    : {in_cut:5d}   (elimination can't draw — inspect any)")
-    by_off = Counter()
-    for r in draws:
-        ls = last_swiss[r["event_id"]]
-        if ls is not None and r["round_number"] not in cuts[r["event_id"]]:
-            by_off[ls - r["round_number"]] += 1
-    print("   rounds before the last Swiss round: " +
-          ", ".join(f"-{k}:{v}" for k, v in sorted(by_off.items())))
+    in_cut_players = defaultdict(set)
+    for eid, ms in by_event.items():
+        for m in ms:
+            if m["round_number"] in cut_of[eid]:
+                in_cut_players[eid].update({m["player1_id"], m["player2_id"]})
 
-    print("\n2. GAME SCORE — does the format even record one?")
+    def made_cut(eid, pid):
+        if pid in in_cut_players[eid]:
+            return True
+        pl, n = places.get((eid, pid)), cut_size.get(eid, 0)
+        return bool(pl and n and pl <= n)
+
+    draws = played
+    per_round = Counter((m["event_id"], m["round_number"]) for m in draws)
+    n_all = sum(1 for r in rows if not r["is_bye"])
+    print(f"{n_all} matches over {len(by_event)} events · {len(draws)} draws "
+          f"({100*len(draws)/n_all:.2f}%)\n")
+
+    def tier(m):
+        if m["_cut_rd"]:
+            return "in-cut"          # elimination can't draw — data error, inspect
+        if not m["_closing"]:
+            return "real"            # too early to be worth a draw
+        both = made_cut(m["event_id"], m["player1_id"]) and made_cut(m["event_id"], m["player2_id"])
+        if both and per_round[(m["event_id"], m["round_number"])] > 1:
+            return "ID-strong"
+        return "ID-likely" if both else "unclear"
+
+    for m in draws:
+        m["_tier"] = tier(m)
+    tiers = Counter(m["_tier"] for m in draws)
+
+    print(f"1. TIERS  (closing window = last {args.id_window} Swiss rounds)")
+    for t in ("ID-strong", "ID-likely", "unclear", "real", "in-cut"):
+        print(f"   {t:<10} {tiers[t]:5d}")
+    print("   ID-strong = closing round + both players made the cut + another draw that round")
+    print("   ID-likely = same, but the only draw in its round")
+    print("   unclear   = closing round, but at least one player missed the cut")
+    # A league night with no cut has nothing to draw INTO, so "made the cut" is
+    # unanswerable there and every closing draw falls to unclear. That is the
+    # honest outcome, but it has to be visible or the tier reads as a miss.
+    nocut = [e for e in by_event if not cut_of[e]]
+    if nocut:
+        blind = sum(1 for m in draws if m["event_id"] in nocut and m["_closing"])
+        print(f"   {len(nocut)} of {len(by_event)} events recorded no cut "
+              f"({blind} closing draws there can only ever be unclear)")
+
+    print("\n2. GAME SCORE PER TIER — is the score worth anything at all?")
     dec = Counter((r["games_won_p1"], r["games_won_p2"])
-                  for r in rows if r["winner_id"] is not None)
-    print("   decisive matches: " + ", ".join(f"{a}-{b}:{n}" for (a, b), n in dec.most_common(6)))
-    print("   -> Bo3 if 2-0/2-1 dominate; Bo1 if 1-0 does (then section 4 is round-position only)")
-    dd = Counter((r["games_won_p1"], r["games_won_p2"]) for r in draws)
-    print("   draws:           " + ", ".join(f"{a}-{b}:{n}" for (a, b), n in dd.most_common(6)))
-    print("   -> 0-0 = no game finished (agreed, or game 1 timed out); 1-1 = they played it out")
+                  for r in rows if not r["is_bye"] and r["winner_id"] is not None)
+    print("   decisive: " + ", ".join(f"{a}-{b}:{n}" for (a, b), n in dec.most_common(5)))
+    for t in ("ID-strong", "ID-likely", "unclear", "real"):
+        c = Counter((m["games_won_p1"], m["games_won_p2"]) for m in draws if m["_tier"] == t)
+        if c:
+            print(f"   {t:<10} " + ", ".join(f"{a}-{b}:{n}" for (a, b), n in c.most_common(5)))
+    print("   -> if ID-strong and real look alike, the score carries nothing (the 1-1-1 case)")
 
-    print("\n3. CLUSTERING — IDs are correlated, accidents are not")
-    per_round = Counter((r["event_id"], r["round_number"]) for r in draws)
-    solo = sum(n for n in per_round.values() if n == 1)
-    print(f"   lone draw in its round : {solo}")
-    print(f"   2+ draws in one round  : {len(draws)-solo}")
-    tt = [r["table_number"] for r in draws
-          if r["table_number"] is not None and r["round_number"] == last_swiss[r["event_id"]]]
+    print("\n3. POSITION")
+    off = Counter()
+    for m in draws:
+        if m["_last"] is not None and not m["_cut_rd"]:
+            off[m["_last"] - m["round_number"]] += 1
+    print("   rounds before the last Swiss round: " +
+          ", ".join(f"-{k}:{v}" for k, v in sorted(off.items())))
+    print("   -> if -1 is comparable to -0, the window genuinely needs to be 2")
+    tt = sorted(m["table_number"] for m in draws
+                if m["_tier"].startswith("ID") and m["table_number"] is not None)
     if tt:
-        tt.sort()
-        print(f"   final-round draw tables: median {tt[len(tt)//2]}, "
+        print(f"   ID-tier draw tables: median {tt[len(tt)//2]}, "
               f"{sum(1 for t in tt if t <= 4)}/{len(tt)} at tables 1-4")
-        print("   -> IDs concentrate at low table numbers; a time draw is uniform")
 
-    print("\n4. VERDICT under the combined heuristic")
-    print("   ID  = final Swiss round AND 0-0 AND (another draw in the same round)")
-    ids = [r for r in draws
-           if r["round_number"] == last_swiss[r["event_id"]]
-           and (r["games_won_p1"], r["games_won_p2"]) in ((0, 0), (0, None), (None, 0), (None, None))
-           and per_round[(r["event_id"], r["round_number"])] > 1]
-    print(f"   {len(ids)} of {len(draws)} draws classified ID "
-          f"({100*len(ids)/len(draws):.1f}%), {len(draws)-len(ids)} left as real")
-    for r in ids[:8]:
-        print(f"     e{r['event_id']} R{r['round_number']} t{r['table_number']} "
-              f"{r['event_date']} {r['event_name'][:44]}")
+    print("\n4. SAMPLE — ID-strong, with match points held entering the round")
+    for m in [d for d in draws if d["_tier"] == "ID-strong"][:10]:
+        e, rn = m["event_id"], m["round_number"]
+        a = entering.get((e, m["player1_id"], rn)); b = entering.get((e, m["player2_id"], rn))
+        print(f"   e{e} R{rn} t{m['table_number']} {a}pts vs {b}pts "
+              f"({m['games_won_p1']}-{m['games_won_p2']})  {m['event_name'][:40]}")
+    if not has_standings:
+        print("\n   note: event_standings_official is missing, so 'made the cut' relies")
+        print("   only on players appearing in a recorded cut round.")
 
 
 if __name__ == "__main__":
