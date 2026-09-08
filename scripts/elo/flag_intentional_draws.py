@@ -33,7 +33,7 @@ def main():
     ap.add_argument("--db", default=str(DB_PATH))
     ap.add_argument("--season", default=None)
     ap.add_argument("--id-window", type=int, default=2)
-    ap.add_argument("--rule", choices=dc.RULES, default="position")
+    ap.add_argument("--rule", choices=dc.RULES, default=dc.DEFAULT_RULE)
     ap.add_argument("--apply", action="store_true", help="write (default is a dry run)")
     ap.add_argument("--unflag", action="store_true", help="clear every flag and stop")
     args = ap.parse_args()

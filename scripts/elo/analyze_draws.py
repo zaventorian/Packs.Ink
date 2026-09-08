@@ -39,7 +39,7 @@ def main():
     ap.add_argument("--season", default=None)
     ap.add_argument("--id-window", type=int, default=2,
                     help="how many closing Swiss rounds can hold an ID (default 2)")
-    ap.add_argument("--rule", choices=dc.RULES, default="position")
+    ap.add_argument("--rule", choices=dc.RULES, default=dc.DEFAULT_RULE)
     ap.add_argument("--player", default=None,
                     help="dump this player's draws individually (substring, case-insensitive)")
     ap.add_argument("--since", default=None, help="with --player: only events on/after YYYY-MM-DD")

@@ -28,6 +28,17 @@ from collections import Counter, defaultdict
 WIN_PTS, DRAW_PTS = 3, 1
 RULES = ("position", "position-only", "score-only")
 
+# Settled against real data 2026-09-08, not chosen on taste. RPH publishes no
+# intent field at all — probe_rph_draw_fields.py dumped the whole payload and
+# every key is scoring, structural or cosmetic — and the score does not stand in
+# for one: over 2548 draws, 0-0 sits 86% in the closing rounds and 1-1 sits 51%.
+# So 1-1 is mostly played out, but 886 of them ARE in closing rounds and Zaven's
+# own confirmed ID is one of those, entered 1-1-1 at table 1 of e881262 R5 with
+# both players in contention and the top three tables drawing together.
+# Requiring 0-0 misses every ID recorded that way, which is a whole convention
+# rather than an edge case.
+DEFAULT_RULE = "position-only"
+
 MATCH_COLS = """m.match_id, m.event_id, m.round_number, m.table_number, m.is_bye,
                 m.player1_id, m.player2_id, m.winner_id,
                 m.games_won_p1, m.games_won_p2"""
@@ -101,7 +112,7 @@ def agreed_score(m):
     return (m["games_won_p1"] or 0) == 0 and (m["games_won_p2"] or 0) == 0
 
 
-def classify(rows, places, id_window=2, rule="position"):
+def classify(rows, places, id_window=2, rule="position-only"):
     """Annotate every draw in `rows` with `_tier` and return the draws.
 
     Tiers: ID-strong / ID-likely / unclear / real / in-cut. Only the two ID

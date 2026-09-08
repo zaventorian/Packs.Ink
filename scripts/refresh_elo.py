@@ -26,6 +26,12 @@ from pathlib import Path
 
 HERE = Path(__file__).parent           # scripts/
 ELO_DIR = HERE / "elo"
+
+# Imported rather than restated: the choices list here was already stale — it
+# never gained "position-only", so the flag could not select the rule that the
+# evidence settled on.
+sys.path.insert(0, str(ELO_DIR))
+import draw_classify as _dc  # noqa: E402
 SEASON_FILE_DEFAULT = ELO_DIR / "season_files" / "wilds_unknown.xlsx"
 SEASON_LABEL_DEFAULT = "Wilds Unknown Summer 2026"
 
@@ -67,7 +73,7 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", type=Path, default=SEASON_FILE_DEFAULT)
     ap.add_argument("--season", default=SEASON_LABEL_DEFAULT)
-    ap.add_argument("--draw-rule", default="position", choices=["position", "score-only"],
+    ap.add_argument("--draw-rule", default=_dc.DEFAULT_RULE, choices=list(_dc.RULES),
                     help="how to tell an intentional draw from a played-out one; see "
                          "scripts/elo/draw_classify.py")
     ap.add_argument("--ids", nargs="*", type=int, default=[],
