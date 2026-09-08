@@ -16,17 +16,20 @@ Wilds Unknown (57) vs Whispers (82). This script makes ingestion store-driven:
   3. Keep SCs whose store.id is in our tracked set and whose event_id we haven't
      already ingested. Those are real SCs at stores we count, currently missing.
 
-Read-only: writes NO DB rows and never calls Supabase. It prints the candidates
-and (optionally) a JSON + the ingest.py command to actually pull them. Vetting
-stays a human step — a store legitimately skipping a set is a real outcome.
+Never calls Supabase. Without --ingest it is read-only: it prints the candidates
+and (optionally) a JSON + the ingest.py command to pull them by hand. With
+--ingest (how the weekly refresh runs it) it writes them to the local DB. Scope
+is never widened either way — a candidate has to sit at a store_id we already
+count, so a store legitimately skipping a set is still a real outcome.
 
 Usage:
     python discover_store_scs.py --sets "Winterspell" "Wilds Unknown"
     python discover_store_scs.py --sets "Wilds Unknown" --json wu_missing.json
     python discover_store_scs.py --sets "Winterspell" --refresh-store-ids
+    python discover_store_scs.py --ingest --season-label "Attack of the Vine! Fall 2026"
 """
 from __future__ import annotations
-import argparse, json, sqlite3, sys, time
+import argparse, datetime, json, sqlite3, sys, time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlencode
@@ -119,15 +122,40 @@ def ingested_event_ids() -> set[int]:
 
 def season_label_for(set_name: str) -> str | None:
     """The full season label this set already uses in our DB (e.g. set 'Wilds
-    Unknown' -> 'Wilds Unknown Summer 2026'). We backfill EXISTING sets, so the
-    label is already present on that set's other events. None if the set has no
-    events yet (a brand-new set is seeded via the spreadsheet, not here)."""
+    Unknown' -> 'Wilds Unknown Summer 2026'). None if the set has no events yet,
+    in which case the caller seeds one with season_label_from_date()."""
     conn = sqlite3.connect(DB)
     row = conn.execute(
         "SELECT season FROM events WHERE season LIKE ? AND season IS NOT NULL "
         "GROUP BY season ORDER BY COUNT(*) DESC LIMIT 1", (set_name + "%",)).fetchone()
     conn.close()
     return row[0] if row else None
+
+
+def season_label_from_date(set_name: str, iso_date: str) -> str:
+    """Name a brand-new set's season from the first SC we're about to ingest —
+    "<set> <northern-hemisphere season> <year>", the shape every existing label
+    already has (Fabled Fall 2025, Wilds Unknown Summer 2026).
+
+    Only the SET half is load-bearing: the UI's eloSeasonSetLabel() longest-prefix
+    matches it against MAINLINE_SETS to head the Stores columns, and the stores
+    tab assigns seasons by DATE rather than by this string. The tag is display
+    text on the season chip, so deriving it is safe — and deriving beats the old
+    behaviour of refusing to ingest a whole set for want of a display string.
+    Pass --season-label to name it by hand."""
+    d0 = datetime.date.fromisoformat(iso_date[:10])
+    m = d0.month
+    if m in (3, 4, 5):
+        tag = f"Spring {d0.year}"
+    elif m in (6, 7, 8):
+        tag = f"Summer {d0.year}"
+    elif m in (9, 10, 11):
+        tag = f"Fall {d0.year}"
+    else:
+        # A December window belongs to the winter that ENDS the next year, which
+        # is how the existing "Azurite Sea Winter 2025" label reads.
+        tag = f"Winter {d0.year + 1 if m == 12 else d0.year}"
+    return f"{set_name} {tag}"
 
 
 def sibling_location(store_name: str) -> str | None:
@@ -143,14 +171,23 @@ def sibling_location(store_name: str) -> str | None:
     return row[0] if row else None
 
 
-def pull_set_scs(set_name: str, name_nets: list[str], sets_sorted, aliases) -> dict[int, dict]:
+def name_nets(set_name: str) -> list[str]:
+    """Spellings to throw at RPH's name-relevance filter, which drops ~4% on any
+    single phrasing — and a dropped SC is a store falling off the board. Derived
+    per set rather than kept in a map, so a set rotation needs no edit here."""
+    return [f"{set_name} Set Championship",
+            f"{set_name} - Set Championship",
+            f"Set Championship {set_name}"]
+
+
+def pull_set_scs(set_name: str, nets: list[str], sets_sorted, aliases) -> dict[int, dict]:
     """Union name-net pulls (past + upcoming) across orderings; keep SC events
     whose detected set == set_name. Keyed by event id."""
     union: dict[int, dict] = {}
     base = {"game_slug": "disney-lorcana", "page_size": 250}
     combos = []
     for status in ("past", "upcoming"):
-        for net in name_nets:
+        for net in nets:
             for ordering in ("-start_datetime", "start_datetime"):
                 combos.append({"display_statuses": status, "name": net, "ordering": ordering})
     for extra in combos:
@@ -189,6 +226,10 @@ def main() -> None:
     ap.add_argument("--json", default=None, help="dump candidate rows to this path")
     ap.add_argument("--refresh-store-ids", action="store_true",
                     help="re-fetch every event's store_id (ignore the disk cache)")
+    ap.add_argument("--season-label", default=None,
+                    help='name the season for a set we have no events for yet, e.g. '
+                         '"Attack of the Vine! Fall 2026". Only used when seeding a '
+                         'brand-new set; derived from the first SC date if omitted.')
     args = ap.parse_args()
 
     if not args.sets:
@@ -202,17 +243,10 @@ def main() -> None:
 
     sets_sorted = d.fetch_set_names()
     aliases = d.build_aliases(sets_sorted)
-    # extra spellings improve name-net recall (the relevance filter drops ~4%)
-    NETS = {
-        "Wilds Unknown": ["Wilds Unknown Set Championship", "Wilds Unknown - Set Championship",
-                          "Set Championship Wilds Unknown"],
-        "Winterspell": ["Winterspell Set Championship", "Winterspell - Set Championship",
-                        "Set Championship Winterspell"],
-    }
 
     all_candidates = []
     for set_name in args.sets:
-        nets = NETS.get(set_name, [f"{set_name} Set Championship"])
+        nets = name_nets(set_name)
         print(f"Pulling '{set_name}' SCs from RPH (name nets: {len(nets)})...")
         scs = pull_set_scs(set_name, nets, sets_sorted, aliases)
         cands = []
@@ -228,9 +262,18 @@ def main() -> None:
         cands.sort(key=lambda e: (e.get("start_datetime") or ""))
         print(f"  {len(scs)} {set_name} SCs found; {len(cands)} at tracked stores & not yet ingested:\n")
         label = season_label_for(set_name) if args.ingest else None
-        if args.ingest and not label:
-            print(f"  ! no existing season label for {set_name!r} in the DB — "
-                  f"SKIPPING ingest for this set (seed its first event via the spreadsheet first)")
+        if args.ingest and not label and cands:
+            # First SCs of a new set. This used to skip the whole set for want of
+            # a season label, which is how a set rotation silently froze the board:
+            # the weekly refresh stayed green while ingesting nothing. Seeding here
+            # widens nothing — candidates are already gated on tracked store_ids.
+            label = args.season_label or season_label_from_date(
+                set_name, cands[0].get("start_datetime") or "")
+            print(f"  * no events for {set_name!r} yet — seeding the season as {label!r}"
+                  f"{'' if args.season_label else ' (derived; override with --season-label)'}")
+        elif args.ingest and args.season_label and label != args.season_label:
+            print(f"  ! --season-label {args.season_label!r} ignored; {set_name!r} already "
+                  f"uses {label!r} in the DB")
         for ev in cands:
             st = ev.get("store") or {}
             sid = st.get("id")

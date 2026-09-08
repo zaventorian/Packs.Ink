@@ -194,8 +194,10 @@ SET_ALIASES = {
 # So when a title names no recognizable set at all ("Set Championship",
 # "Lorcana - Set Championship", "...S12 Set Championship"), default it to the
 # current set instead of dropping it. Constant fallback if the `sets` table read
-# fails; the real value is derived live in fetch_current_set().
-CURRENT_SET_FALLBACK = "Wilds Unknown"
+# fails; the real value is derived live in fetch_current_set(). Only reached when
+# Supabase is unreachable, so it is stale by nature — but a stale value here files
+# this set's SCs under the previous set, so bump it at rotation.
+CURRENT_SET_FALLBACK = "Attack of the Vine!"
 
 
 def is_sc(ev: dict) -> bool:
