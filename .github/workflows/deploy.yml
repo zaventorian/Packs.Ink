@@ -92,6 +92,23 @@ jobs:
           fi
           echo "SHIP_VERSION=$html_v" >> "$GITHUB_ENV"
 
+      # What is live RIGHT NOW, before we touch anything. The verify step below
+      # can only ask "is the edge serving the version I built" — and that question
+      # answers itself when the version did not change, which is how two different
+      # shells came to share v377 on 2026-09-08 (two PRs each branched from a main
+      # at v376 and each bumped to 377; the second deploy's verify passed against
+      # the first one's HTML). Recording the version we are replacing is what lets
+      # the collision check below tell "same code, redeployed" from "same version
+      # string, different code".
+      - name: Note what the edge is serving now
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -uo pipefail
+          prev=$(curl -s --max-time 20 "https://packs.ink/__predeploy-check-$RANDOM$RANDOM" \
+            | grep -o 'styles\.css?v=[0-9]*' | head -1 | grep -o '[0-9]*' || true)
+          echo "edge is currently serving styles.css?v=${prev:-<unknown>}; about to ship v$SHIP_VERSION"
+          echo "PREV_VERSION=${prev:-}" >> "$GITHUB_ENV"
+
       # wrangler uploads the script FIRST, then reconciles the zone's worker
       # routes from wrangler.toml. That second call needs Zone -> Workers Routes
       # -> Edit, which CLOUDFLARE_API_TOKEN is not scoped for, so it 403s with
@@ -122,6 +139,15 @@ jobs:
           code=$?
           set -e
           printf '%s\n' "$out"
+          # Workers Assets is content-addressed, so "new or modified" means the
+          # bytes really differ from what was already up there. That is the only
+          # signal in the run that distinguishes a fresh shell from a no-op
+          # redeploy, and the collision check below needs it.
+          if printf '%s' "$out" | grep -qE '^\+ /index\.html$'; then
+            echo "HTML_CHANGED=yes" >> "$GITHUB_ENV"
+          else
+            echo "HTML_CHANGED=no" >> "$GITHUB_ENV"
+          fi
           if [ "$code" -eq 0 ]; then
             exit 0
           fi
@@ -173,6 +199,34 @@ jobs:
           echo "::error::After 5 attempts the edge is still not serving v$SHIP_VERSION. The deploy may have succeeded but the cache did not clear — purge manually (Caching → Configuration → Purge Everything)."
           exit 1
 
+      # The verify step passes whenever the served version matches the built one,
+      # which a version that never moved satisfies for free. Shipping new bytes
+      # under a version string that was already live means (a) this run's verify
+      # proved nothing, and (b) the number now names two different shells in the
+      # deploy history, so the NEXT change must bump past it rather than to it.
+      # A warning, not a failure: by the time we know, the deploy has already
+      # happened and is fine — the code is live, only the label is ambiguous.
+      - name: Check the shipped version is a new one
+        if: ${{ inputs.dry_run != true }}
+        run: |
+          set -uo pipefail
+          if [ -z "${PREV_VERSION:-}" ]; then
+            echo "No pre-deploy reading, so nothing to compare — skipping."
+            exit 0
+          fi
+          if [ "$PREV_VERSION" != "$SHIP_VERSION" ]; then
+            echo "v$PREV_VERSION -> v$SHIP_VERSION. The verify step compared against a version that moved."
+            exit 0
+          fi
+          if [ "${HTML_CHANGED:-no}" != "yes" ]; then
+            echo "v$SHIP_VERSION was already live and Index.html is byte-identical — a redeploy of the same shell, which is fine."
+            exit 0
+          fi
+          echo "::warning::Shipped NEW Index.html bytes under v$SHIP_VERSION, which was already live. \
+          This run's verify step could not tell this deploy from the previous one, and v$SHIP_VERSION now \
+          names two different shells. Bump the next Index.html / styles.css / logo.js change PAST v$SHIP_VERSION, \
+          not to it (usually two PRs each branched from a main one version behind and both bumped to the same number)."
+
       - name: Summary
         if: always()
         run: |
@@ -185,6 +239,11 @@ jobs:
               echo "- Shipped asset version: **v${SHIP_VERSION:-unknown}**"
               echo "- Cache purged: **${{ inputs.purge }}**"
               echo "- Edge verified: **${VERIFIED:-no}**"
+              # "verified" against a version that did not move is a tautology, and
+              # the summary is the surface a human actually reads. Say so here too.
+              if [ -n "${PREV_VERSION:-}" ] && [ "${PREV_VERSION:-}" = "${SHIP_VERSION:-}" ] && [ "${HTML_CHANGED:-no}" = "yes" ]; then
+                echo "- ⚠ **v${SHIP_VERSION} was already live with different Index.html bytes** — the verify above could not distinguish this deploy from the previous one. Bump the next asset change PAST v${SHIP_VERSION}."
+              fi
               echo ""
               echo "Rollback if needed: grey-cloud \`A packs.ink → 75.2.60.5\` in the Cloudflare dashboard. Instant, no redeploy."
             fi
