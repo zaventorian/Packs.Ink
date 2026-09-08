@@ -55,10 +55,14 @@ def compute(k_factor=32.0, start=1500.0):
 
     resolver = build_resolver(conn)
 
+    id_col = ("coalesce(m.is_intentional_draw, 0)"
+              if any(r[1] == "is_intentional_draw"
+                     for r in conn.execute("PRAGMA table_info(matches)")) else "0")
     matches = conn.execute(
         """
         SELECT m.match_id, m.event_id, m.round_number, m.table_number,
                m.player1_id, m.player2_id, m.winner_id, m.is_bye, m.source,
+               {id_col} AS is_id,
                e.event_date
         FROM matches m
         JOIN events  e ON e.event_id = m.event_id
@@ -71,7 +75,7 @@ def compute(k_factor=32.0, start=1500.0):
                  m.round_number ASC,
                  m.table_number ASC,
                  m.match_id ASC
-        """
+        """.format(id_col=id_col)
     ).fetchall()
 
     ratings = {}  # player_id -> current rating
@@ -92,6 +96,20 @@ def compute(k_factor=32.0, start=1500.0):
             continue
         raw_p1, raw_p2, raw_w = m["player1_id"], m["player2_id"], m["winner_id"]
         if raw_p1 is None or raw_p2 is None:
+            continue
+        # An intentional draw is a scheduling decision, not evidence about who
+        # is better, so it must not move a rating — and because IDs happen at
+        # the top tables it would otherwise drag the leaderboard's best players
+        # toward whoever they shook hands with. Emit FLAT rows rather than
+        # skipping: every W/L/D count and mw_pct in the Supabase views is
+        # derived from elo_ratings.score, so dropping the row would delete the
+        # draw from the player's record instead of marking it.
+        if m["is_id"] and raw_w is None:
+            p1 = resolver.get(raw_p1, raw_p1); p2 = resolver.get(raw_p2, raw_p2)
+            if p1 != p2:
+                r1, r2 = ratings.get(p1, start), ratings.get(p2, start)
+                history_rows.append((p1, m["match_id"], r1, r1, p2, r2, 0.0, 0.5))
+                history_rows.append((p2, m["match_id"], r2, r2, p1, r1, 0.0, 0.5))
             continue
         # resolve through merged_into_id so aliased melee/rph accounts share a curve
         p1 = resolver.get(raw_p1, raw_p1)

@@ -1983,6 +1983,45 @@ a dispatch input on the existing workflow rather than a script you run on its ow
   store_id-resolution samples, an ordinary event must still do all three, and the one-off
   must stay in the DB.
 
+## Intentional draws — flat, not skipped (2026-09-08)
+
+An ID is a scheduling decision, not evidence about who is better, and because IDs happen at the
+top tables it is the leaderboard's best players whose ratings get dragged toward whoever they
+shook hands with. `matches.is_intentional_draw` marks them; `elo.py` then holds both ratings
+FLAT for that match.
+
+- **⚠ Flat rows, never a skip.** Every W/L/D count and `mw_pct` in the Supabase views is derived
+  from `elo_ratings.score` (`0.5` = draw), so dropping the row would delete the draw from the
+  player's record AND silently restate their match-win percentage. A flagged match writes
+  `rating_before == rating_after` with `score = 0.5` — the record is unchanged, only the rating
+  stops moving. `elo.py` already did exactly this for `source='forfeit'`. Measured on a 1516 vs
+  1484 pair: ID moves both 0.00, an identical unflagged draw moves them ∓0.52.
+- **The classification rule is NOT settled, and it is a parameter for that reason.**
+  `draw_classify.py` is the single source of truth (the report and the writer both import it, so
+  they cannot drift). `position` (default) = 0-0 AND the closing rounds of Swiss AND both players
+  in cut contention; `score-only` = 0-0 alone, which calls a round-1 0-0 an ID.
+- **The score may carry nothing at all.** Zaven was asked to enter an ID as **1-1-1** — a game
+  each plus a drawn game — and `matches` has no `games_drawn` column, so that stores as
+  `games_won` 1/1, identical to a Bo3 that timed out at one game each. Whether 0-0 vs 1-1 in fact
+  separates intent is an empirical question about this data set: `analyze_draws.py` section 2
+  cross-tabs score shape against closing-round share, and **if the 1-1 row leans on the closing
+  rounds as hard as the 0-0 row does, `score-only` is silently keeping IDs in the ratings.**
+- **Contention is judged ENTERING the round, never by who finally made the cut.** A player can
+  agree a draw in the second-to-last round, lose the last one and miss; an outcome gate calls that
+  real, which is backwards. On the bubble fixture the outcome gate lost 2 of 2.
+- **The cluster signal counts only agreed-looking draws.** A played-out 1-1 beside an ID is not
+  evidence that the table next to it shook hands.
+- **`flag_intentional_draws.py` runs INSIDE `refresh_elo.py`, before `elo.py`, and must stay
+  there.** Flagging by hand once decays on its own: flags survive the storage round trip, but a
+  match ingested next week has never been classified, so its IDs go back to moving ratings on a
+  green run with nothing red — the same silent-no-op shape as the board freezing at set rotation.
+  Idempotent and reconciles both directions, so a rule change is a re-run, not a repair.
+- Manual runs are a **dry run by default** and `--unflag` reverses a whole pass, because the
+  errors are asymmetric: wrongly flagging a real draw deletes genuine evidence from a rating,
+  while missing an ID only leaves today's behaviour in place. Same reasoning as
+  `graded_sales.exclude_reason`.
+- Guarded by `python scripts/elo/test_intentional_draws.py`.
+
 ## Chicagoland Elo — Stores tab (2026-08-19)
 
 `EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views). Adding a tab means touching four places: `applyUrlToState`, the state→URL effect, the `.elo-innertabs` nav, and the render list. `eloUrlFor` also has to know the target or `EloLink`'s href points at the wrong view on a middle-click — it deletes `store` along with `p`/`e`/`sub` for exactly that reason. `.elo-innertabs` is `flex-wrap:wrap` — at 5 tabs it clipped on phones, and a clipped tab reads as a deleted feature.
@@ -2206,6 +2245,7 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
+- ~~`supabase/135_elo_intentional_draws.sql`~~ — **APPLIED 2026-09-08 by Zaven; verified** (`information_schema.columns` shows `is_intentional_draw` boolean default false on `elo_matches`). Adds the column the site needs to SAY a draw was agreed. Nothing writes it until PR #27 merges — `schedule:` runs from the default branch, so the flagging step in `refresh_elo.py` is not live yet.
 - ~~`supabase/132_scan_samples_public_beta.sql`, `133_anon_write_backstop.sql`, `134_public_release_hardening.sql`~~ — **APPLIED 2026-09-05 by Zaven**, the diagnostics file first and then the three in order (the agent had no DB access that day, so the diagnostics output was not reviewed; the migrations were staged by the 2026-09-04 public-release audit). 132 = scan-photo upload gate + per-user storage cap (see the scanner section). 133 = the anonymous-write rate limits (`create_trade`, `submit_feedback`) keyed on the FIRST hop of `X-Forwarded-For`, which the caller controls — 133 prefers `cf-connecting-ip` (falls back to today's behaviour if absent) and adds a global hourly backstop; its header says how to confirm which header carries the real client IP. 134 = grant/RLS hygiene (revoke EXECUTE from PUBLIC on ~16 functions, drop `notes` from the shared-collection RPCs, narrow the anon `profiles` column grant, `avatar_url` CHECK, `report_graded_sale` caps, search_path pin, backup-table drop). `supabase/diagnostics/public_release_live_checks.sql` is the read-only companion: paste it FIRST — it answers what the repo cannot (live `scan_samples` policies, the two live-only Elo RPC bodies, PUBLIC-executable functions, which header carries the client IP).
 - **`supabase/131_market_index_timeout_pin.sql`** — STAGED, not applied. **This is what makes step 2 possible at all**, so apply it BEFORE trying the populate. 130 pinned the refresh's `statement_timeout` with an in-body `set local`, which cannot work: `statement_timeout` is armed when the outer `select refresh_market_index()` begins, and changing the GUC part-way through does not re-arm the running timer — so the refresh died at the role default (measured: 8s → 57014, reproducibly, every attempt). Every refresh function that WORKS pins it as a **function-level `SET` clause** instead (migration 25, restored by 109). Proof it is the placement and nothing else: `refresh_price_movers` carries the identical `begin … exception … end` sub-block, pins at the function level, and completed a **38-second** refresh over the same PostgREST path with the same key. **Read the migration-109 lesson as "pin it as a function-level SET clause", not merely "pin it".** 131 also swaps the exception-driven CONCURRENTLY probe for an explicit `relispopulated` check, since on a WITH-NO-DATA matview the first CONCURRENTLY attempt is guaranteed to raise and the happy path was an error path. **Two steps**: paste 131, then run `select public.refresh_market_index();` separately (first run is non-concurrent and slow). After that the ETL selfheal job keeps it current — the "Refresh market index" step is `continue-on-error` on purpose, per the rule that this one refresh must stay optional.
 - ~~`supabase/112_drop_legacy_graded_feed.sql`~~ — **APPLIED 2026-08-22 by Zaven; verified via REST probe** (`graded_prices_daily` / `graded_prices_latest` both 404; `graded_sales_rollup` + `card_prices_latest` healthy). The 70,990-row archive remains at `Desktop/graded_prices_daily_archive_20260729.jsonl` (18.9 MB).

@@ -67,6 +67,9 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", type=Path, default=SEASON_FILE_DEFAULT)
     ap.add_argument("--season", default=SEASON_LABEL_DEFAULT)
+    ap.add_argument("--draw-rule", default="position", choices=["position", "score-only"],
+                    help="how to tell an intentional draw from a played-out one; see "
+                         "scripts/elo/draw_classify.py")
     ap.add_argument("--ids", nargs="*", type=int, default=[],
                     help="RPH event ids to ingest as ONE-OFFS. They count toward Elo "
                          "like any other event, but add each id to ONE_OFF_EVENT_IDS in "
@@ -124,6 +127,15 @@ def main() -> None:
     # Auto-merge new player names. apply_aliases.py is idempotent.
     run([sys.executable, "suggest_aliases.py"], cwd=ELO_DIR)
     run([sys.executable, "apply_aliases.py", "aliases_auto.csv"], cwd=ELO_DIR)
+
+    # MUST run before elo.py, every time — not once by hand. The flags live in
+    # the DB and survive the round trip through storage, but a match ingested
+    # this week has never been classified, so without this step every new
+    # intentional draw silently goes back to moving ratings and nothing goes
+    # red. Idempotent: it reconciles flags both ways against the current rule,
+    # so a rule change is a re-run rather than a repair.
+    run([sys.executable, "flag_intentional_draws.py", "--apply",
+         "--rule", args.draw_rule], cwd=ELO_DIR)
 
     run([sys.executable, "elo.py"], cwd=ELO_DIR)
 

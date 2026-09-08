@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS matches (
   games_won_p1    INTEGER,
   games_won_p2    INTEGER,
   is_bye          INTEGER NOT NULL DEFAULT 0,
+  is_intentional_draw INTEGER NOT NULL DEFAULT 0,
   source          TEXT NOT NULL DEFAULT 'api',
   UNIQUE(event_id, round_id, table_number, player1_id)
 );
