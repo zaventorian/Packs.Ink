@@ -12,18 +12,21 @@ actually separates the two is an empirical question about a given data set;
 `analyze_draws.py` cross-tabulates score against position to answer it.
 
 Two rules, hence:
-  score-only  0-0 is an ID, anything else is real. The literal reading. It will
-              call a round-1 0-0 draw an ID, which no competitive player does.
-  position    0-0 AND in the closing rounds of Swiss AND both players in cut
-              contention entering the round. The default, because the cost of
-              the two errors is not symmetric: wrongly flagging a real draw
-              deletes genuine evidence from a rating, while missing an ID only
-              leaves today's behaviour in place.
+  score-only     0-0 is an ID, anything else is real. The literal reading. It
+                 will call a round-1 0-0 draw an ID, which no competitive
+                 player does.
+  position       0-0 AND in the closing rounds of Swiss AND both players in cut
+                 contention entering the round.
+  position-only  the closing rounds AND contention, IGNORING the score. Use
+                 this where IDs are entered 1-1-1 — that stores as games_won
+                 1/1, so requiring 0-0 misses them outright. Confirmed against
+                 a real event: Zaven's Sunday ID went in as 1-1-1 and `position`
+                 classified it `real`.
 """
 from collections import Counter, defaultdict
 
 WIN_PTS, DRAW_PTS = 3, 1
-RULES = ("position", "score-only")
+RULES = ("position", "position-only", "score-only")
 
 MATCH_COLS = """m.match_id, m.event_id, m.round_number, m.table_number, m.is_bye,
                 m.player1_id, m.player2_id, m.winner_id,
@@ -77,8 +80,12 @@ def load(conn, season=None):
     if season:
         where += " AND e.season = ?"; params.append(season)
     rows = [dict(r) for r in conn.execute(
-        f"""SELECT {MATCH_COLS}, e.name AS event_name, e.event_date
-            FROM matches m JOIN events e ON e.event_id = m.event_id
+        f"""SELECT {MATCH_COLS}, e.name AS event_name, e.event_date,
+                   p1.display_name AS p1_name, p2.display_name AS p2_name
+            FROM matches m
+            JOIN events e ON e.event_id = m.event_id
+            LEFT JOIN players p1 ON p1.player_id = m.player1_id
+            LEFT JOIN players p2 ON p2.player_id = m.player2_id
             WHERE {where}
             ORDER BY e.event_date, m.event_id, m.round_number, m.table_number""", params)]
     places = {}
@@ -155,7 +162,7 @@ def classify(rows, places, id_window=2, rule="position"):
     # look agreed corroborate each other. A played-out 1-1 sitting in the same
     # round is not evidence that the table beside it shook hands.
     per_round = Counter((m["event_id"], m["round_number"]) for m in draws
-                        if agreed_score(m))
+                        if rule != "position" or agreed_score(m))
     for m in draws:
         m["_made_cut"] = (m["player1_id"] in in_cut_players[m["event_id"]]
                           and m["player2_id"] in in_cut_players[m["event_id"]]) or all(
@@ -166,7 +173,7 @@ def classify(rows, places, id_window=2, rule="position"):
             m["_tier"] = "in-cut"        # elimination cannot draw — a data error
         elif rule == "score-only":
             m["_tier"] = "ID-likely" if agreed_score(m) else "real"
-        elif not agreed_score(m) or not m["_closing"]:
+        elif not m["_closing"] or (rule == "position" and not agreed_score(m)):
             m["_tier"] = "real"
         elif contending(m, m["player1_id"]) and contending(m, m["player2_id"]):
             m["_tier"] = "ID-strong" if per_round[(m["event_id"], m["round_number"])] > 1 \

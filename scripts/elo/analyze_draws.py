@@ -40,6 +40,9 @@ def main():
     ap.add_argument("--id-window", type=int, default=2,
                     help="how many closing Swiss rounds can hold an ID (default 2)")
     ap.add_argument("--rule", choices=dc.RULES, default="position")
+    ap.add_argument("--player", default=None,
+                    help="dump this player's draws individually (substring, case-insensitive)")
+    ap.add_argument("--since", default=None, help="with --player: only events on/after YYYY-MM-DD")
     args = ap.parse_args()
 
     conn = sqlite3.connect(args.db)
@@ -89,6 +92,28 @@ def main():
     print("   rounds before the last Swiss round: " +
           ", ".join(f"-{k}:{v}" for k, v in sorted(off.items())))
     print("   -> a fat tail at -3/-4 is unintentional draws; they cannot be IDs")
+
+    if args.player:
+        # A named false negative is the most informative bug report this can get,
+        # so print the gates rather than the verdict: which one rejected it is
+        # the whole answer.
+        needle = args.player.lower()
+        hits = [m for m in draws
+                if needle in (m.get("p1_name") or "").lower()
+                or needle in (m.get("p2_name") or "").lower()]
+        if args.since:
+            hits = [m for m in hits if (m["event_date"] or "") >= args.since]
+        print(f"\n5. DRAWS FOR {args.player!r}"
+              + (f" SINCE {args.since}" if args.since else "") + f" — {len(hits)}")
+        for m in hits:
+            e, rn = m["event_id"], m["round_number"]
+            a = meta["entering"].get((e, m["player1_id"], rn))
+            b = meta["entering"].get((e, m["player2_id"], rn))
+            print(f"   {m['event_date']} e{e} R{rn} t{m['table_number']} "
+                  f"{m['p1_name']} vs {m['p2_name']}")
+            print(f"      score={score_key(m)}  closing={m['_closing']}  "
+                  f"cut_round={m['_cut_rd']}  pts={a} vs {b}  "
+                  f"both_made_cut={m['_made_cut']}  -> {m['_tier']}")
 
     print("\n4. SAMPLE — intentional, with match points held entering the round")
     for m in [d for d in draws if d["_tier"] == "ID-strong"][:10]:
