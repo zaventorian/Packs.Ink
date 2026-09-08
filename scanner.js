@@ -98,13 +98,21 @@
     for (k = 0; k < 72; k++) {
       g[k] = 0.299 * d[k * 4] + 0.587 * d[k * 4 + 1] + 0.114 * d[k * 4 + 2];
     }
-    var lo = 0, hi = 0, bit = 0, y, x, idx;
+    var lo = 0, hi = 0, bit = 0, y, x, idx, pos;
     for (y = 0; y < 8; y++) {
       for (x = 0; x < 8; x++) {
         idx = y * 9 + x;
         var on = g[idx + 1] > g[idx] ? 1 : 0;
-        if (bit < 32) lo = (lo | (on << bit)) >>> 0;
-        else hi = (hi | (on << (bit - 32))) >>> 0;
+        // descriptors.py packs MSB-first (`out = (out << 1) | b`) and dhash.bin
+        // is written from THAT, so the first bit is uint64 bit 63 — not bit 0.
+        // Packing LSB-first here reverses the whole 64-bit run, which made every
+        // hamming distance land at ~32/64 (i.e. random) instead of 3-14, so the
+        // dHash tiebreaker contributed noise rather than signal. Verified in
+        // Chromium against the shipped index: bit-reversing the query hash took
+        // correct matches from 30-47 down to 3-14.
+        pos = 63 - bit;
+        if (pos >= 32) hi = (hi | (on << (pos - 32))) >>> 0;
+        else lo = (lo | (on << pos)) >>> 0;
         bit++;
       }
     }
@@ -907,6 +915,304 @@
     return { top3: baseGuard(dedupeIds(frf.ids), colour).slice(0, 3), conf: nm.conf === "medium" ? "medium" : "low", source: "fusion", verBy: frf.vb ? "body" : undefined, verMargin: frf.vb ? Math.round(frf.vb.margin * 1000) / 1000 : undefined, nameConf: nm.conf, nameMargin: nm.marginChar, names: nm.top };
   }
 
+  // ---- deck-image scan (a poster/screenshot of a decklist -> cards) --------
+  // A deck poster is a REGULAR LATTICE of full card faces, and the shipped index
+  // is built from those same full faces (build_index.py descriptors the whole
+  // Lorcast image, not an art crop) -- so a poster cell is the easiest possible
+  // query, not a hard scan. The work is finding the lattice, not the matching.
+  //
+  // The pitch is recovered by autocorrelating a detail profile, and candidate
+  // lattices are scored by ESTIMATED CARD YIELD (soft count of confident cells
+  // x cell count). Scoring by mean/median cosine instead is wrong and was the
+  // bug that made it prefer a 1-row lattice of 8 real cards over the 3-row one
+  // holding all 17 -- empty cells drag a median down, so finding MORE cards
+  // looked worse.
+
+  var DECK_CONF = 0.78;      // cosine below this is background, not a card
+  var DECK_TARGET = 1200;    // longest side the detail map works at
+  var CARD_AR = 488 / 681;   // 0.7166 -- every Lorcana face
+
+  var dcv = document.createElement("canvas");
+  var dctx = dcv.getContext("2d", { willReadFrequently: true });
+
+  // Binary "is this pixel busy" map. Card faces are dense; poster background,
+  // gutters and padding are flat, which is what makes the lattice visible.
+  function detailMap(src, target) {
+    var W = src.naturalWidth || src.width, H = src.naturalHeight || src.height;
+    var sc = Math.min((target || DECK_TARGET) / Math.max(W, H), 1);
+    var w = Math.max(1, Math.round(W * sc)), h = Math.max(1, Math.round(H * sc));
+    dcv.width = w; dcv.height = h;
+    dctx.imageSmoothingEnabled = true; dctx.imageSmoothingQuality = "high";
+    dctx.drawImage(src, 0, 0, W, H, 0, 0, w, h);
+    var d = dctx.getImageData(0, 0, w, h).data;
+    var g = new Float32Array(w * h), i, x, y;
+    for (i = 0; i < w * h; i++) g[i] = 0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2];
+    var e = new Float32Array(w * h);
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        i = y * w + x;
+        e[i] = Math.abs(g[i] - g[y*w + (x ? x-1 : x)]) + Math.abs(g[i] - g[(y ? y-1 : y)*w + x]);
+      }
+    }
+    // 3x3 box blur, then threshold (mirrors scipy uniform_filter(size=3) > 3.0)
+    var m = new Float32Array(w * h), a, b, c2, n;
+    for (y = 0; y < h; y++) {
+      for (x = 0; x < w; x++) {
+        a = 0; n = 0;
+        for (b = -1; b <= 1; b++) for (c2 = -1; c2 <= 1; c2++) {
+          var yy = y + b, xx = x + c2;
+          if (yy < 0 || yy >= h || xx < 0 || xx >= w) continue;
+          a += e[yy*w + xx]; n++;
+        }
+        m[y*w + x] = (a / n) > 3 ? 1 : 0;
+      }
+    }
+    return { m: m, w: w, h: h, sc: sc };
+  }
+
+  function colProfile(M) {
+    var p = new Float32Array(M.w), x, y;
+    for (y = 0; y < M.h; y++) for (x = 0; x < M.w; x++) p[x] += M.m[y*M.w + x];
+    for (x = 0; x < M.w; x++) p[x] /= M.h;
+    return p;
+  }
+  function rowProfile(M) {
+    var p = new Float32Array(M.h), x, y, s;
+    for (y = 0; y < M.h; y++) { s = 0; for (x = 0; x < M.w; x++) s += M.m[y*M.w + x]; p[y] = s / M.w; }
+    return p;
+  }
+
+  function detrend(p) {
+    var n = p.length, k = Math.max(3, Math.round(n * 0.35)), out = new Float32Array(n), i, j, s, c;
+    for (i = 0; i < n; i++) {
+      s = 0; c = 0;
+      for (j = i - (k >> 1); j <= i + (k >> 1); j++) { if (j < 0 || j >= n) continue; s += p[j]; c++; }
+      out[i] = p[i] - s / c;
+    }
+    var mean = 0;
+    for (i = 0; i < n; i++) mean += out[i];
+    mean /= n;
+    for (i = 0; i < n; i++) out[i] -= mean;
+    return out;
+  }
+
+  // Autocorrelation over a lag window -> {lag: score}
+  function acf(p, lo, hi) {
+    var x = detrend(p), n = x.length, out = {}, lag, i, s;
+    hi = Math.min(hi, n - 4);
+    for (lag = lo; lag < Math.max(lo + 1, hi); lag++) {
+      s = 0;
+      for (i = 0; i + lag < n; i++) s += x[i] * x[i + lag];
+      out[lag] = s / (n - lag);
+    }
+    return out;
+  }
+
+  // Candidate periods: local maxima, PLUS integer sub-multiples of the best.
+  // Autocorrelation peaks just as hard at 2x and 3x the true pitch, so without
+  // the sub-multiples a 7-wide poster reads as 3 columns of double-width cells.
+  function periodCands(ac) {
+    var lags = Object.keys(ac).map(Number).sort(function (a, b) { return a - b; });
+    if (!lags.length) return [];
+    var mx = -Infinity, i, l;
+    for (i = 0; i < lags.length; i++) mx = Math.max(mx, ac[lags[i]]);
+    var loc = [];
+    for (i = 0; i < lags.length; i++) {
+      l = lags[i];
+      if (ac[l] < 0.35 * mx) continue;
+      if (ac[l] < Math.max(ac[l-2] != null ? ac[l-2] : -Infinity, ac[l-1] != null ? ac[l-1] : -Infinity,
+                           ac[l+1] != null ? ac[l+1] : -Infinity, ac[l+2] != null ? ac[l+2] : -Infinity)) continue;
+      loc.push(l);
+    }
+    loc.sort(function (a, b) { return ac[b] - ac[a]; });
+    var best = loc.length ? loc[0] : lags[0], pool = loc.slice(0, 8), d;
+    for (d = 2; d <= 6; d++) { var q = Math.floor(best / d); if (q >= lags[0]) pool.push(q); }
+    pool.sort(function (a, b) { return a - b; });
+    var seen = [], out = [];
+    for (i = 0; i < pool.length; i++) {
+      var ok = true, j;
+      for (j = 0; j < seen.length; j++) if (Math.abs(pool[i] - seen[j]) <= 2) { ok = false; break; }
+      if (!ok) continue;
+      seen.push(pool[i]); out.push(pool[i]);
+    }
+    return out;
+  }
+
+  // Lattice phase: the offset whose grid lines land on profile minima (gutters).
+  function gridPhase(p, pitch) {
+    var n = p.length, best = Infinity, bo = 0, off, i, s, c;
+    for (off = 0; off < pitch; off++) {
+      s = 0; c = 0;
+      for (i = off; i < n; i += pitch) { s += p[i]; c++; }
+      if (c < 2) continue;
+      if (s / c < best) { best = s / c; bo = off; }
+    }
+    return bo;
+  }
+
+  function halfSpan(v) {
+    var mn = Infinity, mx = -Infinity, i;
+    for (i = 0; i < v.length; i++) { mn = Math.min(mn, v[i]); mx = Math.max(mx, v[i]); }
+    var t = (mn + mx) / 2, a = -1, b = -1;
+    for (i = 0; i < v.length; i++) if (v[i] > t) { if (a < 0) a = i; b = i; }
+    return a < 0 ? [0, v.length] : [a, b + 1];
+  }
+
+  // Top-1 colour+dHash score for a crop. Own selection loop (no full sort) so a
+  // few hundred probe calls stay cheap; descriptors stay the canonical ones.
+  function deckTop(src, sx, sy, sw, sh, lambda) {
+    lambda = lambda == null ? 0.12 : lambda;
+    var qv = colorSig(src, sx, sy, sw, sh), qd = dhash64(src, sx, sy, sw, sh);
+    var color = state.color, dims = state.dims, n = state.count;
+    var bi = -1, bs = -Infinity, i, d, acc, base = 0;
+    var K = 25, ks = new Float32Array(K), ki = new Int32Array(K), kn = 0, worst = Infinity, wpos = 0, j;
+    for (i = 0; i < n; i++) {
+      acc = 0; base = i * dims;
+      for (d = 0; d < dims; d++) acc += qv[d] * color[base + d];
+      if (kn < K) {
+        ks[kn] = acc; ki[kn] = i; kn++;
+        if (kn === K) { worst = Infinity; for (j = 0; j < K; j++) if (ks[j] < worst) { worst = ks[j]; wpos = j; } }
+      } else if (acc > worst) {
+        ks[wpos] = acc; ki[wpos] = i;
+        worst = Infinity; for (j = 0; j < K; j++) if (ks[j] < worst) { worst = ks[j]; wpos = j; }
+      }
+    }
+    var cmax = -Infinity;
+    for (j = 0; j < kn; j++) cmax = Math.max(cmax, ks[j]);
+    if (!(cmax > 0)) cmax = 1;
+    var out = [];
+    for (j = 0; j < kn; j++) {
+      var ri = ki[j];
+      var ham = popcount((state.dhashLo[ri] ^ qd.lo) >>> 0) + popcount((state.dhashHi[ri] ^ qd.hi) >>> 0);
+      out.push({ row: ri, cos: ks[j] / state.scale, ham: ham, blended: ks[j] / cmax - lambda * (ham / 64) });
+    }
+    out.sort(function (a, b) { return b.blended - a.blended; });
+    bi = out[0];
+    return { row: bi.row, card: state.cards[bi.row], cos: bi.cos, ham: bi.ham,
+             margin: bi.cos - (out[1] ? out[1].cos : 0) };
+  }
+
+  // A slightly-off crop is the whole error mode: every miss in testing (3 of 83)
+  // was misalignment, and a small offset/scale search recovered the right card
+  // every time (dHash hamming 11-18 -> 4-6). Only run on cells that need it.
+  function refineCell(src, r, lambda) {
+    var best = deckTop(src, r.x, r.y, r.w, r.h, lambda), bestR = r;
+    var S = [0, -0.03, 0.03, -0.06, 0.06], D = [0, -0.025, 0.025], i, j, k;
+    for (i = 0; i < S.length; i++) for (j = 0; j < D.length; j++) for (k = 0; k < D.length; k++) {
+      if (!S[i] && !D[j] && !D[k]) continue;
+      var w = r.w * (1 + S[i]), h = r.h * (1 + S[i]);
+      var x = r.x + r.w * D[j], y = r.y + r.h * D[k];
+      if (x < 0 || y < 0 || w < 8 || h < 8) continue;
+      var t = deckTop(src, x, y, w, h, lambda);
+      if (t.cos > best.cos) { best = t; bestR = { x: x, y: y, w: w, h: h }; }
+    }
+    best.rect = bestR;
+    return best;
+  }
+
+  function yieldFrame() {
+    return new Promise(function (res) { setTimeout(res, 0); });
+  }
+
+  // Main entry. Returns {cells:[{rect,card,cos,ham,margin}], cols, rows, score}
+  // or null when nothing card-shaped tiles the image.
+  function scanDeckImage(src, opts) {
+    opts = opts || {};
+    var onProgress = opts.onProgress || function () {};
+    // opts.trace collects every candidate lattice and why it was rejected. The
+    // failure mode here is "found a grid, but the wrong one", which is invisible
+    // from the result alone — this is how you tell a bad pitch from a bad gate.
+    var trace = opts.trace || null;
+    if (!state.loaded) throw new Error("CardScanner not loaded");
+    var M = detailMap(src, opts.target || DECK_TARGET);
+    var inv = 1 / M.sc, C = colProfile(M), R = rowProfile(M);
+    var maxCols = opts.maxCols || 16, minCols = opts.minCols || 2;
+    var pws = periodCands(acf(C, Math.max(8, Math.floor(M.w / maxCols)), Math.max(12, Math.floor(M.w / minCols))));
+    var best = null, tried = 0;
+    var chain = Promise.resolve();
+    pws.forEach(function (pw) {
+      chain = chain.then(function () {
+        var lo = Math.floor(pw * 1.10), hi = Math.floor(pw * 2.10);
+        var phs = (M.h > lo + 6) ? periodCands(acf(R, lo, hi)) : [];
+        phs = phs.concat([Math.round(pw / CARD_AR), Math.round(pw / CARD_AR * 1.06)]);
+        phs = phs.filter(function (v, i2) { return phs.indexOf(v) === i2 && v >= 12 && v <= M.h; });
+        phs.forEach(function (ph) {
+          var ox = gridPhase(C, pw) % pw, oy = gridPhase(R, ph) % ph;
+          var xs = [], ys = [], v;
+          for (v = ox; v <= M.w - pw; v += pw) xs.push(v);
+          for (v = oy; v <= M.h - ph; v += ph) ys.push(v);
+          if (!xs.length || !ys.length) return;
+          // mean cell: where does the card sit inside the pitch box?
+          var acc = new Float32Array(pw * ph), a, b, iy, ix;
+          for (a = 0; a < ys.length; a++) for (b = 0; b < xs.length; b++)
+            for (iy = 0; iy < ph; iy++) for (ix = 0; ix < pw; ix++)
+              acc[iy*pw + ix] += M.m[(ys[a]+iy)*M.w + (xs[b]+ix)];
+          var cx = new Float32Array(pw), cy = new Float32Array(ph);
+          for (iy = 0; iy < ph; iy++) for (ix = 0; ix < pw; ix++) { cx[ix] += acc[iy*pw+ix]; cy[iy] += acc[iy*pw+ix]; }
+          var sx2 = halfSpan(cx), sy2 = halfSpan(cy);
+          var cw = sx2[1] - sx2[0], chh = sy2[1] - sy2[0];
+          if (cw < 8 || chh < 10) {
+            if (trace) trace.push({ pw: pw, ph: ph, why: "cell too small", cw: cw, ch: chh });
+            return;
+          }
+          var ar = cw / chh;
+          if (ar < 0.60 || ar > 0.86) {
+            if (trace) trace.push({ pw: pw, ph: ph, cols: xs.length, rows: ys.length, ar: +ar.toFixed(3), why: "aspect" });
+            return;
+          }
+          var rects = [];
+          for (a = 0; a < ys.length; a++) for (b = 0; b < xs.length; b++)
+            rects.push({ x: (xs[b] + sx2[0]) * inv, y: (ys[a] + sy2[0]) * inv, w: cw * inv, h: chh * inv });
+          var step = Math.max(1, Math.floor(rects.length / 10)), samp = [], i2;
+          for (i2 = 0; i2 < rects.length && samp.length < 10; i2 += step) samp.push(rects[i2]);
+          var soft = 0, hits = 0, hitSum = 0;
+          samp.forEach(function (r2) {
+            var t = deckTop(src, r2.x, r2.y, r2.w, r2.h);
+            soft += Math.max(0, t.cos - 0.75);
+            if (t.cos > DECK_CONF) { hits++; hitSum += t.cos; }
+          });
+          tried++;
+          onProgress({ phase: "detect", tried: tried });
+          if (trace) trace.push({ pw: pw, ph: ph, cols: xs.length, rows: ys.length, ar: +ar.toFixed(3),
+                                  frac: +(hits / samp.length).toFixed(2), n: rects.length,
+                                  score: +((soft / samp.length) * rects.length).toFixed(2),
+                                  why: hits / samp.length < 0.5 ? "low yield" : "kept" });
+          // The probe is deliberately UNREFINED (refining every candidate would
+          // cost ~10x), so on small cards a correct lattice can sit just under
+          // the confidence line on half its cells and still be the right answer
+          // — teacup's real 8x3 grid probed at 0.4 and was thrown away by a 0.5
+          // gate while scoring 3x better than everything else. Keep the gate
+          // loose and let the yield score arbitrate; the per-cell pass below
+          // refines and then drops whatever is still not a card.
+          if (hits < 2 || hits / samp.length < 0.3) return;
+          var score = (soft / samp.length) * rects.length;
+          var hit = hits ? hitSum / hits : 0;
+          if (!best || score > best.score || (score === best.score && hit > best.hit))
+            best = { score: score, hit: hit, rects: rects, cols: xs.length, rows: ys.length };
+        });
+        return yieldFrame();
+      });
+    });
+    return chain.then(function () {
+      if (!best) return null;
+      var cells = [];
+      return best.rects.reduce(function (p, r) {
+        return p.then(function () {
+          var t = deckTop(src, r.x, r.y, r.w, r.h);
+          if (t.cos < 0.96) {
+            var rf = refineCell(src, r);
+            if (rf.cos > t.cos) { t = rf; r = rf.rect; }
+          }
+          if (t.cos > DECK_CONF) { t.rect = r; cells.push(t); }
+          onProgress({ phase: "match", done: cells.length, total: best.rects.length });
+          return cells.length % 6 === 0 ? yieldFrame() : null;
+        });
+      }, Promise.resolve()).then(function () {
+        return { cells: cells, cols: best.cols, rows: best.rows, score: best.score, hit: best.hit };
+      });
+    });
+  }
+
   window.CardScanner = {
     load: load,
     searchCrop: searchCrop,
@@ -918,6 +1224,8 @@
     rescueByQuote: rescueByQuote,
     lookupCN: lookupCN,
     identify: identify,
+    scanDeckImage: scanDeckImage,
+    deckTop: deckTop,
     loadText: loadText,
     textMatch: textMatch,
     get state() { return state; },

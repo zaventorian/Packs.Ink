@@ -113,6 +113,77 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 
 Three places, keep them consistent: the in-scanner notice (`consentPanel`), **privacy.html `#scanner`**, and the Help page's "Card scanner (beta)" section. `Permissions-Policy: camera=(self)` in `_headers` already allows the camera — don't tighten it.
 
+## Deck import from a PICTURE of a deck (2026-09-08)
+
+Paste or drop a deck poster into Decks » Import decklist and it reads the cards off
+the image. Works on dreamborn / duels.ink / packs.ink posters and tournament
+graphics, and on screenshots of them. `CardScanner.scanDeckImage(src)` in
+`scanner.js`; `DeckImageImport` (above `deckToText`) is the review UI.
+
+**It reuses the card scanner's shipped index wholesale, and that is the whole
+trick.** `build_index.py` descriptors the FULL Lorcast card face, not an art crop —
+so a poster cell is the same picture the reference vector was built from, merely
+scaled. No glare, no perspective, no white balance. Matching is the easy half;
+measured **83/83 across five real posters**. Nothing is downloaded that the scanner
+doesn't already fetch (index.json + color.bin + dhash.bin, ~2.1 MB, cached).
+
+- **Finding the lattice is the actual work.** The pitch comes from autocorrelating
+  a detail profile, and **autocorrelation peaks just as hard at 2x and 3x the true
+  pitch** — without the integer sub-multiple candidates a 7-wide poster reads as 3
+  columns of double-width cells and every crop is half of two different cards.
+- **⚠ Candidate lattices are scored by ESTIMATED CARD YIELD** (soft count of
+  confident cells x cell count), never by mean or median cosine. Empty trailing
+  cells drag a median down, so the lattice finding MORE cards scores WORSE — that
+  bug silently imported a 3-row poster as its middle row only, 8 of 17 cards, with
+  every one of those 8 correct and confident. A wrong answer that looks right.
+- **The yield gate is deliberately loose (30%), because the probe is UNREFINED.**
+  Refining every candidate costs ~10x, so on small cards a correct lattice can sit
+  under the confidence line on half its cells and still be right: the RoV-Teacup
+  poster's real 8x3 grid probed at 0.4, scored 3x better than everything else, and
+  a 0.5 gate threw it away. The per-cell pass refines afterwards and drops whatever
+  is still not a card.
+- **A slightly-off crop is the entire error mode.** All three misses in testing were
+  misalignment, and a small offset/scale search recovered the right card every time
+  (dHash hamming 11-18 -> 4-6). `refineCell` runs only on cells under 0.96 cosine.
+- **Review before import is not optional**, same call as the camera scanner's
+  permanent `SCANNER_QA_ONLY`. The grid shows the crop it actually matched next to
+  the name it chose, so a version confusion (Mushu *Sneaky* vs *Stealthy Dragon*)
+  is visible rather than inferred.
+- **Counts are NOT read — every card defaults to 4 and the review grid is where you
+  set them.** A badge reader was built and removed: the digit classifies fine once
+  the chip is located (17/17 by 1-NN on one poster), but locating the chip is not
+  portable across generators — the card's own dark border floods into it — and the
+  glyph scores came back at 0.27 against a 0.55 bar. The running **N / 60** total is
+  the affordance that replaces it: a Lorcana deck is exactly 60 cards, so the sum is
+  a free checksum on the counts. If it gets built properly, the promising route is
+  clustering the badge crops (same count = near-identical crop) and solving the
+  cluster labels against that 60 constraint, not per-glyph OCR.
+- Resolution floor is about **150px per card**. Below that it refuses rather than
+  guessing: a 1023px dreamborn poster and a Zoom screenshot of a duels.ink poster
+  both correctly return no grid instead of a plausible wrong deck.
+- Applies through the existing `parseDeckText`, with names resolved via
+  `card_id -> catalog row -> "Product Name"` (the same id join `resolveGroup` uses),
+  so set/printing disambiguation stays in one place.
+
+Guarded by `node scripts/test_deck_image.mjs` (the lattice maths, no canvas needed).
+
+### ⚠ dHash in scanner.js was bit-reversed — fixed 2026-09-08
+
+`descriptors.py` packs dhash64 **MSB-first** (`out = (out << 1) | b`) and `dhash.bin`
+is written from that, so the first bit is uint64 bit 63. `scanner.js` packed
+**LSB-first**, reversing the whole 64-bit run — so every hamming distance landed at
+**~32/64, i.e. random**, and the dHash tiebreaker in `searchCrop` contributed noise
+rather than signal for as long as it has shipped. Verified in Chromium against the
+shipped index: bit-reversing the query hash took correct matches from 30-47 down to
+3-14, and fixed a real misread on the spot (Develop Your Brain, which had been
+reading as Prince John).
+
+**This changes the camera scanner's ranking too** — `searchCrop` re-ranks its top-25
+by `lambda * (ham/64)`, which was previously a near-constant offset plus noise. It
+should only help, but the scanner's 98.2% precision was measured WITH the broken
+hash, so that number is now unverified in either direction. Re-run the round-11
+photo-verify method if it matters.
+
 ## Lore Tracker (Analytics » Lore Tracker)
 
 A full-bleed scoreboard for a table. Guarded by `node scripts/test_lore_tracker.mjs`, which
