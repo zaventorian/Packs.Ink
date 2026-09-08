@@ -207,6 +207,31 @@ with tempfile.TemporaryDirectory() as td:
 
 print()
 
+print("manual overrides")
+_rows = [
+    {"event_id": 9, "round_number": 2, "table_number": 0, "_tier": "real"},
+    {"event_id": 9, "round_number": 5, "table_number": 1, "_tier": "ID-strong"},
+    {"event_id": 9, "round_number": 3, "table_number": 2, "_tier": "in-cut"},
+]
+_miss = ad.apply_overrides(_rows, force_id={(9, 2, 0): "why", (9, 3, 2): "why"},
+                           force_real={(9, 5, 1): "why"})
+check("an override forces a draw the rule called real", _rows[0]["_tier"], "ID-manual")
+check("...and can force one back to real", _rows[1]["_tier"], "real-manual")
+check("...and outranks in-cut", _rows[2]["_tier"], "ID-manual")
+check("a forced ID still counts as intentional", ad.is_intentional(_rows[0]), True)
+check("a forced real does not", ad.is_intentional(_rows[1]), False)
+check("everything matched, so nothing is reported stale", _miss, [])
+# the failure that matters: a key that stopped matching is a ruling that
+# silently reverted, so it has to be reported rather than shrugged off
+check("a dead key is reported",
+      ad.apply_overrides([], force_id={(1, 1, 1): "gone"}, force_real={}),
+      [(1, 1, 1)])
+check("every shipped override carries a reason",
+      all(str(v).strip() for v in
+          {**ad.draw_overrides.FORCE_ID, **ad.draw_overrides.FORCE_REAL}.values()), True)
+check("manual tiers are in the printed list",
+      ("ID-manual" in ad.TIERS and "real-manual" in ad.TIERS), True)
+
 print("0-0 needs no position support")
 # Zaven's 2025-05-11 e100267947 R3, minimised: an 8-player, 3-round event where
 # the 0-0 sits in the closing window but neither player clears the cut line, so

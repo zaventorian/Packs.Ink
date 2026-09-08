@@ -35,8 +35,13 @@ the scene is the authority on its own conventions.
 """
 from collections import Counter, defaultdict
 
+import draw_overrides
+
 WIN_PTS, DRAW_PTS = 3, 1
 RULES = ("position", "position-only", "score-only", "score-or-position")
+# One list so the report and the writer can never print different tiers.
+TIERS = ("ID-strong", "ID-likely", "ID-manual",
+         "unclear", "real", "real-manual", "in-cut")
 
 # Settled against real data 2026-09-08, not chosen on taste. RPH publishes no
 # intent field at all — probe_rph_draw_fields.py dumped the whole payload and
@@ -226,8 +231,36 @@ def classify(rows, places, id_window=2, rule="position-only"):
         else:
             m["_tier"] = "unclear"
 
+    unmatched = apply_overrides(draws)
+
     return draws, {"per_round": per_round, "entering": entering,
-                   "no_cut": no_cut, "events": len(by_event)}
+                   "no_cut": no_cut, "events": len(by_event),
+                   "override_unmatched": unmatched}
+
+
+def override_key(m):
+    """The RPH-derived identity of a match; see draw_overrides for why not match_id."""
+    return (m["event_id"], m["round_number"], m["table_number"])
+
+
+def apply_overrides(draws, force_id=None, force_real=None):
+    """Force the tier where a person has ruled on a draw the data can't speak to.
+
+    Runs LAST, so it overrides every tier including `in-cut` — someone who was
+    in the room outranks an inference. Returns the keys that matched nothing,
+    which callers working on the whole DB must treat as an error: an override
+    that stopped applying is a decision that silently reverted.
+    """
+    fid = draw_overrides.FORCE_ID if force_id is None else force_id
+    freal = draw_overrides.FORCE_REAL if force_real is None else force_real
+    matched = set()
+    for m in draws:
+        k = override_key(m)
+        if k in fid:
+            m["_tier"] = "ID-manual"; matched.add(k)
+        elif k in freal:
+            m["_tier"] = "real-manual"; matched.add(k)
+    return sorted((set(fid) | set(freal)) - matched)
 
 
 def is_intentional(m):

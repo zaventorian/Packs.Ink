@@ -61,8 +61,19 @@ def main():
     tiers = Counter(m["_tier"] for m in draws)
 
     print(f"rule={args.rule} window={args.id_window} · {len(draws)} draws · "
-          + " ".join(f"{t}={tiers[t]}" for t in
-                     ("ID-strong", "ID-likely", "unclear", "real", "in-cut")))
+          + " ".join(f"{t}={tiers[t]}" for t in dc.TIERS))
+
+    # A dead override key is a person's ruling that stopped applying. On a
+    # --season run it just means the event is out of scope; on a full pass it
+    # is a real regression, so fail rather than write a quietly wrong answer.
+    if meta["override_unmatched"]:
+        where = [f"e{e} R{r} t{t}" for e, r, t in meta["override_unmatched"]]
+        msg = "draw_overrides keys matching no draw: " + ", ".join(where)
+        if args.season:
+            print(f"  note: {msg} (outside --season {args.season})")
+        else:
+            print(f"ERROR: {msg}", file=sys.stderr)
+            conn.close(); sys.exit(1)
 
     # Only ever write within the scope just classified: a --season run must not
     # clear flags on events it never looked at.
