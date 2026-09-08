@@ -124,7 +124,7 @@ graphics, and on screenshots of them. `CardScanner.scanDeckImage(src)` in
 trick.** `build_index.py` descriptors the FULL Lorcast card face, not an art crop —
 so a poster cell is the same picture the reference vector was built from, merely
 scaled. No glare, no perspective, no white balance. Matching is the easy half;
-measured **83/83 across five real posters**. Nothing is downloaded that the scanner
+measured **83/83 across five real posters**, and counts 100/100 across six. Nothing is downloaded that the scanner
 doesn't already fetch (index.json + color.bin + dhash.bin, ~2.1 MB, cached).
 
 - **Finding the lattice is the actual work.** The pitch comes from autocorrelating
@@ -149,18 +149,58 @@ doesn't already fetch (index.json + color.bin + dhash.bin, ~2.1 MB, cached).
   permanent `SCANNER_QA_ONLY`. The grid shows the crop it actually matched next to
   the name it chose, so a version confusion (Mushu *Sneaky* vs *Stealthy Dragon*)
   is visible rather than inferred.
-- **Counts are NOT read — every card defaults to 4 and the review grid is where you
-  set them.** A badge reader was built and removed: the digit classifies fine once
-  the chip is located (17/17 by 1-NN on one poster), but locating the chip is not
-  portable across generators — the card's own dark border floods into it — and the
-  glyph scores came back at 0.27 against a 0.55 bar. The running **N / 60** total is
-  the affordance that replaces it: a Lorcana deck is exactly 60 cards, so the sum is
-  a free checksum on the counts. If it gets built properly, the promising route is
-  clustering the badge crops (same count = near-identical crop) and solving the
-  cluster labels against that 60 constraint, not per-glyph OCR.
-- Resolution floor is about **150px per card**. Below that it refuses rather than
-  guessing: a 1023px dreamborn poster and a Zoom screenshot of a duels.ink poster
-  both correctly return no grid instead of a plausible wrong deck.
+### Counts ARE read (2026-09-08) — and the chip is located from the MEAN
+
+First cut shipped with every count defaulting to 4, because locating the chip
+inside a single cell fails: the card's own dark border floods into it. **The fix is
+to locate it ONCE from the mean of every cell's top-right corner.** Card art differs
+per cell and averages away; the chip is in the same place on every card so it
+survives. Measured **100/100 across six real posters, every one summing to exactly
+60**, in Chromium against the shipped code.
+
+- **Look for the DIGIT, not the chip.** The card's dark border survives the mean too,
+  so thresholding for a dark chip finds one blob spanning border + chip. The digit is
+  a small BRIGHT feature on a dark ground — a grey top-hat (`mean - greyOpen(mean,11)`)
+  isolates it cleanly, and blobs touching the ROI edge are dropped as card edges.
+- **⚠ Glyph templates are BAKED (`QTPL_B64`), never rendered at runtime.** Canvas font
+  rendering depends on what the viewer has installed: on a headless Linux box "Arial",
+  "Verdana" and "Helvetica" all collapse to one fallback face, which silently strips
+  the shape diversity the classifier needs. ~3KB of 20x22 1-bit bitmaps, identical
+  everywhere. Regenerate from Liberation Sans (Bold/Regular), DejaVu Sans Bold and
+  FreeSans (Bold/Regular) if it ever needs extending.
+- **The two "1" shapes both have to be in the set.** Liberation and DejaVu draw "1"
+  with a full base bar; Arial and every poster generator draw a bare flag-and-stem.
+  With only the barred shape in the templates, a real "1" read as 3, then as 4.
+- **⚠ The normalisation box is 20x22, and that width is load-bearing.** At 14x22 a
+  glyph wider than 0.64 clamped to full width — so a "4" (0.83) and a "1" (0.45) both
+  filled the box and the one feature separating them was gone. Scale to the box
+  HEIGHT and centre horizontally; never stretch to fill.
+- **Merged glyphs are split, not rejected.** At low resolution "2x" bridges into one
+  blob whose aspect fails the digit test, which took a whole cell to unreadable.
+  `splitWide` cuts at the emptiest column near the middle and re-tightens each half.
+- **Filter components by HEIGHT before counting them.** The digits are the tallest
+  things in the zone; art bleeding into the crop is shorter. Bailing on a raw
+  component count instead threw away a good "2" because Chernabog's art added a
+  fourth blob.
+- An unread badge still falls back to 4 and is marked (dotted underline) in the
+  review grid; the **N / 60** total remains the checksum, since a Lorcana deck is
+  exactly 60 cards.
+
+### The pitch sweep, and the resolution floor
+
+- **⚠ Autocorrelation proposes harmonics of the strongest periodicity, which is not
+  always the card pitch.** A 1023px dreamborn poster's top peak was **2.58x** the true
+  pitch, so no integer sub-multiple could ever land on it and the whole poster read
+  as "no grid". `sweepPitches` walks pitches directly in 3.5% steps as a fallback,
+  and runs only when the autocorrelation candidates yield nothing — so the common
+  case keeps its speed.
+- Resolution floor is about **150px per card**. A screenshot that also contains
+  browser tabs, a video call or a desktop around the poster is the case that still
+  fails: the surrounding chrome pollutes the row/column profiles and no lattice wins.
+  **Cropping to just the cards fixes it** — verified on the Zoom screen-share that
+  fails whole (cosines ≤0.79) and reads at 0.89–0.98 once cropped. Raising the
+  detail-map target was tried and reverted: it did not rescue that image and doubled
+  the failure time to 14s.
 - Applies through the existing `parseDeckText`, with names resolved via
   `card_id -> catalog row -> "Product Name"` (the same id join `resolveGroup` uses),
   so set/printing disambiguation stays in one place.

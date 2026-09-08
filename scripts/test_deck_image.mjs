@@ -34,10 +34,15 @@ const code = [
   grab("  function periodCands(ac) {", "\n  }"),
   grab("  function gridPhase(p, pitch) {", "\n  }"),
   grab("  function halfSpan(v) {", "\n  }"),
+  grab("  function sweepPitches(rw, maxCols, minCols) {", "\n  }"),
+  grab("  function components(mask, w, h) {", "\n  }"),
+  grab("  function fitBox(g, w, h) {", "\n  }"),
+  grab("  function splitWide(c, gw) {", "\n  }"),
+  "var QTW = 20, QTH = 22;",
 ].join("\n");
 
 const api = new Function(
-  code + "\nreturn {detrend,acf,periodCands,gridPhase,halfSpan};",
+  code + "\nreturn {detrend,acf,periodCands,gridPhase,halfSpan,sweepPitches,components,fitBox,splitWide};",
 )();
 
 let pass = 0, fail = 0;
@@ -101,6 +106,62 @@ console.log("phase + span");
   const v = new Float32Array(20).fill(0.5);
   const s = api.halfSpan(v);
   ok("halfSpan on a flat profile returns the whole span", s[0] === 0 && s[1] === 20, s.join(".."));
+}
+
+console.log("pitch sweep fallback");
+{
+  // The rescue case: a poster whose strongest periodicity is 2.58x the card
+  // pitch, so no integer sub-multiple can reach the truth. The sweep must.
+  const sw = api.sweepPitches(1023, 16, 2);
+  ok("sweep covers the true pitch of a 1023px 8-wide poster",
+    sw.some((p) => Math.abs(p - 128) <= 4), "nearest " + sw.reduce((a,b)=>Math.abs(b-128)<Math.abs(a-128)?b:a));
+  ok("sweep steps finely enough to hit any pitch within 2%",
+    sw.every((p, i) => i === 0 || p / sw[i-1] <= 1.05), "steps " + sw.slice(0,5).join(","));
+  ok("sweep stays inside the column bounds",
+    sw[0] >= Math.floor(1023/16) && sw[sw.length-1] <= Math.floor(1023/2) + 1,
+    `${sw[0]}..${sw[sw.length-1]}`);
+}
+
+console.log("glyph plumbing");
+{
+  const w = 9, h = 5, m = new Uint8Array(w * h);
+  const on = (x, y) => { m[y * w + x] = 1; };
+  on(1,1); on(2,1); on(1,2);  on(6,1); on(7,1); on(7,2);  on(4,3);
+  const cs = api.components(m, w, h);
+  ok("components separates 3 blobs (4-connected, no diagonal merge)", cs.length === 3, "got " + cs.length);
+  const b0 = cs.find((c) => c.x0 === 1);
+  ok("component bbox is right", b0 && b0.x1 === 2 && b0.y0 === 1 && b0.y1 === 2,
+    b0 ? [b0.x0,b0.y0,b0.x1,b0.y1].join(",") : "none");
+}
+{
+  // Width is what separates a "1" from a "4"; fitBox must not clamp it away.
+  const tall = new Float32Array(4 * 40).fill(255);        // aspect 0.10
+  const wide = new Float32Array(33 * 40).fill(255);       // aspect 0.83
+  const inkCols = (b) => {
+    let lo = 99, hi = -1;
+    for (let x = 0; x < 20; x++) for (let y = 0; y < 22; y++)
+      if (b[y*20+x] > 10) { if (x < lo) lo = x; if (x > hi) hi = x; }
+    return hi - lo + 1;
+  };
+  const a = inkCols(api.fitBox(tall, 4, 40)), c = inkCols(api.fitBox(wide, 33, 40));
+  ok("fitBox preserves a narrow glyph's width", a <= 4, "narrow filled " + a + " of 20");
+  ok("fitBox preserves a wide glyph's width", c >= 15, "wide filled " + c + " of 20");
+  ok("fitBox keeps them distinguishable", c - a >= 10, `narrow ${a} vs wide ${c}`);
+}
+{
+  // "2x" merging into one blob is what made a real cell unreadable.
+  const gw = 20, gh = 10, lab = new Int32Array(gw*gh).fill(-1);
+  for (let y = 1; y < 9; y++) { for (let x = 2; x < 8; x++) lab[y*gw+x] = 0; }
+  for (let y = 3; y < 8; y++) { for (let x = 11; x < 16; x++) lab[y*gw+x] = 0; }
+  lab[5*gw+8] = 0; lab[5*gw+9] = 0; lab[5*gw+10] = 0;      // the bridge
+  const c = {id:0, lab, x0:2, y0:1, x1:15, y1:8};
+  const pair = api.splitWide(c, gw);
+  ok("splitWide returns two halves", !!pair && pair.length === 2, pair ? "ok" : "null");
+  if (pair) {
+    ok("left half is the taller glyph", (pair[0].y1-pair[0].y0) > (pair[1].y1-pair[1].y0),
+      `${pair[0].y1-pair[0].y0} vs ${pair[1].y1-pair[1].y0}`);
+    ok("halves do not overlap", pair[0].x1 < pair[1].x0, `${pair[0].x1} < ${pair[1].x0}`);
+  }
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
