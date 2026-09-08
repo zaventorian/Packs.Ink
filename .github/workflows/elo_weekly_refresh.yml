@@ -22,6 +22,14 @@ on:
         default: ""
         type: string
 
+# refresh_elo.py downloads the canonical SQLite at the top and uploads it at the
+# bottom, so two overlapping runs would each publish a DB missing the other's
+# work. Queue rather than cancel: the upload is the last step, so a queued run
+# starts from the finished one's result.
+concurrency:
+  group: elo-refresh
+  cancel-in-progress: false
+
 jobs:
   refresh:
     runs-on: ubuntu-latest
