@@ -274,7 +274,7 @@
      the scanner on any given visit. Both scripts only attach globals used when
      the scan modal opens, long after DOMContentLoaded. The heavy parts (OpenCV,
      the ONNX OCR models) load later still, inside the workers. -->
-<script src="scanner.js?v=300" defer></script>
+<script src="scanner.js?v=301" defer></script>
 <script src="scanner-cv.js?v=253" defer></script>
 <script>
 
@@ -39540,7 +39540,7 @@ function DeckImageImport({raw, onUseText}){
       }});
       if(!res || !res.cells.length){
         setPhase("error");
-        setNote("Couldn't find a grid of cards in that image. It works on deck posters and screenshots of them — the cards need to be laid out in a grid and roughly 150px wide or bigger.");
+        setNote("Couldn't find a grid of cards in that image. It reads deck posters and screenshots of them, but the cards need to be in a grid and roughly 150px wide. If the picture also has browser tabs, a video call or a desktop around the poster, crop to just the cards and try again — that usually does it.");
         return;
       }
       const out = res.cells.map((c, i) => {
@@ -39554,7 +39554,8 @@ function DeckImageImport({raw, onUseText}){
           || (c.card.version ? `${c.card.name} - ${c.card.version}` : c.card.name);
         let thumb = "";
         try { thumb = cv.toDataURL("image/jpeg", 0.82); } catch(_e){}
-        return { key: `${c.card.id}:${i}`, name, thumb, qty: 4,
+        return { key: `${c.card.id}:${i}`, name, thumb,
+                 qty: c.qty == null ? 4 : c.qty, qtyRead: c.qty != null,
                  cos: c.cos, ham: c.ham, inCatalog: !!row };
       });
       setRows(out);
@@ -39615,8 +39616,9 @@ function DeckImageImport({raw, onUseText}){
       </div>
     </div>
     <p class="muted deckimg-hint">
-      Every card starts at 4 — set the counts, and the total above should reach 60.
-      The thumbnail is the crop it matched, so you can check it against the name.
+      Counts are read from each card's badge; an underlined one it couldn't read and
+      guessed at 4. The total above should reach 60. The thumbnail is the crop it
+      matched, so you can check it against the name.
     </p>
     <div class="deckimg-grid">
       ${rows.map(r => html`<div class=${"deckimg-cell" + (r.qty ? "" : " out")} key=${r.key}>
@@ -39625,7 +39627,9 @@ function DeckImageImport({raw, onUseText}){
         ${!r.inCatalog && html`<div class="deckimg-warn">not in your catalog</div>`}
         <div class="deckimg-qty">
           <button onClick=${()=>setQty(r.key,-1)} aria-label="One fewer">−</button>
-          <button class="deckimg-n" title="Cycle 4 → 3 → 2 → 1"
+          <button class=${r.qtyRead ? "deckimg-n" : "deckimg-n guessed"}
+            title=${r.qtyRead ? "Read from the badge — click to cycle 4 → 3 → 2 → 1"
+                              : "Couldn't read this badge — guessed. Click to cycle."}
             onClick=${()=>cycleQty(r.key)}>${r.qty}</button>
           <button onClick=${()=>setQty(r.key,1)} aria-label="One more">+</button>
         </div>

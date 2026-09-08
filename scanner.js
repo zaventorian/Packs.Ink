@@ -1038,6 +1038,21 @@
     return out;
   }
 
+  // Autocorrelation proposes harmonics of the STRONGEST periodicity, and that is
+  // not always the card pitch: one 1023px poster's top peak was 2.58x the true
+  // pitch, so no integer sub-multiple could ever land on it and the whole poster
+  // read as "no grid". Sweeping pitches directly is the fallback.
+  function sweepPitches(rw, maxCols, minCols) {
+    var lo = Math.max(8, Math.floor(rw / maxCols)), hi = Math.max(12, Math.floor(rw / minCols));
+    var out = [], p = lo, last = -1;
+    while (p <= hi) {
+      var v = Math.round(p);
+      if (v !== last) { out.push(v); last = v; }
+      p *= 1.035;                        // finer than one card's alignment tolerance
+    }
+    return out;
+  }
+
   // Lattice phase: the offset whose grid lines land on profile minima (gutters).
   function gridPhase(p, pitch) {
     var n = p.length, best = Infinity, bo = 0, off, i, s, c;
@@ -1114,7 +1129,251 @@
     return new Promise(function (res) { setTimeout(res, 0); });
   }
 
-  // Main entry. Returns {cells:[{rect,card,cos,ham,margin}], cols, rows, score}
+  // ---- quantity badges ------------------------------------------------------
+  // The chip is located ONCE, from the MEAN of every cell's top-right corner.
+  // Card art differs per cell and averages away; the count chip sits in the same
+  // place on every card, so it survives. The card's own dark border survives too
+  // — which is why hunting for the dark CHIP fails, and why an earlier attempt
+  // at this was thrown away. What is distinctive is the DIGIT: a small bright
+  // feature on a dark ground, which a grey top-hat on the mean isolates cleanly.
+  var QRW = 128, QRH = 78;      // working size of the badge ROI
+  // The glyph box must be wide enough that a real aspect never clamps to full
+  // width — at 14x22 both a "4" (0.83) and a "1" (0.45) filled it, and width is
+  // exactly what tells those two apart.
+  var QTW = 20, QTH = 22;
+  var qcv = document.createElement("canvas");
+  var qctx = qcv.getContext("2d", { willReadFrequently: true });
+  var qtpl = null;
+
+  function qtyRoi(src, r) {
+    var IW = src.naturalWidth || src.width, IH = src.naturalHeight || src.height;
+    return { x: Math.max(0, r.x + 0.40 * r.w), y: Math.max(0, r.y - 0.10 * r.h),
+             x1: Math.min(IW, r.x + 1.10 * r.w), y1: Math.min(IH, r.y + 0.34 * r.h) };
+  }
+
+  function qtyGray(src, box, w, h) {
+    qcv.width = w; qcv.height = h;
+    qctx.imageSmoothingEnabled = true; qctx.imageSmoothingQuality = "high";
+    qctx.drawImage(src, box.x, box.y, box.x1 - box.x, box.y1 - box.y, 0, 0, w, h);
+    var d = qctx.getImageData(0, 0, w, h).data, g = new Float32Array(w * h), i;
+    for (i = 0; i < w * h; i++) g[i] = 0.299 * d[i*4] + 0.587 * d[i*4+1] + 0.114 * d[i*4+2];
+    return g;
+  }
+
+  // separable grey erosion then dilation == grey opening
+  function greyOpen(g, w, h, k) {
+    var r = k >> 1, tmp = new Float32Array(w * h), out = new Float32Array(w * h), x, y, i, v;
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      v = Infinity;
+      for (i = -r; i <= r; i++) { var xx = x + i; if (xx < 0 || xx >= w) continue; v = Math.min(v, g[y*w+xx]); }
+      tmp[y*w+x] = v;
+    }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      v = Infinity;
+      for (i = -r; i <= r; i++) { var yy = y + i; if (yy < 0 || yy >= h) continue; v = Math.min(v, tmp[yy*w+x]); }
+      out[y*w+x] = v;
+    }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      v = -Infinity;
+      for (i = -r; i <= r; i++) { var xb = x + i; if (xb < 0 || xb >= w) continue; v = Math.max(v, out[y*w+xb]); }
+      tmp[y*w+x] = v;
+    }
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) {
+      v = -Infinity;
+      for (i = -r; i <= r; i++) { var yb = y + i; if (yb < 0 || yb >= h) continue; v = Math.max(v, tmp[yb*w+x]); }
+      out[y*w+x] = v;
+    }
+    return out;
+  }
+
+  // 4-connected labelling -> [{id,x0,y0,x1,y1,px,lab}]
+  function components(mask, w, h) {
+    var lab = new Int32Array(w * h).fill(-1), out = [], stack = [], i, x, y;
+    for (i = 0; i < w * h; i++) {
+      if (!mask[i] || lab[i] >= 0) continue;
+      var id = out.length, bx0 = w, by0 = h, bx1 = -1, by1 = -1, px = 0;
+      stack.push(i); lab[i] = id;
+      while (stack.length) {
+        var p = stack.pop(); px++;
+        x = p % w; y = (p - x) / w;
+        if (x < bx0) bx0 = x; if (x > bx1) bx1 = x;
+        if (y < by0) by0 = y; if (y > by1) by1 = y;
+        if (x > 0   && mask[p-1] && lab[p-1] < 0) { lab[p-1] = id; stack.push(p-1); }
+        if (x < w-1 && mask[p+1] && lab[p+1] < 0) { lab[p+1] = id; stack.push(p+1); }
+        if (y > 0   && mask[p-w] && lab[p-w] < 0) { lab[p-w] = id; stack.push(p-w); }
+        if (y < h-1 && mask[p+w] && lab[p+w] < 0) { lab[p+w] = id; stack.push(p+w); }
+      }
+      out.push({ id: id, x0: bx0, y0: by0, x1: bx1, y1: by1, px: px, lab: lab });
+    }
+    return out;
+  }
+
+  // Scale to the box HEIGHT and centre horizontally, preserving aspect.
+  function fitBox(g, w, h) {
+    var nw = Math.max(1, Math.min(QTW, Math.round(w * (QTH / h))));
+    var out = new Float32Array(QTW * QTH), ox = (QTW - nw) >> 1, x, y;
+    for (y = 0; y < QTH; y++) for (x = 0; x < nw; x++)
+      out[y*QTW + ox + x] = g[Math.min(h-1, Math.floor(y * h / QTH)) * w + Math.min(w-1, Math.floor(x * w / nw))];
+    return out;
+  }
+
+  function normVec(g, w, h) {
+    var a = fitBox(g, w, h), n = a.length, m = 0, s = 0, i;
+    for (i = 0; i < n; i++) m += a[i];
+    m /= n;
+    for (i = 0; i < n; i++) { a[i] -= m; s += a[i] * a[i]; }
+    s = Math.sqrt(s) || 1;
+    for (i = 0; i < n; i++) a[i] /= s;
+    return a;
+  }
+
+  // Digit templates are BAKED, not rendered at runtime. Canvas font rendering
+  // depends on what the viewer has installed — on a headless Linux box "Arial",
+  // "Verdana" and "Helvetica" all collapse to one fallback face, which silently
+  // strips the shape diversity the classifier needs (notably the two different
+  // "1" shapes: with and without a foot serif). These are 20x22 1-bit bitmaps of
+  // 0-9 and x across five faces, ~3KB, identical on every device.
+  var QTPL_B64 = "MAH4AH/gB/8A//AfD4HweB4HgeB8HgfB4HweB8HgfB4HweB8HgfB4HgfB4Dw+A//AH/wA/4AH4AxAfAAPwAH8AH/AB7wAY8AEPAADwAA8AAPAADwAA8AAPAADwAA8AAPAADwAA8AAPgB//gf/4H/+DIB/AB/4A//Af/4Hw+B4HgGB4AAeAAPgAHwAD8AB+AA/AAfgAPgAHwAD4AB8AAf/8P//D//w//8MwH8AH/gD/8B//gfD4HgeAQHgAD4AB8AD+AA/AAP8AAfgAB4AAfAQHw+B8PwfB//gP/4B/8AH8A0AD8AA/AAfwAP8AD/AB/wA98AOfAHnwDx8A4fAeHwPB8DwfB//8f//D//wAHwAB8AAfAAHwAB8DUf/wH/8B//A+AAPgAD4AA+AAPHAD/+A//wP/8D4fgAD4AAeAAHgAB4fA+D4Pg//wH/8A/8AD+ANgD8AD/gB/8A//gPD4HwcB4AAeAAHnwB//A//4P5+D8HweB8HgfB4HweB8DwfA//gH/wA/4AH8A3P/+D//g//4P/+AAPAAHgAB4AA8AAPAAHgAD4AA8AAfAAHgAD4AA+AAPAADwAB8AAfAAHwAB8ADgB/AB/8A//gfj4HweB4HweB4HweA+PAH/gA/4A//AfD4HgfD4Hw+A8PgfB4HwfD4D/+Af/AB/AOQH4AH/gD/8B//AfD4HgeD4Hw+B8PgfB8Hwfn8D//Af/wD58AAfAAHgOB4Hw+B//AP/gB/wAH4B4fAPj4H4+B8Hw+B+PgPnwB/8Af+AD/AAfwAH4AB/AA/wAP+AH/gD58A+PgfD4PwfD4H58A+fAPzAB+AA/4AePAOBwDAOBwDgcAYHAHBgBwYAcGAHBgBwYAcHAHBwBwcAYHAOA4DgOBwB58AP+AB+AMQDgAD4AB+AA7gAc4AEOAADgAA4AAOAADgAA4AAOAADgAA4AAOAADgAA4AAOAADgAA4AP/+D//gyA/gAf8APHgHA8BwHA4BwAAcAAHAABgAA4AAcAAOAAHAAHgADwAB4AA8AAOAAHAADwAA//4P/+DMB+AB/4A+fAOB4HAOBwDgAA4AAOAAHAAPgAPwAD+AADwAAOAADwAAcHAHBwDgeA4D48Af+AB/ANAAcAAPAADwAB8AA/AAcwAGMADjABwwAYMAODAHAwBgMA4DAcB4H//h//4AAwAAMAADAAAwAAMA1H/4B/+AcAAHAABwAAcAAGAABgAAZ8AH/wB8+AcDwAAcAADgAA4AAOAADg4BwPA8B8eAP/AA/ADYB+AA/wAeeAOBwHAYBwAAYAAOAADj4A7/APx4DwHA8BwOAODgDgYA4HAOBwHAOBwDx4Af8AB+ANz//g//4AAcAAHAADgAAwAAcAAGAADgAAwAAcAAGAADgAA4AAcAAHAABwAAYAAOAADgAA4AAOAA4A/AA/8AeHgHAcBgHA4BwGAcBwHAcDgD7wAf4AP/gHA8DgHA4A4OAODgDg4BwPAcB4PAP/gA/gDkD8AB/wA8+AcDgPAcDgHA4BwOAMDgHA4B4HAeBwPgP/4B/MAHDAABwAAcBgOAcDgHzwA/4AD8AeHgB48A8HAOB4HgODwDw4AeeADnAA/gAH4AA8AAfgAH4AD/AB54AcOAPDwHgeBwHg8A8eAHngB4wAfgAf+AP/wH/+D8fg+D8PgfH4Hx+B+fgfn4H5+B+fgfn4H5+B8PgfD4Pw/H4H/+A//AH/gAfgDEH+AP/gD/4A/+APfgAH4AB+AAfgAH4AB+AAfgAH4AB+AAfgAH4AB+AAfgAH4A//8P//D//w//8Mgf4Af/gP/8D//g8P4AA/AAPwAD8AA+AAfgAHwAH4AD+AB+AA/AAfgAPwAH4AD//w//8P//D//wzB/wB//Af/4H/+BgfgAD8AA+AAPgAPwA/4AP+AD/wA/+AAPwAD8AAfAAPw4H8P/+D//g//gD/gDQAfgAP4AH+AB/gA/4Af+AHvgDz4B4+A+PgPD4Hg+DwPg8D8P//7//+///v//4APwAD4AA+AAPgNT//A//wP/8D//A+AAPgAD4AA/+AP/4D//A//4OD+AAfwAD8AA/AAPxgH4eD+H//h//wf/4A/wA2AP4AP/gH/4D/+B/BgfAAPgAD44A//gP/+D//h/n8PwfD8Hw+B8PwfD8Hwfj8H/+A//gH/gAfwDc//8P//D//w//8AA/AAPgAH4AB8AA/AAPgAH4AB8AAfAAPgAD4AB+AAfAAPwAD4AB+AAfAAHwAOAP8AP/wH/+D//g/H4Pg+D4Pg/H4H/8Af+AP/gH/8D8Pg+D8fgfH4Hw+D8Pw/D//gf/4D/8AP8A5A/AA/8Af/gP/8D8fh+D4fA+HwPx+D8fg/D8/w//8H//A//wBz4AA+AAfgYPwH/8B/+Af/AB+AHj8B+fgfj8Pw/H4H5+B+/AP/wB/4Af8AD/AA/gAP8AH/AB/4A/+AP/wH5+D8fg/D8fg/H4H78B/MAHwAH/AD/4A//AfHwHg8B4PA+D4Pg+DwHg8B4PAeDwHg+B4Pg+B4PAeDwHx8A//AP/gB/wAHwAxAA4AAeAAPgAH4Af+AH/gB/4AA+AAPgAD4AA+AAPgAD4AA+AAPgAD4AA+AAPgAD4AA+AAPgAD4DIB+AB/wA/+Af/wHx8B4PgeD4HAeAAPgADwAB8AA+AAfAAfgAPgAHwAD4AB8AAf/4H/+D//g//4MwPwAP/AD/4B//AeHwPg8BwPAADwAB4AD8AA/AAP4AAfAAD4AA+DwHg+D4Hx8B//AP/gB/wAP4A0AD8AB/AAfwAP8AD/AB3wA98AOfAHHwDx8A4fAcHwHB8D//w//8P//D//w//8AB8AAfAAHwAB8DUH/wD/8A//AP/wDgAA4AAecAH/wB/+Af/wHz8AAPgAD4AAeAAHgAD4Pg+D4fAf/wH/4A/8AD8ANgH4AH/gB/4A//AfDwHgAB4AAecAP/wD/+A//wPw+D4Pg+B4PAeB4HgeD4Hx8A//AP/gB/wAH4A3P//D//w//8P/+AAPgADwAB4AAeAAPAAHgAB4AA8AAPAAHwAB4AAeAAPgADwAA8AAPAADwAB8ADgB8AB/wA/+Af/wHx8B4PAcBwHg8A8eAH/AD/4B8fA+D4PAeDwHg8B4Pg+D8fgf/wD/4Af8AD+AOQHwAH/AD/4B/+AfHwPg8DwPA8D4PA+D4Pg+H4H/+B//gP/4B+8AAPAADwHh8B/+Af/AD/gAPwB4/gfn4Px/D8Px+B+fgfvwD/4A/+AH/AA/wAP4AD+AA/wAf8AP/gD/8B+/AfH4Px+H4Px+D+/AfjAB8AA/wAf+APDgDgcAwHAcBwHAMBwDAcA4HAOBwDgcA4HAMBwDAcBwDAcA4HAPDgB/4AP8AB8AMQAYAAGAADgAB4AD+AB/gAA4AAGAABgAAYAAGAABgAAYAAGAABgAAYAAGAABgAAYAAGAABgAAYAyAfgAf+AP/wDweB4DgcA8HAHAABwAA4AAOAAPAAHgAHwAHwADwABwAA4AAcAAHAAB//g//8P//DMD8AB/wA/+AeDgHAcBwHAYBwAAcAAeAA/AAPwAD+AABwAAcAADA4AwOAMBwHAeDwD/4Af8AD8ANAAOAAHgAB4AA+AAfgAP4ADOABzgA44AcOAGDgDg4BwOA4DgP//D//w//8AA4AAOAADgAA4AAOA1B/8A//AP/gDgAA4AAMAADAAA34Af/AH/4BwPAABwAAOAADgAA4AAOBADAcBwHg8A/+AH/AA/ADYA+AA/wAf+AHDwDgcAwCAcAAHAAB38Af/gH58B4HAcAwHAOBwDgcA4HAOA4HAPDwB/4AP8AB+ANz//g//4P/+AADAABgAA4AAMAAGAADgAAwAAcAAGAADgAAwAAcAAHAADgAA4AAOAADAABwAAcAA4AfAAf8AP/gDg8BwHAcBwHAcA4OAH/gB/wAf+AODwHAcBgDg4A4OAOBgDgcBwHg8A/+AH/AAfADkB8AB/wA/+AeDgHAcBgHAYAwOAMBgDgcB4HA+A8fgP/4A/MAADAABwCAcBwOAeHgD/wAf4AD8AeHgB48A8HgPB4HgPDwBw4AeeAD/AAfgAH4AA8AAPgAH4AD/AA7wAeeAPDwDg8B4Hg8A8eAPngB4=";
+
+  function glyphTemplates() {
+    if (qtpl) return qtpl;
+    var raw = atob(QTPL_B64), out = [], n = QTW * QTH, i;
+    for (i = 0; i + 56 <= raw.length; i += 56) {
+      var v = new Float32Array(n), m = 0, k;
+      for (k = 0; k < n; k++) {
+        v[k] = (raw.charCodeAt(i + 1 + (k >> 3)) >> (7 - (k & 7))) & 1;
+        m += v[k];
+      }
+      m /= n;
+      var s = 0;
+      for (k = 0; k < n; k++) { v[k] -= m; s += v[k] * v[k]; }
+      s = Math.sqrt(s) || 1;
+      for (k = 0; k < n; k++) v[k] /= s;
+      out.push({ ch: raw[i], v: v });
+    }
+    qtpl = out;
+    return out;
+  }
+
+  // Where the digit sits, as ROI-relative fractions. Computed once per poster.
+  function qtyLocate(src, cells) {
+    if (!cells.length) return null;
+    var mean = new Float32Array(QRW * QRH), i, j;
+    for (i = 0; i < cells.length; i++) {
+      var g = qtyGray(src, qtyRoi(src, cells[i].rect), QRW, QRH);
+      for (j = 0; j < mean.length; j++) mean[j] += g[j];
+    }
+    for (j = 0; j < mean.length; j++) mean[j] /= cells.length;
+    var op = greyOpen(mean, QRW, QRH, 11), mx = 0;
+    var th = new Float32Array(QRW * QRH);
+    for (j = 0; j < th.length; j++) { th[j] = mean[j] - op[j]; if (th[j] > mx) mx = th[j]; }
+    if (mx < 25) return null;
+    var mask = new Uint8Array(QRW * QRH);
+    for (j = 0; j < mask.length; j++) mask[j] = th[j] > mx * 0.45 ? 1 : 0;
+    var blobs = components(mask, QRW, QRH).filter(function (c) {
+      var w = c.x1-c.x0+1, h = c.y1-c.y0+1;
+      if (w < 3 || h < 5 || w > 0.55*QRW || h > 0.75*QRH) return false;
+      return !(c.x0 <= 1 || c.x1 >= QRW-2 || c.y0 <= 1 || c.y1 >= QRH-2);
+    });
+    if (!blobs.length) return null;
+    blobs.sort(function (a, b) { return (b.x1-b.x0)*(b.y1-b.y0) - (a.x1-a.x0)*(a.y1-a.y0); });
+    var a0 = blobs[0], x0 = a0.x0, y0 = a0.y0, x1 = a0.x1, y1 = a0.y1, aw = a0.x1-a0.x0+1;
+    for (i = 1; i < blobs.length; i++) {
+      var b = blobs[i];
+      var ov = Math.min(a0.y1, b.y1) - Math.max(a0.y0, b.y0);
+      if (ov <= 0.5 * Math.min(a0.y1-a0.y0, b.y1-b.y0)) continue;      // not the same text line
+      var gap = b.x0 > a0.x1 ? b.x0 - a0.x1 : a0.x0 - b.x1;
+      if (gap > 1.2 * aw) continue;                                     // too far to be one badge
+      x0 = Math.min(x0, b.x0); y0 = Math.min(y0, b.y0);
+      x1 = Math.max(x1, b.x1); y1 = Math.max(y1, b.y1);
+    }
+    var px = 0.20 * (x1-x0+1), py = 0.20 * (y1-y0+1);
+    return { x0: Math.max(0, x0-px)/QRW, y0: Math.max(0, y0-py)/QRH,
+             x1: Math.min(QRW, x1+1+px)/QRW, y1: Math.min(QRH, y1+1+py)/QRH };
+  }
+
+  // Two glyphs whose strokes touch arrive as ONE wide blob — "2x" merges at low
+  // resolution and then fails the aspect test, taking the whole cell with it.
+  // Cut it at the emptiest column near the middle and re-tighten each half.
+  function splitWide(c, gw) {
+    var w = c.x1-c.x0+1, h = c.y1-c.y0+1, col = new Int32Array(w), x, y;
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++)
+      if (c.lab[(c.y0+y)*gw + (c.x0+x)] === c.id) col[x]++;
+    var lo = Math.floor(w*0.35), hi = Math.ceil(w*0.65), cut = lo, bestv = Infinity;
+    for (x = lo; x <= hi && x < w; x++) if (col[x] < bestv) { bestv = col[x]; cut = x; }
+    function tighten(x0, x1) {
+      var ny0 = -1, ny1 = -1, nx0 = -1, nx1 = -1;
+      for (y = 0; y < h; y++) for (x = x0; x <= x1; x++)
+        if (c.lab[(c.y0+y)*gw + (c.x0+x)] === c.id) {
+          if (ny0 < 0) ny0 = y;
+          ny1 = y;
+          if (nx0 < 0 || x < nx0) nx0 = x;
+          if (x > nx1) nx1 = x;
+        }
+      if (ny0 < 0) return null;
+      return { id: c.id, lab: c.lab, x0: c.x0+nx0, x1: c.x0+nx1, y0: c.y0+ny0, y1: c.y0+ny1 };
+    }
+    var a = tighten(0, cut), b = tighten(cut+1, w-1);
+    return (a && b) ? [a, b] : null;
+  }
+
+  function qtyRead(src, rect, zone) {
+    if (!zone) return null;
+    var roi = qtyRoi(src, rect), w = roi.x1 - roi.x, h = roi.y1 - roi.y;
+    var box = { x: roi.x + zone.x0*w, y: roi.y + zone.y0*h,
+                x1: roi.x + zone.x1*w, y1: roi.y + zone.y1*h };
+    if (box.x1 - box.x < 3 || box.y1 - box.y < 4) return null;
+    var UP = 5, gw = Math.max(8, Math.round((box.x1-box.x)*UP)), gh = Math.max(8, Math.round((box.y1-box.y)*UP));
+    var g = qtyGray(src, box, gw, gh), i, mean = 0, mx = -Infinity;
+    for (i = 0; i < g.length; i++) { mean += g[i]; if (g[i] > mx) mx = g[i]; }
+    mean /= g.length;
+    var thr = mean + 0.25 * (mx - mean), ink = new Uint8Array(g.length);
+    for (i = 0; i < g.length; i++) ink[i] = g[i] > thr ? 1 : 0;
+    var raw = components(ink, gw, gh).filter(function (c) {
+      return (c.y1-c.y0+1) >= 0.40*gh && (c.x1-c.x0+1) >= 0.03*gw;
+    });
+    var comps = [];
+    raw.forEach(function (c) {
+      var cw = c.x1-c.x0+1, ch = c.y1-c.y0+1;
+      if (cw/ch <= 1.20) { comps.push(c); return; }
+      if (cw/ch > 2.6) return;                       // too wide to be two glyphs
+      var pair = splitWide(c, gw);
+      if (pair) pair.forEach(function (q) {
+        if ((q.x1-q.x0+1)/(q.y1-q.y0+1) <= 1.20) comps.push(q);
+      });
+    });
+    if (!comps.length || comps.length > 6) return null;
+    // The digits are the TALLEST things in the zone; card art bleeding into the
+    // crop shows up shorter. Filter on height BEFORE counting — bailing on a raw
+    // component count instead threw away a good "2" because the art behind the
+    // chip contributed a fourth blob.
+    var hmax = 0;
+    comps.forEach(function (c) { hmax = Math.max(hmax, c.y1-c.y0+1); });
+    comps = comps.filter(function (c) { return (c.y1-c.y0+1) >= 0.72 * hmax; });
+    if (!comps.length || comps.length > 2) return null;
+    comps.sort(function (a, b) { return a.x0 - b.x0; });
+    var tpl = glyphTemplates(), digits = "", scores = [];
+    for (i = 0; i < comps.length; i++) {
+      var c = comps[i], cw = c.x1-c.x0+1, ch = c.y1-c.y0+1;
+      var box2 = new Float32Array(cw*ch), x, y;
+      for (y = 0; y < ch; y++) for (x = 0; x < cw; x++)
+        box2[y*cw+x] = c.lab[(c.y0+y)*gw + (c.x0+x)] === c.id ? 255 : 0;
+      var q = normVec(box2, cw, ch), bg = null, bs = -9;
+      for (var t = 0; t < tpl.length; t++) {
+        var dot = 0, v = tpl[t].v;
+        for (var k = 0; k < q.length; k++) dot += q[k] * v[k];
+        if (dot > bs) { bs = dot; bg = tpl[t].ch; }
+      }
+      if (bg == null || bg === "x") continue;
+      digits += bg; scores.push(bs);
+    }
+    if (!digits.length || digits.length > 2) return null;
+    var n = parseInt(digits, 10);
+    if (!(n >= 1 && n <= 99)) return null;
+    return n;
+  }
+
+  // Main entry. Returns {cells:[{rect,card,cos,ham,margin,qty}], cols, rows, score}
   // or null when nothing card-shaped tiles the image.
   function scanDeckImage(src, opts) {
     opts = opts || {};
@@ -1124,14 +1383,16 @@
     // from the result alone — this is how you tell a bad pitch from a bad gate.
     var trace = opts.trace || null;
     if (!state.loaded) throw new Error("CardScanner not loaded");
-    var M = detailMap(src, opts.target || DECK_TARGET);
-    var inv = 1 / M.sc, C = colProfile(M), R = rowProfile(M);
     var maxCols = opts.maxCols || 16, minCols = opts.minCols || 2;
-    var pws = periodCands(acf(C, Math.max(8, Math.floor(M.w / maxCols)), Math.max(12, Math.floor(M.w / minCols))));
     var best = null, tried = 0;
-    var chain = Promise.resolve();
-    pws.forEach(function (pw) {
-      chain = chain.then(function () {
+    var M, inv, C, R;
+    function setTarget(t) {
+      M = detailMap(src, t);
+      inv = 1 / M.sc; C = colProfile(M); R = rowProfile(M);
+    }
+    function runPitches(list) {
+      return list.reduce(function (pr, pw) {
+        return pr.then(function () {
         var lo = Math.floor(pw * 1.10), hi = Math.floor(pw * 2.10);
         var phs = (M.h > lo + 6) ? periodCands(acf(R, lo, hi)) : [];
         phs = phs.concat([Math.round(pw / CARD_AR), Math.round(pw / CARD_AR * 1.06)]);
@@ -1190,10 +1451,16 @@
           if (!best || score > best.score || (score === best.score && hit > best.hit))
             best = { score: score, hit: hit, rects: rects, cols: xs.length, rows: ys.length };
         });
-        return yieldFrame();
-      });
-    });
-    return chain.then(function () {
+          return yieldFrame();
+        });
+      }, Promise.resolve());
+    }
+    setTarget(opts.target || DECK_TARGET);
+    var pws = periodCands(acf(C, Math.max(8, Math.floor(M.w / maxCols)),
+                              Math.max(12, Math.floor(M.w / minCols))));
+    return runPitches(pws).then(function () {
+      return best ? null : runPitches(sweepPitches(M.w, maxCols, minCols));
+    }).then(function () {
       if (!best) return null;
       var cells = [];
       return best.rects.reduce(function (p, r) {
@@ -1208,6 +1475,11 @@
           return cells.length % 6 === 0 ? yieldFrame() : null;
         });
       }, Promise.resolve()).then(function () {
+        var zone = null;
+        try { zone = qtyLocate(src, cells); } catch (e) { zone = null; }
+        cells.forEach(function (c) {
+          try { c.qty = qtyRead(src, c.rect, zone); } catch (e) { c.qty = null; }
+        });
         return { cells: cells, cols: best.cols, rows: best.rows, score: best.score, hit: best.hit };
       });
     });
@@ -1225,6 +1497,8 @@
     lookupCN: lookupCN,
     identify: identify,
     scanDeckImage: scanDeckImage,
+    qtyLocate: qtyLocate,
+    qtyRead: qtyRead,
     deckTop: deckTop,
     loadText: loadText,
     textMatch: textMatch,
