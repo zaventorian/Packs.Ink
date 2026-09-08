@@ -2067,16 +2067,27 @@ FLAT for that match.
   `rating_before == rating_after` with `score = 0.5` — the record is unchanged, only the rating
   stops moving. `elo.py` already did exactly this for `source='forfeit'`. Measured on a 1516 vs
   1484 pair: ID moves both 0.00, an identical unflagged draw moves them ∓0.52.
-- **The classification rule is NOT settled, and it is a parameter for that reason.**
-  `draw_classify.py` is the single source of truth (the report and the writer both import it, so
-  they cannot drift). `position` (default) = 0-0 AND the closing rounds of Swiss AND both players
-  in cut contention; `score-only` = 0-0 alone, which calls a round-1 0-0 an ID.
-- **The score may carry nothing at all.** Zaven was asked to enter an ID as **1-1-1** — a game
-  each plus a drawn game — and `matches` has no `games_drawn` column, so that stores as
-  `games_won` 1/1, identical to a Bo3 that timed out at one game each. Whether 0-0 vs 1-1 in fact
-  separates intent is an empirical question about this data set: `analyze_draws.py` section 2
-  cross-tabs score shape against closing-round share, and **if the 1-1 row leans on the closing
-  rounds as hard as the 0-0 row does, `score-only` is silently keeping IDs in the ratings.**
+- **RPH publishes NO intent field — settled by dumping the whole payload**, not assumed.
+  `probe_rph_draw_fields.py --event <id> [--round N]` prints every key on a match and on a
+  player and which ones `ingest.py` ignores. All of them are scoring, structural or cosmetic:
+  `status` is `COMPLETE` on draws and decisive alike, `match_is_loss` false on both,
+  `matches_won/lost/drawn` are the player's running tournament record. There is nothing to read,
+  so classification is inference and always will be.
+- **The score is not a usable proxy either, and the default rule reflects that.**
+  `DEFAULT_RULE = "position-only"` in `draw_classify.py` (the single source of truth — the
+  report, the writer and `refresh_elo.py` all import it, so they cannot drift, and
+  `test_intentional_draws.py` pins it). It requires the closing rounds of Swiss AND both players
+  in cut contention, **ignoring `games_won` entirely**.
+  - Zaven was asked to enter an ID as **1-1-1** — a game each plus a drawn game. `matches` has no
+    `games_drawn` column, so it stores as `games_won` 1/1, identical to a Bo3 that timed out at
+    one game each.
+  - Measured over 2548 real draws: **0-0 is 86% closing / 74% contested / median table 1**;
+    **1-1 is 51% / 34% / median table 3**. So most 1-1 draws are genuinely played out — but 886
+    of them sit in closing rounds, and `e881262` R5 is the confirmed shape: tables **1, 2 and 3
+    all drew, every one entered 1-1**, with tables 4+ decisive.
+  - `position` (0-0 AND closing AND contending) is kept as an option but **misses that entire
+    convention**; `score-only` (0-0 alone) additionally calls a round-1 0-0 an ID, which no
+    competitive player agrees. Switching back to either is a re-run, not a repair.
 - **Contention is judged ENTERING the round, never by who finally made the cut.** A player can
   agree a draw in the second-to-last round, lose the last one and miss; an outcome gate calls that
   real, which is backwards. On the bubble fixture the outcome gate lost 2 of 2.
@@ -2091,6 +2102,14 @@ FLAT for that match.
   errors are asymmetric: wrongly flagging a real draw deletes genuine evidence from a rating,
   while missing an ID only leaves today's behaviour in place. Same reasoning as
   `graded_sales.exclude_reason`.
+- **`analyze_draws.py` is the read-only report** — `--rule`, `--player` (prints the GATES, not
+  the verdict, because which gate rejected a draw is the whole answer), `--event`, `--since`.
+  Neither it nor the probe needs a laptop: **Actions → ELO draw report** runs both against the
+  canonical DB with no flag write, no export and no upload, so it cannot race the weekly refresh.
+- Two open items, neither blocking: **86 draws land `in-cut`** (elimination cannot draw — either
+  RPH rows are wrong or `cut_rounds()` misfires on small events whose Swiss rounds shrink 8→4→2→1
+  and look like a cut), and **184 of 840 events recorded no cut at all**, so contention is
+  unanswerable there and their 190 closing draws can only ever be `unclear`.
 - Guarded by `python scripts/elo/test_intentional_draws.py`.
 
 ## Chicagoland Elo — Stores tab (2026-08-19)

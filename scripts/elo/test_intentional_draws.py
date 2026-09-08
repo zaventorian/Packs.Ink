@@ -144,6 +144,20 @@ with tempfile.TemporaryDirectory() as td:
     check("entering points are reported at the draw, not after",
           "6pts vs 6pts" in out, True)
 
+print("the default rule")
+# The default is the whole finding: an ID entered 1-1-1 is invisible to any rule
+# that requires 0-0, and that is how Zaven was told to enter one. A silent revert
+# to `position` would quietly stop flagging that entire convention again.
+check("draw_classify names position-only", ad.DEFAULT_RULE, "position-only")
+check("...and it is a real rule", ad.DEFAULT_RULE in ad.RULES, True)
+for mod in ("analyze_draws", "flag_intentional_draws"):
+    src = (HERE / f"{mod}.py").read_text()
+    check(f"{mod} defers to it", 'default=dc.DEFAULT_RULE' in src, True)
+refresh = (HERE.parent / "refresh_elo.py").read_text()
+check("refresh_elo defers to it", "default=_dc.DEFAULT_RULE" in refresh, True)
+# the choices list here was stale once already — it never gained position-only
+check("...and takes its choices from the same place", "choices=list(_dc.RULES)" in refresh, True)
+
 print("ratings")
 with tempfile.TemporaryDirectory() as td:
     db = Path(td) / "r.db"
