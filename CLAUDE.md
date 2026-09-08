@@ -2140,6 +2140,27 @@ FLAT for that match.
   fact that it moved neither rating. The client asks for the column and **retries without it on
   42703**: the migration lands on Zaven's schedule, and a missing column 400s the whole select,
   which would blank the profile rather than degrade it.
+- **`scripts/elo/draw_overrides.py` is the last resort, and it has to be CODE.** Every automatic
+  signal is an inference over position and score; a 1-1 in an early round at ordinary standings
+  carries neither, so the data does not contain the answer and someone who was in the room has to
+  supply it (`e605246` R2 is the case that forced this — Zaven's own agreed draw, invisible to
+  every rule). **⚠ A hand-edit of `is_intentional_draw` in the DB does NOT survive**:
+  `flag_intentional_draws.py` reconciles both directions on every run (`drop = already - want`),
+  so a manual flag is cleared by the next weekly refresh, silently and with nothing red. An entry
+  in this file is re-applied every run instead.
+  - Keyed on **`(event_id, round_number, table_number)`**, all three straight from RPH, so the key
+    survives a rebuild of the local SQLite. `match_id` would NOT — it is a bare autoincrement
+    rowid, so a rebuilt DB renumbers it and every override would quietly point at a different
+    match. The draw report prints exactly this key: `e605246 R2 t0` is `(605246, 2, 0)`.
+  - Overrides run **LAST, after every tier including `in-cut`** — a person who was at the table
+    outranks an inference — and land in their own tiers (`ID-manual` / `real-manual`) so the
+    report never hides that a number came from a ruling rather than the rule.
+  - **A key matching no draw is an ERROR that fails the flagger**, not a warning: an override that
+    stopped applying is a decision that silently reverted, the same failure shape as the board
+    freezing at set rotation. A `--season` run downgrades it to a note, since the event is simply
+    out of scope there.
+  - `FORCE_REAL` is the other direction, empty today — kept so a false positive has somewhere to
+    go that isn't retuning the rule for everybody.
 - Guarded by `python scripts/elo/test_intentional_draws.py`.
 
 ## Chicagoland Elo — Stores tab (2026-08-19)

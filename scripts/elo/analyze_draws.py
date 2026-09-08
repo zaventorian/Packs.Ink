@@ -60,8 +60,11 @@ def main():
 
     tiers = Counter(m["_tier"] for m in draws)
     print(f"1. TIERS  (closing window = last {args.id_window} Swiss rounds)")
-    for t in ("ID-strong", "ID-likely", "unclear", "real", "in-cut"):
+    for t in dc.TIERS:
         print(f"   {t:<10} {tiers[t]:5d}")
+    if meta["override_unmatched"]:
+        print("   ⚠ draw_overrides keys matching no draw: "
+              + ", ".join(f"e{e} R{r} t{t}" for e, r, t in meta["override_unmatched"]))
     missed = sum(1 for m in draws if dc.is_intentional(m) and not m["_made_cut"])
     print(f"   {missed} ID-tier draws involve a player who ultimately MISSED the cut")
     print("   — judging by the final cut instead of contention would lose those")
