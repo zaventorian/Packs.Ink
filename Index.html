@@ -8605,7 +8605,16 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           ${posterIssues.join(" · ")}
         </div>
       </div>`}
-      <div style=${{display:"grid",gridTemplateColumns:`repeat(${cols},1fr)`,gap:10}}>
+      ${/* minmax(0,1fr), NEVER a bare 1fr. A bare 1fr is minmax(auto,1fr), so a
+            track can never be narrower than its widest cell's min-content -- and a
+            LANDSCAPE cell below declares aspect-ratio 7/5, which at a row height set
+            by the portrait cards (188px at 7 columns) demands 263px of width. That
+            demand froze the Location's whole COLUMN at ~2x and starved the others to
+            nothing, so every card sharing that column -- rows above it included --
+            rendered oversized while its neighbours collapsed. Reported from the wild
+            2026-09-08; any deck holding a Location could hit it, which is exactly why
+            it looked like "just me". */""}
+      <div style=${{display:"grid",gridTemplateColumns:`repeat(${cols},minmax(0,1fr))`,gap:10}}>
         ${/* Leader as the first cell of the grid, spanning 2x2 so it reads as
               THE card of the deck (the inkDecks treatment). No caption — the
               render already says "[FORMAT COCONUT]", the name and the ability.
