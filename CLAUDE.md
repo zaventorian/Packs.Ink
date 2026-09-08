@@ -357,6 +357,21 @@ editor's image-grid and stacked-pile views, and the deck poster's card cells. **
 poster cell must declare `aspectRatio:"7/5"` itself** — its image is absolutely positioned, so
 the cell would otherwise collapse to zero height.
 
+**⚠ And that declaration is exactly why the poster grid must be `repeat(N, minmax(0,1fr))`, never
+a bare `1fr`.** A bare `1fr` is `minmax(auto,1fr)`, so no track can be narrower than its widest
+cell's min-content — and a `7/5` cell at a row height set by the portrait cards around it (188px
+at 7 columns on the 1000px poster) demands **263px of width**. That demand froze the Location's
+whole COLUMN at ~2x and starved its neighbours; in the reproduction three columns went to
+literally **0px**. Every card sharing a hijacked column rendered oversized, *including the rows
+above the Location*, so what you see is two giant cards stacked in one column with the rest of
+the poster shrunken and spilling off the bottom edge. Reported from the wild 2026-09-08.
+
+The two facts are in tension and both are load-bearing: drop the aspect-ratio and landscape cells
+collapse, drop the `minmax(0,` and they hijack a column. Locations sort LAST, so the poisoning
+cell is usually below the fold of a cropped Discord preview — there is nothing at the blowout to
+look at — and whether it bites depends on which column the Locations land in, which is why it
+reads as "not sure if it's just me". Guarded by `node scripts/test_deck_poster_grid.mjs`.
+
 **Browse GRID tiles stay portrait deliberately.** A 7:5 tile in a 5:7 grid either breaks the row
 or shrinks every other card to accommodate the odd one out, and on a browse wall you're picking
 a card out, not reading it. Click through and it's landscape.
