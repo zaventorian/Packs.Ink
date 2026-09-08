@@ -21,6 +21,10 @@ stopped moving with nothing red anywhere. Four things are locked down:
      to head the Stores columns. A label that doesn't match reads "Unsorted".
   4. EXISTING SETS. A set we already have events for keeps its stored label —
      backfilling Wilds Unknown must never invent a second season for it.
+  5. ONE-OFFS. A hand-added event counts for Elo but must not enrol its store in
+     the tracked set. Scope is derived from ingested events, so the failure mode
+     is a guest store quietly joining every future set's discovery — invisible
+     until months later, when its events are already on the board.
 """
 from __future__ import annotations
 import os, sqlite3, sys, tempfile
@@ -73,6 +77,13 @@ def run_main(argv, candidates, tracked, ingested=()):
          m.sibling_location, m.ing.ingest_event, m.d.fetch_set_names,
          m.d.build_aliases, m.d.fetch_current_set, sys.argv) = orig
     return got
+
+
+def seeded_event_ids(path):
+    conn = sqlite3.connect(path)
+    ids = {r[0] for r in conn.execute("SELECT event_id FROM events")}
+    conn.close()
+    return ids
 
 
 def seed_db(path, rows):
@@ -150,6 +161,23 @@ with tempfile.TemporaryDirectory() as td:
 
     print("\nwithout --ingest nothing is written")
     check("read-only", run_main([], [ev(811279, "2026-09-05", 10)], tracked=[10]), [])
+
+    print("\na one-off event counts for Elo but never makes its store tracked")
+    m.DB = Path(td) / "oneoff.db"
+    m.STORE_ID_CACHE = Path(td) / "oneoff-cache.json"
+    one_off = sorted(m.ONE_OFF_EVENT_IDS)[0]
+    seed_db(m.DB, [(4242, "Ordinary SC", "Tracked Store", "Wilds Unknown Summer 2026"),
+                   (one_off, "Guest SC", "Guest Store", "Attack of the Vine! Fall 2026")])
+    orig = m.d.http_json
+    m.d.http_json = lambda url: {"store": {"id": 99 if str(one_off) in url else 10}}
+    try:
+        tracked, names = m.tracked_store_ids(False)
+    finally:
+        m.d.http_json = orig
+    check("the one-off's store is NOT tracked", 99 in tracked, False)
+    check("an ordinary event still tracks its store", 10 in tracked, True)
+    check("the one-off is not silently dropped from the DB",
+          seeded_event_ids(m.DB) == {4242, one_off}, True)
 
 print()
 if failures:

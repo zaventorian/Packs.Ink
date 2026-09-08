@@ -20,7 +20,9 @@ Never calls Supabase. Without --ingest it is read-only: it prints the candidates
 and (optionally) a JSON + the ingest.py command to pull them by hand. With
 --ingest (how the weekly refresh runs it) it writes them to the local DB. Scope
 is never widened either way — a candidate has to sit at a store_id we already
-count, so a store legitimately skipping a set is still a real outcome.
+count (minus EXCLUDED_STORE_IDS, and not counting the hand-added one-offs in
+ONE_OFF_EVENT_IDS), so a store legitimately skipping a set is still a real
+outcome.
 
 Usage:
     python discover_store_scs.py --sets "Winterspell" "Wilds Unknown"
@@ -61,6 +63,19 @@ EXCLUDED_STORE_IDS = {
     28480,  # Storming Good Games (Greencastle, IN)
 }
 
+# Events added BY HAND as one-offs (refresh_elo.py --ids). They count toward Elo
+# exactly like any other event — matches, ratings, standings — but their store is
+# NOT one we track. Scope is derived from the events we have ingested, so without
+# this list a single guest event would silently enrol its store in every future
+# set's discovery, which is the opposite of what "just this one" means.
+#
+# Distinct from EXCLUDED_STORE_IDS above, which drops a store's events entirely.
+# Here the event counts and only the STORE is out of scope, so it keys on the
+# event id — which also means adding one needs no lookup of the store's id.
+ONE_OFF_EVENT_IDS = {
+    796836,  # Zaven 2026-09-08: count this event, never the store
+}
+
 
 def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
     """Map every rph event we've ingested -> its RPH store.id. Returns the set of
@@ -74,6 +89,8 @@ def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
     rows = conn.execute(
         "SELECT event_id, store FROM events WHERE platform='rph' AND is_ignored=0").fetchall()
     conn.close()
+    # A hand-added one-off confers no scope on its store (see ONE_OFF_EVENT_IDS).
+    rows = [r for r in rows if r["event_id"] not in ONE_OFF_EVENT_IDS]
     cache: dict[str, int | None] = {}
     if STORE_ID_CACHE.exists() and not refresh:
         cache = json.loads(STORE_ID_CACHE.read_text())
