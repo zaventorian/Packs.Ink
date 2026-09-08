@@ -92,22 +92,25 @@ with tempfile.TemporaryDirectory() as td:
         # agrees in round 1 — it is where the two rules disagree
         res = {7: (None, 0, 0), 8: (None, 1, 1)}.get(t, (a, 2, 1))
         add(1, t, a, b, *res)
-    for t, (a, b) in enumerate([(1, 5), (2, 6), (3, 7), (4, 8),
-                                (9, 13), (10, 14), (11, 15), (12, 16)], 1):
+    for t, (a, b) in enumerate([(1, 9), (2, 10), (3, 11), (4, 12),
+                                (5, 13), (6, 14), (7, 15), (8, 16)], 1):
         add(2, t, a, b, a)
     # two top tables agree at 0-0; the table beside them plays out to 1-1, with
     # the same round and the same standing, so the score is the only difference
     add(3, 1, 1, 2, None, 0, 0)
     add(3, 2, 3, 4, None, 0, 0)
-    add(3, 3, 9, 10, None, 1, 1)
-    for t, (a, b) in enumerate([(11, 12), (5, 6), (7, 8), (13, 14), (15, 16)], 4):
+    # the Zaven case: an agreed draw entered 1-1-1, same round and same six
+    # points as the two above. `position` requires 0-0 and so calls it real;
+    # `position-only` ignores the score and catches it.
+    add(3, 3, 5, 6, None, 1, 1)
+    for t, (a, b) in enumerate([(7, 8), (9, 10), (11, 12), (13, 14), (15, 16)], 4):
         add(3, t, a, b, a)
-    for t, (a, b, w) in enumerate([(1, 3, 1), (4, 2, 4), (9, 11, 9), (10, 12, 10),
-                                   (5, 7, 5), (6, 8, 6), (13, 15, 13), (14, 16, 14)], 1):
+    for t, (a, b, w) in enumerate([(1, 3, 1), (4, 2, 4), (5, 7, 5), (6, 8, 6),
+                                   (9, 11, 9), (10, 12, 10), (13, 15, 13), (14, 16, 14)], 1):
         add(4, t, a, b, w)
-    for t, (a, b) in enumerate([(1, 10), (4, 9)], 1):
+    for t, (a, b) in enumerate([(1, 4), (5, 6)], 1):
         add(5, t, a, b, a)
-    add(6, 1, 1, 4, 1)
+    add(6, 1, 1, 5, 1)
     c.commit(); c.close()
 
     def run_rule(rule):
@@ -129,6 +132,11 @@ with tempfile.TemporaryDirectory() as td:
     check("nothing lands in an elimination round", tier_count("in-cut"), 0)
     check("the cut-outcome gate would have lost both",
           "2 ID-tier draws involve a player who ultimately MISSED" in out, True)
+    po = run_rule("position-only")
+    check("position-only catches the 1-1 agreed draw position misses",
+          tier_count("ID-strong", po), 3)
+    check("...and still leaves the early draws alone", tier_count("real", po), 2)
+
     so = run_rule("score-only")
     check("score-only flags the round-1 0-0 that position rejects",
           tier_count("ID-likely", so), 3)
