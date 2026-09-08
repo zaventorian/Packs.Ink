@@ -160,7 +160,7 @@ print("the default rule")
 # The default is the whole finding: an ID entered 1-1-1 is invisible to any rule
 # that requires 0-0, and that is how Zaven was told to enter one. A silent revert
 # to `position` would quietly stop flagging that entire convention again.
-check("draw_classify names position-only", ad.DEFAULT_RULE, "position-only")
+check("draw_classify names score-or-position", ad.DEFAULT_RULE, "score-or-position")
 check("...and it is a real rule", ad.DEFAULT_RULE in ad.RULES, True)
 for mod in ("analyze_draws", "flag_intentional_draws"):
     src = (HERE / f"{mod}.py").read_text()
@@ -206,6 +206,48 @@ with tempfile.TemporaryDirectory() as td:
           round(got[(3, 4)][0] + got[(4, 4)][0], 6), 0.0)
 
 print()
+
+print("0-0 needs no position support")
+# Zaven's 2025-05-11 e100267947 R3, minimised: an 8-player, 3-round event where
+# the 0-0 sits in the closing window but neither player clears the cut line, so
+# position-only calls it `unclear`. It is an ID; nobody finished a game.
+with tempfile.TemporaryDirectory() as td:
+    db = Path(td) / "score.db"
+    c = sqlite3.connect(db)
+    c.executescript((HERE / "schema.sql").read_text())
+    c.execute("INSERT INTO events (event_id,name,event_date,season,is_ignored)"
+              " VALUES (5,'SC Small','2026-08-17','X',0)")
+    for i in range(1, 9):
+        c.execute("INSERT INTO players (player_id,display_name) VALUES (?,?)", (i, f"R{i}"))
+    k = [0]
+
+    def addm(rn, t, p1, p2, w, g1=2, g2=1):
+        k[0] += 1
+        c.execute("INSERT INTO matches (match_id,event_id,round_id,round_number,table_number,"
+                  "player1_id,player2_id,winner_id,games_won_p1,games_won_p2,is_bye)"
+                  " VALUES (?,5,?,?,?,?,?,?,?,?,0)", (k[0], rn, rn, t, p1, p2, w, g1, g2))
+
+    # R1: the 0-0 is at table 4, between two players who go on to finish 1-1-1
+    addm(1, 4, 7, 8, None, 0, 0)
+    for t, (a, b) in enumerate([(1, 5), (2, 6), (3, 4)], 1):
+        addm(1, t, a, b, a)
+    for t, (a, b) in enumerate([(1, 2), (3, 5), (4, 6), (7, 8)], 1):
+        addm(2, t, a, b, a)
+    for t, (a, b) in enumerate([(1, 3), (2, 4), (5, 7), (6, 8)], 1):
+        addm(3, t, a, b, a)
+    c.commit(); c.close()
+
+    def rule_out(rule):
+        return subprocess.run(
+            [sys.executable, str(HERE / "analyze_draws.py"), "--db", str(db), "--rule", rule],
+            capture_output=True, text=True).stdout
+
+    po = rule_out("position-only")
+    check("position-only leaves an unsupported 0-0 on the table",
+          (tier_count("ID-strong", po) or 0) + (tier_count("ID-likely", po) or 0), 0)
+    sp = rule_out("score-or-position")
+    check("score-or-position flags it",
+          (tier_count("ID-strong", sp) or 0) + (tier_count("ID-likely", sp) or 0), 1)
 
 print("a swallowed last Swiss round still yields its ID")
 # The e200747 shape, minimised: R3 holds 4 matches sitting above a 2/1 cut, so

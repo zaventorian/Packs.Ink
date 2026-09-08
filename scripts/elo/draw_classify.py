@@ -11,22 +11,32 @@ no games_drawn column, so both store as games_won 1/1. Whether 0-0 vs 1-1
 actually separates the two is an empirical question about a given data set;
 `analyze_draws.py` cross-tabulates score against position to answer it.
 
-Two rules, hence:
-  score-only     0-0 is an ID, anything else is real. The literal reading. It
-                 will call a round-1 0-0 draw an ID, which no competitive
-                 player does.
-  position       0-0 AND in the closing rounds of Swiss AND both players in cut
-                 contention entering the round.
-  position-only  the closing rounds AND contention, IGNORING the score. Use
-                 this where IDs are entered 1-1-1 — that stores as games_won
-                 1/1, so requiring 0-0 misses them outright. Confirmed against
-                 a real event: Zaven's Sunday ID went in as 1-1-1 and `position`
-                 classified it `real`.
+The rules, hence:
+  score-only        0-0 is an ID, anything else is real. The literal reading.
+  position          0-0 AND in the closing rounds of Swiss AND both players in
+                    cut contention entering the round. Misses every ID entered
+                    1-1-1.
+  position-only     the closing rounds AND contention, IGNORING the score.
+                    Catches the 1-1-1 convention, but throws away a 0-0 played
+                    outside the closing rounds or off the bubble.
+  score-or-position the union, and the default: 0-0 is an ID on its own at ANY
+                    round, and any score is an ID in the closing rounds with
+                    both players contending. Neither half subsumes the other —
+                    that is the point.
+
+⚠ 0-0 needs NO position gate. Both halves of the union were established by
+Zaven against his own results: the 1-1-1 half because his Sunday ID stored as
+games_won 1/1, and the unconditional 0-0 half because `position-only` left
+2025-05-11 e100267947 R3 unflagged — a 0-0 at 6 points each in a 3-round,
+8-player event, where nothing about the standings marks it and it is an ID all
+the same. Nobody finished a game; that is the agreement. An earlier reading
+here objected that a round-1 0-0 cannot be an ID; the scene says otherwise and
+the scene is the authority on its own conventions.
 """
 from collections import Counter, defaultdict
 
 WIN_PTS, DRAW_PTS = 3, 1
-RULES = ("position", "position-only", "score-only")
+RULES = ("position", "position-only", "score-only", "score-or-position")
 
 # Settled against real data 2026-09-08, not chosen on taste. RPH publishes no
 # intent field at all — probe_rph_draw_fields.py dumped the whole payload and
@@ -37,7 +47,7 @@ RULES = ("position", "position-only", "score-only")
 # both players in contention and the top three tables drawing together.
 # Requiring 0-0 misses every ID recorded that way, which is a whole convention
 # rather than an edge case.
-DEFAULT_RULE = "position-only"
+DEFAULT_RULE = "score-or-position"
 
 MATCH_COLS = """m.match_id, m.event_id, m.round_number, m.table_number, m.is_bye,
                 m.player1_id, m.player2_id, m.winner_id,
@@ -200,6 +210,14 @@ def classify(rows, places, id_window=2, rule="position-only"):
             m["_tier"] = "in-cut"        # elimination cannot draw — a data error
         elif rule == "score-only":
             m["_tier"] = "ID-likely" if agreed_score(m) else "real"
+        elif rule == "score-or-position" and agreed_score(m):
+            # 0-0 stands alone here — no closing-round or contention gate — so
+            # this branch has to sit ABOVE the `not _closing` bail below, which
+            # would otherwise call an early 0-0 real.
+            m["_tier"] = "ID-strong" if (
+                m["_closing"]
+                and contending(m, m["player1_id"]) and contending(m, m["player2_id"])
+                and per_round[(m["event_id"], m["round_number"])] > 1) else "ID-likely"
         elif not m["_closing"] or (rule == "position" and not agreed_score(m)):
             m["_tier"] = "real"
         elif contending(m, m["player1_id"]) and contending(m, m["player2_id"]):
