@@ -134,6 +134,12 @@ def main() -> None:
     run([sys.executable, "suggest_aliases.py"], cwd=ELO_DIR)
     run([sys.executable, "apply_aliases.py", "aliases_auto.csv"], cwd=ELO_DIR)
 
+    # Accounts a person told us are theirs. suggest_aliases only proposes fuzzy
+    # pairs at ratio >= 0.85, so handles that differ by more than that are never
+    # suggested and need a ruling. Runs every time, from a committed file: a
+    # merge applied outside a refresh is overwritten by the next one.
+    run([sys.executable, "apply_manual_merges.py", "--apply"], cwd=ELO_DIR)
+
     # MUST run before elo.py, every time — not once by hand. The flags live in
     # the DB and survive the round trip through storage, but a match ingested
     # this week has never been classified, so without this step every new
