@@ -5,6 +5,7 @@ or locally. Steps:
   2. Re-ingest every event in `scripts/elo/season_files/wilds_unknown.xlsx`
      (the smart skip in event_already_ingested() only re-pulls non-finished
      events, so this is cheap on subsequent runs)
+  2b. Ingest any --ids one-offs (hand-added events; see one_off_season below)
   3. Detect + auto-apply high-confidence RPH account renames
   4. Run alias auto-merge for any new player handles
   5. Apply any approved aliases (manual review CSV could be committed)
@@ -46,11 +47,33 @@ def run_soft(cmd: list[str], cwd: Path | None = None) -> None:
         print(f"  ! soft step failed (rc={r.returncode}); continuing refresh", flush=True)
 
 
+def one_off_season() -> str | None:
+    """The season a hand-added event lands in — resolved exactly the way
+    discovery resolves it, so a one-off can't invent a second label for the set
+    that is already running. Returns None if it can't be resolved, which tags the
+    event with a NULL season rather than a wrong one."""
+    sys.path.insert(0, str(ELO_DIR))
+    try:
+        import discover_wu_scs as d
+        import discover_store_scs as ds
+        return ds.season_label_for(d.fetch_current_set())
+    except Exception as e:
+        print(f"  ! couldn't resolve the current season label ({e}); leaving it unset")
+        return None
+
+
 def main() -> None:
     import argparse
     ap = argparse.ArgumentParser()
     ap.add_argument("--xlsx", type=Path, default=SEASON_FILE_DEFAULT)
     ap.add_argument("--season", default=SEASON_LABEL_DEFAULT)
+    ap.add_argument("--ids", nargs="*", type=int, default=[],
+                    help="RPH event ids to ingest as ONE-OFFS. They count toward Elo "
+                         "like any other event, but add each id to ONE_OFF_EVENT_IDS in "
+                         "discover_store_scs.py or its store joins the tracked set and "
+                         "every future set's SCs there get pulled in automatically.")
+    ap.add_argument("--ids-season", default=None,
+                    help="season label for --ids; defaults to the current set's")
     ap.add_argument("--skip-storage", action="store_true",
                     help="don't sync DB with Supabase Storage (for local testing)")
     args = ap.parse_args()
@@ -73,6 +96,19 @@ def main() -> None:
     # live RPH API must never block the weekly recompute; it's idempotent and
     # also re-queues not-yet-played SCs so they fill in once results post.
     run_soft([sys.executable, "discover_store_scs.py", "--ingest"], cwd=ELO_DIR)
+
+    # Hand-added one-offs. This HAS to happen inside this run: the canonical
+    # SQLite is downloaded at the top and uploaded at the bottom, so an ingest
+    # anywhere else is overwritten by the next refresh. Runs after discovery so
+    # the current set's season label already exists to inherit, and before the
+    # rename/alias passes so a new player is merged like any other.
+    if args.ids:
+        label = args.ids_season or one_off_season()
+        print(f"\none-off ingest: {len(args.ids)} event(s), season={label!r}")
+        cmd = [sys.executable, "ingest.py", "--ids", *[str(i) for i in args.ids]]
+        if label:
+            cmd += ["--season", label]
+        run(cmd, cwd=ELO_DIR)
 
     # Detect + apply RPH account renames. RPH has no stable user_id, so a renamed
     # account denormalizes its NEW display name onto historical matches — we re-scan

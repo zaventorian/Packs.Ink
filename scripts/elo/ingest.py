@@ -89,13 +89,20 @@ def ingest_event(event_id, store=None, location=None, event_date=None, season=No
         num_players = tv.get("starting_player_count")
         phases = tv.get("tournament_phases", [])
 
-        # When date wasn't provided (--ids mode), fetch it from the main events API.
-        if event_date is None:
+        # --ids / --urls mode supplies none of the event's metadata, so take what
+        # the events API knows. The store matters as much as the date: without it
+        # a hand-added event is stored with store=NULL and renders nameless in
+        # every list that shows one. (The xlsx and discovery paths pass both, so
+        # this only fills the gap the manual paths leave.)
+        if event_date is None or store is None:
             try:
                 meta = http_get(API_META.format(eid=event_id))
-                raw_dt = meta.get("start_datetime") or ""
-                if raw_dt:
-                    event_date = raw_dt[:10]  # "2026-06-13T15:00:00+00:00" → "2026-06-13"
+                if event_date is None:
+                    raw_dt = meta.get("start_datetime") or ""
+                    if raw_dt:
+                        event_date = raw_dt[:10]  # "2026-06-13T15:00:00+00:00" → "2026-06-13"
+                if store is None:
+                    store = (meta.get("store") or {}).get("name") or None
             except Exception:
                 pass
 

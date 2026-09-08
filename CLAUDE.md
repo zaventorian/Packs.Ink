@@ -1939,6 +1939,40 @@ exactly), overridable with `--season-label`.
   `refresh_elo.py` (current set has ≥1 event, or ≥1 new event in the last N days), not more
   discovery.
 
+### Adding ONE event by hand (2026-09-08)
+
+"Count this event, but not this store" — a guest/out-of-area shop, or an SC discovery
+didn't classify. Two halves, and doing only the first is the trap:
+
+1. **Add the id to `ONE_OFF_EVENT_IDS`** in `discover_store_scs.py`, then
+2. **Actions → ELO weekly refresh → Run workflow**, `event_ids: <id>` (space-separated
+   for several; `event_season` blank inherits the current set's label).
+
+**⚠ The ingest MUST happen inside a refresh run.** The canonical SQLite is downloaded
+from Supabase Storage at the top of `refresh_elo.py` and uploaded at the bottom, so an
+ingest run anywhere else is silently overwritten by the next refresh. That is why this is
+a dispatch input on the existing workflow rather than a script you run on its own.
+
+- **`ONE_OFF_EVENT_IDS` is the "don't count the store" half, and it is not optional.**
+  `tracked_store_ids()` derives scope from every non-ignored event in the DB, so a plain
+  ingest enrols that store — and from the next set on, discovery pulls in every SC it runs,
+  automatically and invisibly. The list keys on the EVENT id, which also means adding one
+  needs no lookup of the store's id.
+- **It is NOT `EXCLUDED_STORE_IDS`.** That one drops a store's events entirely (paired with
+  `is_ignored=1`); here the event fully counts — matches, ratings, the player's rating —
+  and only the STORE is out of scope. Different question, different list.
+- **The one-off is ingested AFTER discovery, BEFORE the rename/alias passes**: after, so
+  the current set's season label already exists to inherit; before, so a player appearing
+  for the first time is merged like any other.
+- **`ingest.py --ids` fills the store name from the events API** (it already fetched that
+  payload for the date). Without it a hand-added event stored `store=NULL` and rendered
+  nameless in every list. The xlsx and discovery paths pass a store explicitly, so this
+  only fills the gap the manual paths left.
+- `event_ids` is validated as digits-and-spaces in the workflow and reaches the shell
+  through `env:`, never interpolated into the command line.
+- Guarded by `python scripts/elo/test_season_seed.py` — a one-off must not track its store,
+  an ordinary event still must, and the one-off must stay in the DB.
+
 ## Chicagoland Elo — Stores tab (2026-08-19)
 
 `EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views). Adding a tab means touching four places: `applyUrlToState`, the state→URL effect, the `.elo-innertabs` nav, and the render list. `eloUrlFor` also has to know the target or `EloLink`'s href points at the wrong view on a middle-click — it deletes `store` along with `p`/`e`/`sub` for exactly that reason. `.elo-innertabs` is `flex-wrap:wrap` — at 5 tabs it clipped on phones, and a clipped tab reads as a deleted feature.

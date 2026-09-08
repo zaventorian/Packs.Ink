@@ -9,7 +9,18 @@ on:
     # Monday 11:00 UTC = 6:00 AM CDT / 5:00 AM CST. Hour past dawn in case
     # any Sunday-night events finish late and the TOs upload Monday morning.
     - cron: "0 11 * * 1"
-  workflow_dispatch: {}      # also runnable on demand from the Actions tab
+  workflow_dispatch:
+    inputs:
+      event_ids:
+        description: "One-off RPH event IDs to ingest (space-separated). Add each to ONE_OFF_EVENT_IDS first, or its store joins the tracked set."
+        required: false
+        default: ""
+        type: string
+      event_season:
+        description: "Season label for those events. Blank = whatever the current set is already using."
+        required: false
+        default: ""
+        type: string
 
 jobs:
   refresh:
@@ -36,5 +47,20 @@ jobs:
           # Override the bucket/object name if you set up something different.
           ELO_DB_BUCKET: elo
           ELO_DB_OBJECT: lorcana_elo.db
+          # Dispatch inputs reach the shell through env, never interpolated into
+          # the command line (same pattern as discover_scs.yml's SET_NAME).
+          EVENT_IDS: ${{ inputs.event_ids }}
+          EVENT_SEASON: ${{ inputs.event_season }}
         run: |
-          python scripts/refresh_elo.py
+          set --
+          if [ -n "$EVENT_IDS" ]; then
+            if [[ ! "$EVENT_IDS" =~ ^[[:space:]]*[0-9]+([[:space:]]+[0-9]+)*[[:space:]]*$ ]]; then
+              echo "::error::event_ids must be one or more numeric IDs separated by spaces"
+              exit 1
+            fi
+            set -- --ids $EVENT_IDS
+          fi
+          if [ -n "$EVENT_SEASON" ]; then
+            set -- "$@" --ids-season "$EVENT_SEASON"
+          fi
+          python scripts/refresh_elo.py "$@"
