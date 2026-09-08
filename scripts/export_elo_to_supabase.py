@@ -164,18 +164,41 @@ def export_players(conn, sb: Supabase, dry: bool) -> int:
     return len(rows)
 
 
+def _has_id_column(conn, sb: Supabase, dry: bool) -> bool:
+    """Both sides have to carry is_intentional_draw before it can be exported.
+
+    Locally it arrives via an ALTER from flag_intentional_draws.py, remotely via
+    migration 135 — and the two land on different days, so an export in between
+    must not fail. Same schema-tolerant probe the client uses for a new column.
+    """
+    local = any(r[1] == "is_intentional_draw"
+                for r in conn.execute("PRAGMA table_info(matches)"))
+    if not local or dry:
+        return local
+    try:
+        sb.select("elo_matches", columns="is_intentional_draw", limit=1)
+        return True
+    except Exception:
+        print("  matches: elo_matches has no is_intentional_draw yet "
+              "(apply supabase/135) — exporting without it")
+        return False
+
+
 def export_matches(conn, sb: Supabase, dry: bool) -> int:
+    id_col = "is_intentional_draw, " if _has_id_column(conn, sb, dry) else ""
     rows = fetch_all(
         conn,
-        """
+        f"""
         SELECT match_id, event_id, round_id, round_number, round_type,
                table_number, player1_id, player2_id, winner_id,
-               games_won_p1, games_won_p2, is_bye, source
+               games_won_p1, games_won_p2, is_bye, {id_col}source
         FROM matches
         """,
     )
     for r in rows:
         r["is_bye"] = to_bool(r["is_bye"])
+        if "is_intentional_draw" in r:
+            r["is_intentional_draw"] = to_bool(r["is_intentional_draw"])
     if dry:
         print(f"  matches: {len(rows)} rows; first: {rows[0] if rows else None}")
         return len(rows)
