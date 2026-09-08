@@ -44,7 +44,7 @@ MATCH_COLS = """m.match_id, m.event_id, m.round_number, m.table_number, m.is_bye
                 m.games_won_p1, m.games_won_p2"""
 
 
-def cut_rounds(round_sizes):
+def cut_rounds(round_sizes, drawn_rounds=()):
     """Round numbers belonging to the single-elimination top cut.
 
     phase_type ('SWISS' / 'RANKED_SINGLE_ELIMINATION') is only stored for GAP
@@ -52,11 +52,25 @@ def cut_rounds(round_sizes):
     single final, Swiss rounds hold roughly the same count. Walk back from the
     end expecting 1, 2, 4, 8 ... and stop as soon as a round repeats its
     predecessor's size, which is Swiss and never elimination.
+
+    ⚠ A round holding a DRAWN match is never elimination — single elimination
+    has to produce a winner — so the walk stops there too. Counting alone is not
+    enough: a Swiss round can land on the very count the walk is expecting once
+    players drop (a 23-player event with 8 matches left in R5, sitting above a
+    4/2/1 cut, reads as a round of 16), and the round it swallows is always the
+    LAST Swiss round — precisely where the IDs are. That silently discarded 86
+    draws as `in-cut`, among them e200747 R5, a confirmed ID.
+
+    The stop preserves rounds already collected, so a bogus draw row inside a
+    genuine cut costs only that round, not the whole bracket.
     """
     nums = sorted(round_sizes)
+    drawn = set(drawn_rounds)
     cut, want = set(), 1
     for i in range(len(nums) - 1, -1, -1):
         rn = nums[i]
+        if rn in drawn:
+            break
         if round_sizes[rn] != want:
             break
         if i > 0 and round_sizes[nums[i - 1]] == want:
@@ -128,7 +142,9 @@ def classify(rows, places, id_window=2, rule="position-only"):
     draws, cut_of, cut_size, entering, no_cut = [], {}, {}, {}, set()
     for eid, ms in by_event.items():
         sizes = Counter(m["round_number"] for m in ms if not m["is_bye"])
-        cut = cut_rounds(dict(sizes))
+        drawn_rounds = {m["round_number"] for m in ms
+                        if not m["is_bye"] and m["winner_id"] is None}
+        cut = cut_rounds(dict(sizes), drawn_rounds)
         cut_of[eid] = cut
         swiss = sorted(set(sizes) - cut)
         # the first cut round pairs the whole cut, so 2x its matches is the size

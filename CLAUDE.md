@@ -2106,10 +2106,25 @@ FLAT for that match.
   the verdict, because which gate rejected a draw is the whole answer), `--event`, `--since`.
   Neither it nor the probe needs a laptop: **Actions → ELO draw report** runs both against the
   canonical DB with no flag write, no export and no upload, so it cannot race the weekly refresh.
-- Two open items, neither blocking: **86 draws land `in-cut`** (elimination cannot draw — either
-  RPH rows are wrong or `cut_rounds()` misfires on small events whose Swiss rounds shrink 8→4→2→1
-  and look like a cut), and **184 of 840 events recorded no cut at all**, so contention is
+- **⚠ A round holding a draw is NEVER elimination, and `cut_rounds()` has to be told so.**
+  The cut is inferred by walking back from the last round expecting 1, 2, 4, 8 … matches, since
+  `phase_type` is stored only for GAP rounds. Counting alone cannot work: once players drop, a
+  Swiss round lands on the very count the walk wants (a 23-player event with 8 matches left in
+  R5, above a 4/2/1 cut, reads as a round of 16) — and the round it swallows is always the **LAST
+  Swiss round, precisely where the IDs are**. Those draws were discarded as `in-cut` before any
+  rule saw them: **86 across the DB**, including `e200747` R5, a confirmed ID Zaven reported as
+  missing from his own profile. Single elimination must produce a winner, so a drawn match is the
+  tiebreaker the count cannot supply and the walk stops there. The stop KEEPS rounds already
+  collected, so a bogus draw row inside a genuine cut costs only its own round, not the bracket.
+- One open item, not blocking: **184 of 840 events recorded no cut at all**, so contention is
   unanswerable there and their 190 closing draws can only ever be `unclear`.
+- **The board says `ID`, not `DRAW`** (migration 136). The only visible sign an ID had been
+  honoured was its Elo Δ sitting at `+0.0` — exactly the thing a reader has to already know to
+  notice. `elo_player_rounds_v` carries `is_intentional_draw` through to the profile's
+  round-by-round table and the H2H table; the pill reads ID in its own colour, titled with the
+  fact that it moved neither rating. The client asks for the column and **retries without it on
+  42703**: the migration lands on Zaven's schedule, and a missing column 400s the whole select,
+  which would blank the profile rather than degrade it.
 - Guarded by `python scripts/elo/test_intentional_draws.py`.
 
 ## Chicagoland Elo — Stores tab (2026-08-19)
@@ -2335,6 +2350,12 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
+- **`supabase/136_elo_player_rounds_intentional_draw.sql`** — STAGED, not applied. Appends
+  `is_intentional_draw` to `elo_player_rounds_v` so the profile prints `ID` instead of `DRAW`.
+  `create or replace view` (not drop+create — the view may have dependents, and replace allows a
+  column appended at the END); the body is migration 62's verbatim plus one trailing column per
+  UNION half, `false` on the bye half. Safe to ship the client first — the fetch retries without
+  the column on 42703.
 - ~~`supabase/135_elo_intentional_draws.sql`~~ — **APPLIED 2026-09-08 by Zaven; verified** (`information_schema.columns` shows `is_intentional_draw` boolean default false on `elo_matches`). Adds the column the site needs to SAY a draw was agreed. **Live since the 2026-09-08 refresh** — `refresh_elo.py` flags before `elo.py` on every run, and the first `position-only` pass flagged **1167 of 2548** draws (784 ID-strong, 383 ID-likely).
 - ~~`supabase/132_scan_samples_public_beta.sql`, `133_anon_write_backstop.sql`, `134_public_release_hardening.sql`~~ — **APPLIED 2026-09-05 by Zaven**, the diagnostics file first and then the three in order (the agent had no DB access that day, so the diagnostics output was not reviewed; the migrations were staged by the 2026-09-04 public-release audit). 132 = scan-photo upload gate + per-user storage cap (see the scanner section). 133 = the anonymous-write rate limits (`create_trade`, `submit_feedback`) keyed on the FIRST hop of `X-Forwarded-For`, which the caller controls — 133 prefers `cf-connecting-ip` (falls back to today's behaviour if absent) and adds a global hourly backstop; its header says how to confirm which header carries the real client IP. 134 = grant/RLS hygiene (revoke EXECUTE from PUBLIC on ~16 functions, drop `notes` from the shared-collection RPCs, narrow the anon `profiles` column grant, `avatar_url` CHECK, `report_graded_sale` caps, search_path pin, backup-table drop). `supabase/diagnostics/public_release_live_checks.sql` is the read-only companion: paste it FIRST — it answers what the repo cannot (live `scan_samples` policies, the two live-only Elo RPC bodies, PUBLIC-executable functions, which header carries the client IP).
 - **`supabase/131_market_index_timeout_pin.sql`** — STAGED, not applied. **This is what makes step 2 possible at all**, so apply it BEFORE trying the populate. 130 pinned the refresh's `statement_timeout` with an in-body `set local`, which cannot work: `statement_timeout` is armed when the outer `select refresh_market_index()` begins, and changing the GUC part-way through does not re-arm the running timer — so the refresh died at the role default (measured: 8s → 57014, reproducibly, every attempt). Every refresh function that WORKS pins it as a **function-level `SET` clause** instead (migration 25, restored by 109). Proof it is the placement and nothing else: `refresh_price_movers` carries the identical `begin … exception … end` sub-block, pins at the function level, and completed a **38-second** refresh over the same PostgREST path with the same key. **Read the migration-109 lesson as "pin it as a function-level SET clause", not merely "pin it".** 131 also swaps the exception-driven CONCURRENTLY probe for an explicit `relispopulated` check, since on a WITH-NO-DATA matview the first CONCURRENTLY attempt is guaranteed to raise and the happy path was an error path. **Two steps**: paste 131, then run `select public.refresh_market_index();` separately (first run is non-concurrent and slow). After that the ETL selfheal job keeps it current — the "Refresh market index" step is `continue-on-error` on purpose, per the rule that this one refresh must stay optional.
