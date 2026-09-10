@@ -1948,6 +1948,95 @@ SELECT public.refresh_graded_prices_latest();
 - **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
 
+## Amazon Associates (approved 2026-09-10, tag `packsink-20`)
+
+Amazon **complements** TCGplayer here rather than competing with it, and the split is
+clean enough to state as a rule: **TCGplayer owns singles, Amazon owns everything
+TCGplayer barely stocks** — sealed gift sets, the Ravensburger jigsaw puzzles, and above
+all **accessories**, a category the site had never monetised at all. So an Amazon link is
+ADDED beside a TCGplayer one, never in place of it.
+
+### ⚠ LINK-ONLY — no prices, no images, ever
+
+This is a compliance boundary, not an unfinished feature. Amazon's Operating Agreement
+permits displaying a price only when it is fetched **live** from their API and caps the
+cache at **one hour** for prices and availability; product images may **not be stored at
+all**. (PA-API 5 was shut off 2026-05-15; the Creators API replaced it — and it does not
+issue keys until the account has cleared its first 3 qualifying sales.) This site's whole
+data flow is `ETL → Supabase → localStorage` on 12–24h TTLs, so an Amazon price here would
+be both stale and non-compliant the moment it was written.
+
+**Adding an Amazon price is the one change that could cost the account.** `scripts/test_amazon_links.mjs`
+asserts the catalog holds nothing but ASINs and keys, specifically to make that regression loud.
+
+### ⚠ The 180-day / 3-sale probation clock
+
+Approval is **conditional**: a new Associates account must produce **3 qualifying sales
+within 180 days** (so, by **~2027-03-09**) or Amazon closes it and you reapply from
+scratch. That is the reason Gear exists and is not a "later" — a $12 pack of sleeves is
+an impulse buy, a $120 booster box is a considered purchase, and the clock only counts
+sales.
+
+### How a link is resolved
+
+`amazonForSealed(product, setName)` → `{url, exact}`, three passes, cheapest first:
+
+1. **A token rule** (`AMAZON_SEALED_RULES`) — for one-of-a-kind products (gift sets, the
+   collector's editions) and for starter decks, which come **two per set** and so cannot be
+   addressed by set alone. First match wins, so the specific rule goes above the general one.
+2. **Set × display type** (`AMAZON_ASIN_BY_SET`) — the reliable bulk of it, since
+   `deriveSealedDisplayType` already classifies every row. A new set is one line.
+3. **A tagged search** on the product's own name. A search URL commissions exactly like a
+   product URL, so coverage is 100% from day one and each curated ASIN merely upgrades a
+   product from "the right shelf" to "the right box".
+
+- **⚠ Rules match on TOKENS, never on a whole name.** The names are TCGplayer's, the ASINs
+  are Amazon's, and the two houses punctuate differently ("Disney Lorcana: Azurite Sea -
+  Collector's Gift Set" vs "Azurite Sea Stitch Collector's Gift Set"). An exact-key map
+  would look correct and match nothing.
+- **`exact` decides the LABEL, and that matters.** A curated ASIN says "Amazon"; a search
+  says "**Find on** Amazon", because a search cannot promise the product page it lands on.
+- **⚠ A set name typo'd against `MAINLINE_SETS` can never match** — that set silently
+  serves a search link forever while looking curated. The guard test cross-checks every key.
+
+### Where it is wired
+
+- **Sealed detail modal** — a secondary outlined button beside TCGplayer's filled one.
+- **EV tool's box-price row** — a small link under the price. This is the one moment on the
+  site where somebody has just been told cracking is +EV, so a box link answers the question
+  actually on screen. **No price beside it** — that column is a TCGplayer number.
+- **Puzzle tiles** — the tile's link now goes to Amazon. Its old `buy_url` was
+  ravensburger.us's whole-**category** landing page: not the product, and not monetised, so
+  Amazon wins on UX and revenue at once. The Ravensburger link stays in the modal for the two
+  Disney-Store exclusives. **Pins and lore counters are NOT sold** (`buy_url` null by design)
+  and stay linkless — a checklist is what a collector wants there.
+- **Gear** (`LORCANA_GEAR` + `GearPanel`) — a home panel, right rail, with the standard
+  pop-out. Sleeves / portfolios / deck boxes, all **first-party Ravensburger**: third-party
+  sleeves outsell them and pay the same, but a fan site naming a brand it has not tested is
+  making a claim, whereas listing the official line is a catalogue. Appended rather than
+  hoisted for existing browsers — a shop box has not earned the right to shove somebody's
+  layout around, unlike the at-the-table shortcuts that did.
+
+### Disclosure
+
+**"As an Amazon Associate I earn from qualifying purchases"** is a required string — verbatim,
+not copy to polish. It is in the footer, in `privacy.html`, in the Gear panel and beside the
+sealed modal's buy row. The FTC wants it **near the links**, not only in a footer, which is
+why the two Amazon-bearing surfaces each carry their own. Every Amazon anchor is
+`rel="noopener nofollow sponsored"`.
+
+### The ASINs are unverified by CI, deliberately
+
+Every ASIN was read off a public listing; **nothing in CI can reach amazon.com**, and Amazon
+bot-challenges anything that looks automated. `node scripts/verify_amazon_asins.mjs` (run it
+from an ordinary machine) fetches each one and reports `OK` / `CHECK` / `BLOCKED` / `GONE`.
+A wrong ASIN is not dangerous — it lands on some other real Ravensburger product — but it
+costs the click, and nothing else in the codebase can tell. It is **not wired into CI**: a red
+job everyone learns to ignore is worse than a script you run when you touch the catalog.
+
+Guarded by `node scripts/test_amazon_links.mjs`.
+
+
 ## Ops
 
 ### ETL reliability (post 2026-05-24 rework)
