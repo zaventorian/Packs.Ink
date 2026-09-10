@@ -48,10 +48,13 @@ const moduleSrc = [
   grab("const AMAZON_PUZZLE_ASINS = {", NL + "};"),
   grabLine("const _amznNorm = "),
   grab("function amazonForSealed(product, setName){", NL + "}"),
+  grab("const SEALED_PUZZLES = [", "}));"),
   grab("const LORCANA_GEAR = [", NL + "];"),
+  grab("const AMAZON_DIR_SETS = [", NL + "];"),
+  grab("function amazonDirectory(){", NL + "}"),
   "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed,",
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
-  "  LORCANA_GEAR, MAINLINE_SETS};",
+  "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory};",
 ].join(NL);
 
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -195,15 +198,61 @@ ok("every gear item links with the tag",
     m.amazonUrl(it.asin).includes("tag=packsink-20"))));
 
 // ── The compliance boundary ─────────────────────────────────────────────────
-// Amazon's licence permits a displayed price only when fetched live (<=1h
-// cache) and forbids storing their images at all. This site is an ETL +
-// localStorage cache, so it must never hold either. Assert the catalog carries
-// nothing that looks like a price or an image URL.
+// An Amazon price or image may only ever come from Amazon's own API, and we
+// hold no Creators API keys. So a price or an image URL appearing in this
+// static catalog means somebody typed one in by hand off a listing — which is
+// exactly the unlicensed use that costs accounts. Assert there are none.
+// (This does NOT forbid prices forever — see the amazonUrl comment for the
+// terms that apply once keys exist. It forbids hand-copied ones.)
 const gearBlob = JSON.stringify(m.LORCANA_GEAR);
 ok("gear stores no prices", !/\$|\bprice\b/i.test(gearBlob));
 ok("gear stores no image URLs", !/https?:\/\//i.test(gearBlob));
 const catalogBlob = JSON.stringify([m.AMAZON_ASIN_BY_SET, m.AMAZON_SEALED_RULES, m.AMAZON_PUZZLE_ASINS]);
 ok("the ASIN catalog stores nothing but ASINs and keys", !/https?:\/\/|\$/.test(catalogBlob));
+
+// ── The /gear directory ─────────────────────────────────────────────────────
+// It is BUILT from the same maps the resolver reads, so the thing to guard is
+// that the build stayed faithful — not the data, which is already covered.
+const dir = m.amazonDirectory();
+ok("the directory has sections", dir.length >= 6, "only " + dir.length);
+ok("every section has a title and items",
+  dir.every((s) => s.title && s.items && s.items.length > 0));
+ok("every directory item has a name and a tagged link",
+  dir.every((s) => s.items.every((it) =>
+    it.name && it.url && it.url.includes("tag=packsink-20"))),
+  JSON.stringify(dir.flatMap((s) => s.items).filter((it) => !it.name || !it.url).slice(0, 3)));
+
+// The one that matters: a curated ASIN that never reaches the page is money
+// left on the table AND invisible — nothing renders it, so nobody notices.
+const asinOf = (u) => (u.match(/\/dp\/([A-Z0-9]{10})/) || [])[1];
+const onPage = new Set(dir.flatMap((s) => s.items.map((it) => asinOf(it.url))));
+const missing = all.map(([, a]) => a).filter((a) => !onPage.has(a));
+ok("every curated ASIN appears on the /gear page",
+  missing.length === 0, missing.join(", "));
+ok("…and the page invents none", [...onPage].every((a) => seen.has(a)),
+  [...onPage].filter((a) => !seen.has(a)).join(", "));
+
+// A rule with no label is silently dropped from the directory, so its ASIN
+// would fail the check above — but name the real cause rather than the symptom.
+const unlabelled = m.AMAZON_SEALED_RULES.filter((r) => !r.label || !r.group);
+ok("every sealed rule carries a label and a group",
+  unlabelled.length === 0, JSON.stringify(unlabelled.map((r) => r.tokens)));
+ok("rule groups are ones the directory renders",
+  m.AMAZON_SEALED_RULES.every((r) => r.group === "gift" || r.group === "deck"),
+  JSON.stringify([...new Set(m.AMAZON_SEALED_RULES.map((r) => r.group))]));
+
+// Sets run newest-first: a shopper wants the current set, not The First Chapter.
+const boxes = dir.find((s) => s.title === "Booster boxes");
+ok("booster boxes run newest first",
+  boxes && boxes.items[0].name === "Wilds Unknown",
+  boxes && boxes.items[0].name);
+
+// Same no-prices/no-images rule as the static catalog, now over what RENDERS.
+const dirBlob = JSON.stringify(dir);
+ok("the directory renders no prices", !/\$[0-9]/.test(dirBlob));
+ok("the directory renders no image URLs",
+  !/https?:\/\/(?!www\.amazon\.com\/dp\/)/.test(dirBlob),
+  (dirBlob.match(/https?:\/\/[^"]+/g) || []).filter((u) => !u.includes("/dp/")).slice(0, 3).join(" "));
 
 console.log(NL + (failed ? failed + " FAILED" : "all passed"));
 process.exit(failed ? 1 : 0);

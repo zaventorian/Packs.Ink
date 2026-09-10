@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=379">
+<link rel="stylesheet" href="styles.css?v=380">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2893,17 +2893,30 @@ const tcgSetSearchUrl = (setName) => {
 // site monetised at all before today. So Amazon is ADDED beside a TCGplayer
 // link, never in place of one.
 //
-// ⚠ LINK-ONLY, and that is a compliance boundary rather than an omission.
-// Amazon's Operating Agreement permits displaying a price only when it comes
-// live from their API, and caps the cache at ONE HOUR for prices and
-// availability; product images may not be stored at all. (PA-API 5 was shut
-// off 2026-05-15; the Creators API replaced it, and it needs 3 qualifying
-// sales before the keys issue at all.) This site's entire data flow is
-// ETL → Supabase → localStorage with 12–24h TTLs, so an Amazon price here
-// would be both stale and non-compliant the moment it was written. Hence:
-// no Amazon prices, no Amazon images, no Amazon-derived data of any kind.
-// A link and a product name, nothing more. Do not "improve" this by adding
-// a price — it is the one change that could cost the account.
+// ⚠ LINK-ONLY TODAY — because we have no API ACCESS, not because prices and
+// photos are forbidden forever. That distinction is worth stating exactly,
+// since "we can never show a price" is wrong and would stop someone building
+// the right thing later:
+//
+//   · Every Amazon price, image or product fact displayed on a site has to
+//     be Program Content fetched from Amazon's own API. PA-API 5 was retired
+//     2026-05-15 and the CREATORS API replaced it, gated on qualifying sales
+//     (reported at 10 in 30 days). We have no keys, so today there is no
+//     lawful source for an Amazon price or photo — that is the whole reason.
+//   · Non-image content, prices included, may be cached for up to 24 HOURS,
+//     and must be refreshed by a fresh API call immediately after.
+//   · An image may NOT be stored or cached at all, but a LINK to one may be
+//     held for up to 24 hours — so you hot-link Amazon's CDN, never our own
+//     storage and never the /img-proxy the card art rides.
+//   · A displayed price must carry its "as of" timestamp and a buy link.
+//   · Scraping is prohibited outright by Amazon's Conditions of Use, so
+//     there is no non-API shortcut. A scraper would risk the account itself
+//     for data the API hands over once we qualify.
+//
+// When the keys do land: refresh DAILY with a visible as-of stamp, and keep
+// the value out of the catalog cache and the offline mirrors — those have no
+// 24h ceiling once a client goes offline, which is exactly how a compliant
+// price becomes a non-compliant one while nobody is looking.
 //
 // The TAG is the only part that carries the commission. SiteStripe pastes a
 // `ref=`/`linkId=`/`gaOptInStatus=` trail alongside it; those are its own
@@ -11808,6 +11821,8 @@ function EVView({raw, sets, avgs, nc, setNc,
       ${hist.status === "error" && ("History unavailable: " + hist.error)}
       ${hist.status === "empty" && "No historical data yet — check back after the next daily update."}
       ${hist.status === "ready" && `Prices via TCGCSV (TCGplayer ${useMarket?"NM Market":"Low"}). Change windows compare ${hist.latest} against earlier snapshots.`}
+      ${" "}Box-price and Amazon links are affiliate links — we may earn a commission
+      at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.
     </p>
   </div>`;
 }
@@ -12140,25 +12155,45 @@ const AMAZON_ASIN_BY_SET = {
   },
 };
 const AMAZON_SEALED_RULES = [
+  // `group` and `label` exist for the /gear directory, which lists these by
+  // hand rather than resolving them from a product row — a directory has no
+  // sealed_products row to hand the resolver, and duplicating the ASINs into a
+  // second list is exactly the drift the guard test forbids. `tokens` remain
+  // the only thing matching ever looks at.
   // Gift sets and collector's editions — the category Amazon carries best and
   // TCGplayer carries worst, so these are the rows most worth a second link.
-  {tokens:["azurite", "stitch"],              asin:"B0DK5WC19T"},
-  {tokens:["d100"],                           asin:"B0CLQR9D3N"},
-  {tokens:["first chapter", "gift set"],      asin:"B0CD2Z93GM"},
-  {tokens:["inklands", "gift set"],           asin:"B0CFR98C1G"},
-  {tokens:["elsa", "gift box"],               asin:"B0DTK2D12T"},
-  {tokens:["collection starter", "stitch"],   asin:"B0GHPRLZ7B"},
-  {tokens:["collection starter"],             asin:"B0FM8FBTNM"},
+  {tokens:["azurite", "stitch"],              asin:"B0DK5WC19T", group:"gift",
+   label:"Azurite Sea · Stitch Collector's Gift Set"},
+  {tokens:["d100"],                           asin:"B0CLQR9D3N", group:"gift",
+   label:"D100 Collector's Edition Gift Set"},
+  {tokens:["first chapter", "gift set"],      asin:"B0CD2Z93GM", group:"gift",
+   label:"The First Chapter Gift Set"},
+  {tokens:["inklands", "gift set"],           asin:"B0CFR98C1G", group:"gift",
+   label:"Into the Inklands Gift Set"},
+  {tokens:["elsa", "gift box"],               asin:"B0DTK2D12T", group:"gift",
+   label:"Elsa Gift Box"},
+  {tokens:["collection starter", "stitch"],   asin:"B0GHPRLZ7B", group:"gift",
+   label:"Collection Starter Set · Stitch Edition (Winterspell)"},
+  {tokens:["collection starter"],             asin:"B0FM8FBTNM", group:"gift",
+   label:"Collection Starter Set (Fabled)"},
   // Starter decks: two per set, one per ink pair, so they are addressed by
   // their ink pair rather than by their set alone.
-  {tokens:["ursula", "sapphire", "steel"],    asin:"B0CFRBX7GW"},
-  {tokens:["azurite", "amber", "ruby"],       asin:"B0DJT13VSX"},
-  {tokens:["azurite", "emerald", "sapphire"], asin:"B0DJSZ79T7"},
-  {tokens:["archazia", "amethyst", "steel"],  asin:"B0DDL6BJDS"},
-  {tokens:["archazia", "ruby", "sapphire"],   asin:"B0DDL8HJ2M"},
-  {tokens:["first chapter", "ruby", "emerald"], asin:"B0BT6NK58G"},
-  {tokens:["wilds unknown", "2 player"],      asin:"B0GWDXZ12H"},
-  {tokens:["2 player starter"],               asin:"B0GWKJS7BG"},
+  {tokens:["ursula", "sapphire", "steel"],    asin:"B0CFRBX7GW", group:"deck",
+   label:"Ursula's Return · Sapphire & Steel"},
+  {tokens:["azurite", "amber", "ruby"],       asin:"B0DJT13VSX", group:"deck",
+   label:"Azurite Sea · Amber & Ruby"},
+  {tokens:["azurite", "emerald", "sapphire"], asin:"B0DJSZ79T7", group:"deck",
+   label:"Azurite Sea · Emerald & Sapphire"},
+  {tokens:["archazia", "amethyst", "steel"],  asin:"B0DDL6BJDS", group:"deck",
+   label:"Archazia's Island · Amethyst & Steel"},
+  {tokens:["archazia", "ruby", "sapphire"],   asin:"B0DDL8HJ2M", group:"deck",
+   label:"Archazia's Island · Ruby & Sapphire"},
+  {tokens:["first chapter", "ruby", "emerald"], asin:"B0BT6NK58G", group:"deck",
+   label:"The First Chapter · Ruby & Emerald"},
+  {tokens:["wilds unknown", "2 player"],      asin:"B0GWDXZ12H", group:"deck",
+   label:"Wilds Unknown · 2-Player Deck"},
+  {tokens:["2 player starter"],               asin:"B0GWKJS7BG", group:"deck",
+   label:"2-Player Starter Deck"},
 ];
 // Puzzle SKU → ASIN. The 1000-piece "Glimmers of the Realm" series is on
 // Amazon; the three 300-piece character puzzles are not, and fall through to
@@ -19940,6 +19975,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       readOnly=${readOnly}
       setName=${selectedProduct.set_id ? (setNameById[selectedProduct.set_id] || null) : null}
       onClose=${()=>setSelectedProduct(null)}/>`}
+    <p class="sealed-coll-affiliate muted">
+      Buy links are affiliate links — TCGplayer for sealed product, Amazon for the
+      puzzles. We may earn a commission at no extra cost to you. As an Amazon
+      Associate I earn from qualifying purchases.
+    </p>
   </div>`;
 }
 
@@ -25898,7 +25938,8 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>On iPhone and Android, tap the <strong>install</strong> button (a phone with a down-arrow) in the top-right of the page for step-by-step instructions. On desktop Chrome or Edge, use the install icon in the address bar. Once installed, Packs.Ink opens in its own window/app icon with a faster startup and home-screen presence.</p>
 
     <h2>Affiliate disclosure</h2>
-    <p>Packs.Ink participates in the TCGplayer Affiliate Program. As a TCGplayer Affiliate, we earn a commission from qualifying purchases made through TCGplayer links on this site (the price-tag buttons on every card). This costs you nothing extra and helps keep the site running. Thanks for clicking through!</p>
+    <p>Packs.Ink participates in the TCGplayer Affiliate Program and the Amazon Associates Program. We earn a commission from qualifying purchases made through TCGplayer links (the price-tag buttons on every card) and through Amazon links (sealed product, the Ravensburger puzzles, and the sleeves, portfolios and deck boxes listed on <a href="/gear">Lorcana on Amazon</a>). <strong>As an Amazon Associate I earn from qualifying purchases.</strong> This costs you nothing extra and helps keep the site running. Thanks for clicking through!</p>
+    <p>We show no prices, photos or other data from Amazon anywhere on this site — Amazon licenses that only through their product API, which we don't hold keys to. Every Amazon price you see is on Amazon's own page, after you follow a link.</p>
 
     <h2 id="privacy">Privacy & terms</h2>
     <p>The full, current policy lives at <a href="/privacy" style=${{color:"var(--accent)"}}>packs.ink/privacy</a> — what we store, the card-scanner photo notice, the graded-data terms of use, the general terms of use, and how to delete your account. In short: browsing needs no account; signing in stores your Google email and display name; only the features you actually use store anything; we never sell data.</p>
@@ -34805,9 +34846,9 @@ const HOME_TOOL_ICONS = {
 // tested; listing the official line is a catalogue, which is what a checklist
 // site is for. The capacities are Ravensburger's own published specs.
 //
-// ⚠ No prices and no thumbnails, same rule as everywhere else Amazon appears
-// here — their licence permits a price only when fetched live, and forbids
-// storing product images at all. Text and a link.
+// ⚠ No prices and no thumbnails, for the reason given at amazonUrl: we hold
+// no Creators API keys, and the API is the only lawful source for either.
+// Text and a link until that changes.
 const LORCANA_GEAR = [
   {group: "Sleeves", note: "65 per pack — one pack sleeves a 60-card deck", items: [
     {asin: "B0CSZ5FJSV", name: "Lorcana card-back art"},
@@ -34828,6 +34869,124 @@ const LORCANA_GEAR = [
     {asin: "B0DKJSYRRG", name: "Premium deck box", meta: "100 sleeved cards"},
   ]},
 ];
+// The /gear page's contents, assembled from the SAME maps the resolver uses.
+// Deliberately derived rather than hand-listed: a second list of ASINs would
+// drift from the first, and the guard test's "no ASIN used twice" check would
+// not catch it — a duplicate across two lists that are supposed to agree is
+// not a duplicate, it is a fork.
+//
+// Sets run NEWEST FIRST. MAINLINE_SETS is release order, so the sections
+// reverse it: somebody shopping wants the current set, not The First Chapter.
+const AMAZON_DIR_SETS = [
+  {type: "Booster Boxes",        title: "Booster boxes",
+   note: "24 packs · 288 cards"},
+  {type: "Illumineer's Troves",  title: "Illumineer's Troves",
+   note: "Storage box, booster packs, damage dice and a lore counter"},
+  {type: "Booster Packs",        title: "Single booster packs",
+   note: "12 cards"},
+];
+function amazonDirectory(){
+  const out = [];
+  const newestFirst = MAINLINE_SETS.slice().reverse();
+  for(const sec of AMAZON_DIR_SETS){
+    const bySet = AMAZON_ASIN_BY_SET[sec.type] || {};
+    const items = newestFirst
+      .filter(setName => bySet[setName])
+      .map(setName => ({name: setName, url: amazonUrl(bySet[setName])}));
+    if(items.length) out.push({title: sec.title, note: sec.note, items});
+  }
+  const rules = (group) => AMAZON_SEALED_RULES
+    .filter(r => r.group === group && r.label)
+    .map(r => ({name: r.label, url: amazonUrl(r.asin)}));
+  const decks = rules("deck");
+  if(decks.length) out.push({title: "Starter decks", note: "Ready to play out of the box", items: decks});
+  const gifts = rules("gift");
+  if(gifts.length) out.push({title: "Gift sets & collector's editions", items: gifts});
+  // Puzzle names come from SEALED_PUZZLES, which already keys them by the same
+  // Ravensburger SKU — so a renamed puzzle renames here for free.
+  const puzzleName = {};
+  for(const pz of SEALED_PUZZLES) puzzleName[pz.tcgplayer_product_id - 900000000] = pz.name;
+  const puzzles = Object.entries(AMAZON_PUZZLE_ASINS)
+    .map(([sku, asin]) => ({name: puzzleName[sku] || ("Puzzle " + sku), url: amazonUrl(asin)}))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  if(puzzles.length) out.push({title: "Jigsaw puzzles", note: "Ravensburger · 1000 pieces", items: puzzles});
+  for(const sec of LORCANA_GEAR){
+    out.push({title: sec.group, note: sec.note, items: sec.items.map(it => ({
+      name: it.name, meta: it.meta, url: amazonUrl(it.asin),
+    }))});
+  }
+  return out;
+}
+// The page. A DIRECTORY, not a storefront — no prices and no photos, because
+// the only lawful source for either is an API we have no keys to (see the
+// amazonUrl comment). Saying that plainly at the top is better than a page
+// that looks like a shop with the prices mysteriously missing.
+// A slim, permanently-dismissible pill on the home page pointing at /gear.
+// BOTTOM-LEFT deliberately: the flash toast and the offline pill are both
+// bottom-CENTRE, so this is the one free corner and the three can never stack.
+//
+// It is the only advertising-shaped thing on the site, which is why the × is
+// not a "later" — it writes a permanent flag on first click. A shop prompt you
+// cannot turn off is the kind of thing that makes a fan site feel sold.
+const HomeGearBar = ({onOpen}) => {
+  const [gone, setGone] = useState(() => {
+    try { return localStorage.getItem("packsink:gearBarDismissed") === "1"; }
+    catch { return false; }
+  });
+  if(gone) return null;
+  const dismiss = () => {
+    try { localStorage.setItem("packsink:gearBarDismissed", "1"); } catch {}
+    setGone(true);
+  };
+  return html`<div class="gear-bar">
+    <a class="gear-bar-link" href="/gear" onClick=${navHandler(() => onOpen && onOpen())}
+      title="Lorcana sleeves, portfolios and deck boxes on Amazon">
+      ${uiIcon("cart", 15)}
+      <span class="gear-bar-txt">Sleeves, binders & deck boxes</span>
+    </a>
+    <button class="gear-bar-x" onClick=${dismiss}
+      aria-label="Hide this for good" title="Hide this for good">\u2715</button>
+  </div>`;
+};
+function GearView(){
+  const sections = useMemo(() => amazonDirectory(), []);
+  const count = sections.reduce((n, s) => n + s.items.length, 0);
+  return html`<div class="faq-section gear-page">
+    <h1 class="gear-page-h1">Lorcana on Amazon</h1>
+    <p class="gear-page-lede">
+      Every Lorcana product we can point you at on Amazon — ${count} of them, kept by
+      hand. Sealed boxes and gift sets sit beside TCGplayer rather than instead of it;
+      the sleeves, portfolios and deck boxes are here because TCGplayer barely stocks
+      them.
+    </p>
+    <p class="gear-page-note muted">
+      No prices or photos on this page: Amazon only licenses those through their
+      product API, and we don't hold keys to it. Follow a link for the live price.
+      Links are affiliate links — as an Amazon Associate I earn from qualifying
+      purchases, at no extra cost to you.
+    </p>
+    ${sections.map(sec => html`<section key=${sec.title} class="gear-sec">
+      <h2 class="gear-sec-title">
+        ${sec.title}
+        ${sec.note && html`<span class="gear-sec-note muted">${sec.note}</span>`}
+      </h2>
+      <ul class="gear-grid">
+        ${sec.items.map(it => html`<li key=${it.url}>
+          <a class="gear-link" href=${it.url} target="_blank" rel="noopener nofollow sponsored">
+            <span class="gear-link-name">${it.name}</span>
+            ${it.meta && html`<span class="gear-link-meta muted">${it.meta}</span>`}
+            <span class="gear-link-ext" aria-hidden="true">↗</span>
+          </a>
+        </li>`)}
+      </ul>
+    </section>`)}
+    <p class="gear-page-foot muted">
+      Missing something, or a link landing on the wrong product? Use the feedback
+      button below — the list is maintained by hand, so it is only as good as what
+      gets reported.
+    </p>
+  </div>`;
+}
 const GearPanel = ({panelNav}) => {
   const [collapsed, setCollapsed] = useState(() => {
     try { return localStorage.getItem("packsink:home:gearCollapsed") === "1"; }
@@ -35096,6 +35255,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const goScreener   = openView ? (()=>openView("screener"))   : null;
   const goCollection = openView ? (()=>openView("collection")) : null;
   const goFollowing  = openDecksSection ? (()=>openDecksSection("following")) : null;
+  const goGear       = openView ? (()=>openView("gear"))       : null;
   // Build a Screener filter payload from the home banner's current state.
   // - "chase"   → rarities = Enchanted/Iconic/Epic, sort by current window
   // - "rareLeg" → rarities = Rare/Super Rare/Legendary
@@ -35660,9 +35820,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     gradedOwned: goCollection && {href: "/collection", go: goCollection,
                                  cta: "Open your graded collection"},
     news:        null,
-    // Gear has no section of the site behind it, so like the news feed its
-    // title pops the panel out at every width rather than navigating.
-    gear:        null,
+    gear:        goGear && {href: "/gear", go: goGear,
+                                 cta: "Open Lorcana on Amazon"},
   };
   const panelCta = Object.fromEntries(Object.entries(panelDest)
     .map(([k, d]) => [k, d ? {label: d.cta, go: d.go} : null]));
@@ -42187,6 +42346,7 @@ const VIEW_PATHS = {
   collection: "/collection",
   decks:      "/decks",
   faq:        "/how-it-works",
+  gear:       "/gear",
   elo:        "/elo",   // hidden — Chicagoland Lorcana Elo leaderboard (no nav entry)
 };
 // Per-view document.title (+ canonical) — set by the view-sync effect so
@@ -42201,6 +42361,7 @@ const VIEW_TITLES = {
   collection: "My Lorcana Collection — Packs.Ink",
   decks:      "Lorcana Decks & Tournaments — Packs.Ink",
   faq:        "How Packs.Ink Works",
+  gear:       "Lorcana on Amazon — Packs.Ink",
   elo:        "Chicagoland Lorcana Elo — Packs.Ink",
 };
 // Analytics sub-tools get their own tab titles — every ?a= URL is shareable,
@@ -45321,6 +45482,8 @@ function App(){
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
+    ${view==="gear"&&html`<${GearView}/>`}
+    ${view==="home"&&html`<${HomeGearBar} onOpen=${()=>openView("gear")}/>`}
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}

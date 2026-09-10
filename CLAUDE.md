@@ -1956,26 +1956,72 @@ TCGplayer barely stocks** — sealed gift sets, the Ravensburger jigsaw puzzles,
 all **accessories**, a category the site had never monetised at all. So an Amazon link is
 ADDED beside a TCGplayer one, never in place of it.
 
-### ⚠ LINK-ONLY — no prices, no images, ever
+### ⚠ LINK-ONLY TODAY — because we have no API keys, NOT because prices are banned
 
-This is a compliance boundary, not an unfinished feature. Amazon's Operating Agreement
-permits displaying a price only when it is fetched **live** from their API and caps the
-cache at **one hour** for prices and availability; product images may **not be stored at
-all**. (PA-API 5 was shut off 2026-05-15; the Creators API replaced it — and it does not
-issue keys until the account has cleared its first 3 qualifying sales.) This site's whole
-data flow is `ETL → Supabase → localStorage` on 12–24h TTLs, so an Amazon price here would
-be both stale and non-compliant the moment it was written.
+An earlier version of this section said prices could never be shown and images could
+never be used. **That was wrong**, and the correction matters because it changes what is
+worth building later. The actual terms:
 
-**Adding an Amazon price is the one change that could cost the account.** `scripts/test_amazon_links.mjs`
-asserts the catalog holds nothing but ASINs and keys, specifically to make that regression loud.
+- Every Amazon price, image or product fact displayed on a site must be **Program Content
+  fetched from Amazon's own API**. PA-API 5 was retired **2026-05-15**; the **Creators
+  API** replaced it.
+- **Non-image content, prices included, may be cached for up to 24 HOURS**, and must be
+  refreshed by a fresh API call immediately after.
+- An **image may not be stored or cached at all**, but a **link** to one may be held for
+  up to 24 hours — i.e. you hot-link Amazon's CDN. Never our storage, never `/img-proxy`.
+- A displayed price must carry its **"as of" timestamp** and a buy link to the detail page.
+- **Scraping is prohibited outright** by Amazon's Conditions of Use ("data mining, robots,
+  or similar data gathering and extraction tools"). There is no non-API shortcut, and a
+  scraper would risk the affiliate account itself for data the API hands over free once we
+  qualify. Do not build one; do not buy a third-party Amazon scraping API either — the
+  Operating Agreement is about where the *displayed* content came from, not who fetched it.
 
-### ⚠ The 180-day / 3-sale probation clock
+So the reason there are no prices and no photos on the site today is simply that **we hold
+no Creators API keys**. `scripts/test_amazon_links.mjs` asserts the static catalog holds
+nothing but ASINs and keys — that guard is against somebody hand-copying a price off a
+listing, which is the unlicensed use that actually costs accounts. It is not a vow of
+poverty about prices in general.
 
-Approval is **conditional**: a new Associates account must produce **3 qualifying sales
-within 180 days** (so, by **~2027-03-09**) or Amazon closes it and you reapply from
-scratch. That is the reason Gear exists and is not a "later" — a $12 pack of sleeves is
-an impulse buy, a $120 booster box is a considered purchase, and the clock only counts
-sales.
+**⚠ Sources are secondary.** Every amazon.com / webservices.amazon.com /
+affiliate-program.amazon.com domain is egress-blocked from the agent sandbox, so the
+clauses above were assembled from search results quoting the licence, not read from the
+primary document. Confirm the exact wording in Associates Central before building against
+it.
+
+### Two different sale thresholds — don't conflate them
+
+| Bar | What it gates | Reported figure |
+|---|---|---|
+| **Account probation** | Keeping the Associates account at all | **3 qualifying sales in 180 days** from approval (so by ~2027-03-09) |
+| **Creators API access** | Prices, photos, any Program Content | **10 qualifying sales in 30 days** |
+
+The first is why **Gear exists now and is not a "later"** — a $12 pack of sleeves is an
+impulse buy, a $120 booster box is a considered purchase, and only sales stop the clock.
+The second is the gate on ever showing a price.
+
+### When the keys do land — the design that stays compliant
+
+Not built, deliberately: there is nothing to test against without keys. But the shape is
+constrained enough to write down, because the obvious implementation is the
+non-compliant one.
+
+- **A daily refresh fits.** The 24h ceiling lines up with the existing ETL cadence
+  (20:30 UTC), so an `etl.yml` job calling the Creators API once a day is the natural
+  home — the same shape as `etl_tcgcsv_daily.py`.
+- **⚠ But `ETL → Supabase → localStorage` is exactly what breaks it.** The catalog cache
+  has a 24h TTL *with background refresh*, aux caches run 12h, and the offline mirrors
+  have **no ceiling at all** — a client that goes offline serves saved data indefinitely.
+  An Amazon price written through the normal path would therefore outlive its 24h licence
+  on any offline or long-idle client, silently. So:
+  - Amazon prices must **never** enter `readCache`/`writeCache`, `offlineMirrorWrite`, or
+    any `packsink:*` aux cache.
+  - Store the fetch timestamp beside the price and **hide the price client-side once it is
+    over 24h old**, rather than trusting the refresh to have happened.
+  - Images are **hot-linked from Amazon's CDN**, never proxied — which also means the
+    `img-src` list in `_headers` needs their image host added, and the SW's image-caching
+    branch must be taught to skip it (it currently caches every `destination === "image"`,
+    which would be storing the image).
+- Each price needs its as-of stamp and a buy link rendered with it.
 
 ### How a link is resolved
 
@@ -2017,13 +2063,58 @@ sales.
   hoisted for existing browsers — a shop box has not earned the right to shove somebody's
   layout around, unlike the at-the-table shortcuts that did.
 
+### `/gear` — the directory page
+
+A real SPA view (`GearView`, `VIEW_PATHS.gear`), listing every Amazon link we hold: boxes,
+troves, single packs, starter decks, gift sets, puzzles, then the accessories. ~59 links.
+
+- **⚠ It is BUILT from the resolver's own maps (`amazonDirectory()`), never hand-listed.**
+  A second list of ASINs would drift from the first, and the guard test's "no ASIN used
+  twice" check would NOT catch it — a duplicate across two lists that are meant to agree
+  is not a duplicate, it is a fork. The test instead asserts **every curated ASIN appears
+  on the page** and **the page invents none**, in both directions.
+- `AMAZON_SEALED_RULES` entries carry `group` (`gift` | `deck`) and `label` purely so the
+  directory can name them — a page has no `sealed_products` row to hand the resolver.
+  A rule missing either is silently dropped from the page, so the test names that cause
+  directly rather than letting it surface as a missing ASIN.
+- **Sets run newest-first** (`MAINLINE_SETS` reversed): somebody shopping wants the current
+  set, not The First Chapter.
+- It says plainly at the top that there are no prices or photos and why. A page that looks
+  like a shop with the prices mysteriously absent is worse than one that explains itself.
+- Needs **no worker or dev_server route** — both already SPA-fallback unknown paths, so
+  `VIEW_PATHS` + `VIEW_TITLES` + a line in `sitemap.xml` is the whole routing change.
+
+### The home bar
+
+`HomeGearBar` — a slim pill, **bottom-LEFT**, home view only.
+
+- **Bottom-left is the only free corner**: `.packsink-flash-toast` and `.offline-pill` are
+  both bottom-centre. Verified in-browser that they cannot stack.
+- **The × is permanent, not "later"** (`packsink:gearBarDismissed`). This is the only
+  advertising-shaped thing on the site; a shop prompt you cannot turn off is what makes a
+  fan site feel sold. It is also the first thing to cut if it reads as clutter — delete the
+  component and its one render line.
+- At ≤520px the label collapses and it is icon-only (60px). Measured: no page overflow at
+  390px.
+
 ### Disclosure
 
 **"As an Amazon Associate I earn from qualifying purchases"** is a required string — verbatim,
-not copy to polish. It is in the footer, in `privacy.html`, in the Gear panel and beside the
-sealed modal's buy row. The FTC wants it **near the links**, not only in a footer, which is
-why the two Amazon-bearing surfaces each carry their own. Every Amazon anchor is
-`rel="noopener nofollow sponsored"`.
+not copy to polish. The FTC wants it **near the links**, not only in a footer, so every
+Amazon-bearing surface carries its own:
+
+| Surface | Where the statement is |
+|---|---|
+| Footer (every SPA view) | `.footer-disclosure` |
+| `privacy.html` | affiliate bullet, third-party list, fineprint |
+| Help / How-it-works | its affiliate paragraph, which also states we show no Amazon data |
+| Sealed detail modal | `.sealed-detail-affiliate`, under the buy row |
+| Sealed collection (puzzle tiles) | `.sealed-coll-affiliate`, foot of the view |
+| EV tool (box-price column) | appended to the existing "Prices via TCGCSV" footer |
+| Gear home panel | `.home-gear-disclosure` |
+| `/gear` | `.gear-page-note`, above the list |
+
+Every Amazon anchor is `rel="noopener nofollow sponsored"`.
 
 ### The ASINs are unverified by CI, deliberately
 
