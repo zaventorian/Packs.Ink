@@ -21,7 +21,8 @@ WHAT THIS WRITES
 CLASSIFICATION lives in the two existing scripts and is imported, not
 reimplemented, so there is exactly one definition of "is this an SC" and "is this
 a prerelease":
-  * is_sc()  from discover_wu_scs      — title says "set championship", minus side events
+  * is_sc()  from discover_wu_scs      — title says "set championship" or RPH's SC
+                                         template made it, minus side events
   * classify() from discover_prereleases — template / strict-name / launch-window
 Everything the two reject is kind='other' (the locals, league nights, drafts,
 demo days, convention side events). RPH's own event_type cannot do this job: it
@@ -65,7 +66,7 @@ except Exception:
 from discover_wu_scs import (
     SUPABASE_URL, SERVICE_KEY,
     fetch_all, fetch_set_names, build_aliases, detect_set, fetch_current_set,
-    is_sc, to_row,
+    is_sc, is_sc_by_name, SC_PHASE_TEMPLATE_GROUPS, to_row,
     upsert as upsert_set_championships,
 )
 from discover_prereleases import (
@@ -292,6 +293,19 @@ def main() -> None:
     # The relevance net is folded in for SC recall parity with the old job (see
     # the `name=` warning in discover_wu_scs) — it is a supplement, never the gate.
     raw = fetch_all(name_net="Set Championship")
+    # is_sc() also trusts RPH's SC template, whose id is hardcoded. If RPH ever
+    # rotates it, titled SCs stop carrying it and the untitled ones ("Set Champs",
+    # "Store Championship") silently go back to being locals — so say so. An
+    # annotation, not a failure: the title test keeps working either way.
+    titled = [ev for ev in raw if is_sc_by_name(ev)]
+    if titled:
+        carrying = sum(1 for ev in titled
+                       if ev.get("phase_template_group") in SC_PHASE_TEMPLATE_GROUPS)
+        print(f"  SC template group on {carrying}/{len(titled)} titled Set Championships")
+        if len(titled) >= 30 and carrying < 0.8 * len(titled):
+            print(f"::warning::Only {carrying} of {len(titled)} titled Set Championships carry "
+                  f"the SC phase template group. RPH may have rotated it; update "
+                  f"SC_PHASE_TEMPLATE_GROUPS in scripts/elo/discover_wu_scs.py.")
     templates = derive_prerelease_templates(raw)
     if templates:
         print("  prerelease templates (derived):",

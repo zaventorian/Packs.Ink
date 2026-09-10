@@ -20,6 +20,9 @@ name: Discover Lorcana events
 # upcoming events RPH dropped, behind a completeness guard so a partial pull can
 # never mass-delete live rows.
 #
+# The last two steps keep the Elo » Stores tab current: they top up each tracked
+# store's event history and pull who played. See the note above them.
+#
 # SET ROTATION IS AUTOMATIC: sets are auto-detected per event from the Supabase
 # `sets` table, so a new set is picked up the moment Lorcast adds it — nothing to
 # edit here. (The optional set_name input below is just for targeted SC re-pulls.)
@@ -56,7 +59,7 @@ on:
         default: "false"
         type: string
       scrape_attendance:
-        description: "Scrape who PLAYED per past event: true for all (~10min), or a number to cap it"
+        description: "Re-scrape who PLAYED by hand: true for every unscanned event, or a number to cap it. The daily run already does this incrementally."
         required: false
         default: "false"
         type: string
@@ -143,8 +146,8 @@ jobs:
 
       # Read-only: prints the tier metrics per store to the run log.
       # Who actually PLAYED, per past event — the real source for RPH's Event
-      # Tickets and Unique Fans. ~4,200 events at one request each on a first
-      # full run, so it's by-hand only; a numeric value caps it for slicing.
+      # Tickets and Unique Fans. The scheduled steps at the bottom of this job keep
+      # it current; this dispatch input is for an uncapped re-run or a capped slice.
       - name: Scrape past-event attendance
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.scrape_attendance != '' && inputs.scrape_attendance != 'false' }}
         env:
@@ -184,3 +187,42 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/elo/scrape_rosters.py
+
+      # ── Elo » Stores tab: history + attendance, on the SCHEDULE ──────────────
+      # Tickets and Fans come from rph_event_attendance, and the scrape that fills
+      # it used to run only when dispatched by hand — which happened around
+      # 2026-08-19 and never again. By 2026-09-10, 212 of the 216 events played at
+      # tracked stores since then read as events nobody attended, on green runs,
+      # until a store owner asked why nothing they had hosted was showing up.
+      # These run LAST so a failure turns the run red without costing the roster
+      # scrape, and on !cancelled() so an earlier failure can't quietly skip them
+      # too — being skipped quietly is the bug.
+
+      # 1. Top up history from each tracked store's own PAST feed. The archive in
+      #    discover_events.py only ever sees an event that was listed as upcoming
+      #    during a daily scan, so one created the day it ran never reaches history
+      #    (44 at tracked stores since 2026-06-01). It also replaces the
+      #    display_status the archive froze at "upcoming". 30 days covers a missed
+      #    week with room to spare, at a page or two per store.
+      - name: Top up tracked-store event history
+        if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || (inputs.skip_discover != 'true' && inputs.backfill_stores != 'true')) }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python scripts/elo/scrape_store_history.py --since "$(date -u -d '30 days ago' +%F)"
+
+      # 2. Roster every event that has none yet, and re-read the last 3 days: an
+      #    event scanned mid-play (this job lands mid-afternoon Central) or before
+      #    the store entered results would otherwise keep that half-finished roster
+      #    for good, since a scan row is what makes an event skip forever. The guard
+      #    runs first because a selection bug fails by scraping nothing, which looks
+      #    exactly like a quiet day.
+      - name: Scrape attendance for finished events
+        if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || (inputs.skip_discover != 'true' && (inputs.scrape_attendance == '' || inputs.scrape_attendance == 'false'))) }}
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python scripts/elo/test_attendance_targets.py
+          python scripts/elo/scrape_event_attendance.py --recheck-days 3
