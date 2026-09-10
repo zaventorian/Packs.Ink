@@ -10,19 +10,22 @@ Wilds Unknown (57) vs Whispers (82). This script makes ingestion store-driven:
   1. Derive the set of RPH store_ids we've EVER counted, from the events already
      in our local DB (each rph event -> its store.id via the events meta API).
      A physical store has a stable store_id, so this is its durable identity.
-  2. For each target set, pull that set's SCs from RPH via the name-relevance
-     "net" (the only tractable filter over the 115k-row past index) across a few
-     spellings + orderings, union by id, and gate on is_sc + detect_set locally.
+  2. For each target set, pull that set's SCs two ways and union them by id:
+     the name-relevance "net" (the only tractable filter over the 115k-row past
+     index) across a few spellings + orderings, and each tracked store's OWN
+     event feed across that set's season. The nets can't see an SC whose title
+     never says "Set Championship" or names no set; a store's feed can. Gate on
+     is_sc + sc_set_for locally.
   3. Keep SCs whose store.id is in our tracked set and whose event_id we haven't
      already ingested. Those are real SCs at stores we count, currently missing.
 
-Never calls Supabase. Without --ingest it is read-only: it prints the candidates
-and (optionally) a JSON + the ingest.py command to pull them by hand. With
---ingest (how the weekly refresh runs it) it writes them to the local DB. Scope
-is never widened either way — a candidate has to sit at a store_id we already
-count (minus EXCLUDED_STORE_IDS, and not counting the hand-added one-offs in
-ONE_OFF_EVENT_IDS), so a store legitimately skipping a set is still a real
-outcome.
+Reads Supabase only for set names and release dates. Without --ingest it is
+read-only: it prints the candidates and (optionally) a JSON + the ingest.py
+command to pull them by hand. With --ingest (how the weekly refresh runs it) it
+writes them to the local DB. Scope is never widened either way — a candidate has
+to sit at a store_id we already count (minus EXCLUDED_STORE_IDS, and not counting
+the hand-added one-offs in ONE_OFF_EVENT_IDS), so a store legitimately skipping a
+set is still a real outcome.
 
 Usage:
     python discover_store_scs.py --sets "Winterspell" "Wilds Unknown"
@@ -31,7 +34,7 @@ Usage:
     python discover_store_scs.py --ingest --season-label "Attack of the Vine! Fall 2026"
 """
 from __future__ import annotations
-import argparse, datetime, json, sqlite3, sys, time
+import argparse, datetime, json, sqlite3, sys, time, urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from urllib.parse import urlencode
@@ -189,9 +192,62 @@ def name_nets(set_name: str) -> list[str]:
             f"Set Championship {set_name}"]
 
 
-def pull_set_scs(set_name: str, nets: list[str], sets_sorted, aliases) -> dict[int, dict]:
+def fetch_set_releases() -> list[tuple[str, datetime.date]]:
+    """Booster sets with a release date, oldest first. A promo set's code isn't
+    numeric, and it has no Set Championship season of its own."""
+    if not (d.SUPABASE_URL and d.SERVICE_KEY):
+        return []
+    try:
+        req = urllib.request.Request(
+            f"{d.SUPABASE_URL}/rest/v1/sets?select=name,code,released_at"
+            f"&order=released_at.asc.nullslast",
+            headers={"apikey": d.SERVICE_KEY, "Authorization": f"Bearer {d.SERVICE_KEY}",
+                     "Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=40) as r:
+            rows = json.loads(r.read().decode("utf-8", "ignore"))
+    except Exception as e:
+        print(f"  ! couldn't read set release dates ({e}); store feeds won't be pulled")
+        return []
+    out: list[tuple[str, datetime.date]] = []
+    for row in rows:
+        released = (row.get("released_at") or "")[:10]
+        if not (str(row.get("code") or "").isdigit() and row.get("name") and released):
+            continue
+        try:
+            out.append((row["name"], datetime.date.fromisoformat(released)))
+        except ValueError:
+            continue
+    return out
+
+
+def set_window(set_name: str, releases) -> tuple[datetime.date, datetime.date | None] | None:
+    """[this set's release, the next booster set's release) — the only dates a Set
+    Championship for it can fall in. None if the set isn't dated."""
+    for i, (name, released) in enumerate(releases):
+        if name == set_name:
+            return released, (releases[i + 1][1] if i + 1 < len(releases) else None)
+    return None
+
+
+def sc_set_for(ev: dict, window, set_name: str, sets_sorted, aliases) -> str | None:
+    """The set an SC belongs to. A title that names a set decides it. A title that
+    names none ("Twisted - Lorcana Set Champs") is placed by DATE inside the set's
+    season window — the rule the Stores tab applies to every event, and the one
+    discover_events.py already applies to an upcoming SC."""
+    named = d.detect_set(ev.get("name") or "", sets_sorted, aliases)
+    if named or not window:
+        return named
+    day = (ev.get("start_datetime") or "")[:10]
+    start, end = window
+    if day and start.isoformat() <= day and (end is None or day < end.isoformat()):
+        return set_name
+    return None
+
+
+def pull_set_scs(set_name: str, nets: list[str], sets_sorted, aliases,
+                 window=None) -> dict[int, dict]:
     """Union name-net pulls (past + upcoming) across orderings; keep SC events
-    whose detected set == set_name. Keyed by event id."""
+    that belong to set_name. Keyed by event id."""
     union: dict[int, dict] = {}
     base = {"game_slug": "disney-lorcana", "page_size": 250}
     combos = []
@@ -214,13 +270,65 @@ def pull_set_scs(set_name: str, nets: list[str], sets_sorted, aliases) -> dict[i
                     continue
                 if not d.is_sc(ev):
                     continue
-                if d.detect_set(ev.get("name") or "", sets_sorted, aliases) != set_name:
+                if sc_set_for(ev, window, set_name, sets_sorted, aliases) != set_name:
                     continue
                 union[ev["id"]] = ev
             if not doc.get("next") or page >= 15:  # name net is small; cap pages
                 break
             page += 1
             time.sleep(0.1)
+    return union
+
+
+def pull_store_scs(store_ids, set_name: str, window, sets_sorted, aliases) -> dict[int, dict]:
+    """Every SC for set_name in each tracked store's own event feed.
+
+    The name nets are a relevance search, and a title like "Twisted - Lorcana Set
+    Champs" never comes back from them: it doesn't say "Set Championship" and names
+    no set. Those titles are not rare — 26 of the 470 SCs at tracked stores since
+    Reign of Jafar read like that, and 5 of the 6 played since Winterspell never
+    reached the board. A store's own feed has no such blind spot and is cheap, a
+    page or two per store for one season. Both store-filter spellings are unioned
+    and store.id is re-checked locally, as in scrape_store_history.py: RPH's two
+    store filters disagree."""
+    if not window:
+        return {}
+    start, end = window
+    season_over = end is not None and end <= datetime.date.today()
+
+    def one(sid: int) -> dict[int, dict]:
+        found: dict[int, dict] = {}
+        for status in ("past", "upcoming"):
+            if status == "upcoming" and season_over:
+                continue
+            for param in ("store", "store_id"):
+                page = 1
+                while True:
+                    params = {"game_slug": "disney-lorcana", "display_statuses": status,
+                              param: sid, "page_size": 250, "ordering": "id", "page": page}
+                    if status == "past":
+                        params["start_date_after"] = start.isoformat()
+                    try:
+                        doc = d.http_json(API + "?" + urlencode(params))
+                    except Exception as e:
+                        print(f"  ! store {sid} {status} feed failed (p{page}): {e}")
+                        break
+                    results = doc.get("results") or []
+                    for ev in results:
+                        st = ev.get("store") or {}
+                        if not isinstance(st, dict) or st.get("id") != sid:
+                            continue
+                        if d.is_sc(ev) and sc_set_for(ev, window, set_name, sets_sorted, aliases) == set_name:
+                            found[ev["id"]] = ev
+                    if not doc.get("next") or not results or page >= 20:
+                        break
+                    page += 1
+        return found
+
+    union: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        for got in ex.map(one, sorted(store_ids)):
+            union.update(got)
     return union
 
 
@@ -252,12 +360,23 @@ def main() -> None:
 
     sets_sorted = d.fetch_set_names()
     aliases = d.build_aliases(sets_sorted)
+    releases = fetch_set_releases()
+    feed_stores = tracked - EXCLUDED_STORE_IDS
 
     all_candidates = []
     for set_name in args.sets:
         nets = name_nets(set_name)
+        window = set_window(set_name, releases)
         print(f"Pulling '{set_name}' SCs from RPH (name nets: {len(nets)})...")
-        scs = pull_set_scs(set_name, nets, sets_sorted, aliases)
+        scs = pull_set_scs(set_name, nets, sets_sorted, aliases, window=window)
+        if window:
+            fed = pull_store_scs(feed_stores, set_name, window, sets_sorted, aliases)
+            extra = {k: v for k, v in fed.items() if k not in scs}
+            scs.update(extra)
+            print(f"  +{len(extra)} more from {len(feed_stores)} tracked stores' own feeds "
+                  f"(titles the name nets can't match)")
+        else:
+            print(f"  ! no release date for {set_name!r} in `sets`; store feeds not pulled")
         cands = []
         for ev in scs.values():
             sid = (ev.get("store") or {}).get("id")

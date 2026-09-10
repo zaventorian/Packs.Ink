@@ -22,6 +22,10 @@
 //      display name and has to fold case, or one regular becomes several.
 //   5. An event whose roster hasn't been pulled must be reported as uncovered,
 //      not silently counted as a quiet week.
+//   6. A cancelled event is not an event — unless it has results. RPH keeps
+//      cancelled events on a store's feed; the history held 1,063 of them at
+//      tracked stores, all counted, and the ones that took pre-registrations
+//      leaked 96 tickets through the registrations fallback.
 //
 // Reads the real functions out of Index.html rather than restating them, so it
 // cannot drift from what ships. Manual — there is no client-side CI.
@@ -187,6 +191,30 @@ eq("registrations for an event that HAS results are ignored (no double count)",
 eq("no fallback rows at all is the strict rule",
    build(events, played, [], scanned, seasons, TRACKED)
      .stores.find((x) => x.store === "Collectors Lounge").per[WILDS].attendance, 8);
+
+console.log("cancelled events");
+// Results prove an event ran whatever RPH now labels it, so they win over the
+// label; without any, a cancelled event contributes nothing at all — not an
+// event, not its registrations, not a missing-roster flag.
+const cx = build(
+  events.concat([
+    ev(40, "Collectors Lounge", "2026-06-12", 6, {display_status: "canceled"}),    // registrations only
+    ev(41, "Collectors Lounge", "2026-06-13", 3, {display_status: "canceled"}),    // but results exist
+    ev(42, "Top Choice Gaming", "2026-06-14", 2, {display_status: "Cancelled"}),   // never scanned
+    ev(43, "Top Choice Gaming", "2026-06-15", 2, {display_status: "complete"}),    // an ordinary label
+  ]),
+  played.concat([at(41, 20)]),
+  fallback.concat([reg(40, 21), reg(40, 22)]),
+  new Set([...scanned, 40, 41, 43]), seasons, TRACKED);
+const cxl = cx.stores.find((x) => x.store === "Collectors Lounge");
+const cxt = cx.stores.find((x) => x.store === "Top Choice Gaming");
+eq("a cancelled event with no results is not an event", cxl.per[WILDS].events, 5);    // 4 + event 41
+eq("...and its registrations are not tickets",
+   [cxl.per[WILDS].attendance, cxl.per[WILDS].unrecorded], [12, 3]);
+eq("a cancelled event WITH results still counts, with its players",
+   totals(cxl, [WILDS]).players, 9);
+eq("either spelling, any case", cxt.per[WILDS].events, 2);                            // 16 + 43
+eq("a cancelled event is never reported as missing a roster", cxt.per[WILDS].unscanned, 1);
 
 console.log("scoped rollup");
 const all = [WILDS, WINTER];

@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=383">
+<link rel="stylesheet" href="styles.css?v=385">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -23771,6 +23771,12 @@ function EloRankBadge({rank}){
   </span>`;
 }
 
+// Every query param the Elo view owns. App's view-sync registers them, so they
+// are stripped when you leave for another page, and the Analytics sub-tab sync
+// drops them when you switch tools. Unregistered they followed you everywhere:
+// the 2026-09-09 store feedback arrived stamped /how-it-works?sub=stores.
+const ELO_URL_PARAMS = ["p", "e", "sub", "store"];
+
 // Build a relative URL for a given Elo view target. Preserves any other query
 // params on the current URL (e.g. ?a=elo for the Analytics-pinned mount) so a
 // new-tab-opened link lands in the same outer view.
@@ -23786,7 +23792,7 @@ function eloUrlFor(target){
   let url;
   try { url = new URL(window.location.href); }
   catch { return "#"; }
-  ["p","e","sub","store"].forEach(k => url.searchParams.delete(k));
+  ELO_URL_PARAMS.forEach(k => url.searchParams.delete(k));
   if(target?.tab === "player" && target.playerId != null) url.searchParams.set("p", String(target.playerId));
   else if(target?.tab === "event" && target.eventId != null) url.searchParams.set("e", String(target.eventId));
   else if(target?.tab === "store" && target.store) url.searchParams.set("store", target.store);
@@ -25193,7 +25199,7 @@ function EloUpcomingSCs({canViewStore, onStoreClick, onPlayerClick, excludeOrg, 
 // An event nobody has scraped yet is NOT silently counted as zero — the row
 // carries how many of its events are uncovered, because a quiet zero reads
 // exactly like a quiet week. Cached 12h.
-const ELO_STORES_CACHE = "packsink:elo:stores:v6";   // v6: tickets/fans from rph_event_attendance
+const ELO_STORES_CACHE = "packsink:elo:stores:v7";   // v7: a cancelled event without results no longer counts
 const ELO_STORES_TTL = 12 * 3600 * 1000;
 const ELO_STORES_PREFS = "packsink:elo:stores:prefs";
 const ELO_RECENT_SETS = 4;
@@ -25257,7 +25263,8 @@ async function fetchEloStoreActivity(){
   // rph_event_attendance joins on the RPH event id, the same id both carry.
   const [events, played, scans, sets, tracked] = await Promise.all([
     sbFetchAll("lorcana_events_history", {
-      select: "event_id,store_id,store_name,city,state,kind,set_name,start_datetime",
+      // display_status is how a cancelled event is told apart — see buildEloStoreActivity.
+      select: "event_id,store_id,store_name,city,state,kind,set_name,start_datetime,display_status",
       order: "event_id.asc",
     }, null),
     sbFetchAll("rph_event_attendance", {
@@ -25337,12 +25344,19 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
   const evAt = new Map();                 // event_id → {store, season}, for the match pass
   const used = new Map();                 // season → earliest date seen, for column order
 
+  // Results prove an event ran, whatever RPH now labels it. A CANCELLED event
+  // without any is not an event at all: until 2026-09-10 every one counted toward
+  // Events — 1,063 at tracked stores — and those that took pre-registrations
+  // leaked 96 tickets through the fallback below. Built up front so the event
+  // pass can ask; the tickets pass and the fallback guard read the same set.
+  const withPlay = new Set((played || []).map(a => a.event_id));
   for(const e of events){
     const store = e.store_name;
     if(!store) continue;                  // storeless / online events aren't a venue
     // Scope to the stores this scene actually tracks. An empty/absent set means
     // "no filter" so the pivot stays usable against fixtures.
     if(trackedIds && trackedIds.size && !trackedIds.has(e.store_id)) continue;
+    if(/^cancel{1,2}ed$/i.test(e.display_status || "") && !withPlay.has(e.event_id)) continue;
     // Key on store_id, NOT the name. Two branches of a chain can share a name
     // (and several do), and merging them would report one location's numbers as
     // both. RPH tiers are per physical store, so the id is the identity.
@@ -25372,9 +25386,7 @@ function buildEloStoreActivity(events, played, fallback, scanned, seasons, track
   // Tickets and fans in one pass: every row here is one person who played one
   // event, so it is a ticket, and its person key joins the season's fan set.
   // A regular who plays every week is many tickets and one fan.
-  const withPlay = new Set();
   for(const a of played){
-    withPlay.add(a.event_id);
     const at = evAt.get(a.event_id);
     if(!at) continue;
     const st = byStore.get(at.skey);
@@ -25686,7 +25698,11 @@ function EloStores({canViewStore, onStoreClick}){
       entered results, only people with a result count; where it never did, everyone who registered counts instead —
       marked <span class="elo-stores-gap">~</span> — because a shop that runs events without recording pairings is not a
       shop nobody attended. <strong>Pre</strong> is how many sets the store ran a prerelease for. The tier verdict scores
-      events, fans and tickets; prereleases carry the asterisk.</p>
+      events, fans and tickets; prereleases carry the asterisk. A cancelled event isn't counted unless the store
+      recorded results for it.</p>
+    <p class="elo-stores-fresh">Store events and rosters refresh from Ravensburger Play once a day, so an event usually
+      shows up the day after it runs. <strong>Last ${ELO_RECENT_SETS} complete</strong> leaves out the set still running;
+      pick <strong>Incl. current</strong> to see this season.</p>
 
     <div class="elo-stores-req">
       ${proBars ? html`<${React.Fragment}><strong>Pro-rated bars</strong> — the memo's one-off 1/6 offer:${" "}
@@ -25897,7 +25913,7 @@ function EloView({eloPinned, setEloPinned, user}){
     if(fromPopstate.current){ fromPopstate.current = false; return; }
     try {
       const url = new URL(window.location.href);
-      ["p","e","sub","store"].forEach(k => url.searchParams.delete(k));
+      ELO_URL_PARAMS.forEach(k => url.searchParams.delete(k));
       if(tab === "store" && storeKey) url.searchParams.set("store", storeKey);
       else if(tab === "player" && playerId != null) url.searchParams.set("p", String(playerId));
       else if(tab === "event" && eventId != null) url.searchParams.set("e", String(eventId));
@@ -26049,6 +26065,14 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <h2>Tournaments</h2>
     <p>The Decks tab has a <strong>Tournaments</strong> section listing recent events with full top-finish decklists. Click a tournament to see all uploaded results; click any individual deck to view the full list, mulligan-sim it, or export it as an image. Tournament decks render with a trophy badge wherever they appear in the Discover feed.</p>
     <p>Tournament results are admin-uploaded. If you run an event and want results listed here, get in touch via the X link below.</p>
+
+    <h2>How often does the data update?</h2>
+    <ul>
+      <li><strong>Card prices</strong> — once a day, after TCGplayer publishes its daily snapshot (usually by late afternoon, U.S. Central).</li>
+      <li><strong>Upcoming events</strong> near you — pulled from Ravensburger Play once a day.</li>
+      <li><strong>Store activity</strong> on the Chicagoland Elo board's <em>Stores</em> tab — each store's events, and who played in them, are pulled from Ravensburger Play once a day, so an event usually shows up the day after it runs. Results a store enters a few days late are picked up too, and a cancelled event only counts if the store recorded results for it. The tab opens on the last four <em>finished</em> set seasons; choose <em>Incl. current</em> to see this season.</li>
+      <li><strong>Elo ratings</strong> — recalculated once a week, on Monday mornings (U.S. Central), with any new Set Championship results.</li>
+    </ul>
 
     <h2>How are prices computed?</h2>
     <p>Prices come from <strong>TCGplayer</strong> via TCGCSV and refresh once a day. Two numbers are surfaced for every card; most surfaces let you toggle which one drives totals and charts via the <strong>Low / NM Market</strong> control.</p>
@@ -43234,7 +43258,7 @@ function App(){
                            "s","f","m","c","card","panel","v",
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
-                           ...SC_DEEP_PARAMS];
+                           ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
       // click new-tab opens hold their query even though the view didn't
@@ -43243,7 +43267,10 @@ function App(){
       const VIEW_OWNED = {
         decks:      new Set(["deck","token","user","tourney","s","f"]),
         collection: new Set(["collection","token","set","c"]),
-        market:     new Set(["a","trade","t"]),
+        // The Elo view mounts under Analytics (?a=elo) and on its own at /elo.
+        // Switching from the Elo sub-tab to another tool is handled by the ?a= sync.
+        market:     new Set(["a","trade","t", ...ELO_URL_PARAMS]),
+        elo:        new Set(ELO_URL_PARAMS),
         // ?m= is the short mode link; ?v= is the whole screen (preset, window,
         // every chip, both sort keys) — see encodeScreenerState.
         screener:   new Set(["m","v"]),
@@ -43289,9 +43316,14 @@ function App(){
       const url = new URL(window.location.href);
       const cur = url.searchParams.get("a");
       const want = marketSub === "ev" ? null : marketSub;
-      if(cur === want){ marketSubSynced.current = true; return; }
+      // VIEW_OWNED keeps the Elo view's params alive across Analytics, so leaving
+      // the Elo sub-tab for another tool is where they have to go.
+      const staleElo = marketSub !== "elo" && ELO_URL_PARAMS.some(k => url.searchParams.has(k));
+      if(cur === want && !staleElo){ marketSubSynced.current = true; return; }
       if(want) url.searchParams.set("a", want); else url.searchParams.delete("a");
-      if(marketSubSynced.current) window.history.pushState({view, a: want}, "", url.toString());
+      if(staleElo) ELO_URL_PARAMS.forEach(k => url.searchParams.delete(k));
+      // Dropping stale params isn't a navigation, so only a change of tool pushes.
+      if(marketSubSynced.current && cur !== want) window.history.pushState({view, a: want}, "", url.toString());
       else window.history.replaceState(window.history.state, "", url.toString());
       marketSubSynced.current = true;
     } catch {/* no-op */}

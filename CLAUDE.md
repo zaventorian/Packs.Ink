@@ -2471,6 +2471,46 @@ exactly), overridable with `--season-label`.
   `refresh_elo.py` (current set has ≥1 event, or ≥1 new event in the last N days), not more
   discovery.
 
+### Set Championships are recognised by RPH's template, not only the title (2026-09-10)
+
+`is_sc()` needed the words "set championship" in the title, and stores don't always type
+them: "Lorcana Set Champs", "Attack of the Vine Store Championship", "Set Chamionship". RPH's
+official SC event template stamps **`phase_template_group` `f6a76808-…`** on every event made
+from it, whatever the title says, so `is_sc()` now accepts the title OR that group
+(`SC_PHASE_TEMPLATE_GROUPS` in `discover_wu_scs.py`), and side-event words veto both.
+
+- **Measured exhaustively, not sampled**: every event at all 103 tracked stores since
+  2025-08-01 (4,723). The group sat on 444 of 448 titled SCs and on 26 events that weren't
+  titled — **all 470 are real SCs**. The title test missed all 26: of the 6 played since
+  Winterspell, **5 never reached the board**, and 5 more (2026-09-12 to 09-20) were on track to
+  miss it.
+- **Widening the title test instead would not have worked.** "champ" also matches "Lorcana
+  League Play last week before Championships" and "League Season Finale - Single Elimination
+  Championship"; both carry a different template.
+- **Recognising them was half of it; FINDING them needed a second pull.** The name nets in
+  `discover_store_scs.py` are RPH's relevance search, which never returns a title that names no
+  set. `pull_store_scs()` reads each tracked store's own feed across the set's season
+  (`set_window()`: this booster set's release up to the next one's, from Supabase `sets`), and
+  `sc_set_for()` places a setless title by DATE — the rule the Stores tab already uses for every
+  event, and `discover_events.py` for an upcoming SC. Measured at ~25s a season for 103 stores;
+  it finds exactly the untitled SCs above (6 / 1 / 4 for AotV / Wilds Unknown / Winterspell).
+- **Knock-on effects, all intended**: `discover_events.py` now files these as `kind='sc'` and
+  mirrors them into `set_championships`, so they reach the Upcoming SCs tab, the roster scrape
+  and `sync_elo_tracked_stores`' 75-mile rule; `scrape_store_history.py` classifies history the
+  same way.
+- **The per-set config template UUID changes every rotation; this group has not moved since
+  Reign of Jafar.** If it ever does, `discover_events.py` prints a `::warning::` once fewer than
+  80% of ≥30 titled SCs carry it. An annotation, not a failure, because the title test keeps
+  working; `is_sc_by_name()` is the old test, kept for exactly that check.
+- **Older seasons are NOT backfilled by the weekly refresh**, which only asks about the current
+  set. With the canonical DB pulled locally,
+  `python scripts/elo/discover_store_scs.py --sets "Winterspell" "Wilds Unknown"` lists what they
+  missed (4 SCs at tracked stores as of 2026-09-10). Ingesting them re-rates history, so that is
+  a decision, not a chore.
+- Guarded by `python scripts/elo/test_sc_template.py` (the rule, the window, the store-feed
+  pull) and `test_season_seed.py` (a store-feed-only SC is ingested; an excluded store's feed is
+  never asked).
+
 ### Adding ONE event by hand (2026-09-08)
 
 "Count this event, but not this store" — a guest/out-of-area shop, or an SC discovery
@@ -2661,12 +2701,19 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 
 - **Sources**: `lorcana_events_history` (every event a store has run) for the event count, and **`rph_event_attendance`** (migration 122, one row per person per event) for Tickets AND Fans.
 - **Tickets and Fans are both about PLAYERS, and both come from the roster.** RPH defines Event Tickets as "the total number of players across all events" and Unique Fans as "individuals that have played in at least 1 event". So the attendance rows are filtered server-side to people who actually sat down — a final standing, or any recorded match (`RPH_PLAYED_FILTER`, kept identical to `played()` in `scrape_event_attendance.py` and to `PLAYED` in `report_store_tiers.py`). Tickets is the row count; Fans is the distinct people. **`lorcana_events.registered_user_count` answers neither** and must not come back: it is pre-registration frozen at the last listing before the event ran, so it misses walk-ins (a store reading ~1 ticket per event is a walk-in scene, not an empty one) and counts no-shows. `elo_matches` is likewise gone from this tab — it only covers the SC-shaped Elo ingest, so most of a store's events contributed nobody.
-- **An unscraped event is reported, not zeroed.** `scanned` (from `rph_event_attendance_scans`) drives a per-row `unscanned` count rendered as a `†`; a silent zero reads exactly like a quiet week. Measured 2026-08-19: coverage is complete — 0 unscraped of 3,743 events in the four-set window.
+- **An unscraped event is reported, not zeroed.** `scanned` (from `rph_event_attendance_scans`) drives a per-row `unscanned` count rendered as a `†`; a silent zero reads exactly like a quiet week.
+- **⚠ History and attendance refresh on `discover_scs.yml`'s DAILY schedule — and until 2026-09-10 attendance was refreshed by nobody.** `scrape_event_attendance.py` was wired only to a manual dispatch; it ran around 2026-08-19 and never again, so by 2026-09-10 **212 of the 216 events played at tracked stores since then had no roster** (66 of 103 stores), each one an event nobody attended, on green runs. It surfaced as feedback from a store owner who had hosted several events and seen nothing move. The `†` didn't give it away, because the default window skips the running set (below), which is exactly where every one of those events sat. The schedule now runs two steps, last in the job: `scrape_store_history.py --since` 30 days, then `scrape_event_attendance.py --recheck-days 3`.
+  - **The top-up exists because the archive can't see everything.** `discover_events.py` only archives an event that was listed as upcoming during a daily scan, so one created the day it ran never reaches history — **44 at tracked stores since 2026-06-01**, including two of the reporting store's own nights. It also replaces the `display_status` the archive froze at `upcoming`. Re-classifying is safe: a replay over every tracked store since 2026-06-01 reproduced the stored `kind` on all 1,203 archived events.
+  - **`--recheck-days` exists because a scan row is what makes an event skip forever.** The job lands mid-afternoon Central, halfway through a Sunday SC; without a re-read, a roster caught mid-play or before results were entered stays frozen at that state. `scraped_at` is now stamped on every read, so `max(scraped_at)` shows at a glance that the job is alive.
+  - Guarded by `python scripts/elo/test_attendance_targets.py`, which also asserts the scrape sits on the SCHEDULE path — the one condition that was the whole bug.
+- **A cancelled event is not an event — unless it has results** (2026-09-10). RPH keeps cancelled events on a store's feed, and the history held **1,063 at tracked stores**, every one counted toward Events, while the 27 that had taken pre-registrations leaked **96 tickets** through the registrations fallback. `buildEloStoreActivity` now skips a `display_status` of canceled/cancelled unless the event has at least one played row: results prove it ran, whatever the label says (14 cancelled events had them). The fetch selects `display_status` for this, and the daily history top-up is what keeps that column honest — the archive freezes it at `upcoming`. `report_store_tiers.py` (`is_cancelled`) and `diagnose_store_fans.py` apply the same rule, so the offline numbers match the tab. `ELO_STORES_CACHE` went v6 → v7 with it.
+- **The Elo view's query params live in `ELO_URL_PARAMS` (`p`, `e`, `sub`, `store`)**, registered in App's `dirtyParams` and in `VIEW_OWNED` for both `market` and `elo`, and dropped by the Analytics `?a=` sync whenever the sub-tab isn't `elo`. Unregistered, they rode along onto every other page — the 2026-09-09 feedback arrived stamped `/how-it-works?sub=stores`.
+- **The update cadence is stated in two places**: How It Works ("How often does the data update?") and the Stores tab's `.elo-stores-fresh` line. Both describe `discover_scs.yml` (daily) and `elo_weekly_refresh.yml` (Mondays), so change them with the schedules.
 - **The played rule is PER EVENT, with a registrations fallback — and the site-wide average is what hid the need for it.** Where an event has any recorded result, only people with results count. Where it has none, every COMPLETE registration counts instead (`rphCompleteReg`, marked `~` in the UI). Seven Out Cards took **19 registrations across 5 events including a Set Championship and entered results for none**, so the strict rule scored the shop 0 tickets and 0 fans for a season it demonstrably ran; verified against RPH directly — all 5 rosters read HTTP 200 with registrations intact. **The aggregate says the rule is fine (93% of registrations carry a result, only 8% of events dark) and the aggregate is the wrong statistic**: this is a per-store metric and the failure is concentrated, not spread — nearly every store records results and the few that don't are zeroed outright. Don't re-tighten it on the strength of a site-wide percentage. The fallback does admit no-shows for those events; that is the lesser error, since a zero reads as "this shop is dead" next to a tier bar. The two passes MUST stay disjoint (guard on the played event-id set) or every player at a normal event doubles.
 - **`buildEloStoreActivity` keeps player ids PER SEASON, and never pre-counts them.** The set filter has to re-answer "how many distinct people" for any window, and that is a **union** (`eloStoreTotals`), never a sum — a regular who plays all four sets is one person. Pre-counting per store is what the first cut did and it makes the filter impossible. The tfoot shows `—` under Players for the same reason: distinct players can't be summed across stores either.
 - **Attendance rows carry no store or season of their own**, so a person only counts once their event survived the history pass (tracked store, not storeless). A guest plays without an account, so `rphPersonKey` falls back to the lowercased display name — without the case fold one regular becomes several.
 - **Season columns are derived, newest first** — ordered by each season's earliest event date, labelled with the set half of the season string (`"Wilds Unknown Summer 2026"` → `Wilds Unknown`) via longest-prefix match against `MAINLINE_SETS`. A new set adds a chip and a column pair on its own.
-- **Default scope is the `ELO_RECENT_SETS` (4) newest sets, totals only.** Persisted at `packsink:elo:stores:prefs` as `{mode, keys, breakdown}` — the **mode** is stored, not just the keys, so a saved "Last 4" still means last 4 after the next set releases. As in the home movers' chip groups, the last active set chip can't be switched off.
+- **Default scope is "Last 4 complete"** — the `ELO_RECENT_SETS` (4) newest FINISHED sets, skipping the set currently running (`scopeMode === "complete"`; "Incl. current" and "All" are the other chips). So **nothing a store does this season appears in the default view until the next set releases** — easy to read as "the data isn't updating", which is exactly how the 2026-09-10 feedback read. Persisted at `packsink:elo:stores:prefs` as `{mode, keys, breakdown, showBars, proBars}` — the **mode** is stored, not just the keys, so a saved "Last 4" still means last 4 after the next set releases. As in the home movers' chip groups, the last active set chip can't be switched off.
 - **Layout: totals come BEFORE the per-set detail.** They sit immediately right of the pinned store name so they never scroll off; expanding the breakdown appends detail to the right instead of shoving the numbers people came for off the edge. That was the first cut's bug.
 - **Wide tables get `.elo-stores-wrap--wide` (a `max-height`).** A table wider than the viewport puts its horizontal scrollbar at the bottom of a 30-row table, so reaching it means scrolling the whole page past the data — a mouse user simply cannot scroll sideways. Capping the height puts both scrollbars in one viewport-sized box. Same short-viewport escape as the Screener. Only fires past the default window; at 4 sets the table fits.
 - **The sticky store column must use `--bg-modal`.** `--bg-card` is translucent in the dark themes and `--btn-bg` is transparent in *every* theme, so either lets the scrolling season columns show straight through the pinned cell. Same rule as the Screener's sticky NAME column. The name clamp lives on an inner `.elo-stores-nametxt` block, not the `<td>` — `table-layout:auto` treats a cell `max-width` as a hint.
