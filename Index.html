@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=380">
+<link rel="stylesheet" href="styles.css?v=381">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -4066,6 +4066,94 @@ const computeSeriesDeltas = (rows, field) => {
   return { now, byWin };
 };
 
+// ── Price standing — "is this actually a good price?" ───────────────────
+// A restock feed can tell you a thing is in stock at $130. It cannot tell you
+// whether $130 is good. We have daily prices back to 2024-02-08, so we can —
+// and that judgement is the whole reason to click a buy link here rather than
+// on whichever alert account posted it first.
+//
+// Four decisions, each of which the obvious implementation gets wrong:
+//
+//   1. ⚠ It reads MARKET_PRICE, never low_price. Low is a published aggregate,
+//      not a sale: 41% of Lows sit >10% below the cheapest NM sale that
+//      actually happened, and `smooth_low_prices.py` exists precisely because
+//      one bad listing pins it for days. A phantom low would render
+//      "cheapest it has ever been" at the exact moment somebody is deciding to
+//      buy — the worst possible place to be wrong. Market's median ratio
+//      against real sales is 1.000.
+//   2. ⚠ It is a PERCENTILE, not a minimum. A min is decided by one
+//      observation, which makes it the noisiest statistic available; a
+//      percentile over the whole window barely moves when a single point is
+//      bad, and degrades honestly instead of flipping.
+//   3. It reports the LONGEST window that has enough data. "Cheapest in 12
+//      months" is a stronger and truer claim than "cheapest in 3 months", so
+//      walk longest-first and take the first that qualifies.
+//   4. ⚠ It says NOTHING in the middle of the range. A badge that renders on
+//      every card is furniture; one that appears only when the price is
+//      genuinely at an edge is information. `null` is the common return.
+const PRICE_STANDING_WINDOWS = [
+  {days: 365, adj: "12-month", noun: "12 months"},
+  {days: 180, adj: "6-month",  noun: "6 months"},
+  {days: 90,  adj: "3-month",  noun: "3 months"},
+];
+// Floors are BOTH a count and a span: 30 samples that all landed in one week
+// describe that week, not the year, and a card with eight prices across a year
+// must not get to claim a 12-month low.
+const PRICE_STANDING_MIN_POINTS = 30;
+// ⚠ The window's LABEL has to be something the data can support. A 365-day
+// filter over a card with 100 days of history keeps all 100 rows and every
+// other floor passes — so it announced "cheapest in 12-month" off one quarter
+// of data. That is a straight false claim, and it lands hardest on exactly the
+// cards people price most: a set released three months ago has no year to be
+// cheapest in. Demand the observed span cover most of the window it names, and
+// a short history falls back to a shorter, true label instead of overreaching.
+const PRICE_STANDING_MIN_SPAN_RATIO = 0.8;
+// ⚠ And a spread floor. Ties count as "at or below" (see below), so a card
+// that has not moved all year computes to pct 1.0 and would announce itself as
+// "near its 12-month high" — which is the opposite of true. A price with no
+// range has no edge to be near, so it gets no badge. A sub-window's spread can
+// only be <= the full window's, so failing here fails every shorter one too.
+const PRICE_STANDING_MIN_SPREAD = 1.15;
+const PRICE_STANDING_LOW = 0.10;
+const PRICE_STANDING_NEAR_LOW = 0.25;
+const PRICE_STANDING_HIGH = 0.90;
+// rows: [{date, market_price, low_price}] ascending, as fetchCardHistory returns.
+// Returns {tone, label, window, pct, n, value} or null when there is nothing
+// worth saying.
+function priceStanding(rows, opts){
+  const field = (opts && opts.field) || "market_price";
+  const DAY = 86400000;
+  const pts = (rows || [])
+    .map(r => ({t: Date.parse(r.date), v: r[field] != null ? parseFloat(r[field]) : null}))
+    .filter(p => Number.isFinite(p.t) && Number.isFinite(p.v) && p.v > 0);
+  if(pts.length < PRICE_STANDING_MIN_POINTS) return null;
+  const last = pts[pts.length - 1];
+  for(const w of PRICE_STANDING_WINDOWS){
+    const cutoff = last.t - w.days * DAY;
+    const inWin = pts.filter(p => p.t >= cutoff);
+    if(inWin.length < PRICE_STANDING_MIN_POINTS) continue;
+    const span = (inWin[inWin.length - 1].t - inWin[0].t) / DAY;
+    if(span < w.days * PRICE_STANDING_MIN_SPAN_RATIO) continue;
+    let lo = Infinity, hi = 0;
+    for(const p of inWin){ if(p.v < lo) lo = p.v; if(p.v > hi) hi = p.v; }
+    if(!(lo > 0) || hi / lo < PRICE_STANDING_MIN_SPREAD) continue;
+    // Fraction of the window priced at or below today, TIES INCLUDED. That is
+    // deliberate: a card that has sat at $5 for half the year and is at $5
+    // today is not at a special low, and counting ties keeps it out of the
+    // bottom decile. The cost is that a flat series lands at 1.0, which the
+    // spread floor above is what catches.
+    const atOrBelow = inWin.reduce((n, p) => n + (p.v <= last.v ? 1 : 0), 0);
+    const pct = atOrBelow / inWin.length;
+    let tone = null, label = null;
+    if(pct <= PRICE_STANDING_LOW){ tone = "low"; label = "Cheapest in " + w.noun; }
+    else if(pct <= PRICE_STANDING_NEAR_LOW){ tone = "near-low"; label = "Near its " + w.adj + " low"; }
+    else if(pct >= PRICE_STANDING_HIGH){ tone = "high"; label = "Near its " + w.adj + " high"; }
+    if(!tone) return null;
+    return {tone, label, window: w.adj, pct, n: inWin.length, value: last.v};
+  }
+  return null;
+}
+
 // ── Compare-report export ───────────────────────────────────────────────
 // Builds a self-contained SVG of the multi-product compare chart with a
 // Morningstar-style title block, branded footer, and a product table
@@ -6748,7 +6836,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
 // poster draws its own rows on a canvas in buildCardPosterBlob).
-const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing}) => {
+const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing}) => {
   const buyUrl = tcgUrl(productId, printing);
   return html`
   <div class="cd-stat">
@@ -6756,6 +6844,11 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing})
       ${color ? html`<span class="cd-stat-dot" style=${{color}}>●</span>` : null}
       <span class="cd-stat-name">${label}</span>
       ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
+      ${standing && html`<span class=${"price-standing price-standing--" + standing.tone}
+        title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
+          + "th percentile of the last " + standing.window.replace("-", " ") + " ("
+          + standing.n + " daily prices). Market, not Low — Low is a published aggregate that a single listing can move."}>
+        ${standing.label}</span>`}
       ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow sponsored"
         onClick=${e=>e.stopPropagation()} title="Buy this printing on TCGplayer (affiliate link)">
         Buy on TCGplayer
@@ -7223,6 +7316,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       printing: (group.normal && group.normal.tcg_printing) || "Normal",
       low: computeSeriesDeltas(history.normal, "low_price"),
       market: computeSeriesDeltas(history.normal, "market_price"),
+      standing: priceStanding(history.normal),
     });
     if(history.foil && history.foil.length) rows.push({
       key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
@@ -7230,6 +7324,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       printing: (group.foil && group.foil.tcg_printing) || "Foil",
       low: computeSeriesDeltas(history.foil, "low_price"),
       market: computeSeriesDeltas(history.foil, "market_price"),
+      standing: priceStanding(history.foil),
     });
     if(variants.open){
       for(const v of variantRows){
@@ -7245,6 +7340,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           color: null,
           productId: v.row.tcgplayer_product_id,
           printing: v.printing,
+          standing: priceStanding(vr),
           low: computeSeriesDeltas(vr, "low_price"),
           market: computeSeriesDeltas(vr, "market_price"),
         });
@@ -7499,7 +7595,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       </div>
       <div class="cd-stat-list">
         ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub}
-          color=${r.color} low=${r.low} market=${r.market}
+          color=${r.color} low=${r.low} market=${r.market} standing=${r.standing}
           productId=${r.productId} printing=${r.printing}/>`)}
       </div>
     </div>`}
@@ -19445,6 +19541,10 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   const qty = sealedCollection?.[pid] || 0;
   const dtype = deriveSealedDisplayType(product);
   const url = tcgUrl(pid);
+  // A plain call, deliberately NOT useMemo — the static-product branch above
+  // early-returns, so any hook added here would sit after a conditional return
+  // and break hook order. It is a couple of passes over at most ~600 rows.
+  const standing = priceStanding(history);
   const bump = (delta) => {
     const next = Math.max(0, Math.min(99, qty + delta));
     if(next !== qty) updateSealedQty(pid, next);
@@ -19477,6 +19577,10 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               <span class="sealed-detail-price-lbl">NM Market</span>
               <span class="sealed-detail-price-val">${fmt(marketToday)}</span>
             </div>`}
+            ${standing && html`<span class=${"price-standing price-standing--" + standing.tone}
+              title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
+                + "th percentile of the last " + standing.window.replace("-", " ") + " ("
+                + standing.n + " daily prices)."}>${standing.label}</span>`}
             ${url && html`<a class="sealed-detail-buy" href=${url} target="_blank"
               rel="noopener nofollow sponsored" title="Buy on TCGplayer (affiliate link)">Buy on TCGplayer ↗</a>`}
             <${AmazonBuyLink} product=${product} setName=${setName}/>
