@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=381">
+<link rel="stylesheet" href="styles.css?v=382">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2931,8 +2931,14 @@ const amazonUrl = (asin) => asin
 // added later simply upgrades that product from "the right shelf" to "the
 // right box". Scoped to Toys & Games (`i=`) because an unscoped Lorcana
 // search returns novels and bedding.
-const amazonSearchUrl = (query) =>
-  `https://www.amazon.com/s?k=${encodeURIComponent(query)}&i=toys-and-games` +
+// `dept` is Amazon's search-department slug. It defaults to toys-and-games
+// because every caller inside the app is shopping for cards or accessories;
+// /picks passes its own (videogames, electronics) since an unscoped search
+// for "PS5 games" returns cases and cables.
+const AMAZON_DEPT_DEFAULT = "toys-and-games";
+const amazonSearchUrl = (query, dept) =>
+  `https://www.amazon.com/s?k=${encodeURIComponent(query)}` +
+  `&i=${encodeURIComponent(dept || AMAZON_DEPT_DEFAULT)}` +
   `&tag=${AMAZON_TAG}&linkCode=ll2`;
 
 // ── Price history fetching ──────────────────────────────────────────────
@@ -34944,17 +34950,40 @@ const HOME_TOOL_ICONS = {
 // rather than a second front on the same products — nothing here competes
 // with a TCGplayer link, because there mostly isn't one.
 //
-// Every entry is FIRST-PARTY Ravensburger product, deliberately. Third-party
-// sleeves outsell them and would pay the same commission, but a fan site
-// recommending a specific brand of sleeve is making a claim it has not
-// tested; listing the official line is a catalogue, which is what a checklist
-// site is for. The capacities are Ravensburger's own published specs.
+// Sections carrying `home: true` are the ones the home panel shows; /gear
+// renders all of them. That split is what lets the catalogue grow without the
+// right-rail panel turning into a shop — the panel is the teaser, its title
+// already links to /gear, and /gear is the whole thing.
+//
+// The first three sections are FIRST-PARTY Ravensburger, and were once the
+// whole list: a fan site naming a brand of sleeve it has not tested is making
+// a claim, where listing the official line is a catalogue. Zaven asked for the
+// third-party market too (2026-09-10), which is right — the official line is
+// four sleeve designs against a category people actually shop — so the rule
+// that replaced it is narrower and survives the same objection:
+//
+//   ⚠ STATE THE SPEC, NEVER RANK. Sizes, counts, finishes and capacities are
+//   facts. "Best", "recommended" and any ordering that implies one is a
+//   comparative claim about products nobody here has tested. Where a spec is
+//   a REQUIREMENT it may be stated as one — PSA publishes the semi-rigid
+//   dimensions it wants, so repeating them is reporting, not endorsing.
+//
+// ⚠ THIRD-PARTY ENTRIES CARRY `q` (a tagged search), NOT `asin`, and that is
+// the correct destination rather than a fallback. Two reasons. Amazon is
+// egress-blocked from every path available to an agent here — sandbox curl AND
+// the fetch tool — so an ASIN written from this seat would be unverifiable by
+// construction, and a wrong one silently lands on somebody else's product.
+// More importantly sleeves are a COLOUR purchase: a search for "Dragon Shield
+// Matte 100" lands on all forty colours, which is the page a buyer wants,
+// where a single ASIN picks black for them. Searches commission identically.
+// Upgrade any of these to an ASIN with scripts/verify_amazon_asins.mjs from an
+// ordinary machine — never from here.
 //
 // ⚠ No prices and no thumbnails, for the reason given at amazonUrl: we hold
 // no Creators API keys, and the API is the only lawful source for either.
 // Text and a link until that changes.
 const LORCANA_GEAR = [
-  {group: "Sleeves", note: "65 per pack — one pack sleeves a 60-card deck", items: [
+  {group: "Sleeves", note: "65 per pack — one pack sleeves a 60-card deck", home: true, items: [
     {asin: "B0CSZ5FJSV", name: "Lorcana card-back art"},
     {asin: "B0DTK2ZQ4D", name: "I2I"},
     {asin: "B0BT78JTSR", name: "Elsa – Spirit of Winter"},
@@ -34963,16 +34992,83 @@ const LORCANA_GEAR = [
     {asin: "B0CFRDR957", name: "Robin Hood – Daydreamer"},
     {asin: "B0DJPCLFW4", name: "Winnie the Pooh – Hunny Wizard"},
   ]},
-  {group: "Portfolios", note: "Binder storage for the sets you are completing", items: [
+  {group: "Portfolios", note: "Binder storage for the sets you are completing", home: true, items: [
     {asin: "B0DKJLRC79", name: "Premium portfolio, card-back art", meta: "252 cards"},
     {asin: "B0H6JGF65L", name: "Mickey & Minnie (Fabled)", meta: "252 cards"},
     {asin: "B0GBYWWQ28", name: "Card-back art, 3-pack", meta: "252 cards each"},
     {asin: "B0BT6ZM88Q", name: "The Queen – Wicked and Vain", meta: "64 + 8 oversized"},
   ]},
-  {group: "Deck boxes", items: [
+  {group: "Deck boxes", home: true, items: [
     {asin: "B0DKJSYRRG", name: "Premium deck box", meta: "100 sleeved cards"},
   ]},
+
+  // A Lorcana card is 63×88mm — the same as Magic and Pokémon — so there is no
+  // Lorcana-specific accessory constraint at all beyond licensed art, and the
+  // entire mainstream standard-size market fits. That one fact is why these
+  // sections can exist, and it is the most useful sentence on the page.
+  {group: "Sleeves — any brand", note:
+    "Lorcana cards are 63×88mm, the same as Magic and Pokémon: anything sold as \\u201cstandard size\\u201d (66×91mm) fits", items: [
+    {q: "Dragon Shield Matte standard size sleeves 100 count", name: "Dragon Shield Matte", meta: "100 ct · opaque back"},
+    {q: "Dragon Shield Dual Matte sleeves 100 count", name: "Dragon Shield Dual Matte", meta: "100 ct · two-tone"},
+    {q: "Dragon Shield Classic standard size sleeves 100 count", name: "Dragon Shield Classic", meta: "100 ct · glossy"},
+    {q: "Ultra Pro Eclipse Matte standard deck protector sleeves 100", name: "Ultra Pro Eclipse Matte", meta: "100 ct"},
+    {q: "Ultimate Guard Katana standard size sleeves 100", name: "Ultimate Guard Katana", meta: "100 ct"},
+    {q: "KMC Hyper Matte standard size card sleeves 100", name: "KMC Hyper Matte", meta: "100 ct"},
+  ]},
+  {group: "Inner sleeves", note:
+    "For double-sleeving — a perfect-fit inner goes on the card, the matte sleeve goes over both", items: [
+    {q: "Dragon Shield Perfect Fit sealable inner sleeves 100", name: "Dragon Shield Perfect Fit", meta: "100 ct · sealable available"},
+    {q: "KMC Perfect Fit inner card sleeves 100", name: "KMC Perfect Fit", meta: "100 ct"},
+  ]},
+  {group: "Binders & pages", note: "Nine pockets a page — a set page fits a row of three", items: [
+    {q: "9 pocket zippered trading card binder 360 side loading", name: "9-pocket zip binder", meta: "360 cards · side-loading"},
+    {q: "9 pocket trading card binder 480 side loading", name: "Larger zip binder", meta: "480 cards"},
+    {q: "side loading 9 pocket trading card pages 100", name: "Loose 9-pocket pages", meta: "for a D-ring binder"},
+    {q: "4 pocket trading card binder side loading", name: "4-pocket binder", meta: "for oversized and playmat-art cards"},
+  ]},
+  {group: "Deck boxes — any brand", note: "Sleeved cards need roughly double the raw-card capacity", items: [
+    {q: "deck box 100 double sleeved trading cards magnetic", name: "100+ sleeved", meta: "one deck, sleeved"},
+    {q: "Ultimate Guard Boulder deck case 100", name: "Ultimate Guard Boulder", meta: "100 ct"},
+    {q: "Gamegenic Watchtower 100 convertible deck box", name: "Gamegenic Watchtower", meta: "100 ct · doubles as a dice tray"},
+    {q: "multi deck storage box 1200 trading cards", name: "Multi-deck case", meta: "several decks plus tokens"},
+  ]},
+
+  // The one section this site is unusually placed to carry: it tracks graded
+  // collections, so some of its readers are about to send cards away, and PSA
+  // publishes an exact supply spec for that. Nothing here is a recommendation
+  // — it is PSA's own packing list, and the toploader line is the mistake it
+  // exists to prevent.
+  {group: "Grading submission supplies", note:
+    "PSA asks for a semi-rigid holder, 3\\u00a05/16\\u2033 × 4\\u00a07/8\\u2033 — explicitly NOT a toploader, which graders cannot safely open", items: [
+    {q: "Card Saver 1 semi rigid card holders", name: "Card Saver 1", meta: "the size PSA specifies"},
+    {q: "clear penny sleeves trading cards 100", name: "Penny sleeves", meta: "clear only — opaque backs delay a submission"},
+    {q: "team bags resealable trading card sleeves", name: "Team bags", meta: "to bundle a stack"},
+    {q: "trading card cardboard dividers grading submission", name: "Dividers & bands", meta: "to stop cards shifting in transit"},
+  ]},
+  {group: "Single-card protection", note: "For a card you are keeping or selling, rather than submitting", items: [
+    {q: "35pt toploaders trading cards 3x4 clear rigid", name: "Toploaders", meta: "3×4″ · 35pt for a raw card"},
+    {q: "one touch magnetic card holder 35pt UV", name: "Magnetic one-touch", meta: "35pt · UV"},
+    {q: "acrylic trading card display stand", name: "Display stands"},
+  ]},
+  {group: "At the table", note: "What the Dice Tray and Lore Tracker stand in for when you are playing in person", items: [
+    {q: "trading card game playmat stitched edge 24x14", name: "Playmat", meta: "24×14″ · stitched edge"},
+    {q: "six sided d6 dice set of 12 translucent", name: "d6 dice", meta: "damage counters"},
+    {q: "spin down life counter d20 dice", name: "Spin-down counters", meta: "for lore"},
+    {q: "dice tray folding pu leather", name: "Dice tray"},
+  ]},
+  {group: "Bulk storage", note: "For everything that is not going in a binder", items: [
+    {q: "800 count cardboard trading card storage box", name: "800-count box"},
+    {q: "1600 count cardboard trading card storage box", name: "1600-count box"},
+    {q: "trading card storage box dividers tabbed", name: "Tabbed dividers"},
+  ]},
 ];
+// One accessor for a gear row's destination, so no render site has to know
+// which kind it is holding. An entry carries exactly one of `asin` (a curated
+// product page) or `q` (a tagged search) — see the catalogue's header for why
+// the search is the right answer for third-party goods rather than a stopgap.
+const gearUrl = (it) => it.asin ? amazonUrl(it.asin) : amazonSearchUrl(it.q);
+const gearKey = (it) => it.asin || ("q:" + it.q);
+
 // The /gear page's contents, assembled from the SAME maps the resolver uses.
 // Deliberately derived rather than hand-listed: a second list of ASINs would
 // drift from the first, and the guard test's "no ASIN used twice" check would
@@ -35016,7 +35112,7 @@ function amazonDirectory(){
   if(puzzles.length) out.push({title: "Jigsaw puzzles", note: "Ravensburger · 1000 pieces", items: puzzles});
   for(const sec of LORCANA_GEAR){
     out.push({title: sec.group, note: sec.note, items: sec.items.map(it => ({
-      name: it.name, meta: it.meta, url: amazonUrl(it.asin),
+      name: it.name, meta: it.meta, url: gearUrl(it), search: !it.asin,
     }))});
   }
   return out;
@@ -35058,10 +35154,11 @@ function GearView(){
   return html`<div class="faq-section gear-page">
     <h1 class="gear-page-h1">Lorcana on Amazon</h1>
     <p class="gear-page-lede">
-      Every Lorcana product we can point you at on Amazon — ${count} of them, kept by
-      hand. Sealed boxes and gift sets sit beside TCGplayer rather than instead of it;
-      the sleeves, portfolios and deck boxes are here because TCGplayer barely stocks
-      them.
+      Every Lorcana product and accessory we can point you at on Amazon — ${count} of
+      them, kept by hand. Sealed boxes and gift sets sit beside TCGplayer rather than
+      instead of it; sleeves, binders, deck boxes and grading supplies are here because
+      TCGplayer barely stocks them. A Lorcana card is 63×88mm, the same as Magic and
+      Pokémon, so anything sold as <em>standard size</em> fits.
     </p>
     <p class="gear-page-note muted">
       No prices or photos on this page: Amazon only licenses those through their
@@ -35072,6 +35169,8 @@ function GearView(){
     ${sections.map(sec => html`<section key=${sec.title} class="gear-sec">
       <h2 class="gear-sec-title">
         ${sec.title}
+        ${sec.items.every(it => it.search) && html`<span class="gear-sec-tag"
+          title="These open an Amazon search rather than one product page — these are colour and size choices, so the search is the page you want.">searches</span>`}
         ${sec.note && html`<span class="gear-sec-note muted">${sec.note}</span>`}
       </h2>
       <ul class="gear-grid">
@@ -35111,14 +35210,14 @@ const GearPanel = ({panelNav}) => {
       </button>
     </div>
     ${!collapsed && html`<div class="home-gear-body">
-      ${LORCANA_GEAR.map(sec => html`<div key=${sec.group} class="home-gear-sec">
+      ${LORCANA_GEAR.filter(sec => sec.home).map(sec => html`<div key=${sec.group} class="home-gear-sec">
         <div class="home-gear-sec-head">
           <span class="home-gear-sec-name">${sec.group}</span>
           ${sec.note && html`<span class="home-gear-sec-note muted">${sec.note}</span>`}
         </div>
         <ul class="home-gear-list">
-          ${sec.items.map(it => html`<li key=${it.asin}>
-            <a class="home-gear-item" href=${amazonUrl(it.asin)} target="_blank"
+          ${sec.items.map(it => html`<li key=${gearKey(it)}>
+            <a class="home-gear-item" href=${gearUrl(it)} target="_blank"
               rel="noopener nofollow sponsored"
               title=${it.name + " — on Amazon (affiliate link)"}>
               <span class="home-gear-item-name">${it.name}</span>
@@ -35129,8 +35228,9 @@ const GearPanel = ({panelNav}) => {
         </ul>
       </div>`)}
       <p class="home-gear-disclosure muted">
-        Official Ravensburger accessories, on Amazon. As an Amazon Associate I earn
-        from qualifying purchases — at no extra cost to you.
+        Official Ravensburger accessories, on Amazon; sleeves, binders and grading
+        supplies are on the Gear page. As an Amazon Associate I earn from qualifying
+        purchases — at no extra cost to you.
       </p>
     </div>`}
   </aside>`;

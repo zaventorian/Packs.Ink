@@ -2179,6 +2179,107 @@ job everyone learns to ignore is worse than a script you run when you touch the 
 
 Guarded by `node scripts/test_amazon_links.mjs`.
 
+### Third-party accessories, and why they are SEARCHES (2026-09-10)
+
+The first cut of Gear was first-party Ravensburger only, on the reasoning that a fan
+site naming a brand of sleeve it has not tested is making a claim. Zaven asked for the
+third-party market too, which is right — the official line is four sleeve designs
+against a category people genuinely shop. The rule that replaced it is narrower and
+survives the same objection:
+
+**⚠ STATE THE SPEC, NEVER RANK.** Sizes, counts, finishes and capacities are facts.
+"Best", "recommended", or an ordering that implies one is a comparative claim about
+products nobody here has tested. Where a spec is a **requirement** it may be stated as
+one — PSA publishes the semi-rigid dimensions it wants, so repeating them is reporting.
+
+**The fact that makes the whole category possible: a Lorcana card is 63×88mm, the same
+as Magic and Pokémon.** There is no Lorcana-specific accessory constraint at all beyond
+licensed art, so the entire mainstream standard-size (66×91mm) market fits. That is the
+single most useful sentence on `/gear` and it leads the sleeves section.
+
+- **⚠ A third-party entry carries `q` (a tagged search), never `asin` — and that is the
+  RIGHT destination, not a fallback.** Two independent reasons, and the second is the
+  one that would still hold with perfect information:
+  1. Amazon is egress-blocked from **every** path available to an agent here — sandbox
+     curl *and* the fetch tool (re-confirmed 2026-09-10). An ASIN written from that seat
+     is unverifiable by construction, and a wrong one silently lands on somebody else's
+     product.
+  2. Sleeves, binders and toploaders are a **colour and size purchase**. A search for
+     "Dragon Shield Matte 100" lands on all forty colours, which is the page a buyer
+     wants; a single ASIN picks black for them. Searches commission identically.
+  Upgrade any of them with `node scripts/verify_amazon_asins.mjs` from an ordinary
+  machine — never from inside an agent session.
+- **`gearUrl(it)` / `gearKey(it)` are the one accessor**, so no render site has to know
+  which kind it is holding. An entry has exactly one of `asin` or `q`; **neither** is the
+  dangerous case, because `amazonUrl(undefined)` returns null and the row renders as a
+  dead `<a href>` that looks completely normal. The guard test asserts the xor.
+- **`home: true` marks the sections the home panel shows; `/gear` renders all of them.**
+  That split is what lets the catalogue grow (17 sections, 89 links) without the
+  right-rail panel becoming a shop — the panel is a teaser whose title already links to
+  `/gear`. The panel's disclosure line says "Official Ravensburger accessories", so
+  **marking a third-party section `home` would silently make that copy false**; the test
+  asserts every `home` section is all-ASIN.
+- **The "searches" tag sits on the SECTION, not the row.** Every section is wholly one
+  kind or the other, so a per-row tag on thirty rows is noise for a fact true of the
+  whole block. Same honesty as `exact` choosing "Amazon" vs "Find on Amazon".
+- **Grading supplies are the differentiated section**, because this site tracks graded
+  collections — some of its readers are about to send cards away, and PSA publishes an
+  exact packing list: a semi-rigid holder at **3 5/16″ × 4 7/8″** (Card Saver 1 is that
+  size), clear penny sleeves (opaque backs delay a submission), and **explicitly not
+  toploaders**, which graders cannot safely open. That is PSA's spec, not a preference.
+- `amazonSearchUrl(query, dept)` gained the department argument here; it defaults to
+  `toys-and-games` so every existing caller is unchanged.
+
+## /picks — the unlisted affiliate page (2026-09-10)
+
+`picks.html`, a **standalone page like `/swiss` and `/ticker`**, not an SPA view: it is a
+personal link page rather than part of the product, so it has no business inside
+Index.html, the nav, or the sitemap. Wired in `dev_server.py`, `build_dist.mjs` and
+`robots.txt`; **no worker route** — Workers Assets' pretty-URL handling serves it, the
+same fall-through `/ticker` relies on.
+
+- **⚠ "Unlisted" is THREE mechanisms and losing any one quietly puts it in Google**: a
+  `noindex,nofollow` meta, a `robots.txt` Disallow on both `/picks` and `/picks.html`,
+  and nothing linking to it. Two of the three are checkable and the test checks them.
+- **Undiscoverable is NOT access-controlled.** Anyone with the address can open it, so
+  nothing sensitive goes on it — and the page says so in its own footer, because a
+  reader who thinks it is private will treat the link as safer than it is. Same posture
+  as swiss.html.
+- **⚠ Every link is a tagged SEARCH, and for this page that is the whole design.** A
+  hand-picked list of "popular games" rots within weeks — the Switch 2's price moved
+  from $449 to $500 on 2026-09-01, ten days before this shipped — while a category
+  search always shows what is current, in stock and at today's price. It also sidesteps
+  the ASIN-verification problem entirely. The page says this out loud rather than
+  letting it read as missing product pages.
+- **⚠ `AMAZON_TAG` is DUPLICATED from Index.html** because a standalone page cannot
+  reach the app's module. A drifted or dropped tag produces links that work perfectly,
+  land on the right products and earn nothing, with no error anywhere — so
+  `scripts/test_picks_page.mjs` reads the tag out of **both** files and fails if they
+  disagree. Same guard shape as the Discord digest vs `priceStanding`.
+- **`i=` (search department) is per section** — `videogames` / `electronics` /
+  `toys-and-games`. A typo'd slug is the quiet failure: Amazon serves the page anyway,
+  filtered to a category the product isn't in, so the link looks fine and returns
+  nothing useful. The test pins the set of valid slugs.
+- **The disclosure matters MORE here, not less.** This page exists to be handed to
+  people, so the required verbatim string ("As an Amazon Associate I earn from
+  qualifying purchases") sits above the links in its own bordered block, and the test
+  asserts it byte-for-byte. Every anchor is `rel="noopener nofollow sponsored"`.
+- **⚠ Send the PAGE, never the product links.** Amazon's Operating Agreement bans
+  Special Links in printed material, ebooks and oral solicitation outright; since March
+  2024 email/DM/social sharing is allowed only into **solicited** communications the
+  recipient opted into and can opt out of. A page URL is unambiguously a website link
+  and carries the disclosure with it, which is exactly why this page is the compliant
+  shape for "something I can send to people". The **Copy this page's link** button
+  forces the canonical `https://packs.ink/picks` for that reason — opened from disk,
+  `location.href` is a `file:///` path useless to anybody else.
+  **⚠ Sources are secondary**: affiliate-program.amazon.com is egress-blocked here, so
+  this was assembled from search results quoting the licence. Confirm in Associates
+  Central before leaning on the March-2024 relaxation.
+- Content is ordered by who is most likely to have been handed the link, so cards lead.
+
+Guarded by `node scripts/test_picks_page.mjs` (22 checks).
+
+
 
 ## Discord digest (`scripts/discord_digest.py`, 2026-09-10)
 

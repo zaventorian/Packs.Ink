@@ -38,7 +38,8 @@ function grabLine(prefix) {
 const moduleSrc = [
   grabLine("const AMAZON_TAG = "),
   grab("const amazonUrl = (asin) => asin", ";" + NL),
-  grab("const amazonSearchUrl = (query) =>", ";" + NL),
+  grabLine("const AMAZON_DEPT_DEFAULT = "),
+  grab("const amazonSearchUrl = (query, dept) =>", ";" + NL),
   grab("const MAINLINE_SETS = [", NL + "];"),
   grab("const SEALED_DISPLAY_TYPE_FOR = {", NL + "};"),
   grab("function deriveSealedDisplayType(item){", NL + "}"),
@@ -50,9 +51,11 @@ const moduleSrc = [
   grab("function amazonForSealed(product, setName){", NL + "}"),
   grab("const SEALED_PUZZLES = [", "}));"),
   grab("const LORCANA_GEAR = [", NL + "];"),
+  grabLine("const gearUrl = "),
+  grabLine("const gearKey = "),
   grab("const AMAZON_DIR_SETS = [", NL + "];"),
   grab("function amazonDirectory(){", NL + "}"),
-  "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed,",
+  "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed, gearUrl,",
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
   "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory};",
 ].join(NL);
@@ -97,8 +100,11 @@ for (const [type, bySet] of Object.entries(m.AMAZON_ASIN_BY_SET))
   for (const [set, asin] of Object.entries(bySet)) all.push([type + " / " + set, asin]);
 for (const r of m.AMAZON_SEALED_RULES) all.push(["rule " + r.tokens.join("+"), r.asin]);
 for (const [sku, asin] of Object.entries(m.AMAZON_PUZZLE_ASINS)) all.push(["puzzle " + sku, asin]);
+// Only the curated half: a search-backed row has no ASIN by design, and
+// pushing its `undefined` here would fail both the well-formed check and the
+// "reaches the page" check for a row that is working exactly as intended.
 for (const sec of m.LORCANA_GEAR)
-  for (const it of sec.items) all.push(["gear " + it.name, it.asin]);
+  for (const it of sec.items) if (it.asin) all.push(["gear " + it.name, it.asin]);
 
 const badShape = all.filter(([, a]) => !ASIN_RE.test(a));
 ok("every ASIN is well formed", badShape.length === 0, JSON.stringify(badShape));
@@ -195,7 +201,25 @@ ok("gear has sleeves, portfolios and a deck box",
   m.LORCANA_GEAR.length >= 3 && m.LORCANA_GEAR.every((s) => s.items.length > 0));
 ok("every gear item links with the tag",
   m.LORCANA_GEAR.every((s) => s.items.every((it) =>
-    m.amazonUrl(it.asin).includes("tag=packsink-20"))));
+    m.gearUrl(it).includes("tag=packsink-20"))));
+// An entry is either a curated product page or a tagged search, never both and
+// never neither. Neither is the dangerous one: amazonUrl(undefined) returns
+// null, so the row renders as a dead <a href> that looks completely normal.
+ok("every gear item is exactly one of asin or search",
+  m.LORCANA_GEAR.every((s) => s.items.every((it) =>
+    (!!it.asin) !== (!!it.q))),
+  JSON.stringify(m.LORCANA_GEAR.flatMap((s) => s.items)
+    .filter((it) => (!!it.asin) === (!!it.q)).slice(0, 3)));
+ok("every gear search carries real terms",
+  m.LORCANA_GEAR.every((s) => s.items.every((it) =>
+    !it.q || it.q.trim().length > 3)));
+// The home panel renders only the `home` sections and signs off with "Official
+// Ravensburger accessories". Marking a third-party section `home` would make
+// that sentence false — silently, since nothing about the render would change.
+ok("every home-panel section is first-party",
+  m.LORCANA_GEAR.filter((s) => s.home).every((s) => s.items.every((it) => it.asin)));
+ok("the home panel is a strict subset of the page",
+  m.LORCANA_GEAR.filter((s) => s.home).length < m.LORCANA_GEAR.length);
 
 // ── The compliance boundary ─────────────────────────────────────────────────
 // An Amazon price or image may only ever come from Amazon's own API, and we
@@ -225,7 +249,10 @@ ok("every directory item has a name and a tagged link",
 // The one that matters: a curated ASIN that never reaches the page is money
 // left on the table AND invisible — nothing renders it, so nobody notices.
 const asinOf = (u) => (u.match(/\/dp\/([A-Z0-9]{10})/) || [])[1];
-const onPage = new Set(dir.flatMap((s) => s.items.map((it) => asinOf(it.url))));
+// Search-backed rows have no ASIN by design, so they are simply not part of
+// this question — filter them out rather than letting an `undefined` sit in
+// the set and fail the "invents none" check below for the wrong reason.
+const onPage = new Set(dir.flatMap((s) => s.items.map((it) => asinOf(it.url))).filter(Boolean));
 const missing = all.map(([, a]) => a).filter((a) => !onPage.has(a));
 ok("every curated ASIN appears on the /gear page",
   missing.length === 0, missing.join(", "));
@@ -250,9 +277,13 @@ ok("booster boxes run newest first",
 // Same no-prices/no-images rule as the static catalog, now over what RENDERS.
 const dirBlob = JSON.stringify(dir);
 ok("the directory renders no prices", !/\$[0-9]/.test(dirBlob));
+// Product pages AND search pages are both links this code generates; what the
+// check is actually hunting is an image CDN URL somebody pasted off a listing,
+// which is the unlicensed use. Anything else on amazon.com is ours.
+const OURS = /^https?:\/\/www\.amazon\.com\/(dp\/|s\?)/;
 ok("the directory renders no image URLs",
-  !/https?:\/\/(?!www\.amazon\.com\/dp\/)/.test(dirBlob),
-  (dirBlob.match(/https?:\/\/[^"]+/g) || []).filter((u) => !u.includes("/dp/")).slice(0, 3).join(" "));
+  (dirBlob.match(/https?:\/\/[^"]+/g) || []).every((u) => OURS.test(u)),
+  (dirBlob.match(/https?:\/\/[^"]+/g) || []).filter((u) => !OURS.test(u)).slice(0, 3).join(" "));
 
 console.log(NL + (failed ? failed + " FAILED" : "all passed"));
 process.exit(failed ? 1 : 0);
