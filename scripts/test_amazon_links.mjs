@@ -285,5 +285,30 @@ ok("the directory renders no image URLs",
   (dirBlob.match(/https?:\/\/[^"]+/g) || []).every((u) => OURS.test(u)),
   (dirBlob.match(/https?:\/\/[^"]+/g) || []).filter((u) => !OURS.test(u)).slice(0, 3).join(" "));
 
+// ── The grading-queue supplies note ─────────────────────────────────────────
+// Source-text checks, because the block is JSX inside a component rather than a
+// pure function — but every way it breaks is silent, so it is worth pinning:
+//
+//   * The gate is what separates "a fact you need right now" from an advert. If
+//     it inverts or is dropped, the note shows for cards ALREADY at the grader,
+//     where the packing question is answered — nothing errors, it just starts
+//     reading as a shop prompt on somebody's collection page.
+//   * A dropped tag earns nothing and looks perfectly fine.
+//   * The disclosure is required near the link, not only in a footer.
+const queue = grab("const GradingQueueSection = ", NL + "};");
+ok("the queue's supplies note is gated on cards still to submit",
+  /toSubmit\s*>\s*0/.test(queue) && /gq-supplies/.test(queue));
+ok("…and 'to submit' is derived from the status, not the queue length",
+  /status\s*!==\s*"at_grader"/.test(queue));
+ok("its link goes through the tagged search helper",
+  /amazonSearchUrl\(/.test(queue) && !/href=\$\{"https/.test(queue));
+ok("it is marked sponsored + nofollow",
+  /rel="noopener nofollow sponsored"/.test(queue));
+ok("it carries the Associate disclosure",
+  /as an Amazon Associate I earn from qualifying purchases/i.test(queue));
+// PSA's spec is the reason the note exists; losing it leaves a bare shop link.
+ok("it states PSA's semi-rigid spec and the toploader warning",
+  /3 5\/16/.test(queue) && /toploader/i.test(queue));
+
 console.log(NL + (failed ? failed + " FAILED" : "all passed"));
 process.exit(failed ? 1 : 0);

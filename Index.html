@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=382">
+<link rel="stylesheet" href="styles.css?v=383">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -20648,6 +20648,10 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
   const [grades, setGrades] = useState({});
   const [busy, setBusy] = useState(false);
   if(!submissions || submissions.length === 0) return null;
+  // Cards still to be packed. The supplies note below is gated on this rather
+  // than on the queue existing at all: once everything is AT the grader the
+  // question is answered and a shopping line there is just an advert.
+  const toSubmit = submissions.filter(s => s.status !== "at_grader").length;
   const getG = (s) => grades[s.id] || {grader: s.intended_grader || "psa", grade: "10"};
   const setG = (id, patch) => setGrades(g => ({...g, [id]: {...(g[id] || {grader:"psa", grade:"10"}), ...patch}}));
   const graduateAll = async () => {
@@ -20690,6 +20694,24 @@ const GradingQueueSection = ({submissions, cardById, onUpdate, onRemove, onGradu
           </div>
         </div>`;
       })}
+    </div>`}
+    ${/* The one place on the site where somebody is about to pack a box, so the
+          spec is the point and the link is incidental — PSA publishes exact
+          dimensions and most people reach for a toploader, which graders cannot
+          safely open and which delays a submission. Reporting their packing
+          list, not recommending a brand (see the Gear rule in CLAUDE.md). */""}
+    ${!collapsed && toSubmit > 0 && html`<div class="gq-supplies">
+      <p class="gq-supplies-txt">
+        Packing ${toSubmit === 1 ? "it" : "them"}? PSA asks for a <strong>semi-rigid holder,
+        3 5/16″ × 4 7/8″</strong> and a clear penny sleeve — <strong>not</strong> a toploader,
+        which graders can't safely open.
+      </p>
+      <a class="gq-supplies-link" href=${amazonSearchUrl("Card Saver 1 semi rigid card holders")}
+        target="_blank" rel="noopener nofollow sponsored">Submission supplies on Amazon ↗</a>
+      <p class="gq-supplies-note muted">
+        Affiliate link — as an Amazon Associate I earn from qualifying purchases,
+        at no extra cost to you.
+      </p>
     </div>`}
   </div>`;
 };

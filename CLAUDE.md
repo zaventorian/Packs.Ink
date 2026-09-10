@@ -2279,6 +2279,30 @@ same fall-through `/ticker` relies on.
 
 Guarded by `node scripts/test_picks_page.mjs` (22 checks).
 
+### The grading queue is the one high-intent placement (2026-09-10)
+
+Everything else Amazon-shaped on the site sits where somebody might browse. The
+**grading queue** (`GradingQueueSection`) is different: a card with `status` other than
+`at_grader` is one the user has explicitly said they are about to pack and send. That is
+the highest-intent moment on the site for submission supplies, and PSA publishes an exact
+spec for them — so the note is **reporting a packing list, not recommending a brand**,
+which is what lets it exist under the state-the-spec-never-rank rule.
+
+- **⚠ It is gated on `toSubmit > 0`, and that gate is the whole difference between a fact
+  and an advert.** Once every card is AT the grader the packing question is answered, and
+  a shopping line there is just a promo box on somebody's collection page. Nothing errors
+  if the gate inverts or is dropped — it simply starts reading as an ad — so
+  `test_amazon_links.mjs` pins both the gate and that it is derived from the row's
+  `status`, never from the queue's length.
+- **The toploader warning is the reason it earns its place.** Reaching for a toploader is
+  the common mistake and graders cannot safely open one, which delays a submission; the
+  semi-rigid dimensions (3 5/16″ × 4 7/8″) are PSA's own.
+- Quiet by design — a hairline rule, not a filled card — and it carries its own Associate
+  disclosure, because the FTC wants that near the link rather than only in a footer.
+- The block is JSX inside a component rather than a pure function, so the guard is
+  source-text over the extracted component (bounded: ~4.4k chars, verified not to leak
+  into the next component, or the assertions would pass for the wrong reason).
+
 
 
 ## Discord digest (`scripts/discord_digest.py`, 2026-09-10)
