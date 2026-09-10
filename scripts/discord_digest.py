@@ -237,6 +237,17 @@ def main():
                     help="post even when the newest price date is not today")
     args = ap.parse_args()
 
+    # Every sibling ETL script loads scripts/.env, and supabase_client's own
+    # "missing SUPABASE_URL" message tells you to fill that file in — which only
+    # helps if something reads it. Guarded because this is the one script meant
+    # to be run by hand from a bare checkout, and in CI the values come from
+    # secrets rather than a file.
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     webhook = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
     if args.post and not webhook:
         print("No DISCORD_WEBHOOK_URL set — nothing to post. Exiting 0.")
