@@ -457,9 +457,12 @@ def promo_printing_hint(pid, info: dict, set_name: dict) -> str:
         f'{what}, i.e. {sname} #{r.get("collector_number")} (base pid {base_pid}). '
         f'Add to REPRINT_PROMOS in scripts/patch_pid_overrides.py:  '
         f'({base_pid}, <PROMO_SET>, "<printed cn>", "crd_<slug>_{pid}", {pid})  '
-        f'— the printed collector number is NOT this group\'s number (one TCGplayer '
-        f'promo group holds several numbering series); read it off the card art at '
-        f'https://tcgplayer-cdn.tcgplayer.com/product/{pid}_400w.jpg'
+        f'— read the printed collector number AND ITS SERIES off the card art at '
+        f'https://tcgplayer-cdn.tcgplayer.com/product/{pid}_400w.jpg . One TCGplayer '
+        f'promo group holds several series at once (P4 league/buy-a-box, PD1 '
+        f'prerelease, DIS Disney Parks, C2 Challenge), so a bare number never '
+        f'identifies a card: 4/PD1 and 4/DIS are different cards, and this group\'s '
+        f'#15/#16 are BOTH the C2 Challenge cards and the P4 Rapunzel pair.'
     )
 
 
