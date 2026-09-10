@@ -2308,10 +2308,13 @@ which is what lets it exist under the state-the-spec-never-rank rule.
 ## Discord digest (`scripts/discord_digest.py`, 2026-09-10)
 
 A daily post to a Discord webhook. **It is not a movers list**, and the reason is the
-whole design: the restock accounts (TrackaLacker's @LorcanaRestocks and the rest) already
-own *"this is in stock at Walmart for $6.00"* — native apps, push, a paid priority queue,
-150k users. We have no push infrastructure at all, so competing on the speed of that alert
-loses by default. **What none of them can say is whether $6.00 is a good price.** We hold
+whole design: the restock services already own *"this is in stock at Walmart for $6.00"*.
+**They have gone WIDE, which is exactly why they cannot go deep — and that is the opening.**
+TrackaLacker (whose `@LorcanaRestocks` handle is legacy SEO real estate; the account now
+reads *"TCG Restocks — Magic, Lorcana, One Piece & More"*) tracks Pokémon, Magic, One Piece,
+Lorcana, sports cards, LEGO, PS5, Switch, Xbox and GPUs. A service that also watches
+graphics cards is never going to tell a Lorcana player whether $140 is a fair price for
+that Enchanted. **What none of them can say is whether $6.00 is a good price.** We hold
 daily prices back to 2024-02-08, so the digest leads with the judgement:
 
 - **"Worth a look"** — cards that FELL on the window **and** now sit at a multi-month low.
