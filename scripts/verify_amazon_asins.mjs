@@ -66,8 +66,10 @@ for (const r of mod.AMAZON_SEALED_RULES)
     expect: r.tokens.flatMap((t) => t.split(" ")).filter((w) => w.length > 3)});
 for (const [sku, asin] of Object.entries(mod.AMAZON_PUZZLE_ASINS))
   targets.push({asin, what: "puzzle " + sku, expect: ["puzzle", PUZZLE_NAMES[sku]].filter(Boolean)});
+// A third-party entry is a search (`q`), not a product page: nothing to verify,
+// and fetching /dp/undefined would report it as a dead listing.
 for (const sec of mod.LORCANA_GEAR)
-  for (const it of sec.items)
+  for (const it of sec.items) if (it.asin)
     targets.push({asin: it.asin, what: "gear / " + it.name,
       expect: norm(it.name).split(" ").filter((w) => w.length > 4).slice(0, 2)});
 

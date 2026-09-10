@@ -19,7 +19,9 @@
 //     never added.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+// CRLF-normalised: a Windows checkout (core.autocrlf=true) ends lines "\r\n",
+// which never contains the ";\n" end markers below.
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const NL = String.fromCharCode(10);
 
 function grab(start, end) {

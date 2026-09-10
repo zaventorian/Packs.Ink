@@ -215,7 +215,8 @@ def build_embed(price_date, window, risers, fallers, standings):
             "inline": False,
         })
     return {
-        "title": f"Lorcana movers — {price_date:%b %-d, %Y}",
+        # .day, not %-d: the no-padding flag is glibc-only and raises on Windows.
+        "title": f"Lorcana movers — {price_date:%b} {price_date.day}, {price_date:%Y}",
         "url": f"{SITE}/screener",
         "description": (
             "Percent moves are NM Market. **Bold** notes say where today's price sits "
