@@ -2065,6 +2065,46 @@ exactly), overridable with `--season-label`.
   `refresh_elo.py` (current set has ≥1 event, or ≥1 new event in the last N days), not more
   discovery.
 
+### Set Championships are recognised by RPH's template, not only the title (2026-09-10)
+
+`is_sc()` needed the words "set championship" in the title, and stores don't always type
+them: "Lorcana Set Champs", "Attack of the Vine Store Championship", "Set Chamionship". RPH's
+official SC event template stamps **`phase_template_group` `f6a76808-…`** on every event made
+from it, whatever the title says, so `is_sc()` now accepts the title OR that group
+(`SC_PHASE_TEMPLATE_GROUPS` in `discover_wu_scs.py`), and side-event words veto both.
+
+- **Measured exhaustively, not sampled**: every event at all 103 tracked stores since
+  2025-08-01 (4,723). The group sat on 444 of 448 titled SCs and on 26 events that weren't
+  titled — **all 470 are real SCs**. The title test missed all 26: of the 6 played since
+  Winterspell, **5 never reached the board**, and 5 more (2026-09-12 to 09-20) were on track to
+  miss it.
+- **Widening the title test instead would not have worked.** "champ" also matches "Lorcana
+  League Play last week before Championships" and "League Season Finale - Single Elimination
+  Championship"; both carry a different template.
+- **Recognising them was half of it; FINDING them needed a second pull.** The name nets in
+  `discover_store_scs.py` are RPH's relevance search, which never returns a title that names no
+  set. `pull_store_scs()` reads each tracked store's own feed across the set's season
+  (`set_window()`: this booster set's release up to the next one's, from Supabase `sets`), and
+  `sc_set_for()` places a setless title by DATE — the rule the Stores tab already uses for every
+  event, and `discover_events.py` for an upcoming SC. Measured at ~25s a season for 103 stores;
+  it finds exactly the untitled SCs above (6 / 1 / 4 for AotV / Wilds Unknown / Winterspell).
+- **Knock-on effects, all intended**: `discover_events.py` now files these as `kind='sc'` and
+  mirrors them into `set_championships`, so they reach the Upcoming SCs tab, the roster scrape
+  and `sync_elo_tracked_stores`' 75-mile rule; `scrape_store_history.py` classifies history the
+  same way.
+- **The per-set config template UUID changes every rotation; this group has not moved since
+  Reign of Jafar.** If it ever does, `discover_events.py` prints a `::warning::` once fewer than
+  80% of ≥30 titled SCs carry it. An annotation, not a failure, because the title test keeps
+  working; `is_sc_by_name()` is the old test, kept for exactly that check.
+- **Older seasons are NOT backfilled by the weekly refresh**, which only asks about the current
+  set. With the canonical DB pulled locally,
+  `python scripts/elo/discover_store_scs.py --sets "Winterspell" "Wilds Unknown"` lists what they
+  missed (4 SCs at tracked stores as of 2026-09-10). Ingesting them re-rates history, so that is
+  a decision, not a chore.
+- Guarded by `python scripts/elo/test_sc_template.py` (the rule, the window, the store-feed
+  pull) and `test_season_seed.py` (a store-feed-only SC is ingested; an excluded store's feed is
+  never asked).
+
 ### Adding ONE event by hand (2026-09-08)
 
 "Count this event, but not this store" — a guest/out-of-area shop, or an SC discovery
