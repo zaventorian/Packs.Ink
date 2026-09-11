@@ -2199,6 +2199,33 @@ A movers row (`MoversBanner` + `renderTile` → `AmazonShelfTile`), keyed `amazo
 - `MoversBanner` grew a `titleHint` prop: its title button had "Open Screener with this
   filter" hardcoded, which this row's title (→ `/gear`) is not.
 
+### Out of stock → hidden, by a MANUAL daily check (migration 137)
+
+Until Creators API access, whether a shelf product is in stock is checked **by a person**,
+from an admin-only checklist at the top of `/gear` (`AmazonStockCheck`, gated on
+`GradedAdminContext`). Marking one **Out** writes `amazon_stock_checks` and hides it from
+the home row and from `/gear` for visitors; admins still see it dimmed so it can be
+marked back in.
+
+- **⚠ The flag decides which links we feature; it is never DISPLAYED.** No "in stock" badge,
+  no price. Amazon licenses stock and price only through its API; curating our own list
+  is not Program Content.
+- **⚠ Never automate it.** Reading Amazon pages on a schedule is the automated data
+  gathering Amazon's Conditions of Use prohibit, and it trips their bot checks. A person
+  opening forty listings is the design, not a stopgap to "improve".
+- **Keys are `amazonListingKey(url)`**: the ASIN, or `s:` + the search terms. Never the
+  tagged URL, or a tag change silently un-hides everything.
+- **The checklist's links are untagged** (`amazonCheckUrl`), so an admin checking forty
+  listings a day doesn't pollute the Associates click report.
+- **Hidden before the cap** — `amazonShelfItems(…, hidden)` filters, then round-robins, so
+  the next product takes a hidden one's slot. The checklist walks `amazonShelfPool`, every
+  candidate, not just the 30 on screen.
+- **Every failure reads as "nothing hidden"**, the pre-137 behaviour, and `amazonStockUnavailable`
+  lets the checklist say "apply migration 137" instead of throwing. Cached 10 min in
+  module scope (`_amazonStock`), refetched after each save.
+- Test it signed out: on localhost, `localStorage["packsink:gradedAdminPreview"] = "1"`
+  renders the admin checklist (writes still need a real admin session).
+
 ### The home bar — removed (2026-09-10)
 
 `HomeGearBar`, the bottom-left "Sleeves, binders & deck boxes" pill, is gone at Zaven's
@@ -2941,6 +2968,9 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
+- **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
+  check: anon-readable, graded-admin writes. Until it lands, `/gear`'s admin checklist says
+  "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
 - **`supabase/136_elo_player_rounds_intentional_draw.sql`** — STAGED, not applied. Appends
   `is_intentional_draw` to `elo_player_rounds_v` so the profile prints `ID` instead of `DRAW`.
   `create or replace view` (not drop+create — the view may have dependents, and replace allows a

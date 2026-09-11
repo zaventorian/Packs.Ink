@@ -12444,6 +12444,16 @@ const setNameMapOf = (setsMeta) => {
   for(const s of (setsMeta || [])) if(s && s.id) out[s.id] = s.name;
   return out;
 };
+// One stable key per Amazon destination, for the stock check: the ASIN for a
+// product page, "s:" + the search terms for a search. Never the whole URL — a
+// change to the tag or linkCode trail would orphan every check at once.
+const amazonListingKey = (url) => {
+  const u = String(url || "");
+  const dp = /\/dp\/([A-Z0-9]{10})/.exec(u);
+  if(dp) return dp[1];
+  const k = /[?&]k=([^&]*)/.exec(u);
+  return k ? "s:" + decodeURIComponent(k[1]).toLowerCase() : null;
+};
 function amazonSealedMatches(sealedPrices, setNameById){
   const num = (v) => { const n = v == null ? NaN : Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
   const byUrl = new Map();
@@ -12484,10 +12494,17 @@ function amazonSealedMatches(sealedPrices, setNameById){
 const AMAZON_SHELF_ORDER = ["Booster Boxes", "Illumineer's Troves", "Starter Decks", "Gift Sets", "Bundles", "Collector's Edition", "Booster Packs", "Puzzles"];
 const AMAZON_SHELF_SEARCH_TYPES = new Set(["Booster Boxes", "Illumineer's Troves", "Booster Packs"]);
 const AMAZON_SHELF_MAX = 30;
-function amazonShelfItems(sealedPrices, setNameById){
+// Every product eligible for the shelf, before the stock check and the cap —
+// which is also exactly the list the admin stock check walks each day.
+function amazonShelfPool(sealedPrices, setNameById){
   const newest = MAINLINE_SETS[MAINLINE_SETS.length - 1];
-  const all = [...amazonSealedMatches(sealedPrices, setNameById).values()]
+  return [...amazonSealedMatches(sealedPrices, setNameById).values()]
     .filter(it => it.exact || (it.setName === newest && AMAZON_SHELF_SEARCH_TYPES.has(it.type)));
+}
+function amazonShelfItems(sealedPrices, setNameById, hidden){
+  // Out of stock drops a product BEFORE the cap, so the next one fills its slot.
+  const all = amazonShelfPool(sealedPrices, setNameById)
+    .filter(it => !hidden || !hidden.has(amazonListingKey(it.amazon)));
   // Round-robin across product types, newest set first within each, so the
   // marquee opens on the current set and never reads as twelve boxes in a row.
   const lanes = AMAZON_SHELF_ORDER.map(t => all.filter(it => it.type === t)
@@ -12509,6 +12526,132 @@ function amazonShelfItems(sealedPrices, setNameById){
 // the <img>, uncovering the glyph drawn beneath it. Style rather than state, so
 // a marquee re-render can never flash a broken image back.
 const hideBrokenImg = (e) => { e.currentTarget.style.visibility = "hidden"; };
+
+// ── Out of stock on Amazon: a MANUAL daily check (migration 137) ───────────
+// Until Creators API access (10 shipped sales in 30 days), stock is checked by
+// a PERSON: an admin opens each shelf listing from the checklist on /gear and
+// marks it. An item marked out of stock is HIDDEN from the home row and /gear.
+//   · The site never DISPLAYS Amazon's stock or price — Amazon licenses both
+//     only through its API. Choosing which links to feature is curation.
+//   · It is never automated. Reading Amazon pages on a schedule is the "robots /
+//     data gathering" Amazon's Conditions of Use prohibit, and trips their bot
+//     checks anyway. Don't wire a scraper to this table.
+// Any failure reads as "nothing hidden", which is exactly the behaviour before
+// this existed — a broken check can cost a hidden link, never a page.
+const AMAZON_STOCK_TTL_MS = 10 * 60 * 1000;
+let _amazonStock = null;
+const amazonStockUnavailable = (err) => {
+  const code = err && (err.code || "");
+  return code === "42P01" || code === "PGRST205" || code === "42501"
+    || /amazon_stock_checks/i.test(String((err && err.message) || ""));
+};
+async function fetchAmazonStock(force){
+  if(!force && _amazonStock && Date.now() - _amazonStock.at < AMAZON_STOCK_TTL_MS) return _amazonStock;
+  let out;
+  try {
+    const {data, error} = await sbClient.from("amazon_stock_checks")
+      .select("listing_key,out_of_stock,checked_at").limit(1000);
+    out = error
+      ? {rows: [], at: Date.now(), unavailable: amazonStockUnavailable(error)}
+      : {rows: data || [], at: Date.now(), unavailable: false};
+  } catch {
+    out = {rows: [], at: Date.now(), unavailable: false};
+  }
+  _amazonStock = out;
+  return out;
+}
+function useAmazonStock(){
+  const [state, setState] = useState(() => _amazonStock || {rows: [], at: 0, unavailable: false});
+  const reload = useCallback((force) => fetchAmazonStock(force).then(setState), []);
+  useEffect(() => { reload(false); }, [reload]);
+  const hidden = useMemo(() => new Set(state.rows.filter(r => r.out_of_stock).map(r => r.listing_key)), [state.rows]);
+  const byKey = useMemo(() => new Map(state.rows.map(r => [r.listing_key, r])), [state.rows]);
+  return {hidden, byKey, unavailable: state.unavailable, reload};
+}
+async function saveAmazonStock(keys, outOfStock){
+  const checked_at = new Date().toISOString();
+  const {error} = await sbClient.from("amazon_stock_checks")
+    .upsert(keys.map(listing_key => ({listing_key, out_of_stock: !!outOfStock, checked_at})), {onConflict: "listing_key"});
+  return error || null;
+}
+// The checklist's links are UNTAGGED: an admin clicking through forty listings a
+// day is not a referral, and it keeps the Associates click report honest.
+const amazonCheckUrl = (key) => !key ? null : key.startsWith("s:")
+  ? "https://www.amazon.com/s?k=" + encodeURIComponent(key.slice(2)) + "&i=" + AMAZON_DEPT_DEFAULT
+  : "https://www.amazon.com/dp/" + encodeURIComponent(key);
+const stockCheckedWhen = (iso) => {
+  if(!iso) return "never";
+  const d = new Date(iso);
+  if(d.toDateString() === new Date().toDateString()) return "today";
+  if(d.toDateString() === new Date(Date.now() - 86400000).toDateString()) return "yesterday";
+  return d.toLocaleDateString(undefined, {month: "short", day: "numeric"});
+};
+const AmazonStockCheck = ({pool, stock}) => {
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(true);
+  const today = new Date().toDateString();
+  const rows = pool.map(it => {
+    const key = amazonListingKey(it.amazon);
+    const rec = key ? stock.byKey.get(key) : null;
+    return {it, key, rec, done: !!(rec && new Date(rec.checked_at).toDateString() === today)};
+  }).filter(r => r.key)
+    .sort((a, b) => (AMAZON_SHELF_ORDER.indexOf(a.it.type) - AMAZON_SHELF_ORDER.indexOf(b.it.type))
+      || (b.it.setRank - a.it.setRank) || a.it.name.localeCompare(b.it.name));
+  const doneCount = rows.filter(r => r.done).length;
+  const outCount = rows.filter(r => r.rec && r.rec.out_of_stock).length;
+  const off = stock.unavailable;
+  const mark = async (keys, out) => {
+    if(!keys.length || busy) return;
+    setBusy(true);
+    const err = await saveAmazonStock(keys, out);
+    setBusy(false);
+    if(err){
+      flashToast(amazonStockUnavailable(err)
+        ? "The stock check isn't switched on yet — apply migration 137"
+        : "Couldn't save the stock check: " + (err.message || "unknown error"));
+      return;
+    }
+    await stock.reload(true);
+  };
+  return html`<section class="amz-check" aria-label="Amazon stock check">
+    <div class="amz-check-head">
+      <button class="amz-check-toggle" onClick=${() => setOpen(v => !v)} aria-expanded=${open}>
+        <span class="amz-check-caret" aria-hidden="true">${open ? "▾" : "▸"}</span>
+        <span class="amz-check-title">Amazon stock check</span>
+        <span class="amz-check-admin">admin</span>
+      </button>
+      <span class="amz-check-sum muted">${off
+        ? "Not switched on yet — apply migration 137"
+        : `Checked today ${doneCount} of ${rows.length} · ${outCount} hidden`}</span>
+      ${open && !off && html`<button class="amz-check-bulk" disabled=${busy || doneCount === rows.length}
+        title="Marks every row you haven't checked today as in stock"
+        onClick=${() => mark(rows.filter(r => !r.done).map(r => r.key), false)}>The rest are in stock</button>`}
+    </div>
+    ${open && html`<p class="amz-check-help muted">
+      Open each listing and mark it. <b>Out</b> hides the product from the home row and from
+      this page for visitors. Nothing about stock or price is ever shown on the site, and these
+      links are untagged, so checking doesn't count as clicks.
+    </p>
+    <ul class="amz-check-list">
+      ${rows.map(({it, key, rec, done}) => html`<li key=${key}
+          class=${"amz-check-row" + (rec && rec.out_of_stock ? " is-out" : "") + (done ? " is-done" : "")}>
+        <span class="amz-check-thumb" aria-hidden="true">
+          ${uiIcon(it.type === "Puzzles" ? "puzzle" : "box", 14)}
+          ${it.img && html`<img src=${it.img} alt="" loading="lazy" onError=${hideBrokenImg}/>`}
+        </span>
+        <span class="amz-check-name"><b title=${it.name}>${it.name}</b><span>${it.sub}${it.exact ? "" : " · search"}</span></span>
+        <a class="amz-check-open" href=${amazonCheckUrl(key)} target="_blank" rel="noopener nofollow">Open ↗</a>
+        <span class="amz-check-seg" role="group" aria-label=${"Amazon stock for " + it.name}>
+          <button class=${rec && !rec.out_of_stock ? "active" : ""} disabled=${busy || off}
+            onClick=${() => mark([key], false)}>In stock</button>
+          <button class=${rec && rec.out_of_stock ? "active is-out" : ""} disabled=${busy || off}
+            onClick=${() => mark([key], true)}>Out</button>
+        </span>
+        <span class="amz-check-when muted">${rec ? stockCheckedWhen(rec.checked_at) : "never"}</span>
+      </li>`)}
+    </ul>`}
+  </section>`;
+};
 const AmazonShelfTile = ({it}) => html`<div class="amz-tile">
   <a class="amz-tile-art" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
     draggable="false" tabIndex="-1" aria-hidden="true">
@@ -35386,9 +35529,19 @@ function amazonDirectory(){
 // says so — a TCGplayer price must never read as Amazon's.
 const gearSecId = (title) => "gear-" + _amznNorm(title).replace(/ /g, "-");
 function GearView({sealedPrices, setsMeta}){
-  const sections = useMemo(() => amazonDirectory(), []);
-  const matches = useMemo(() => amazonSealedMatches(sealedPrices, setNameMapOf(setsMeta)), [sealedPrices, setsMeta]);
-  const count = sections.reduce((n, s) => n + s.items.length, 0);
+  const isAdmin = useContext(GradedAdminContext);
+  const stock = useAmazonStock();
+  const setNames = useMemo(() => setNameMapOf(setsMeta), [setsMeta]);
+  const matches = useMemo(() => amazonSealedMatches(sealedPrices, setNames), [sealedPrices, setNames]);
+  const pool = useMemo(() => amazonShelfPool(sealedPrices, setNames), [sealedPrices, setNames]);
+  // A listing marked out of stock is hidden from visitors; an admin still sees
+  // it, dimmed, so it can be found and marked back in.
+  const sections = useMemo(() => amazonDirectory()
+    .map(sec => ({...sec, items: sec.items
+      .map(it => ({...it, out: stock.hidden.has(amazonListingKey(it.url))}))
+      .filter(it => isAdmin || !it.out)}))
+    .filter(sec => sec.items.length > 0), [stock.hidden, isAdmin]);
+  const count = sections.reduce((n, s) => n + s.items.filter(it => !it.out).length, 0);
   let asOf = "";
   for(const m of matches.values()) if(m.priceDate && m.priceDate > asOf) asOf = m.priceDate;
   const jump = (title) => {
@@ -35409,6 +35562,7 @@ function GearView({sealedPrices, setsMeta}){
           onClick=${() => jump(sec.title)}>${sec.title}</button>`)}
       </nav>
     </header>
+    ${isAdmin && html`<${AmazonStockCheck} pool=${pool} stock=${stock}/>`}
     <p class="gear-page-note muted">
       Photos and prices are TCGplayer's${asOf ? ", prices as of " + fmtIsoDate(asOf) : ""} — Amazon's
       own price is on Amazon. Every link is an affiliate link: as an Amazon Associate I earn from
@@ -35426,7 +35580,7 @@ function GearView({sealedPrices, setsMeta}){
           const m = matches.get(it.url);
           const img = m ? m.img : tcgProductImg(it.tcg);
           const tcg = m ? m.tcg : (it.tcg ? tcgUrl(it.tcg) : null);
-          return html`<li key=${it.url} class="gear-card">
+          return html`<li key=${it.url} class=${"gear-card" + (it.out ? " is-out" : "")}>
             <a class="gear-card-art" href=${it.url} target="_blank" rel="noopener nofollow sponsored"
               tabIndex="-1" aria-hidden="true">
               <span class="gear-card-glyph">${uiIcon(it.glyph || sec.glyph || "box", 34)}</span>
@@ -35435,6 +35589,7 @@ function GearView({sealedPrices, setsMeta}){
             <div class="gear-card-body">
               <a class="gear-card-name" href=${it.url} target="_blank" rel="noopener nofollow sponsored">${it.name}</a>
               ${it.meta && html`<span class="gear-card-meta muted">${it.meta}</span>`}
+              ${it.out && html`<span class="gear-card-out">Hidden from visitors · out of stock</span>`}
               ${m && m.price != null && html`<span class="gear-card-px"><span class="gear-card-px-lbl">TCGplayer ${m.priceBasis}</span> ${fmt(m.price)}</span>`}
               <div class="gear-card-btns">
                 <a class="gear-btn gear-btn--amazon" href=${it.url} target="_blank" rel="noopener nofollow sponsored"
@@ -35796,7 +35951,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const [paused, setPaused] = useState(false);
   // Sealed product on Amazon for the shelf banner — see amazonShelfItems for
   // why every photo and price on it is TCGplayer's.
-  const amazonShelf = useMemo(() => amazonShelfItems(sealedPrices, setNameMapOf(setsMeta)), [sealedPrices, setsMeta]);
+  const amazonStock = useAmazonStock();
+  const amazonShelf = useMemo(() => amazonShelfItems(sealedPrices, setNameMapOf(setsMeta), amazonStock.hidden),
+    [sealedPrices, setsMeta, amazonStock.hidden]);
   const amazonShelfSubtitle = useMemo(() => {
     const asOf = amazonShelf.reduce((d, it) => (it.priceDate && it.priceDate > d) ? it.priceDate : d, "");
     return "Photos & prices from TCGplayer" + (asOf ? ", as of " + fmtIsoDate(asOf) : "")

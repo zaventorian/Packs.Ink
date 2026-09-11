@@ -72,12 +72,14 @@ const moduleSrc = [
   grabLine("const AMAZON_SHELF_ORDER = "),
   grabLine("const AMAZON_SHELF_SEARCH_TYPES = "),
   grabLine("const AMAZON_SHELF_MAX = "),
-  grab("function amazonShelfItems(sealedPrices, setNameById){", NL + "}"),
+  grab("const amazonListingKey = (url) => {", NL + "};"),
+  grab("function amazonShelfPool(sealedPrices, setNameById){", NL + "}"),
+  grab("function amazonShelfItems(sealedPrices, setNameById, hidden){", NL + "}"),
   "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed, gearUrl,",
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
   "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory,",
   "  amazonCardSearchUrl, tcgProductImg, tcgImgSized, amazonSealedMatches,",
-  "  amazonShelfItems, AMAZON_SHELF_MAX};",
+  "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool};",
 ].join(NL);
 
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -359,7 +361,7 @@ const shelfSets = {wu: "Wilds Unknown", aotv: "Attack of the Vine!", az: "Azurit
 const sRow = (pid, set, type, name, mkt, low) => ({tcgplayer_product_id: pid, set_id: set, product_type: type,
   name: "Disney Lorcana: " + name, market_price: mkt, low_price: low, price_date: "2026-09-10",
   image_url: "https://tcgplayer-cdn.tcgplayer.com/product/" + pid + "_200w.jpg"});
-const shelf = m.amazonShelfItems([
+const shelfRows = [
   sRow(1, "wu", "Booster Box", "Wilds Unknown Booster Box", 236.33, 220),
   sRow(2, "wu", "Booster Box", "Wilds Unknown Booster Box Case", 882.94, 850),
   sRow(3, "aotv", "Booster Box", "Attack of the Vine! Booster Box", 214.79, 200),
@@ -370,7 +372,8 @@ const shelf = m.amazonShelfItems([
   sRow(8, "wu", "Promo Single", "Wilds Unknown Puzzle Insert (Top Left)", 0.1, 0.1),
   sRow(9, "wu", "Booster Pack", "Wilds Unknown Sleeved Booster Pack Art Bundle [Set of 3]", 39.36, 30),
   sRow(10, "az", "Trove", "Azurite Sea Illumineer's Trove", null, 70),
-], shelfSets);
+];
+const shelf = m.amazonShelfItems(shelfRows, shelfSets);
 const shelfNames = shelf.map((it) => it.name);
 ok("the shelf carries curated listings",
   shelfNames.includes("Wilds Unknown Booster Box") && shelfNames.includes("Stitch Collector's Gift Set"), shelfNames.join(" | "));
@@ -409,6 +412,26 @@ ok("no shelf photo is Amazon's",
 ok("every shelf photo is TCGplayer's or Ravensburger's",
   shelfPhotos.every((u) => /^https:\/\/(tcgplayer-cdn\.tcgplayer\.com|ravensburger\.cloud)\//.test(u)),
   shelfPhotos.filter((u) => !/^https:\/\/(tcgplayer-cdn\.tcgplayer\.com|ravensburger\.cloud)\//.test(u)).slice(0, 3).join(" "));
+
+// ── The manual stock check ──────────────────────────────────────────────────
+// An item an admin marked out of stock leaves the shelf, and the next product
+// takes its slot. Keys are the ASIN or the search terms — never the tagged URL,
+// or a tag change would silently un-hide everything.
+check("a product page's stock key is its ASIN",
+  m.amazonListingKey("https://www.amazon.com/dp/B0GWKMTQGY?tag=packsink-20&linkCode=ll1"), "B0GWKMTQGY");
+check("a search's stock key is its terms",
+  m.amazonListingKey(m.amazonSearchUrl("Disney Lorcana Attack of the Vine! Booster Box")),
+  "s:disney lorcana attack of the vine! booster box");
+check("no URL has no stock key", m.amazonListingKey(""), null);
+const wuKey = m.amazonListingKey(shelf.find((it) => it.name === "Wilds Unknown Booster Box").amazon);
+const shelfMinusOne = m.amazonShelfItems(shelfRows, shelfSets, new Set([wuKey]));
+ok("an item marked out of stock leaves the shelf",
+  !shelfMinusOne.some((it) => it.name === "Wilds Unknown Booster Box"));
+check("…and nothing else does", shelfMinusOne.length, shelf.length - 1);
+check("a hidden item's slot is refilled under the cap",
+  m.amazonShelfItems(bigRows, bigSets, new Set([m.amazonListingKey(bigShelf[0].amazon)])).length, m.AMAZON_SHELF_MAX);
+ok("the stock check walks every candidate, not just the capped row",
+  m.amazonShelfPool(bigRows, bigSets).length > m.AMAZON_SHELF_MAX);
 
 // /gear joins its sealed rows to the same matches by Amazon URL, so a curated
 // listing with a live TCGplayer row has to find it there.
