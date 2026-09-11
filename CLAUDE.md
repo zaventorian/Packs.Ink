@@ -2028,11 +2028,21 @@ worth building later. The actual terms:
   qualify. Do not build one; do not buy a third-party Amazon scraping API either — the
   Operating Agreement is about where the *displayed* content came from, not who fetched it.
 
-So the reason there are no prices and no photos on the site today is simply that **we hold
-no Creators API keys**. `scripts/test_amazon_links.mjs` asserts the static catalog holds
-nothing but ASINs and keys — that guard is against somebody hand-copying a price off a
-listing, which is the unlicensed use that actually costs accounts. It is not a vow of
-poverty about prices in general.
+So the reason no AMAZON price or photo appears on the site is simply that **we hold no
+Creators API keys**. `scripts/test_amazon_links.mjs` asserts the static catalog holds
+nothing but ASINs, keys and TCGplayer ids — that guard is against somebody hand-copying a
+price or image off a listing, which is the unlicensed use that actually costs accounts. It
+is not a vow of poverty about prices in general.
+
+**⚠ The photos and prices you DO see on Amazon-linked tiles are TCGplayer's (2026-09-10).**
+Zaven asked for pictures and prices "even if we have to source them ourselves". Sourcing
+*Amazon's* ourselves — scraping, or copying them off listings — is exactly the prohibited
+path above, so the answer was to source OUR OWN: TCGplayer's catalog photo of the same
+product (the images the Sealed pages already show; the host is already in `img-src`) and
+TCGplayer's market price from our daily ETL, **labelled as TCGplayer's on every surface**.
+The rule governs Amazon's content, not TCGplayer's photo of the same box, so this is not a
+loophole. What a tile can never say is *Amazon's* price or stock: it shows "TCGplayer
+market $X" beside a "Buy/Find on Amazon" button, never "$X on Amazon".
 
 **⚠ Sources are secondary.** Every amazon.com / webservices.amazon.com /
 affiliate-program.amazon.com domain is egress-blocked from the agent sandbox, so the
@@ -2096,6 +2106,17 @@ non-compliant one.
   says "**Find on** Amazon", because a search cannot promise the product page it lands on.
 - **⚠ A set name typo'd against `MAINLINE_SETS` can never match** — that set silently
   serves a search link forever while looking curated. The guard test cross-checks every key.
+- **⚠ A case or display never takes a rule's ASIN.** Rules match tokens, so "Fabled
+  Collection Starter Set **Case**" matched the single set's listing. `amazonForSealed` skips
+  the rules when `deriveSealedDisplayType` says `Cases` / `Other Displays / Cases`.
+- **The rules were checked against the LIVE catalog (2026-09-10) and three were wrong.** The
+  unscoped `["collection starter"]` sent Attack of the Vine!'s Rapunzel Edition to the Fabled
+  listing (now `["fabled", "collection starter"]`); `["azurite", "stitch"]` never fired,
+  because TCGplayer calls it plain "Stitch Collector's Gift Set" (now `["stitch", "gift
+  set"]`); `["d100"]` never fired against "Disney100 Collector's Edition". The check that
+  found them resolves every `sealed_prices_latest` row and prints any two rows landing on one
+  ASIN — re-run that whenever a rule is added, because a wrong rule looks exactly like a
+  right one.
 
 ### Where it is wired
 
@@ -2114,6 +2135,17 @@ non-compliant one.
   making a claim, whereas listing the official line is a catalogue. Appended rather than
   hoisted for existing browsers — a shop box has not earned the right to shove somebody's
   layout around, unlike the at-the-table shortcuts that did.
+- **Every "buy on TCGplayer" control has an Amazon twin (2026-09-10)**, per Zaven: the card
+  popup's Price-changes rows ("Find on Amazon" beside "Buy on TCGplayer"), Sealed and Graded
+  collection tiles (`TCG ↗` + `Amazon ↗`), the Price Graphing single-product preview, the
+  movers-tile corner (a cart glyph left of the ↗), the home "Recent set EV" box price,
+  Playset Cost rows, Trade Compare printings and every Screener row. A single card is always
+  `amazonCardSearchUrl(name, rarity)` — a search, with the rarity word appended for
+  Enchanted / Iconic / Epic — because Amazon has no singles catalog worth pinning.
+  **Deliberately NOT twinned:** a *price* that merely happens to be a TCGplayer link (Cards
+  list rows, set-detail rows, deck tile price chips, pack-sim results) — doubling every
+  price chip would bury the prices — and TCGplayer's mass-entry "shop missing" buttons,
+  which Amazon has no equivalent for.
 
 ### `/gear` — the directory page
 
@@ -2131,10 +2163,41 @@ troves, single packs, starter decks, gift sets, puzzles, then the accessories. ~
   directly rather than letting it surface as a missing ASIN.
 - **Sets run newest-first** (`MAINLINE_SETS` reversed): somebody shopping wants the current
   set, not The First Chapter.
-- It says plainly at the top that there are no prices or photos and why. A page that looks
-  like a shop with the prices mysteriously absent is worse than one that explains itself.
+- **Product cards with photos (2026-09-10).** A sealed row's photo, TCGplayer price and
+  TCGplayer twin come from `amazonSealedMatches()`, joined by Amazon URL; an accessory's
+  come from its `tcg` field — the TCGplayer product id of the pictured item (on a search
+  row, one representative of the line). **Ids, never URLs**: `tcgProductImg(id)` builds the
+  image at render, so the catalog still holds nothing a hand-copied listing image could hide
+  in. No `tcg` means TCGplayer doesn't carry it, and the card shows its section glyph (`box`,
+  `sleeve`, `binder`, `deckbox`, `slab`, `toploader`, `mat`, `storage`, `puzzle` in
+  `UI_ICON_PATHS`). The glyph is drawn UNDER the `<img>` and `hideBrokenImg` hides a failed
+  image by style, so a product TCGplayer has no photo for yet degrades to the glyph.
+- The note above the grid says whose photos and prices they are, with the ETL date.
+- **Two section notes printed raw backslash-u escape codes** (for the curly quotes, the
+  non-breaking spaces and the inch marks) until 2026-09-10 — the source held
+  double-backslashed escapes inside plain JS strings. Real characters now.
 - Needs **no worker or dev_server route** — both already SPA-fallback unknown paths, so
   `VIEW_PATHS` + `VIEW_TITLES` + a line in `sitemap.xml` is the whole routing change.
+
+### The home shelf — "Lorcana on Amazon" (2026-09-10)
+
+A movers row (`MoversBanner` + `renderTile` → `AmazonShelfTile`), keyed `amazon` in
+`HOME_BANNER_KEYS`, default slot right after Promo Movers. Show/Hide is the fixed
+`amazonShelf` entry in `HOME_PANELS`, same pattern as Your Graded Movers; ▲▼ place it.
+
+- **`amazonShelfItems(sealedPrices, setNameById)` is pure and guarded.** It admits only
+  products the resolver matched to a curated ASIN, plus the NEWEST mainline set's own boxes,
+  troves and packs as a search ("Find on Amazon") — a search can't promise stock, so it is
+  admitted only for what people shop before we have matched a listing. Cases, promo singles
+  and `[Set of N]` bundles never appear. Round-robin across product types, newest set first
+  within each, capped at 30.
+- **Every photo and price on it is TCGplayer's**, and the subtitle says so, with the ETL
+  date and the Associate disclosure. "Updated daily" needs no new pipeline:
+  `sealed_prices_latest` refreshes every ETL run and the row re-derives from it.
+- **Its anchors carry `draggable="false"`.** The row is drag-to-pan, and a native link or
+  image drag would hijack the gesture.
+- `MoversBanner` grew a `titleHint` prop: its title button had "Open Screener with this
+  filter" hardcoded, which this row's title (→ `/gear`) is not.
 
 ### The home bar
 
@@ -2142,9 +2205,9 @@ troves, single packs, starter decks, gift sets, puzzles, then the accessories. ~
 
 - **Bottom-left is the only free corner**: `.packsink-flash-toast` and `.offline-pill` are
   both bottom-centre. Verified in-browser that they cannot stack.
-- **The × is permanent, not "later"** (`packsink:gearBarDismissed`). This is the only
-  advertising-shaped thing on the site; a shop prompt you cannot turn off is what makes a
-  fan site feel sold. It is also the first thing to cut if it reads as clutter — delete the
+- **The × is permanent, not "later"** (`packsink:gearBarDismissed`). It is
+  advertising-shaped, and a shop prompt you cannot turn off is what makes a fan site feel
+  sold. It is also the first thing to cut if it reads as clutter — delete the
   component and its one render line.
 - At ≤520px the label collapses and it is icon-only (60px). Measured: no page overflow at
   390px.
@@ -2161,10 +2224,13 @@ Amazon-bearing surface carries its own:
 | `privacy.html` | affiliate bullet, third-party list, fineprint |
 | Help / How-it-works | its affiliate paragraph, which also states we show no Amazon data |
 | Sealed detail modal | `.sealed-detail-affiliate`, under the buy row |
-| Sealed collection (puzzle tiles) | `.sealed-coll-affiliate`, foot of the view |
+| Sealed collection tiles | `.sealed-coll-affiliate`, foot of the view |
 | EV tool (box-price column) | appended to the existing "Prices via TCGCSV" footer |
 | Gear home panel | `.home-gear-disclosure` |
 | `/gear` | `.gear-page-note`, above the list |
+| Card popup (Price changes) | `.cd-affiliate-note`, above the rows |
+| Graded collection tiles | `.sealed-coll-affiliate`, foot of the set list |
+| Home "Lorcana on Amazon" row | the row's subtitle |
 
 Every Amazon anchor is `rel="noopener nofollow sponsored"`.
 
@@ -2276,8 +2342,12 @@ same fall-through `/ticker` relies on.
   this was assembled from search results quoting the licence. Confirm in Associates
   Central before leaning on the March-2024 relaxation.
 - Content is ordered by who is most likely to have been handed the link, so cards lead.
+- **Cards, with photos where we have them (2026-09-10).** An item may carry `tcg` (a
+  TCGplayer product id) or `rav` (a Ravensburger SKU), and `photoUrl()` builds the image;
+  everything else — consoles, games, streaming gear — gets a drawn glyph from `ICONS`, tinted
+  by the section's `hue`. Never an Amazon image: the test checks every photo host.
 
-Guarded by `node scripts/test_picks_page.mjs` (22 checks).
+Guarded by `node scripts/test_picks_page.mjs`.
 
 ### The grading queue is the one high-intent placement (2026-09-10)
 

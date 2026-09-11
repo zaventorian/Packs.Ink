@@ -57,9 +57,27 @@ const moduleSrc = [
   grabLine("const gearKey = "),
   grab("const AMAZON_DIR_SETS = [", NL + "];"),
   grab("function amazonDirectory(){", NL + "}"),
+  grab("const normalizeRarity = r => {", NL + "};"),
+  grabLine("const AMAZON_CARD_RARITY_WORDS = "),
+  grab("const amazonCardSearchUrl = (name, rarity) => {", NL + "};"),
+  grabLine("const TCG_IMG_BASE = "),
+  grab("const tcgProductImg = (pid, px = 400) =>", ";" + NL),
+  grab("const tcgImgSized = (url, px = 400) => {", NL + "};"),
+  grabLine("const TCG_AFFILIATE_BASE = "),
+  grab("const tcgUrl = (productId, printing) => {", NL + "};"),
+  grab("function isHiddenSealedListing(item){", NL + "}"),
+  grab("const AMAZON_SEALED_TYPE_LABEL = {", NL + "};"),
+  grab("const setNameMapOf = (setsMeta) => {", NL + "};"),
+  grab("function amazonSealedMatches(sealedPrices, setNameById){", NL + "}"),
+  grabLine("const AMAZON_SHELF_ORDER = "),
+  grabLine("const AMAZON_SHELF_SEARCH_TYPES = "),
+  grabLine("const AMAZON_SHELF_MAX = "),
+  grab("function amazonShelfItems(sealedPrices, setNameById){", NL + "}"),
   "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed, gearUrl,",
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
-  "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory};",
+  "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory,",
+  "  amazonCardSearchUrl, tcgProductImg, tcgImgSized, amazonSealedMatches,",
+  "  amazonShelfItems, AMAZON_SHELF_MAX};",
 ].join(NL);
 
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -286,6 +304,118 @@ const OURS = /^https?:\/\/www\.amazon\.com\/(dp\/|s\?)/;
 ok("the directory renders no image URLs",
   (dirBlob.match(/https?:\/\/[^"]+/g) || []).every((u) => OURS.test(u)),
   (dirBlob.match(/https?:\/\/[^"]+/g) || []).filter((u) => !OURS.test(u)).slice(0, 3).join(" "));
+
+// ── Cards on Amazon ─────────────────────────────────────────────────────────
+// Singles are always a search. The name's dash goes (Amazon titles never carry
+// it) and a chase rarity is added, or the common outranks the Enchanted.
+const elsaUrl = m.amazonCardSearchUrl("Elsa - Spirit of Winter", "Common");
+ok("a card search carries the tag", elsaUrl.includes("tag=packsink-20"), elsaUrl);
+ok("…searches the name without its dash",
+  decodeURIComponent(elsaUrl).includes("k=Disney Lorcana Elsa Spirit of Winter&"), decodeURIComponent(elsaUrl));
+ok("…and adds no base rarity", !/Common/.test(decodeURIComponent(elsaUrl)));
+ok("a chase card searches with its rarity",
+  decodeURIComponent(m.amazonCardSearchUrl("Elsa - Spirit of Winter", "enchanted")).includes("Spirit of Winter Enchanted&"));
+ok("an em-dashed tile title is cleaned the same way",
+  decodeURIComponent(m.amazonCardSearchUrl("Elsa — Spirit of Winter", "Rare")).includes("k=Disney Lorcana Elsa Spirit of Winter&"));
+check("no name yields no link", m.amazonCardSearchUrl("", "Rare"), null);
+
+// ── Resolver fixes found against the live catalog (2026-09-10) ──────────────
+// A case or display is not the single product a rule's ASIN points at.
+check("a case never takes a rule's listing",
+  m.amazonForSealed({name: "Disney Lorcana: Fabled Collection Starter Set Case", product_type: "Starter Deck"}, "Fabled").exact, false);
+check("…nor does a display",
+  m.amazonForSealed({name: "Disney Lorcana: Wilds Unknown 2-Player Starter Set Display", product_type: "Starter Deck"}, "Wilds Unknown").exact, false);
+check("a later Collection Starter Set no longer lands on Fabled's listing",
+  m.amazonForSealed({name: "Disney Lorcana: Attack of the Vine! Collection Starter Set - Rapunzel Edition", product_type: "Starter Deck"}, "Attack of the Vine!").exact, false);
+const fabledStarter = m.amazonForSealed({name: "Disney Lorcana: Fabled Collection Starter Set", product_type: "Starter Deck"}, "Fabled");
+ok("…while Fabled's own still does", fabledStarter.exact && fabledStarter.url.includes("B0FM8FBTNM"), fabledStarter.url);
+const stitchLive = m.amazonForSealed({name: "Disney Lorcana: Stitch Collector's Gift Set", product_type: "Gift Set"}, null);
+ok("the gift set resolves under TCGplayer's own name for it",
+  stitchLive.exact && stitchLive.url.includes("B0DK5WC19T"), stitchLive.url);
+const d100 = m.amazonForSealed({name: "Disney Lorcana: Disney100 Collector's Edition", product_type: "Collector's Edition"}, null);
+ok("Disney100 resolves under its catalog spelling", d100.exact && d100.url.includes("B0CLQR9D3N"), d100.url);
+
+// ── Photos: TCGplayer's, never Amazon's ─────────────────────────────────────
+// Amazon licenses its images only through its API, so every photo on an
+// Amazon-linked tile is TCGplayer's (or, for the puzzles, Ravensburger's),
+// derived at render from an id — which is what keeps URLs out of the catalog.
+check("a product photo comes from TCGplayer's CDN at tile size",
+  m.tcgProductImg(149665), "https://tcgplayer-cdn.tcgplayer.com/product/149665_in_400x400.jpg");
+ok("…and a thumbnail uses the stored 200px image", m.tcgProductImg(149665, 200).endsWith("/149665_200w.jpg"));
+check("no id yields no photo", m.tcgProductImg(null), null);
+check("a stored catalog image is re-sized for a tile",
+  m.tcgImgSized("https://tcgplayer-cdn.tcgplayer.com/product/690384_200w.jpg"),
+  "https://tcgplayer-cdn.tcgplayer.com/product/690384_in_400x400.jpg");
+ok("a non-TCGplayer image passes through untouched",
+  m.tcgImgSized("https://ravensburger.cloud/images/produktseiten/520x445/12001621.webp").startsWith("https://ravensburger.cloud/"));
+const gearIds = m.LORCANA_GEAR.flatMap((s) => s.items.filter((it) => "tcg" in it).map((it) => it.tcg));
+ok("every gear photo id is a positive integer",
+  gearIds.every((n) => Number.isInteger(n) && n > 0), JSON.stringify(gearIds.filter((n) => !(Number.isInteger(n) && n > 0))));
+ok("most gear rows have a photo", gearIds.length >= 30, "only " + gearIds.length);
+ok("every gear section names a fallback glyph", m.LORCANA_GEAR.every((s) => typeof s.glyph === "string" && s.glyph));
+
+// ── The home shelf ──────────────────────────────────────────────────────────
+const shelfSets = {wu: "Wilds Unknown", aotv: "Attack of the Vine!", az: "Azurite Sea"};
+const sRow = (pid, set, type, name, mkt, low) => ({tcgplayer_product_id: pid, set_id: set, product_type: type,
+  name: "Disney Lorcana: " + name, market_price: mkt, low_price: low, price_date: "2026-09-10",
+  image_url: "https://tcgplayer-cdn.tcgplayer.com/product/" + pid + "_200w.jpg"});
+const shelf = m.amazonShelfItems([
+  sRow(1, "wu", "Booster Box", "Wilds Unknown Booster Box", 236.33, 220),
+  sRow(2, "wu", "Booster Box", "Wilds Unknown Booster Box Case", 882.94, 850),
+  sRow(3, "aotv", "Booster Box", "Attack of the Vine! Booster Box", 214.79, 200),
+  sRow(4, "aotv", "Trove", "Attack of the Vine! Illumineer's Trove", 89.52, 80),
+  sRow(5, "az", "Booster Box", "Azurite Sea Booster Box", 150, 140),
+  sRow(6, "aotv", "Starter Deck", "Attack of the Vine! Collection Starter Set - Rapunzel Edition", 45.58, 40),
+  sRow(7, null, "Gift Set", "Stitch Collector's Gift Set", 29.37, null),
+  sRow(8, "wu", "Promo Single", "Wilds Unknown Puzzle Insert (Top Left)", 0.1, 0.1),
+  sRow(9, "wu", "Booster Pack", "Wilds Unknown Sleeved Booster Pack Art Bundle [Set of 3]", 39.36, 30),
+  sRow(10, "az", "Trove", "Azurite Sea Illumineer's Trove", null, 70),
+], shelfSets);
+const shelfNames = shelf.map((it) => it.name);
+ok("the shelf carries curated listings",
+  shelfNames.includes("Wilds Unknown Booster Box") && shelfNames.includes("Stitch Collector's Gift Set"), shelfNames.join(" | "));
+ok("…the newest set's box as a search, labelled as one",
+  shelf.some((it) => it.name === "Attack of the Vine! Booster Box" && it.exact === false), shelfNames.join(" | "));
+ok("…and never a case, a promo single or a multi-unit bundle",
+  !shelfNames.some((n) => /case|insert|set of 3/i.test(n)), shelfNames.join(" | "));
+ok("a search for anything else stays off the shelf",
+  !shelfNames.includes("Attack of the Vine! Collection Starter Set - Rapunzel Edition"), shelfNames.join(" | "));
+check("the shelf opens on the newest set", shelf[0].setName, "Attack of the Vine!");
+ok("product types alternate rather than bunching", shelf[1].type !== shelf[0].type,
+  shelf.slice(0, 3).map((it) => it.type).join(", "));
+const azTrove = shelf.find((it) => it.name === "Azurite Sea Illumineer's Trove");
+ok("market price first, low only when market is missing",
+  azTrove && azTrove.priceBasis === "low" && azTrove.price === 70, JSON.stringify(azTrove));
+ok("every sealed shelf tile carries both links",
+  shelf.filter((it) => it.type !== "Puzzles").every((it) => it.tcg && it.amazon.includes("tag=packsink-20")));
+
+// Cap: one row per curated set x type is more than the shelf holds.
+const TYPE_ROW = {"Booster Boxes": ["Booster Box", "Booster Box"],
+  "Illumineer's Troves": ["Trove", "Illumineer's Trove"], "Booster Packs": ["Booster Pack", "Booster Pack"]};
+const bigSets = {}, bigRows = [];
+let bigPid = 1000;
+for (const [type, bySet] of Object.entries(m.AMAZON_ASIN_BY_SET))
+  for (const set of Object.keys(bySet)) {
+    bigSets["id:" + set] = set;
+    bigRows.push(sRow(bigPid++, "id:" + set, TYPE_ROW[type][0], set + " " + TYPE_ROW[type][1], 50, 45));
+  }
+const bigShelf = m.amazonShelfItems(bigRows, bigSets);
+check("the shelf is capped", bigShelf.length, m.AMAZON_SHELF_MAX);
+ok("every curated tile links its exact listing",
+  bigShelf.filter((it) => it.exact).every((it) => /\/dp\/[A-Z0-9]{10}\?tag=packsink-20/.test(it.amazon)));
+const shelfPhotos = [...shelf, ...bigShelf].map((it) => it.img).filter(Boolean);
+ok("no shelf photo is Amazon's",
+  shelfPhotos.every((u) => !/media-amazon|ssl-images-amazon|images-amazon/i.test(u)));
+ok("every shelf photo is TCGplayer's or Ravensburger's",
+  shelfPhotos.every((u) => /^https:\/\/(tcgplayer-cdn\.tcgplayer\.com|ravensburger\.cloud)\//.test(u)),
+  shelfPhotos.filter((u) => !/^https:\/\/(tcgplayer-cdn\.tcgplayer\.com|ravensburger\.cloud)\//.test(u)).slice(0, 3).join(" "));
+
+// /gear joins its sealed rows to the same matches by Amazon URL, so a curated
+// listing with a live TCGplayer row has to find it there.
+const gearMatches = m.amazonSealedMatches([sRow(1, "wu", "Booster Box", "Wilds Unknown Booster Box", 236.33, 220)], shelfSets);
+const wuBox = m.amazonDirectory().find((s) => s.title === "Booster boxes").items.find((it) => it.name === "Wilds Unknown");
+ok("a /gear row finds its TCGplayer photo and price",
+  !!(gearMatches.get(wuBox.url) && gearMatches.get(wuBox.url).price === 236.33));
 
 // ── The grading-queue supplies note ─────────────────────────────────────────
 // Source-text checks, because the block is JSX inside a component rather than a

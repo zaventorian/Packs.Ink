@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=383">
+<link rel="stylesheet" href="styles.css?v=384">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2051,6 +2051,17 @@ const UI_ICON_PATHS = {
   reprint:   _icoSvg(html`<path d="M4 10.2a6.4 6.4 0 0 1 10.8-3.5l2.7 2.5"/><path d="M17.9 4.6v4.6h-4.6"/><path d="M20 13.8a6.4 6.4 0 0 1-10.8 3.5l-2.7-2.5"/><path d="M6.1 19.4v-4.6h4.6"/>`),
   pennant:   _icoSvg(html`<path d="M6 21V3.4"/><path d="M6 4.4h11.6l-2.4 3.9 2.4 3.9H6"/>`),
   die:       _icoSvg(html`<rect x="3.4" y="3.4" width="17.2" height="17.2" rx="3.6"/><path d="M8.2 8.2h.01"/><path d="M15.8 8.2h.01"/><path d="M12 12h.01"/><path d="M8.2 15.8h.01"/><path d="M15.8 15.8h.01"/>`, 2.4),
+  // Product glyphs for Amazon tiles with no TCGplayer photo — drawn under the
+  // <img>, so they only ever show when there is nothing to cover them.
+  box:       _icoSvg(html`<path d="M3.5 7.5L12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5L12 12l8.5-4.5"/><path d="M12 12v9"/>`),
+  puzzle:    _icoSvg(html`<path d="M5 5h4.5a2.5 2.5 0 0 1 5 0H19v4.5a2.5 2.5 0 0 1 0 5V19h-4.5a2.5 2.5 0 0 0-5 0H5v-4.5a2.5 2.5 0 0 0 0-5z"/>`),
+  sleeve:    _icoSvg(html`<path d="M6.5 6h11A1.5 1.5 0 0 1 19 7.5v12a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 5 19.5v-12A1.5 1.5 0 0 1 6.5 6z"/><path d="M8 6V3h8v3"/><path d="M9 11h6"/>`),
+  binder:    _icoSvg(html`<rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M9.5 3v18"/><path d="M5 7.5h2"/><path d="M5 12h2"/><path d="M5 16.5h2"/><path d="M12.5 8h4"/>`),
+  deckbox:   _icoSvg(html`<path d="M5 9.5h14v10A1.5 1.5 0 0 1 17.5 21h-11A1.5 1.5 0 0 1 5 19.5z"/><path d="M4 5.5h16v4H4z"/><path d="M10 14h4"/>`),
+  slab:      _icoSvg(html`<rect x="5.5" y="2.5" width="13" height="19" rx="1.5"/><path d="M5.5 7h13"/><rect x="8" y="9.5" width="8" height="9.5" rx="0.8"/>`),
+  toploader: _icoSvg(html`<rect x="5.5" y="3.5" width="13" height="17" rx="1"/><rect x="8" y="6" width="8" height="12" rx="0.6"/>`),
+  mat:       _icoSvg(html`<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h4v4h-4z"/><path d="M13.5 10h4v4h-4z"/>`),
+  storage:   _icoSvg(html`<path d="M3 9.5h18v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M5 9.5v-3h14v3"/><path d="M9 14h6"/>`),
 };
 
 const uiIcon = (key, size) => {
@@ -2918,6 +2929,13 @@ const tcgSetSearchUrl = (setName) => {
 // 24h ceiling once a client goes offline, which is exactly how a compliant
 // price becomes a non-compliant one while nobody is looking.
 //
+// PHOTOS AND PRICES ON AMAZON-LINKED TILES ARE TCGPLAYER'S (2026-09-10). The
+// home shelf, /gear and the Gear panel show product photos and prices, and
+// every one comes from TCGplayer's catalog through our own ETL — never from
+// Amazon — and is labelled as TCGplayer's. That is not a loophole in the rule
+// above; the rule governs Amazon's content, not TCGplayer's photo of the same
+// box. See amazonSealedMatches.
+//
 // The TAG is the only part that carries the commission. SiteStripe pastes a
 // `ref=`/`linkId=`/`gaOptInStatus=` trail alongside it; those are its own
 // analytics decoration and are deliberately dropped, because a short URL is
@@ -2940,6 +2958,33 @@ const amazonSearchUrl = (query, dept) =>
   `https://www.amazon.com/s?k=${encodeURIComponent(query)}` +
   `&i=${encodeURIComponent(dept || AMAZON_DEPT_DEFAULT)}` +
   `&tag=${AMAZON_TAG}&linkCode=ll2`;
+
+// A single card on Amazon. Always a SEARCH, never a curated ASIN: singles there
+// are third-party listings that come and go, so there is no product page worth
+// pinning, and the search for the card's own name commissions exactly like a
+// product link. Chase rarities carry the rarity word, or a search for "Elsa
+// Spirit of Winter" finds the common long before the Enchanted somebody was
+// actually looking at.
+const AMAZON_CARD_RARITY_WORDS = new Set(["Enchanted", "Iconic", "Epic"]);
+const amazonCardSearchUrl = (name, rarity) => {
+  const base = String(name || "").replace(/\s+[-–—]\s+/g, " ").trim();
+  if(!base) return null;
+  const r = normalizeRarity(rarity);
+  return amazonSearchUrl("Disney Lorcana " + base + (AMAZON_CARD_RARITY_WORDS.has(r) ? " " + r : ""));
+};
+
+// Product photos on anything Amazon-linked come from TCGPLAYER's catalog CDN,
+// never from Amazon: Amazon licenses its images only through its API, while
+// these are the same TCGplayer photos the Sealed pages already show. The CDN
+// renders a product at any size from its id, so tiles ask for 400px rather
+// than the 200px the catalog stores, which a hi-DPI tile visibly softens.
+const TCG_IMG_BASE = "https://tcgplayer-cdn.tcgplayer.com/product/";
+const tcgProductImg = (pid, px = 400) => !pid ? null
+  : TCG_IMG_BASE + encodeURIComponent(pid) + (px <= 200 ? "_200w.jpg" : `_in_${px}x${px}.jpg`);
+const tcgImgSized = (url, px = 400) => {
+  const m = /^https:\/\/tcgplayer-cdn\.tcgplayer\.com\/product\/(\d+)_\d+w\.jpg$/.exec(url || "");
+  return m ? tcgProductImg(m[1], px) : (url || null);
+};
 
 // ── Price history fetching ──────────────────────────────────────────────
 // Per-card history is the dominant anon query against prices_daily (89% of
@@ -6842,7 +6887,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
 // poster draws its own rows on a canvas in buildCardPosterBlob).
-const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing}) => {
+const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing, amazonHref}) => {
   const buyUrl = tcgUrl(productId, printing);
   return html`
   <div class="cd-stat">
@@ -6858,6 +6903,11 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
       ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow sponsored"
         onClick=${e=>e.stopPropagation()} title="Buy this printing on TCGplayer (affiliate link)">
         Buy on TCGplayer
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
+      </a>`}
+      ${amazonHref && html`<a class="cd-stat-buy cd-stat-buy--amazon" href=${amazonHref} target="_blank" rel="noopener nofollow sponsored"
+        onClick=${e=>e.stopPropagation()} title="Search Amazon for this card (affiliate link)">
+        Find on Amazon
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
       <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
@@ -7318,6 +7368,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     const rows = [];
     if(history.normal && history.normal.length) rows.push({
       key:"__normal", label:"Non-Foil", color:"#1d8d4a", sub:null,
+      amazonHref: amazonCardSearchUrl(group["Product Name"], group.Rarity),
       productId: group.normal && group.normal.tcgplayer_product_id,
       printing: (group.normal && group.normal.tcg_printing) || "Normal",
       low: computeSeriesDeltas(history.normal, "low_price"),
@@ -7326,6 +7377,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     });
     if(history.foil && history.foil.length) rows.push({
       key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
+      amazonHref: amazonCardSearchUrl(group["Product Name"], group.Rarity),
       productId: group.foil && group.foil.tcgplayer_product_id,
       printing: (group.foil && group.foil.tcg_printing) || "Foil",
       low: computeSeriesDeltas(history.foil, "low_price"),
@@ -7345,6 +7397,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           sub: (v.row.Set || "") + num,
           color: null,
           productId: v.row.tcgplayer_product_id,
+          amazonHref: amazonCardSearchUrl(v.row["Product Name"], v.row.Rarity),
           printing: v.printing,
           standing: priceStanding(vr),
           low: computeSeriesDeltas(vr, "low_price"),
@@ -7590,7 +7643,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     </div>`}
 
     ${!isGradedMode && statRows.length > 0 && html`<div class="card-detail-screener">
-      <div class="cd-affiliate-note">Buy links open TCGplayer through our affiliate program — we may earn a commission at no extra cost to you.</div>
+      <div class="cd-affiliate-note">Buy links open TCGplayer and Amazon through their affiliate programs — we may earn a commission at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.</div>
       <div class="card-detail-screener-head">
         <span class="cd-screener-title">Price changes</span>
         ${variantRows.length > 0 && html`<button class="cd-variants-btn"
@@ -7602,7 +7655,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       <div class="cd-stat-list">
         ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub}
           color=${r.color} low=${r.low} market=${r.market} standing=${r.standing}
-          productId=${r.productId} printing=${r.printing}/>`)}
+          productId=${r.productId} printing=${r.printing} amazonHref=${r.amazonHref}/>`)}
       </div>
     </div>`}
 
@@ -12264,9 +12317,12 @@ const AMAZON_SEALED_RULES = [
   // the only thing matching ever looks at.
   // Gift sets and collector's editions — the category Amazon carries best and
   // TCGplayer carries worst, so these are the rows most worth a second link.
-  {tokens:["azurite", "stitch"],              asin:"B0DK5WC19T", group:"gift",
+  // TCGplayer lists this as plain "Stitch Collector's Gift Set", no set name,
+  // so a rule keyed on "azurite" never fired against a live row.
+  {tokens:["stitch", "gift set"],             asin:"B0DK5WC19T", group:"gift",
    label:"Azurite Sea · Stitch Collector's Gift Set"},
-  {tokens:["d100"],                           asin:"B0CLQR9D3N", group:"gift",
+  // The catalog spells it "Disney100 Collector's Edition" — never "D100".
+  {tokens:["disney100", "collector"],         asin:"B0CLQR9D3N", group:"gift",
    label:"D100 Collector's Edition Gift Set"},
   {tokens:["first chapter", "gift set"],      asin:"B0CD2Z93GM", group:"gift",
    label:"The First Chapter Gift Set"},
@@ -12276,7 +12332,9 @@ const AMAZON_SEALED_RULES = [
    label:"Elsa Gift Box"},
   {tokens:["collection starter", "stitch"],   asin:"B0GHPRLZ7B", group:"gift",
    label:"Collection Starter Set · Stitch Edition (Winterspell)"},
-  {tokens:["collection starter"],             asin:"B0FM8FBTNM", group:"gift",
+  // Scoped to Fabled: unscoped, every later Collection Starter Set (Attack of
+  // the Vine!'s Rapunzel Edition) resolved to THIS listing, a wrong product.
+  {tokens:["fabled", "collection starter"],   asin:"B0FM8FBTNM", group:"gift",
    label:"Collection Starter Set (Fabled)"},
   // Starter decks: two per set, one per ink pair, so they are addressed by
   // their ink pair rather than by their set alone.
@@ -12319,14 +12377,18 @@ function amazonForSealed(product, setName){
   const clean = cleanSealedName(product.name || "");
   if(!clean) return null;
   const norm = _amznNorm(clean);
-  for(const rule of AMAZON_SEALED_RULES){
+  const type = deriveSealedDisplayType(product);
+  // A case or display (six boxes, a tray of starter sets) is not the single
+  // product a rule's ASIN points at — it gets a search, never that listing.
+  const bulk = type === "Cases" || type === "Other Displays / Cases";
+  if(!bulk) for(const rule of AMAZON_SEALED_RULES){
     if(rule.tokens.every(t => norm.includes(t))) return {url: amazonUrl(rule.asin), exact: true};
   }
   if(product.is_puzzle){
     const asin = AMAZON_PUZZLE_ASINS[(product.tcgplayer_product_id || 0) - 900000000];
     if(asin) return {url: amazonUrl(asin), exact: true};
   }
-  const byType = AMAZON_ASIN_BY_SET[deriveSealedDisplayType(product)];
+  const byType = AMAZON_ASIN_BY_SET[type];
   const asin = byType && setName ? byType[setName] : null;
   if(asin) return {url: amazonUrl(asin), exact: true};
   // The set name is prepended because a bare "Booster Pack Display" search is
@@ -12355,6 +12417,116 @@ const AmazonBuyLink = ({product, setName, cls}) => {
       : "Search Amazon for this product (affiliate link)"}>
     ${a.exact ? "Amazon" : "Find on Amazon"} ↗</a>`;
 };
+
+// ── Sealed product on Amazon, with TCGplayer's photo and price ─────────────
+// Every sealed row the resolver can place on Amazon, keyed by the Amazon URL it
+// resolves to. The home shelf and /gear both need the same answer to "which
+// TCGplayer row is this Amazon listing", because the photo, the price and the
+// TCGplayer twin link all come from that row.
+//
+// Where each field comes from is what keeps this compliant:
+//   · the PHOTO is TCGplayer's catalog image (tcgImgSized), never Amazon's —
+//     Amazon licenses its images only through its API;
+//   · the PRICE is TCGplayer's, from our own daily ETL, and every surface labels
+//     it as TCGplayer's. An Amazon price may only come from the Creators API
+//     (10 shipped sales in 30 days to unlock) with an as-of stamp; a scraped or
+//     hand-copied one is prohibited outright, and is how accounts get closed.
+// "Updated daily" is therefore true with no new pipeline: sealed_prices_latest
+// refreshes every ETL run and this re-derives from it.
+const AMAZON_SEALED_TYPE_LABEL = {
+  "Booster Boxes": "Booster box", "Illumineer's Troves": "Illumineer's Trove",
+  "Starter Decks": "Starter deck", "Gift Sets": "Gift set", "Bundles": "Bundle",
+  "Collector's Edition": "Collector's edition", "Booster Packs": "Booster pack",
+  "Puzzles": "Puzzle",
+};
+const setNameMapOf = (setsMeta) => {
+  const out = {};
+  for(const s of (setsMeta || [])) if(s && s.id) out[s.id] = s.name;
+  return out;
+};
+function amazonSealedMatches(sealedPrices, setNameById){
+  const num = (v) => { const n = v == null ? NaN : Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
+  const byUrl = new Map();
+  for(const row of [...(sealedPrices || []), ...SEALED_PUZZLES]){
+    if(!row || row.product_type === "Promo Single" || isHiddenSealedListing(row)) continue;
+    const type = deriveSealedDisplayType(row);
+    if(!AMAZON_SEALED_TYPE_LABEL[type]) continue;
+    const setName = row.is_puzzle ? null : ((setNameById && setNameById[row.set_id]) || null);
+    const az = amazonForSealed(row, setName);
+    if(!az) continue;
+    const mkt = num(row.market_price), low = num(row.low_price);
+    const item = {
+      key: "amz:" + row.tcgplayer_product_id,
+      name: cleanSealedName(row.name),
+      sub: row.is_puzzle
+        ? "Puzzle · " + row.puzzle_pieces + " pcs"
+        : [setName, AMAZON_SEALED_TYPE_LABEL[type]].filter(Boolean).join(" · "),
+      type, setName,
+      setRank: setName ? MAINLINE_SETS.indexOf(setName) : -1,
+      img: tcgImgSized(row.image_url),
+      price: mkt != null ? mkt : low,
+      priceBasis: mkt != null ? "market" : (low != null ? "low" : null),
+      priceDate: row.price_date || null,
+      amazon: az.url, exact: az.exact,
+      tcg: row.is_puzzle ? null : tcgUrl(row.tcgplayer_product_id),
+    };
+    // Two SKUs can resolve to one listing; keep the one TCGplayer actually prices.
+    const prev = byUrl.get(az.url);
+    if(prev && (prev.price != null || item.price == null)) continue;
+    byUrl.set(az.url, item);
+  }
+  return byUrl;
+}
+// The home shelf: curated listings, plus the NEWEST set's own boxes as a
+// search. A search cannot promise a product is on Amazon, so it is admitted only
+// for what people shop for before we have matched a listing, and its button
+// says "Find" rather than claiming stock.
+const AMAZON_SHELF_ORDER = ["Booster Boxes", "Illumineer's Troves", "Starter Decks", "Gift Sets", "Bundles", "Collector's Edition", "Booster Packs", "Puzzles"];
+const AMAZON_SHELF_SEARCH_TYPES = new Set(["Booster Boxes", "Illumineer's Troves", "Booster Packs"]);
+const AMAZON_SHELF_MAX = 30;
+function amazonShelfItems(sealedPrices, setNameById){
+  const newest = MAINLINE_SETS[MAINLINE_SETS.length - 1];
+  const all = [...amazonSealedMatches(sealedPrices, setNameById).values()]
+    .filter(it => it.exact || (it.setName === newest && AMAZON_SHELF_SEARCH_TYPES.has(it.type)));
+  // Round-robin across product types, newest set first within each, so the
+  // marquee opens on the current set and never reads as twelve boxes in a row.
+  const lanes = AMAZON_SHELF_ORDER.map(t => all.filter(it => it.type === t)
+    .sort((a, b) => (b.setRank - a.setRank) || a.name.localeCompare(b.name)));
+  const out = [];
+  for(let i = 0; out.length < AMAZON_SHELF_MAX; i++){
+    let took = false;
+    for(const lane of lanes){
+      if(!lane[i]) continue;
+      took = true;
+      out.push(lane[i]);
+      if(out.length >= AMAZON_SHELF_MAX) break;
+    }
+    if(!took) break;
+  }
+  return out;
+}
+// A missing photo (TCGplayer has none yet for a set still in pre-order) hides
+// the <img>, uncovering the glyph drawn beneath it. Style rather than state, so
+// a marquee re-render can never flash a broken image back.
+const hideBrokenImg = (e) => { e.currentTarget.style.visibility = "hidden"; };
+const AmazonShelfTile = ({it}) => html`<div class="amz-tile">
+  <a class="amz-tile-art" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
+    draggable="false" tabIndex="-1" aria-hidden="true">
+    <span class="amz-tile-glyph">${uiIcon(it.type === "Puzzles" ? "puzzle" : "box", 30)}</span>
+    ${it.img && html`<img src=${it.img} alt="" loading="lazy" draggable="false" onError=${hideBrokenImg}/>`}
+  </a>
+  <a class="amz-tile-name" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
+    draggable="false" title=${it.name}>${it.name}</a>
+  <div class="amz-tile-sub" title=${it.sub}>${it.sub}</div>
+  <div class="amz-tile-px">${it.price != null
+    ? html`<span class="amz-tile-px-lbl">TCGplayer ${it.priceBasis}</span><b>${fmt(it.price)}</b>`
+    : html`<span class="amz-tile-px-lbl">${it.tcg ? "No TCGplayer price" : "Not on TCGplayer"}</span>`}</div>
+  <a class="amz-tile-btn amz-tile-btn--amazon" href=${it.amazon} target="_blank" rel="noopener nofollow sponsored"
+    draggable="false" title=${it.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>
+    ${it.exact ? "Buy on Amazon" : "Find on Amazon"} ↗</a>
+  ${it.tcg && html`<a class="amz-tile-btn" href=${it.tcg} target="_blank" rel="noopener nofollow sponsored"
+    draggable="false" title="Buy this on TCGplayer (affiliate link)">TCGplayer ↗</a>`}
+</div>`;
 
 // Set Breakdown — average price per rarity, per set, with a second lens that
 // shows each rarity's share of box EV (the retired Heatmap tab folded in as a
@@ -18213,6 +18385,22 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                || cardOptions.find(c => c.card_id === previewItem.card_id)?.img_small
                || previewItem.image))
         : null;
+      // Amazon beside "View on TCGplayer". A card is always a search (Amazon has
+      // no dependable singles catalog); sealed goes through the resolver so a
+      // curated listing lands on its own product page.
+      const previewAmazon = (() => {
+        if(!previewItem) return null;
+        if(previewItem.kind === "sealed"){
+          const row = (sealedPrices || []).find(s => s.tcgplayer_product_id === previewItem.productId);
+          const setName = row ? ((setsMeta || []).find(s => s.id === row.set_id) || {}).name : null;
+          return amazonForSealed(row || {name: previewItem.name}, setName || null);
+        }
+        if(previewItem.kind !== "card") return null;
+        const baseId = String(previewItem.card_id || "").split("::")[0];
+        const row = raw.find(r => r.card_id === baseId);
+        const url = amazonCardSearchUrl(row ? row["Product Name"] : previewItem.name, row && row.Rarity);
+        return url ? {url, exact: false} : null;
+      })();
 
       const filtersButton = html`<button class=${"history-picker-filters-btn"+(histActiveCount>0?" active":"")}
         onClick=${()=>setHistoryFilterOpen(true)}
@@ -18463,6 +18651,8 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                     <div class="history-preview-meta">${previewItem.sub || ""}</div>
                     ${tcgUrl(previewItem.productId) && html`<div class="history-preview-type">
                       <a href=${tcgUrl(previewItem.productId)} target="_blank" rel="noopener nofollow sponsored">View on TCGplayer ↗</a>
+                      ${previewAmazon && html`<span class="history-preview-sep" aria-hidden="true"> · </span><a href=${previewAmazon.url} target="_blank" rel="noopener nofollow sponsored"
+                        title=${previewAmazon.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this (affiliate link)"}>${previewAmazon.exact ? "Buy on Amazon" : "Find on Amazon"} ↗</a>`}
                     </div>`}
                   </div>
                 </div>`}
@@ -19953,7 +20143,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     // search, because the search is for THIS puzzle by name.
                     // Pins and lore counters are not sold at all (buy_url is
                     // null by design), so they stay linkless.
-                    const amzn = item.is_puzzle ? amazonForSealed(item) : null;
+                    // Every sealed tile carries an Amazon twin now, not only the
+                    // puzzles: TCGplayer first (it has the live price), Amazon beside.
+                    const amzn = item.is_collectible ? null
+                      : amazonForSealed(item, item.is_puzzle ? null : (setNameById[item.set_id] || null));
                     const url = item.is_puzzle
                       ? (amzn?.url || item.buy_url)
                       : item.is_collectible
@@ -20014,7 +20207,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                               onClick=${e=>e.stopPropagation()}
                               title=${item.is_puzzle
                                 ? (amzn ? "Buy this puzzle on Amazon (affiliate link)" : "View on Ravensburger")
-                                : "Buy on TCGplayer (affiliate link)"}>Buy ↗</a>`}
+                                : "Buy on TCGplayer (affiliate link)"}>${item.is_puzzle || item.is_collectible ? "Buy" : "TCG"} ↗</a>`}
+                          ${amzn && !item.is_puzzle && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amzn.url} target="_blank"
+                              rel="noopener nofollow sponsored"
+                              onClick=${e=>e.stopPropagation()}
+                              title=${amzn.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this product (affiliate link)"}>Amazon ↗</a>`}
                         </div>
                         ${dRow && html`<div class="gc-card-deltas">
                           <span class="gc-card-delta-cell"><span class="gc-card-delta-lbl">1D</span>
@@ -20086,9 +20283,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       setName=${selectedProduct.set_id ? (setNameById[selectedProduct.set_id] || null) : null}
       onClose=${()=>setSelectedProduct(null)}/>`}
     <p class="sealed-coll-affiliate muted">
-      Buy links are affiliate links — TCGplayer for sealed product, Amazon for the
-      puzzles. We may earn a commission at no extra cost to you. As an Amazon
-      Associate I earn from qualifying purchases.
+      Buy links are affiliate links — TCGplayer and Amazon for sealed product,
+      Amazon for the puzzles. We may earn a commission at no extra cost to you. As
+      an Amazon Associate I earn from qualifying purchases.
     </p>
   </div>`;
 }
@@ -21993,9 +22190,13 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                         ${(rawPx != null || (card.tcgplayer_product_id && !isCustomVariant)) && html`<div class="gc-card-raw">
                           ${rawPx != null && html`<span class="gc-card-raw-px">Raw $${Number(rawPx).toLocaleString(undefined,{maximumFractionDigits:2})}</span>`}
                           ${card.tcgplayer_product_id && !isCustomVariant && html`<a class="gc-card-buy" href=${tcgUrl(card.tcgplayer_product_id, card.tcg_printing||"Normal")}
-                              target="_blank" rel="noopener nofollow"
+                              target="_blank" rel="noopener nofollow sponsored"
                               onClick=${e=>e.stopPropagation()}
-                              title="Buy on TCGplayer">Buy ↗</a>`}
+                              title="Buy a raw copy on TCGplayer (affiliate link)">TCG ↗</a>`}
+                          ${card.tcgplayer_product_id && !isCustomVariant && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amazonCardSearchUrl(card["Product Name"], card.Rarity)}
+                              target="_blank" rel="noopener nofollow sponsored"
+                              onClick=${e=>e.stopPropagation()}
+                              title="Search Amazon for this card (affiliate link)">Amazon ↗</a>`}
                         </div>`}
                         <div class="gc-card-slots">
                           ${slots.map((s, si) => {
@@ -22147,6 +22348,11 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                   : renderCards(section.cards))}
               </div>`;
             })}
+        <p class="sealed-coll-affiliate muted">
+          Buy links are affiliate links — TCGplayer and Amazon. We may earn a
+          commission at no extra cost to you. As an Amazon Associate I earn from
+          qualifying purchases.
+        </p>
       </div>
       ${!readOnly && (gradedView==="tracking" || (gradedPremium && submissions.length>0)) && html`<aside class="graded-collection-side" id="graded-goals-panel">
         ${gradedPremium && submissions.length>0 && html`<${GradingQueueSection} submissions=${submissions} cardById=${cardById}
@@ -26128,6 +26334,10 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
               onClick=${e=>e.stopPropagation()}
               class="playset-tcg-btn"
               title="Open on TCGplayer">TCG ↗</a>`}
+            ${url && html`<a href=${amazonCardSearchUrl(c.name, c.rarity)} target="_blank" rel="noopener nofollow sponsored"
+              onClick=${e=>e.stopPropagation()}
+              class="playset-tcg-btn playset-amzn-btn"
+              title="Find this card on Amazon (affiliate link)">Amazon ↗</a>`}
           </td>
           <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
           <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
@@ -26609,7 +26819,12 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
         <span class="trade-pr-low"><${Tip} text=${TIP_LOW} class="trade-pr-tag">Low<//> ${tradeMoney(row["Low Price"])}</span>
         <span class="trade-pr-mkt"><${Tip} text=${TIP_MARKET} class="trade-pr-tag">NM<//> ${tradeMoney(row["TCGPlayer Market"])}</span>
       </span>
-      ${url && html`<a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>↗</a>`}
+      ${url && html`<span class="trade-pr-links">
+        <a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>↗</a>
+        <a class="trade-pr-link trade-pr-link--amzn" href=${amazonCardSearchUrl(g["Product Name"], g.Rarity)} target="_blank"
+          rel="noopener nofollow sponsored" aria-label="Find on Amazon"
+          title=${"Find " + (g["Product Name"] || "this card") + " on Amazon (affiliate link)"}>${uiIcon("cart", 12)}</a>
+      </span>`}
     </div>`;
   };
 
@@ -29837,6 +30052,14 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                   ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
                     rel="noopener nofollow sponsored"
                     title="Open on TCGplayer (affiliate link)">↗</a>`}
+                  ${tcg && (() => {
+                    const az = isSealedRow
+                      ? amazonForSealed(r._sealedProduct, setNameById[r.set_id] || null)
+                      : {url: amazonCardSearchUrl(r.version ? r.name + " - " + r.version : r.name, r.rarity), exact: false};
+                    return az && az.url && html`<a class="td-tcg-link td-amzn-link" href=${az.url} target="_blank"
+                      rel="noopener nofollow sponsored" aria-label="Amazon"
+                      title=${az.exact ? "Buy on Amazon (affiliate link)" : "Find on Amazon (affiliate link)"}>${uiIcon("cart", 11)}</a>`;
+                  })()}
                 </div>
                 <div class="td-name-meta">
                   ${isSealedRow ? (r.display_type || r.product_type || "Sealed") : (() => { const vl = gradedVariantLabel(r._variant, setNameById[r.set_id]); return html`${r.printing + " #" + (r.collector_number || "?")}${vl ? html`<span class="variant-badge">${vl}</span>` : ""}`; })()}
@@ -32168,6 +32391,10 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
           <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>
         </svg>
       </a>`}
+      ${url && html`<a class="mt-amzn-link" href=${amazonCardSearchUrl(name, card.rarity)} target="_blank"
+          rel="noopener nofollow sponsored" data-h2c-ignore
+          title="Find this card on Amazon (affiliate link)" aria-label="Find this card on Amazon"
+          onClick=${e=>e.stopPropagation()}>${uiIcon("cart", 10)}</a>`}
     </div>
     <div class="mt-name">${name}</div>
     <div class="mt-meta">${card.rarity}${isFoil?" · Foil":""}</div>
@@ -32272,7 +32499,7 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
 // MoverTile can't: a graded slab has one price and one set of deltas, where
 // MoverTile is built around LOW vs MKT. Everything outside the tile stays
 // identical, which is the point: a movers row should look like a movers row.
-const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey}) => {
+const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey, titleHint}) => {
   const wrapRef = useRef(null);
   // Track manual interaction so the rAF loop yields briefly after the user
   // scrolls / wheels — otherwise the auto-advance immediately yanks the
@@ -32393,7 +32620,7 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
     ${(title || subtitle || controls || cards.length) ? html`<div style=${{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
       ${title ? (onTitleClick
         ? html`<button class="home-title-link" onClick=${onTitleClick}
-            title="Open Screener with this filter"
+            title=${titleHint || "Open Screener with this filter"}
             style=${{fontFamily:"'Cinzel',serif",fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3,background:"none",border:0,padding:0,cursor:"pointer"}}>${title}</button>`
         : html`<h2 class="title-font" style=${{fontSize:12,fontWeight:600,margin:0,color:"var(--accent)",letterSpacing:0.3}}>${title}</h2>`) : null}
       ${controls ? html`<span>${controls}</span>` : null}
@@ -32502,6 +32729,9 @@ const HOME_PANELS = [
   // collection's "show on home" toggle flips; `fixed` drops the column picker
   // and the arrows, because its position comes from the banner order instead.
   {key:"gradedOwned", label:"Your Graded Movers",   col:"main", off:true, fixed:true},
+  // Lorcana on Amazon is a movers ROW too (bannerNodes.amazon), so like the row
+  // above it keeps an entry only for Show/Hide; the banner ▲▼ place it.
+  {key:"amazonShelf", label:"Lorcana on Amazon",    col:"main", fixed:true},
   // Not a panel — a shortcut. It pins a die under the Edit-layout chip on
   // PHONES only, because rolling for turn order is a thing you do at a table
   // with the phone already in your hand, and burying it three taps deep in
@@ -32576,7 +32806,7 @@ const HOME_TABLE_SHORTCUT_KEYS = ["dice", "lore"];
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
 const HOME_BANNER_ORDER_KEY = "packsink:homeBannerOrder";
-const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","graded","gowned"];
+const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","graded","gowned","amazon"];
 const HOME_BANNER_LABELS = {
   valuable: "Newest set — Most Valuable",
   chase:    "Chase Movers",
@@ -32584,6 +32814,7 @@ const HOME_BANNER_LABELS = {
   promo:    "Promo Movers",
   graded:   "Graded Movers",
   gowned:   "Your Graded Movers",
+  amazon:   "Lorcana on Amazon",
 };
 const normalizeBannerOrder = (val) => {
   if(!Array.isArray(val)) return null;
@@ -33485,6 +33716,7 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
       if(!best || px < best.price) best = {
         price: px,
         url: tcgUrl(row.tcgplayer_product_id),
+        row,
       };
     }
     return best;
@@ -33528,6 +33760,11 @@ const HomeEvStrip = ({sets, avgs, sealedPrices, setsMeta, onTitleClick, panelNav
                   ? html`<a href=${box.url} target="_blank" rel="noopener nofollow sponsored" class="home-ev-strip-box-link">${fmt(box.price)}<span class="ext">↗</span></a>`
                   : fmt(box.price))
               : html`<span class="muted">—</span>`}
+            ${(() => {
+              const az = box && box.row ? amazonForSealed(box.row, setName) : null;
+              return az && html`<a class="home-ev-strip-amzn" href=${az.url} target="_blank" rel="noopener nofollow sponsored"
+                title=${az.exact ? "Buy this box on Amazon (affiliate link)" : "Search Amazon for this box (affiliate link)"}>Amazon ↗</a>`;
+            })()}
           </div>
         </div>`;
       })}
@@ -35001,26 +35238,30 @@ const HOME_TOOL_ICONS = {
 // Upgrade any of these to an ASIN with scripts/verify_amazon_asins.mjs from an
 // ordinary machine — never from here.
 //
-// ⚠ No prices and no thumbnails, for the reason given at amazonUrl: we hold
-// no Creators API keys, and the API is the only lawful source for either.
-// Text and a link until that changes.
+// Photos: `tcg` is the TCGplayer product id of the pictured item — or, on a
+// search row, of one representative of the line (the section's "searches" tag
+// says so). The photo is TCGplayer's catalog image, derived from the id at
+// render (tcgProductImg), so no URL is ever stored here: an image URL in this
+// list would look exactly like one hand-copied off an Amazon listing, which is
+// the unlicensed use the guard test exists to catch. No `tcg` means TCGplayer
+// doesn't carry it, and the row shows its section's glyph instead.
 const LORCANA_GEAR = [
-  {group: "Sleeves", note: "65 per pack — one pack sleeves a 60-card deck", home: true, items: [
-    {asin: "B0CSZ5FJSV", name: "Lorcana card-back art"},
+  {group: "Sleeves", note: "65 per pack — one pack sleeves a 60-card deck", home: true, glyph: "sleeve", items: [
+    {asin: "B0CSZ5FJSV", name: "Lorcana card-back art", tcg: 555156},
     {asin: "B0DTK2ZQ4D", name: "I2I"},
-    {asin: "B0BT78JTSR", name: "Elsa – Spirit of Winter"},
-    {asin: "B0BT6R7WF9", name: "Mickey Mouse – True Friend"},
-    {asin: "B0DDL6XKL7", name: "Mickey Mouse – Wayward Sorcerer"},
-    {asin: "B0CFRDR957", name: "Robin Hood – Daydreamer"},
-    {asin: "B0DJPCLFW4", name: "Winnie the Pooh – Hunny Wizard"},
+    {asin: "B0BT78JTSR", name: "Elsa – Spirit of Winter", tcg: 510077},
+    {asin: "B0BT6R7WF9", name: "Mickey Mouse – True Friend", tcg: 510078},
+    {asin: "B0DDL6XKL7", name: "Mickey Mouse – Wayward Sorcerer", tcg: 625024},
+    {asin: "B0CFRDR957", name: "Robin Hood – Daydreamer", tcg: 531531},
+    {asin: "B0DJPCLFW4", name: "Winnie the Pooh – Hunny Wizard", tcg: 578142},
   ]},
-  {group: "Portfolios", note: "Binder storage for the sets you are completing", home: true, items: [
+  {group: "Portfolios", note: "Binder storage for the sets you are completing", home: true, glyph: "binder", items: [
     {asin: "B0DKJLRC79", name: "Premium portfolio, card-back art", meta: "252 cards"},
-    {asin: "B0H6JGF65L", name: "Mickey & Minnie (Fabled)", meta: "252 cards"},
-    {asin: "B0GBYWWQ28", name: "Card-back art, 3-pack", meta: "252 cards each"},
-    {asin: "B0BT6ZM88Q", name: "The Queen – Wicked and Vain", meta: "64 + 8 oversized"},
+    {asin: "B0H6JGF65L", name: "Mickey & Minnie (Fabled)", meta: "252 cards", tcg: 696532},
+    {asin: "B0GBYWWQ28", name: "Card-back art, 3-pack", meta: "252 cards each", tcg: 555182},
+    {asin: "B0BT6ZM88Q", name: "The Queen – Wicked and Vain", meta: "64 + 8 oversized", tcg: 510075},
   ]},
-  {group: "Deck boxes", home: true, items: [
+  {group: "Deck boxes", home: true, glyph: "deckbox", items: [
     {asin: "B0DKJSYRRG", name: "Premium deck box", meta: "100 sleeved cards"},
   ]},
 
@@ -35028,30 +35269,30 @@ const LORCANA_GEAR = [
   // Lorcana-specific accessory constraint at all beyond licensed art, and the
   // entire mainstream standard-size market fits. That one fact is why these
   // sections can exist, and it is the most useful sentence on the page.
-  {group: "Sleeves — any brand", note:
-    "Lorcana cards are 63×88mm, the same as Magic and Pokémon: anything sold as \\u201cstandard size\\u201d (66×91mm) fits", items: [
-    {q: "Dragon Shield Matte standard size sleeves 100 count", name: "Dragon Shield Matte", meta: "100 ct · opaque back"},
-    {q: "Dragon Shield Dual Matte sleeves 100 count", name: "Dragon Shield Dual Matte", meta: "100 ct · two-tone"},
-    {q: "Dragon Shield Classic standard size sleeves 100 count", name: "Dragon Shield Classic", meta: "100 ct · glossy"},
-    {q: "Ultra Pro Eclipse Matte standard deck protector sleeves 100", name: "Ultra Pro Eclipse Matte", meta: "100 ct"},
-    {q: "Ultimate Guard Katana standard size sleeves 100", name: "Ultimate Guard Katana", meta: "100 ct"},
-    {q: "KMC Hyper Matte standard size card sleeves 100", name: "KMC Hyper Matte", meta: "100 ct"},
+  {group: "Sleeves — any brand", glyph: "sleeve", note:
+    "Lorcana cards are 63×88mm, the same as Magic and Pokémon: anything sold as “standard size” (66×91mm) fits", items: [
+    {q: "Dragon Shield Matte standard size sleeves 100 count", name: "Dragon Shield Matte", meta: "100 ct · opaque back", tcg: 149665},
+    {q: "Dragon Shield Dual Matte sleeves 100 count", name: "Dragon Shield Dual Matte", meta: "100 ct · two-tone", tcg: 709038},
+    {q: "Dragon Shield Classic standard size sleeves 100 count", name: "Dragon Shield Classic", meta: "100 ct · glossy", tcg: 152809},
+    {q: "Ultra Pro Eclipse Matte standard deck protector sleeves 100", name: "Ultra Pro Eclipse Matte", meta: "100 ct", tcg: 691653},
+    {q: "Ultimate Guard Katana standard size sleeves 100", name: "Ultimate Guard Katana", meta: "100 ct", tcg: 478393},
+    {q: "KMC Hyper Matte standard size card sleeves 100", name: "KMC Hyper Matte", meta: "100 ct", tcg: 170174},
   ]},
-  {group: "Inner sleeves", note:
+  {group: "Inner sleeves", glyph: "sleeve", note:
     "For double-sleeving — a perfect-fit inner goes on the card, the matte sleeve goes over both", items: [
-    {q: "Dragon Shield Perfect Fit sealable inner sleeves 100", name: "Dragon Shield Perfect Fit", meta: "100 ct · sealable available"},
-    {q: "KMC Perfect Fit inner card sleeves 100", name: "KMC Perfect Fit", meta: "100 ct"},
+    {q: "Dragon Shield Perfect Fit sealable inner sleeves 100", name: "Dragon Shield Perfect Fit", meta: "100 ct · sealable available", tcg: 149695},
+    {q: "KMC Perfect Fit inner card sleeves 100", name: "KMC Perfect Fit", meta: "100 ct", tcg: 149901},
   ]},
-  {group: "Binders & pages", note: "Nine pockets a page — a set page fits a row of three", items: [
+  {group: "Binders & pages", glyph: "binder", note: "Nine pockets a page — a set page fits a row of three", items: [
     {q: "9 pocket zippered trading card binder 360 side loading", name: "9-pocket zip binder", meta: "360 cards · side-loading"},
     {q: "9 pocket trading card binder 480 side loading", name: "Larger zip binder", meta: "480 cards"},
-    {q: "side loading 9 pocket trading card pages 100", name: "Loose 9-pocket pages", meta: "for a D-ring binder"},
-    {q: "4 pocket trading card binder side loading", name: "4-pocket binder", meta: "for oversized and playmat-art cards"},
+    {q: "side loading 9 pocket trading card pages 100", name: "Loose 9-pocket pages", meta: "for a D-ring binder", tcg: 531545},
+    {q: "4 pocket trading card binder side loading", name: "4-pocket binder", meta: "for oversized and playmat-art cards", tcg: 510076},
   ]},
-  {group: "Deck boxes — any brand", note: "Sleeved cards need roughly double the raw-card capacity", items: [
-    {q: "deck box 100 double sleeved trading cards magnetic", name: "100+ sleeved", meta: "one deck, sleeved"},
-    {q: "Ultimate Guard Boulder deck case 100", name: "Ultimate Guard Boulder", meta: "100 ct"},
-    {q: "Gamegenic Watchtower 100 convertible deck box", name: "Gamegenic Watchtower", meta: "100 ct · doubles as a dice tray"},
+  {group: "Deck boxes — any brand", glyph: "deckbox", note: "Sleeved cards need roughly double the raw-card capacity", items: [
+    {q: "deck box 100 double sleeved trading cards magnetic", name: "100+ sleeved", meta: "one deck, sleeved", tcg: 150933},
+    {q: "Ultimate Guard Boulder deck case 100", name: "Ultimate Guard Boulder", meta: "100 ct", tcg: 150379},
+    {q: "Gamegenic Watchtower 100 convertible deck box", name: "Gamegenic Watchtower", meta: "100 ct · doubles as a dice tray", tcg: 230080},
     {q: "multi deck storage box 1200 trading cards", name: "Multi-deck case", meta: "several decks plus tokens"},
   ]},
 
@@ -35060,28 +35301,28 @@ const LORCANA_GEAR = [
   // publishes an exact supply spec for that. Nothing here is a recommendation
   // — it is PSA's own packing list, and the toploader line is the mistake it
   // exists to prevent.
-  {group: "Grading submission supplies", note:
-    "PSA asks for a semi-rigid holder, 3\\u00a05/16\\u2033 × 4\\u00a07/8\\u2033 — explicitly NOT a toploader, which graders cannot safely open", items: [
-    {q: "Card Saver 1 semi rigid card holders", name: "Card Saver 1", meta: "the size PSA specifies"},
-    {q: "clear penny sleeves trading cards 100", name: "Penny sleeves", meta: "clear only — opaque backs delay a submission"},
-    {q: "team bags resealable trading card sleeves", name: "Team bags", meta: "to bundle a stack"},
-    {q: "trading card cardboard dividers grading submission", name: "Dividers & bands", meta: "to stop cards shifting in transit"},
+  {group: "Grading submission supplies", glyph: "slab", note:
+    "PSA asks for a semi-rigid holder, 3 5/16″ × 4 7/8″ — explicitly NOT a toploader, which graders cannot safely open", items: [
+    {q: "Card Saver 1 semi rigid card holders", name: "Card Saver 1", meta: "the size PSA specifies", tcg: 247598},
+    {q: "clear penny sleeves trading cards 100", name: "Penny sleeves", meta: "clear only — opaque backs delay a submission", tcg: 630330},
+    {q: "team bags resealable trading card sleeves", name: "Team bags", meta: "to bundle a stack", tcg: 616128},
+    {q: "trading card cardboard dividers grading submission", name: "Dividers & bands", meta: "to stop cards shifting in transit", tcg: 164248},
   ]},
-  {group: "Single-card protection", note: "For a card you are keeping or selling, rather than submitting", items: [
-    {q: "35pt toploaders trading cards 3x4 clear rigid", name: "Toploaders", meta: "3×4″ · 35pt for a raw card"},
-    {q: "one touch magnetic card holder 35pt UV", name: "Magnetic one-touch", meta: "35pt · UV"},
-    {q: "acrylic trading card display stand", name: "Display stands"},
+  {group: "Single-card protection", glyph: "toploader", note: "For a card you are keeping or selling, rather than submitting", items: [
+    {q: "35pt toploaders trading cards 3x4 clear rigid", name: "Toploaders", meta: "3×4″ · 35pt for a raw card", tcg: 168524},
+    {q: "one touch magnetic card holder 35pt UV", name: "Magnetic one-touch", meta: "35pt · UV", tcg: 180719},
+    {q: "acrylic trading card display stand", name: "Display stands", tcg: 265541},
   ]},
-  {group: "At the table", note: "What the Dice Tray and Lore Tracker stand in for when you are playing in person", items: [
-    {q: "trading card game playmat stitched edge 24x14", name: "Playmat", meta: "24×14″ · stitched edge"},
-    {q: "six sided d6 dice set of 12 translucent", name: "d6 dice", meta: "damage counters"},
-    {q: "spin down life counter d20 dice", name: "Spin-down counters", meta: "for lore"},
-    {q: "dice tray folding pu leather", name: "Dice tray"},
+  {group: "At the table", glyph: "mat", note: "What the Dice Tray and Lore Tracker stand in for when you are playing in person", items: [
+    {q: "trading card game playmat stitched edge 24x14", name: "Playmat", meta: "24×14″ · stitched edge", tcg: 510085},
+    {q: "six sided d6 dice set of 12 translucent", name: "d6 dice", meta: "damage counters", glyph: "die"},
+    {q: "spin down life counter d20 dice", name: "Spin-down counters", meta: "for lore", glyph: "die"},
+    {q: "dice tray folding pu leather", name: "Dice tray", tcg: 625973},
   ]},
-  {group: "Bulk storage", note: "For everything that is not going in a binder", items: [
-    {q: "800 count cardboard trading card storage box", name: "800-count box"},
-    {q: "1600 count cardboard trading card storage box", name: "1600-count box"},
-    {q: "trading card storage box dividers tabbed", name: "Tabbed dividers"},
+  {group: "Bulk storage", glyph: "storage", note: "For everything that is not going in a binder", items: [
+    {q: "800 count cardboard trading card storage box", name: "800-count box", tcg: 154090},
+    {q: "1600 count cardboard trading card storage box", name: "1600-count box", tcg: 154099},
+    {q: "trading card storage box dividers tabbed", name: "Tabbed dividers", tcg: 164276},
   ]},
 ];
 // One accessor for a gear row's destination, so no render site has to know
@@ -35115,15 +35356,15 @@ function amazonDirectory(){
     const items = newestFirst
       .filter(setName => bySet[setName])
       .map(setName => ({name: setName, url: amazonUrl(bySet[setName])}));
-    if(items.length) out.push({title: sec.title, note: sec.note, items});
+    if(items.length) out.push({title: sec.title, note: sec.note, glyph: "box", items});
   }
   const rules = (group) => AMAZON_SEALED_RULES
     .filter(r => r.group === group && r.label)
     .map(r => ({name: r.label, url: amazonUrl(r.asin)}));
   const decks = rules("deck");
-  if(decks.length) out.push({title: "Starter decks", note: "Ready to play out of the box", items: decks});
+  if(decks.length) out.push({title: "Starter decks", note: "Ready to play out of the box", glyph: "box", items: decks});
   const gifts = rules("gift");
-  if(gifts.length) out.push({title: "Gift sets & collector's editions", items: gifts});
+  if(gifts.length) out.push({title: "Gift sets & collector's editions", glyph: "box", items: gifts});
   // Puzzle names come from SEALED_PUZZLES, which already keys them by the same
   // Ravensburger SKU — so a renamed puzzle renames here for free.
   const puzzleName = {};
@@ -35131,25 +35372,22 @@ function amazonDirectory(){
   const puzzles = Object.entries(AMAZON_PUZZLE_ASINS)
     .map(([sku, asin]) => ({name: puzzleName[sku] || ("Puzzle " + sku), url: amazonUrl(asin)}))
     .sort((a, b) => a.name.localeCompare(b.name));
-  if(puzzles.length) out.push({title: "Jigsaw puzzles", note: "Ravensburger · 1000 pieces", items: puzzles});
+  if(puzzles.length) out.push({title: "Jigsaw puzzles", note: "Ravensburger · 1000 pieces", glyph: "puzzle", items: puzzles});
   for(const sec of LORCANA_GEAR){
-    out.push({title: sec.group, note: sec.note, items: sec.items.map(it => ({
+    out.push({title: sec.group, note: sec.note, glyph: sec.glyph, items: sec.items.map(it => ({
       name: it.name, meta: it.meta, url: gearUrl(it), search: !it.asin,
+      tcg: it.tcg || null, glyph: it.glyph || null,
     }))});
   }
   return out;
 }
-// The page. A DIRECTORY, not a storefront — no prices and no photos, because
-// the only lawful source for either is an API we have no keys to (see the
-// amazonUrl comment). Saying that plainly at the top is better than a page
-// that looks like a shop with the prices mysteriously missing.
 // A slim, permanently-dismissible pill on the home page pointing at /gear.
 // BOTTOM-LEFT deliberately: the flash toast and the offline pill are both
 // bottom-CENTRE, so this is the one free corner and the three can never stack.
 //
-// It is the only advertising-shaped thing on the site, which is why the × is
-// not a "later" — it writes a permanent flag on first click. A shop prompt you
-// cannot turn off is the kind of thing that makes a fan site feel sold.
+// It is advertising-shaped, which is why the × is not a "later" — it writes a
+// permanent flag on first click. A shop prompt you cannot turn off is the kind
+// of thing that makes a fan site feel sold.
 const HomeGearBar = ({onOpen}) => {
   const [gone, setGone] = useState(() => {
     try { return localStorage.getItem("packsink:gearBarDismissed") === "1"; }
@@ -35167,42 +35405,74 @@ const HomeGearBar = ({onOpen}) => {
       <span class="gear-bar-txt">Sleeves, binders & deck boxes</span>
     </a>
     <button class="gear-bar-x" onClick=${dismiss}
-      aria-label="Hide this for good" title="Hide this for good">\u2715</button>
+      aria-label="Hide this for good" title="Hide this for good">✕</button>
   </div>`;
 };
-function GearView(){
+// The /gear page: product cards. Every photo and price on it is TCGplayer's
+// (see amazonSealedMatches for why that is the compliant source), and the page
+// says so — a TCGplayer price must never read as Amazon's.
+const gearSecId = (title) => "gear-" + _amznNorm(title).replace(/ /g, "-");
+function GearView({sealedPrices, setsMeta}){
   const sections = useMemo(() => amazonDirectory(), []);
+  const matches = useMemo(() => amazonSealedMatches(sealedPrices, setNameMapOf(setsMeta)), [sealedPrices, setsMeta]);
   const count = sections.reduce((n, s) => n + s.items.length, 0);
+  let asOf = "";
+  for(const m of matches.values()) if(m.priceDate && m.priceDate > asOf) asOf = m.priceDate;
+  const jump = (title) => {
+    const el = document.getElementById(gearSecId(title));
+    if(el) el.scrollIntoView({behavior: "smooth", block: "start"});
+  };
   return html`<div class="faq-section gear-page">
-    <h1 class="gear-page-h1">Lorcana on Amazon</h1>
-    <p class="gear-page-lede">
-      Every Lorcana product and accessory we can point you at on Amazon — ${count} of
-      them, kept by hand. Sealed boxes and gift sets sit beside TCGplayer rather than
-      instead of it; sleeves, binders, deck boxes and grading supplies are here because
-      TCGplayer barely stocks them. A Lorcana card is 63×88mm, the same as Magic and
-      Pokémon, so anything sold as <em>standard size</em> fits.
-    </p>
+    <header class="gear-hero">
+      <h1 class="gear-page-h1">Lorcana on Amazon</h1>
+      <p class="gear-page-lede">
+        ${count} Lorcana products and accessories, kept by hand — sealed boxes and gift sets
+        beside TCGplayer rather than instead of it, and the sleeves, binders, deck boxes and
+        grading supplies TCGplayer barely stocks. A Lorcana card is 63×88mm, the same as Magic
+        and Pokémon, so anything sold as <em>standard size</em> fits.
+      </p>
+      <nav class="gear-jump" aria-label="Jump to a section">
+        ${sections.map(sec => html`<button key=${sec.title} type="button" class="gear-jump-chip"
+          onClick=${() => jump(sec.title)}>${sec.title}</button>`)}
+      </nav>
+    </header>
     <p class="gear-page-note muted">
-      No prices or photos on this page: Amazon only licenses those through their
-      product API, and we don't hold keys to it. Follow a link for the live price.
-      Links are affiliate links — as an Amazon Associate I earn from qualifying
-      purchases, at no extra cost to you.
+      Photos and prices are TCGplayer's${asOf ? ", prices as of " + fmtIsoDate(asOf) : ""} — Amazon's
+      own price is on Amazon. Every link is an affiliate link: as an Amazon Associate I earn from
+      qualifying purchases, and TCGplayer pays a commission too, at no extra cost to you.
     </p>
-    ${sections.map(sec => html`<section key=${sec.title} class="gear-sec">
+    ${sections.map(sec => html`<section key=${sec.title} id=${gearSecId(sec.title)} class="gear-sec">
       <h2 class="gear-sec-title">
         ${sec.title}
         ${sec.items.every(it => it.search) && html`<span class="gear-sec-tag"
-          title="These open an Amazon search rather than one product page — these are colour and size choices, so the search is the page you want.">searches</span>`}
+          title="These open an Amazon search rather than one product page — they're colour and size choices, so the search is the page you want. The photo shows one of them.">searches</span>`}
         ${sec.note && html`<span class="gear-sec-note muted">${sec.note}</span>`}
       </h2>
       <ul class="gear-grid">
-        ${sec.items.map(it => html`<li key=${it.url}>
-          <a class="gear-link" href=${it.url} target="_blank" rel="noopener nofollow sponsored">
-            <span class="gear-link-name">${it.name}</span>
-            ${it.meta && html`<span class="gear-link-meta muted">${it.meta}</span>`}
-            <span class="gear-link-ext" aria-hidden="true">↗</span>
-          </a>
-        </li>`)}
+        ${sec.items.map(it => {
+          const m = matches.get(it.url);
+          const img = m ? m.img : tcgProductImg(it.tcg);
+          const tcg = m ? m.tcg : (it.tcg ? tcgUrl(it.tcg) : null);
+          return html`<li key=${it.url} class="gear-card">
+            <a class="gear-card-art" href=${it.url} target="_blank" rel="noopener nofollow sponsored"
+              tabIndex="-1" aria-hidden="true">
+              <span class="gear-card-glyph">${uiIcon(it.glyph || sec.glyph || "box", 34)}</span>
+              ${img && html`<img src=${img} alt="" loading="lazy" onError=${hideBrokenImg}/>`}
+            </a>
+            <div class="gear-card-body">
+              <a class="gear-card-name" href=${it.url} target="_blank" rel="noopener nofollow sponsored">${it.name}</a>
+              ${it.meta && html`<span class="gear-card-meta muted">${it.meta}</span>`}
+              ${m && m.price != null && html`<span class="gear-card-px"><span class="gear-card-px-lbl">TCGplayer ${m.priceBasis}</span> ${fmt(m.price)}</span>`}
+              <div class="gear-card-btns">
+                <a class="gear-btn gear-btn--amazon" href=${it.url} target="_blank" rel="noopener nofollow sponsored"
+                  title=${it.search ? "Search Amazon (affiliate link)" : "This product on Amazon (affiliate link)"}>
+                  ${it.search ? "Find on Amazon" : "Buy on Amazon"} ↗</a>
+                ${tcg && html`<a class="gear-btn" href=${tcg} target="_blank" rel="noopener nofollow sponsored"
+                  title=${it.search ? "The pictured product on TCGplayer (affiliate link)" : "This product on TCGplayer (affiliate link)"}>TCGplayer ↗</a>`}
+              </div>
+            </div>
+          </li>`;
+        })}
       </ul>
     </section>`)}
     <p class="gear-page-foot muted">
@@ -35242,6 +35512,10 @@ const GearPanel = ({panelNav}) => {
             <a class="home-gear-item" href=${gearUrl(it)} target="_blank"
               rel="noopener nofollow sponsored"
               title=${it.name + " — on Amazon (affiliate link)"}>
+              <span class="home-gear-thumb" aria-hidden="true">
+                ${uiIcon(it.glyph || sec.glyph || "box", 14)}
+                ${it.tcg && html`<img src=${tcgProductImg(it.tcg, 200)} alt="" loading="lazy" onError=${hideBrokenImg}/>`}
+              </span>
               <span class="home-gear-item-name">${it.name}</span>
               ${it.meta && html`<span class="home-gear-item-meta muted">${it.meta}</span>`}
               <span class="home-gear-item-ext" aria-hidden="true">↗</span>
@@ -35250,9 +35524,9 @@ const GearPanel = ({panelNav}) => {
         </ul>
       </div>`)}
       <p class="home-gear-disclosure muted">
-        Official Ravensburger accessories, on Amazon; sleeves, binders and grading
-        supplies are on the Gear page. As an Amazon Associate I earn from qualifying
-        purchases — at no extra cost to you.
+        Official Ravensburger accessories, on Amazon (photos are TCGplayer's); sleeves,
+        binders and grading supplies are on the Gear page. As an Amazon Associate I earn
+        from qualifying purchases — at no extra cost to you.
       </p>
     </div>`}
   </aside>`;
@@ -35547,6 +35821,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const [showUp, setShowUp] = useState(true);
   const [showDown, setShowDown] = useState(true);
   const [paused, setPaused] = useState(false);
+  // Sealed product on Amazon for the shelf banner — see amazonShelfItems for
+  // why every photo and price on it is TCGplayer's.
+  const amazonShelf = useMemo(() => amazonShelfItems(sealedPrices, setNameMapOf(setsMeta)), [sealedPrices, setsMeta]);
+  const amazonShelfSubtitle = useMemo(() => {
+    const asOf = amazonShelf.reduce((d, it) => (it.priceDate && it.priceDate > d) ? it.priceDate : d, "");
+    return "Photos & prices from TCGplayer" + (asOf ? ", as of " + fmtIsoDate(asOf) : "")
+      + " · As an Amazon Associate I earn from qualifying purchases";
+  }, [amazonShelf]);
   // Event news tiles — one per still-active event in EVENT_TILES (module
   // scope). State + ArtistAlleyModal live at App level; we just render the
   // tiles here and call onEventArtistClick when an artist link is tapped.
@@ -36167,6 +36449,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const diceEntry = homeLayout.find(p => p.key === "dice");
   const loreEntry = homeLayout.find(p => p.key === "lore");
   const gradedOwnedOn = !!(homeLayout.find(p => p.key === "gradedOwned") || {}).on;
+  const amazonShelfOn = !!(homeLayout.find(p => p.key === "amazonShelf") || {}).on;
   const announceNodes = columnNodes("announce");
   const leftNodes     = columnNodes("left");
   const mainNodes     = columnNodes("main");
@@ -36331,12 +36614,23 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                     gowned:   gradedOwnedOn
                       ? html`<${GradedOwnedMoversHomePanel} raw=${raw} user=${user} onCard=${openCard}/>`
                       : null,
+                    amazon:   amazonShelfOn && amazonShelf.length > 0
+                      ? html`<${MoversBanner}
+                          title="Lorcana on Amazon"
+                          titleHint="Every Lorcana product and accessory we link on Amazon"
+                          subtitle=${amazonShelfSubtitle}
+                          cards=${amazonShelf}
+                          paused=${paused}
+                          onTitleClick=${()=>openView && openView("gear")}
+                          renderTile=${(it, key) => html`<${AmazonShelfTile} key=${key} it=${it}/>`}
+                          tileKey=${it => it.key}/>`
+                      : null,
                   };
                   // Your own slabs lead: it is the row about cards you actually
                   // own, and it only renders for people who switched it on.
                   const defaultOrder = newestSetIsHot
-                    ? ["gowned","valuable","chase","rareLeg","promo","graded"]
-                    : ["gowned","chase","rareLeg","promo","graded","valuable"];
+                    ? ["gowned","valuable","chase","rareLeg","promo","amazon","graded"]
+                    : ["gowned","chase","rareLeg","promo","amazon","graded","valuable"];
                   const order = (homeEdit && homeEdit.bannerOrder && homeEdit.bannerOrder.length)
                     ? homeEdit.bannerOrder : defaultOrder;
                   // ▲▼ enable/target off the banners that actually rendered —
@@ -45708,7 +46002,7 @@ function App(){
       onStartTour=${TOURS_ENABLED ? (()=>setTourOpen(true)) : null}
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
-    ${view==="gear"&&html`<${GearView}/>`}
+    ${view==="gear"&&html`<${GearView} sealedPrices=${sealedPrices} setsMeta=${setsMeta}/>`}
     ${view==="home"&&html`<${HomeGearBar} onOpen=${()=>openView("gear")}/>`}
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}

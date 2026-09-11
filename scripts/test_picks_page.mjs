@@ -41,7 +41,9 @@ const moduleSrc = [
   grab(page, "var AMAZON_TAG = ", ";"),
   grab(page, "function amazonSearchUrl(query, dept){", NL + "}"),
   grab(page, "var PICKS = [", NL + "];"),
-  "export {AMAZON_TAG, amazonSearchUrl, PICKS};",
+  grab(page, "var ICONS = {", NL + "};"),
+  grab(page, "function photoUrl(it){", NL + "}"),
+  "export {AMAZON_TAG, amazonSearchUrl, PICKS, ICONS, photoUrl};",
 ].join(NL);
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
 
@@ -95,6 +97,21 @@ ok("no two rows share a name", new Set(names).size === names.length,
 const blob = JSON.stringify(m.PICKS);
 ok("the catalogue stores no prices", !/\$[0-9]/.test(blob));
 ok("the catalogue stores no URLs", !/https?:\/\//i.test(blob));
+
+// ── Photos and glyphs ───────────────────────────────────────────────────────
+// A photo on an Amazon link is never Amazon's (their images come only through
+// their API): ids for TCGplayer's CDN or Ravensburger's, turned into URLs by
+// photoUrl, and a drawn glyph for everything else.
+ok("every photo id is a positive integer",
+  items.every((it) => ["tcg", "rav"].every((k) => it[k] == null || (Number.isInteger(it[k]) && it[k] > 0))));
+const glyphless = m.PICKS.flatMap((s) => s.items.filter((it) => !m.ICONS[it.icon || s.icon]).map((it) => it.name));
+ok("every card has a real fallback glyph", glyphless.length === 0, glyphless.join(", "));
+const photos = items.map((it) => m.photoUrl(it)).filter(Boolean);
+ok("the cards section has photos", photos.length >= 4, "only " + photos.length);
+ok("every photo comes from TCGplayer or Ravensburger",
+  photos.every((u) => /^https:\/\/(tcgplayer-cdn\.tcgplayer\.com|ravensburger\.cloud)\//.test(u)),
+  photos.filter((u) => !/^https:\/\/(tcgplayer-cdn\.tcgplayer\.com|ravensburger\.cloud)\//.test(u)).join(" "));
+ok("the page never references an Amazon image host", !/media-amazon|ssl-images-amazon|images-amazon/i.test(page));
 
 // ── Disclosure and unlisting ────────────────────────────────────────────────
 ok("the required Associate disclosure is present, verbatim",
