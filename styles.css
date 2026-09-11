@@ -1736,6 +1736,92 @@ html[data-mode="dark"] .ev-delta-down{background:rgba(232,140,140,0.12);color:#e
 .footer-social a{font-size:11px;color:var(--accent);text-decoration:none;opacity:0.8;}
 .footer-social a:hover{opacity:1;text-decoration:underline;}
 .footer-disclosure{font-size:12px;color:var(--text-muted);margin-top:6px;max-width:560px;line-height:1.45;}
+/* Feedback threads (migration 138). The badge counts unread replies to YOUR
+   feedback; the corner notice says the same thing to the many people who never
+   scroll to the footer. z-index 50: over the deck editor's docked bars (38/40),
+   under the Lore Tracker board (60), the card-detail overlay and every modal. */
+.footer-feedback-btn{position:relative;}
+.footer-feedback-badge{position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;
+  padding:0 4px;border-radius:9px;box-sizing:border-box;border:2px solid var(--bg-solid);
+  background:var(--red);color:#fff;font-size:10px;font-weight:800;line-height:1;
+  display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;
+  pointer-events:none;}
+.feedback-reply-notice{position:fixed;z-index:50;left:max(14px, env(safe-area-inset-left));
+  bottom:calc(14px + env(safe-area-inset-bottom));max-width:calc(100vw - 28px);box-sizing:border-box;
+  display:flex;align-items:center;background:var(--bg-modal);border:1px solid var(--border-accent);
+  border-radius:999px;box-shadow:0 6px 22px rgba(0,0,0,0.28);animation:fadeIn .2s ease;}
+.feedback-reply-notice-open{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;
+  background:none;border:0;border-radius:999px;cursor:pointer;padding:9px 6px 9px 14px;
+  color:var(--text);font:inherit;font-size:13px;font-weight:600;}
+.feedback-reply-notice-open > svg{color:var(--accent);}
+.feedback-reply-notice-text{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.feedback-reply-notice-cta{color:var(--accent);white-space:nowrap;}
+.feedback-reply-notice-x{flex:0 0 auto;width:32px;height:32px;margin-right:3px;padding:0;border:0;
+  border-radius:50%;background:none;color:var(--text-muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;}
+.feedback-reply-notice-x:hover{color:var(--accent);}
+body:has(.offline-pill) .feedback-reply-notice{bottom:calc(58px + env(safe-area-inset-bottom));}
+/* The floating Tour launcher owns the same corner, but only where it renders —
+   mirror its two hide rules, or phones get a lift for a button they don't have. */
+@media (min-width:701px) and (min-height:501px){
+  body:has(.section-tour-btn) .feedback-reply-notice{bottom:calc(58px + env(safe-area-inset-bottom));}
+}
+body:has(.deck-editor-mobile-tabs) .feedback-reply-notice{bottom:calc(74px + env(safe-area-inset-bottom));}
+body:has(.deck-quickadd) .feedback-reply-notice{bottom:calc(76px + env(safe-area-inset-bottom));}
+.fb-sub{font-size:12px;color:var(--text-muted);margin:0 0 12px;line-height:1.5;}
+.fb-textarea{display:block;width:100%;box-sizing:border-box;resize:vertical;min-height:96px;
+  padding:9px 11px;border:1px solid var(--btn-border);border-radius:6px;background:var(--bg-solid);
+  color:var(--text);font-size:13px;font-family:inherit;line-height:1.45;}
+.fb-textarea--reply{min-height:58px;}
+.fb-note{font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5;}
+.fb-err{padding-top:8px;color:var(--red);font-size:12px;}
+.fb-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;margin-top:12px;}
+.fb-section-title{font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--text-muted);margin:20px 0 8px;padding-top:14px;border-top:1px solid var(--border);}
+.fb-list{display:flex;flex-direction:column;gap:6px;}
+.fb-item{display:flex;align-items:flex-start;gap:9px;width:100%;box-sizing:border-box;text-align:left;
+  padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);
+  color:var(--text);cursor:pointer;font:inherit;}
+.fb-item:hover{border-color:var(--accent);}
+.fb-item.is-unread{border-color:var(--border-accent);
+  background:color-mix(in srgb, var(--accent) 8%, var(--bg-modal));}
+.fb-dot{flex:0 0 auto;width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--accent);visibility:hidden;}
+.fb-item.is-unread .fb-dot{visibility:visible;}
+.fb-item-main{flex:1 1 auto;min-width:0;}
+.fb-item-snippet{display:block;font-size:13px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fb-item.is-unread .fb-item-snippet{font-weight:700;}
+.fb-item-meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;margin-top:3px;font-size:11px;color:var(--text-muted);}
+.fb-chip{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;
+  line-height:1;padding:3px 6px;border-radius:999px;border:1px solid var(--border);color:var(--text-muted);white-space:nowrap;}
+.fb-chip--new{background:var(--accent);border-color:var(--accent);color:#fff;}
+.fb-chip--ok{border-color:color-mix(in srgb, var(--green) 55%, transparent);color:var(--green);}
+.fb-chip--warn{border-color:color-mix(in srgb, var(--accent) 60%, transparent);color:var(--accent);}
+.fb-back{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;margin-bottom:10px;}
+.fb-sent{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--green);margin-bottom:10px;}
+.fb-thread-origin{font-size:11px;color:var(--text-muted);text-align:center;margin-bottom:10px;}
+.fb-thread{display:flex;flex-direction:column;gap:10px;}
+.fb-msg{display:flex;flex-direction:column;max-width:86%;}
+.fb-msg--mine{align-self:flex-end;align-items:flex-end;}
+.fb-msg--theirs{align-self:flex-start;align-items:flex-start;}
+.fb-bubble{padding:8px 12px;border-radius:14px;font-size:13px;line-height:1.5;color:var(--text);
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}
+.fb-msg--mine .fb-bubble{background:color-mix(in srgb, var(--accent) 18%, var(--bg-modal));
+  border:1px solid color-mix(in srgb, var(--accent) 38%, transparent);border-bottom-right-radius:4px;}
+.fb-msg--theirs .fb-bubble{background:var(--bg-surface);border:1px solid var(--border);border-bottom-left-radius:4px;}
+.fb-msg-meta{font-size:10.5px;color:var(--text-muted);margin-top:3px;padding:0 4px;}
+.fb-resolved-note{font-size:11.5px;color:var(--text-muted);text-align:center;margin:12px 0 0;}
+.fb-composer{flex:0 0 auto;border-top:1px solid var(--border);background:var(--bg-surface);padding:10px 14px 12px;}
+.fb-composer .fb-actions{margin-top:8px;}
+.fb-admin-list{display:flex;flex-direction:column;gap:8px;}
+.fb-admin-card{padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);}
+.fb-admin-card.is-new{border-color:var(--border-accent);}
+.fb-admin-card.is-resolved{background:var(--bg-surface);opacity:.72;}
+.fb-admin-comment{font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}
+.fb-admin-meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;margin-top:6px;font-size:11px;color:var(--text-muted);}
+.fb-admin-thread{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
+.fb-admin-reply{margin-top:10px;}
+.fb-admin-btns{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:8px;}
+.fb-admin-btns > button{font-size:12px;padding:3px 10px;}
 .sc-zip-note{font-size:11px;color:var(--text-muted);margin:4px 0 6px;line-height:1.35;}
 .cd-affiliate-note{font-size:11px;color:var(--text-muted);margin:0 0 6px;line-height:1.35;}
 .theme-toggle{cursor:pointer;background:none;border:1px solid var(--btn-border);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-dim);padding:0;transition:all 0.15s;}
