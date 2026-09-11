@@ -14,7 +14,9 @@
 // the user gets that the button caught the right thing.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+// CRLF-normalised: a Windows checkout (core.autocrlf=true) ends lines "\r\n",
+// which the NL-based end markers below never match.
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const NL = String.fromCharCode(10);
 
 function grab(start, end) {
