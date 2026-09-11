@@ -35381,33 +35381,6 @@ function amazonDirectory(){
   }
   return out;
 }
-// A slim, permanently-dismissible pill on the home page pointing at /gear.
-// BOTTOM-LEFT deliberately: the flash toast and the offline pill are both
-// bottom-CENTRE, so this is the one free corner and the three can never stack.
-//
-// It is advertising-shaped, which is why the × is not a "later" — it writes a
-// permanent flag on first click. A shop prompt you cannot turn off is the kind
-// of thing that makes a fan site feel sold.
-const HomeGearBar = ({onOpen}) => {
-  const [gone, setGone] = useState(() => {
-    try { return localStorage.getItem("packsink:gearBarDismissed") === "1"; }
-    catch { return false; }
-  });
-  if(gone) return null;
-  const dismiss = () => {
-    try { localStorage.setItem("packsink:gearBarDismissed", "1"); } catch {}
-    setGone(true);
-  };
-  return html`<div class="gear-bar">
-    <a class="gear-bar-link" href="/gear" onClick=${navHandler(() => onOpen && onOpen())}
-      title="Lorcana sleeves, portfolios and deck boxes on Amazon">
-      ${uiIcon("cart", 15)}
-      <span class="gear-bar-txt">Sleeves, binders & deck boxes</span>
-    </a>
-    <button class="gear-bar-x" onClick=${dismiss}
-      aria-label="Hide this for good" title="Hide this for good">✕</button>
-  </div>`;
-};
 // The /gear page: product cards. Every photo and price on it is TCGplayer's
 // (see amazonSealedMatches for why that is the compliant source), and the page
 // says so — a TCGplayer price must never read as Amazon's.
@@ -46003,7 +45976,6 @@ function App(){
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
     ${view==="gear"&&html`<${GearView} sealedPrices=${sealedPrices} setsMeta=${setsMeta}/>`}
-    ${view==="home"&&html`<${HomeGearBar} onOpen=${()=>openView("gear")}/>`}
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}

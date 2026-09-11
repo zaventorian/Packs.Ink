@@ -2199,18 +2199,13 @@ A movers row (`MoversBanner` + `renderTile` → `AmazonShelfTile`), keyed `amazo
 - `MoversBanner` grew a `titleHint` prop: its title button had "Open Screener with this
   filter" hardcoded, which this row's title (→ `/gear`) is not.
 
-### The home bar
+### The home bar — removed (2026-09-10)
 
-`HomeGearBar` — a slim pill, **bottom-LEFT**, home view only.
-
-- **Bottom-left is the only free corner**: `.packsink-flash-toast` and `.offline-pill` are
-  both bottom-centre. Verified in-browser that they cannot stack.
-- **The × is permanent, not "later"** (`packsink:gearBarDismissed`). It is
-  advertising-shaped, and a shop prompt you cannot turn off is what makes a fan site feel
-  sold. It is also the first thing to cut if it reads as clutter — delete the
-  component and its one render line.
-- At ≤520px the label collapses and it is icon-only (60px). Measured: no page overflow at
-  390px.
+`HomeGearBar`, the bottom-left "Sleeves, binders & deck boxes" pill, is gone at Zaven's
+request: component, CSS and render line together. Once the "Lorcana on Amazon" row and the
+Gear panel both existed it was a third Amazon prompt on one page. Don't re-add it; the
+row's title and the Gear panel's title both already lead to `/gear`. A leftover
+`packsink:gearBarDismissed` key in someone's browser is harmless.
 
 ### Disclosure
 
