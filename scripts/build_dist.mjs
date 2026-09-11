@@ -48,6 +48,10 @@ const FILES = [
   // Stream ticker overlay at /ticker (Workers Assets pretty-URL serves it;
   // no worker route so ?bar=1 survives) — OBS Browser Source bar + configurator.
   "ticker.html",
+  // Unlisted affiliate link page at /picks — noindex + robots-disallowed and
+  // linked from nowhere, so it ships only because it must be reachable by
+  // anyone who is handed the address.
+  "picks.html",
   "robots.txt",
   "sitemap.xml",
   "og-image.png",
