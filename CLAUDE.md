@@ -3070,10 +3070,13 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
   check: anon-readable, graded-admin writes. Until it lands, `/gear`'s admin checklist says
   "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
-- **`supabase/138_feedback_threads.sql`** — STAGED, not applied. Feedback replies and
-  follow-ups: `feedback_messages`, the unread columns on `feedback`, and nine functions (see
-  "Feedback replies"). Until it lands the box stays one-way and the admin inbox says "Replies
-  switch on once migration 138 is applied." Safe to ship the client first.
+- ~~`supabase/138_feedback_threads.sql`~~ — **APPLIED 2026-09-11 by Zaven; verified via REST
+  probes** with the publishable key: the unread count and the thread list return 200, both the
+  4-argument and the old 3-argument `submit_feedback` call shapes resolve (each raises `empty
+  feedback` before any write), a follow-up on a nonexistent thread raises `feedback not found`,
+  and anon is refused both admin functions with `42501`. Feedback replies and follow-ups:
+  `feedback_messages`, the unread columns on `feedback`, and nine functions (see "Feedback
+  replies").
 - **`supabase/136_elo_player_rounds_intentional_draw.sql`** — STAGED, not applied. Appends
   `is_intentional_draw` to `elo_player_rounds_v` so the profile prints `ID` instead of `DRAW`.
   `create or replace view` (not drop+create — the view may have dependents, and replace allows a
