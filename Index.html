@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=387">
+<link rel="stylesheet" href="styles.css?v=388">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -11499,86 +11499,331 @@ const Badge=({rarity,foil,theme})=>{const s=getBadgeStyle(rarity,theme);return h
 const SetSel=({val,onChange,placeholder,sets})=>html`<select value=${val} onChange=${e=>onChange(e.target.value)} style=${{maxWidth:280,flex:1}}><option value="">${placeholder}</option>${sets.map(s=>html`<option key=${s} value=${s}>${s}</option>`)}</select>`;
 const Tooltip=({text,children})=>html`<span class="tip-wrap">${children}<span class="tip-icon">?</span><span class="tip-box">${text}</span></span>`;
 
-// Footer "Send feedback" widget. Anyone can submit a short comment; the page
-// URL, the user's account (server-side, when signed in), and the user agent
-// are captured via the submit_feedback RPC (migration 106).
-const FeedbackModal = ({user, onClose})=>{
+// ── Feedback: the footer box, and the conversations it holds (migration 138) ──
+// A submission is the first message of a thread. An admin replies from the
+// inbox; the sender reads it the next time they open the box and can follow up
+// in it. A signed-in thread is keyed on the account; an anonymous one on a
+// random secret this browser keeps — the only thing that can carry a reply
+// back to someone who never signed in. That secret is user state, NOT a cache:
+// it must never match AUX_EVICTABLE_PREFIXES, or a wipe strands the thread.
+const FEEDBACK_TOKENS_KEY = "packsink:feedback:tokens";
+const FEEDBACK_NOTICE_KEY = "packsink:feedback:noticeDismissed";
+const FEEDBACK_TOKEN_RE = /^[A-Za-z0-9_-]{22,64}$/;
+const normalizeFeedbackTokens = (v) => Array.isArray(v)
+  ? Array.from(new Set(v.filter(t => typeof t === "string" && FEEDBACK_TOKEN_RE.test(t)))).slice(-100)
+  : [];
+const readFeedbackTokens = () => {
+  try { return normalizeFeedbackTokens(JSON.parse(localStorage.getItem(FEEDBACK_TOKENS_KEY) || "[]")); }
+  catch { return []; }
+};
+const addFeedbackToken = (token) => {
+  const next = normalizeFeedbackTokens([...readFeedbackTokens(), token]);
+  try { localStorage.setItem(FEEDBACK_TOKENS_KEY, JSON.stringify(next)); } catch {}
+  return next;
+};
+// Before migration 138 the thread functions don't exist: fall back to the
+// one-way box instead of throwing.
+const feedbackThreadsUnavailable = (err) => {
+  const code = String((err && err.code) || "");
+  const msg = String((err && err.message) || "");
+  return code === "PGRST202" || code === "42883" || code === "42P01" || code === "42703"
+    || /could not find the function|feedback_messages/i.test(msg);
+};
+// Postgres sends microseconds; not every engine parses past milliseconds.
+const feedbackTime = (s) => s ? Date.parse(String(s).replace(/(\.\d{3})\d+/, "$1")) : NaN;
+// The conversation as it reads: the original note is message one.
+const feedbackThreadMessages = (t) => [
+  {id: "c:" + t.id, created_at: t.created_at, from_admin: false, body: t.comment || ""},
+  ...(Array.isArray(t.messages) ? t.messages : []),
+];
+// Who spoke last: "none" (no reply yet), "replied" (Packs.Ink did), or
+// "followup" (the sender answered a reply).
+const feedbackReplyState = (t) => {
+  const la = feedbackTime(t && t.last_admin_at);
+  if(!Number.isFinite(la)) return "none";
+  const lu = feedbackTime(t && (t.last_user_at || t.created_at));
+  return (Number.isFinite(lu) && lu > la) ? "followup" : "replied";
+};
+// Where the box opens: the newest thread holding an unread reply, if any.
+const pickUnreadFeedbackThread = (threads) => {
+  let best = null, bestAt = -Infinity;
+  for(const t of (threads || [])){
+    if(!t || !t.unread) continue;
+    const at = feedbackTime(t.last_admin_at);
+    if(best === null || (Number.isFinite(at) && at > bestAt)){
+      best = t;
+      if(Number.isFinite(at)) bestAt = at;
+    }
+  }
+  return best ? best.id : null;
+};
+// Whether the corner notice shows: an unread reply newer than the one last
+// dismissed. Dismissing covers everything up to that reply, so reading the
+// newer of two can't resurrect the notice for the older.
+const feedbackNoticeVisible = (state, dismissed) => {
+  if(!state || !(state.unread > 0) || !state.latest) return false;
+  if(!dismissed) return true;
+  const a = feedbackTime(state.latest), b = feedbackTime(dismissed);
+  return (Number.isFinite(a) && Number.isFinite(b)) ? a > b : String(state.latest) > String(dismissed);
+};
+const feedbackModEnter = (fn) => (e) => {
+  if(e.key === "Enter" && (e.metaKey || e.ctrlKey)){ e.preventDefault(); fn(); }
+};
+
+// The footer feedback box. Anyone can send a note; the page URL, the account
+// (server-side, when signed in) and the user agent ride along. Earlier notes
+// list under the form, and each opens as a conversation you can reply in.
+const FeedbackModal = ({user, onClose, onSeen})=>{
   useEscToClose(onClose);
-  const [text, setText] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState(false);
-  const [err, setErr]   = useState(null);
+  const uid = user ? user.id : null;
+  const [threads, setThreads]     = useState(null);   // null while loading
+  const [unavailable, setUnavailable] = useState(false); // database predates 138
+  const [loadErr, setLoadErr]     = useState(null);
+  const [openId, setOpenId]       = useState(null);
+  const [justSent, setJustSent]   = useState(null);   // thread created this visit
+  const [text, setText]           = useState("");
+  const [busy, setBusy]           = useState(false);
+  const [done, setDone]           = useState(false);  // the one-way "Thanks!" screen
+  const [err, setErr]             = useState(null);
+  const [reply, setReply]         = useState("");
+  const [replyBusy, setReplyBusy] = useState(false);
+  const [replyErr, setReplyErr]   = useState(null);
+  const bodyRef = useRef(null);
+  const composeRef = useRef(null);
+  const onSeenRef = useRef(onSeen);
+  onSeenRef.current = onSeen;
   // Same scrub as the Sentry beforeSend: a report filed from a share-link page
   // must not store the deck/collection/trade token alongside the comment.
   const page = (typeof window !== "undefined")
     ? (window.location.pathname + window.location.search).replace(/([?&])(t|token|collection)=[^&#]*/gi, "$1$2=[redacted]")
     : "";
+
+  const load = useCallback(async ()=>{
+    const tokens = readFeedbackTokens();
+    // An anonymous visitor who never sent a note from this browser has
+    // nothing to ask about — that common case costs no request.
+    if(!uid && !tokens.length){ setThreads([]); return []; }
+    try {
+      const {data, error} = await sbClient.rpc("get_my_feedback", {p_tokens: tokens});
+      if(error){
+        if(feedbackThreadsUnavailable(error)) setUnavailable(true);
+        else setLoadErr("Couldn't load your earlier feedback.");
+        setThreads([]); return [];
+      }
+      const list = Array.isArray(data) ? data : [];
+      setLoadErr(null); setThreads(list); return list;
+    } catch {
+      setLoadErr("Couldn't load your earlier feedback.");
+      setThreads([]); return [];
+    }
+  }, [uid]);
+
+  // Land on the newest unread reply — the badge or the corner notice is usually
+  // why the box was opened — and otherwise put the cursor in the form.
+  useEffect(()=>{
+    let live = true;
+    load().then(list => {
+      if(!live) return;
+      const id = pickUnreadFeedbackThread(list);
+      if(id) setOpenId(id);
+      else if(composeRef.current) composeRef.current.focus();
+    });
+    return () => { live = false; };
+  }, [load]);
+
+  const openThread = (threads && openId) ? (threads.find(t => t.id === openId) || null) : null;
+
+  // Opening a thread with an unread reply marks it read — up to the reply on
+  // screen, so one that lands a moment later still counts as new.
+  const unreadKey = (openThread && openThread.unread) ? openThread.id + "|" + openThread.last_admin_at : "";
+  useEffect(()=>{
+    if(!unreadKey || !openThread) return;
+    const id = openThread.id;
+    sbClient.rpc("mark_my_feedback_seen", {p_id: id, p_until: openThread.last_admin_at, p_tokens: readFeedbackTokens()})
+      .then(({error}) => {
+        if(error) return;
+        setThreads(ts => (ts || []).map(t => t.id === id ? {...t, unread: false} : t));
+        if(onSeenRef.current) onSeenRef.current();
+      })
+      .catch(()=>{});
+  }, [unreadKey]);
+
+  // A conversation reads from the bottom; the list from the top.
+  const msgCount = openThread ? (openThread.messages || []).length : -1;
+  useEffect(()=>{
+    const el = bodyRef.current;
+    if(el) el.scrollTop = openThread ? el.scrollHeight : 0;
+  }, [openId, msgCount]);
+
   const submit = useCallback(async ()=>{
     const comment = text.trim();
     if(!comment){ setErr("Please type something first."); return; }
     setBusy(true); setErr(null);
+    const ua = (typeof navigator !== "undefined") ? navigator.userAgent : "";
+    const args = {p_comment: comment, p_page: page, p_user_agent: ua};
+    // An anonymous note carries a secret this browser keeps, so a reply can
+    // find its way back here. Same 128-bit generator as trade links.
+    let token = (!uid && !unavailable) ? genTradeToken() : null;
+    if(token) args.p_reply_token = token;
     try {
-      const ua = (typeof navigator !== "undefined") ? navigator.userAgent : "";
-      const {error} = await sbClient.rpc("submit_feedback", {p_comment: comment, p_page: page, p_user_agent: ua});
+      let {data, error} = await sbClient.rpc("submit_feedback", args);
+      if(error && token && feedbackThreadsUnavailable(error)){
+        // Database predates 138: the function takes no token, so send one-way.
+        delete args.p_reply_token; token = null; setUnavailable(true);
+        ({data, error} = await sbClient.rpc("submit_feedback", args));
+      }
       if(error){ setErr(error.message || "Couldn't send — please try again."); setBusy(false); return; }
-      setDone(true);
+      if(token) addFeedbackToken(token);
+      setText(""); setBusy(false);
+      const list = (uid || token) ? await load() : [];
+      if(data && list.some(t => t.id === data)){ setJustSent(data); setOpenId(data); }
+      else setDone(true);
     } catch(e){ setErr((e && e.message) || "Couldn't send — please try again."); setBusy(false); }
-  }, [text, page]);
-  return html`<div class="modal-backdrop" onClick=${onClose}>
-    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:460}}>
-      <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${done ? "Thanks!" : "Send feedback"}</h2>
-        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
+  }, [text, page, uid, unavailable, load]);
+
+  const sendReply = useCallback(async ()=>{
+    const body = reply.trim();
+    if(!body || !openThread || replyBusy) return;
+    const id = openThread.id;
+    setReplyBusy(true); setReplyErr(null);
+    try {
+      const {data, error} = await sbClient.rpc("reply_my_feedback", {p_id: id, p_body: body, p_tokens: readFeedbackTokens()});
+      if(error || !data){ setReplyErr((error && error.message) || "Couldn't send — please try again."); setReplyBusy(false); return; }
+      setThreads(ts => (ts || []).map(t => t.id === id
+        ? {...t, messages: [...(t.messages || []), data], last_user_at: data.created_at, resolved: false, unread: false}
+        : t));
+      setReply(""); setReplyBusy(false);
+    } catch(e){ setReplyErr((e && e.message) || "Couldn't send — please try again."); setReplyBusy(false); }
+  }, [reply, openThread, replyBusy]);
+
+  const backToList = () => { setOpenId(null); setJustSent(null); setReply(""); setReplyErr(null); };
+  const hasThreads = !!(threads && threads.length);
+  const accountNote = user
+    ? html`Attached to your account (<strong>${user.email}</strong>)${unavailable ? " so we can follow up." : " — replies show up right here."}`
+    : unavailable
+      ? "You're not signed in — sign in first if you'd like a reply."
+      : "You're not signed in, so replies show up here on this browser only. Sign in to get them on any device.";
+
+  const threadView = openThread && html`<${React.Fragment}>
+    <div class="modal-body" ref=${bodyRef} style=${{padding:"12px 16px 14px"}}>
+      <button type="button" class="fb-back" onClick=${backToList}>← All feedback</button>
+      ${justSent === openThread.id && html`<div class="fb-sent" role="status">${uiIcon("check", 13)} Sent. Replies will show up right here.</div>`}
+      <div class="fb-thread-origin">
+        Sent from <code>${openThread.page || "/"}</code> · <span title=${absoluteLocalTime(openThread.created_at)}>${relativeTime(openThread.created_at)}</span>
       </div>
-      <div class="modal-body" style=${{padding:18}}>
-        ${done
-          ? html`<div>
-              <p style=${{margin:"0 0 16px",fontSize:14,lineHeight:1.5}}>Got it — thanks for helping make Packs.Ink better.</p>
-              <div style=${{display:"flex",justifyContent:"flex-end"}}>
-                <button class="active" onClick=${onClose} style=${{padding:"7px 16px",fontSize:13}}>Close</button>
-              </div>
-            </div>`
-          : html`<div>
-              <p class="muted" style=${{fontSize:12,margin:"0 0 12px",lineHeight:1.5}}>
-                Found a bug, or have an idea? Tell us what's on your mind — we read every note.
-              </p>
-              <textarea value=${text} onInput=${e=>setText(e.target.value)} rows=${5} autoFocus
-                placeholder="What's working, what's broken, what you'd like to see…"
-                style=${{width:"100%",boxSizing:"border-box",resize:"vertical",minHeight:96,
-                  padding:"9px 11px",border:"1px solid var(--btn-border)",borderRadius:6,
-                  background:"var(--bg-solid)",color:"var(--text)",fontSize:13,fontFamily:"inherit"}}/>
-              <div class="muted" style=${{fontSize:11,marginTop:8,lineHeight:1.5}}>
-                ${user
-                  ? html`Attached to your account (<strong>${user.email}</strong>) so we can follow up.`
-                  : html`You're not signed in — sign in first if you'd like a reply.`}
-                <br/>We'll also record which page you're on (<code>${page || "/"}</code>).
-              </div>
-              ${err && html`<div style=${{padding:"8px 0 0",color:"var(--red)",fontSize:12}}>${err}</div>`}
-              <div style=${{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14}}>
-                <button onClick=${onClose} disabled=${busy}>Cancel</button>
-                <button class="active" onClick=${submit} disabled=${busy || !text.trim()}
-                  style=${{padding:"7px 16px",fontSize:13}}>${busy ? "Sending…" : "Send"}</button>
-              </div>
+      <div class="fb-thread">
+        ${feedbackThreadMessages(openThread).map(m => html`<div key=${m.id} class=${"fb-msg " + (m.from_admin ? "fb-msg--theirs" : "fb-msg--mine")}>
+          <div class="fb-bubble">${m.body}</div>
+          <div class="fb-msg-meta" title=${absoluteLocalTime(m.created_at)}>${m.from_admin ? "Packs.Ink" : "You"} · ${relativeTime(m.created_at)}</div>
+        </div>`)}
+      </div>
+      ${openThread.resolved && html`<p class="fb-resolved-note">Marked resolved. If it isn't, reply and it reopens.</p>`}
+    </div>
+    <div class="fb-composer">
+      <textarea class="fb-textarea fb-textarea--reply" value=${reply} rows=${2}
+        onInput=${e=>setReply(e.target.value)} onKeyDown=${feedbackModEnter(sendReply)}
+        placeholder="Write a follow-up…" aria-label="Follow-up message"/>
+      ${replyErr && html`<div class="fb-err">${replyErr}</div>`}
+      <div class="fb-actions">
+        <button type="button" class="active" onClick=${sendReply} disabled=${replyBusy || !reply.trim()}
+          style=${{padding:"7px 16px",fontSize:13}}>${replyBusy ? "Sending…" : "Send"}</button>
+      </div>
+    </div>
+  <//>`;
+
+  const listView = html`<div class="modal-body" ref=${bodyRef} style=${{padding:18}}>
+    ${done
+      ? html`<div>
+          <p style=${{margin:"0 0 16px",fontSize:14,lineHeight:1.5}}>Got it — thanks for helping make Packs.Ink better.</p>
+          <div style=${{display:"flex",justifyContent:"flex-end"}}>
+            <button class="active" onClick=${onClose} style=${{padding:"7px 16px",fontSize:13}}>Close</button>
+          </div>
+        </div>`
+      : html`<div>
+          <p class="fb-sub">Found a bug, or have an idea? Tell us what's on your mind — we read every note.</p>
+          <textarea ref=${composeRef} class="fb-textarea" value=${text} rows=${4}
+            onInput=${e=>setText(e.target.value)} onKeyDown=${feedbackModEnter(submit)}
+            placeholder="What's working, what's broken, what you'd like to see…" aria-label="Your feedback"/>
+          <div class="fb-note">${accountNote}<br/>We'll also record which page you're on (<code>${page || "/"}</code>).</div>
+          ${err && html`<div class="fb-err">${err}</div>`}
+          <div class="fb-actions">
+            <button type="button" onClick=${onClose} disabled=${busy}>Cancel</button>
+            <button type="button" class="active" onClick=${submit} disabled=${busy || !text.trim()}
+              style=${{padding:"7px 16px",fontSize:13}}>${busy ? "Sending…" : "Send"}</button>
+          </div>
+          ${hasThreads && html`<div class="fb-section-title">Your feedback</div>
+            <div class="fb-list">
+              ${threads.map(t => {
+                const rs = feedbackReplyState(t);
+                const at = rs === "replied" ? t.last_admin_at : (t.last_user_at || t.created_at);
+                const who = rs === "replied" ? "Packs.Ink replied" : rs === "followup" ? "You followed up" : "You sent this";
+                return html`<button key=${t.id} type="button" class=${"fb-item" + (t.unread ? " is-unread" : "")}
+                    onClick=${()=>{ setOpenId(t.id); setJustSent(null); }}>
+                  <span class="fb-dot" aria-hidden="true"></span>
+                  <span class="fb-item-main">
+                    <span class="fb-item-snippet">${t.comment}</span>
+                    <span class="fb-item-meta">
+                      ${t.unread && html`<span class="fb-chip fb-chip--new">New reply</span>`}
+                      <span title=${absoluteLocalTime(at)}>${who} · ${relativeTime(at)}</span>
+                      ${t.resolved && html`<span class="fb-chip fb-chip--ok">Resolved</span>`}
+                    </span>
+                  </span>
+                </button>`;
+              })}
             </div>`}
+          ${loadErr && html`<div class="fb-note">${loadErr}</div>`}
+        </div>`}
+  </div>`;
+
+  return html`<div class="modal-backdrop" onClick=${onClose}>
+    <div class="modal" role="dialog" aria-label="Feedback" onClick=${e=>e.stopPropagation()} style=${{maxWidth:500}}>
+      <div class="modal-header">
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>${done ? "Thanks!" : openThread ? "Your feedback" : hasThreads ? "Feedback" : "Send feedback"}</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close" aria-label="Close">×</button>
       </div>
+      ${openThread ? threadView : listView}
     </div>
   </div>`;
 };
 
-// Admin-only inbox (gated on is_graded_admin via the get_feedback RPC). Lists
-// submissions newest-first with account + page + time; resolve/reopen + delete.
-const FeedbackAdminModal = ({onClose})=>{
+// Admin inbox (gated on is_graded_admin). Each submission is a conversation:
+// reply, resolve, delete. "New" marks sender activity no admin had seen before
+// this visit — loading the inbox is what marks it seen, so the footer badge
+// clears while the chips stay up until the inbox closes.
+const FeedbackAdminModal = ({onClose, onSeen})=>{
   useEscToClose(onClose);
-  const [rows, setRows]     = useState(null);
-  const [err, setErr]       = useState(null);
-  const [filter, setFilter] = useState("open");   // "open" | "all"
-  const [armedDel, setArmedDel] = useState(null);  // id armed for delete
-  const load = useCallback(()=>{
+  const [rows, setRows]         = useState(null);
+  const [err, setErr]           = useState(null);
+  const [legacy, setLegacy]     = useState(false);   // database predates 138: no replies
+  const [filter, setFilter]     = useState("open");  // "open" | "all"
+  const [armedDel, setArmedDel] = useState(null);    // id armed for delete
+  const [replyFor, setReplyFor] = useState(null);    // id whose reply box is open
+  const [draft, setDraft]       = useState("");
+  const [sending, setSending]   = useState(false);
+  const onSeenRef = useRef(onSeen);
+  onSeenRef.current = onSeen;
+  const load = useCallback(async ()=>{
     setErr(null);
-    sbClient.rpc("get_feedback").then(({data, error})=>{
-      if(error){ setErr(error.message || "Couldn't load feedback"); setRows([]); return; }
-      setRows(data || []);
-    }).catch(e=>{ setErr((e && e.message) || "Couldn't load feedback"); setRows([]); });
+    try {
+      const res = await sbClient.rpc("get_feedback_threads");
+      if(!res.error){
+        const list = Array.isArray(res.data) ? res.data : [];
+        setLegacy(false); setRows(list);
+        const fresh = list.filter(r => r.is_new);
+        if(fresh.length){
+          // Seen up to the newest activity this load showed — not up to now.
+          const until = fresh.reduce((a, r) => feedbackTime(r.last_user_at) > feedbackTime(a) ? r.last_user_at : a, fresh[0].last_user_at);
+          const seen = await sbClient.rpc("mark_feedback_seen_admin", {p_ids: fresh.map(r => r.id), p_until: until});
+          if(!seen.error && onSeenRef.current) onSeenRef.current();
+        }
+        return;
+      }
+      if(!feedbackThreadsUnavailable(res.error)){ setErr(res.error.message || "Couldn't load feedback"); setRows([]); return; }
+      const old = await sbClient.rpc("get_feedback");
+      if(old.error){ setErr(old.error.message || "Couldn't load feedback"); setRows([]); return; }
+      setLegacy(true);
+      setRows((old.data || []).map(r => ({...r, messages: []})));
+    } catch(e){ setErr((e && e.message) || "Couldn't load feedback"); setRows([]); }
   }, []);
   useEffect(()=>{ load(); }, [load]);
   const toggleResolved = async (id, resolved)=>{
@@ -11592,13 +11837,28 @@ const FeedbackAdminModal = ({onClose})=>{
     const {error} = await sbClient.rpc("delete_feedback", {p_id:id});
     if(error){ flashToast("Delete failed: " + error.message); load(); }
   };
+  const sendReply = async (row, resolve)=>{
+    const body = draft.trim();
+    if(!body || sending) return;
+    setSending(true);
+    try {
+      const {data, error} = await sbClient.rpc("admin_reply_feedback", {p_id: row.id, p_body: body, p_resolve: !!resolve});
+      if(error || !data){ flashToast("Reply failed: " + ((error && error.message) || "no response")); setSending(false); return; }
+      setRows(rs => (rs||[]).map(r => r.id===row.id
+        ? {...r, messages: [...(r.messages || []), data], last_admin_at: data.created_at, resolved: resolve ? true : r.resolved}
+        : r));
+      setDraft(""); setReplyFor(null); setSending(false);
+      flashToast(resolve ? "Reply sent · resolved" : "Reply sent");
+    } catch(e){ flashToast("Reply failed: " + ((e && e.message) || "network error")); setSending(false); }
+  };
   const shown = (rows||[]).filter(r => filter==="all" || !r.resolved);
   const openCount = (rows||[]).filter(r => !r.resolved).length;
+  const newCount = (rows||[]).filter(r => r.is_new).length;
   return html`<div class="modal-backdrop" onClick=${onClose}>
-    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:620,width:"94vw"}}>
+    <div class="modal" onClick=${e=>e.stopPropagation()} style=${{maxWidth:640,width:"94vw"}}>
       <div class="modal-header">
-        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Feedback inbox${rows ? html` <span class="muted" style=${{fontSize:13,fontWeight:400}}>· ${openCount} open</span>` : ""}</h2>
-        <button onClick=${onClose} class="theme-toggle" title="Close">×</button>
+        <h2 class="title-font" style=${{margin:0,fontSize:18}}>Feedback inbox${rows ? html` <span class="muted" style=${{fontSize:13,fontWeight:400}}>· ${openCount} open${newCount ? " · " + newCount + " new" : ""}</span>` : ""}</h2>
+        <button onClick=${onClose} class="theme-toggle" title="Close" aria-label="Close">×</button>
       </div>
       <div class="modal-body" style=${{padding:"12px 16px"}}>
         <div style=${{display:"flex",gap:8,alignItems:"center",marginBottom:12}}>
@@ -11608,36 +11868,63 @@ const FeedbackAdminModal = ({onClose})=>{
           </div>
           <button onClick=${load} title="Refresh" style=${{marginLeft:"auto"}}>↻ Refresh</button>
         </div>
+        ${legacy && html`<div class="fb-note" style=${{margin:"0 0 10px"}}>Replies switch on once migration 138 is applied.</div>`}
         ${err && html`<div style=${{padding:"8px 0",color:"var(--red)",fontSize:12}}>${err}</div>`}
         ${rows===null
           ? html`<div class="muted" style=${{padding:"20px 0",textAlign:"center",fontSize:13}}>Loading…</div>`
           : shown.length===0
             ? html`<div class="muted" style=${{padding:"24px 0",textAlign:"center",fontSize:13}}>${filter==="open" ? "No open feedback." : "No feedback yet."}</div>`
-            : html`<div style=${{display:"flex",flexDirection:"column",gap:8,maxHeight:"60vh",overflowY:"auto"}}>
-                ${shown.map(r => html`<div key=${r.id} style=${{padding:"10px 12px",border:"1px solid var(--border)",borderRadius:8,
-                    background: r.resolved ? "var(--bg-surface)" : "var(--bg-card)", opacity: r.resolved ? 0.7 : 1}}>
-                  <div style=${{fontSize:13,lineHeight:1.5,whiteSpace:"pre-wrap",wordBreak:"break-word"}}>${r.comment}</div>
-                  <div class="muted" style=${{fontSize:11,marginTop:6,display:"flex",flexWrap:"wrap",gap:"2px 8px"}}>
-                    <span>${r.user_email || "anonymous"}</span>
-                    <span>· <code>${r.page || "—"}</code></span>
-                    <span title=${absoluteLocalTime(r.created_at)}>· ${relativeTime(r.created_at)}</span>
-                  </div>
-                  <div style=${{display:"flex",gap:6,marginTop:8,justifyContent:"flex-end"}}>
-                    <button onClick=${()=>toggleResolved(r.id, !r.resolved)} style=${{fontSize:12,padding:"3px 10px"}}>
-                      ${r.resolved ? "↩ Reopen" : "✓ Resolve"}
-                    </button>
-                    ${armedDel===r.id
-                      ? html`<button class="danger" onClick=${()=>del(r.id)} style=${{fontSize:12,padding:"3px 10px"}}>Confirm delete</button>`
-                      : html`<button onClick=${()=>{ setArmedDel(r.id); setTimeout(()=>setArmedDel(a=>a===r.id?null:a), 3000); }} style=${{fontSize:12,padding:"3px 10px"}}>Delete</button>`}
-                  </div>
-                </div>`)}
+            : html`<div class="fb-admin-list">
+                ${shown.map(r => {
+                  const rs = feedbackReplyState(r);
+                  const msgs = r.messages || [];
+                  const canReply = !legacy && r.reachable !== false;
+                  const replying = replyFor === r.id;
+                  return html`<div key=${r.id} class=${"fb-admin-card" + (r.resolved ? " is-resolved" : "") + (r.is_new ? " is-new" : "")}>
+                    <div class="fb-admin-comment">${r.comment}</div>
+                    <div class="fb-admin-meta">
+                      ${r.is_new && html`<span class="fb-chip fb-chip--new">New</span>`}
+                      ${rs === "followup" && html`<span class="fb-chip fb-chip--warn">Follow-up</span>`}
+                      ${rs === "replied" && html`<span class="fb-chip fb-chip--ok">Replied</span>`}
+                      <span>${r.user_email || "anonymous"}</span>
+                      <span>· <code>${r.page || "—"}</code></span>
+                      <span title=${absoluteLocalTime(r.created_at)}>· ${relativeTime(r.created_at)}</span>
+                    </div>
+                    ${msgs.length > 0 && html`<div class="fb-admin-thread">
+                      ${msgs.map(m => html`<div key=${m.id} class=${"fb-msg " + (m.from_admin ? "fb-msg--mine" : "fb-msg--theirs")}>
+                        <div class="fb-bubble">${m.body}</div>
+                        <div class="fb-msg-meta" title=${absoluteLocalTime(m.created_at)}>${m.from_admin ? "Packs.Ink" : (r.user_email || "Them")} · ${relativeTime(m.created_at)}</div>
+                      </div>`)}
+                    </div>`}
+                    ${replying && html`<div class="fb-admin-reply">
+                      <textarea class="fb-textarea fb-textarea--reply" value=${draft} rows=${3} autoFocus
+                        onInput=${e=>setDraft(e.target.value)} onKeyDown=${feedbackModEnter(()=>sendReply(r, false))}
+                        placeholder="Write a reply…" aria-label="Reply"/>
+                      <div class="fb-note">${r.user_email
+                        ? "They'll see it in their feedback box, with a badge on the button."
+                        : "Sent anonymously — they'll see it only in the browser they wrote from."}</div>
+                    </div>`}
+                    <div class="fb-admin-btns">
+                      ${replying
+                        ? html`<button onClick=${()=>{ setReplyFor(null); setDraft(""); }} disabled=${sending}>Cancel</button>
+                            <button onClick=${()=>sendReply(r, true)} disabled=${sending || !draft.trim()}>Send & resolve</button>
+                            <button class="active" onClick=${()=>sendReply(r, false)} disabled=${sending || !draft.trim()}>${sending ? "Sending…" : "Send reply"}</button>`
+                        : html`${canReply && html`<button onClick=${()=>{ setReplyFor(r.id); setDraft(""); }}>Reply</button>`}
+                            <button onClick=${()=>toggleResolved(r.id, !r.resolved)}>${r.resolved ? "↩ Reopen" : "✓ Resolve"}</button>
+                            ${armedDel===r.id
+                              ? html`<button class="danger" onClick=${()=>del(r.id)}>Confirm delete</button>`
+                              : html`<button onClick=${()=>{ setArmedDel(r.id); setTimeout(()=>setArmedDel(a=>a===r.id?null:a), 3000); }}>Delete</button>`}`}
+                    </div>
+                    ${!legacy && r.reachable === false && html`<div class="fb-note">Sent anonymously before replies existed, so a reply has nowhere to reach.</div>`}
+                  </div>`;
+                })}
               </div>`}
       </div>
     </div>
   </div>`;
 };
 
-const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback})=>{
+const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback, feedbackUnread = 0, feedbackAdminUnread = 0})=>{
   // Warn when the daily ETL hasn't refreshed prices on schedule. Anchor
   // to 21:00 UTC of the snapshot date (when the cron actually runs) plus
   // a 30h grace window — covers the natural "cron is running / TCGCSV is
@@ -11652,6 +11939,7 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
   // — the site is currently serving yesterday's prices despite today's being
   // in the database. This is a distinct failure mode from "ETL didn't run."
   const matviewLag = lastEtlDate && lastRawPriceDate && lastRawPriceDate > lastEtlDate;
+  const replyWord = (n) => n === 1 ? "reply" : "replies";
   return html`<div class="footer">
     <div class="footer-text">
       <div class="footer-social">
@@ -11668,13 +11956,17 @@ const Footer = ({lastEtlDate, lastRawPriceDate, user, onFeedback, onViewFeedback
       </div>
       ${(onFeedback || onViewFeedback) && html`<div class="footer-feedback-row" style=${{marginTop:8,display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
         ${onFeedback && html`<button class="footer-feedback-btn" onClick=${onFeedback}
+          title=${feedbackUnread > 0 ? feedbackUnread + " new " + replyWord(feedbackUnread) + " to your feedback" : undefined}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"var(--btn-bg)",border:"1px solid var(--btn-border)",
             color:"var(--btn-text)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
-          ${uiIcon("chat")} Send feedback</button>`}
+          ${uiIcon("chat")} Send feedback${feedbackUnread > 0 && html`<span class="footer-feedback-badge"
+            aria-label=${feedbackUnread + " new " + replyWord(feedbackUnread)}>${feedbackUnread > 9 ? "9+" : feedbackUnread}</span>`}</button>`}
         ${onViewFeedback && html`<button class="footer-feedback-btn" onClick=${onViewFeedback}
+          title=${feedbackAdminUnread > 0 ? feedbackAdminUnread + (feedbackAdminUnread === 1 ? " conversation" : " conversations") + " with new activity" : undefined}
           style=${{display:"inline-flex",alignItems:"center",gap:6,background:"none",border:"1px solid var(--btn-border)",
             color:"var(--text-muted)",borderRadius:999,padding:"5px 14px",fontSize:12,fontWeight:600,cursor:"pointer"}}>
-          ${uiIcon("inbox")} Feedback inbox</button>`}
+          ${uiIcon("inbox")} Feedback inbox${feedbackAdminUnread > 0 && html`<span class="footer-feedback-badge"
+            aria-label=${feedbackAdminUnread + " new"}>${feedbackAdminUnread > 9 ? "9+" : feedbackAdminUnread}</span>`}</button>`}
       </div>`}
       ${stale && html`<div class="footer-stale" title=${"Last successful price update on " + lastEtlDate + " (your local time). The daily refresh may be late or failing."}>
         ${uiIcon("warn", 12)} Prices may be stale (last update ${relativeTime(lastEtlDate)})
@@ -44525,6 +44817,58 @@ function App(){
     return () => { cancelled = true; };
   }, [user]);
 
+  // Replies to feedback (migration 138): one cheap count, asked on sign-in
+  // changes, on return to the tab (at most every 5 minutes) and whenever a
+  // feedback box closes. An anonymous visitor holding no reply tokens has
+  // nothing to ask about, so the common case costs no request at all.
+  const [feedbackUnread, setFeedbackUnread] = useState({unread: 0, latest: null});
+  const [feedbackAdminUnread, setFeedbackAdminUnread] = useState(0);
+  const [feedbackNoticeDismissed, setFeedbackNoticeDismissed] = useState(() => {
+    try { return localStorage.getItem(FEEDBACK_NOTICE_KEY) || null; } catch { return null; }
+  });
+  const feedbackThreadsOff = useRef(false);
+  const feedbackUid = user ? user.id : null;
+  const refreshFeedbackUnread = useCallback(async () => {
+    if(feedbackThreadsOff.current) return;
+    const tokens = readFeedbackTokens();
+    let next = {unread: 0, latest: null};
+    if(feedbackUid || tokens.length){
+      try {
+        const {data, error} = await sbClient.rpc("get_my_feedback_unread", {p_tokens: tokens});
+        if(error){
+          if(feedbackThreadsUnavailable(error)) feedbackThreadsOff.current = true;
+          return;
+        }
+        next = {unread: Number(data && data.unread) || 0, latest: (data && data.latest) || null};
+      } catch { return; }
+    }
+    setFeedbackUnread(s => (s.unread === next.unread && s.latest === next.latest) ? s : next);
+    if(!isGradedAdmin){ setFeedbackAdminUnread(0); return; }
+    try {
+      const {data, error} = await sbClient.rpc("get_feedback_admin_unread");
+      if(!error) setFeedbackAdminUnread(Number(data) || 0);
+      else if(feedbackThreadsUnavailable(error)) feedbackThreadsOff.current = true;
+    } catch {}
+  }, [feedbackUid, isGradedAdmin]);
+  useEffect(() => {
+    refreshFeedbackUnread();
+    let last = Date.now();
+    const onVisible = () => {
+      if(document.visibilityState !== "visible" || Date.now() - last < 5 * 60_000) return;
+      last = Date.now();
+      refreshFeedbackUnread();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [refreshFeedbackUnread]);
+  // The corner notice dismisses per reply: it stays away until a newer one lands.
+  const dismissFeedbackNotice = useCallback(() => {
+    const at = feedbackUnread.latest;
+    if(!at) return;
+    try { localStorage.setItem(FEEDBACK_NOTICE_KEY, at); } catch {}
+    setFeedbackNoticeDismissed(at);
+  }, [feedbackUnread.latest]);
+
   // The scanner is a PUBLIC beta (2026-08-04) — everyone gets the button. The
   // modal's own consent gate does the rest: explains that scan photos are
   // uploaded, records the accept, and shows a sign-in CTA to signed-out
@@ -45797,6 +46141,14 @@ function App(){
     <${EnlargedCardOverlay}/>
     <${ImageSaverOverlay}/>
     ${!isOnline && html`<div class="offline-pill" role="status">${uiIcon("offline", 13)} Offline — showing saved data</div>`}
+    ${feedbackNoticeVisible(feedbackUnread, feedbackNoticeDismissed) && !feedbackOpen && html`<div class="feedback-reply-notice" role="status">
+      <button type="button" class="feedback-reply-notice-open" onClick=${()=>setFeedbackOpen(true)}>
+        ${uiIcon("chat", 15)}
+        <span class="feedback-reply-notice-text">${feedbackUnread.unread > 1 ? feedbackUnread.unread + " new replies to your feedback" : "New reply to your feedback"}</span>
+        <span class="feedback-reply-notice-cta">View</span>
+      </button>
+      <button type="button" class="feedback-reply-notice-x" onClick=${dismissFeedbackNotice} title="Dismiss" aria-label="Dismiss">${uiIcon("close", 13)}</button>
+    </div>`}
     <div class="top-nav">
       <a class="tabs-logo-btn" href="/"
         onClick=${navHandler(()=>onTabClick("home"))}
@@ -46166,9 +46518,12 @@ function App(){
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}
-      onViewFeedback=${isGradedAdmin ? ()=>setFeedbackAdminOpen(true) : null}/>
-    ${feedbackOpen && html`<${FeedbackModal} user=${user} onClose=${()=>setFeedbackOpen(false)}/>`}
-    ${feedbackAdminOpen && isGradedAdmin && html`<${FeedbackAdminModal} onClose=${()=>setFeedbackAdminOpen(false)}/>`}
+      onViewFeedback=${isGradedAdmin ? ()=>setFeedbackAdminOpen(true) : null}
+      feedbackUnread=${feedbackUnread.unread} feedbackAdminUnread=${feedbackAdminUnread}/>
+    ${feedbackOpen && html`<${FeedbackModal} user=${user} onSeen=${refreshFeedbackUnread}
+      onClose=${()=>{ setFeedbackOpen(false); refreshFeedbackUnread(); }}/>`}
+    ${feedbackAdminOpen && isGradedAdmin && html`<${FeedbackAdminModal} onSeen=${refreshFeedbackUnread}
+      onClose=${()=>{ setFeedbackAdminOpen(false); refreshFeedbackUnread(); }}/>`}
   </div><//><//><//><//>`;
 }
 
