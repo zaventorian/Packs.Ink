@@ -95,6 +95,7 @@ check("own collection, default section carries no param",
   collectionSectionHref("cards", null), "/collection");
 check("own collection, sealed", collectionSectionHref("sealed", null), "/collection?c=sealed");
 check("own collection, graded", collectionSectionHref("graded", null), "/collection?c=graded");
+check("own collection, pins & counters", collectionSectionHref("pins", null), "/collection?c=pins");
 
 const viewer = { ownerId: "abc-123", ownerToken: "tok_xyz" };
 check("viewer mode keeps owner + token on the default section",
@@ -140,7 +141,7 @@ check("a bogus analytics tool is ignored", at("/analytics", "?a=nonsense"), "Ana
 
 // Every section the app can actually be in needs a label — a missing one
 // silently degrades to the bare view name, which reads as a bug in the toast.
-const EXPECTED = { cards: "Cards", sealed: "Sealed", graded: "Graded" };
+const EXPECTED = { cards: "Cards", sealed: "Sealed", graded: "Graded", pins: "Pins & Counters" };
 for (const k of mod.COLLECTION_SECTIONS) {
   check('collection section "' + k + '" has a label',
     at("/collection", "?c=" + k), "your Collection · " + EXPECTED[k]);

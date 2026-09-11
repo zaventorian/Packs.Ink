@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=388">
+<link rel="stylesheet" href="styles.css?v=389">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1098,8 +1098,11 @@ const SCREENER_MODES = ["raw","graded","sealed"];
 // Collection's Cards / Sealed / Graded split was the last localStorage-only
 // sub-tab: /collection meant three different pages depending on what you last
 // clicked, so "look at my graded" was unsendable. Same rules as ?s= above.
-const COLLECTION_SECTIONS = ["cards","sealed","graded"];
-const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded"};
+// "pins" (2026-09-11) is the pins + lore counters tab. Its data still lives in
+// sealed_collection_items, so it shares the SEALED visibility axis everywhere a
+// viewer's access is decided — see effectiveSection in CollectionView.
+const COLLECTION_SECTIONS = ["cards","sealed","graded","pins"];
+const COLLECTION_SECTION_LABELS = {cards:"Cards", sealed:"Sealed", graded:"Graded", pins:"Pins & Counters"};
 // Human names for the toast. Deliberately separate from the nav labels: this
 // reads as a sentence ("Link to Decks · Tournaments copied"), not a chip.
 const VIEW_SHARE_LABELS = {
@@ -2035,6 +2038,10 @@ const UI_ICON_PATHS = {
   cart:      _icoSvg(html`<circle cx="9.5" cy="19.5" r="1.4"/><circle cx="17" cy="19.5" r="1.4"/><path d="M2.5 3.5h2.6l2.3 11.1a1.5 1.5 0 0 0 1.5 1.2h8.2a1.5 1.5 0 0 0 1.5-1.2l1.4-7.1H6"/>`),
   chart:     _icoSvg(html`<path d="M3.5 20.5h17"/><path d="M6.5 20.5V12"/><path d="M11.5 20.5V5.5"/><path d="M16.5 20.5v-6"/>`),
   pin:       _icoSvg(html`<path d="M14.5 2.8l6.7 6.7-2.4 1a3 3 0 0 0-1.6 1.5l-1.7 3.7-7.2-7.2 3.7-1.7a3 3 0 0 0 1.5-1.6z"/><path d="M8.3 15.7L3 21"/>`),
+  // Pins & Counters board: turn a selected pin, and lift it above its neighbours.
+  rotateL:   _icoSvg(html`<path d="M3.5 12a8.5 8.5 0 1 0 2.5-6"/><path d="M3.5 3.5V8H8"/>`),
+  rotateR:   _icoSvg(html`<path d="M20.5 12a8.5 8.5 0 1 1-2.5-6"/><path d="M20.5 3.5V8H16"/>`),
+  layers:    _icoSvg(html`<path d="M12 3.5l8.5 4.5-8.5 4.5L3.5 8z"/><path d="M3.5 12l8.5 4.5 8.5-4.5"/><path d="M3.5 16l8.5 4.5 8.5-4.5"/>`),
   news:      _icoSvg(html`<path d="M4 9.5h3.5L14 5v14L7.5 14.5H4a1.5 1.5 0 0 1-1.5-1.5v-2A1.5 1.5 0 0 1 4 9.5z"/><path d="M17.5 9.2a4 4 0 0 1 0 5.6"/><path d="M20 6.5a7.7 7.7 0 0 1 0 11"/>`),
   offline:   _icoSvg(html`<path d="M3 4l18 16"/><path d="M12 18.5h.01"/><path d="M8.2 14.8a5.4 5.4 0 0 1 6-1"/><path d="M4.9 11.4A10.2 10.2 0 0 1 9 9.1"/><path d="M14.6 9.4a10.2 10.2 0 0 1 4.5 2"/>`),
   coconut:   _icoSvg(html`<circle cx="12" cy="12" r="8.3"/><path d="M9.3 9.6h.01"/><path d="M14.7 9.6h.01"/><path d="M12 13.4h.01"/><path d="M4.6 14.6c3.4 1.9 11.4 1.9 14.8 0"/>`),
@@ -3634,7 +3641,6 @@ function computeSealedDeltas(history){
     if(!byPid.has(k)) byPid.set(k, []);
     byPid.get(k).push(h);
   }
-  const todayMs = Date.now();
   const DAY = 86400000;
   const WINDOWS = [["pct_1d",1],["pct_7d",7],["pct_30d",30],["pct_90d",90],["pct_180d",180],["pct_365d",365]];
   // Same accessor used everywhere in the catalog — coalesce(low_price_smoothed,
@@ -3645,8 +3651,7 @@ function computeSealedDeltas(history){
   // -100% crash against the prior real price.
   const lowOf = (r) => { const v = r.low_price_smoothed ?? r.low_price; return v == null ? NaN : Number(v); };
   const mktOf = (r) => { const v = r.market_price; return v == null ? NaN : Number(v); };
-  const priceNDaysAgo = (pts, days, fieldOf) => {
-    const cutMs = todayMs - days * DAY;
+  const priceAtOrBefore = (pts, cutMs, fieldOf) => {
     let best = null, bestMs = -Infinity;
     for(const p of pts){
       const v = fieldOf(p);
@@ -3665,16 +3670,25 @@ function computeSealedDeltas(history){
     const lowToday = lowOf(latest);
     const mktToday = mktOf(latest);
     if(!Number.isFinite(lowToday) && !Number.isFinite(mktToday)) continue;
+    // ⚠ Windows are measured back from this product's OWN latest snapshot,
+    // never from the wall clock — the rule price_movers already follows
+    // ("low_prev = most recent before low_today's own date"). Measured from
+    // Date.now(), a snapshot is dated 00:00Z, so for the ~20 hours between
+    // midnight UTC and the day's ETL the newest row was itself "at least a day
+    // old": 1D compared the latest price with ITSELF and every sealed product
+    // read 0% until the evening, on the Screener, the tiles and the modal.
+    const latestMs = new Date(latest.date + "T00:00:00Z").getTime();
     const row = {
       tcgplayer_product_id: pid,
       printing: "Normal",
+      price_date:   latest.date,
       low_today:    Number.isFinite(lowToday) ? lowToday : null,
       market_today: Number.isFinite(mktToday) ? mktToday : null,
       low_prev: null, market_prev: null,
     };
     for(const [k, days] of WINDOWS){
-      const lowPast = priceNDaysAgo(pts, days, lowOf);
-      const mktPast = priceNDaysAgo(pts, days, mktOf);
+      const lowPast = priceAtOrBefore(pts, latestMs - days * DAY, lowOf);
+      const mktPast = priceAtOrBefore(pts, latestMs - days * DAY, mktOf);
       row[k]                           = (Number.isFinite(lowPast) && lowPast > 0 && Number.isFinite(lowToday))
         ? ((lowToday - lowPast) / lowPast * 100) : null;
       row[k.replace("pct_", "mkt_pct_")] = (Number.isFinite(mktPast) && mktPast > 0 && Number.isFinite(mktToday))
@@ -3694,20 +3708,25 @@ function computeSealedDeltas(history){
 // broke every caller of this function for weeks: collection value chart,
 // sealed tile Δ%, Screener sealed mode. Keep it glued to this function.)
 const COLLECTION_HISTORY_BATCH = 80;
-async function fetchCollectionPriceHistory(productIds, sinceDate){
+async function fetchCollectionPriceHistory(productIds, sinceDate, opts){
   if(!productIds.length) return [];
   const batches = [];
   for(let i=0; i<productIds.length; i+=COLLECTION_HISTORY_BATCH){
     batches.push(productIds.slice(i, i+COLLECTION_HISTORY_BATCH));
   }
+  // `market` opts into market_price. The collection rollup values on Low and
+  // never reads it, so it stays off there; computeSealedDeltas derives every
+  // mkt_pct_* (and market_today) from it, so a Δ% surface that shows NM Market
+  // has to ask — without it those columns silently come back null.
+  const mkt = opts && opts.market ? ",market_price" : "";
   // low_price_smoothed (migration 55) lets the rollup ignore phantom-spike
   // days where a single mispriced listing dragged Low far from baseline.
   // Schema-tolerant: if the column doesn't exist yet (pre-migration env),
   // PostgREST 42703s the SELECT — retry without it so the chart still works.
   const fetchOne = async (b, withSmoothed) => sbFetchAll("prices_daily", {
     select: withSmoothed
-      ? "tcgplayer_product_id,printing,date,low_price,low_price_smoothed"
-      : "tcgplayer_product_id,printing,date,low_price",
+      ? "tcgplayer_product_id,printing,date,low_price,low_price_smoothed" + mkt
+      : "tcgplayer_product_id,printing,date,low_price" + mkt,
     source: "eq.tcgcsv",
     grade: "eq.raw",
     tcgplayer_product_id: "in.(" + b.join(",") + ")",
@@ -9791,7 +9810,7 @@ const COACH_TOURS = {
     {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Set Breakdown, Playset Cost, the pack/box Simulator, Swiss tournament odds and a Dice Tray for turn order. Overview lists what each one does — and every tab keeps its own URL, so any tool is shareable and bookmarkable."},
   ]},
   collection: { title: "Collection", requiresUser: true, steps: [
-    {sel:".collection-section-tabs", title:"Cards · Sealed · Graded", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math."},
+    {sel:".collection-section-tabs", title:"Cards · Sealed · Graded · Pins", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math — and your pins and lore counters get a board to arrange them on."},
     {sel:".collection-stats", title:"Your portfolio", body:"Owned value, set completion and extras at a glance — the home page charts it over time."},
     {sel:".collection-share-btn", title:"Share it (or don't)", body:"Each section can be private, unlisted or public — share a read-only link without exposing what you paid."},
   ]},
@@ -20277,7 +20296,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   </div>`;
 };
 
-function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, onSignIn, readOnly, compareMode, viewerOwnSealedCollection}){
+function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, packArts, updatePackArt, onSignIn, readOnly, compareMode, viewerOwnSealedCollection, onOpenPins, pinsHref}){
   sealedMeta = sealedMeta || {};
   updateSealedMeta = updateSealedMeta || (()=>{});
   packArts = packArts || {};
@@ -20359,10 +20378,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
   // render below doesn't need to branch — set_id doubles as the section
   // key in either mode (using the type string when grouping by type).
   const grouped = useMemo(()=>{
-    // SEALED_PUZZLES and SEALED_COLLECTIBLES are unpriced static catalog rows
-    // merged in so they render as their own sections alongside the priced
-    // sealed products.
-    const items = [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_COLLECTIBLES].filter(p =>
+    // SEALED_PUZZLES are unpriced static catalog rows merged in so they render
+    // as their own section alongside the priced sealed products. Pins and lore
+    // counters (SEALED_COLLECTIBLES) have their own tab since 2026-09-11 — see
+    // CollectiblesView.
+    const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const filtered = (hideUnowned
@@ -20443,7 +20463,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
   // Owned sealed pids — driver for the optional Δ% history fetch.
   const ownedSealedPids = useMemo(() =>
     Object.entries(sealedCollection || {})
-      .filter(([, q]) => q > 0)
+      .filter(([pid, q]) => q > 0 && !isCollectiblePid(pid))
       .map(([pid]) => parseInt(pid, 10))
       .filter(Number.isFinite),
     [sealedCollection]);
@@ -20482,7 +20502,9 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       priceByPid[p.tcgplayer_product_id] = parseFloat(p[priceField]);
     }
     for(const [pid, qty] of Object.entries(sealedCollection)){
-      if(qty <= 0) continue;
+      // Pins and lore counters live on their own tab now; counting them here
+      // inflated Units owned / Distinct SKUs with things this tab doesn't show.
+      if(qty <= 0 || isCollectiblePid(pid)) continue;
       distinct++;
       units += qty;
       const p = priceByPid[pid];
@@ -20538,6 +20560,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       </div>
     </div>
 
+    ${onOpenPins && html`<p class="sealed-coll-pins-note">Pins and lore counters have their own tab now:${" "}<a href=${pinsHref || collectionSectionHref("pins", null)} onClick=${navHandler(onOpenPins)}>Pins & Counters →</a></p>`}
     ${!readOnly && html`<${SealedValueChart} sealedCollection=${sealedCollection} sealedPrices=${sealedPrices}
       rangeKey=${chartRange} setRangeKey=${setChartRange}/>`}
 
@@ -20722,6 +20745,816 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     </p>
   </div>`;
 }
+
+// ── Pins & Counters (Collection » Pins & Counters, 2026-09-11) ──────────────
+// Pins and lore counters were two sections of tiles at the foot of the Sealed
+// tab. They aren't sealed product — nobody sells them, and what a collector does
+// with them is DISPLAY them — so they have their own tab: a pin board to arrange
+// pins on, a counter board they snap into, and a checklist of what you're
+// missing and where each one came from (Zaven, 2026-09-11).
+//
+// Ownership is unchanged: a row in sealed_collection_items under the synthetic
+// pid (see LORCANA_PINS). Only the ARRANGEMENT is new — supabase/139.
+const isCollectiblePid = (pid) => { const n = Number(pid); return n >= 950000000 && n < 970000000; };
+const cbClamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const COLLECTIBLE_BOARD_BGS = [
+  {key: "cork",     label: "Cork"},
+  {key: "felt",     label: "Felt"},
+  {key: "linen",    label: "Linen"},
+  {key: "midnight", label: "Midnight"},
+];
+const COLLECTIBLE_BOARD_DEFAULT_BG = {pins: "cork", counters: "felt"};
+// The pin board is a 3:2 sheet and a pin sits anywhere on it. x/y are the pin's
+// centre as fractions of the board, so a board arranged on a monitor reads the
+// same on a phone.
+const PIN_BOARD_ASPECT = 1.5;
+// Every pin gets the same AREA, not the same width: the photos run from 0.70 to
+// 2.35 wide-to-tall (all 41 measured, 2026-09-11), and one fixed width made the
+// logo pins slivers and the pendant pins towers.
+const PIN_BOARD_BASE = 0.1;
+const PIN_TYPICAL_ASPECT = 0.76;
+const PIN_BOARD_SCALES = [0.8, 1, 1.25];
+const pinWidthOf = (aspect, scale) => {
+  const ar = (Number.isFinite(aspect) && aspect > 0) ? aspect : PIN_TYPICAL_ASPECT;
+  return Math.min(0.32, PIN_BOARD_BASE * (scale || 1) * Math.sqrt(ar / PIN_TYPICAL_ASPECT));
+};
+// A pin's box on the board, in board fractions (its height converts through the
+// board's own 3:2).
+const pinRectOf = (it, aspect, scale) => {
+  const ar = (Number.isFinite(aspect) && aspect > 0) ? aspect : PIN_TYPICAL_ASPECT;
+  const w = pinWidthOf(ar, scale), h = (w / ar) * PIN_BOARD_ASPECT;
+  return {x0: it.x - w / 2, x1: it.x + w / 2, y0: it.y - h / 2, y1: it.y + h / 2, w, h};
+};
+// The counter board is a honeycomb of POINTY-TOP hexagons because that is the
+// counters' shape: the Weekly Play dials and most Trove dials measure 0.87
+// wide-to-tall with a point at the top (measured 2026-09-11), so counters on
+// neighbouring sockets butt edge to edge the way the real ones clip together.
+// Odd rows sit half a socket right. Rows grow with the catalog, so there are
+// always spare sockets to rearrange into.
+const COUNTER_HEX_ASPECT = Math.sqrt(3) / 2;
+const COUNTER_BOARD_COLS = 7;
+const counterBoardGeom = (count) => {
+  const rows = Math.max(6, Math.ceil((count || 0) * 1.5 / COUNTER_BOARD_COLS));
+  const h = 1 / COUNTER_HEX_ASPECT;
+  return {cols: COUNTER_BOARD_COLS, rows, h, W: COUNTER_BOARD_COLS + 0.5, H: h + (rows - 1) * 0.75 * h};
+};
+const counterCellCenter = (g, c, r) => ({
+  x: (c + 0.5 + (r % 2 ? 0.5 : 0)) / g.W,
+  y: (g.h / 2 + r * 0.75 * g.h) / g.H,
+});
+// The socket nearest a point on the board (fractions); null only off the grid.
+const counterCellAt = (g, x, y) => {
+  const ux = x * g.W, uy = y * g.H;
+  const r0 = Math.round((uy - g.h / 2) / (0.75 * g.h));
+  let best = null, bestD = Infinity;
+  for(let r = r0 - 1; r <= r0 + 1; r++){
+    if(r < 0 || r >= g.rows) continue;
+    const c0 = Math.round(ux - 0.5 - (r % 2 ? 0.5 : 0));
+    for(let c = c0 - 1; c <= c0 + 1; c++){
+      if(c < 0 || c >= g.cols) continue;
+      const p = counterCellCenter(g, c, r);
+      const d = Math.hypot((p.x - x) * g.W, (p.y - y) * g.H);
+      if(d < bestD){ bestD = d; best = {c, r}; }
+    }
+  }
+  return best;
+};
+// Coerce a stored board into a valid one. Never throws — the normalizeHomeLayout
+// contract: a hand-edited or half-migrated value is repaired, not rejected. A
+// placement for a number the catalog doesn't have is dropped; one for something
+// you no longer own is KEPT, so un-owning and re-owning a pin puts it back where
+// it was. Only owned items are ever drawn. Two counters can't share a socket.
+function normalizeCollectibleBoard(kind, raw, knownNs, geom){
+  const src = (raw && typeof raw === "object" && !Array.isArray(raw)) ? raw : {};
+  const bgKeys = COLLECTIBLE_BOARD_BGS.map(b => b.key);
+  const out = {v: 1, bg: bgKeys.includes(src.bg) ? src.bg : COLLECTIBLE_BOARD_DEFAULT_BG[kind], items: {}};
+  if(kind === "pins") out.scale = PIN_BOARD_SCALES.includes(src.scale) ? src.scale : 1;
+  const known = new Set((knownNs || []).map(String));
+  const items = (src.items && typeof src.items === "object" && !Array.isArray(src.items)) ? src.items : {};
+  const taken = new Set();
+  for(const k of Object.keys(items).sort((a, b) => Number(a) - Number(b))){
+    const it = items[k];
+    if(!known.has(k) || !it || typeof it !== "object") continue;
+    if(kind === "pins"){
+      const x = Number(it.x), y = Number(it.y), r = Number(it.r), z = Number(it.z);
+      if(!Number.isFinite(x) || !Number.isFinite(y)) continue;
+      out.items[k] = {x: cbClamp(x, 0, 1), y: cbClamp(y, 0, 1),
+        r: Number.isFinite(r) ? Math.round(cbClamp(r, -180, 180)) : 0,
+        z: Number.isFinite(z) ? Math.max(0, Math.round(z)) : 0};
+    } else {
+      const c = Number(it.c), r = Number(it.r);
+      if(!geom || !Number.isInteger(c) || !Number.isInteger(r) || c < 0 || r < 0 || c >= geom.cols || r >= geom.rows) continue;
+      if(taken.has(c + "," + r)) continue;
+      taken.add(c + "," + r);
+      out.items[k] = {c, r};
+    }
+  }
+  return out;
+}
+// Where a pin goes when it's placed without a drop point (a tap in the tray,
+// "I have it"): the first spot in reading order whose box clears every pin
+// already drawn.
+function nextFreePinSpot(board, drawnNs, aspectOf, n){
+  const scale = board.scale || 1;
+  const others = drawnNs.map(String).filter(k => k !== String(n) && board.items[k])
+    .map(k => pinRectOf(board.items[k], aspectOf(k), scale));
+  const pad = 0.01;
+  for(let row = 0; row < 14; row++){
+    for(let col = 0; col < 20; col++){
+      const x = (col + 0.5) / 20, y = (row + 0.5) / 14;
+      const r = pinRectOf({x, y}, aspectOf(n), scale);
+      if(r.x0 < 0.01 || r.x1 > 0.99 || r.y0 < 0.01 || r.y1 > 0.99) continue;
+      if(others.every(o => r.x1 + pad <= o.x0 || o.x1 + pad <= r.x0 || r.y1 + pad <= o.y0 || o.y1 + pad <= r.y0)) return {x, y};
+    }
+  }
+  return {x: 0.5, y: 0.5};
+}
+// "Tidy up": pins in release order, packed into centred rows like words on a
+// page, each at its own width — at the largest pin size that fits the board.
+function tidyPins(ns, aspectOf){
+  const gap = 0.018;
+  for(const scale of [...PIN_BOARD_SCALES].reverse()){
+    const rows = [];
+    let cur = [], x = gap;
+    for(const n of ns){
+      const r = pinRectOf({x: 0, y: 0}, aspectOf(n), scale);
+      if(cur.length && x + r.w + gap > 1){ rows.push(cur); cur = []; x = gap; }
+      cur.push({n, w: r.w, h: r.h});
+      x += r.w + gap;
+    }
+    if(cur.length) rows.push(cur);
+    const heights = rows.map(row => Math.max(...row.map(s => s.h)));
+    const total = heights.reduce((a, h) => a + h + gap, gap);
+    if(total <= 1 || scale === PIN_BOARD_SCALES[0]){
+      const items = {};
+      let y = gap + Math.max(0, (1 - total) / 2);
+      rows.forEach((row, i) => {
+        let x0 = (1 - row.reduce((a, s) => a + s.w + gap, -gap)) / 2;
+        for(const s of row){
+          items[String(s.n)] = {x: cbClamp(x0 + s.w / 2, 0.02, 0.98), y: cbClamp(y + heights[i] / 2, 0.02, 0.98), r: 0, z: 0};
+          x0 += s.w + gap;
+        }
+        y += heights[i] + gap;
+      });
+      return {items, scale};
+    }
+  }
+  return {items: {}, scale: 1};
+}
+function nextFreeCounterCell(board, drawnNs, geom, n){
+  const taken = new Set(drawnNs.map(String).filter(k => k !== String(n) && board.items[k])
+    .map(k => board.items[k].c + "," + board.items[k].r));
+  for(let r = 0; r < geom.rows; r++)
+    for(let c = 0; c < geom.cols; c++)
+      if(!taken.has(c + "," + r)) return {c, r};
+  return null;
+}
+const tidyCounters = (ns, geom) => {
+  const items = {};
+  ns.slice(0, geom.cols * geom.rows).forEach((n, i) => { items[String(n)] = {c: i % geom.cols, r: Math.floor(i / geom.cols)}; });
+  return items;
+};
+const COLLECTIBLE_BOARDS_LS = "packsink:collectibleBoards:";
+// Before migration 139 the table isn't there: say "saved on this device", don't throw.
+const collectibleBoardsUnavailable = (err) => {
+  const code = String((err && err.code) || "");
+  const msg = String((err && (err.message || err)) || "");
+  return ["42P01", "PGRST205", "PGRST202", "42883"].includes(code) || /collectible_boards/i.test(msg);
+};
+
+const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, readOnly, viewerContext, onSignIn}) => {
+  const owned = sealedCollection || {};
+  const [view, setView] = useState(() => {
+    try { const v = localStorage.getItem("packsink:collectibles:view"); return (v === "counters" || v === "list") ? v : "pins"; }
+    catch { return "pins"; }
+  });
+  useEffect(() => { try { localStorage.setItem("packsink:collectibles:view", view); } catch {} }, [view]);
+  const pinRows = useMemo(() => SEALED_COLLECTIBLES.filter(r => r.product_type === "Pin"), []);
+  const counterRows = useMemo(() => SEALED_COLLECTIBLES.filter(r => r.product_type === "Lore Counter"), []);
+  const qtyOf = (r) => owned[r.tcgplayer_product_id] || 0;
+  const ownedPins = pinRows.filter(r => qtyOf(r) > 0);
+  const ownedCounters = counterRows.filter(r => qtyOf(r) > 0);
+  const ownedPinNs = ownedPins.map(r => String(r.collectible_n));
+  const ownedCounterNs = ownedCounters.map(r => String(r.collectible_n));
+  const ownedPinKey = ownedPinNs.join(","), ownedCounterKey = ownedCounterNs.join(",");
+  const geom = useMemo(() => counterBoardGeom(counterRows.length), [counterRows.length]);
+  const pinKnown = useMemo(() => pinRows.map(r => r.collectible_n), [pinRows]);
+  const counterKnown = useMemo(() => counterRows.map(r => r.collectible_n), [counterRows]);
+
+  // Each pin photo's aspect, measured as it arrives. Tidy and "place" need real
+  // boxes to keep pins from overlapping, so every pin photo is asked for up front
+  // (the Sealed tab used to load all of them anyway).
+  const [aspects, setAspects] = useState({});
+  useEffect(() => {
+    let alive = true;
+    for(const r of pinRows){
+      const img = new Image();
+      img.onload = () => {
+        if(!alive || !img.naturalWidth || !img.naturalHeight) return;
+        const k = String(r.collectible_n), ar = img.naturalWidth / img.naturalHeight;
+        setAspects(a => (a[k] && Math.abs(a[k] - ar) < 0.005) ? a : {...a, [k]: ar});
+      };
+      img.src = r.image_url;
+    }
+    return () => { alive = false; };
+  }, [pinRows]);
+  const aspectOf = (n) => aspects[String(n)] || PIN_TYPICAL_ASPECT;
+  const [aspectWaitOver, setAspectWaitOver] = useState(false);
+  useEffect(() => { const t = setTimeout(() => setAspectWaitOver(true), 3000); return () => clearTimeout(t); }, []);
+  const aspectsReady = ownedPinNs.every(k => aspects[k]);
+  const aspectsKey = ownedPinNs.map(k => aspects[k] ? "1" : "0").join("");
+
+  // Boards: null until loaded, then {pins?, counters?}. A board with no stored
+  // record is undefined, and that — not an empty board — is what earns the
+  // first automatic arrangement.
+  const userId = (!viewerContext && user && user.id) || null;
+  const ownerKey = viewerContext ? "viewer:" + (viewerContext.ownerId || "") : (userId || "");
+  const localKey = COLLECTIBLE_BOARDS_LS + String(userId || "anon").slice(0, 8);
+  const [boards, setBoards] = useState(null);
+  // cloud   loaded from, and saving to, the account.
+  // local   no table yet (migration 139 hasn't landed): this device is the store.
+  // offline the load failed some other way, so NOTHING is written to the account
+  //         — an auto-arrangement written over a board we couldn't read destroys it.
+  const [sync, setSync] = useState("loading");
+  const boardsRef = useRef(null); boardsRef.current = boards;
+  const syncRef = useRef(sync); syncRef.current = sync;
+  const saveTimers = useRef({});
+  const pendingSave = useRef({});
+  const flushSave = useCallback(async (b) => {
+    const layout = pendingSave.current[b];
+    if(!layout || !userId) return;
+    delete pendingSave.current[b];
+    try {
+      const {error} = await sbClient.from("collectible_boards")
+        .upsert({user_id: userId, board: b, layout}, {onConflict: "user_id,board"});
+      if(error){
+        if(collectibleBoardsUnavailable(error)) setSync("local");
+        else console.warn("collectible board save:", error.message || error);
+      } else if(syncRef.current !== "cloud") setSync("cloud");
+    } catch(e){ console.warn("collectible board save:", e?.message || e); }
+  }, [userId]);
+  const queueSave = (b, layout) => {
+    if(readOnly || !userId || syncRef.current === "offline") return;
+    pendingSave.current[b] = layout;
+    clearTimeout(saveTimers.current[b]);
+    saveTimers.current[b] = setTimeout(() => flushSave(b), 700);
+  };
+  useEffect(() => () => {
+    for(const b of Object.keys(saveTimers.current)){ clearTimeout(saveTimers.current[b]); flushSave(b); }
+  }, [flushSave]);
+  useEffect(() => {
+    let cancelled = false;
+    const fromRows = (rows) => {
+      const o = {};
+      for(const r of (rows || [])) if(r && (r.board === "pins" || r.board === "counters")) o[r.board] = r.layout;
+      return o;
+    };
+    const readLocal = () => {
+      try { const v = JSON.parse(localStorage.getItem(localKey) || "null"); return (v && typeof v === "object") ? v : {}; }
+      catch { return {}; }
+    };
+    setBoards(null);
+    setSync("loading");
+    (async () => {
+      if(viewerContext){
+        let rows = [];
+        try {
+          const {data, error} = await sbClient.rpc("get_shared_collectible_boards",
+            {p_user_id: viewerContext.ownerId, p_token: viewerContext.ownerToken || null});
+          if(!error) rows = data || [];
+        } catch {}
+        if(!cancelled){ setBoards(fromRows(rows)); setSync("viewer"); }
+        return;
+      }
+      if(!userId){ if(!cancelled){ setBoards({}); setSync("local"); } return; }
+      const local = readLocal();
+      try {
+        const {data, error} = await sbClient.from("collectible_boards").select("board,layout").eq("user_id", userId);
+        if(cancelled) return;
+        if(error){
+          const missing = collectibleBoardsUnavailable(error);
+          if(!missing) console.warn("collectible boards load:", error.message || error);
+          setSync(missing ? "local" : "offline");
+          setBoards(local);
+          return;
+        }
+        const remote = fromRows(data);
+        setSync("cloud");
+        // A board arranged before the table existed lives only on this device.
+        // Carry it up once rather than lose it to an empty account.
+        for(const b of ["pins", "counters"]){
+          if(remote[b] === undefined && local[b] !== undefined){ pendingSave.current[b] = local[b]; flushSave(b); }
+        }
+        setBoards({...local, ...remote});
+      } catch {
+        if(!cancelled){ setSync("offline"); setBoards(local); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [ownerKey]);
+
+  const pinBoard = useMemo(() => boards ? normalizeCollectibleBoard("pins", boards.pins, pinKnown) : null, [boards, pinKnown]);
+  const counterBoard = useMemo(() => boards ? normalizeCollectibleBoard("counters", boards.counters, counterKnown, geom) : null, [boards, counterKnown, geom]);
+  const pinBoardRef = useRef(null); pinBoardRef.current = pinBoard;
+  const counterBoardRef = useRef(null); counterBoardRef.current = counterBoard;
+  const commitBoard = (b, next) => {
+    const all = {...(boardsRef.current || {}), [b]: next};
+    boardsRef.current = all;
+    setBoards(all);
+    if(!readOnly){ try { localStorage.setItem(localKey, JSON.stringify(all)); } catch {} }
+    queueSave(b, next);
+  };
+  // A viewer looking at a collection whose owner never arranged it still sees a
+  // board, laid out the way Tidy would lay it out — computed, never saved.
+  const shownPinBoard = useMemo(() => {
+    if(!pinBoard) return null;
+    if(readOnly && boards && boards.pins === undefined){
+      const t = tidyPins(ownedPinNs, aspectOf);
+      return {...pinBoard, scale: t.scale, items: t.items};
+    }
+    return pinBoard;
+  }, [pinBoard, readOnly, boards, ownedPinKey, aspectsKey]);
+  const shownCounterBoard = useMemo(() => {
+    if(!counterBoard) return null;
+    if(readOnly && boards && boards.counters === undefined) return {...counterBoard, items: tidyCounters(ownedCounterNs, geom)};
+    return counterBoard;
+  }, [counterBoard, readOnly, boards, ownedCounterKey, geom]);
+  // First look at a board that has never been saved: lay out what you own. Only
+  // once the account (or, pre-migration, this device) has actually been read.
+  useEffect(() => {
+    if(readOnly || !boards || (sync !== "cloud" && sync !== "local")) return;
+    if(boards.pins === undefined && ownedPinNs.length && (aspectsReady || aspectWaitOver)){
+      const t = tidyPins(ownedPinNs, aspectOf);
+      commitBoard("pins", {...pinBoardRef.current, scale: t.scale, items: t.items});
+    }
+    if(boards.counters === undefined && ownedCounterNs.length){
+      commitBoard("counters", {...counterBoardRef.current, items: tidyCounters(ownedCounterNs, geom)});
+    }
+  }, [readOnly, boards, sync, ownedPinKey, ownedCounterKey, aspectsReady, aspectWaitOver]);
+
+  const surfaceRef = useRef(null);
+  const [drag, setDrag] = useState(null);
+  const [selected, setSelected] = useState(null);
+  const [detail, setDetail] = useState(null);
+  const [listFilter, setListFilter] = useState("all");
+  const [listKind, setListKind] = useState("both");
+  const [listQuery, setListQuery] = useState("");
+  useEffect(() => { setSelected(null); }, [view]);
+  const hexCells = useMemo(() => {
+    const out = [];
+    for(let r = 0; r < geom.rows; r++) for(let c = 0; c < geom.cols; c++){
+      const cx = c + 0.5 + (r % 2 ? 0.5 : 0), cy = geom.h / 2 + r * 0.75 * geom.h, hh = geom.h / 2, q = geom.h / 4;
+      out.push({c, r, pts: [[cx, cy - hh], [cx + 0.5, cy - q], [cx + 0.5, cy + q], [cx, cy + hh], [cx - 0.5, cy + q], [cx - 0.5, cy - q]]
+        .map(p => p[0].toFixed(3) + "," + p[1].toFixed(3)).join(" ")});
+    }
+    return out;
+  }, [geom]);
+
+  const rowOf = (kind, n) => (kind === "pins" ? pinRows : counterRows).find(r => String(r.collectible_n) === String(n)) || null;
+  const dropPin = (n, x, y) => {
+    const b = pinBoardRef.current;
+    if(!b) return;
+    const k = String(n);
+    const items = {...b.items};
+    let maxZ = Object.values(items).reduce((m, it) => Math.max(m, it.z || 0), 0);
+    // Keep z small: re-rank once it has climbed, preserving the stacking order.
+    if(maxZ > 400){
+      const order = Object.keys(items).sort((a, c) => (items[a].z || 0) - (items[c].z || 0));
+      order.forEach((key, i) => { items[key] = {...items[key], z: i}; });
+      maxZ = order.length;
+    }
+    const prev = items[k];
+    items[k] = {x: cbClamp(x, 0.02, 0.98), y: cbClamp(y, 0.02, 0.98), r: prev ? prev.r : 0, z: maxZ + 1};
+    commitBoard("pins", {...b, items});
+  };
+  const dropCounter = (n, x, y, drawn) => {
+    const b = counterBoardRef.current;
+    const cell = b && counterCellAt(geom, x, y);
+    if(!cell) return;
+    const k = String(n);
+    const drawnNs = drawn || ownedCounterNs;
+    const items = {...b.items};
+    const prev = items[k];
+    // A stored placement for a counter you no longer own is invisible, so it
+    // must never hold a socket against one you can see.
+    for(const key of Object.keys(items)){
+      if(key !== k && !drawnNs.includes(key) && items[key].c === cell.c && items[key].r === cell.r) delete items[key];
+    }
+    const occupant = drawnNs.find(key => key !== k && items[key] && items[key].c === cell.c && items[key].r === cell.r);
+    if(occupant){
+      if(prev) items[occupant] = {c: prev.c, r: prev.r};
+      else {
+        delete items[occupant];
+        const free = nextFreeCounterCell({items: {...items, [k]: cell}}, [...drawnNs, k], geom, occupant);
+        if(free) items[occupant] = free;
+      }
+    }
+    items[k] = {c: cell.c, r: cell.r};
+    commitBoard("counters", {...b, items});
+  };
+  const takeOff = (kind, n) => {
+    const b = kind === "pins" ? pinBoardRef.current : counterBoardRef.current;
+    if(!b) return;
+    const items = {...b.items};
+    delete items[String(n)];
+    commitBoard(kind, {...b, items});
+    setSelected(null);
+  };
+  const placeFromTray = (kind, n, drawn) => {
+    const k = String(n);
+    if(kind === "pins"){
+      const b = pinBoardRef.current;
+      if(!b) return;
+      const spot = nextFreePinSpot(b, drawn || ownedPinNs, aspectOf, k);
+      dropPin(k, spot.x, spot.y);
+    } else {
+      const b = counterBoardRef.current;
+      if(!b) return;
+      const cell = nextFreeCounterCell(b, drawn || ownedCounterNs, geom, k);
+      if(!cell){ flashToast("The counter board is full — take one off first"); return; }
+      commitBoard("counters", {...b, items: {...b.items, [k]: cell}});
+    }
+    setSelected({kind, n: k});
+  };
+  const placeAll = (kind) => {
+    const b0 = kind === "pins" ? pinBoardRef.current : counterBoardRef.current;
+    if(!b0) return;
+    const drawnNs = kind === "pins" ? ownedPinNs : ownedCounterNs;
+    const b = {...b0, items: {...b0.items}};
+    for(const k of drawnNs){
+      if(b.items[k]) continue;
+      if(kind === "pins"){
+        const spot = nextFreePinSpot(b, drawnNs, aspectOf, k);
+        const maxZ = Object.values(b.items).reduce((m, it) => Math.max(m, it.z || 0), 0);
+        b.items[k] = {x: spot.x, y: spot.y, r: 0, z: maxZ + 1};
+      } else {
+        const cell = nextFreeCounterCell(b, drawnNs, geom, k);
+        if(!cell) break;
+        b.items[k] = cell;
+      }
+    }
+    commitBoard(kind, b);
+  };
+  const tidy = (kind) => {
+    const b = kind === "pins" ? pinBoardRef.current : counterBoardRef.current;
+    if(!b) return;
+    if(kind === "pins"){
+      // Placements for pins you no longer own ride along untouched.
+      const keep = {};
+      for(const [k, it] of Object.entries(b.items)) if(!ownedPinNs.includes(k)) keep[k] = it;
+      const t = tidyPins(ownedPinNs, aspectOf);
+      commitBoard("pins", {...b, scale: t.scale, items: {...keep, ...t.items}});
+    } else {
+      // On a honeycomb a kept placement would hold a socket, so a tidy clears them.
+      commitBoard("counters", {...b, items: tidyCounters(ownedCounterNs, geom)});
+    }
+    setSelected(null);
+  };
+  const rotatePin = (n, deg) => {
+    const b = pinBoardRef.current, k = String(n);
+    if(!b || !b.items[k]) return;
+    let r = (b.items[k].r || 0) + deg;
+    if(r > 180) r -= 360;
+    if(r < -180) r += 360;
+    commitBoard("pins", {...b, items: {...b.items, [k]: {...b.items[k], r}}});
+  };
+  const frontPin = (n) => {
+    const b = pinBoardRef.current, it = b && b.items[String(n)];
+    if(it) dropPin(n, it.x, it.y);
+  };
+  const addOwned = (kind, r) => {
+    if(!updateSealedQty) return;
+    const k = String(r.collectible_n);
+    updateSealedQty(r.tcgplayer_product_id, Math.max(1, qtyOf(r)));
+    placeFromTray(kind, k, [...(kind === "pins" ? ownedPinNs : ownedCounterNs), k]);
+  };
+  const bumpQty = (r, delta) => {
+    if(!updateSealedQty) return;
+    const q = qtyOf(r), next = cbClamp(q + delta, 0, 99);
+    if(next !== q) updateSealedQty(r.tcgplayer_product_id, next);
+  };
+
+  // Pointer drag, one code path for mouse and touch. Items carry
+  // touch-action:none so a drag never scrolls the page; the surface keeps
+  // pan-y so you can still scroll past the board.
+  const beginDrag = (e, kind, n, fromTray) => {
+    if(readOnly || (e.button != null && e.button !== 0)) return;
+    const surface = surfaceRef.current;
+    if(!surface) return;
+    e.preventDefault();
+    const k = String(n);
+    const sx = e.clientX, sy = e.clientY;
+    const r0 = surface.getBoundingClientRect();
+    const b = kind === "pins" ? pinBoardRef.current : counterBoardRef.current;
+    const it = b && b.items[k];
+    // Hold a pin where you grabbed it rather than jumping its centre to the
+    // pointer. Counters snap to a socket, so they don't need it.
+    const off = (kind === "pins" && !fromTray && it)
+      ? {dx: it.x - (sx - r0.left) / r0.width, dy: it.y - (sy - r0.top) / r0.height} : {dx: 0, dy: 0};
+    let moved = false;
+    const at = (ev) => {
+      const rect = surface.getBoundingClientRect();
+      const fx = (ev.clientX - rect.left) / rect.width + off.dx;
+      const fy = (ev.clientY - rect.top) / rect.height + off.dy;
+      return {x: cbClamp(fx, 0.02, 0.98), y: cbClamp(fy, 0.02, 0.98),
+        inside: fx > -0.05 && fx < 1.05 && fy > -0.05 && fy < 1.05};
+    };
+    const move = (ev) => {
+      if(!moved && Math.hypot(ev.clientX - sx, ev.clientY - sy) < 5) return;
+      moved = true;
+      const p = at(ev);
+      setDrag({kind, n: k, fromTray, x: p.x, y: p.y, inside: p.inside, cx: ev.clientX, cy: ev.clientY,
+        cell: (kind === "counters" && p.inside) ? counterCellAt(geom, p.x, p.y) : null});
+    };
+    const end = (ev) => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", end);
+      window.removeEventListener("pointercancel", end);
+      setDrag(null);
+      if(ev.type === "pointercancel") return;
+      if(!moved){
+        if(fromTray) placeFromTray(kind, k);
+        else setSelected(s => (s && s.kind === kind && s.n === k) ? null : {kind, n: k});
+        return;
+      }
+      const p = at(ev);
+      if(!p.inside){ if(!fromTray) takeOff(kind, k); return; }
+      if(kind === "pins") dropPin(k, p.x, p.y); else dropCounter(k, p.x, p.y);
+      setSelected({kind, n: k});
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", end);
+    window.addEventListener("pointercancel", end);
+  };
+  const onItemKey = (kind, n) => (e) => {
+    if(readOnly) return;
+    const k = String(n);
+    if(e.key === "Enter" || e.key === " "){ e.preventDefault(); setSelected({kind, n: k}); return; }
+    if(e.key === "Delete" || e.key === "Backspace"){ e.preventDefault(); takeOff(kind, k); return; }
+    if(e.key === "Escape"){ setSelected(null); return; }
+    const d = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]}[e.key];
+    if(kind === "pins"){
+      if(e.key === "[" || e.key === "]"){ e.preventDefault(); rotatePin(k, e.key === "[" ? -15 : 15); return; }
+      const b = pinBoardRef.current, it = b && b.items[k];
+      if(!d || !it) return;
+      e.preventDefault();
+      const step = e.shiftKey ? 0.05 : 0.01;
+      commitBoard("pins", {...b, items: {...b.items, [k]: {...it,
+        x: cbClamp(it.x + d[0] * step, 0.02, 0.98), y: cbClamp(it.y + d[1] * step * PIN_BOARD_ASPECT, 0.02, 0.98)}}});
+    } else if(d){
+      const b = counterBoardRef.current, it = b && b.items[k];
+      if(!it) return;
+      e.preventDefault();
+      const c = it.c + d[0], r = it.r + d[1];
+      if(c < 0 || r < 0 || c >= geom.cols || r >= geom.rows) return;
+      const p = counterCellCenter(geom, c, r);
+      dropCounter(k, p.x, p.y);
+    }
+  };
+
+  if(!readOnly && !user){
+    return html`<div class="sealed-coll-empty">
+      <p>Sign in with Google to check off the pins and lore counters you own, and arrange them on a board.</p>
+      <button class="settings-action primary" onClick=${onSignIn}>Sign in with Google</button>
+    </div>`;
+  }
+
+  const stat = (label, have, total) => html`<div class="cb-stat">
+    <div class="cb-stat-top"><span>${label}</span><span><b>${have}</b> / ${total}</span></div>
+    <div class="cb-bar" role="progressbar" aria-label=${label + " owned"} aria-valuemin="0"
+      aria-valuemax=${total} aria-valuenow=${have}><i style=${{width: (total ? (have / total) * 100 : 0) + "%"}}></i></div>
+  </div>`;
+  const boardToolbar = (kind, b) => html`<div class="cb-toolbar">
+    <div class="cb-swatches" role="group" aria-label="Board background">
+      ${COLLECTIBLE_BOARD_BGS.map(bg => html`<button key=${bg.key} type="button"
+        class=${"cb-swatch cb-bg-" + bg.key + (b.bg === bg.key ? " active" : "")}
+        aria-pressed=${b.bg === bg.key} aria-label=${bg.label + " background"} title=${bg.label}
+        onClick=${() => commitBoard(kind, {...b, bg: bg.key})}></button>`)}
+    </div>
+    ${kind === "pins" && html`<div class="seg-toggle" role="group" aria-label="Pin size">
+      ${PIN_BOARD_SCALES.map((s, i) => html`<button key=${s} type="button"
+        class=${(b.scale || 1) === s ? "active" : ""} title=${["Small", "Medium", "Large"][i] + " pins"}
+        onClick=${() => commitBoard("pins", {...b, scale: s})}>${["S", "M", "L"][i]}</button>`)}
+    </div>`}
+    <button type="button" class="cb-tool-btn"
+      disabled=${!(kind === "pins" ? ownedPinNs : ownedCounterNs).length}
+      title=${kind === "pins" ? "Line every pin you own up, in release order" : "Snap every counter you own into rows, in release order"}
+      onClick=${() => tidy(kind)}>${uiIcon("sparkle", 13)} Tidy up</button>
+    <span class="cb-hint">${kind === "pins"
+      ? "Drag a pin to move it · tap to select it · drag it off the board to take it down"
+      : "Counters snap into the honeycomb · drop one on another to swap them"}</span>
+  </div>`;
+  const pinItems = (b) => ownedPins.filter(r => b.items[String(r.collectible_n)]).map(r => {
+    const k = String(r.collectible_n);
+    const dragging = !!(drag && drag.kind === "pins" && drag.n === k && !drag.fromTray);
+    const it = dragging ? {...b.items[k], x: drag.x, y: drag.y} : b.items[k];
+    const sel = !!(selected && selected.kind === "pins" && selected.n === k);
+    return html`<button key=${k} type="button"
+      class=${"cb-item cb-item--pin" + (sel ? " is-selected" : "") + (dragging ? " is-dragging" : "")}
+      style=${{left: (it.x * 100) + "%", top: (it.y * 100) + "%", width: (pinWidthOf(aspectOf(k), b.scale || 1) * 100) + "%",
+        zIndex: (it.z || 0) + 1, transform: "translate(-50%,-50%) rotate(" + (it.r || 0) + "deg)"}}
+      title=${r.name} aria-label=${r.name}
+      onPointerDown=${e => beginDrag(e, "pins", k, false)}
+      onClick=${readOnly ? (() => setDetail(r)) : undefined}
+      onKeyDown=${onItemKey("pins", k)}>
+      <img src=${r.image_url} alt="" draggable="false"/>
+    </button>`;
+  });
+  const counterItems = (b) => ownedCounters.filter(r => b.items[String(r.collectible_n)]).map(r => {
+    const k = String(r.collectible_n);
+    const dragging = !!(drag && drag.kind === "counters" && drag.n === k && !drag.fromTray);
+    const pos = dragging ? {x: drag.x, y: drag.y} : counterCellCenter(geom, b.items[k].c, b.items[k].r);
+    const sel = !!(selected && selected.kind === "counters" && selected.n === k);
+    return html`<button key=${k} type="button"
+      class=${"cb-item cb-item--counter" + (sel ? " is-selected" : "") + (dragging ? " is-dragging" : "")}
+      style=${{left: (pos.x * 100) + "%", top: (pos.y * 100) + "%",
+        width: (97 / geom.W) + "%", height: (97 * geom.h / geom.H) + "%"}}
+      title=${r.name + " · " + r.collectible_source} aria-label=${r.name + ", " + r.collectible_source}
+      onPointerDown=${e => beginDrag(e, "counters", k, false)}
+      onClick=${readOnly ? (() => setDetail(r)) : undefined}
+      onKeyDown=${onItemKey("counters", k)}>
+      <img src=${r.image_url} alt="" draggable="false"/>
+    </button>`;
+  });
+  const renderBoard = (kind) => {
+    const b = kind === "pins" ? shownPinBoard : shownCounterBoard;
+    const ratio = kind === "pins" ? "3 / 2" : geom.W.toFixed(3) + " / " + geom.H.toFixed(3);
+    if(!b){
+      return html`<div class="cb-frame"><div class=${"cb-surface cb-bg-" + COLLECTIBLE_BOARD_DEFAULT_BG[kind]}
+        style=${{aspectRatio: ratio}}><div class="cb-empty">Loading the board…</div></div></div>`;
+    }
+    const mine = kind === "pins" ? ownedPins : ownedCounters;
+    const placed = mine.filter(r => b.items[String(r.collectible_n)]).length;
+    const noun = kind === "pins" ? "pins" : "lore counters";
+    const empty = readOnly ? "Nothing on this board yet."
+      : mine.length ? "Drag " + noun + " up from the tray below, or tap one to place it."
+      : "Add the " + noun + " you own below and they'll go up on this board.";
+    const target = drag && drag.kind === "counters" ? drag.cell : null;
+    return html`<div class="cb-frame">
+      <div class=${"cb-surface cb-surface--" + kind + " cb-bg-" + b.bg} ref=${surfaceRef} style=${{aspectRatio: ratio}}
+        onPointerDown=${e => { if(e.target === e.currentTarget) setSelected(null); }}>
+        ${kind === "counters" && html`<svg class="cb-hexgrid" aria-hidden="true" preserveAspectRatio="none"
+          viewBox=${"0 0 " + geom.W.toFixed(3) + " " + geom.H.toFixed(3)}>
+          ${hexCells.map(cell => html`<polygon key=${cell.c + "," + cell.r}
+            class=${"cb-hexcell" + (target && target.c === cell.c && target.r === cell.r ? " is-target" : "")}
+            points=${cell.pts}/>`)}
+        </svg>`}
+        ${placed === 0 && html`<div class="cb-empty">${empty}</div>`}
+        ${kind === "pins" ? pinItems(b) : counterItems(b)}
+      </div>
+    </div>`;
+  };
+  const renderSelBar = (kind, b) => {
+    if(readOnly || !b || !selected || selected.kind !== kind || !b.items[selected.n]) return null;
+    const r = rowOf(kind, selected.n);
+    if(!r) return null;
+    const k = selected.n;
+    return html`<div class="cb-selbar" role="toolbar" aria-label=${"Selected: " + r.name}>
+      <div class="cb-selbar-meta">
+        <span class="cb-selbar-name">${r.name}</span>
+        <span class="cb-selbar-src">${r.collectible_source} · ${r.collectible_date}</span>
+      </div>
+      ${kind === "pins" && html`<${React.Fragment}>
+        <button type="button" class="cb-tool-btn" title="Turn it left" aria-label="Turn left" onClick=${() => rotatePin(k, -15)}>${uiIcon("rotateL", 14)}</button>
+        <button type="button" class="cb-tool-btn" title="Turn it right" aria-label="Turn right" onClick=${() => rotatePin(k, 15)}>${uiIcon("rotateR", 14)}</button>
+        <button type="button" class="cb-tool-btn" title="Bring it in front of the pins it overlaps" onClick=${() => frontPin(k)}>${uiIcon("layers", 14)} Front</button>
+      <//>`}
+      <button type="button" class="cb-tool-btn" onClick=${() => setDetail(r)}>Details</button>
+      <button type="button" class="cb-tool-btn" title="Back to the tray — it stays in your collection"
+        onClick=${() => takeOff(kind, k)}>Take off board</button>
+    </div>`;
+  };
+  const renderTray = (kind, b) => {
+    if(readOnly || !b) return null;
+    const off = (kind === "pins" ? ownedPins : ownedCounters).filter(r => !b.items[String(r.collectible_n)]);
+    if(!off.length) return null;
+    const noun = kind === "pins" ? (off.length === 1 ? "pin" : "pins") : (off.length === 1 ? "counter" : "counters");
+    return html`<div class="cb-tray">
+      <div class="cb-tray-head">
+        <span>${off.length} ${noun} not on the board · drag one up, or tap it to place it</span>
+        <button type="button" class="cb-tool-btn" onClick=${() => placeAll(kind)}>Place all</button>
+      </div>
+      <div class="cb-tray-list">
+        ${off.map(r => {
+          const k = String(r.collectible_n);
+          return html`<button key=${k} type="button" class="cb-tray-item"
+            title=${r.name} aria-label=${"Place " + r.name + " on the board"}
+            onPointerDown=${e => beginDrag(e, kind, k, true)}
+            onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); placeFromTray(kind, k); } }}>
+            <img src=${r.image_url} alt="" draggable="false"/>
+          </button>`;
+        })}
+      </div>
+    </div>`;
+  };
+  const renderAdd = (kind) => {
+    if(readOnly) return null;
+    const missing = (kind === "pins" ? pinRows : counterRows).filter(r => qtyOf(r) <= 0);
+    if(!missing.length) return null;
+    return html`<details class="cb-add">
+      <summary>+ Add ${kind === "pins" ? "pins" : "lore counters"} you own <span class="muted" style=${{fontWeight: 400}}>${missing.length} missing</span></summary>
+      <div class="cb-add-list">
+        ${missing.map(r => html`<div key=${r.tcgplayer_product_id} class="cb-add-item">
+          <img src=${r.image_url} alt="" loading="lazy"/>
+          <div style=${{minWidth: 0}}>
+            <div class="cb-add-name" title=${r.name}>${r.name}</div>
+            <div class="cb-add-src" title=${r.collectible_source}>${r.collectible_source} · ${r.collectible_date}</div>
+          </div>
+          <button type="button" class="cb-tool-btn" title="Mark it owned and put it on the board"
+            onClick=${() => addOwned(kind, r)}>I have it</button>
+        </div>`)}
+      </div>
+    </details>`;
+  };
+  const renderList = () => {
+    const q = searchNorm(listQuery.trim().toLowerCase());
+    const groups = [["pins", "Pins", pinRows], ["counters", "Lore counters", counterRows]]
+      .filter(([k]) => listKind === "both" || listKind === k);
+    return html`<${React.Fragment}>
+      <div class="cb-list-filters">
+        <div class="seg-toggle" role="group" aria-label="Show">
+          ${[["all", "All"], ["missing", "Missing"], ["owned", "Owned"]].map(([k, l]) => html`<button key=${k} type="button"
+            class=${listFilter === k ? "active" : ""} onClick=${() => setListFilter(k)}>${l}</button>`)}
+        </div>
+        <div class="seg-toggle" role="group" aria-label="Which collectibles">
+          ${[["both", "Both"], ["pins", "Pins"], ["counters", "Lore counters"]].map(([k, l]) => html`<button key=${k} type="button"
+            class=${listKind === k ? "active" : ""} onClick=${() => setListKind(k)}>${l}</button>`)}
+        </div>
+        <input type="search" class="cb-search" placeholder="Search a name, or where it came from…"
+          aria-label="Search pins and lore counters" value=${listQuery} onInput=${e => setListQuery(e.target.value)}/>
+      </div>
+      ${groups.map(([k, label, rows]) => {
+        const have = rows.filter(r => qtyOf(r) > 0).length;
+        const shown = rows.filter(r => {
+          const own = qtyOf(r) > 0;
+          if(listFilter === "missing" && own) return false;
+          if(listFilter === "owned" && !own) return false;
+          return !q || searchNorm((r.name + " " + r.collectible_source + " " + r.collectible_date).toLowerCase()).includes(q);
+        });
+        return html`<div key=${k} class="cb-list-group">
+          <div class="cb-list-group-title">${label}<span class="muted" style=${{fontFamily: "inherit", fontSize: 11, fontWeight: 400}}>${have} of ${rows.length} owned</span></div>
+          ${shown.length === 0
+            ? html`<div class="muted" style=${{fontSize: 12, padding: "6px 4px"}}>${(listFilter === "missing" && !q) ? "Nothing missing here — you have every one." : "Nothing matches."}</div>`
+            : shown.map(r => {
+                const qty = qtyOf(r);
+                return html`<div key=${r.tcgplayer_product_id} class=${"cb-row" + (qty > 0 ? "" : " is-missing")}
+                  role="button" tabIndex=${0} title="Where it came from, and your copies"
+                  onClick=${() => setDetail(r)}
+                  onKeyDown=${e => { if(e.key === "Enter"){ e.preventDefault(); setDetail(r); } }}>
+                  <div class="cb-row-thumb"><img src=${r.image_url} alt="" loading="lazy"/></div>
+                  <div class="cb-row-meta">
+                    <div class="cb-row-name">${r.name}</div>
+                    <div class="cb-row-src">${r.collectible_source} · ${r.collectible_date}</div>
+                  </div>
+                  <div class="cb-row-right" onClick=${e => e.stopPropagation()}>
+                    ${qty > 0 ? html`<span class="cb-pill cb-pill--owned">Owned</span>` : html`<span class="cb-pill">Missing</span>`}
+                    ${readOnly
+                      ? (qty > 1 ? html`<span class="sealed-coll-counter-qty has">×${qty}</span>` : null)
+                      : html`<div class="sealed-coll-counter">
+                          <button type="button" onClick=${() => bumpQty(r, -1)} disabled=${qty <= 0} aria-label=${"One fewer " + r.name}>−</button>
+                          <span class=${"sealed-coll-counter-qty" + (qty > 0 ? " has" : "")}>${qty}</span>
+                          <button type="button" onClick=${() => bumpQty(r, 1)} disabled=${qty >= 99} aria-label=${"One more " + r.name}>+</button>
+                        </div>`}
+                  </div>
+                </div>`;
+              })}
+        </div>`;
+      })}
+    <//>`;
+  };
+
+  const kindNow = view === "counters" ? "counters" : "pins";
+  const bNow = kindNow === "pins" ? shownPinBoard : shownCounterBoard;
+  const ghostRow = drag && drag.fromTray ? rowOf(drag.kind, drag.n) : null;
+  return html`<div class=${"cb-view" + (readOnly ? " cb-readonly" : "")}>
+    <div class="cb-head">
+      <div class="cb-stats">${stat("Pins", ownedPins.length, pinRows.length)}${stat("Lore counters", ownedCounters.length, counterRows.length)}</div>
+      <div class="seg-toggle" role="group" aria-label="View">
+        <button type="button" class=${view === "pins" ? "active" : ""} onClick=${() => setView("pins")}>Pin board</button>
+        <button type="button" class=${view === "counters" ? "active" : ""} onClick=${() => setView("counters")}>Counter board</button>
+        <button type="button" class=${view === "list" ? "active" : ""} onClick=${() => setView("list")}>Checklist</button>
+      </div>
+    </div>
+    ${view === "list" ? renderList() : html`<${React.Fragment}>
+      ${!readOnly && bNow && boardToolbar(kindNow, bNow)}
+      ${renderBoard(kindNow)}
+      ${renderSelBar(kindNow, bNow)}
+      ${renderTray(kindNow, bNow)}
+      ${renderAdd(kindNow)}
+      ${!readOnly && (sync === "cloud" || sync === "local" || sync === "offline") && html`<div class="cb-sync">${
+        sync === "cloud" ? "Your boards are saved to your account."
+        : sync === "local" ? "Your boards are saved on this device."
+        : "Couldn't reach your saved boards, so changes stay on this device for now."}</div>`}
+    <//>`}
+    ${ghostRow && html`<div class="cb-ghost" style=${{left: drag.cx + "px", top: drag.cy + "px"}}>
+      <img src=${ghostRow.image_url} alt=""/>
+    </div>`}
+    ${detail && html`<${SealedDetailModal} product=${detail}
+      sealedCollection=${owned} sealedMeta=${sealedMeta || {}}
+      updateSealedQty=${updateSealedQty || (() => {})} updateSealedMeta=${updateSealedMeta || (() => {})}
+      readOnly=${!!readOnly} onClose=${() => setDetail(null)}/>`}
+  </div>`;
+};
 
 // Graded Collection — user-owned graded cards + custom set-tracking goals.
 // Two-column layout: left lists owned + tracked-but-unowned cards by set;
@@ -24094,6 +24927,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
     if(section === "cards"  && viewerVis.raw)    return "cards";
     if(section === "sealed" && viewerVis.sealed) return "sealed";
     if(section === "graded" && viewerVis.graded) return "graded";
+    // Pins & Counters read sealed_collection_items, so they share sealed's axis.
+    if(section === "pins"   && viewerVis.sealed) return "pins";
     if(viewerVis.raw)    return "cards";
     if(viewerVis.sealed) return "sealed";
     if(viewerVis.graded) return "graded";
@@ -24153,7 +24988,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       let theirSealed = 0, sharedSealed = 0;
       if(sealedCollection && viewerOwnSealedCollection){
         for(const [pid, q] of Object.entries(sealedCollection)){
-          if(q <= 0) continue;
+          // "Sealed" means the Sealed tab's products — pins and counters have their own tab.
+          if(q <= 0 || isCollectiblePid(pid)) continue;
           theirSealed += 1;
           if((viewerOwnSealedCollection[pid] || 0) > 0) sharedSealed += 1;
         }
@@ -24182,7 +25018,8 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           link still points at whose collection you're looking at. */""}
     <div class="collection-section-tabs">
       ${COLLECTION_SECTIONS.map(k => {
-        const vis = k === "cards" ? viewerVis.raw : k === "sealed" ? viewerVis.sealed : viewerVis.graded;
+        const vis = k === "cards" ? viewerVis.raw
+          : (k === "sealed" || k === "pins") ? viewerVis.sealed : viewerVis.graded;
         if(isViewerMode && !vis) return null;
         return html`<a key=${k}
           class=${"collection-section-tab"+(effectiveSection===k?" active":"")}
@@ -24213,7 +25050,16 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           onSignIn=${onSignIn}
           readOnly=${isViewerMode}
           compareMode=${canCompare ? compareMode : "all"}
-          viewerOwnSealedCollection=${viewerOwnSealedCollection || null}/>`
+          viewerOwnSealedCollection=${viewerOwnSealedCollection || null}
+          onOpenPins=${()=>setSection("pins")}
+          pinsHref=${collectionSectionHref("pins", isViewerMode ? viewerContext : null)}/>`
+      : effectiveSection === "pins"
+      ? html`<${CollectiblesView} user=${user}
+          sealedCollection=${sealedCollection} sealedMeta=${sealedMeta || {}}
+          updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta || (()=>{})}
+          readOnly=${isViewerMode}
+          viewerContext=${isViewerMode ? viewerContext : null}
+          onSignIn=${onSignIn}/>`
       : effectiveSection === "graded"
       ? html`<${GradedCollectionView} raw=${raw} user=${user} onSignIn=${onSignIn} theme=${theme}
           readOnly=${isViewerMode}
@@ -28638,7 +29484,10 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
     if(!pids.length){ setSealedHistory([]); return; }
     const since = new Date(Date.now() - 365*24*3600*1000).toISOString().slice(0,10);
     let cancelled = false;
-    fetchCollectionPriceHistory(pids, since)
+    // {market:true}: the NM Market column and every mkt_pct_* window are
+    // derived from market_price, which the default select leaves out — so
+    // without it this mode rendered a dash in every Market cell.
+    fetchCollectionPriceHistory(pids, since, {market: true})
       .then(rows => { if(!cancelled) setSealedHistory(rows || []); })
       .catch(e => { if(!cancelled){ console.warn("sealed history fetch:", e?.message || e); setSealedHistory([]); } });
     return () => { cancelled = true; };
@@ -32881,6 +33730,173 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   </div>`;
 };
 
+// ── Sealed Movers (home banner) ──────────────────────────────────────────
+// The question on the home page is "did the boxes move", so the banner offers
+// three chips instead of the Screener's full sealed type list: Boxes, Troves
+// and Specials (gift sets, collector's editions, bundles, quests). Packs,
+// starter decks, prerelease kits, cases and the unpriced catalog rows
+// (puzzles, pins, lore counters) stay out by design (Zaven, 2026-09-11): a $5
+// pack's 20% is noise beside a box's, and a case moves with the boxes in it.
+// The Screener's Sealed mode is where the whole list lives.
+const SEALED_MOVER_KIND_ORDER = ["boxes", "troves", "specials"];
+const SEALED_MOVER_KIND_LABELS = {boxes: "Boxes", troves: "Troves", specials: "Specials"};
+// deriveSealedDisplayType → chip. A type absent here never reaches the banner.
+const SEALED_MOVER_KIND_OF_TYPE = {
+  "Booster Boxes":       "boxes",
+  "Illumineer's Troves": "troves",
+  "Gift Sets":           "specials",
+  "Collector's Edition": "specials",
+  "Bundles":             "specials",
+  "Quests":              "specials",
+};
+const SEALED_MOVER_TYPE_SINGULAR = {
+  "Booster Boxes": "Booster Box", "Illumineer's Troves": "Trove", "Gift Sets": "Gift Set",
+  "Collector's Edition": "Collector's Edition", "Bundles": "Bundle", "Quests": "Quest",
+};
+// How far back each window reaches, keyed by the Δ% column MOVER_WINDOWS names.
+const SEALED_MOVER_WINDOW_DAYS = {pct_1d: 1, pct_7d: 7, pct_30d: 30, pct_90d: 90, pct_180d: 180, pct_365d: 365};
+// The history fetch reaches this far PAST the window, so a product with no
+// snapshot on the exact day still finds the one before it.
+const SEALED_MOVER_PAD_DAYS = 14;
+// The Screener Sealed-mode type chips a selection stands for — the title jump
+// has to land on the same slice of the market the banner is showing.
+const sealedMoverScreenerTypes = (kinds) =>
+  Object.keys(SEALED_MOVER_KIND_OF_TYPE).filter(t => (kinds || []).includes(SEALED_MOVER_KIND_OF_TYPE[t]));
+
+// Every product the banner could ever show, whatever the chips say — the
+// history fetch keys on this list, so toggling a chip never refetches.
+// is_stale rows (absent from the latest snapshot) stay out: their "today" is
+// whatever TCGplayer last published, possibly weeks ago.
+function sealedMoverCandidates(sealedPrices){
+  const out = [];
+  for(const p of (sealedPrices || [])){
+    if(!p || p.printing !== "Normal" || p.product_type === "Promo Single" || p.is_stale) continue;
+    if(p.is_puzzle || p.is_collectible || p.tcgplayer_product_id == null || isHiddenSealedListing(p)) continue;
+    const type = deriveSealedDisplayType(p);
+    const kind = SEALED_MOVER_KIND_OF_TYPE[type];
+    if(kind) out.push({product: p, type, kind});
+  }
+  return out;
+}
+
+// Candidates + their price history → the banner's rows, qualified, sorted and
+// capped exactly the way HomeView's card banners are (qualifies / cmpAbs): the
+// prior Low in the window must be at least $5, a flat 0% is not a move, the
+// direction toggles filter, and the top `limit` is taken AFTER the chips have
+// narrowed the pool. Pure — guarded by scripts/test_sealed_movers.mjs.
+function sealedMoverRows({candidates, history, kinds, pctKey, showUp, showDown, setNameById, limit}){
+  const deltas = new Map();
+  for(const d of computeSealedDeltas(history || [])) deltas.set(d.tcgplayer_product_id, d);
+  const sel = new Set(kinds || []);
+  const nameOfSet = (id) => (setNameById == null || id == null) ? null
+    : ((setNameById instanceof Map ? setNameById.get(id) : setNameById[id]) || null);
+  const rows = [];
+  for(const c of (candidates || [])){
+    if(!sel.has(c.kind)) continue;
+    const p = c.product;
+    const d = deltas.get(p.tcgplayer_product_id);
+    const pct = d ? d[pctKey] : null;
+    if(pct == null || !Number.isFinite(pct) || pct === 0) continue;
+    const prior = d.low_today != null ? d.low_today / (1 + pct / 100) : null;
+    if(prior == null || !(prior >= 5)) continue;
+    if(pct > 0 && !showUp) continue;
+    if(pct < 0 && !showDown) continue;
+    rows.push({
+      ...d,
+      key: "sealed:" + p.tcgplayer_product_id,
+      name: cleanSealedName(p.name || ""),
+      type_label: SEALED_MOVER_TYPE_SINGULAR[c.type] || c.type,
+      kind: c.kind,
+      set_name: nameOfSet(p.set_id),
+      image: p.image_url || null,
+      _sealedProduct: p,
+    });
+  }
+  const cmp = (showUp && showDown) ? (a, b) => Math.abs(b[pctKey]) - Math.abs(a[pctKey])
+    : showUp ? (a, b) => b[pctKey] - a[pctKey]
+    : (a, b) => a[pctKey] - b[pctKey];
+  rows.sort(cmp);
+  return rows.slice(0, limit || 20);
+}
+
+// One history fetch per (candidate list, horizon), shared by every HomeView
+// mount in the session — the home page unmounts on every tab switch, and
+// coming back must not refetch a year of prices. A deeper horizon serves any
+// shallower window. An hour is the ceiling: the ETL lands once a day.
+const SEALED_MOVER_CACHE_MS = 60 * 60 * 1000;
+let _sealedMoverHist = null;
+const peekSealedMoverHistory = (key, horizon) => {
+  const c = _sealedMoverHist;
+  return (c && c.key === key && c.horizon >= horizon && Date.now() - c.t < SEALED_MOVER_CACHE_MS) ? c : null;
+};
+async function fetchSealedMoverHistory(key, horizon){
+  const hit = peekSealedMoverHistory(key, horizon);
+  if(hit) return hit;
+  const pids = key.split(",").map(Number).filter(Number.isFinite);
+  const since = new Date(Date.now() - horizon * 86400000).toISOString().slice(0, 10);
+  const rows = await fetchCollectionPriceHistory(pids, since, {market: true});
+  _sealedMoverHist = {key, horizon, rows: rows || [], t: Date.now()};
+  return _sealedMoverHist;
+}
+
+// A movers tile for a sealed product. MoverTile's classes and layout, so the
+// row reads as one more movers row, with three differences: the photo is shown
+// whole (a box cover-cropped into a card's 5:7 loses its name), the product
+// type stands where a card shows its rarity, and the buy links are the
+// product's own. No camera export — that paints MoverTile-shaped cards.
+const SealedMoverTile = ({row, activeWindow, visibleWindows, onClick}) => {
+  const p = row._sealedProduct;
+  const url = tcgUrl(row.tcgplayer_product_id);
+  const amzn = amazonForSealed(p, row.set_name);
+  const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
+  const meta = row.type_label + (row.set_name ? " · " + row.set_name : "");
+  return html`<div class="mover-tile mover-tile--sealed"
+    role="button" tabIndex=${0}
+    onClick=${onClick}
+    onKeyDown=${e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick && onClick(); } }}>
+    <div class="mt-img-wrap">
+      ${row.image
+        ? html`<img src=${row.image} alt=${row.name} loading="lazy" draggable="false"/>`
+        : html`<div class="mt-img-fallback">${uiIcon("box", 30)}</div>`}
+      ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow sponsored"
+          draggable="false" title="Open on TCGplayer" aria-label="Open on TCGplayer"
+          onClick=${e=>e.stopPropagation()}>
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M14 4h6v6"/>
+          <path d="M20 4l-9 9"/>
+          <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>
+        </svg>
+      </a>`}
+      ${amzn && html`<a class="mt-amzn-link" href=${amzn.url} target="_blank"
+          rel="noopener nofollow sponsored" draggable="false"
+          title=${amzn.exact ? "Buy this on Amazon (affiliate link)" : "Find this on Amazon (affiliate link)"}
+          aria-label="Find this on Amazon"
+          onClick=${e=>e.stopPropagation()}>${uiIcon("cart", 10)}</a>`}
+    </div>
+    <div class="mt-name" title=${row.name}>${row.name}</div>
+    <div class="mt-meta" title=${meta}>${meta}</div>
+    <div class="mt-prices">
+      <${Tip} text=${TIP_LOW} class="mt-lbl">LOW<//>
+      <span class="mt-now">${fmt(parseP(row.low_today))}</span>
+      <${Tip} text=${TIP_MARKET} class="mt-lbl">MKT<//>
+      <span class="mt-now">${fmt(parseP(row.market_today))}</span>
+    </div>
+    <div class="mt-deltas">
+      <span></span>
+      ${wins.map(w => html`<span key=${"h-"+w.key}
+        class=${"mt-dh"+(w.key===activeWindow?" active":"")}>${w.label}</span>`)}
+      <${Tip} text=${TIP_LOW} class="mt-dlbl">LOW<//>
+      ${wins.map(w => html`<span key=${"l-"+w.key}
+        class=${"mt-dval"+(w.key===activeWindow?" active":"")}
+        style=${{color:pctColor(row[w.pctLow])}}>${fmtPct(row[w.pctLow])}</span>`)}
+      <${Tip} text=${TIP_MARKET} class="mt-dlbl">MKT<//>
+      ${wins.map(w => html`<span key=${"m-"+w.key}
+        class=${"mt-dval"+(w.key===activeWindow?" active":"")}
+        style=${{color:pctColor(row[w.pctMkt])}}>${fmtPct(row[w.pctMkt])}</span>`)}
+    </div>
+  </div>`;
+};
+
 // Scroll speed in CSS pixels per second. Lower = slower drift.
 const MOVERS_SCROLL_PX_PER_SEC = 28;
 
@@ -32956,7 +33972,7 @@ const MoverChipGroup = ({ariaLabel, order, labels, selected, onToggle, noun}) =>
 // MoverTile can't: a graded slab has one price and one set of deltas, where
 // MoverTile is built around LOW vs MKT. Everything outside the tile stays
 // identical, which is the point: a movers row should look like a movers row.
-const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey, titleHint}) => {
+const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWindow, visibleWindows, paused, onTitleClick, renderTile, tileKey, titleHint, emptyText}) => {
   const wrapRef = useRef(null);
   // Track manual interaction so the rAF loop yields briefly after the user
   // scrolls / wheels — otherwise the auto-advance immediately yanks the
@@ -33103,7 +34119,7 @@ const MoversBanner = ({title, subtitle, controls, cards, onTileClick, activeWind
     </div>` : null}
     ${cards.length === 0
       ? html`<div class="muted" style=${{fontSize:11,padding:"10px 4px"}}>
-          No cards match the current window + direction filters.</div>`
+          ${emptyText || "No cards match the current window + direction filters."}</div>`
       : html`<div ref=${wrapRef} class=${"movers-wrap"+(paused?" is-paused":"")}
           onMouseEnter=${()=>{ hoverRef.current = true; }}
           onMouseLeave=${()=>{ hoverRef.current = false; }}>
@@ -33263,15 +34279,28 @@ const HOME_TABLE_SHORTCUT_KEYS = ["dice", "lore"];
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
 const HOME_BANNER_ORDER_KEY = "packsink:homeBannerOrder";
-const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","graded","gowned","amazon"];
+const HOME_BANNER_KEYS = ["valuable","chase","rareLeg","promo","sealed","graded","gowned","amazon"];
 const HOME_BANNER_LABELS = {
   valuable: "Newest set — Most Valuable",
   chase:    "Chase Movers",
   rareLeg:  "Rare – Legendary Movers",
   promo:    "Promo Movers",
+  sealed:   "Sealed Movers",
   graded:   "Graded Movers",
   gowned:   "Your Graded Movers",
   amazon:   "Lorcana on Amazon",
+};
+// One-shot stamp for the Sealed Movers row (2026-09-11). A stored banner order
+// is explicit, and normalizeBannerOrder APPENDS a key it has never seen — so
+// any browser that has ever pressed ▲▼ would find the new row at the very
+// bottom of the stack. Seat it after Promo Movers once, where the built-in
+// order puts it. Stamped rather than coerced, so a later ▲▼ sticks.
+const HOME_BANNER_ORDER_SEALED_KEY = "packsink:homeBannerOrderSealed";
+const bannerOrderWithAfter = (order, key, after) => {
+  if(!Array.isArray(order)) return order;
+  const rest = order.filter(k => k !== key);
+  const i = rest.indexOf(after);
+  return i < 0 ? [...rest, key] : [...rest.slice(0, i + 1), key, ...rest.slice(i + 1)];
 };
 const normalizeBannerOrder = (val) => {
   if(!Array.isArray(val)) return null;
@@ -36180,7 +37209,7 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
   </div>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout, homeEdit}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
   const homeLayout = useMemo(() => normalizeHomeLayout(layout), [layout]);
@@ -36224,6 +37253,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       sortDesc: true,
       priceMode: "low",
       minPrice: "5",
+      // Every card banner lands in RAW mode, said explicitly: applyView only
+      // touches the Sealed flag when the payload names it, so a Screener last
+      // left in Sealed mode opened a card banner's filters on top of the
+      // sealed table.
+      showSealed: false,
     };
     if(which === "chase"){
       // Carry the banner's rarity chips so the jump lands on the same tiers.
@@ -36236,12 +37270,17 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
         showFoil: rlPrintings.includes("foil"), showNonFoil: rlPrintings.includes("normal")});
     } else if(which === "promo"){
       openScreenerWithFilter({...base, filterRarities: ["Promo"]});
+    } else if(which === "sealed"){
+      // Sealed mode, with the banner's chips carried onto its product-type chips.
+      openScreenerWithFilter({...base, showSealed: true,
+        filterSealedTypes: sealedMoverScreenerTypes(sealedKinds)});
     } else if(which === "newest"){
       openScreenerWithFilter({
         preset: "all",
         moverWin: "pct_1d",
         sortKey: "low_today", sortDesc: true,
         priceMode: "low",
+        showSealed: false,
         filterSet: NEWEST_SET || "",
         filterRarities: valuableMode === "chase"
           ? ["Enchanted","Iconic","Epic"]
@@ -36320,6 +37359,44 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
     try { localStorage.setItem("packsink:home:rlPrintings", JSON.stringify(rlPrintings)); } catch {}
   }, [rlPrintings]);
   const toggleRlPrinting = (p) => setRlPrintings(prev => toggleChipKey(RL_PRINTING_ORDER, prev, p));
+  // Sealed Movers banner: Boxes / Troves / Specials, the same multi-select chip
+  // contract as the two groups above (persisted per browser, last chip sticky).
+  const [sealedKinds, setSealedKinds] = useState(() =>
+    readChipPref("packsink:home:sealedKinds", SEALED_MOVER_KIND_ORDER));
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:sealedKinds", JSON.stringify(sealedKinds)); } catch {}
+  }, [sealedKinds]);
+  const toggleSealedKind = (k) => setSealedKinds(prev => toggleChipKey(SEALED_MOVER_KIND_ORDER, prev, k));
+  const [selectedSealed, setSelectedSealed] = useState(null);
+  // History is fetched for EVERY candidate at once, so a chip toggle re-filters
+  // and never refetches, and only as far back as the selected window needs:
+  // 1D costs two weeks of rows; only picking 1Y pays for a year.
+  const sealedCandidates = useMemo(() => sealedMoverCandidates(sealedPrices), [sealedPrices]);
+  const sealedPidsKey = useMemo(() => sealedCandidates
+    .map(c => c.product.tcgplayer_product_id).sort((a, b) => a - b).join(","), [sealedCandidates]);
+  const sealedPctKey = (MOVER_WIN_BY_KEY[windowKey] || MOVER_WIN_BY_KEY["1d"]).pctLow;
+  const sealedHorizon = (SEALED_MOVER_WINDOW_DAYS[sealedPctKey] || 1) + SEALED_MOVER_PAD_DAYS;
+  const [sealedHist, setSealedHist] = useState(null);
+  useEffect(() => {
+    if(!sealedPidsKey) return;
+    const hit = peekSealedMoverHistory(sealedPidsKey, sealedHorizon);
+    if(hit){ setSealedHist(hit); return; }
+    let cancelled = false;
+    fetchSealedMoverHistory(sealedPidsKey, sealedHorizon)
+      .then(rec => { if(!cancelled) setSealedHist(rec); })
+      .catch(e => {
+        console.warn("sealed movers history:", e?.message || e);
+        if(!cancelled) setSealedHist({key: sealedPidsKey, horizon: sealedHorizon, rows: [], t: Date.now(), error: true});
+      });
+    return () => { cancelled = true; };
+  }, [sealedPidsKey, sealedHorizon]);
+  const sealedReady = !!(sealedHist && sealedHist.key === sealedPidsKey && sealedHist.horizon >= sealedHorizon);
+  const sealedSetNames = useMemo(() => setNameMapOf(setsMeta), [setsMeta]);
+  const sealedMovers = useMemo(() => sealedReady
+    ? sealedMoverRows({candidates: sealedCandidates, history: sealedHist.rows, kinds: sealedKinds,
+        pctKey: sealedPctKey, showUp, showDown, setNameById: sealedSetNames, limit: 20})
+    : null,
+  [sealedReady, sealedHist, sealedCandidates, sealedKinds, sealedPctKey, showUp, showDown, sealedSetNames]);
 
   // Resolve a mover (carries card_id + tcgplayer_product_id) to the
   // CardDetailModal-shaped "group" via O(1) lookups instead of scanning
@@ -37040,6 +38117,27 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                       paused=${paused}
                       onTitleClick=${()=>openBannerInScreener("promo")}
                       onTileClick=${openCard}/>`;
+                  // Renders once the sealed catalog is in. While its history is
+                  // on the way it says so, rather than claiming nothing moved.
+                  const sealedBanner = sealedPidsKey ? html`<${MoversBanner}
+                      title="Sealed Movers"
+                      subtitle=${`${SEALED_MOVER_KIND_ORDER.filter(k => sealedKinds.includes(k)).map(k => SEALED_MOVER_KIND_LABELS[k]).join(" · ")} — top 20 by ${winLabel} ${directionLabel}`}
+                      controls=${html`<${MoverChipGroup} ariaLabel="Sealed product types"
+                        order=${SEALED_MOVER_KIND_ORDER} labels=${SEALED_MOVER_KIND_LABELS}
+                        selected=${sealedKinds} onToggle=${toggleSealedKind} noun="movers"/>`}
+                      cards=${sealedMovers || []}
+                      emptyText=${sealedMovers == null ? "Loading sealed prices…"
+                        : (sealedHist && sealedHist.error) ? "Couldn't load sealed prices right now — try again in a moment."
+                        : "No sealed products of these types moved in this window."}
+                      activeWindow=${windowKey}
+                      visibleWindows=${visibleWindows}
+                      paused=${paused}
+                      titleHint="Open the Screener's Sealed mode on these product types"
+                      onTitleClick=${()=>openBannerInScreener("sealed")}
+                      renderTile=${(row, key) => html`<${SealedMoverTile} key=${key} row=${row}
+                        activeWindow=${windowKey} visibleWindows=${visibleWindows}
+                        onClick=${() => setSelectedSealed(row._sealedProduct)}/>`}
+                      tileKey=${row => row.key}/>` : null;
                   // Ordered banner stack. With no stored order the newest-set
                   // banner keeps its hot-aware placement (top during release
                   // week, bottom otherwise); once the user reorders in edit
@@ -37054,6 +38152,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                         </div>`
                       : rareLegBanner,
                     promo:    promoBanner,
+                    sealed:   sealedBanner,
                     graded:   gradedPremium ? html`<${GradedMoversHomeBanner} raw=${raw} onCard=${openCard}/>` : null,
                     gowned:   gradedOwnedOn
                       ? html`<${GradedOwnedMoversHomePanel} raw=${raw} user=${user} onCard=${openCard}/>`
@@ -37073,8 +38172,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                   // Your own slabs lead: it is the row about cards you actually
                   // own, and it only renders for people who switched it on.
                   const defaultOrder = newestSetIsHot
-                    ? ["gowned","valuable","chase","rareLeg","promo","amazon","graded"]
-                    : ["gowned","chase","rareLeg","promo","amazon","graded","valuable"];
+                    ? ["gowned","valuable","chase","rareLeg","promo","sealed","amazon","graded"]
+                    : ["gowned","chase","rareLeg","promo","sealed","amazon","graded","valuable"];
                   const order = (homeEdit && homeEdit.bannerOrder && homeEdit.bannerOrder.length)
                     ? homeEdit.bannerOrder : defaultOrder;
                   // ▲▼ enable/target off the banners that actually rendered —
@@ -37154,6 +38253,15 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       initialTab=${selectedInitialTab || undefined}
       initialPrinting=${selectedInitialPrinting || undefined}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
+    ${selectedSealed && html`<${SealedDetailModal}
+      product=${selectedSealed}
+      sealedCollection=${sealedCollection || {}}
+      sealedMeta=${sealedMeta || {}}
+      updateSealedQty=${updateSealedQty || (()=>{})}
+      updateSealedMeta=${updateSealedMeta || (()=>{})}
+      readOnly=${!user || !updateSealedQty}
+      setName=${selectedSealed.set_id ? (sealedSetNames[selectedSealed.set_id] || null) : null}
+      onClose=${()=>setSelectedSealed(null)}/>`}
   </div>`;
 };
 
@@ -41734,8 +42842,21 @@ const DeckHistoryModal = ({deck, cardById, isOwner, shareToken, refreshNonce, on
 // whose results open upward, not a second grid. Search routes through
 // parseSearchQuery + matchesCardFilter like every other card surface (the
 // single-canonical-matcher rule), so "amber rush 3" works here too.
-const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard}) => {
-  const blank = useMemo(() => emptyFilter(), []);
+const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard, defaultInks}) => {
+  // The same ink default the browse layout's CardBrowser gets: a deck's own
+  // inks (1-2 of them) pre-select the ink chips, so "belle" in a green/blue
+  // deck finds the green and blue Belles rather than every Belle. Seeded once
+  // on mount, exactly like CardBrowser, so a chip the user turns off stays off
+  // and a deck gaining its first ink mid-session doesn't narrow the search
+  // under them.
+  const [inks, setInks] = useState(() =>
+    new Set((Array.isArray(defaultInks) && defaultInks.length && defaultInks.length <= 2) ? defaultInks : []));
+  const toggleInk = (ink) => setInks(prev => {
+    const next = new Set(prev);
+    if(next.has(ink)) next.delete(ink); else next.add(ink);
+    return next;
+  });
+  const filter = useMemo(() => ({...emptyFilter(), inks}), [inks]);
   const groups = useMemo(() => groupCards(rows || []), [rows]);
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -41747,10 +42868,10 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard}) => {
   const matches = useMemo(() => {
     if(!query.trim()) return null;
     return groups
-      .filter(g => matchesCardFilter(g, blank, parsed))
+      .filter(g => matchesCardFilter(g, filter, parsed))
       .sort((a,b) => (setRank(b) - setRank(a)) || (collectorNum(a) - collectorNum(b)))
       .slice(0, 30);
-  }, [groups, query, parsed, blank]);
+  }, [groups, query, parsed, filter]);
 
   useEffect(() => { setCursor(0); }, [query]);
 
@@ -41812,7 +42933,11 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard}) => {
     <div class="deck-quickadd-inner">
       ${open && matches != null && html`<div class="deck-quickadd-results" ref=${listRef}>
         ${matches.length === 0
-          ? html`<div class="deck-quickadd-empty">No cards match "${query}"</div>`
+          ? html`<div class="deck-quickadd-empty">
+              No ${inks.size ? INKS.filter(i => inks.has(i)).join(" / ") + " " : ""}cards match "${query}"
+              ${inks.size > 0 && html` · <button type="button" class="deck-quickadd-allinks"
+                onClick=${() => setInks(new Set())}>search every ink</button>`}
+            </div>`
           : matches.map((g, i) => {
               const qty = qtyOf(g.card_id, "Normal");
               const max = maxFor(g);
@@ -41867,6 +42992,18 @@ const DeckQuickAdd = ({rows, qtyOf, maxFor, onChangeQty, onHoverCard}) => {
           onKeyDown=${onKeyDown}/>
         ${query && html`<button type="button" class="deck-quickadd-clear"
           aria-label="Clear search" onClick=${() => { setQuery(""); setOpen(false); }}>${uiIcon("close", 13)}</button>`}
+        <div class="deck-quickadd-inks" role="group" aria-label="Filter results by ink">
+          ${INKS.map(ink => {
+            const on = inks.has(ink);
+            return html`<button key=${ink} type="button"
+              class=${"chip ink ink-icon-chip" + (on ? " active" : "")}
+              aria-pressed=${on} aria-label=${ink}
+              title=${on ? `${ink} is in the ink filter — click to remove it` : `Add ${ink} to the ink filter`}
+              onClick=${() => toggleInk(ink)}>
+              <img src=${INK_ICONS[ink]} alt=""/>
+            </button>`;
+          })}
+        </div>
         <span class="deck-quickadd-hint">
           ${matches && matches.length
             ? html`click a row to add · <kbd>↵</kbd> add · <kbd>⇧↵</kbd> remove · <kbd>↑↓</kbd> pick`
@@ -43220,6 +44357,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
                  <aside class="deck-editor-panel">${layoutSwitch}${coconutShowcase(true)}${listBlock}${statsBlock}${reprintBlock}</aside>`}
       </div>
       ${focusMode && html`<${DeckQuickAdd} rows=${deckRaw}
+        defaultInks=${inkColorsInDeck}
         qtyOf=${qtyOf} maxFor=${quickAddMaxFor}
         onChangeQty=${onDeckQtyChangeStable} onHoverCard=${setHoverPreview}/>`}`;
     })()}
@@ -44607,7 +45745,14 @@ function App(){
   // Movers-banner order (null = built-in hot-aware order). Same edit-mode
   // lifecycle as homeLayout: snapshot on entry, Cancel restores, Reset nulls.
   const [homeBannerOrder, setHomeBannerOrder] = useState(() => {
-    try { return normalizeBannerOrder(JSON.parse(localStorage.getItem(HOME_BANNER_ORDER_KEY) || "null")); }
+    try {
+      let order = normalizeBannerOrder(JSON.parse(localStorage.getItem(HOME_BANNER_ORDER_KEY) || "null"));
+      if(localStorage.getItem(HOME_BANNER_ORDER_SEALED_KEY) !== "1"){
+        if(order) order = bannerOrderWithAfter(order, "sealed", "promo");
+        localStorage.setItem(HOME_BANNER_ORDER_SEALED_KEY, "1");
+      }
+      return order;
+    }
     catch { return null; }
   });
   useEffect(() => {
@@ -46412,6 +47557,7 @@ function App(){
     ${viewsReady&&view==="home"&&html`<${HomeView} raw=${raw} sets=${sets} avgs=${avgs} theme=${theme}
       user=${user} collection=${collection} collectionLoading=${collectionLoading}
       sealedPrices=${sealedPrices} sealedCollection=${sealedCollection} sealedMeta=${sealedMeta} setsMeta=${setsMeta}
+      updateSealedQty=${updateSealedQty} updateSealedMeta=${updateSealedMeta}
       updateQty=${updateQty} onSignIn=${signIn}
       openDeckById=${openDeckById} openTournamentById=${openTournamentById}
       openTournamentsList=${openTournamentsList}

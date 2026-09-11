@@ -276,7 +276,8 @@ extracts the real pure functions out of Index.html.
 
 ## Pin + lore-counter photos (2026-08-24)
 
-41 pins and 21 lore counters render as checklist tiles in the Sealed collection, from the static
+41 pins and 21 lore counters render on their own Collection tab (Pins & Counters — see the next
+section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from the static
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
 **Lorcana Player's, re-hosted with their permission**, cut out and served from our own storage.
 
@@ -307,6 +308,57 @@ extracts the real pure functions out of Index.html.
   `i0.wp.com/lorcanaplayer.com/wp-content/uploads/...`, which serves the same files. The Weekly
   Play counters are not in the counters page's HTML at all — `product-sitemap.xml` enumerates
   them and each `/product/` page carries its photo path.
+
+## Pins & Counters — a Collection tab of its own (2026-09-11)
+
+Pins and lore counters were two sections of tiles at the foot of the Sealed tab. They aren't
+sealed product — nobody sells them — and what a collector does with them is *display* them, so
+Zaven asked for their own tab: *"make it look like an actual pin board (and lore counter board,
+since they all can kinda snap together) … but also still having a list element and way to see
+what you're missing and where it's from."* `/collection?c=pins` → `CollectiblesView` (just above
+the Graded collection in Index.html), with three views: **Pin board · Counter board · Checklist**
+(`packsink:collectibles:view`). Guarded by `node scripts/test_collectible_boards.mjs`.
+
+- **Ownership did not move.** An owned pin is still a `sealed_collection_items` row under its
+  synthetic pid (950000000+n / 960000000+n), so the owned marks, the offline mirror and sharing are
+  untouched. `isCollectiblePid` keeps them out of the Sealed tab's unit / SKU counts, its Δ% fetch
+  and the viewer compare counts, where pins used to inflate "Units owned".
+- **Sharing rides the SEALED visibility axis**, because the data behind the tab lives there: the
+  tab appears in viewer mode exactly when sealed is visible (`effectiveSection`).
+- **Only the arrangement is new — migration 139 (STAGED):** `collectible_boards(user_id, board,
+  layout jsonb)`, one document per board, owner-only RLS, and `get_shared_collectible_boards` for
+  viewers under the same rule as `get_shared_collection_sealed`. **Safe to ship first**: until it
+  lands, boards save to `localStorage["packsink:collectibleBoards:<uid8>"]` and the tab says
+  "saved on this device"; the first load after it lands carries a device-only board up.
+- **⚠ `sync === "offline"` writes nothing to the account.** A load that failed for any reason
+  other than a missing table leaves the device copy on screen and neither saves nor
+  auto-arranges — writing a fresh arrangement over a board we couldn't read would destroy it.
+- **The pin board is a 3:2 cork sheet, and placements are fractions of it** (`{x, y, r, z}`), so an
+  arrangement made on a monitor reads the same on a phone. **Every pin gets the same AREA, not the
+  same width** (`pinWidthOf`): the 41 photos run 0.70–2.35 wide-to-tall, and one fixed width made
+  logo pins slivers and pendant pins towers. Aspects are measured as the photos load.
+- **The counter board is a honeycomb of POINTY-TOP hexagons because that is the counters' shape** —
+  measured off the photos: the Weekly Play dials and most Trove dials are 0.866 wide-to-tall with a
+  point at the top. Placements are sockets (`{c, r}`), odd rows shifted half a socket, so
+  neighbouring counters butt edge to edge. The test asserts every neighbouring pair of sockets is
+  exactly one socket-width apart, which is what makes it a honeycomb. A few Trove dials were
+  photographed at an angle (1.25–1.58 wide-to-tall) and sit smaller in their socket.
+- One pointer-event drag path for mouse and touch. Items are `touch-action:none`; the board keeps
+  `pan-y` so the page still scrolls past it. Drop a counter on another to swap them; drag anything
+  off the board to send it back to the tray. Keyboard: arrows move, `[` `]` turn a pin, Delete
+  takes it down.
+- **The first look at a never-saved board lays out what you own** (`tidyPins` / `tidyCounters`),
+  but only once the store has actually been read. After that, newly owned items wait in the TRAY
+  so they never disturb an arranged board — except "I have it" in the add drawer, which is you
+  asking to put that one up.
+- `normalizeCollectibleBoard` is the only way a stored layout enters: it repairs, never throws. A
+  placement for something you no longer own is KEPT (re-own it and it goes back where it was) but
+  never drawn, and on the honeycomb it can't hold a socket against a counter you can see.
+- The Checklist is the "what am I missing, and where did it come from" view: All / Missing /
+  Owned, Pins / Lore counters, a name-or-source search, and the owned stepper. A row opens the
+  collectible branch of `SealedDetailModal`.
+- The Sealed tab carries a one-line pointer to the new tab, for everyone who remembers the pins
+  living there.
 
 ## Icons — there are no emoji in the UI (2026-08-24)
 
@@ -1485,7 +1537,7 @@ Decks' sections and the Screener's mode were localStorage-only, so every one of 
 - **`/decks?s=<section>`** — `yours|favorites|following|discover|tournaments` (`DECK_SECTION_KEYS`).
 - **`/decks?f=<format>`** — `core|infinity|coconut`; implies Discover, so `/decks?f=coconut` alone is the short share link.
 - **`/screener?m=<mode>`** — `raw|graded|sealed` (`SCREENER_MODES`).
-- **`/collection?c=<section>`** — `cards|sealed|graded` (`COLLECTION_SECTIONS`, added 2026-08-24). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
+- **`/collection?c=<section>`** — `cards|sealed|graded|pins` (`COLLECTION_SECTIONS`, added 2026-08-24; `pins` = Pins & Counters, 2026-09-11). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
 
 Rules that keep this from fighting the rest of the URL machinery:
 
@@ -1616,6 +1668,13 @@ are tuning counts — the thing you're working on was the small column. **`workL
   `groupCards(deckRaw)` — the single-canonical-matcher rule, and the same
   mainline-sets-only universe the CardBrowser gets. Behaviour matches the browser
   it replaces exactly, strict-keyword quirks included.
+- **The deck's own inks pre-select its ink chips**, the same `defaultInks` rule the
+  CardBrowser follows: 1-2 inks, seeded once on mount, and a chip the user turns off
+  stays off. Until 2026-09-11 the bar passed a blank filter, so "belle" in a
+  green/blue deck listed every Belle in every ink (Zaven's report). The six shields
+  sit in the bar (`.deck-quickadd-inks`), and when the ink filter empties the
+  results the message names the inks and offers **search every ink** — a filter you
+  can't see from the results is a search that silently lies.
 - **Results open UPWARD.** The bar is the last thing on screen; a downward list has
   nowhere to go.
 - **The whole ROW adds a copy**, art included — the `+` is the affordance, not the
@@ -1889,9 +1948,10 @@ the growth: two 600px cards read as a mistake, not as emphasis.
 
 ### Movers-banner chip filters (`MoverChipGroup`)
 
-Two banners carry a multi-select chip group in their `controls` slot. Both use the shared `MoverChipGroup` + `toggleChipKey` + `readChipPref` trio — **don't hand-roll a third one.**
+Three banners carry a multi-select chip group in their `controls` slot. All use the shared `MoverChipGroup` + `toggleChipKey` + `readChipPref` trio — **don't hand-roll another one.**
 
 - **Chase Movers** — `CHASE_RAR_ORDER` (Epic / Enchanted / Iconic), persisted at `packsink:home:chaseRars`.
+- **Sealed Movers** — `SEALED_MOVER_KIND_ORDER` (`boxes` / `troves` / `specials`), persisted at `packsink:home:sealedKinds`. See "Sealed Movers" below.
 - **Rare–Legendary Movers** — `RL_PRINTING_ORDER` (`normal` / `foil`, labelled Normal / Cold Foil), persisted at `packsink:home:rlPrintings`. Was a one-of-N `Both | Normal | Cold Foil` seg-grp keyed `packsink:home:rlPrinting` until 2026-08-02; the old key is still read once as a migration (`"all"` falls through to the default). `MOVER_FOIL_PRINTINGS` buckets Holofoil under foil, so there's no third state.
 
 Invariants:
@@ -1901,6 +1961,46 @@ Invariants:
 - **The banner subtitle and the title-click Screener jump both read the selection.** Chase passes `filterRarities`; rare–leg passes `showFoil` / `showNonFoil`. Both are in the buckets `useMemo` deps.
 - **These keys are preferences, not caches.** They live under `packsink:home:` but do NOT match any `AUX_EVICTABLE_PREFIXES` entry (`packsink:home:tourneys:` is the tournament *cache* — note the trailing colon, and that `packsink:home:tourneyCollapsed` deliberately doesn't match it). Don't add a bare `packsink:home:` prefix to that list or every home preference resets on the next `AUX_CACHE_VERSION` bump.
 - Persistence is **per browser (localStorage), not per account** — these aren't in the `user_metadata` prefs-sync effect, so picks don't follow a signed-in user across devices.
+
+### Sealed Movers (2026-09-11)
+
+A movers row for sealed product, from Zaven's feedback: *"Toggles for product types. Maybe boxes,
+Troves, specials. Ignore packs, puzzles, etc."* `sealedMoverCandidates` → `sealedMoverRows` →
+`SealedMoverTile`, all just below `MoverTile`. Guarded by `node scripts/test_sealed_movers.mjs`.
+
+- **Three chips, not the Screener's type list.** `SEALED_MOVER_KIND_OF_TYPE` maps
+  `deriveSealedDisplayType` onto Boxes (Booster Boxes), Troves (Illumineer's Troves) and Specials
+  (Gift Sets, Collector's Edition, Bundles, Quests). Packs, starter decks, prerelease packs,
+  cases/displays, promo singles, `[Set of N]`, stale rows, puzzles, pins and counters never reach
+  the banner, and a display type the map doesn't name stays out until someone decides where it
+  belongs.
+- **Same qualifying rules as the card banners** (`qualifies` / `cmpAbs` in HomeView): Δ% on Low,
+  prior Low in the window ≥ $5, a flat 0% is not a move, the direction toggles filter, and the top
+  20 is taken AFTER the chips narrow. The prior Low is derived from the Δ%
+  (`low_today / (1 + pct/100)`), because `computeSealedDeltas` doesn't carry the prior price.
+- **History is fetched per HORIZON, not per window.** One `fetchCollectionPriceHistory` over every
+  candidate, reaching `SEALED_MOVER_WINDOW_DAYS[window] + 14` days back: 1D costs two weeks of rows
+  and only 1Y pays for a year (measured ~2.8s cold in the preview). A deeper fetch serves every
+  shallower window, and the module-level `_sealedMoverHist` survives HomeView unmounting on every
+  tab switch (1h ceiling). A chip toggle re-filters, never refetches.
+- **It asks for `market_price`** (`{market:true}`). The default select leaves it out because the
+  collection rollup values on Low — and without it every MKT delta and `market_today` is null. The
+  Screener's Sealed mode had exactly that bug (a dash in every NM Market cell) and passes it now too.
+- **`SealedMoverTile` is MoverTile's markup with three changes**: the photo is `object-fit:contain`
+  (`.mover-tile--sealed`; a box cover-cropped into 5:7 loses its name), type + set sit where rarity
+  goes, and the links are the product's own (`tcgUrl(pid)` + `amazonForSealed`). It renders through
+  `MoversBanner`'s `renderTile`, so the row has no camera export — that paints MoverTile-shaped cards.
+- **`MoversBanner` takes `emptyText`**, so the row says "Loading sealed prices…" while its history
+  is on the way instead of claiming nothing moved.
+- A tile opens `SealedDetailModal` on the home page (HomeView now receives `updateSealedQty` /
+  `updateSealedMeta`); the title opens the Screener's Sealed mode with the chips carried onto
+  `filterSealedTypes`.
+- **Banner key `sealed`, seated after `promo`.** A stored order (anyone who has pressed ▲▼) would
+  get it appended at the bottom, so App's `homeBannerOrder` init inserts it after Promo once, behind
+  the `packsink:homeBannerOrderSealed` stamp — stamped, not coerced, so a later ▲▼ sticks.
+- **Every card banner's Screener jump now says `showSealed:false`.** `applyView` only touches the
+  Sealed flag when a payload names it, so a Screener last left in Sealed mode opened Chase /
+  Rare–Legendary / Promo / Most-Valuable filters on top of the sealed table.
 
 ## Mobile top-nav
 
@@ -3067,6 +3167,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
+- **`supabase/139_collectible_boards.sql`** — STAGED, not applied. Where pins and lore counters
+  sit on the Pins & Counters boards: `collectible_boards` (owner-only RLS, grants in the same
+  file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
+  lands, boards save on the device and the tab says so. See "Pins & Counters".
 - **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
   check: anon-readable, graded-admin writes. Until it lands, `/gear`'s admin checklist says
   "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
