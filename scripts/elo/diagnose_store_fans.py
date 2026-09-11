@@ -25,7 +25,7 @@ from urllib.parse import quote
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from discover_wu_scs import SUPABASE_URL, SERVICE_KEY, FALLBACK_SETS  # noqa: E402
-from report_store_tiers import window_start, PLAYED  # noqa: E402
+from report_store_tiers import window_start, PLAYED, is_cancelled  # noqa: E402
 from scrape_event_attendance import REG  # noqa: E402
 
 try:
@@ -95,7 +95,7 @@ def main() -> None:
     print(f"Window: {since} -> {until or 'today'}  ({', '.join(set_names)})\n")
 
     end = f"&start_datetime=lt.{quote(until)}" if until else ""
-    evs = _page(f"lorcana_events_history?select=event_id,store_id,store_name,kind,start_datetime"
+    evs = _page(f"lorcana_events_history?select=event_id,store_id,store_name,kind,start_datetime,display_status"
                 f"&start_datetime=gte.{quote(since)}{end}&order=event_id.asc")
     want = args.store.lower()
     mine = [e for e in evs if want in (e.get("store_name") or "").lower()]
@@ -107,8 +107,6 @@ def main() -> None:
 
     for (sid, name), rows in sorted(by_store.items(), key=lambda kv: -len(kv[1])):
         ids = {e["event_id"] for e in rows}
-        kinds = Counter(e.get("kind") for e in rows)
-        print(f"=== {name}  (store_id {sid}) — {len(rows)} events  {dict(kinds)}")
 
         # Pull attendance for just this store's events, in chunks the URL can hold.
         played = []
@@ -117,6 +115,15 @@ def main() -> None:
             chunk = ",".join(str(x) for x in idlist[i:i + 150])
             played += _page(f"rph_event_attendance?select=event_id,rph_user_id,best_identifier,is_guest"
                             f"&event_id=in.({chunk})&{PLAYED}&order=event_id.asc,best_identifier.asc")
+
+        # Same rule as the Stores tab: a cancelled event counts only if it has results.
+        with_play = {a["event_id"] for a in played}
+        dropped = sum(1 for e in rows if is_cancelled(e) and e["event_id"] not in with_play)
+        rows = [e for e in rows if not (is_cancelled(e) and e["event_id"] not in with_play)]
+        idlist = sorted(e["event_id"] for e in rows)
+        kinds = Counter(e.get("kind") for e in rows)
+        print(f"=== {name}  (store_id {sid}) — {len(rows)} events  {dict(kinds)}"
+              + (f"  (+{dropped} cancelled with no results, not counted)" if dropped else ""))
 
         keys = Counter(person_key(a) for a in played)
         named = {}

@@ -200,14 +200,31 @@ SET_ALIASES = {
 CURRENT_SET_FALLBACK = "Attack of the Vine!"
 
 
-def is_sc(ev: dict) -> bool:
-    """True if this looks like a real Set Championship (any set), not a side event."""
+# RPH's official Set Championship event template stamps this phase template group
+# on every event made from it, whatever the store then types as the title. Across
+# all 4,723 events at the 103 tracked stores since 2025-08-01 (pulled 2026-09-10)
+# it sat on 444 of the 448 titled "Set Championship" and on 26 more that weren't —
+# "Set Champs", "Store Championship", "Set Chamionship" — and all 470 are real SCs.
+# The title-only test missed every one of those 26. The per-set config template
+# UUID changes every rotation; this group has not moved since Reign of Jafar, and
+# discover_events.py warns if titled SCs stop carrying it.
+SC_PHASE_TEMPLATE_GROUPS = frozenset({"f6a76808-5d5c-429f-8753-02d0cfc1ee03"})
+
+
+def is_sc_by_name(ev: dict) -> bool:
+    """The title says Set Championship and doesn't read as a side event."""
     name = (ev.get("name") or "").lower()
-    if "set championship" not in name:
-        return False
+    return "set championship" in name and not any(k in name for k in SIDE_PATTERNS)
+
+
+def is_sc(ev: dict) -> bool:
+    """True if this is a real Set Championship (any set), not a side event: the
+    title says so, or RPH's own SC template made it. Side-event words veto both —
+    a prerelease a store happened to build from the SC template is a prerelease."""
+    name = (ev.get("name") or "").lower()
     if any(k in name for k in SIDE_PATTERNS):
         return False
-    return True
+    return "set championship" in name or ev.get("phase_template_group") in SC_PHASE_TEMPLATE_GROUPS
 
 
 def is_target_sc(ev: dict, set_name: str) -> bool:

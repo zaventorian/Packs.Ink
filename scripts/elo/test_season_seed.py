@@ -2,7 +2,8 @@
 
     python scripts/elo/test_season_seed.py
 
-No network — pull_set_scs and ingest_event are stubbed, the DB is a temp SQLite.
+No network — pull_set_scs, pull_store_scs and ingest_event are stubbed, the DB
+is a temp SQLite.
 
 This exists because of a silent freeze: when the current set rotated to Attack
 of the Vine!, discover_store_scs found all 68 SCs at tracked stores and then
@@ -28,9 +29,12 @@ stopped moving with nothing red anywhere. Four things are locked down:
      history behind the Stores tab). Honouring the list on one side only is the
      easy miss, and it fails invisibly: the store just quietly appears months
      later with its whole event history attached.
+  6. TITLES THE NETS CAN'T SEE. An SC found only in a tracked store's own feed is
+     ingested like any other, and an EXCLUDED store's feed is never asked. (The
+     recognition rule itself is test_sc_template.py.)
 """
 from __future__ import annotations
-import os, sqlite3, sys, tempfile
+import datetime, os, sqlite3, sys, tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -56,14 +60,23 @@ def ev(eid, date, store_id, name="Set Championship"):
             "store": {"id": store_id, "name": f"Store {store_id}"}}
 
 
-def run_main(argv, candidates, tracked, ingested=()):
+def run_main(argv, candidates, tracked, ingested=(), store_candidates=(), releases=(),
+             feed_calls=None):
     """Drive main() with the network and the DB replaced. Returns the
     (event_id, season) pairs it tried to ingest, in call order."""
     got = []
-    orig = (m.pull_set_scs, m.tracked_store_ids, m.ingested_event_ids,
-            m.sibling_location, m.ing.ingest_event, m.d.fetch_set_names,
-            m.d.build_aliases, m.d.fetch_current_set, sys.argv)
-    m.pull_set_scs = lambda s, nets, ss, al: {e["id"]: e for e in candidates}
+    orig = (m.pull_set_scs, m.pull_store_scs, m.fetch_set_releases, m.tracked_store_ids,
+            m.ingested_event_ids, m.sibling_location, m.ing.ingest_event,
+            m.d.fetch_set_names, m.d.build_aliases, m.d.fetch_current_set, sys.argv)
+
+    def store_pull(ids, s, window, ss, al):
+        if feed_calls is not None:
+            feed_calls.append(set(ids))
+        return {e["id"]: e for e in store_candidates if (e.get("store") or {}).get("id") in ids}
+
+    m.pull_set_scs = lambda s, nets, ss, al, window=None: {e["id"]: e for e in candidates}
+    m.pull_store_scs = store_pull
+    m.fetch_set_releases = lambda: list(releases)
     m.tracked_store_ids = lambda refresh: (set(tracked), {i: {f"Store {i}"} for i in tracked})
     m.ingested_event_ids = lambda: set(ingested)
     m.sibling_location = lambda n: "Chicago, IL"
@@ -76,9 +89,9 @@ def run_main(argv, candidates, tracked, ingested=()):
     try:
         m.main()
     finally:
-        (m.pull_set_scs, m.tracked_store_ids, m.ingested_event_ids,
-         m.sibling_location, m.ing.ingest_event, m.d.fetch_set_names,
-         m.d.build_aliases, m.d.fetch_current_set, sys.argv) = orig
+        (m.pull_set_scs, m.pull_store_scs, m.fetch_set_releases, m.tracked_store_ids,
+         m.ingested_event_ids, m.sibling_location, m.ing.ingest_event,
+         m.d.fetch_set_names, m.d.build_aliases, m.d.fetch_current_set, sys.argv) = orig
     return got
 
 
@@ -164,6 +177,20 @@ with tempfile.TemporaryDirectory() as td:
 
     print("\nwithout --ingest nothing is written")
     check("read-only", run_main([], [ev(811279, "2026-09-05", 10)], tracked=[10]), [])
+
+    print("\nan SC only a store's own feed can see is ingested like any other")
+    calls = []
+    got = run_main(["--ingest"], [], tracked=[5171, 2237],
+                   store_candidates=[ev(894902, "2026-09-13", 5171,
+                                        name="Twisted - Lorcana Set Champs")],
+                   releases=[("Attack of the Vine!", datetime.date(2026, 7, 17))],
+                   feed_calls=calls)
+    check("store-feed SC ingested, seeded into the current season", got,
+          [(894902, "Attack of the Vine! Fall 2026")])
+    check("an EXCLUDED store's feed is never asked", bool(calls) and 2237 not in calls[0], True)
+    check("no release date, no store-feed pull",
+          run_main(["--ingest"], [], tracked=[5171],
+                   store_candidates=[ev(894902, "2026-09-13", 5171)]), [])
 
     print("\na one-off event counts for Elo but never makes its store tracked")
     m.DB = Path(td) / "oneoff.db"
