@@ -98,6 +98,11 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         if url_path == "/ticker":
             self.path = "/ticker.html"
             return super().do_GET()
+        # Unlisted affiliate link page. Same pretty-URL fall-through as
+        # /ticker in prod, so no worker route is needed there either.
+        if url_path == "/picks":
+            self.path = "/picks.html"
+            return super().do_GET()
         # Strip query string when checking on-disk; reattach when rewriting.
         rel = url_path.lstrip("/")
         disk = os.path.join(os.getcwd(), rel) if rel else os.path.join(os.getcwd(), "Index.html")

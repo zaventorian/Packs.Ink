@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="aurora" data-mode="dark">
+<head>
+<script>
+/* Pre-paint theme boot — copied verbatim from Index.html so this standalone
+   page resolves the SAME saved theme and can't flash the wrong palette. */
+(function(){
+  try{
+    var LIGHT=["parchment","sunrise","watercolor","daydream"], DARK=["velvet","aurora","black"];
+    var mode=localStorage.getItem("packsink:themeMode");
+    var lt=localStorage.getItem("packsink:lightTheme"); if(LIGHT.indexOf(lt)<0) lt="parchment";
+    var dt=localStorage.getItem("packsink:darkTheme");  if(DARK.indexOf(dt)<0)  dt="aurora";
+    if(LIGHT.indexOf(mode)>=0) mode="light";
+    else if(DARK.indexOf(mode)>=0) mode="dark";
+    else if(mode!=="light"&&mode!=="dark"&&mode!=="system") mode="dark";
+    var resolved = mode==="light" ? lt : mode==="dark" ? dt
+      : ((window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches) ? dt : lt);
+    var el=document.documentElement;
+    el.setAttribute("data-theme", resolved);
+    el.setAttribute("data-mode", DARK.indexOf(resolved)>=0 ? "dark" : "light");
+  }catch(e){}
+})();
+</script>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex,nofollow">
+<title>Picks — Packs.Ink</title>
+<!-- Asset URLs are RELATIVE on purpose: picks.html sits at the site root, so
+     they resolve identically at /picks and when the file is opened from disk. -->
+<link rel="icon" href="favicon-32.png?v=4">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+<style>
+.pk-app{max-width:1060px;margin:0 auto;padding-bottom:40px;}
+.pk-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+.pk-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
+.pk-brand img{height:34px;width:auto;display:block;}
+.pk-spacer{flex:1;min-width:0;}
+.pk-flag{font-family:'Cinzel',serif;font-size:9px;letter-spacing:1.2px;text-transform:uppercase;
+  border:1px solid var(--border-accent);color:var(--accent);border-radius:999px;padding:3px 9px;white-space:nowrap;}
+.pk-copy{font-family:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+  background:var(--btn-bg);color:var(--text);border:1px solid var(--border);border-radius:999px;padding:7px 14px;}
+.pk-copy:hover{border-color:var(--border-accent);color:var(--accent);}
+/* The hero is the part of the page someone lands on from a link, so it carries
+   the disclosure inside it rather than below the fold. */
+.pk-hero{border:1px solid var(--border);border-radius:16px;padding:24px 24px 18px;margin:0 0 26px;
+  background:linear-gradient(135deg, var(--accent-glow), transparent 58%), var(--bg-card);}
+.pk-h1{font-family:'Cinzel',serif;font-size:2.1rem;font-weight:700;margin:0 0 8px;letter-spacing:0.4px;}
+.pk-lede{color:var(--text);font-size:15px;line-height:1.55;margin:0 0 10px;max-width:62ch;}
+.pk-note{color:var(--text-dim);font-size:12.5px;line-height:1.6;margin:0 0 12px;max-width:74ch;}
+.pk-disclosure{color:var(--text-dim);font-size:12px;line-height:1.6;margin:0;max-width:74ch;
+  border-left:2px solid var(--border-accent);padding:6px 0 6px 12px;}
+.pk-jump{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 0;}
+.pk-jump button{font:inherit;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+  padding:5px 12px;border-radius:999px;border:1px solid var(--border);background:var(--bg-card);color:var(--text);}
+.pk-jump button:hover{border-color:var(--border-accent);color:var(--accent);}
+.pk-sec{margin:0 0 32px;scroll-margin-top:16px;}
+.pk-sec-head{display:flex;align-items:center;gap:12px;margin:0 0 12px;}
+/* --h is the section's hue, set from PICKS. Tints stay low-alpha so a section
+   reads as a colour family without competing with the photos. */
+.pk-sec-icon{flex:0 0 auto;width:38px;height:38px;border-radius:10px;display:flex;align-items:center;
+  justify-content:center;background:hsl(var(--h) 70% 55% / 0.16);color:hsl(var(--h) 58% 40%);}
+.pk-sec-icon svg{width:22px;height:22px;}
+.pk-sec-title{font-family:'Cinzel',serif;font-size:1.02rem;font-weight:700;letter-spacing:0.6px;
+  text-transform:uppercase;margin:0;}
+.pk-sec-note{font-size:12px;color:var(--text-dim);margin:2px 0 0;line-height:1.45;}
+.pk-grid{list-style:none;margin:0;padding:0;display:grid;gap:12px;
+  grid-template-columns:repeat(auto-fill,minmax(min(100%,164px),1fr));}
+.pk-card{display:flex;flex-direction:column;height:100%;box-sizing:border-box;text-decoration:none;
+  color:inherit;border:1px solid var(--border);border-radius:12px;overflow:hidden;background:var(--bg-card);
+  transition:transform .12s ease,border-color .12s ease,box-shadow .12s ease;}
+.pk-card:hover{transform:translateY(-2px);border-color:var(--border-accent);
+  box-shadow:0 8px 22px rgba(0,0,0,0.16);}
+.pk-art{position:relative;aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;
+  background:linear-gradient(140deg, hsl(var(--h) 70% 55% / 0.24), hsl(calc(var(--h) + 45) 70% 55% / 0.08));
+  color:hsl(var(--h) 55% 40%);}
+.pk-art svg{width:40%;height:62%;}
+/* A photo sits on white (product shots are shot on white). If it fails to
+   load, the img is removed and the class dropped, uncovering the illustration. */
+.pk-art--photo{background:#fff;}
+.pk-art img{position:absolute;inset:12px;width:calc(100% - 24px);height:calc(100% - 24px);object-fit:contain;}
+.pk-card-body{display:flex;flex-direction:column;gap:3px;padding:10px 12px 12px;flex:1;}
+.pk-card-name{font-weight:700;font-size:13.5px;line-height:1.3;}
+.pk-card-meta{font-size:11.5px;color:var(--text-dim);line-height:1.35;}
+.pk-card-cta{margin-top:auto;padding-top:9px;font-size:11.5px;font-weight:700;color:var(--accent);letter-spacing:0.2px;}
+.pk-card:hover .pk-card-cta{text-decoration:underline;}
+html[data-mode="dark"] .pk-sec-icon{background:hsl(var(--h) 70% 55% / 0.2);color:hsl(var(--h) 82% 74%);}
+html[data-mode="dark"] .pk-art{color:hsl(var(--h) 82% 76%);}
+.pk-foot{color:var(--text-dim);font-size:12px;line-height:1.6;margin-top:30px;
+  border-top:1px solid var(--border);padding-top:14px;max-width:74ch;}
+@media (max-width:520px){
+  .pk-hero{padding:18px 16px 14px;}
+  .pk-h1{font-size:1.6rem;}
+  .pk-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
+  .pk-card-body{padding:8px 9px 10px;}
+  .pk-card-name{font-size:12.5px;}
+}
+</style>
+</head>
+<body>
+<div class="pk-app">
+  <div class="pk-top">
+    <a class="pk-brand" href="/"><img src="Logos/packs-ink-logo.png" alt="Packs.Ink"></a>
+    <span class="pk-flag">Unlisted</span>
+    <span class="pk-spacer"></span>
+    <button class="pk-copy" id="pk-copy" type="button">Copy this page's link</button>
+  </div>
+
+  <header class="pk-hero">
+    <h1 class="pk-h1">Picks</h1>
+    <p class="pk-lede">
+      A shortlist of things worth owning, on Amazon. Cards and card supplies are the
+      day job — the rest is everything else people ask me about.
+    </p>
+    <p class="pk-note">
+      Every link opens an Amazon <strong>search</strong> rather than one frozen product
+      page, and that is deliberate: a hand-picked list goes out of date the week
+      something is restocked, repriced or replaced, while a search always shows what is
+      actually current, in stock, and at today's price. Nothing here is a review — these
+      are the shelves, not a ranking. Where a card has a photo it is a TCGplayer or
+      Ravensburger product shot of one example; Amazon's own photos and prices only come
+      through its product API, so none are shown here.
+    </p>
+    <p class="pk-disclosure">
+      <strong>As an Amazon Associate I earn from qualifying purchases.</strong>
+      Every link on this page is an affiliate link, so a purchase may earn Packs.Ink a
+      commission — at no extra cost to you, and it never changes the price you pay.
+    </p>
+    <nav class="pk-jump" id="pk-jump" aria-label="Jump to a section"></nav>
+  </header>
+
+  <div id="pk-sections"></div>
+
+  <p class="pk-foot">
+    This page is <strong>unlisted, not private</strong>: it is kept out of search
+    engines and isn't linked from anywhere on the site, but anyone who has the address
+    can open it. Don't treat it as a secret — treat it as a page you have to be given.
+    <br><br>
+    Packs.Ink is an unofficial fan site. Disney Lorcana TCG is a trademark of Disney;
+    the game is operated by Ravensburger. This site is not affiliated with, endorsed
+    by, or sponsored by Disney or Ravensburger.
+  </p>
+</div>
+
+<script>
+/* ── The link layer ──────────────────────────────────────────────────────────
+   ⚠ AMAZON_TAG is duplicated from Index.html because a standalone page cannot
+   reach the app's module. That is a drift risk with no visible symptom — a
+   wrong or missing tag produces a link that works perfectly and earns nothing
+   — so scripts/test_picks_page.mjs reads the tag back OUT of both files and
+   fails if they disagree.
+
+   `i=` is Amazon's search department. It matters: an unscoped search for
+   "PS5 games" returns cases and cables, and the toys-and-games default the app
+   uses would return nothing at all for hardware.                            */
+var AMAZON_TAG = "packsink-20";
+function amazonSearchUrl(query, dept){
+  return "https://www.amazon.com/s?k=" + encodeURIComponent(query) +
+    "&i=" + encodeURIComponent(dept || "toys-and-games") +
+    "&tag=" + AMAZON_TAG + "&linkCode=ll2";
+}
+
+/* ── Photos and illustrations ────────────────────────────────────────────────
+   A photo is never Amazon's: Amazon licenses its images only through its API.
+   `tcg` is a TCGplayer product id and `rav` a Ravensburger SKU — both are ids,
+   never URLs, so the catalogue below can't grow a pasted listing image without
+   the guard test noticing. Everything else gets a drawn glyph from ICONS, the
+   same line vocabulary as the app (24x24, stroke=currentColor, round caps). */
+function photoUrl(it){
+  if(it.tcg) return "https://tcgplayer-cdn.tcgplayer.com/product/" + it.tcg + "_in_400x400.jpg";
+  if(it.rav) return "https://ravensburger.cloud/images/produktseiten/520x445/" + it.rav + ".webp";
+  return null;
+}
+var ICONS = {
+  cards: '<rect x="4" y="6" width="10.5" height="14.5" rx="1.5"/><path d="M8.5 3.5h9a1.5 1.5 0 0 1 1.5 1.5v12"/>',
+  box: '<path d="M3.5 7.5L12 3l8.5 4.5v9L12 21l-8.5-4.5z"/><path d="M3.5 7.5L12 12l8.5-4.5"/><path d="M12 12v9"/>',
+  binder: '<rect x="5" y="3" width="14" height="18" rx="1.5"/><path d="M9.5 3v18"/><path d="M5 7.5h2"/><path d="M5 12h2"/><path d="M5 16.5h2"/><path d="M12.5 8h4"/>',
+  gamepad: '<path d="M7 8h10a4.5 4.5 0 0 1 4.3 5.8l-1 3.3a2.2 2.2 0 0 1-3.8.8L14.8 16H9.2l-1.7 1.9a2.2 2.2 0 0 1-3.8-.8l-1-3.3A4.5 4.5 0 0 1 7 8z"/><path d="M8 10.8v3"/><path d="M6.5 12.3h3"/><path d="M15.5 11.5h.01"/><path d="M17.5 13.3h.01"/>',
+  handheld: '<rect x="2.5" y="7" width="19" height="10" rx="3"/><rect x="7.5" y="9" width="9" height="6" rx="0.8"/><path d="M4.6 12h1.8"/><path d="M5.5 11.1v1.8"/><path d="M18.6 12h.01"/>',
+  disc: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="2.2"/><path d="M12 5.5a6.5 6.5 0 0 1 6.5 6.5"/>',
+  monitor: '<rect x="3" y="4" width="18" height="12" rx="1.5"/><path d="M9 20h6"/><path d="M12 16v4"/>',
+  giftcard: '<rect x="3" y="6" width="18" height="12" rx="2"/><path d="M3 10h18"/><path d="M7 14.5h4"/>',
+  console: '<rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 17v2"/><path d="M17 17v2"/><path d="M7 11.5h3"/><path d="M15.5 11.5h.01"/>',
+  headset: '<path d="M4 14v-2a8 8 0 0 1 16 0v2"/><rect x="3" y="14" width="4" height="6" rx="1.5"/><rect x="17" y="14" width="4" height="6" rx="1.5"/>',
+  ssd: '<rect x="3" y="7.5" width="18" height="9" rx="1.5"/><path d="M6.5 10.5h7"/><path d="M6.5 13.5h4"/><path d="M17.5 12h.01"/>',
+  sdcard: '<path d="M7.5 3H14l4 4v12.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 6 19.5v-15A1.5 1.5 0 0 1 7.5 3z"/><path d="M10 3v3"/><path d="M13 3v3"/>',
+  mic: '<rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/><path d="M9 21h6"/>',
+  webcam: '<circle cx="12" cy="10" r="6.5"/><circle cx="12" cy="10" r="2.5"/><path d="M8 20.5h8"/><path d="M12 16.5v4"/>',
+  capture: '<rect x="3.5" y="8" width="17" height="8" rx="2"/><path d="M1.5 12h2"/><path d="M20.5 12h2"/><path d="M8 12h.01"/><path d="M11 12h5"/>',
+  light: '<rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M8 7.5h8"/><path d="M8 11h8"/><path d="M12 15v5.5"/><path d="M8.5 20.5h7"/>',
+  arm: '<path d="M4 20.5h7"/><path d="M7.5 20.5v-6l5.5-5.5"/><path d="M13 9l3-1.5"/><rect x="15" y="3" width="6.5" height="8" rx="1"/>',
+  keys: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><rect x="6.5" y="8" width="3" height="3" rx="0.6"/><rect x="10.5" y="8" width="3" height="3" rx="0.6"/><rect x="14.5" y="8" width="3" height="3" rx="0.6"/><rect x="6.5" y="13" width="3" height="3" rx="0.6"/><rect x="10.5" y="13" width="3" height="3" rx="0.6"/><rect x="14.5" y="13" width="3" height="3" rx="0.6"/>',
+  board: '<rect x="3.5" y="3.5" width="17" height="17" rx="2"/><path d="M3.5 12h17"/><path d="M12 3.5v17"/><circle cx="7.8" cy="7.8" r="1.2"/><circle cx="16.2" cy="16.2" r="1.2"/>',
+  players: '<circle cx="8.5" cy="8" r="3"/><circle cx="15.5" cy="8" r="3"/><path d="M3 19.5a5.5 5.5 0 0 1 11 0"/><path d="M10 19.5a5.5 5.5 0 0 1 11 0"/>',
+  dice: '<rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/><path d="M8.2 8.2h.01"/><path d="M15.8 8.2h.01"/><path d="M12 12h.01"/><path d="M8.2 15.8h.01"/><path d="M15.8 15.8h.01"/>'
+};
+
+/* Sections are ordered by who is most likely to have been handed this link:
+   the card people first, since that is what the rest of the site is. `hue`
+   tints the section; `icon` is the fallback glyph for a card with no photo. */
+var PICKS = [
+  {title: "Lorcana & trading cards", dept: "toys-and-games", icon: "cards", hue: 38,
+   note: "The full Lorcana catalogue — every set, plus sleeves and grading supplies — is on the Gear page",
+   items: [
+    {q: "Disney Lorcana booster box", name: "Lorcana booster boxes", tcg: 690384},
+    {q: "Disney Lorcana starter deck", name: "Starter decks", tcg: 682038},
+    {q: "Dragon Shield Matte standard size sleeves 100 count", name: "Dragon Shield sleeves", meta: "standard size", tcg: 149665},
+    {q: "9 pocket zippered trading card binder side loading", name: "Card binders", meta: "9-pocket", icon: "binder"},
+    {q: "Card Saver 1 semi rigid card holders", name: "Card Saver 1", meta: "for PSA submissions", tcg: 247598},
+    {q: "Pokemon elite trainer box", name: "Pokémon ETBs", icon: "box"},
+  ]},
+  {title: "Video games", dept: "videogames", icon: "gamepad", hue: 265,
+   note: "By platform — each opens that platform's current listings",
+   items: [
+    {q: "Nintendo Switch 2 games", name: "Switch 2 games", icon: "handheld"},
+    {q: "Nintendo Switch games", name: "Switch games", icon: "handheld"},
+    {q: "PS5 games", name: "PS5 games", icon: "disc"},
+    {q: "Xbox Series X games", name: "Xbox games", icon: "disc"},
+    {q: "PC games", name: "PC games", icon: "monitor"},
+    {q: "video game gift card", name: "Gift cards", meta: "PSN · eShop · Xbox", icon: "giftcard"},
+  ]},
+  {title: "Consoles & handhelds", dept: "videogames", icon: "console", hue: 205, items: [
+    {q: "Nintendo Switch 2 console", name: "Nintendo Switch 2", icon: "handheld"},
+    {q: "PlayStation 5 console", name: "PlayStation 5"},
+    {q: "PlayStation 5 Pro console", name: "PS5 Pro"},
+    {q: "Xbox Series X console", name: "Xbox Series X"},
+    {q: "Xbox Series S console", name: "Xbox Series S"},
+    {q: "Steam Deck OLED handheld", name: "Steam Deck", icon: "handheld"},
+  ]},
+  {title: "Controllers & gear", dept: "videogames", icon: "gamepad", hue: 330, items: [
+    {q: "PS5 DualSense wireless controller", name: "DualSense controller"},
+    {q: "Nintendo Switch 2 Pro controller", name: "Switch Pro controller"},
+    {q: "Xbox wireless controller", name: "Xbox controller"},
+    {q: "gaming headset wireless", name: "Gaming headsets", icon: "headset"},
+    {q: "PS5 NVMe SSD heatsink 2TB", name: "Console SSD upgrade", icon: "ssd"},
+    {q: "microSD Express card Nintendo Switch 2", name: "Switch 2 storage", meta: "microSD Express", icon: "sdcard"},
+  ]},
+  {title: "Streaming & desk", dept: "electronics", icon: "mic", hue: 160,
+   note: "What it takes to put a game — or a Packs.Ink ticker — on stream",
+   items: [
+    {q: "USB microphone streaming", name: "USB microphones", icon: "mic"},
+    {q: "streaming webcam 1080p", name: "Webcams", icon: "webcam"},
+    {q: "capture card 4K HDMI USB", name: "Capture cards", icon: "capture"},
+    {q: "key light streaming panel", name: "Key lights", icon: "light"},
+    {q: "monitor arm single desk mount", name: "Monitor arms", icon: "arm"},
+    {q: "stream deck control pad", name: "Stream controllers", icon: "keys"},
+  ]},
+  {title: "Board & tabletop", dept: "toys-and-games", icon: "board", hue: 12, items: [
+    {q: "board game best sellers", name: "Board games", icon: "board"},
+    {q: "cooperative board game 2 player", name: "Two-player games", icon: "players"},
+    {q: "polyhedral dice set", name: "Dice sets", icon: "dice"},
+    {q: "jigsaw puzzle 1000 pieces Ravensburger", name: "Ravensburger puzzles", rav: 12001621},
+  ]},
+];
+
+(function(){
+  var SVGNS = "http://www.w3.org/2000/svg";
+  var glyph = function(key){
+    var svg = document.createElementNS(SVGNS, "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "1.7");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    svg.setAttribute("aria-hidden", "true");
+    svg.setAttribute("focusable", "false");
+    /* Static constants from ICONS above — never user or network text. */
+    svg.innerHTML = ICONS[key] || ICONS.box;
+    return svg;
+  };
+  var slug = function(t){ return "pk-" + t.toLowerCase().replace(/[^a-z0-9]+/g, "-"); };
+  var root = document.getElementById("pk-sections");
+  var jump = document.getElementById("pk-jump");
+  PICKS.forEach(function(sec){
+    var s = document.createElement("section");
+    s.className = "pk-sec";
+    s.id = slug(sec.title);
+    s.style.setProperty("--h", String(sec.hue || 38));
+
+    var head = document.createElement("div");
+    head.className = "pk-sec-head";
+    var badge = document.createElement("span");
+    badge.className = "pk-sec-icon";
+    badge.appendChild(glyph(sec.icon));
+    head.appendChild(badge);
+    var titles = document.createElement("div");
+    var h = document.createElement("h2");
+    h.className = "pk-sec-title";
+    h.textContent = sec.title;
+    titles.appendChild(h);
+    if(sec.note){
+      var n = document.createElement("p");
+      n.className = "pk-sec-note";
+      n.textContent = sec.note;
+      titles.appendChild(n);
+    }
+    head.appendChild(titles);
+    s.appendChild(head);
+
+    var ul = document.createElement("ul");
+    ul.className = "pk-grid";
+    sec.items.forEach(function(it){
+      var li = document.createElement("li");
+      var a = document.createElement("a");
+      a.className = "pk-card";
+      a.href = amazonSearchUrl(it.q, sec.dept);
+      a.target = "_blank";
+      /* sponsored + nofollow on every affiliate anchor, same as the app. */
+      a.rel = "noopener nofollow sponsored";
+      a.title = it.name + " — Amazon search (affiliate link)";
+
+      var art = document.createElement("span");
+      art.className = "pk-art";
+      art.appendChild(glyph(it.icon || sec.icon));
+      var src = photoUrl(it);
+      if(src){
+        art.className += " pk-art--photo";
+        var img = document.createElement("img");
+        img.alt = "";
+        img.loading = "lazy";
+        img.src = src;
+        img.addEventListener("error", function(){
+          img.remove();
+          art.className = "pk-art";
+        });
+        art.appendChild(img);
+      }
+      a.appendChild(art);
+
+      var body = document.createElement("span");
+      body.className = "pk-card-body";
+      var nm = document.createElement("span");
+      nm.className = "pk-card-name";
+      nm.textContent = it.name;
+      body.appendChild(nm);
+      if(it.meta){
+        var mt = document.createElement("span");
+        mt.className = "pk-card-meta";
+        mt.textContent = it.meta;
+        body.appendChild(mt);
+      }
+      var cta = document.createElement("span");
+      cta.className = "pk-card-cta";
+      cta.textContent = "Shop on Amazon ↗";
+      body.appendChild(cta);
+      a.appendChild(body);
+
+      li.appendChild(a);
+      ul.appendChild(li);
+    });
+    s.appendChild(ul);
+    root.appendChild(s);
+
+    var chip = document.createElement("button");
+    chip.type = "button";
+    chip.textContent = sec.title;
+    chip.addEventListener("click", function(){
+      s.scrollIntoView({behavior: "smooth", block: "start"});
+    });
+    jump.appendChild(chip);
+  });
+
+  /* The point of the page is that it gets SENT, so make sending it one click.
+     Forced to the canonical https URL: opened from disk, location.href is a
+     file:/// path that is useless to anybody else. */
+  var btn = document.getElementById("pk-copy");
+  btn.addEventListener("click", function(){
+    var url = "https://packs.ink/picks";
+    var done = function(){
+      btn.textContent = "Copied ✓";
+      setTimeout(function(){ btn.textContent = "Copy this page's link"; }, 1800);
+    };
+    try{
+      navigator.clipboard.writeText(url).then(done, function(){ window.prompt("Copy this link:", url); });
+    }catch(e){ window.prompt("Copy this link:", url); }
+  });
+})();
+</script>
+</body>
+</html>

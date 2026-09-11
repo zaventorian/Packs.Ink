@@ -1,0 +1,79 @@
+name: Discord digest
+
+# Posts the day's Lorcana movers to Discord — but leading with the JUDGEMENT
+# ("this fell AND is now at a 6-month low"), not the move. See the header of
+# scripts/discord_digest.py for why that framing is the whole point: the
+# restock-alert accounts already own "in stock at $X", and the one thing none
+# of them can say is whether $X is any good.
+#
+# ⚠ ITS OWN WORKFLOW ON ONE CRON, NOT A JOB CHAINED OFF etl.yml. The ETL fires
+# up to three times a day (20:30 / 22:30 / 01:00 retries) and a digest job
+# hanging off it would post two or three times on a retry day. One cron plus the
+# script's own freshness gate (it refuses to post unless the newest price date
+# IS today) makes a duplicate post impossible by construction, and makes a day
+# the ETL never landed produce silence rather than yesterday's numbers dressed
+# up as today's.
+#
+# Green with no DISCORD_WEBHOOK_URL secret: the script exits 0 and says so, so a
+# fork or a not-yet-configured repo does not sit permanently red.
+
+on:
+  schedule:
+    # 21:15 UTC — TCGCSV publishes ~20:00 and the primary ETL fires 20:30, so
+    # this lands after the snapshot is in and the matviews are refreshed. If the
+    # ETL is late the freshness gate skips the day rather than posting stale.
+    - cron: "15 21 * * *"
+  workflow_dispatch:
+    inputs:
+      window:
+        description: "Mover window"
+        type: choice
+        options: ["1d", "7d", "30d", "90d"]
+        default: "1d"
+      dry_run:
+        description: "Build the digest and print it WITHOUT posting"
+        type: boolean
+        default: true
+      allow_stale:
+        description: "Post even if today's prices have not landed yet"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discord-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    name: Post the movers digest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+      - run: pip install -r scripts/requirements.txt
+      # Runs first and needs no network. It is also the cross-language check:
+      # it reads the price-standing constants back OUT of Index.html and fails
+      # if the bot and the site have drifted apart on what counts as a good
+      # price. Two surfaces making the same claim differently is worse than
+      # neither making it.
+      - name: Test the digest (and that it still agrees with the site)
+        run: python scripts/test_discord_digest.py
+      - name: Post the digest
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          # Optional. Unset → the script prints what it would have posted and
+          # exits 0, which is also what a manual dry run does.
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          python scripts/discord_digest.py \
+            --window "${{ inputs.window || '1d' }}" \
+            ${{ (github.event_name == 'schedule' || !inputs.dry_run) && '--post' || '' }} \
+            ${{ inputs.allow_stale && '--allow-stale' || '' }}
