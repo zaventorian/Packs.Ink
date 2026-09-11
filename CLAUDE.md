@@ -427,7 +427,7 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 ## Client cache rules
 
-- **Catalog lives in IndexedDB** (2026-07 offline rework): db `packsink`, store `kv`, key `catalog`, record `{v: CACHE_KEY, t, rows, latestDate}`. `CACHE_KEY` (`packsink:catalog:vN`, currently **v50**) is still the version stamp — bump N whenever cached row shape changes; a mismatched `v` is treated as missing and the next write replaces it. 24h TTL with background refresh. **Full rows are stored — `img_large` and `text` are NOT stripped anymore** (that strip existed for the 5MB localStorage quota; IDB has no such ceiling). Body-text smart search therefore works on cache-replay sessions, including offline; the lazy text backfill only fires for rows migrated from a legacy localStorage cache.
+- **Catalog lives in IndexedDB** (2026-07 offline rework): db `packsink`, store `kv`, key `catalog`, record `{v: CACHE_KEY, t, rows, latestDate}`. `CACHE_KEY` (`packsink:catalog:vN`, currently **v55**) is still the version stamp — bump N whenever cached row shape changes; a mismatched `v` is treated as missing and the next write replaces it. 24h TTL with background refresh. **Full rows are stored — `img_large` and `text` are NOT stripped anymore** (that strip existed for the 5MB localStorage quota; IDB has no such ceiling). Body-text smart search therefore works on cache-replay sessions, including offline; the lazy text backfill only fires for rows migrated from a legacy localStorage cache.
 - **Legacy migration**: `readCache()` falls back to the old localStorage `packsink:catalog:vN` entry, returns it, and one-shot migrates it into IDB, deleting the localStorage copy on success (frees ~2.5MB back to the aux caches). `writeCache()` falls back to the old slim localStorage write only when IDB is unavailable (old private-mode Safari). Both are async now — `loadFromSupabase` awaits `readCache()`.
 - **IDB helpers** (Index.html top): `idbOpen/idbGet/idbSet/idbDel` — resolve (never reject); reads → `undefined`, writes → `false` on failure. `offlineMirrorWrite/offlineMirrorRead("<what>:<uid>", data)` wrap them for per-user offline mirrors (see "Offline support" below).
 - **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs. On network failure the probe trusts the TTL and keeps the cached catalog (this is the offline path).
@@ -538,7 +538,7 @@ This is where catalog correctness lives. Structural cleanups:
 6. **`SET_DISPLAY_NAMES`** — `{"Challenge Promo": "Lorcana Challenge Promo (C1)", "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)"}`. **All in-code set comparisons use the DISPLAY name.**
 7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_cn>`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community #1/2/3/4.
 8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3, D23 Collection, EPCOT Festival of the Arts. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
-9. **`CHINA_ONLY_NONFOIL` + `JAPAN_ONLY_NONFOIL`** — `{name|cn: image path}` for non-foil printings that exist only in a regional market. Get `variant_label: "Chinese Exclusive"` / `"Japanese Exclusive"`, null prices, local image, no TCGPlayer link. Currently CN: Dragon Fire #25, Let It Go #41. JP: Snow White - Unexpected Houseguest #41 (Promo Set 1, added via migration 52). Pattern works only when the card row exists in `cards` table — Lorcast-indexed cards just need the map entry; non-Lorcast cards need a `cards` insert too (see migration 52).
+9. **`CHINA_ONLY_NONFOIL` + `JAPAN_ONLY_NONFOIL`** — `{name|cn: image path}` for non-foil printings that exist only in a regional market. Get `variant_label: "Chinese Exclusive"` / `"Japanese Exclusive"`, null prices, local image, no TCGPlayer link. Currently CN: Dragon Fire #25, Let It Go #41. JP: Snow White - Unexpected Houseguest #41 (Promo Set 1, added via migration 52) and Elsa - Exploring the Unknown #59 (Promo Set 3, the JA-10 promo; synthetic row from migration 108). **The image is the whole point of this map** — the sibling `REGIONAL_EXCLUSIVE_LABEL` stamps the same "Japanese Exclusive" label but keeps the Lorcast art, so a JP-only card parked there renders the ENGLISH frame. Elsa sat there for exactly that reason until a scan existed; move a key across the moment you have one. Pattern works only when the card row exists in `cards` table — Lorcast-indexed cards just need the map entry; non-Lorcast cards need a `cards` insert too (see migration 52).
 10. **`TCG_PID_OVERRIDES` is authoritative** — overrides Lorcast even when Lorcast has a (wrong) value. Used for Hiro Hamada #24/24B pid swap. **Applied client-side in `transformSupabaseData` AND server-side via `scripts/patch_pid_overrides.py`** — the latter writes them into `cards` so the matview JOIN picks them up. Client-only overrides don't help the matview.
 11. **Image fallback in `buildRow`** — `img_normal || img_large || img_small`, etc. Lorcast occasionally populates only `image_large` (LCP C1 Dragon Fire, Let It Go, Cinderella, Rapunzel). **Downstream surfaces reading `price_movers` directly (home banners, Screener) DON'T see buildRow fallback** + `img_large` is stripped from catalog cache. Look up `raw[i].img_normal` (contains the large URL via fallback) and inject as `image_normal` on the matview row.
 12. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price`. When a card has one but not the other, the missing side falls back so it still contributes to rarity averages.
@@ -1948,6 +1948,504 @@ SELECT public.refresh_graded_prices_latest();
 - **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
 
+## Price standing — "is this actually a good price?" (2026-09-10)
+
+The competitive read, in one line: a restock feed can tell you a box is in stock at $130;
+it cannot tell you whether $130 is good. We have daily prices back to 2024-02-08, so we
+can — and that judgement is the only reason to click a buy link here rather than on
+whichever alert account posted it first. `priceStanding(rows)` (next to
+`computeSeriesDeltas`) is that judgement; it renders as a chip at the buy moment on the
+card-detail stat rows and in the Sealed detail modal.
+
+Four decisions, each the opposite of the obvious implementation:
+
+- **⚠ It reads `market_price`, NEVER `low_price`.** Low is a published aggregate, not a
+  sale: 41% of Lows sit >10% below the cheapest NM sale that actually happened, and
+  `smooth_low_prices.py` exists because one bad listing pins it for days. A phantom low
+  would render **"Cheapest in 12 months" at the exact moment somebody is deciding to
+  buy** — the worst place on the site to be wrong. The guard test pins this with a series
+  whose market is flat and whose low cratered on one day, and checks both that the default
+  stays silent and that `{field:"low_price"}` *would* have fired (so the test proves the
+  default is doing work, not that the function is blind).
+- **⚠ It is a PERCENTILE, not a minimum.** A min is decided by one observation — the
+  noisiest statistic available. A percentile over the window barely moves when a single
+  point is bad.
+- **⚠ The window's LABEL must be one the data can support.** A 365-day filter over a card
+  with 100 days of history keeps all 100 rows and passes every other floor, so the first
+  cut announced *"Cheapest in 12 months"* off one quarter of data. That is a false claim,
+  and it lands hardest on exactly the cards people price most — a set released three
+  months ago has no year to be cheapest in. `PRICE_STANDING_MIN_SPAN_RATIO` (0.8) makes a
+  short history fall back to a shorter, true label instead of overreaching.
+- **⚠ Ties count as "at or below", and that needs the spread floor.** A card that sat at
+  $5 for half the year and is $5 today is not at a special low, so ties keep it out of the
+  bottom decile. The cost is that a perfectly flat series computes to pct 1.0 and would
+  announce **"near its 12-month high"** — the opposite of true. `PRICE_STANDING_MIN_SPREAD`
+  (1.15) is what catches it: a price with no range has no edge to be near. A sub-window's
+  spread is always ≤ the full window's, so failing once fails every shorter window too.
+
+**It says nothing in the middle of the range, and that is the point.** A badge that
+renders on every card is furniture; one that appears only at an edge is information.
+`null` is the common return — bottom decile → "Cheapest in N", bottom quartile → "Near its
+N low", top decile → "Near its N high", everything else → nothing.
+
+- **`priceStanding` is called as a PLAIN FUNCTION in `SealedDetailModal`, not a `useMemo`.**
+  The static-product (puzzle / collectible) branch early-returns above it, so a hook there
+  would sit after a conditional return and break hook order — the same trap the
+  `useMaxWidth(1100)` note describes. It is two passes over at most ~600 rows.
+- The chip is a bordered tint, never a filled badge: it sits beside a buy CTA and must not
+  compete with it. Dark themes get their own colours — the light green fails on velvet.
+
+Guarded by `node scripts/test_price_standing.mjs` (18 cases). Both bugs above were caught
+by writing the test first, and both are the silent kind: a confident false claim next to an
+affiliate link.
+
+
+## Amazon Associates (approved 2026-09-10, tag `packsink-20`)
+
+Amazon **complements** TCGplayer here rather than competing with it, and the split is
+clean enough to state as a rule: **TCGplayer owns singles, Amazon owns everything
+TCGplayer barely stocks** — sealed gift sets, the Ravensburger jigsaw puzzles, and above
+all **accessories**, a category the site had never monetised at all. So an Amazon link is
+ADDED beside a TCGplayer one, never in place of it.
+
+### ⚠ LINK-ONLY TODAY — because we have no API keys, NOT because prices are banned
+
+An earlier version of this section said prices could never be shown and images could
+never be used. **That was wrong**, and the correction matters because it changes what is
+worth building later. The actual terms:
+
+- Every Amazon price, image or product fact displayed on a site must be **Program Content
+  fetched from Amazon's own API**. PA-API 5 was retired **2026-05-15**; the **Creators
+  API** replaced it.
+- **Non-image content, prices included, may be cached for up to 24 HOURS**, and must be
+  refreshed by a fresh API call immediately after.
+- An **image may not be stored or cached at all**, but a **link** to one may be held for
+  up to 24 hours — i.e. you hot-link Amazon's CDN. Never our storage, never `/img-proxy`.
+- A displayed price must carry its **"as of" timestamp** and a buy link to the detail page.
+- **Scraping is prohibited outright** by Amazon's Conditions of Use ("data mining, robots,
+  or similar data gathering and extraction tools"). There is no non-API shortcut, and a
+  scraper would risk the affiliate account itself for data the API hands over free once we
+  qualify. Do not build one; do not buy a third-party Amazon scraping API either — the
+  Operating Agreement is about where the *displayed* content came from, not who fetched it.
+
+So the reason no AMAZON price or photo appears on the site is simply that **we hold no
+Creators API keys**. `scripts/test_amazon_links.mjs` asserts the static catalog holds
+nothing but ASINs, keys and TCGplayer ids — that guard is against somebody hand-copying a
+price or image off a listing, which is the unlicensed use that actually costs accounts. It
+is not a vow of poverty about prices in general.
+
+**⚠ The photos and prices you DO see on Amazon-linked tiles are TCGplayer's (2026-09-10).**
+Zaven asked for pictures and prices "even if we have to source them ourselves". Sourcing
+*Amazon's* ourselves — scraping, or copying them off listings — is exactly the prohibited
+path above, so the answer was to source OUR OWN: TCGplayer's catalog photo of the same
+product (the images the Sealed pages already show; the host is already in `img-src`) and
+TCGplayer's market price from our daily ETL, **labelled as TCGplayer's on every surface**.
+The rule governs Amazon's content, not TCGplayer's photo of the same box, so this is not a
+loophole. What a tile can never say is *Amazon's* price or stock: it shows "TCGplayer
+market $X" beside a "Buy/Find on Amazon" button, never "$X on Amazon".
+
+**⚠ Sources are secondary.** Every amazon.com / webservices.amazon.com /
+affiliate-program.amazon.com domain is egress-blocked from the agent sandbox, so the
+clauses above were assembled from search results quoting the licence, not read from the
+primary document. Confirm the exact wording in Associates Central before building against
+it.
+
+### Two different sale thresholds — don't conflate them
+
+| Bar | What it gates | Reported figure |
+|---|---|---|
+| **Account probation** | Keeping the Associates account at all | **3 qualifying sales in 180 days** from approval (so by ~2027-03-09) |
+| **Creators API access** | Prices, photos, any Program Content | **10 qualifying sales in 30 days** |
+
+The first is why **Gear exists now and is not a "later"** — a $12 pack of sleeves is an
+impulse buy, a $120 booster box is a considered purchase, and only sales stop the clock.
+The second is the gate on ever showing a price.
+
+### When the keys do land — the design that stays compliant
+
+Not built, deliberately: there is nothing to test against without keys. But the shape is
+constrained enough to write down, because the obvious implementation is the
+non-compliant one.
+
+- **A daily refresh fits.** The 24h ceiling lines up with the existing ETL cadence
+  (20:30 UTC), so an `etl.yml` job calling the Creators API once a day is the natural
+  home — the same shape as `etl_tcgcsv_daily.py`.
+- **⚠ But `ETL → Supabase → localStorage` is exactly what breaks it.** The catalog cache
+  has a 24h TTL *with background refresh*, aux caches run 12h, and the offline mirrors
+  have **no ceiling at all** — a client that goes offline serves saved data indefinitely.
+  An Amazon price written through the normal path would therefore outlive its 24h licence
+  on any offline or long-idle client, silently. So:
+  - Amazon prices must **never** enter `readCache`/`writeCache`, `offlineMirrorWrite`, or
+    any `packsink:*` aux cache.
+  - Store the fetch timestamp beside the price and **hide the price client-side once it is
+    over 24h old**, rather than trusting the refresh to have happened.
+  - Images are **hot-linked from Amazon's CDN**, never proxied — which also means the
+    `img-src` list in `_headers` needs their image host added, and the SW's image-caching
+    branch must be taught to skip it (it currently caches every `destination === "image"`,
+    which would be storing the image).
+- Each price needs its as-of stamp and a buy link rendered with it.
+
+### How a link is resolved
+
+`amazonForSealed(product, setName)` → `{url, exact}`, three passes, cheapest first:
+
+1. **A token rule** (`AMAZON_SEALED_RULES`) — for one-of-a-kind products (gift sets, the
+   collector's editions) and for starter decks, which come **two per set** and so cannot be
+   addressed by set alone. First match wins, so the specific rule goes above the general one.
+2. **Set × display type** (`AMAZON_ASIN_BY_SET`) — the reliable bulk of it, since
+   `deriveSealedDisplayType` already classifies every row. A new set is one line.
+3. **A tagged search** on the product's own name. A search URL commissions exactly like a
+   product URL, so coverage is 100% from day one and each curated ASIN merely upgrades a
+   product from "the right shelf" to "the right box".
+
+- **⚠ Rules match on TOKENS, never on a whole name.** The names are TCGplayer's, the ASINs
+  are Amazon's, and the two houses punctuate differently ("Disney Lorcana: Azurite Sea -
+  Collector's Gift Set" vs "Azurite Sea Stitch Collector's Gift Set"). An exact-key map
+  would look correct and match nothing.
+- **`exact` decides the LABEL, and that matters.** A curated ASIN says "Amazon"; a search
+  says "**Find on** Amazon", because a search cannot promise the product page it lands on.
+- **⚠ A set name typo'd against `MAINLINE_SETS` can never match** — that set silently
+  serves a search link forever while looking curated. The guard test cross-checks every key.
+- **⚠ A case or display never takes a rule's ASIN.** Rules match tokens, so "Fabled
+  Collection Starter Set **Case**" matched the single set's listing. `amazonForSealed` skips
+  the rules when `deriveSealedDisplayType` says `Cases` / `Other Displays / Cases`.
+- **The rules were checked against the LIVE catalog (2026-09-10) and three were wrong.** The
+  unscoped `["collection starter"]` sent Attack of the Vine!'s Rapunzel Edition to the Fabled
+  listing (now `["fabled", "collection starter"]`); `["azurite", "stitch"]` never fired,
+  because TCGplayer calls it plain "Stitch Collector's Gift Set" (now `["stitch", "gift
+  set"]`); `["d100"]` never fired against "Disney100 Collector's Edition". The check that
+  found them resolves every `sealed_prices_latest` row and prints any two rows landing on one
+  ASIN — re-run that whenever a rule is added, because a wrong rule looks exactly like a
+  right one.
+
+### Where it is wired
+
+- **Sealed detail modal** — a secondary outlined button beside TCGplayer's filled one.
+- **EV tool's box-price row** — a small link under the price. This is the one moment on the
+  site where somebody has just been told cracking is +EV, so a box link answers the question
+  actually on screen. **No price beside it** — that column is a TCGplayer number.
+- **Puzzle tiles** — the tile's link now goes to Amazon. Its old `buy_url` was
+  ravensburger.us's whole-**category** landing page: not the product, and not monetised, so
+  Amazon wins on UX and revenue at once. The Ravensburger link stays in the modal for the two
+  Disney-Store exclusives. **Pins and lore counters are NOT sold** (`buy_url` null by design)
+  and stay linkless — a checklist is what a collector wants there.
+- **Gear** (`LORCANA_GEAR` + `GearPanel`) — a home panel, right rail, with the standard
+  pop-out. Sleeves / portfolios / deck boxes, all **first-party Ravensburger**: third-party
+  sleeves outsell them and pay the same, but a fan site naming a brand it has not tested is
+  making a claim, whereas listing the official line is a catalogue. Appended rather than
+  hoisted for existing browsers — a shop box has not earned the right to shove somebody's
+  layout around, unlike the at-the-table shortcuts that did.
+- **Every "buy on TCGplayer" control has an Amazon twin (2026-09-10)**, per Zaven: the card
+  popup's Price-changes rows ("Find on Amazon" beside "Buy on TCGplayer"), Sealed and Graded
+  collection tiles (`TCG ↗` + `Amazon ↗`), the Price Graphing single-product preview, the
+  movers-tile corner (a cart glyph left of the ↗), the home "Recent set EV" box price,
+  Playset Cost rows, Trade Compare printings and every Screener row. A single card is always
+  `amazonCardSearchUrl(name, rarity)` — a search, with the rarity word appended for
+  Enchanted / Iconic / Epic — because Amazon has no singles catalog worth pinning.
+  **Deliberately NOT twinned:** a *price* that merely happens to be a TCGplayer link (Cards
+  list rows, set-detail rows, deck tile price chips, pack-sim results) — doubling every
+  price chip would bury the prices — and TCGplayer's mass-entry "shop missing" buttons,
+  which Amazon has no equivalent for.
+
+### `/gear` — the directory page
+
+A real SPA view (`GearView`, `VIEW_PATHS.gear`), listing every Amazon link we hold: boxes,
+troves, single packs, starter decks, gift sets, puzzles, then the accessories. ~59 links.
+
+- **⚠ It is BUILT from the resolver's own maps (`amazonDirectory()`), never hand-listed.**
+  A second list of ASINs would drift from the first, and the guard test's "no ASIN used
+  twice" check would NOT catch it — a duplicate across two lists that are meant to agree
+  is not a duplicate, it is a fork. The test instead asserts **every curated ASIN appears
+  on the page** and **the page invents none**, in both directions.
+- `AMAZON_SEALED_RULES` entries carry `group` (`gift` | `deck`) and `label` purely so the
+  directory can name them — a page has no `sealed_products` row to hand the resolver.
+  A rule missing either is silently dropped from the page, so the test names that cause
+  directly rather than letting it surface as a missing ASIN.
+- **Sets run newest-first** (`MAINLINE_SETS` reversed): somebody shopping wants the current
+  set, not The First Chapter.
+- **Product cards with photos (2026-09-10).** A sealed row's photo, TCGplayer price and
+  TCGplayer twin come from `amazonSealedMatches()`, joined by Amazon URL; an accessory's
+  come from its `tcg` field — the TCGplayer product id of the pictured item (on a search
+  row, one representative of the line). **Ids, never URLs**: `tcgProductImg(id)` builds the
+  image at render, so the catalog still holds nothing a hand-copied listing image could hide
+  in. No `tcg` means TCGplayer doesn't carry it, and the card shows its section glyph (`box`,
+  `sleeve`, `binder`, `deckbox`, `slab`, `toploader`, `mat`, `storage`, `puzzle` in
+  `UI_ICON_PATHS`). The glyph is drawn UNDER the `<img>` and `hideBrokenImg` hides a failed
+  image by style, so a product TCGplayer has no photo for yet degrades to the glyph.
+- The note above the grid says whose photos and prices they are, with the ETL date.
+- **Two section notes printed raw backslash-u escape codes** (for the curly quotes, the
+  non-breaking spaces and the inch marks) until 2026-09-10 — the source held
+  double-backslashed escapes inside plain JS strings. Real characters now.
+- Needs **no worker or dev_server route** — both already SPA-fallback unknown paths, so
+  `VIEW_PATHS` + `VIEW_TITLES` + a line in `sitemap.xml` is the whole routing change.
+
+### The home shelf — "Lorcana on Amazon" (2026-09-10)
+
+A movers row (`MoversBanner` + `renderTile` → `AmazonShelfTile`), keyed `amazon` in
+`HOME_BANNER_KEYS`, default slot right after Promo Movers. Show/Hide is the fixed
+`amazonShelf` entry in `HOME_PANELS`, same pattern as Your Graded Movers; ▲▼ place it.
+
+- **`amazonShelfItems(sealedPrices, setNameById)` is pure and guarded.** It admits only
+  products the resolver matched to a curated ASIN, plus the NEWEST mainline set's own boxes,
+  troves and packs as a search ("Find on Amazon") — a search can't promise stock, so it is
+  admitted only for what people shop before we have matched a listing. Cases, promo singles
+  and `[Set of N]` bundles never appear. Round-robin across product types, newest set first
+  within each, capped at 30.
+- **Every photo and price on it is TCGplayer's**, and the subtitle says so, with the ETL
+  date and the Associate disclosure. "Updated daily" needs no new pipeline:
+  `sealed_prices_latest` refreshes every ETL run and the row re-derives from it.
+- **Its anchors carry `draggable="false"`.** The row is drag-to-pan, and a native link or
+  image drag would hijack the gesture.
+- `MoversBanner` grew a `titleHint` prop: its title button had "Open Screener with this
+  filter" hardcoded, which this row's title (→ `/gear`) is not.
+
+### Out of stock → hidden, by a MANUAL daily check (migration 137)
+
+Until Creators API access, whether a shelf product is in stock is checked **by a person**,
+from an admin-only checklist at the top of `/gear` (`AmazonStockCheck`, gated on
+`GradedAdminContext`). Marking one **Out** writes `amazon_stock_checks` and hides it from
+the home row and from `/gear` for visitors; admins still see it dimmed so it can be
+marked back in.
+
+- **⚠ The flag decides which links we feature; it is never DISPLAYED.** No "in stock" badge,
+  no price. Amazon licenses stock and price only through its API; curating our own list
+  is not Program Content.
+- **⚠ Never automate it.** Reading Amazon pages on a schedule is the automated data
+  gathering Amazon's Conditions of Use prohibit, and it trips their bot checks. A person
+  opening forty listings is the design, not a stopgap to "improve".
+- **Keys are `amazonListingKey(url)`**: the ASIN, or `s:` + the search terms. Never the
+  tagged URL, or a tag change silently un-hides everything.
+- **The checklist's links are untagged** (`amazonCheckUrl`), so an admin checking forty
+  listings a day doesn't pollute the Associates click report.
+- **Hidden before the cap** — `amazonShelfItems(…, hidden)` filters, then round-robins, so
+  the next product takes a hidden one's slot. The checklist walks `amazonShelfPool`, every
+  candidate, not just the 30 on screen.
+- **Every failure reads as "nothing hidden"**, the pre-137 behaviour, and `amazonStockUnavailable`
+  lets the checklist say "apply migration 137" instead of throwing. Cached 10 min in
+  module scope (`_amazonStock`), refetched after each save.
+- Test it signed out: on localhost, `localStorage["packsink:gradedAdminPreview"] = "1"`
+  renders the admin checklist (writes still need a real admin session).
+
+### The home bar — removed (2026-09-10)
+
+`HomeGearBar`, the bottom-left "Sleeves, binders & deck boxes" pill, is gone at Zaven's
+request: component, CSS and render line together. Once the "Lorcana on Amazon" row and the
+Gear panel both existed it was a third Amazon prompt on one page. Don't re-add it; the
+row's title and the Gear panel's title both already lead to `/gear`. A leftover
+`packsink:gearBarDismissed` key in someone's browser is harmless.
+
+### Disclosure
+
+**"As an Amazon Associate I earn from qualifying purchases"** is a required string — verbatim,
+not copy to polish. The FTC wants it **near the links**, not only in a footer, so every
+Amazon-bearing surface carries its own:
+
+| Surface | Where the statement is |
+|---|---|
+| Footer (every SPA view) | `.footer-disclosure` |
+| `privacy.html` | affiliate bullet, third-party list, fineprint |
+| Help / How-it-works | its affiliate paragraph, which also states we show no Amazon data |
+| Sealed detail modal | `.sealed-detail-affiliate`, under the buy row |
+| Sealed collection tiles | `.sealed-coll-affiliate`, foot of the view |
+| EV tool (box-price column) | appended to the existing "Prices via TCGCSV" footer |
+| Gear home panel | `.home-gear-disclosure` |
+| `/gear` | `.gear-page-note`, above the list |
+| Card popup (Price changes) | `.cd-affiliate-note`, above the rows |
+| Graded collection tiles | `.sealed-coll-affiliate`, foot of the set list |
+| Home "Lorcana on Amazon" row | the row's subtitle |
+
+Every Amazon anchor is `rel="noopener nofollow sponsored"`.
+
+### The ASINs are unverified by CI, deliberately
+
+Every ASIN was read off a public listing; **nothing in CI can reach amazon.com**, and Amazon
+bot-challenges anything that looks automated. `node scripts/verify_amazon_asins.mjs` (run it
+from an ordinary machine) fetches each one and reports `OK` / `CHECK` / `BLOCKED` / `GONE`.
+A wrong ASIN is not dangerous — it lands on some other real Ravensburger product — but it
+costs the click, and nothing else in the codebase can tell. It is **not wired into CI**: a red
+job everyone learns to ignore is worse than a script you run when you touch the catalog.
+
+Guarded by `node scripts/test_amazon_links.mjs`.
+
+### Third-party accessories, and why they are SEARCHES (2026-09-10)
+
+The first cut of Gear was first-party Ravensburger only, on the reasoning that a fan
+site naming a brand of sleeve it has not tested is making a claim. Zaven asked for the
+third-party market too, which is right — the official line is four sleeve designs
+against a category people genuinely shop. The rule that replaced it is narrower and
+survives the same objection:
+
+**⚠ STATE THE SPEC, NEVER RANK.** Sizes, counts, finishes and capacities are facts.
+"Best", "recommended", or an ordering that implies one is a comparative claim about
+products nobody here has tested. Where a spec is a **requirement** it may be stated as
+one — PSA publishes the semi-rigid dimensions it wants, so repeating them is reporting.
+
+**The fact that makes the whole category possible: a Lorcana card is 63×88mm, the same
+as Magic and Pokémon.** There is no Lorcana-specific accessory constraint at all beyond
+licensed art, so the entire mainstream standard-size (66×91mm) market fits. That is the
+single most useful sentence on `/gear` and it leads the sleeves section.
+
+- **⚠ A third-party entry carries `q` (a tagged search), never `asin` — and that is the
+  RIGHT destination, not a fallback.** Two independent reasons, and the second is the
+  one that would still hold with perfect information:
+  1. Amazon is egress-blocked from **every** path available to an agent here — sandbox
+     curl *and* the fetch tool (re-confirmed 2026-09-10). An ASIN written from that seat
+     is unverifiable by construction, and a wrong one silently lands on somebody else's
+     product.
+  2. Sleeves, binders and toploaders are a **colour and size purchase**. A search for
+     "Dragon Shield Matte 100" lands on all forty colours, which is the page a buyer
+     wants; a single ASIN picks black for them. Searches commission identically.
+  Upgrade any of them with `node scripts/verify_amazon_asins.mjs` from an ordinary
+  machine — never from inside an agent session.
+- **`gearUrl(it)` / `gearKey(it)` are the one accessor**, so no render site has to know
+  which kind it is holding. An entry has exactly one of `asin` or `q`; **neither** is the
+  dangerous case, because `amazonUrl(undefined)` returns null and the row renders as a
+  dead `<a href>` that looks completely normal. The guard test asserts the xor.
+- **`home: true` marks the sections the home panel shows; `/gear` renders all of them.**
+  That split is what lets the catalogue grow (17 sections, 89 links) without the
+  right-rail panel becoming a shop — the panel is a teaser whose title already links to
+  `/gear`. The panel's disclosure line says "Official Ravensburger accessories", so
+  **marking a third-party section `home` would silently make that copy false**; the test
+  asserts every `home` section is all-ASIN.
+- **The "searches" tag sits on the SECTION, not the row.** Every section is wholly one
+  kind or the other, so a per-row tag on thirty rows is noise for a fact true of the
+  whole block. Same honesty as `exact` choosing "Amazon" vs "Find on Amazon".
+- **Grading supplies are the differentiated section**, because this site tracks graded
+  collections — some of its readers are about to send cards away, and PSA publishes an
+  exact packing list: a semi-rigid holder at **3 5/16″ × 4 7/8″** (Card Saver 1 is that
+  size), clear penny sleeves (opaque backs delay a submission), and **explicitly not
+  toploaders**, which graders cannot safely open. That is PSA's spec, not a preference.
+- `amazonSearchUrl(query, dept)` gained the department argument here; it defaults to
+  `toys-and-games` so every existing caller is unchanged.
+
+## /picks — the unlisted affiliate page (2026-09-10)
+
+`picks.html`, a **standalone page like `/swiss` and `/ticker`**, not an SPA view: it is a
+personal link page rather than part of the product, so it has no business inside
+Index.html, the nav, or the sitemap. Wired in `dev_server.py`, `build_dist.mjs` and
+`robots.txt`; **no worker route** — Workers Assets' pretty-URL handling serves it, the
+same fall-through `/ticker` relies on.
+
+- **⚠ "Unlisted" is THREE mechanisms and losing any one quietly puts it in Google**: a
+  `noindex,nofollow` meta, a `robots.txt` Disallow on both `/picks` and `/picks.html`,
+  and nothing linking to it. Two of the three are checkable and the test checks them.
+- **Undiscoverable is NOT access-controlled.** Anyone with the address can open it, so
+  nothing sensitive goes on it — and the page says so in its own footer, because a
+  reader who thinks it is private will treat the link as safer than it is. Same posture
+  as swiss.html.
+- **⚠ Every link is a tagged SEARCH, and for this page that is the whole design.** A
+  hand-picked list of "popular games" rots within weeks — the Switch 2's price moved
+  from $449 to $500 on 2026-09-01, ten days before this shipped — while a category
+  search always shows what is current, in stock and at today's price. It also sidesteps
+  the ASIN-verification problem entirely. The page says this out loud rather than
+  letting it read as missing product pages.
+- **⚠ `AMAZON_TAG` is DUPLICATED from Index.html** because a standalone page cannot
+  reach the app's module. A drifted or dropped tag produces links that work perfectly,
+  land on the right products and earn nothing, with no error anywhere — so
+  `scripts/test_picks_page.mjs` reads the tag out of **both** files and fails if they
+  disagree. Same guard shape as the Discord digest vs `priceStanding`.
+- **`i=` (search department) is per section** — `videogames` / `electronics` /
+  `toys-and-games`. A typo'd slug is the quiet failure: Amazon serves the page anyway,
+  filtered to a category the product isn't in, so the link looks fine and returns
+  nothing useful. The test pins the set of valid slugs.
+- **The disclosure matters MORE here, not less.** This page exists to be handed to
+  people, so the required verbatim string ("As an Amazon Associate I earn from
+  qualifying purchases") sits above the links in its own bordered block, and the test
+  asserts it byte-for-byte. Every anchor is `rel="noopener nofollow sponsored"`.
+- **⚠ Send the PAGE, never the product links.** Amazon's Operating Agreement bans
+  Special Links in printed material, ebooks and oral solicitation outright; since March
+  2024 email/DM/social sharing is allowed only into **solicited** communications the
+  recipient opted into and can opt out of. A page URL is unambiguously a website link
+  and carries the disclosure with it, which is exactly why this page is the compliant
+  shape for "something I can send to people". The **Copy this page's link** button
+  forces the canonical `https://packs.ink/picks` for that reason — opened from disk,
+  `location.href` is a `file:///` path useless to anybody else.
+  **⚠ Sources are secondary**: affiliate-program.amazon.com is egress-blocked here, so
+  this was assembled from search results quoting the licence. Confirm in Associates
+  Central before leaning on the March-2024 relaxation.
+- Content is ordered by who is most likely to have been handed the link, so cards lead.
+- **Cards, with photos where we have them (2026-09-10).** An item may carry `tcg` (a
+  TCGplayer product id) or `rav` (a Ravensburger SKU), and `photoUrl()` builds the image;
+  everything else — consoles, games, streaming gear — gets a drawn glyph from `ICONS`, tinted
+  by the section's `hue`. Never an Amazon image: the test checks every photo host.
+
+Guarded by `node scripts/test_picks_page.mjs`.
+
+### The grading queue is the one high-intent placement (2026-09-10)
+
+Everything else Amazon-shaped on the site sits where somebody might browse. The
+**grading queue** (`GradingQueueSection`) is different: a card with `status` other than
+`at_grader` is one the user has explicitly said they are about to pack and send. That is
+the highest-intent moment on the site for submission supplies, and PSA publishes an exact
+spec for them — so the note is **reporting a packing list, not recommending a brand**,
+which is what lets it exist under the state-the-spec-never-rank rule.
+
+- **⚠ It is gated on `toSubmit > 0`, and that gate is the whole difference between a fact
+  and an advert.** Once every card is AT the grader the packing question is answered, and
+  a shopping line there is just a promo box on somebody's collection page. Nothing errors
+  if the gate inverts or is dropped — it simply starts reading as an ad — so
+  `test_amazon_links.mjs` pins both the gate and that it is derived from the row's
+  `status`, never from the queue's length.
+- **The toploader warning is the reason it earns its place.** Reaching for a toploader is
+  the common mistake and graders cannot safely open one, which delays a submission; the
+  semi-rigid dimensions (3 5/16″ × 4 7/8″) are PSA's own.
+- Quiet by design — a hairline rule, not a filled card — and it carries its own Associate
+  disclosure, because the FTC wants that near the link rather than only in a footer.
+- The block is JSX inside a component rather than a pure function, so the guard is
+  source-text over the extracted component (bounded: ~4.4k chars, verified not to leak
+  into the next component, or the assertions would pass for the wrong reason).
+
+
+
+## Discord digest (`scripts/discord_digest.py`, 2026-09-10)
+
+A daily post to a Discord webhook. **It is not a movers list**, and the reason is the
+whole design: the restock services already own *"this is in stock at Walmart for $6.00"*.
+**They have gone WIDE, which is exactly why they cannot go deep — and that is the opening.**
+TrackaLacker (whose `@LorcanaRestocks` handle is legacy SEO real estate; the account now
+reads *"TCG Restocks — Magic, Lorcana, One Piece & More"*) tracks Pokémon, Magic, One Piece,
+Lorcana, sports cards, LEGO, PS5, Switch, Xbox and GPUs. A service that also watches
+graphics cards is never going to tell a Lorcana player whether $140 is a fair price for
+that Enchanted. **What none of them can say is whether $6.00 is a good price.** We hold
+daily prices back to 2024-02-08, so the digest leads with the judgement:
+
+- **"Worth a look"** — cards that FELL on the window **and** now sit at a multi-month low.
+  A faller merely off its high is noise; a faller at the bottom of its own year is the
+  opportunity, and it is the one line in the post nobody else in the space can write.
+- **"Heating up"** — the risers, each carrying a caution when it is near its 12-month high.
+
+**⚠ The standing maths MUST match the site.** `priceStanding` in Index.html renders the
+same claim next to a buy button, and two implementations of "is this a good price" that
+disagree destroys the only thing the claim has going for it. The `STANDING_*` constants in
+the script are the same numbers, and **`scripts/test_discord_digest.py` reads them back out
+of Index.html** and fails when they drift. Same guard shape as `buildCustomIndex` vs
+migration 130 — retuning means a deliberate edit in both places.
+
+- **It reads `market_price`, never `low_price`** (`PRICE_COL`/`PCT_PREFIX`). Low is a
+  published aggregate one listing can move, and a digest that calls a sticky Low a bargain
+  is exactly the false confidence this feature exists to avoid. `MIN_PRICE = 5.0` for the
+  same reason the ticker and Screener default there — a 10-cent common's +300% is not news.
+- **DRY RUN BY DEFAULT.** Posting is public and irreversible, so `--post` is the deliberate
+  act. Same asymmetry as `flag_intentional_draws.py`.
+- **No webhook configured is a clean exit 0**, not a red run — the workflow stays green on a
+  fork or before `DISCORD_WEBHOOK_URL` is set.
+- **⚠ The freshness gate is what makes duplicate posts impossible.** The ETL fires up to
+  three times a day (20:30 / 22:30 / 01:00 retries), so the script refuses to post unless
+  the newest `card_prices_latest.price_date` **is today**. A retry therefore cannot re-post
+  yesterday's digest, and a day the ETL never landed produces silence rather than a stale
+  digest presented as today's. That is also why it is **its own workflow on one cron**
+  (21:15 UTC, after the 20:30 ETL) rather than a job chained off `prices` — chaining would
+  fire it once per dispatch. `--allow-stale` overrides it for a manual test.
+- **The webhook URL is never logged.** It is a bearer credential in a URL: anyone holding it
+  can post to that channel as us.
+- Discord's embed limits are hard failures, not truncations — 1024 chars per field value,
+  25 fields, 6000 total. The test asserts all three against a synthetic worst case.
+
+Guarded by `python scripts/test_discord_digest.py` (35 checks), which the workflow runs
+BEFORE the digest for the same reason `catalog-watch.yml` tests its ack layer first: a
+drifted constant or a blown embed limit fails by posting something wrong, not by failing.
+
+
 ## Ops
 
 ### ETL reliability (post 2026-05-24 rework)
@@ -2064,6 +2562,46 @@ exactly), overridable with `--season-label`.
   for the current set still exits 0. If this bites again, the fix is a floor check in
   `refresh_elo.py` (current set has ≥1 event, or ≥1 new event in the last N days), not more
   discovery.
+
+### Set Championships are recognised by RPH's template, not only the title (2026-09-10)
+
+`is_sc()` needed the words "set championship" in the title, and stores don't always type
+them: "Lorcana Set Champs", "Attack of the Vine Store Championship", "Set Chamionship". RPH's
+official SC event template stamps **`phase_template_group` `f6a76808-…`** on every event made
+from it, whatever the title says, so `is_sc()` now accepts the title OR that group
+(`SC_PHASE_TEMPLATE_GROUPS` in `discover_wu_scs.py`), and side-event words veto both.
+
+- **Measured exhaustively, not sampled**: every event at all 103 tracked stores since
+  2025-08-01 (4,723). The group sat on 444 of 448 titled SCs and on 26 events that weren't
+  titled — **all 470 are real SCs**. The title test missed all 26: of the 6 played since
+  Winterspell, **5 never reached the board**, and 5 more (2026-09-12 to 09-20) were on track to
+  miss it.
+- **Widening the title test instead would not have worked.** "champ" also matches "Lorcana
+  League Play last week before Championships" and "League Season Finale - Single Elimination
+  Championship"; both carry a different template.
+- **Recognising them was half of it; FINDING them needed a second pull.** The name nets in
+  `discover_store_scs.py` are RPH's relevance search, which never returns a title that names no
+  set. `pull_store_scs()` reads each tracked store's own feed across the set's season
+  (`set_window()`: this booster set's release up to the next one's, from Supabase `sets`), and
+  `sc_set_for()` places a setless title by DATE — the rule the Stores tab already uses for every
+  event, and `discover_events.py` for an upcoming SC. Measured at ~25s a season for 103 stores;
+  it finds exactly the untitled SCs above (6 / 1 / 4 for AotV / Wilds Unknown / Winterspell).
+- **Knock-on effects, all intended**: `discover_events.py` now files these as `kind='sc'` and
+  mirrors them into `set_championships`, so they reach the Upcoming SCs tab, the roster scrape
+  and `sync_elo_tracked_stores`' 75-mile rule; `scrape_store_history.py` classifies history the
+  same way.
+- **The per-set config template UUID changes every rotation; this group has not moved since
+  Reign of Jafar.** If it ever does, `discover_events.py` prints a `::warning::` once fewer than
+  80% of ≥30 titled SCs carry it. An annotation, not a failure, because the title test keeps
+  working; `is_sc_by_name()` is the old test, kept for exactly that check.
+- **Older seasons are NOT backfilled by the weekly refresh**, which only asks about the current
+  set. With the canonical DB pulled locally,
+  `python scripts/elo/discover_store_scs.py --sets "Winterspell" "Wilds Unknown"` lists what they
+  missed (4 SCs at tracked stores as of 2026-09-10). Ingesting them re-rates history, so that is
+  a decision, not a chore.
+- Guarded by `python scripts/elo/test_sc_template.py` (the rule, the window, the store-feed
+  pull) and `test_season_seed.py` (a store-feed-only SC is ingested; an excluded store's feed is
+  never asked).
 
 ### Adding ONE event by hand (2026-09-08)
 
@@ -2255,12 +2793,19 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 
 - **Sources**: `lorcana_events_history` (every event a store has run) for the event count, and **`rph_event_attendance`** (migration 122, one row per person per event) for Tickets AND Fans.
 - **Tickets and Fans are both about PLAYERS, and both come from the roster.** RPH defines Event Tickets as "the total number of players across all events" and Unique Fans as "individuals that have played in at least 1 event". So the attendance rows are filtered server-side to people who actually sat down — a final standing, or any recorded match (`RPH_PLAYED_FILTER`, kept identical to `played()` in `scrape_event_attendance.py` and to `PLAYED` in `report_store_tiers.py`). Tickets is the row count; Fans is the distinct people. **`lorcana_events.registered_user_count` answers neither** and must not come back: it is pre-registration frozen at the last listing before the event ran, so it misses walk-ins (a store reading ~1 ticket per event is a walk-in scene, not an empty one) and counts no-shows. `elo_matches` is likewise gone from this tab — it only covers the SC-shaped Elo ingest, so most of a store's events contributed nobody.
-- **An unscraped event is reported, not zeroed.** `scanned` (from `rph_event_attendance_scans`) drives a per-row `unscanned` count rendered as a `†`; a silent zero reads exactly like a quiet week. Measured 2026-08-19: coverage is complete — 0 unscraped of 3,743 events in the four-set window.
+- **An unscraped event is reported, not zeroed.** `scanned` (from `rph_event_attendance_scans`) drives a per-row `unscanned` count rendered as a `†`; a silent zero reads exactly like a quiet week.
+- **⚠ History and attendance refresh on `discover_scs.yml`'s DAILY schedule — and until 2026-09-10 attendance was refreshed by nobody.** `scrape_event_attendance.py` was wired only to a manual dispatch; it ran around 2026-08-19 and never again, so by 2026-09-10 **212 of the 216 events played at tracked stores since then had no roster** (66 of 103 stores), each one an event nobody attended, on green runs. It surfaced as feedback from a store owner who had hosted several events and seen nothing move. The `†` didn't give it away, because the default window skips the running set (below), which is exactly where every one of those events sat. The schedule now runs two steps, last in the job: `scrape_store_history.py --since` 30 days, then `scrape_event_attendance.py --recheck-days 3`.
+  - **The top-up exists because the archive can't see everything.** `discover_events.py` only archives an event that was listed as upcoming during a daily scan, so one created the day it ran never reaches history — **44 at tracked stores since 2026-06-01**, including two of the reporting store's own nights. It also replaces the `display_status` the archive froze at `upcoming`. Re-classifying is safe: a replay over every tracked store since 2026-06-01 reproduced the stored `kind` on all 1,203 archived events.
+  - **`--recheck-days` exists because a scan row is what makes an event skip forever.** The job lands mid-afternoon Central, halfway through a Sunday SC; without a re-read, a roster caught mid-play or before results were entered stays frozen at that state. `scraped_at` is now stamped on every read, so `max(scraped_at)` shows at a glance that the job is alive.
+  - Guarded by `python scripts/elo/test_attendance_targets.py`, which also asserts the scrape sits on the SCHEDULE path — the one condition that was the whole bug.
+- **A cancelled event is not an event — unless it has results** (2026-09-10). RPH keeps cancelled events on a store's feed, and the history held **1,063 at tracked stores**, every one counted toward Events, while the 27 that had taken pre-registrations leaked **96 tickets** through the registrations fallback. `buildEloStoreActivity` now skips a `display_status` of canceled/cancelled unless the event has at least one played row: results prove it ran, whatever the label says (14 cancelled events had them). The fetch selects `display_status` for this, and the daily history top-up is what keeps that column honest — the archive freezes it at `upcoming`. `report_store_tiers.py` (`is_cancelled`) and `diagnose_store_fans.py` apply the same rule, so the offline numbers match the tab. `ELO_STORES_CACHE` went v6 → v7 with it.
+- **The Elo view's query params live in `ELO_URL_PARAMS` (`p`, `e`, `sub`, `store`)**, registered in App's `dirtyParams` and in `VIEW_OWNED` for both `market` and `elo`, and dropped by the Analytics `?a=` sync whenever the sub-tab isn't `elo`. Unregistered, they rode along onto every other page — the 2026-09-09 feedback arrived stamped `/how-it-works?sub=stores`.
+- **The update cadence is stated in two places**: How It Works ("How often does the data update?") and the Stores tab's `.elo-stores-fresh` line. Both describe `discover_scs.yml` (daily) and `elo_weekly_refresh.yml` (Mondays), so change them with the schedules.
 - **The played rule is PER EVENT, with a registrations fallback — and the site-wide average is what hid the need for it.** Where an event has any recorded result, only people with results count. Where it has none, every COMPLETE registration counts instead (`rphCompleteReg`, marked `~` in the UI). Seven Out Cards took **19 registrations across 5 events including a Set Championship and entered results for none**, so the strict rule scored the shop 0 tickets and 0 fans for a season it demonstrably ran; verified against RPH directly — all 5 rosters read HTTP 200 with registrations intact. **The aggregate says the rule is fine (93% of registrations carry a result, only 8% of events dark) and the aggregate is the wrong statistic**: this is a per-store metric and the failure is concentrated, not spread — nearly every store records results and the few that don't are zeroed outright. Don't re-tighten it on the strength of a site-wide percentage. The fallback does admit no-shows for those events; that is the lesser error, since a zero reads as "this shop is dead" next to a tier bar. The two passes MUST stay disjoint (guard on the played event-id set) or every player at a normal event doubles.
 - **`buildEloStoreActivity` keeps player ids PER SEASON, and never pre-counts them.** The set filter has to re-answer "how many distinct people" for any window, and that is a **union** (`eloStoreTotals`), never a sum — a regular who plays all four sets is one person. Pre-counting per store is what the first cut did and it makes the filter impossible. The tfoot shows `—` under Players for the same reason: distinct players can't be summed across stores either.
 - **Attendance rows carry no store or season of their own**, so a person only counts once their event survived the history pass (tracked store, not storeless). A guest plays without an account, so `rphPersonKey` falls back to the lowercased display name — without the case fold one regular becomes several.
 - **Season columns are derived, newest first** — ordered by each season's earliest event date, labelled with the set half of the season string (`"Wilds Unknown Summer 2026"` → `Wilds Unknown`) via longest-prefix match against `MAINLINE_SETS`. A new set adds a chip and a column pair on its own.
-- **Default scope is the `ELO_RECENT_SETS` (4) newest sets, totals only.** Persisted at `packsink:elo:stores:prefs` as `{mode, keys, breakdown}` — the **mode** is stored, not just the keys, so a saved "Last 4" still means last 4 after the next set releases. As in the home movers' chip groups, the last active set chip can't be switched off.
+- **Default scope is "Last 4 complete"** — the `ELO_RECENT_SETS` (4) newest FINISHED sets, skipping the set currently running (`scopeMode === "complete"`; "Incl. current" and "All" are the other chips). So **nothing a store does this season appears in the default view until the next set releases** — easy to read as "the data isn't updating", which is exactly how the 2026-09-10 feedback read. Persisted at `packsink:elo:stores:prefs` as `{mode, keys, breakdown, showBars, proBars}` — the **mode** is stored, not just the keys, so a saved "Last 4" still means last 4 after the next set releases. As in the home movers' chip groups, the last active set chip can't be switched off.
 - **Layout: totals come BEFORE the per-set detail.** They sit immediately right of the pinned store name so they never scroll off; expanding the breakdown appends detail to the right instead of shoving the numbers people came for off the edge. That was the first cut's bug.
 - **Wide tables get `.elo-stores-wrap--wide` (a `max-height`).** A table wider than the viewport puts its horizontal scrollbar at the bottom of a 30-row table, so reaching it means scrolling the whole page past the data — a mouse user simply cannot scroll sideways. Capping the height puts both scrollbars in one viewport-sized box. Same short-viewport escape as the Screener. Only fires past the default window; at 4 sets the table fits.
 - **The sticky store column must use `--bg-modal`.** `--bg-card` is translucent in the dark themes and `--btn-bg` is transparent in *every* theme, so either lets the scrolling season columns show straight through the pinned cell. Same rule as the Screener's sticky NAME column. The name clamp lives on an inner `.elo-stores-nametxt` block, not the `<td>` — `table-layout:auto` treats a cell `max-width` as a hint.
@@ -2288,7 +2833,8 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 - **RPH's own `event_type` cannot do this job** — it reads `LOCALS` for ~99% of events (1972 of the soonest 1991, measured 2026-07-30). Same for `gameplay_format`: an SC and a league night are both Core Constructed.
 - `set_name` stays **NULL for `kind='other'`** unless the title names a set. A Thursday league night belongs to no set and must not claim one.
 - **Past events are ARCHIVED, not deleted (migration 121).** `archive_past_events()` copies every already-happened row into `lorcana_events_history` before the sweep touches it, and **the sweep is skipped entirely unless that archive succeeded** — including when the table doesn't exist yet, in which case past rows just accumulate in `lorcana_events`. Delete-then-archive would strand them permanently: RPH's feed is `display_statuses=upcoming`, so nothing can re-pull an event that already happened. This is what makes "every event this store has run" answerable at all — **RPH store tiers score Total Events / Unique Fans / Event Tickets over the four most recent set seasons across EVERY event type**, and `elo_events` can't answer it (it's the curated, SC-shaped, hand-compiled Elo ingest, driven by `season_files/*.xlsx`, not by discovery). `registered_user_count` IS the Event Tickets metric — but it's frozen at the last pull that saw the event listed, i.e. roughly the day before, so treat it as a floor, not a final count. **It does not backfill** what earlier sweeps already deleted; recovering that depends on whether RPH will serve past events at all (`scripts/elo/probe_rph_history.py`, read-only, must run somewhere that can reach `api.ravensburgerplay.com`). `HISTORY_COLS` in the script and the column list in migration 121 are a straight copy — add to one without the other and the archive silently drops the column. Guarded by `python scripts/elo/test_events_archive.py` (stubbed HTTP, no network): ordering, the skip-on-failure modes, paging, and the column contract.
-- **Pruning (new).** Every upsert stamps `last_seen_at`; after the pull, upcoming rows this run didn't see are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
+- **Pruning.** Every upsert stamps `last_seen_at`; after the pull, upcoming rows RPH hasn't listed for `PRUNE_GRACE_HOURS` (36h) are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
+- **⚠ Even a COMPLETE pull misses live events, so one miss must never delete one** (2026-09-10). The scan pages by offset through ~21k rows that move while it reads; the three orderings and the name net narrow the gap but don't close it. That night's pull came back without 10 of the 508 upcoming events at tracked stores, and the old prune (delete whatever this run didn't see) had deleted Gemini Games' 9/20 Set Championship, so it never reached Upcoming SCs although RPH listed it. Two fixes, both in `discover_events.py`: the 36h grace (two daily misses in a row, with room for cron to run late), and **`add_tracked_store_feeds()`**, which folds each tracked store's own upcoming feed into the scan before anything is classified, upserted or pruned. It reads both store-filter spellings and re-checks `store.id`, through `scrape_store_history.fetch_store_feed`. The feeds are a supplement, never a gate: an unreadable store list or feed leaves the scan's rows as they were, with a `::warning::` once more than half the feeds fail. Guarded by `python scripts/elo/test_events_archive.py`.
 
 ## Swiss simulator (`/lab/swiss`) — unlisted, added 2026-08-20
 
@@ -2470,6 +3016,9 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
+- **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
+  check: anon-readable, graded-admin writes. Until it lands, `/gear`'s admin checklist says
+  "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
 - **`supabase/136_elo_player_rounds_intentional_draw.sql`** — STAGED, not applied. Appends
   `is_intentional_draw` to `elo_player_rounds_v` so the profile prints `ID` instead of `DRAW`.
   `create or replace view` (not drop+create — the view may have dependents, and replace allows a

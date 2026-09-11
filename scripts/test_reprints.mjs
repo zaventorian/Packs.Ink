@@ -26,7 +26,9 @@
 // cardPrintingsFor, reprintVerdict, MAINLINE_SETS, or SET_PARENT.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+// CRLF-normalised: a Windows checkout (core.autocrlf=true) ends lines "\r\n",
+// which the "\n"-based end markers below never match.
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 
 function grab(startMarker, endMarker) {
   const a = src.indexOf(startMarker);

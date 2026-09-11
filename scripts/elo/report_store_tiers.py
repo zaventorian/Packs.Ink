@@ -108,7 +108,7 @@ def fetch_events(since: str, until: str | None = None) -> list[dict]:
     out, offset = [], 0
     while True:
         page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,city,state,kind,"
-                    f"set_name,start_datetime"
+                    f"set_name,start_datetime,display_status"
                     f"&start_datetime=gte.{quote(since)}{end}"
                     f"&order=event_id.asc&limit=1000&offset={offset}")
         out.extend(page)
@@ -156,6 +156,13 @@ def complete_reg(a: dict) -> bool:
     return not st or st == "COMPLETE"
 
 
+def is_cancelled(e: dict) -> bool:
+    """Cancelled on RPH. Such an event still counts if anyone has a result —
+    results prove it ran — and otherwise is not an event at all, exactly as the
+    Stores tab's buildEloStoreActivity decides."""
+    return (e.get("display_status") or "").lower() in ("canceled", "cancelled")
+
+
 def fetch_attendance() -> tuple[list[dict], set[int], dict[int, tuple[int, int]]]:
     played = _page_all(f"rph_event_attendance?select=event_id,rph_user_id,best_identifier"
                        f"&{PLAYED}&order=event_id.asc,best_identifier.asc")
@@ -196,6 +203,9 @@ def main() -> None:
 
     evs = fetch_events(since, until)
     played, scanned, counts = fetch_attendance()
+    # Built before the event pass so a cancelled event with no results is dropped
+    # there, before it can add an event, a gap or a fallback ticket.
+    with_play = {a["event_id"] for a in played}
     tracked = None if args.all_stores else tracked_store_ids()
     if tracked is not None:
         print(f"Scoped to {len(tracked)} tracked stores (--all-stores for everything)\n")
@@ -206,6 +216,8 @@ def main() -> None:
         if sid is None:
             continue
         if tracked is not None and sid not in tracked:
+            continue
+        if is_cancelled(e) and e["event_id"] not in with_play:
             continue
         # Keyed on store_id: branches of a chain share a name and are separate
         # stores for tiering, so the location is part of the identity.
@@ -229,9 +241,7 @@ def main() -> None:
 
     # One pass for both metrics: each row is one person at one event, so it is a
     # ticket, and its person key joins the store's fan set.
-    with_play = set()
     for a in played:
-        with_play.add(a["event_id"])
         s = at_store.get(a["event_id"])
         if s is None:
             continue

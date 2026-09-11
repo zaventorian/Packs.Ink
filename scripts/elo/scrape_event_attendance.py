@@ -1,8 +1,9 @@
 """Scrape who actually PLAYED in each past event, for the tracked stores.
 
     python scripts/elo/scrape_event_attendance.py
-    python scripts/elo/scrape_event_attendance.py --limit 200      # a slice
-    python scripts/elo/scrape_event_attendance.py --refresh        # re-scrape
+    python scripts/elo/scrape_event_attendance.py --recheck-days 3   # the daily run
+    python scripts/elo/scrape_event_attendance.py --limit 200        # a slice
+    python scripts/elo/scrape_event_attendance.py --refresh          # re-scrape
     python scripts/elo/scrape_event_attendance.py --dry-run
 
 Fills public.rph_event_attendance from /api/v2/events/{id}/registrations/.
@@ -21,18 +22,24 @@ The registrations endpoint has both, per event, for past events (confirmed by
 probe_rph_history.py). Each row carries the user, their final standing and their
 match record — enough to tell a registrant from someone who actually sat down.
 
-Scope: events in lorcana_events_history belonging to elo_tracked_stores. ~4,200
-events at one request each; writes are batched FLUSH_EVERY events, so a first
-full run is bounded by the RPH fetches (~25-40 min). After that --limit / the
-scans table make it incremental, and an interrupted run resumes where it
-stopped rather than starting over.
+Scope: events in lorcana_events_history belonging to elo_tracked_stores. The
+first full run was ~4,200 events at one request each; writes are batched
+FLUSH_EVERY events, and the scans table makes every later run incremental, so an
+interrupted run resumes where it stopped rather than starting over.
+
+Cadence: discover_scs.yml runs this on its daily schedule with --recheck-days 3.
+It used to be reachable only from a manual dispatch; it ran around 2026-08-19 and
+never again, so by 2026-09-10, 212 of the 216 events played at tracked stores
+since then had no roster, and the Stores tab counted each one as an event nobody
+attended while every workflow stayed green.
 
 Idempotent: upserts on (event_id, best_identifier), and skips events already in
-rph_event_attendance_scans unless --refresh. An event that genuinely had nobody
-still gets a scan row, so "no attendance" and "never scraped" stay distinct.
+rph_event_attendance_scans unless --refresh, or they started inside
+--recheck-days. An event that genuinely had nobody still gets a scan row, so "no
+attendance" and "never scraped" stay distinct.
 """
 from __future__ import annotations
-import argparse, json, sys, time, urllib.request, urllib.error
+import argparse, datetime, json, sys, time, urllib.request, urllib.error
 from pathlib import Path
 from urllib.parse import urlencode, quote
 
@@ -103,11 +110,27 @@ def http_json(url: str, retries: int = 3):
     return None
 
 
-def target_events(refresh: bool, limit: int | None) -> list[dict]:
+def _started(iso: str | None) -> datetime.datetime | None:
+    try:
+        return datetime.datetime.fromisoformat(iso) if iso else None
+    except ValueError:
+        return None
+
+
+def target_events(refresh: bool, limit: int | None, recheck_days: int = 0,
+                  now: datetime.datetime | None = None) -> list[dict]:
     """Past events at tracked stores, oldest first so an interrupted run makes
-    monotonic progress rather than re-treading the newest slice."""
-    tracked = {r["store_id"] for r in _get("elo_tracked_stores?select=store_id")
-               if r.get("store_id") is not None}
+    monotonic progress rather than re-treading the newest slice.
+
+    An already-scanned event is queued again, flagged `_recheck`, when it started
+    inside the last `recheck_days`. The scan row is what makes an event skip
+    forever, so an event read while it was still being played — the daily job
+    lands mid-afternoon Central, halfway through a Sunday SC — or before the store
+    entered its results would otherwise keep that half-finished roster for good."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    recheck_from = now - datetime.timedelta(days=recheck_days) if recheck_days > 0 else None
+    tracked = sorted({r["store_id"] for r in _get("elo_tracked_stores?select=store_id")
+                      if r.get("store_id") is not None})
     done: set[int] = set()
     if not refresh:
         off = 0
@@ -118,16 +141,27 @@ def target_events(refresh: bool, limit: int | None) -> list[dict]:
             if len(page) < 1000:
                 break
             off += 1000
-    out, off = [], 0
-    while True:
-        page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,start_datetime"
-                    f"&order=start_datetime.asc&limit=1000&offset={off}")
-        for r in page:
-            if r.get("store_id") in tracked and r["event_id"] not in done:
-                out.append(r)
-        if len(page) < 1000:
-            break
-        off += 1000
+    out = []
+    # Filtered on the SERVER: the archive holds every store the global upcoming
+    # feed ever listed and grows every day, and this now runs every day. Only
+    # events that have started — a row archived and then pushed back isn't
+    # attendance yet.
+    for i in range(0, len(tracked), 150):
+        ids = ",".join(str(s) for s in tracked[i:i + 150])
+        off = 0
+        while True:
+            page = _get(f"lorcana_events_history?select=event_id,store_id,store_name,start_datetime"
+                        f"&store_id=in.({ids})&start_datetime=lt.{quote(now.isoformat())}"
+                        f"&order=start_datetime.asc,event_id.asc&limit=1000&offset={off}")
+            for r in page:
+                if r["event_id"] not in done:
+                    out.append(r)
+                elif recheck_from and (_started(r.get("start_datetime")) or now) >= recheck_from:
+                    out.append(dict(r, _recheck=True))
+            if len(page) < 1000:
+                break
+            off += 1000
+    out.sort(key=lambda r: (r.get("start_datetime") or "", r["event_id"]))
     return out[:limit] if limit else out
 
 
@@ -186,13 +220,18 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=None, help="only this many events this run")
     ap.add_argument("--refresh", action="store_true", help="re-scrape events already done")
+    ap.add_argument("--recheck-days", type=int, default=0,
+                    help="also re-scrape events that started within this many days, even "
+                         "if already scanned (the daily job uses 3)")
     ap.add_argument("--dry-run", action="store_true", help="scrape but don't write")
     args = ap.parse_args()
     if not (SUPABASE_URL and SERVICE_KEY):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY not set")
 
-    events = target_events(args.refresh, args.limit)
+    events = target_events(args.refresh, args.limit, args.recheck_days)
+    rechecks = sum(1 for e in events if e.get("_recheck"))
     print(f"{len(events)} past event(s) to scrape"
+          + (f", {rechecks} of them re-reads from the last {args.recheck_days} days" if rechecks else "")
           + (" (--refresh: including already-scraped)" if args.refresh else "") + "\n")
     if not events:
         print("  nothing to do — every tracked past event is already scraped")
@@ -226,7 +265,10 @@ def main() -> None:
         n_played = sum(1 for r in rows if played(r))
         total_rows += len(rows); total_played += n_played
         pend_rows.extend(rows)
-        pend_scans.append({"event_id": eid, "player_count": n_played, "row_count": len(rows)})
+        # Stamped on every read, so a re-read moves it: max(scraped_at) is how to
+        # tell at a glance that this is still running.
+        pend_scans.append({"event_id": eid, "player_count": n_played, "row_count": len(rows),
+                           "scraped_at": datetime.datetime.now(datetime.timezone.utc).isoformat()})
         # Batched because two writes per event made the upserts, not the RPH
         # fetch, the long pole — a full run was overrunning the job timeout. A
         # flush costs at most FLUSH_EVERY events of rework if the run dies.
