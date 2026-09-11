@@ -34,11 +34,14 @@ public.lorcana_events_history before the sweep removes them from the live feed,
 so "every event this store has run" stays answerable (RPH store tiers score
 Total Events / Unique Fans / Event Tickets across ALL event types). After a pull
 that passes a completeness guard, upcoming rows that
-this run did NOT see are deleted: RPH events get cancelled and locals churn far
+RPH has stopped listing are deleted: RPH events get cancelled and locals churn far
 more than SCs did, so "never prune" would leave dead weeklies on the map forever.
 Long-past rows are swept too so the table stays bounded. The guard refuses to
 prune off a pull that looks partial (network flake, API hiccup) — a bad pull can
 skip rows, and silently deleting live events is worse than keeping a stale one.
+Even a complete pull misses the odd live event, so a row is only pruned once RPH
+has gone PRUNE_GRACE_HOURS without listing it, and every tracked store's own
+upcoming feed is folded in before any of it (add_tracked_store_feeds).
 
 Usage:
     python discover_events.py                  # the daily job
@@ -49,6 +52,7 @@ Usage:
 from __future__ import annotations
 import argparse, datetime, json, sys, time, urllib.request, urllib.error
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import quote
 
@@ -73,6 +77,7 @@ from discover_prereleases import (
     classify as classify_prerelease,
     derive_prerelease_templates, fetch_launch_sets,
 )
+from scrape_store_history import tracked_store_ids, fetch_store_feed
 
 # A pull is trusted enough to prune from only if it found at least this many
 # events AND at least this fraction of the upcoming rows already on file. Both
@@ -84,6 +89,14 @@ MIN_PULL_RATIO = 0.7
 # Past events are invisible to the site (it only queries start_datetime >= today)
 # but would grow the table without bound, so sweep them after a grace period.
 KEEP_PAST_DAYS = 30
+
+# An upcoming row is pruned once RPH has gone this long without listing it, never
+# on the first scan that misses it. The scan pages by offset through ~21k rows that
+# move while it reads, so even a complete pull comes back without the odd live
+# event: on 2026-09-10 it lacked 10 of the 508 upcoming at tracked stores, and the
+# prune deleted a Set Championship among them that RPH still listed. The job runs
+# daily, so 36h takes two misses in a row, with room for cron to run late.
+PRUNE_GRACE_HOURS = 36
 
 
 def _sb_headers(extra: dict | None = None) -> dict:
@@ -242,9 +255,59 @@ def archive_past_events() -> bool:
     return True
 
 
+def fetch_tracked_upcoming(store_ids, workers: int = 8) -> tuple[dict[int, dict], list[int]]:
+    """Every upcoming event in each tracked store's own RPH feed, by id, plus the
+    stores whose feed couldn't be read. One failing store never sinks the rest."""
+    def one(sid: int):
+        try:
+            return sid, fetch_store_feed(sid, "upcoming")
+        except Exception as e:
+            print(f"  ! store {sid}: upcoming feed unreadable ({e})")
+            return sid, None
+
+    found: dict[int, dict] = {}
+    failed: list[int] = []
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        for sid, evs in ex.map(one, sorted(store_ids)):
+            if evs is None:
+                failed.append(sid)
+            else:
+                found.update((ev["id"], ev) for ev in evs)
+    return found, failed
+
+
+def add_tracked_store_feeds(raw: list[dict]) -> list[dict]:
+    """Fold each tracked store's own upcoming feed into the index scan.
+
+    The scan misses the odd live event (see PRUNE_GRACE_HOURS). A store's feed is
+    a page or two and doesn't drift, and these are the stores the Elo board, the
+    Upcoming SCs tab and the Stores tab are about, so their events shouldn't rest
+    on the scan's luck. A supplement, never a gate: if the store list or a feed
+    can't be read, the scan's own rows still go through."""
+    if not (SUPABASE_URL and SERVICE_KEY):
+        print("  (no Supabase credentials: tracked-store feeds skipped)")
+        return raw
+    try:
+        stores = tracked_store_ids()
+    except Exception as e:
+        print(f"  ! couldn't read elo_tracked_stores ({e}): tracked-store feeds skipped")
+        return raw
+    feeds, failed = fetch_tracked_upcoming(stores)
+    seen = {ev["id"] for ev in raw}
+    missed = [ev for eid, ev in feeds.items() if eid not in seen]
+    print(f"  tracked-store feeds: {len(feeds)} upcoming at {len(stores)} stores, "
+          f"{len(missed)} of them missing from the index scan")
+    if stores and len(failed) * 2 > len(stores):
+        print(f"::warning::{len(failed)} of {len(stores)} tracked-store feeds couldn't be read, "
+              f"so events at those stores rest on the index scan alone today.")
+    return raw + missed
+
+
 def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> None:
-    """Delete upcoming rows this run didn't see (cancelled/removed on RPH) plus
-    long-past rows. Guarded: a partial pull must never mass-delete live events."""
+    """Delete upcoming rows RPH has stopped listing (cancelled/removed) plus
+    long-past rows. Guarded twice: a partial pull must never mass-delete live
+    events, and a row has to go unseen for PRUNE_GRACE_HOURS, so one scan's miss
+    can't delete it."""
     if pulled < MIN_PULL_ABSOLUTE:
         print(f"  ! prune SKIPPED — pull of {pulled} is below the {MIN_PULL_ABSOLUTE} floor")
         return
@@ -254,9 +317,11 @@ def prune(run_start_iso: str, pulled: int, before_upcoming: int) -> None:
         return
 
     now = datetime.datetime.now(datetime.timezone.utc)
-    gone = _delete(f"last_seen_at=lt.{quote(run_start_iso)}"
+    unseen_since = (datetime.datetime.fromisoformat(run_start_iso)
+                    - datetime.timedelta(hours=PRUNE_GRACE_HOURS)).isoformat()
+    gone = _delete(f"last_seen_at=lt.{quote(unseen_since)}"
                    f"&start_datetime=gte.{quote(now.isoformat())}")
-    print(f"  pruned {gone} upcoming events no longer listed on RPH")
+    print(f"  pruned {gone} upcoming events RPH hasn't listed for {PRUNE_GRACE_HOURS}h")
 
     # Archive first. The sweep is the only thing that deletes history, so it
     # must not run unless the rows are safely copied.
@@ -293,6 +358,7 @@ def main() -> None:
     # The relevance net is folded in for SC recall parity with the old job (see
     # the `name=` warning in discover_wu_scs) — it is a supplement, never the gate.
     raw = fetch_all(name_net="Set Championship")
+    raw = add_tracked_store_feeds(raw)
     # is_sc() also trusts RPH's SC template, whose id is hardcoded. If RPH ever
     # rotates it, titled SCs stop carrying it and the untitled ones ("Set Champs",
     # "Store Championship") silently go back to being locals — so say so. An
