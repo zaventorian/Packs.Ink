@@ -99,14 +99,15 @@ def tracked_store_ids() -> list[int]:
     return [r["store_id"] for r in rows if r.get("store_id") is not None]
 
 
-def fetch_store_past(store_id: int, since: str | None) -> list[dict]:
-    """Every past event for one store, unioned across both store-filter
-    spellings and then verified locally against store.id."""
+def fetch_store_feed(store_id: int, status: str = "past", since: str | None = None) -> list[dict]:
+    """Every event in one store's `status` feed ("past" or "upcoming"), unioned
+    across both store-filter spellings and then verified locally against
+    store.id. discover_events.py reads each tracked store's upcoming feed with it."""
     found: dict[int, dict] = {}
     for param in STORE_PARAMS:
         page = 1
         while True:
-            params = {"game_slug": "disney-lorcana", "display_statuses": "past",
+            params = {"game_slug": "disney-lorcana", "display_statuses": status,
                       param: store_id, "page_size": PAGE_SIZE,
                       "ordering": "id", "page": page}
             if since:
@@ -186,7 +187,7 @@ def main() -> None:
     all_rows: list[dict] = []
     kinds = {"sc": 0, "prerelease": 0, "other": 0}
     for n, sid in enumerate(stores, 1):
-        evs = fetch_store_past(sid, args.since)
+        evs = fetch_store_feed(sid, "past", args.since)
         name = ((evs[0].get("store") or {}).get("name") if evs else None) or f"store {sid}"
         templates = derive_prerelease_templates(evs)
         for ev in evs:
