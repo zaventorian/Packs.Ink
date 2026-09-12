@@ -424,7 +424,7 @@ the Graded collection in Index.html), with three views: **Pin board · Counter b
   and the viewer compare counts, where pins used to inflate "Units owned".
 - **Sharing rides the SEALED visibility axis**, because the data behind the tab lives there: the
   tab appears in viewer mode exactly when sealed is visible (`effectiveSection`).
-- **Only the arrangement is new — migration 139 (STAGED):** `collectible_boards(user_id, board,
+- **Only the arrangement is new — `139_collectible_boards`:** `collectible_boards(user_id, board,
   layout jsonb)`, one document per board, owner-only RLS, and `get_shared_collectible_boards` for
   viewers under the same rule as `get_shared_collection_sealed`. **Safe to ship first**: until it
   lands, boards save to `localStorage["packsink:collectibleBoards:<uid8>"]` and the tab says
@@ -1508,7 +1508,7 @@ Public deck access paths (no auth needed):
 - `externalDeck` flow — set via `openExternalDeckEntry()` when a Discover card is clicked. The SECURITY DEFINER RPCs `get_shared_deck(uuid, text)` / `get_shared_deck_cards(uuid, text)` handle the fetch without auth.
 - Incoming URL deep-links (`?deck=<id>` or `?deck=<id>&token=<x>`) hit the same fetch path BEFORE the gate logic — already designed for logged-out shared-link visitors.
 
-## Deck version history (migration 125 — STAGED)
+## Deck version history (migration 125)
 
 **A version is one EDITING SESSION, not one keystroke.** The editor already snapshots the deck when you enter edit mode (`editSnapshot`, which powers "Undo changes"); leaving edit mode writes that pre-edit state as the next version — but only if `deckCardsSignature` says something actually changed. Snapshot per card-tap and you get four hundred rows nobody can read as history.
 
@@ -3262,7 +3262,7 @@ Both tab strips — `.elo-innertabs` and Analytics' `.market-subtabs` — are **
 - **The pro-rated lens scores ONE season, not the selection.** The memo's 8/8/80 is 1/6 of Legendary over a two-month window — one set season's worth of activity, not four — so applying it to a four-set window cleared it for everybody. `eloProSeasonKey` picks the most recent *completed* set (seasons are newest-first; index 0 is the set still running) and the lens overrides the set chips while it's on, so the numbers shown and the verdict come from the same window.
 - **Guarded by `node scripts/test_elo_store_activity.mjs`**, which extracts `buildEloStoreActivity` + `eloStoreTotals` out of Index.html so they can't drift. Run it after touching the pivot or the rollup.
 
-## Scouting is a TEAM tool now (migration 143 — STAGED, 2026-09-12)
+## Scouting is a TEAM tool now (migration 143, 2026-09-12)
 
 "Who is in this room, what are they playing, and what did they play last time?" Two open
 text fields — **deck** and **notes** — per PLAYER per EVENT, shared across the scouting team,
@@ -3344,7 +3344,7 @@ Guarded by `node scripts/test_scout.mjs`.
   that would have made the event visible. Its gate widens to `can_view_store_report() OR
   can_scout()`; the body is otherwise 89's, unchanged.
 
-### The slate keeps an event for 24 HOURS past its start (migration 147 — STAGED)
+### The slate keeps an event for 24 HOURS past its start (migration 147)
 
 143 scoped `get_roster_scout` to `start_datetime >= now()`, so an event left the Scout tab at
 the exact moment it became the one you were standing in. Reported from the floor 2026-09-12:
@@ -3380,7 +3380,7 @@ write it up, and is the same grace whatever time the event started.
 - **Upcoming SCs, the calendar and the "Near me" finder are untouched.** A list called
   *Upcoming* holding a finished event is a different claim, and nobody asked for it.
 
-### Scouting an event outside the bubble (migration 148 — STAGED, 2026-09-12)
+### Scouting an event outside the bubble (migration 148, 2026-09-12)
 
 Zaven: *"some team members might be outside the bubble a little … if a scouting user pins an
 SC or clicks on one, give them the option to add roster for that and scout and have those
@@ -3743,9 +3743,18 @@ Guarded by `node scripts/test_calendar.mjs` (194 checks).
   script, no cookie, nobody profiling a reader for looking at where a tournament
   is. `osmTileLayout` is Web-Mercator and returns the covering tiles plus the pin;
   **x WRAPS at the antimeridian** (a box straddling it must fetch from the other
-  edge of the world) and y is clamped. It cost one `img-src` entry in BOTH copies
-  of the CSP in `_headers`, a line in `privacy.html`, and the attribution OSM's
-  tile policy requires — that credit is not decoration, don't remove it.
+  edge of the world) and y is clamped. It cost a line in `privacy.html`, the
+  attribution OSM's tile policy requires — that credit is not decoration, don't
+  remove it — and **`tile.openstreetmap.org` in BOTH `img-src` AND `connect-src`,
+  in both copies of the CSP in `_headers`**. It shipped with the img-src half
+  only, which reads as working: a first load has no service worker, so the map
+  renders, and `_headers` does not apply on the dev server either. On every
+  RELOAD the SW re-fetches the tile through `fetch()` — that is **`connect-src`,
+  not `img-src`** — the block makes `fetch` reject, sw.js's image branch
+  `.catch(() => cached)` hands `respondWith` an `undefined` for a tile it has
+  never cached, and the map goes blank. The rule is general (every cross-origin
+  img/font/style host needs the connect-src half, because the SW re-fetches all
+  of them); guarded by `node scripts/test_csp_headers.mjs`.
   Curated rows carry **city-level** coordinates (a DLC is announced months before
   a venue exists); store events carry the venue's own, from `lorcana_events`.
 - **A set event lists what comes out that day**, matched on sealed-product NAME
@@ -3839,7 +3848,7 @@ photo, and that a curated override still wins.
   a name both survive (or two years of the same annual "Gift Set" collapse into
   one). The derived list is a fallback for what the table has not been told yet,
   not a peer of it.
-- `supabase/146_hyperia_city_dates.sql` (STAGED) only rewrites 141's note on the
+- `supabase/146_hyperia_city_dates.sql` only rewrites 141's note on the
   prerelease row, which now says the LGS and retail dates are unpublished. The
   dates themselves stay in `SET_RELEASE_DATES` — putting them in the table too
   would fork one fact into two stores.
@@ -4174,30 +4183,27 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
-- **`supabase/148_scout_any_event.sql`** — STAGED, not applied. Lets a scout add ANY
+- ~~`supabase/148_scout_any_event.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Lets a scout add ANY
   event to scouting by hand: `scout_events` (the opt-in ledger), a widened
   `scout_event_meta`, `scout_event_add` / `scout_event_remove`, and the slate + sheet
   carrying the `Added` mark. The automatic tracked-store scope is untouched. See
   "Scouting an event outside the bubble". **It is a SUPERSET of 144 and 147 for the
   scouting functions**, so `144 → 147 → 148` in ascending order is right and pasting
-  **148 alone** is also right. The one mistake is running an EARLIER file AFTER it —
-  that costs the hand-added events on the tab (147) or the "added by" line (144), never
-  the gate, which is verified. **Safe to ship the client first**: without it
-  `scout_event_add` answers PGRST202 and the Add button says scouting isn't switched on,
-  which is today's behaviour.
-- **`supabase/147_scout_window_24h.sql`** — STAGED, not applied. The Scout tab's
+  **148 alone** is also right. ⚠ **If any of these is ever re-run, never run an EARLIER
+  scouting file AFTER it** — that costs the hand-added events on the tab (147) or the
+  "added by" line (144), never the gate, which is verified. That is the repo's standing
+  re-running-an-old-migration hazard, and it applies after the fact as much as before.
+- ~~`supabase/147_scout_window_24h.sql`~~ — **APPLIED 2026-09-12 by Zaven.** The Scout tab's
   slate keeps an event for **24 hours past its start** instead of dropping it the
   minute the doors open: `get_roster_scout`'s window goes from
   `start_datetime >= now()` to `>= now() - interval '24 hours'`. Reported from the
   floor — three 3:00 PM SCs were on the tab at 2:59 and gone at 3:00, which is the
   exact moment a scouting sheet starts being useful. **Only that predicate
   changes**; the body is 143's verbatim, and the test asserts it. Independent of
-  144_scout_off_roster.sql (which never touches this function), so either may land
-  first — but **148 contains this change, so never run 147 AFTER 148** (it would
-  drop the hand-added events from the slate). **Safe to ship the client first** —
-  until it runs, the "Started" chip simply never has anything to mark, which is
-  today's behaviour.
-- **`supabase/144_scout_off_roster.sql`** — STAGED, not applied. Fixes a SILENT
+  144_scout_off_roster.sql (which never touches this function). **148 contains this
+  change, so never re-run 147 AFTER 148** — it would drop the hand-added events from
+  the slate.
+- ~~`supabase/144_scout_off_roster.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Fixed a SILENT
   data-hiding bug in 143 found on review: the panel listed only the roster, and
   the roster scrape is delete-then-insert, so a note about a player who dropped
   their registration stopped rendering on its own event while staying in the
@@ -4205,11 +4211,8 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   the roster with this event's notes (`off_roster` marks which), which also
   enables **Add player** for someone RPH never recorded. Plus
   `scout_member_delete(uuid)` so the admin panel's Remove works on a row added by
-  user_id. **Safe to ship the client first** — without it an off-roster note is
-  simply not listed (143's behaviour), and Add player says so rather than
-  failing. `create or replace` only; no DDL a human has to review. **148 contains
-  this file's `get_scout_event` and `scout_member_delete`, so never run 144 AFTER
-  148** — it would drop the "added by" line from the sheet header.
+  user_id. **148 contains this file's `get_scout_event` and `scout_member_delete`, so
+  never re-run 144 AFTER 148** — it would drop the "added by" line from the sheet header.
 - ~~`supabase/143_scout_team.sql`~~ — **APPLIED 2026-09-12 by Zaven; verified via
   anon REST probes**: all ten functions answer `42501 permission denied` rather
   than `PGRST202`, and `scout_notes` / `scout_members` are unreachable directly.
@@ -4219,27 +4222,26 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   (LEFT JOIN + the scout gate), and the `elo_event_roster` FK drop. See "Scouting
   is a TEAM tool now". **Still outstanding: redeploy `refresh-elo-rosters`**, or
   the per-event roster refresh falls back to refreshing every tracked SC.
-- **`supabase/139_calendar_events.sql`** — STAGED, not applied. The curated
-  calendar (sets / products / DLCs / CCQs) + the two championship rows already
-  committed in `EVENT_TILES`. Safe to ship the client first: every read failure
-  reads as "no curated events", and the page still renders its derived set
-  releases and your followed stores. Until it lands, `/calendar` shows an
-  admin-only banner naming the file, and `scan_ccq_candidates.py` exits saying so.
-- **`supabase/144_calendar_hide.sql`** — STAGED, not applied. Widens
-  `calendar_subscriptions.kind` to allow `'hide'`. Safe to ship the client
-  first: hiding falls back to per-device until it lands.
+- ~~`supabase/139_calendar_events.sql`~~ — **APPLIED 2026-09-12 by Zaven** (this entry
+  said STAGED until 2026-09-12 while 142's own note already recorded an anon read of
+  `calendar_events` returning 34 rows — the ledger contradicted itself for a day). The
+  curated calendar (sets / products / DLCs / CCQs) + the two championship rows already
+  committed in `EVENT_TILES`.
+- ~~`supabase/144_calendar_hide.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Widens
+  `calendar_subscriptions.kind` to allow `'hide'`, so a hide follows you between
+  devices instead of staying on one.
   **⚠ Its NUMBER collides** with a concurrent session's
   `144_scout_off_roster.sql` (and `143_calendar_geo.sql` with `143_scout_team.sql`).
   Numbering is first-come across sessions and nothing enforces it, so say the
   FULL FILENAME when asking for one of these to be run.
-- **`supabase/146_hyperia_city_dates.sql`** — STAGED, not applied. One UPDATE, correcting 141's
+- ~~`supabase/146_hyperia_city_dates.sql`~~ — **APPLIED 2026-09-12 by Zaven.** One UPDATE, correcting 141's
   note on the Hyperia City prerelease row, which says its LGS and retail dates are unpublished —
   they now are, and the calendar shows them two lines below it. Seeds no dates (they live in
-  `SET_RELEASE_DATES`); safe before or after the client ships, and a no-op where 141 never landed.
-- **`supabase/145_calendar_image.sql`** — STAGED, not applied. One nullable
-  `calendar_events.image_url`, the per-event art override. Safe to ship the
-  client first: `CAL_COL_LADDER` drops the column on 42703 and every event falls
-  back to its automatic match or its glyph. Its header carries the two rules that
+  `SET_RELEASE_DATES`); a no-op where 141 never landed.
+- ~~`supabase/145_calendar_image.sql`~~ — **APPLIED 2026-09-12 by Zaven.** One nullable
+  `calendar_events.image_url`, the per-event art override. `CAL_COL_LADDER` still drops
+  the column on 42703, so a database without it falls back to the automatic match or the
+  glyph. Its header carries the two rules that
   are easy to get wrong later — don't store a Disney/Ravensburger mark in it, and
   the host must be in the CSP `img-src` in BOTH copies in `_headers`.
 - **`supabase/142_calendar_geo_and_read_fix.sql`** — **HALF-APPLIED.** Its policy
@@ -4276,11 +4278,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
-- **`supabase/139_collectible_boards.sql`** — STAGED, not applied. Where pins and lore counters
+- ~~`supabase/139_collectible_boards.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Where pins and lore counters
   sit on the Pins & Counters boards: `collectible_boards` (owner-only RLS, grants in the same
   file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
   lands, boards save on the device and the tab says so. See "Pins & Counters".
-- **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
+- ~~`supabase/137_amazon_stock_checks.sql`~~ — **APPLIED 2026-09-12 by Zaven.** The manual Amazon stock
   **and price** check: anon-readable, graded-admin writes. **Extended in place 2026-09-12**
   with `msrp` + `price_over` (the 20%-above-MSRP ceiling) rather than followed by a new
   migration — the whole file is idempotent (`create table if not exists`, `add column if not
@@ -4294,7 +4296,7 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   and anon is refused both admin functions with `42501`. Feedback replies and follow-ups:
   `feedback_messages`, the unread columns on `feedback`, and nine functions (see "Feedback
   replies").
-- **`supabase/136_elo_player_rounds_intentional_draw.sql`** — STAGED, not applied. Appends
+- ~~`supabase/136_elo_player_rounds_intentional_draw.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Appends
   `is_intentional_draw` to `elo_player_rounds_v` so the profile prints `ID` instead of `DRAW`.
   `create or replace view` (not drop+create — the view may have dependents, and replace allows a
   column appended at the END); the body is migration 62's verbatim plus one trailing column per
@@ -4302,7 +4304,7 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   the column on 42703.
 - ~~`supabase/135_elo_intentional_draws.sql`~~ — **APPLIED 2026-09-08 by Zaven; verified** (`information_schema.columns` shows `is_intentional_draw` boolean default false on `elo_matches`). Adds the column the site needs to SAY a draw was agreed. **Live since the 2026-09-08 refresh** — `refresh_elo.py` flags before `elo.py` on every run, and the first `position-only` pass flagged **1167 of 2548** draws (784 ID-strong, 383 ID-likely).
 - ~~`supabase/132_scan_samples_public_beta.sql`, `133_anon_write_backstop.sql`, `134_public_release_hardening.sql`~~ — **APPLIED 2026-09-05 by Zaven**, the diagnostics file first and then the three in order (the agent had no DB access that day, so the diagnostics output was not reviewed; the migrations were staged by the 2026-09-04 public-release audit). 132 = scan-photo upload gate + per-user storage cap (see the scanner section). 133 = the anonymous-write rate limits (`create_trade`, `submit_feedback`) keyed on the FIRST hop of `X-Forwarded-For`, which the caller controls — 133 prefers `cf-connecting-ip` (falls back to today's behaviour if absent) and adds a global hourly backstop; its header says how to confirm which header carries the real client IP. 134 = grant/RLS hygiene (revoke EXECUTE from PUBLIC on ~16 functions, drop `notes` from the shared-collection RPCs, narrow the anon `profiles` column grant, `avatar_url` CHECK, `report_graded_sale` caps, search_path pin, backup-table drop). `supabase/diagnostics/public_release_live_checks.sql` is the read-only companion: paste it FIRST — it answers what the repo cannot (live `scan_samples` policies, the two live-only Elo RPC bodies, PUBLIC-executable functions, which header carries the client IP).
-- **`supabase/131_market_index_timeout_pin.sql`** — STAGED, not applied. **This is what makes step 2 possible at all**, so apply it BEFORE trying the populate. 130 pinned the refresh's `statement_timeout` with an in-body `set local`, which cannot work: `statement_timeout` is armed when the outer `select refresh_market_index()` begins, and changing the GUC part-way through does not re-arm the running timer — so the refresh died at the role default (measured: 8s → 57014, reproducibly, every attempt). Every refresh function that WORKS pins it as a **function-level `SET` clause** instead (migration 25, restored by 109). Proof it is the placement and nothing else: `refresh_price_movers` carries the identical `begin … exception … end` sub-block, pins at the function level, and completed a **38-second** refresh over the same PostgREST path with the same key. **Read the migration-109 lesson as "pin it as a function-level SET clause", not merely "pin it".** 131 also swaps the exception-driven CONCURRENTLY probe for an explicit `relispopulated` check, since on a WITH-NO-DATA matview the first CONCURRENTLY attempt is guaranteed to raise and the happy path was an error path. **Two steps**: paste 131, then run `select public.refresh_market_index();` separately (first run is non-concurrent and slow). After that the ETL selfheal job keeps it current — the "Refresh market index" step is `continue-on-error` on purpose, per the rule that this one refresh must stay optional.
+- ~~`supabase/131_market_index_timeout_pin.sql`~~ — **APPLIED 2026-09-12 by Zaven, with step 2** (`select public.refresh_market_index();`) reported run in the same sitting. Not probed from the agent sandbox, which has no egress to Supabase — **the visible confirmation is the Screener's vs Mkt column and Price Graphing's benchmark picker carrying data**; if either is still blank, step 2 did not take and it is safe to re-issue on its own. **It is what makes step 2 possible at all**, so it had to land BEFORE the populate. 130 pinned the refresh's `statement_timeout` with an in-body `set local`, which cannot work: `statement_timeout` is armed when the outer `select refresh_market_index()` begins, and changing the GUC part-way through does not re-arm the running timer — so the refresh died at the role default (measured: 8s → 57014, reproducibly, every attempt). Every refresh function that WORKS pins it as a **function-level `SET` clause** instead (migration 25, restored by 109). Proof it is the placement and nothing else: `refresh_price_movers` carries the identical `begin … exception … end` sub-block, pins at the function level, and completed a **38-second** refresh over the same PostgREST path with the same key. **Read the migration-109 lesson as "pin it as a function-level SET clause", not merely "pin it".** 131 also swaps the exception-driven CONCURRENTLY probe for an explicit `relispopulated` check, since on a WITH-NO-DATA matview the first CONCURRENTLY attempt is guaranteed to raise and the happy path was an error path. **Two steps**: paste 131, then run `select public.refresh_market_index();` separately (first run is non-concurrent and slow). After that the ETL selfheal job keeps it current — the "Refresh market index" step is `continue-on-error` on purpose, per the rule that this one refresh must stay optional.
 - ~~`supabase/112_drop_legacy_graded_feed.sql`~~ — **APPLIED 2026-08-22 by Zaven; verified via REST probe** (`graded_prices_daily` / `graded_prices_latest` both 404; `graded_sales_rollup` + `card_prices_latest` healthy). The 70,990-row archive remains at `Desktop/graded_prices_daily_archive_20260729.jsonl` (18.9 MB).
 - ~~`supabase/123_drop_prerelease_events.sql`~~ — **APPLIED 2026-08-22 by Zaven; verified via REST probe** (404). Its precondition (retiring `discover_prereleases.py`'s `main()` upsert; the script is analysis-only now, `discover_events.py` owns the daily write) shipped the same day in `536c639`.
 - **`supabase/119_feedback_service_role_read.sql`** — APPLIED 2026-08-10. `service_role` can now read + update `feedback`, so the queue is reachable from a script instead of only the in-app admin inbox.
