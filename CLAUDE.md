@@ -3192,6 +3192,66 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   and seeded by 141. **Its LGS and retail dates are published nowhere** — type them
   in when they are, never infer them.
 
+### Region, the map, and what a set release is called
+
+- **Region filter** (`?cr=`, `packsink:cal:region`) groups countries rather than
+  listing them: the competitive calendar is 17 Challenges across four continents
+  and a 30-entry country picker is a worse version of the same question.
+  **⚠ An ungeocoded row falls into "Elsewhere", never out of the list** — dropping
+  unknowns would make a row we simply have not placed yet invisible everywhere.
+  Counts are computed BEFORE the region filter, or every option reads (0) once
+  you have narrowed by one.
+- **⚠ A set event is named by BOTH halves — "Hyperia City Prerelease".**
+  `calEventTitle` is the one accessor and it feeds list, grid, modal, `.ics` and
+  the Google handoff. Two opposite failures both shipped: the title alone gives a
+  month two identical "Attack of the Vine!" chips a week apart, and the phase
+  alone gives a cell reading "Prerelease", which says something is happening
+  without saying what. `title`/`subtitle` stay separate in the DATA because they
+  are the merge key against `SET_RELEASE_DATES`; this is display only, and
+  `calEventSubtitle` returns null for set rows so the phase is not printed twice.
+- **The mini map is OpenStreetMap tiles as plain `<img>`** — no library, no
+  script, no cookie, nobody profiling a reader for looking at where a tournament
+  is. `osmTileLayout` is Web-Mercator and returns the covering tiles plus the pin;
+  **x WRAPS at the antimeridian** (a box straddling it must fetch from the other
+  edge of the world) and y is clamped. It cost one `img-src` entry in BOTH copies
+  of the CSP in `_headers`, a line in `privacy.html`, and the attribution OSM's
+  tile policy requires — that credit is not decoration, don't remove it.
+  Curated rows carry **city-level** coordinates (a DLC is announced months before
+  a venue exists); store events carry the venue's own, from `lorcana_events`.
+- **A set event lists what comes out that day**, matched on sealed-product NAME
+  and not `set_id`: an unreleased set has no row in `sets` yet — Hyperia City had
+  none while its six products were already listed — so the id join would find
+  nothing exactly when this is most interesting. Cases are filtered out; they are
+  a distributor SKU, not a thing a player walks out with.
+- **A prerelease offers "Find a prerelease near you"**, which drops you on the
+  home event finder already in that mode. **⚠ The mode travels in localStorage,
+  not a `?scmode=` link**: `SC_DEEP_SEED` is captured once at MODULE LOAD, so a
+  client-side navigation would never see the param, whereas `UpcomingSCsBox` reads
+  localStorage in its `useState` initialiser and leaving /calendar unmounts
+  HomeView, so returning mounts it fresh.
+
+### Keeping it current
+
+- **`scripts/watch_calendar_sources.py`** is the calendar's catalog-watch: a daily
+  sweep (in `catalog-watch.yml`, `if: always()`) that is red ONLY when an event
+  has been announced that the calendar does not have. Two sources, because
+  neither sees everything — the community season page (the only place a whole
+  season is listed at once) and RPH itself for qualifier-shaped store titles.
+  Rulings live in `scripts/calendar_watch.json`; an ack may carry `until` so it
+  expires and re-alerts. **It never writes to the calendar** — publishing stays a
+  person's decision, the same rule as `confirmed`.
+- **⚠ `lorcana.fandom.com` 403s a page fetch but `api.php` answers 200.** Read it
+  as `api.php?action=parse&page=<Page>&prop=wikitext&format=json`.
+- **⚠ Do NOT send a custom User-Agent to Supabase.** `Mozilla/5.0 (packs.ink
+  calendar watch)` returns **401 Unauthorized with a perfectly valid service
+  key** — the edge in front of PostgREST rejects the agent string before the key
+  is checked. Isolated by sending one request four ways: bare 200, +Accept 200,
+  +that UA 401. The watcher therefore gives the wiki its UA and Supabase none.
+- **User-facing copy never names where a listing was compiled from.** Readers want
+  to know whether a date is firm, not who typed it up; `notes` is displayed in the
+  modal, so it says "Announced for the 2026-27 season. Confirm … with the
+  organiser" instead.
+
 ### On the home page
 
 - **Default position is the TOP of the LEFT rail, above the news feed** (Zaven,
@@ -3405,13 +3465,22 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   reads as "no curated events", and the page still renders its derived set
   releases and your followed stores. Until it lands, `/calendar` shows an
   admin-only banner naming the file, and `scan_ccq_candidates.py` exits saying so.
-- **`supabase/141_calendar_season_2026_27.sql`** — STAGED, not applied. Seeds the
-  Season of Villainy (14 CCQs + 17 DLCs from the Fandom wiki, plus Hyperia City's
-  prerelease weekend from our own feed). Apply it AFTER 139. Ids are
-  `uuid5(6b3e1d2a-…, '<kind>:<title>')` so a re-run updates in place, and the
+- **`supabase/142_calendar_geo_and_read_fix.sql`** — STAGED, not applied. **Apply
+  this one.** 139's SELECT policy reads `to anon, authenticated using (confirmed
+  or is_graded_admin())`, but migration 134 revoked EXECUTE on that function from
+  anon — so an anonymous read does not get `false`, it RAISES **42501 "permission
+  denied for function is_graded_admin"**, and the whole curated calendar is
+  invisible to everyone who is not signed in. Confirmed against the live database.
+  142 splits it into two policies so anon never touches the function, and adds
+  latitude/longitude/country for the map and the region filter.
+- ~~`supabase/139` / `140` / `141`~~ — **APPLIED 2026-09-12 by Zaven.**
+  141 seeded the Season of Villainy (14 CCQs + 17 DLCs, plus Hyperia City's
+  prerelease weekend from our own feed). Its ids are
+  `uuid5(6b3e1d2a-…, '<kind>:<title>')` so a re-run updates in place, and its
   conflict clause deliberately does not touch `url`, `event_id` or `confirmed` —
-  a re-seed must never undo what a person or the linker added on top.
-- **`supabase/140_calendar_subscriptions.sql`** — STAGED, not applied. The
+  a re-seed must never undo what a person or the linker added on top. 142's
+  provenance rewrite depends on 141 having run, so keep the order.
+- ~~`supabase/140_calendar_subscriptions.sql`~~ — APPLIED 2026-09-12. The
   per-user layer (followed stores, pinned series, saved events) + a
   `(store_id, start_datetime)` index on `lorcana_events`, which is the query the
   feature is built on and the one 113 does not have. Also safe to ship first:

@@ -40,11 +40,22 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const CALENDAR_KIND_LONG = {", NL + "};"),
   grabLine("const SET_RELEASE_LABELS = "),
   grabLine("const SET_RELEASE_PHASES = "),
+  grab("const calEventTitle = (ev) => !ev ? \"\"", ": (ev.title || \"\");"),
+  grabLine("const calEventSubtitle = "),
+  grab("const CALENDAR_REGIONS = [", NL + "];"),
+  grab("const _CAL_REGION_BY_CC = (() => {", NL + "})();"),
+  grabLine("const calRegionOf = "),
+  grabLine("const calMatchesRegion = "),
+  grabLine("const OSM_TILE_PX = "),
+  grab("const osmTileLayout = (lat, lng, zoom, w, h) => {", NL + "};"),
+  grabLine("const osmTileUrl = "),
+  grabLine("const osmViewUrl = "),
   grab("const calendarSetEntries = (releaseDates) => {", NL + "};"),
   grabLine("const _calSetKey = "),
   grab("const calendarMergeEvents = (derived, rows) => {", NL + "};"),
   grabLine("const _calKindRank = "),
   grab("const calendarSort = (events) =>", "|| String(a.title || \"\").localeCompare(String(b.title || \"\")));"),
+  grab("const calendarCombine = (curated, store) => {", NL + "};"),
   grab("const calendarStoreEntry = (ev, extra) => {", NL + "};"),
   grabLine("const CAL_MAX_SPAN_DAYS = "),
   grab("const calendarEventDays = (ev) => {", NL + "};"),
@@ -64,14 +75,16 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const googleCalUrl = (ev) => {", NL + "};"),
   "export {calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
-  " googleCalUrl, calCountdown, calChipLabel,",
+  " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,",
+  " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
 ].join(NL)));
 
 const {
   calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
-  googleCalUrl, calCountdown, calChipLabel,
+  googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,
+  calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
 } = mod;
 
@@ -263,14 +276,107 @@ ok("the day after a multi-day event ends, it is past",
   cd({starts_on: "2026-09-08", ends_on: "2026-09-11"}));
 ok("an undated event has no countdown", cd({title: "x"}) === "");
 
-// A month cell labels a set release by PHASE — two chips reading "Attack of the
-// Vine!" a week apart distinguish nothing.
-ok("a set chip is labelled by its phase",
-  calChipLabel({kind: "set", title: "Attack of the Vine!", subtitle: "LGS release"}) === "LGS release");
-ok("a non-set chip keeps its name",
-  calChipLabel({kind: "dlc", title: "NA Championship", subtitle: "Disney Lorcana Challenge"}) === "NA Championship");
+// ── A set event is named by BOTH halves ─────────────────────────────────────
+// Two failures, opposite directions, both shipped. The title alone gives a month
+// two identical "Attack of the Vine!" chips a week apart. The phase alone gives
+// a cell reading "Prerelease", which says something is happening without saying
+// what. Only the pair identifies it.
+ok("a set event is named set + phase",
+  calEventTitle({kind: "set", title: "Hyperia City", subtitle: "Prerelease"}) === "Hyperia City Prerelease",
+  calEventTitle({kind: "set", title: "Hyperia City", subtitle: "Prerelease"}));
+ok("a month chip uses that same name",
+  calChipLabel({kind: "set", title: "Attack of the Vine!", subtitle: "LGS release"}) === "Attack of the Vine! LGS release");
+ok("a non-set event keeps its own name",
+  calEventTitle({kind: "dlc", title: "DLC London", subtitle: "Disney Lorcana Challenge"}) === "DLC London");
 ok("a set with no phase falls back to its name",
-  calChipLabel({kind: "set", title: "Some Set"}) === "Some Set");
+  calEventTitle({kind: "set", title: "Some Set"}) === "Some Set");
+// The phase is folded into the title, so repeating it in the meta line would
+// print it twice in the same row.
+ok("a set event reports no separate subtitle",
+  calEventSubtitle({kind: "set", title: "Hyperia City", subtitle: "Prerelease"}) === null);
+ok("a DLC still reports its subtitle",
+  calEventSubtitle({kind: "dlc", title: "DLC London", subtitle: "Disney Lorcana Challenge"})
+    === "Disney Lorcana Challenge");
+
+// ── Regions ─────────────────────────────────────────────────────────────────
+ok("US is North America", calRegionOf("US") === "na");
+ok("lowercase still resolves", calRegionOf("gb") === "eu");
+ok("Japan and Australia share Asia-Pacific",
+  calRegionOf("JP") === "apac" && calRegionOf("AU") === "apac");
+ok("Brazil is Latin America", calRegionOf("BR") === "latam");
+// ⚠ An ungeocoded row must stay REACHABLE. Dropping unknowns would make a row
+// we simply have not placed yet invisible under every region, including "all".
+ok("an unknown country falls into Elsewhere", calRegionOf("ZZ") === "other");
+ok("a missing country falls into Elsewhere", calRegionOf(null) === "other");
+ok("no country appears in two regions", (() => {
+  const seen = new Set();
+  for (const r of CALENDAR_REGIONS) for (const c of r.cc) { if (seen.has(c)) return false; seen.add(c); }
+  return true;
+})());
+ok("'all' matches everything", calMatchesRegion({country: "JP"}, "all")
+  && calMatchesRegion({country: null}, "all"));
+ok("a region filter excludes other regions", !calMatchesRegion({country: "JP"}, "na"));
+ok("a region filter keeps its own", calMatchesRegion({country: "CA"}, "na"));
+
+// ── The mini map ────────────────────────────────────────────────────────────
+// Web-Mercator, checked against the known tile for a known place: Greenwich at
+// zoom 1 sits at the seam between the four world tiles.
+const gm = osmTileLayout(0, 0, 1, 256, 256);
+ok("zoom 1 at the origin spans the four world tiles", gm.tiles.length === 4, gm.tiles.length);
+ok("the pin is the centre of the box", gm.pinLeft === 128 && gm.pinTop === 128);
+const ldn = osmTileLayout(51.5074, -0.1278, 12, 400, 150);
+ok("London at z12 lands on the documented tile",
+  ldn.tiles.some(t => t.x === 2047 && t.y === 1362),
+  ldn.tiles.map(t => `${t.x}/${t.y}`).join(" "));
+ok("the tile box is covered with no gaps", (() => {
+  const xs = new Set(ldn.tiles.map(t => t.x)), ys = new Set(ldn.tiles.map(t => t.y));
+  return ldn.tiles.length === xs.size * ys.size;
+})());
+ok("every tile overlaps the viewport", ldn.tiles.every(t =>
+  t.left > -256 && t.left < 400 && t.top > -256 && t.top < 150));
+// ⚠ x WRAPS at the antimeridian — a box straddling it must fetch from the other
+// edge of the world, not from a tile index that does not exist.
+const fiji = osmTileLayout(-17.7, 179.98, 8, 400, 150);
+ok("tile x wraps at the antimeridian instead of overflowing",
+  fiji.tiles.every(t => t.x >= 0 && t.x < 256), fiji.tiles.map(t => t.x).join(","));
+ok("tile y is never outside the world",
+  osmTileLayout(85, 0, 3, 400, 400).tiles.every(t => t.y >= 0 && t.y < 8));
+ok("a null position yields no map", osmTileLayout(null, null, 11, 400, 150) === null);
+ok("NaN coordinates yield no map", osmTileLayout(NaN, 12, 11, 400, 150) === null);
+ok("tile urls point at openstreetmap over https",
+  osmTileUrl(ldn.tiles[0]).startsWith("https://tile.openstreetmap.org/"),
+  osmTileUrl(ldn.tiles[0]));
+
+// ── One event, one row ──────────────────────────────────────────────────────
+// A curated CCQ the linker matched to its Ravensburger Play listing carries that
+// listing's event_id. Follow the shop running it and the same tournament arrives
+// twice — once as a CCQ, once as a store event. Seven curated rows already carry
+// an event_id, so this is not hypothetical.
+{
+  const curated = [
+    {id: "c1", kind: "ccq", title: "Brainwash Cards 2K", starts_on: "2026-09-19", event_id: 853992},
+    {id: "c2", kind: "dlc", title: "DLC London", starts_on: "2026-11-13"},
+  ];
+  const store = [
+    {id: "ev:853992", kind: "store", title: "Lorcana X Brainwash Cards 2K CCQ",
+     starts_on: "2026-09-19", event_id: 853992},
+    {id: "ev:999", kind: "store", title: "GNG Weekly", starts_on: "2026-09-16", event_id: 999},
+  ];
+  const merged = calendarCombine(curated, store);
+  ok("a matched listing is not shown twice", merged.length === 3, merged.length);
+  ok("the CURATED row is the one kept — it has the checked name and the venue",
+    merged.some(e => e.id === "c1") && !merged.some(e => e.id === "ev:853992"));
+  ok("an unmatched store event still shows", merged.some(e => e.id === "ev:999"));
+  ok("the result is sorted", merged.every((e, i) => i === 0 || merged[i - 1].starts_on <= e.starts_on));
+  // A string id vs a numeric one must still count as the same event.
+  ok("event ids compare across string and number",
+    calendarCombine([{id: "c", kind: "ccq", title: "x", starts_on: "2026-09-19", event_id: "853992"}],
+                    [{id: "s", kind: "store", title: "y", starts_on: "2026-09-19", event_id: 853992}]).length === 1);
+  ok("a curated row with no event_id claims nothing",
+    calendarCombine([{id: "c", kind: "dlc", title: "x", starts_on: "2026-09-19"}],
+                    [{id: "s", kind: "store", title: "y", starts_on: "2026-09-19", event_id: 7}]).length === 2);
+  ok("combine tolerates nulls", calendarCombine(null, null).length === 0);
+}
 
 // ── Store entries ───────────────────────────────────────────────────────────
 const storeEv = calendarStoreEntry({
@@ -321,8 +427,12 @@ ok("a timed event is stamped, not all-day",
   ics.includes("DTSTART:20260919T150000Z"), (ics.match(/DTSTART:\S+/) || [])[0]);
 ok("a timed event with no end gets a 2h default",
   ics.includes("DTEND:20260919T170000Z"), (ics.match(/DTEND:\d\S+/) || [])[0]);
-ok("the summary joins title and subtitle",
-  ics.includes("SUMMARY:Winterspell — LGS release"));
+ok("the summary uses the display name",
+  ics.includes("SUMMARY:Winterspell LGS release"),
+  ics.split(String.fromCharCode(13,10)).find(l => l.startsWith("SUMMARY:Winterspell")));
+ok("a DLC summary keeps both halves",
+  ics.includes("SUMMARY:NA Championship — Disney Lorcana Challenge"),
+  ics.split(String.fromCharCode(13,10)).find(l => l.startsWith("SUMMARY:NA")));
 ok("a location is carried", ics.includes("LOCATION:Disneyland Hotel"));
 ok("a url is carried", ics.includes("URL:https://example.test/na"));
 ok("an undated row is skipped rather than emitting a broken VEVENT",
