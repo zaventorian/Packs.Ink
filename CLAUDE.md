@@ -3501,14 +3501,25 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   reads as "no curated events", and the page still renders its derived set
   releases and your followed stores. Until it lands, `/calendar` shows an
   admin-only banner naming the file, and `scan_ccq_candidates.py` exits saying so.
-- **`supabase/142_calendar_geo_and_read_fix.sql`** — STAGED, not applied. **Apply
-  this one.** 139's SELECT policy reads `to anon, authenticated using (confirmed
-  or is_graded_admin())`, but migration 134 revoked EXECUTE on that function from
-  anon — so an anonymous read does not get `false`, it RAISES **42501 "permission
-  denied for function is_graded_admin"**, and the whole curated calendar is
-  invisible to everyone who is not signed in. Confirmed against the live database.
-  142 splits it into two policies so anon never touches the function, and adds
-  latitude/longitude/country for the map and the region filter.
+- **`supabase/142_calendar_geo_and_read_fix.sql`** — **HALF-APPLIED.** Its policy
+  fix IS live (2026-09-12, verified: an anon read of `calendar_events` returns 34
+  rows where it used to raise 42501). Its `alter table` half never ran — selecting
+  `country` still gives 42703 — and two attempts at the whole file failed with no
+  error reaching me. **Don't re-run 142; run 143.**
+  The bug it fixed is worth keeping written down: 139's SELECT policy read `to
+  anon, authenticated using (confirmed or is_graded_admin())`, but migration 134
+  revoked EXECUTE on that function from anon — so an anonymous read did not get
+  `false`, it RAISED 42501 and the whole curated calendar was invisible to
+  everyone not signed in. Every other policy in the repo that calls that function
+  is scoped `to authenticated`; that one wasn't.
+- **`supabase/143_calendar_geo.sql`** — STAGED, not applied. The half of 142 that
+  didn't run, on its own: latitude/longitude/country, the city-level coordinates
+  for 33 curated rows (all 33 ids verified against live rows), and the provenance
+  rewrite. **Deliberately pure ASCII with a short header** — 142 carries box-
+  drawing characters and a long comment block, and this rules out an encoding or
+  partial-paste failure as the cause. Until it runs, the region picker files
+  everything under "Elsewhere" and curated events show no map; the client is
+  schema-tolerant and retries the select without those columns, so nothing breaks.
 - ~~`supabase/139` / `140` / `141`~~ — **APPLIED 2026-09-12 by Zaven.**
   141 seeded the Season of Villainy (14 CCQs + 17 DLCs, plus Hyperia City's
   prerelease weekend from our own feed). Its ids are
