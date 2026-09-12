@@ -3030,9 +3030,9 @@ a dispatch input on the existing workflow rather than a script you run on its ow
     rule 4 tracks an in-region history store even with no upcoming SC, so filling the store name
     (below) is exactly what would have enrolled the shop a day later, via the daily
     `discover_scs.yml`, with nothing in the Elo refresh to show for it.
-- **It is NOT `EXCLUDED_STORE_IDS`.** That one drops a store's events entirely (paired with
-  `is_ignored=1`); here the event fully counts — matches, ratings, the player's rating —
-  and only the STORE is out of scope. Different question, different list.
+- **It is NOT `EXCLUDED_STORE_IDS`** (its neighbour in `elo_scope.py`, see below). That one
+  drops a store's events entirely; here the event fully counts — matches, ratings, the
+  player's rating — and only the STORE is out of scope. Different question, different list.
 - **The one-off is ingested AFTER discovery, BEFORE the rename/alias passes**: after, so
   the current set's season label already exists to inherit; before, so a player appearing
   for the first time is merged like any other.
@@ -3046,6 +3046,49 @@ a dispatch input on the existing workflow rather than a script you run on its ow
   track its store locally, must not reach the Upcoming-SCs allowlist name set or the
   store_id-resolution samples, an ordinary event must still do all three, and the one-off
   must stay in the DB.
+
+### Taking a store OUT of scope (2026-09-12)
+
+`EXCLUDED_STORE_IDS` is the other half of `elo_scope.py`: this shop is not Chicagoland,
+past and future, whatever the rules infer. Today it holds the two central-Indiana stores
+(Good Games - Indianapolis, Storming Good Games — both ~165 mi out).
+
+**⚠ Both of these were true at once, and a store excluded months earlier was still on the
+Scout tab** (reported 2026-09-12, and either one alone is enough to reproduce it):
+
+1. **The list reached one consumer.** It lived inside `discover_store_scs.py`, which gates
+   the Elo **ingest**. `sync_elo_tracked_stores` writes `elo_tracked_stores` — the table
+   that gates the Upcoming SCs tab, the **Scout tab**, whether a scouting sheet opens at
+   all, the roster scrape and the Stores tab's history — and had never heard of it. Exactly
+   the split `elo_scope.py` was created to prevent for `ONE_OFF_EVENT_IDS`, which is why
+   both rulings live there now and both scripts import them.
+2. **The sync could only ADD.** Its write is an upsert with no delete anywhere, so a store
+   that qualified once stayed tracked forever and no rule change could ever take a row back
+   out. `prune_excluded()` is that delete.
+
+- **⚠ Only the explicit list is deleted — drift is REPORTED.** Pass 2 resolves store_ids
+  over the live RPH API, so a 404 or a timeout makes a perfectly good store look unmatched
+  for one run; deleting on that evidence would drop a real shop off four surfaces, silently,
+  on a green run. A tracked store no rule matched is printed with the line that names
+  `EXCLUDED_STORE_IDS` as the way to remove it, and left alone.
+- **The exclusion beats every rule, not just the one that tracked the store.** Pass 1's gate
+  is an OR (history / geo / curated), so the skip sits above all three, and pass 2 re-checks
+  after RPH resolves the id — the history-with-no-upcoming-SC shape is how Indianapolis got
+  there originally.
+- **`--dry-run` must be dry on BOTH writes.** A flag that still deletes is a lie in the one
+  direction that loses data.
+- `service_role` already has DELETE on the table (migration 69) — no migration needed.
+- A store is out of scope the moment it is in the list, but the row only leaves on the next
+  `sync_elo_tracked_stores` run — the daily `discover_scs.yml`, or run it by hand.
+- **Scouting notes already written are NOT lost.** Losing the row makes `scout_event_meta`
+  report `tracked: false`, so the sheet stops opening — but `scout_notes` carries its own
+  denormalised event label and `get_scout_player` reads that table and nothing else, so the
+  player's history still shows what the team logged there. Same property that lets a note
+  outlive its event being pruned from the upcoming feed.
+- Guarded by `python scripts/elo/test_excluded_stores.py`: that one object is shared by both
+  importers (identity, not equality — a local copy holding the same ids today is how they
+  drifted and it compares equal), that neither pass tracks an excluded store, that an
+  existing row is deleted, and that an unmatched one is not.
 
 ## Intentional draws — flat, not skipped (2026-09-08)
 
