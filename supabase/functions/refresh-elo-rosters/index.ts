@@ -13,7 +13,19 @@
 //          with the caller's Authorization: Bearer <user jwt> header.
 //
 // Auth model: the caller's JWT must pass can_view_store_report() (admins +
-// elo_report_viewers). All DB writes use the service-role key (server-only).
+// elo_report_viewers) OR can_scout() (the scouting team, migration 143). All DB
+// writes use the service-role key (server-only).
+//
+// Two shapes:
+//   {}                  → every tracked upcoming Set Championship. Slow (one
+//                         paginated HTTP round trip per event), so the client
+//                         keeps this behind an admin button.
+//   {"event_id": 12345} → that ONE event, which is what a scout member hits from
+//                         the panel they have open. It may be ANY event at a
+//                         tracked store — a league night, not just an SC — so it
+//                         resolves through scout_event_meta rather than the
+//                         SC-only elo_upcoming_scs view, and refuses anything at
+//                         a store the Elo board does not track.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
@@ -110,14 +122,29 @@ Deno.serve(async (req: Request) => {
   const SERVICE_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const ANON_KEY = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
 
+  // One event, or all of them. An unparseable body is the same as {} — the
+  // client may legitimately post nothing.
+  let onlyEventId: number | null = null;
+  try {
+    const body = await req.json();
+    const raw = body?.event_id;
+    if (raw != null && Number.isFinite(Number(raw))) onlyEventId = Number(raw);
+  } catch { /* no body */ }
+
   // (a) Verify the caller with THEIR jwt: a client carrying the request's
-  // Authorization header, then can_view_store_report() (admins + viewers).
+  // Authorization header. Either credential passes — the store-report allowlist
+  // or the scouting team. can_scout() does not exist before migration 143, so a
+  // failure there must not sink the request when the other gate opens it.
   const authHeader = req.headers.get("Authorization") ?? "";
   const userClient = createClient(SUPABASE_URL, ANON_KEY, {
     global: { headers: { Authorization: authHeader } },
   });
-  const { data: allowed, error: authErr } = await userClient.rpc("can_view_store_report");
-  if (authErr || allowed !== true) {
+  const gate = async (fn: string) => {
+    try { const { data } = await userClient.rpc(fn); return data === true; }
+    catch { return false; }
+  };
+  const [report, scout] = await Promise.all([gate("can_view_store_report"), gate("can_scout")]);
+  if (!report && !scout) {
     return new Response(JSON.stringify({ ok: false, error: "not authorized" }), {
       status: 403,
       headers: { ...cors, "Content-Type": "application/json" },
@@ -127,27 +154,61 @@ Deno.serve(async (req: Request) => {
   // (b) Service-role client for all reads/writes (bypasses RLS, server-only).
   const db = createClient(SUPABASE_URL, SERVICE_KEY);
 
-  // Tracked upcoming SCs (elo_upcoming_scs = set_championships ⋈ tracked stores),
-  // today or later.
-  const today = new Date().toISOString().slice(0, 10);
-  const { data: events, error: evErr } = await db
-    .from("elo_upcoming_scs")
-    .select("event_id,name,capacity,registered_user_count,start_datetime")
-    .gte("start_datetime", today)
-    .order("start_datetime", { ascending: true });
+  let events: Array<Record<string, unknown>> = [];
 
-  if (evErr) {
-    return new Response(JSON.stringify({ ok: false, error: evErr.message }), {
-      status: 500,
-      headers: { ...cors, "Content-Type": "application/json" },
-    });
+  if (onlyEventId != null) {
+    // scout_event_meta resolves the id across lorcana_events / its archive /
+    // set_championships and reports whether the store is tracked. That `tracked`
+    // flag is the scope check — without it a caller could point this at any shop
+    // in the country by pasting an id.
+    const { data: metaRow, error: mErr } = await db
+      .rpc("scout_event_meta", { p_event_id: onlyEventId })
+      .maybeSingle();
+    const meta = metaRow as
+      | { event_id: number; name: string | null; capacity: number | null; tracked: boolean }
+      | null;
+    if (mErr) {
+      return new Response(JSON.stringify({ ok: false, error: mErr.message }), {
+        status: 500, headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+    if (!meta) {
+      return new Response(JSON.stringify({ ok: false, error: "unknown event" }), {
+        status: 404, headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+    if (meta.tracked !== true) {
+      return new Response(JSON.stringify({ ok: false, error: "that event is not at a store we track" }), {
+        status: 403, headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+    events = [{ event_id: meta.event_id, name: meta.name, capacity: meta.capacity }];
+  } else {
+    // Tracked upcoming SCs (elo_upcoming_scs = set_championships ⋈ tracked
+    // stores), today or later. Deliberately SCs only: every upcoming event at
+    // every tracked store is several hundred league nights, which is a lot of
+    // paginated round trips for a bulk button nobody is watching.
+    const today = new Date().toISOString().slice(0, 10);
+    const { data: rows, error: evErr } = await db
+      .from("elo_upcoming_scs")
+      .select("event_id,name,capacity,registered_user_count,start_datetime")
+      .gte("start_datetime", today)
+      .order("start_datetime", { ascending: true });
+
+    if (evErr) {
+      return new Response(JSON.stringify({ ok: false, error: evErr.message }), {
+        status: 500,
+        headers: { ...cors, "Content-Type": "application/json" },
+      });
+    }
+    events = rows ?? [];
   }
 
   let okCount = 0;
   let totalMembers = 0;
   const failed: Array<{ event_id: number; error: string }> = [];
 
-  for (const ev of events ?? []) {
+  for (const ev of events) {
     const eid = ev.event_id as number;
     try {
       // (c) fetch + filter COMPLETE
@@ -196,6 +257,7 @@ Deno.serve(async (req: Request) => {
       events: okCount,
       players: totalMembers,
       failed: failed.length ? failed : undefined,
+      event_id: onlyEventId ?? undefined,
     }),
     { status: 200, headers: { ...cors, "Content-Type": "application/json" } },
   );

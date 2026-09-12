@@ -149,14 +149,24 @@ def scrape_event(sb: Supabase, ev: dict, dry_run: bool) -> int:
 
 def upcoming_events(sb: Supabase, only_event: int | None) -> list[dict]:
     """Tracked upcoming SCs to scrape: elo_upcoming_scs with start_datetime today
-    or later. `only_event` short-circuits to a single set_championships row."""
+    or later. `only_event` short-circuits to that one event.
+
+    Migration 143 dropped elo_event_roster's FK to set_championships, so a roster
+    can now belong to ANY event at a tracked store — a league night at the shop
+    you scout is full of the same people. --event therefore looks in
+    lorcana_events too, falling back to set_championships for an event that has
+    already aged out of the upcoming feed.
+    """
     if only_event is not None:
-        rows = sb.select(
-            "set_championships",
-            columns="event_id,name,capacity,start_datetime",
-            filters={"event_id": f"eq.{only_event}"},
-        )
-        return rows
+        for table in ("lorcana_events", "set_championships"):
+            rows = sb.select(
+                table,
+                columns="event_id,name,capacity,start_datetime",
+                filters={"event_id": f"eq.{only_event}"},
+            )
+            if rows:
+                return rows
+        return []
     today = datetime.now(timezone.utc).date().isoformat()
     return sb.select(
         "elo_upcoming_scs",
