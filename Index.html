@@ -36858,6 +36858,48 @@ const calCountdown = (ev, todayYmd) => {
 // without saying what. calEventTitle folds both halves together instead.
 const calChipLabel = (ev) => calEventTitle(ev);
 
+// "Sep 12" — compact enough for a pager label in a 240px rail.
+const calShortDay = (ymd) => {
+  const p = calYmdParts(ymd);
+  return p ? `${CAL_MONTHS[p.m - 1].slice(0, 3)} ${p.d}` : "";
+};
+
+// The home panel shows a WINDOW of the schedule rather than only the next few,
+// so ‹ › can step through time without opening the page.
+//
+// ⚠ The window is anchored on the first event that has NOT FINISHED, not on the
+// first row of the pool — so page 0 always means "now" however much past is in
+// the list, and paging backwards walks into it. Anchoring on index 0 would make
+// the panel open on 2023 the moment past events are in scope.
+const calendarPanelWindow = (pool, todayYmd, size, page) => {
+  const list = pool || [];
+  const n = Math.max(1, size || 1);
+  const today = CAL_D(todayYmd) || calTodayYmd();
+  const endOf = (e) => calYmdParts(CAL_D(e.ends_on)) ? CAL_D(e.ends_on) : CAL_D(e.starts_on);
+  let base = list.findIndex(e => endOf(e) >= today);
+  // Nothing ahead at all: anchor on the last page so the box shows the most
+  // recent thing that happened instead of going blank — several times a year
+  // there is genuinely nothing scheduled.
+  if(base < 0) base = Math.max(0, list.length - n);
+  // ⚠ Clamp the PAGE, not the start. Clamping the start to (length - n) keeps
+  // the last page full — by repeating a row you have just scrolled past, so ›
+  // appears to move you one row instead of one page. A short last page is what
+  // pagination is supposed to look like.
+  const minPage = -Math.ceil(base / n);
+  const maxPage = Math.max(0, Math.ceil((list.length - base) / n) - 1);
+  const pg = Math.max(minPage, Math.min(maxPage, page || 0));
+  const start = Math.max(0, base + pg * n);
+  const rows = list.slice(start, start + n);
+  return {
+    rows, start,
+    canPrev: start > 0,
+    canNext: start + n < list.length,
+    // Every row in view is behind us; the caller says so rather than presenting
+    // old events as though they were coming up.
+    past: rows.length > 0 && endOf(rows[rows.length - 1]) < today,
+  };
+};
+
 const calTimeLabel = (ev) => {
   if(!ev || !ev.starts_at) return "";
   try {
@@ -36996,7 +37038,13 @@ const CalendarMiniMap = ({lat, lng, label, zoom}) => {
        target="_blank" rel="noopener noreferrer"
        title=${label ? `${label} — open in OpenStreetMap` : "Open in OpenStreetMap"}
        style=${{width: CAL_MAP_W + "px", height: CAL_MAP_H + "px"}}>
-      ${layout.tiles.map(t => html`<img key=${t.key} src=${osmTileUrl(t)} alt="" loading="lazy"
+      ${/* ⚠ NOT loading="lazy". These <img>s only exist while the modal is open
+            and are in view the moment they are created, so lazy buys nothing —
+            and Chrome defers lazy images whenever document.visibilityState is
+            "hidden" (a background tab, a hidden preview pane), which leaves the
+            map permanently blank with four pending requests and no error. Same
+            lesson as the deck quick-add thumbnails. */
+        layout.tiles.map(t => html`<img key=${t.key} src=${osmTileUrl(t)} alt=""
         width=${layout.size} height=${layout.size} draggable="false"
         style=${{left: t.left + "px", top: t.top + "px"}}/>`)}
       <span class="cal-map-pin" aria-hidden="true"
@@ -37295,6 +37343,7 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
     catch { return "list"; }
   });
   const [openFilters, setOpenFilters] = useState(false);
+  const [page, setPage] = useState(0);
   const [sel, setSel] = useState(null);
   const [month, setMonth] = useState(() => calMonthOf(calTodayYmd()));
   const today = calTodayYmd();
@@ -37310,10 +37359,13 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
   // blank in that window reads as broken and earns a Hide, so it falls back to
   // the last couple of things that happened: "Attack of the Vine! · retail
   // release · 2 mo ago" still tells you where you are in the season.
-  const {rows, past} = useMemo(() => {
-    const next = calendarUpcoming(pool, today, CAL_PANEL_ROWS);
-    return next.length ? {rows: next, past: false} : {rows: pool.slice(-2).reverse(), past: true};
-  }, [pool, today]);
+  const win = useMemo(() => calendarPanelWindow(pool, today, CAL_PANEL_ROWS, page),
+    [pool, today, page]);
+  const {rows, past} = win;
+  // Narrowing the filters can strand you deep in a list that no longer has that
+  // many rows. Clamping alone would keep you there; going back to "now" is what
+  // someone changing a filter means.
+  useEffect(() => { setPage(0); }, [kinds, region]);
   const nFilters = (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0) + (region !== "all" ? 1 : 0);
   // ⚠ THE INVITATION. Retiring the "Upcoming near me" panel removed a visible
   // ZIP box from the home page, and a button one click inside a tile is a worse
@@ -37351,14 +37403,30 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
     ${mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${pool} today=${today}
           compact=${true} onOpen=${setSel} onMonth=${setMonth}/>`
-      : past && rows.length > 0
-        ? html`<${React.Fragment}>
-            <div class="cal-panel-note muted">Nothing announced yet — most recently:</div>
+      : rows.length === 0
+        ? html`<div class="cal-panel-empty muted">Nothing matches those filters.</div>`
+        : html`<${React.Fragment}>
+            ${past && html`<div class="cal-panel-note muted">
+              ${page === 0 ? "Nothing announced yet — most recently:" : "Already happened:"}</div>`}
             <${CalendarPanelList} rows=${rows} today=${today} onOpen=${setSel}/>
-          </>`
-        : rows.length === 0
-          ? html`<div class="cal-panel-empty muted">Nothing matches those filters.</div>`
-          : html`<${CalendarPanelList} rows=${rows} today=${today} onOpen=${setSel}/>`}
+            ${/* A pager, not a month bar: list rows carry their own dates, so it
+                  belongs under them as a footer rather than above as a heading.
+                  Hidden entirely when everything already fits — dead arrows are
+                  worse than no arrows. */
+              pool.length > CAL_PANEL_ROWS && html`<div class="cal-panel-page">
+              <button type="button" aria-label="Earlier" title="Earlier"
+                disabled=${!win.canPrev} onClick=${() => setPage(p => p - 1)}>‹</button>
+              <span class="cal-panel-page-lbl">${rows.length
+                ? (calShortDay(rows[0].starts_on) === calShortDay(rows[rows.length - 1].starts_on)
+                    ? calShortDay(rows[0].starts_on)
+                    : `${calShortDay(rows[0].starts_on)} – ${calShortDay(rows[rows.length - 1].starts_on)}`)
+                : ""}</span>
+              <button type="button" aria-label="Later" title="Later"
+                disabled=${!win.canNext} onClick=${() => setPage(p => p + 1)}>›</button>
+              ${page !== 0 && html`<button type="button" class="cal-panel-now"
+                onClick=${() => setPage(0)}>Now</button>`}
+            </div>`}
+          </>`}
     ${nothingFollowed && onFindEvents && html`<button type="button" class="cal-panel-find"
       onClick=${() => onFindEvents()}>
       ${uiIcon("store", 12)} Find events near you</button>`}

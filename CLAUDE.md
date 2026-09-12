@@ -3266,6 +3266,38 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   plain **"Near me"** control in the page header and a fourth tool button on the
   home panel.
 
+### The home panel's list pager
+
+- **‹ › step through time in list mode** (Zaven, 2026-09-12) — the panel shows a
+  window of the schedule, not just the next few, so "what's after that" needs no
+  trip to the page. `calendarPanelWindow` is the pure core, guarded.
+- **⚠ Page 0 is anchored on the first UNFINISHED event, not on index 0.** The pool
+  is sorted oldest-first and carries years of past set releases, so anchoring on
+  the head would open the panel on 2023 the moment past events are in scope. An
+  event running right now anchors page 0 — the same in-progress rule the countdown
+  uses. Paging backwards walks into the past, which is the list-shaped version of
+  the page's "Show past".
+- **⚠ Clamp the PAGE, not the start.** Clamping `start` to `length - n` keeps the
+  last page full by REPEATING a row you have just scrolled past, so › reads as
+  "one row on" rather than "one page on". A short last page is what pagination is
+  supposed to look like. The test pins "consecutive pages do not overlap".
+- The pager is a **footer, not a heading** — list rows carry their own dates, so it
+  only has to say where in time you are; the month view's bar is above because you
+  need to know the month before you can read the grid. It is hidden entirely when
+  everything already fits: dead arrows are worse than no arrows.
+- Changing a filter **resets to page 0** rather than clamping you into wherever the
+  shorter list now ends.
+
+### The map's tiles are NOT lazy
+
+**⚠ `loading="lazy"` on the mini-map was a bug, not an optimisation.** The `<img>`s
+only exist while the modal is open and are in view the moment they are created, so
+lazy buys nothing — and Chrome defers every lazy image while
+`document.visibilityState === "hidden"`, which leaves the map permanently blank
+with four pending requests and no error anywhere. Caught because the preview pane
+was backgrounded; forcing one tile eager loaded it instantly. Same lesson as the
+deck quick-add thumbnails, and the same trap the offline-testing note describes.
+
 ### Keeping it current
 
 - **`scripts/watch_calendar_sources.py`** is the calendar's catalog-watch: a daily
@@ -3512,14 +3544,12 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `false`, it RAISED 42501 and the whole curated calendar was invisible to
   everyone not signed in. Every other policy in the repo that calls that function
   is scoped `to authenticated`; that one wasn't.
-- **`supabase/143_calendar_geo.sql`** — STAGED, not applied. The half of 142 that
-  didn't run, on its own: latitude/longitude/country, the city-level coordinates
-  for 33 curated rows (all 33 ids verified against live rows), and the provenance
-  rewrite. **Deliberately pure ASCII with a short header** — 142 carries box-
-  drawing characters and a long comment block, and this rules out an encoding or
-  partial-paste failure as the cause. Until it runs, the region picker files
-  everything under "Elsewhere" and curated events show no map; the client is
-  schema-tolerant and retries the select without those columns, so nothing breaks.
+- ~~`supabase/143_calendar_geo.sql`~~ — **APPLIED 2026-09-12; verified** (geo
+  populated, 0 rows still naming the source, the only row without a country is
+  the Hyperia City prerelease, which is correct — a set releases worldwide).
+  It was 142's unapplied half re-issued **in pure ASCII with a short header**;
+  142 itself failed twice with no error text, and that was the difference, so
+  **prefer plain ASCII and a short preamble for anything meant to be pasted.**
 - ~~`supabase/139` / `140` / `141`~~ — **APPLIED 2026-09-12 by Zaven.**
   141 seeded the Season of Villainy (14 CCQs + 17 DLCs, plus Hyperia City's
   prerelease weekend from our own feed). Its ids are

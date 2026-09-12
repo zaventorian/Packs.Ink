@@ -61,6 +61,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calendarEventDays = (ev) => {", NL + "};"),
   grab("const calendarMonthGrid = (year, month, events) => {", NL + "};"),
   grab("const calendarUpcoming = (events, fromYmd, limit) => {", NL + "};"),
+  grabLine("const CAL_MONTHS = "),   // one line — a block grab here runs on and swallows calShortDay
+  grab("const calShortDay = (ymd) => {", NL + "};"),
+  grab("const calendarPanelWindow = (pool, todayYmd, size, page) => {", NL + "};"),
   grabLine("const calChipLabel = "),
   grab("const calCountdown = (ev, todayYmd) => {", NL + "};"),
   grabLine("const _calEnc = "),
@@ -77,6 +80,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,",
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
+  " calendarPanelWindow, calShortDay,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
 ].join(NL)));
 
@@ -85,6 +89,7 @@ const {
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,
   calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
+  calendarPanelWindow, calShortDay,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
 } = mod;
 
@@ -377,6 +382,67 @@ ok("tile urls point at openstreetmap over https",
                     [{id: "s", kind: "store", title: "y", starts_on: "2026-09-19", event_id: 7}]).length === 2);
   ok("combine tolerates nulls", calendarCombine(null, null).length === 0);
 }
+
+// ── The home panel's list pager ─────────────────────────────────────────────
+// ⚠ Page 0 must mean NOW, not the head of the list. The pool is sorted oldest
+// first and contains years of past set releases, so anchoring on index 0 would
+// open the panel on 2023 the moment past events are in scope.
+{
+  const day = (d) => ({id: "e" + d, kind: "dlc", title: "E" + d, starts_on: d});
+  const pool = ["2023-01-01","2024-01-01","2026-09-01","2026-09-20","2026-10-04",
+                "2026-11-13","2026-12-18","2027-02-19"].map(day);
+  const T = "2026-09-12";
+  const w0 = calendarPanelWindow(pool, T, 3, 0);
+  ok("page 0 starts at the first unfinished event",
+    w0.rows.map(r => r.starts_on).join(",") === "2026-09-20,2026-10-04,2026-11-13",
+    w0.rows.map(r => r.starts_on).join(","));
+  ok("page 0 is not the head of the pool", w0.start === 3, w0.start);
+  ok("page 0 can go back (there IS a past)", w0.canPrev === true);
+  ok("page 0 can go forward", w0.canNext === true);
+  const w1 = calendarPanelWindow(pool, T, 3, 1);
+  ok("paging forward advances by a full page",
+    w1.rows.map(r => r.starts_on).join(",") === "2026-12-18,2027-02-19",
+    w1.rows.map(r => r.starts_on).join(","));
+  ok("the last page cannot go further", w1.canNext === false);
+  const wb = calendarPanelWindow(pool, T, 3, -1);
+  ok("paging back walks into the past",
+    wb.rows.map(r => r.starts_on).join(",") === "2023-01-01,2024-01-01,2026-09-01",
+    wb.rows.map(r => r.starts_on).join(","));
+  ok("a wholly-past window is flagged so the caller can label it", wb.past === true);
+  ok("a window containing the future is not flagged past", w0.past === false);
+  ok("the first page cannot go further back", wb.canPrev === false);
+  // Overshooting in either direction clamps instead of emptying the box.
+  ok("overshooting forward clamps to the last page, short as it is",
+    calendarPanelWindow(pool, T, 3, 99).rows.map(r => r.starts_on).join(",") === "2026-12-18,2027-02-19",
+    calendarPanelWindow(pool, T, 3, 99).rows.map(r => r.starts_on).join(","));
+  // ⚠ No row may appear on two consecutive pages — that is what makes › read as
+  // "one page on" rather than "one row on".
+  ok("consecutive pages do not overlap", (() => {
+    const a = new Set(calendarPanelWindow(pool, T, 3, 0).rows.map(r => r.id));
+    return calendarPanelWindow(pool, T, 3, 1).rows.every(r => !a.has(r.id));
+  })());
+  ok("overshooting backward clamps to the first page",
+    calendarPanelWindow(pool, T, 3, -99).start === 0);
+  // Nothing ahead: show the most recent instead of going blank.
+  const allPast = ["2026-01-01","2026-02-01","2026-03-01"].map(day);
+  const wp = calendarPanelWindow(allPast, T, 2, 0);
+  ok("with nothing ahead it shows the most recent, not nothing",
+    wp.rows.map(r => r.starts_on).join(",") === "2026-02-01,2026-03-01",
+    wp.rows.map(r => r.starts_on).join(","));
+  ok("and says it is past", wp.past === true);
+  // An in-progress multi-day event is NOT past — same rule as the countdown.
+  const live = [{id: "l", kind: "dlc", title: "L", starts_on: "2026-09-11", ends_on: "2026-09-13"}];
+  ok("an event running right now anchors page 0",
+    calendarPanelWindow(live, T, 3, 0).rows.length === 1 &&
+    calendarPanelWindow(live, T, 3, 0).past === false);
+  ok("an empty pool yields an empty window",
+    calendarPanelWindow([], T, 3, 0).rows.length === 0);
+  ok("a pool shorter than a page has no paging",
+    calendarPanelWindow([day("2026-10-01")], T, 3, 0).canNext === false &&
+    calendarPanelWindow([day("2026-10-01")], T, 3, 0).canPrev === false);
+}
+ok("the pager label is compact", calShortDay("2026-09-12") === "Sep 12", calShortDay("2026-09-12"));
+ok("a bad date has no label", calShortDay("nope") === "");
 
 // ── Store entries ───────────────────────────────────────────────────────────
 const storeEv = calendarStoreEntry({
