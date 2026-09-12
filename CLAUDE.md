@@ -310,6 +310,20 @@ extracts the real pure functions out of Index.html.
   icons rule), anything else → nothing. It reads `loreWinOf`, NOT a seat's target, or one Donald
   would put the whole table in coconuts. A hand-typed 25 counts as Coconut, deliberately: someone
   typing it is playing it, and storing a preset id would let a custom number contradict it.
+- **Player 1 is the BOTTOM seat, the opponent the top one** (2026-09-12, Zaven) — a phone propped
+  on a table faces whoever set it down, so the near half of the screen is theirs and the far half
+  is the player across the table. `seatOrder` reverses the render for two seats; **`idx` stays the
+  true player index** (it keys the score, the rename and every stored event), so never re-derive a
+  player from render position. This also settles which side "Face-to-face" turns around: seat 1,
+  now the top one. Rendering seat 0 first put YOU at the top and flipped YOUR half — wrong twice.
+- **The seat's background art is cropped to the top 68% of the card**, top-anchored: the card's
+  frame, its art and its name down to the classification band, stopping where the ability box
+  starts. 68% was measured off both Lorcana layouts (a character's classification band and a
+  song's both end at 67%). **Top-anchoring alone is not the trick** — on a seat narrower than
+  ~1.05:1 a plain `object-fit:cover` scales by width and runs down into the rules text, so
+  `.lore-seat-art` is `height:147.1%` (100/68) of the seat and the seat's own `overflow:hidden`
+  is what makes the cut. A seat WIDER than that shows less than 68%, which is fine: the top of
+  the card is the part that must never be cut, and the old `object-position:center 22%` cut it.
 - **A seat that played a modifier wears its card**, a round crop beside that seat's lore total.
   The art is resolved once in LoreTracker from `CatalogContext` by the modifier's own `card` name,
   so a future `LORE_WIN_MODIFIERS` entry gets a badge for free. `object-position` sits high —
