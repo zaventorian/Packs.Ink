@@ -228,3 +228,21 @@ jobs:
         run: |
           python scripts/elo/test_attendance_targets.py
           python scripts/elo/scrape_event_attendance.py --recheck-days 3
+
+      # 3. Propose Challenge Championship Qualifiers for the curated calendar.
+      #    continue-on-error, and deliberately so: unlike the two steps above,
+      #    nothing here is load-bearing for a displayed price or a store's stats —
+      #    a missed day costs a review-queue entry appearing 24h later. Failing the
+      #    run over it would train us to ignore a light that matters.
+      #
+      #    ⚠ Everything it writes is confirmed=false, so it can only ever fill a
+      #    review queue an admin sees. A CCQ reaches the public calendar when a
+      #    person publishes it, never because a script found a title.
+      - name: Propose CCQ candidates
+        if: ${{ !cancelled() && (github.event_name != 'workflow_dispatch' || inputs.skip_discover != 'true') }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          python scripts/scan_ccq_candidates.py --apply

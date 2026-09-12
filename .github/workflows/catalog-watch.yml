@@ -66,3 +66,17 @@ jobs:
         run: |
           python scripts/reconcile_catalog.py --watch \
             ${{ (github.event_name == 'workflow_dispatch' && !inputs.fail_on_new) && '--no-fail' || '' }}
+
+      # The curated calendar is the one surface nothing refreshes on its own, so
+      # it gets the same treatment as the catalog: a daily sweep that is red only
+      # when something is announced that we don't have.
+      #
+      # `if: always()` so a red catalog sweep doesn't hide a calendar finding —
+      # being skipped quietly is the bug this whole workflow exists to avoid.
+      # It NEVER writes to the calendar: publishing an event stays a person's call.
+      - name: Watch for newly announced events
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: python scripts/watch_calendar_sources.py
