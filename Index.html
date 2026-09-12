@@ -1000,6 +1000,16 @@ const GRADED_TOS_VERSION = "2026-06-23";
 // is_graded_admin(). Separate from premium-viewer access.
 const GradedAdminContext = React.createContext(false);
 
+// Whether the signed-in account is on the scouting team — can_scout(), migration
+// 143: a tournament admin, or an EMAIL on the scout_members allowlist. Held in a
+// context rather than fetched per view because three unrelated surfaces ask (the
+// Elo Scout tab, the Upcoming-SCs event modal, and the calendar's event modal)
+// and the answer is one boolean that never changes mid-session.
+//
+// Deliberately NOT the same gate as can_view_store_report(): the store report
+// keeps its own, wider allowlist. Scouting notes are the team's own intel.
+const ScoutContext = React.createContext(false);
+
 // Standard tooltip strings — keep wording consistent across views.
 const TIP_LOW = "TCGplayer's published Low Price for the card. It tracks the cheap end of the market. For an NM-quality reference, see NM Market.";
 const TIP_MARKET = "TCGplayer's NM Market price — a smoothed algorithmic average of recent Near Mint sales. Lags the Low price but is more stable and reflects what a clean copy actually trades for.";
@@ -34762,18 +34772,11 @@ const HOME_PANELS = [
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
   {key:"tools",       label:"Analytics toolbox",    col:"right"},
-  // There was a "Gear" panel here, an accessories list in the right rail.
-  // Removed 2026-09-12 (Zaven): once the "Lorcana on Amazon" row shipped it was
-  // a second Amazon prompt on the same page, and the row already reaches the
-  // same place — its title links to /gear, which is the whole catalogue.
-  // normalizeHomeLayout DROPS a key it doesn't recognise, so every stored
-  // layout holding "gear" repairs itself on the next load with no migration.
   // Accessories, all Amazon. Appended rather than hoisted for existing
   // browsers (normalizeHomeLayout puts a new key at the foot of its default
   // column): a shop box has not earned the right to shove somebody's
   // arrangement around, unlike the at-the-table shortcuts that did.
   {key:"gear",        label:"Gear",                 col:"right"},
-  {key:"setChamps",   label:"Upcoming events",      col:"right"},
   {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
   // Off by default: it is empty for anyone with no graded slabs, and the
@@ -34818,15 +34821,14 @@ const HOME_FIXED_KEYS = new Set(HOME_PANELS.filter(p => p.fixed).map(p => p.key)
 const HOME_PAIRABLE_KEYS = new Set(["news", "following", "tournaments", "calendar"]);
 const HOME_PAIR_SIDES = ["right", "left"];
 const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.label]));
-// Every panel except setChamps can be popped out and linked to.
-// ⚠ calendar is excluded for the same reason as setChamps: its title does
-// something else. Popping it out would re-show the identical six-row list over
-// a dimmed page, which is not "bigger" by any reading — /calendar, with the
+// Every panel can be popped out and linked to EXCEPT the calendar, whose title
+// does something else: popping it out would re-show the identical six-row list
+// over a dimmed page, which is not "bigger" by any reading — /calendar, with the
 // month grid and the filters, is. HOME_ALWAYS_SECTION is what sends it there at
 // every width instead of only above 1100px.
 // ⚠ Keep this on ONE line — scripts/test_share_links.mjs extracts it with a
 // single-line grab, and splitting it truncated the const to a syntax error.
-const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps" && k !== "calendar" && !HOME_FIXED_KEYS.has(k)));
+const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "calendar" && !HOME_FIXED_KEYS.has(k)));
 // Panels whose title goes to their own section at EVERY width, because the
 // pop-out would show the same thing the panel already shows.
 const HOME_ALWAYS_SECTION = new Set(["calendar"]);
@@ -34841,10 +34843,7 @@ const HOME_ALWAYS_SECTION = new Set(["calendar"]);
 // convention as the top nav — so ctrl/middle-click opens the destination in a
 // new tab and right-click offers "Copy link address" for it, which is why no
 // box needs a link icon of its own.
-//
-// setChamps is deliberately absent from both: Upcoming events already expands
-// on its own title click and already carries richer deep links (?sczip / scc /
-// scdist / scdate / scmode) that a bare ?panel= would flatten.
+
 const homePanelHref = (key) => "/?panel=" + encodeURIComponent(key);
 const homePanelTitle = ({cls, label, panelKey, panelNav}) => {
   const to = (panelKey && panelNav) ? panelNav(panelKey, label) : null;
@@ -37316,6 +37315,12 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
     return next.length ? {rows: next, past: false} : {rows: pool.slice(-2).reverse(), past: true};
   }, [pool, today]);
   const nFilters = (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0) + (region !== "all" ? 1 : 0);
+  // ⚠ THE INVITATION. Retiring the "Upcoming near me" panel removed a visible
+  // ZIP box from the home page, and a button one click inside a tile is a worse
+  // prompt than an input sitting there asking to be filled. This line is what
+  // pays that back: while you follow nothing, the calendar asks. Once you follow
+  // something it disappears, because then the events themselves are the answer.
+  const nothingFollowed = !subs.subs.some(x => x.kind === "store" || x.kind === "series");
 
   return html`<aside class="home-feed home-feed--calendar">
     <div class="cal-panel-head">
@@ -37332,6 +37337,9 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
           title="List" aria-label="List view" onClick=${() => setMode("list")}>${uiIcon("list", 12)}</button>
         <button type="button" class=${"cal-panel-tool" + (mode === "month" ? " on" : "")}
           title="Month" aria-label="Month view" onClick=${() => setMode("month")}>${uiIcon("calendar", 12)}</button>
+        ${onFindEvents && html`<button type="button" class="cal-panel-tool"
+          title="Find events near you" aria-label="Find events near you"
+          onClick=${() => onFindEvents()}>${uiIcon("store", 12)}</button>`}
       </div>
     </div>
     ${openFilters && html`<div class="cal-panel-filters">
@@ -37351,6 +37359,9 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
         : rows.length === 0
           ? html`<div class="cal-panel-empty muted">Nothing matches those filters.</div>`
           : html`<${CalendarPanelList} rows=${rows} today=${today} onOpen=${setSel}/>`}
+    ${nothingFollowed && onFindEvents && html`<button type="button" class="cal-panel-find"
+      onClick=${() => onFindEvents()}>
+      ${uiIcon("store", 12)} Find events near you</button>`}
     ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onFindEvents=${onFindEvents}
       onClose=${() => setSel(null)}/>`}
   </aside>`;
@@ -37466,6 +37477,9 @@ function CalendarView({user, onSignIn, onFindEvents}){
         </p>
       </div>
       <div class="cal-header-actions">
+        ${onFindEvents && html`<button type="button" class="cal-act cal-act--find"
+          title="Search Ravensburger Play for events near you, and follow the shops you play at"
+          onClick=${() => onFindEvents()}>${uiIcon("store", 14)} Near me</button>`}
         <button type="button" class="cal-act" onClick=${exportAll} title="Download everything shown as an .ics file">
           ${uiIcon("save", 14)} Export .ics</button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
@@ -37507,8 +37521,9 @@ function CalendarView({user, onSignIn, onFindEvents}){
       ${showStores && html`<div class="cal-follow-body">
         ${followCount === 0
           ? html`<p class="muted cal-follow-empty">
-              Nothing followed yet. Find your shops in <strong>Upcoming near me</strong> on the home page —
-              every event there has a ${uiIcon("calendarPlus", 12)} button, and a
+              Nothing followed yet. <button type="button" class="cal-linkish"
+                onClick=${() => onFindEvents && onFindEvents()}>Find events near you</button> —
+              every result has a ${uiIcon("calendarPlus", 12)} button, and a
               <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.</p>`
           : html`<ul class="cal-follow-list">
               ${followedStores.map(s => html`<li key=${"st" + s.ref}>
@@ -37753,7 +37768,12 @@ const ScCalendarButton = ({series, subs}) => {
   </div>`;
 };
 
-const UpcomingSCsBox = ({user}) => {
+// `overlay` mounts it as a pure full-screen finder over whatever page you are
+// on, which is how the calendar reaches it (2026-09-12). It is no longer a home
+// panel of its own: the finder is how you FIND shops and the calendar is where
+// they live once you have, so it reads as a step in that funnel rather than a
+// second events box competing with it on the same page.
+const UpcomingSCsBox = ({user, overlay, onClose}) => {
   const calSubs = useCalendarSubs(user);
   // Deep-link seed: ?sczip / scc / scdist / scdate let a shared link reproduce
   // a specific view. Taken from the module-load capture (not live URL) so it
@@ -37794,10 +37814,16 @@ const UpcomingSCsBox = ({user}) => {
   const [sel, setSel] = useState(null);            // {series, occ} — one date of one series
   const [openSeries, setOpenSeries] = useState({}); // series_key -> showing its full date list
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("packsink:scCollapsed") === "1"; } catch { return false; } });
-  const [expanded, setExpanded] = useState(() => !!pZip);  // a deep-link opens straight into the full-screen view
-  // Closing it retires the deep link too, so a later re-mount of the box opens
-  // the ordinary home panel instead of re-staging the shared view.
-  const closeExpanded = useCallback(() => { clearScSeed(); setExpanded(false); }, []);
+  const [expanded, setExpanded] = useState(() => overlay || !!pZip);  // a deep-link opens straight into the full-screen view
+  // Closing retires the deep link too, so a later open is the ordinary finder
+  // rather than a re-staging of the shared view. In overlay mode the PARENT
+  // owns whether we exist at all, so hand the close up instead of hiding in
+  // place — a hidden-but-mounted overlay would swallow the next click.
+  const closeExpanded = useCallback(() => {
+    clearScSeed();
+    if(overlay){ if(onClose) onClose(); return; }
+    setExpanded(false);
+  }, [overlay, onClose]);
   const [copied, setCopied] = useState(false);
   const [pinned, setPinned] = useState(() => { try { const p = JSON.parse(localStorage.getItem("packsink:scPinned") || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } });
   const [dateOn, setDateOn] = useState(() => { try { return pDate ? true : localStorage.getItem("packsink:scDateOn") === "1"; } catch { return !!pDate; } });
@@ -38923,9 +38949,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   const panelCol = useMemo(() => {
     const m = {};
     for(const p of homeLayout) m[p.key] = p.on ? p.col : null;
-    // A ?sczip/&scmode deep link has to render the events box wherever it
-    // lives, even for someone who hid it — the link is meaningless otherwise.
-    if(!m.setChamps && SC_DEEP_LINKED) m.setChamps = "right";
     return m;
   }, [homeLayout]);
   const gradedPremium = useContext(GradedPremiumContext);
@@ -39593,7 +39616,6 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}
         panelNav=${panelTitleNav}/>`;
       case "gear":       return html`<${GearPanel} key="gear" panelNav=${panelTitleNav}/>`;
-      case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps" user=${user}/>`;
       case "calendar":   return html`<${CalendarPanel} key="calendar" user=${user}
         panelNav=${panelTitleNav}/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
@@ -46805,25 +46827,26 @@ function App(){
     if(MARKET_SUBS.some(([kk]) => kk === k)) setMarketSub(k);
     setView("market");
   }, []);
-  // "Find a prerelease near you" from a calendar event → the home page's event
-  // finder, already switched to that mode.
+  // The event finder is an OVERLAY now, owned here rather than being a home
+  // panel — it is how you find shops, and the calendar is where they live once
+  // you have, so it belongs one click inside the calendar instead of beside it
+  // as a second events box. Opening it from anywhere therefore works, including
+  // from /calendar, which is where most people will now reach it.
   //
-  // ⚠ Writing the mode to localStorage is what carries it, NOT a ?scmode= link.
-  // SC_DEEP_SEED is captured once at MODULE LOAD, so a client-side navigation
-  // would never see the param; UpcomingSCsBox reads localStorage in its useState
-  // initialiser, and leaving /calendar unmounts HomeView, so going back to it
-  // mounts the box fresh and it picks the mode up. The alternative is a full
-  // page reload, which is a lot of machinery to answer one button.
+  // ⚠ The mode travels in localStorage, NOT a ?scmode= link: SC_DEEP_SEED is
+  // captured once at MODULE LOAD, so nothing client-side would ever see the
+  // param. UpcomingSCsBox reads localStorage in its useState initialiser and is
+  // mounted fresh each time the overlay opens, so it picks the mode up.
+  //
+  // A ?sczip/&scmode deep link opens it on arrival. That used to work by
+  // force-showing the panel even for someone who had hidden it; with no panel to
+  // force, the overlay is the only thing that can honour the link.
+  const [eventFinderOpen, setEventFinderOpen] = useState(() => SC_DEEP_LINKED);
   const openEventFinder = useCallback((mode) => {
-    try { localStorage.setItem("packsink:scMode", mode || "all"); } catch {}
-    setView("home");
-    setTimeout(() => {
-      try {
-        const el = document.querySelector(".sc-box");
-        if(el) el.scrollIntoView({behavior: "smooth", block: "center"});
-      } catch {}
-    }, 350);
+    if(mode){ try { localStorage.setItem("packsink:scMode", mode); } catch {} }
+    setEventFinderOpen(true);
   }, []);
+  const closeEventFinder = useCallback(() => setEventFinderOpen(false), []);
   const marketSubSynced = useRef(false);
   // Keep the URL pathname in sync with `view` so back/forward + reload +
   // bookmarks all work. Strips view-specific deep-link params (?deck=,
@@ -49415,6 +49438,8 @@ function App(){
     ${view==="gear"&&html`<${GearView} sealedPrices=${sealedPrices} setsMeta=${setsMeta}/>`}
     ${view==="calendar"&&html`<${CalendarView} user=${user} onSignIn=${signIn}
       onFindEvents=${openEventFinder}/>`}
+    ${eventFinderOpen&&html`<${UpcomingSCsBox} overlay=${true} user=${user}
+      onClose=${closeEventFinder}/>`}
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}

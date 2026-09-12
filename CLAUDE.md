@@ -51,7 +51,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
   - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
   - **User**: `profiles` (carries collection-sharing visibility + share_token cols), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`, `screener_views`.
   - **Tournament**: `tournaments`, `tournament_decks`, `tournament_admins`, view `tournament_results_v` (security_invoker on).
-  - **Events (RPH)**: `lorcana_events` (migration 113) — EVERY upcoming Ravensburger Play Lorcana event (~17k), `kind` ∈ `sc|prerelease|other`. What the site's "Upcoming near me" box reads. `set_championships` is the SC subset kept in lockstep for the Elo pipeline only. `prerelease_events` was DROPPED 2026-08-22 (migration 123). See "Upcoming-events finder".
+  - **Events (RPH)**: `lorcana_events` (migration 113) — EVERY upcoming Ravensburger Play Lorcana event (~17k), `kind` ∈ `sc|prerelease|other`. What the site's "Near me" event finder reads. `set_championships` is the SC subset kept in lockstep for the Elo pipeline only. `prerelease_events` was DROPPED 2026-08-22 (migration 123). See "Upcoming-events finder".
   - **Misc**: `trades` (token-keyed shareable Trade Compare payloads; RLS-locked, access only via `create_trade` / `get_trade` RPCs — migration 54). **30-day retention** via `cleanup_old_trades()` (migration 65), called daily by the selfheal job in `matview_self_heal.py`.
   - **Matviews**: `card_prices_latest`, `rarity_avg_daily`, `price_movers`, `sealed_prices_latest`, `graded_prices_latest`.
 - **ETL** (`.github/workflows/etl.yml`):
@@ -1565,7 +1565,7 @@ The nested-interactive HTML (button inside `<a>`) is technically invalid but eve
 ## Home panels: the title is a link, and the width decides where to (2026-09-06)
 
 You could not link anyone to one box on the home page — "the tournament box" was "scroll down".
-Every configurable panel except `setChamps` therefore has a title that is an **`<a href>` +
+Every configurable panel therefore has a title that is an **`<a href>` +
 `navHandler`**, so ctrl/⌘-click and middle-click open the destination in a new tab and right-click
 offers **Copy link address** without opening anything. That last point is the whole reason **no
 box carries a link icon** — Zaven's constraint. Don't add one.
@@ -1609,8 +1609,9 @@ decides.**
 - **pushState, not replace** (unlike the sub-tab params below): a modal is a place you can leave,
   so Back closes it. `closePanel` only calls `history.back()` when the entry is one it pushed —
   on a cold `/?panel=` load, back would leave the site, so it cleans the URL instead.
-- **`setChamps` is deliberately excluded**, and `HOME_POPOUT_KEYS` (not `HOME_PANEL_LABELS`) is
-  what `shareUrlLabel` checks. Upcoming events already expands on its own title click and already
+- **The calendar is deliberately excluded**, and `HOME_POPOUT_KEYS` (not `HOME_PANEL_LABELS`) is
+  what `shareUrlLabel` checks. (`setChamps` used to be the exclusion here for the same reason,
+  until it stopped being a panel at all.) Its title goes to /calendar and already
   carries richer deep links (`?sczip` / `scc` / `scdist` / `scdate` / `scmode`) that a bare
   `?panel=` would flatten. Labelling it would promise a link that opens nothing.
 - Guarded by `node scripts/test_share_links.mjs`, which now walks every panel key.
@@ -3050,7 +3051,43 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 - **The pro-rated lens scores ONE season, not the selection.** The memo's 8/8/80 is 1/6 of Legendary over a two-month window — one set season's worth of activity, not four — so applying it to a four-set window cleared it for everybody. `eloProSeasonKey` picks the most recent *completed* set (seasons are newest-first; index 0 is the set still running) and the lens overrides the set chips while it's on, so the numbers shown and the verdict come from the same window.
 - **Guarded by `node scripts/test_elo_store_activity.mjs`**, which extracts `buildEloStoreActivity` + `eloStoreTotals` out of Index.html so they can't drift. Run it after touching the pivot or the rollup.
 
-## Upcoming-events finder (home "Upcoming near me" box)
+## Upcoming-events finder (the "Near me" overlay)
+
+**⚠ It stopped being a home panel on 2026-09-12** and is now a full-screen
+overlay reached from the calendar — its `setChamps` entry is gone from
+`HOME_PANELS`. Two events boxes side by side on one page read as redundant, and
+they are not peers: **the finder is how you FIND shops, the calendar is where
+they live once you have**, so it belongs one click inside the calendar rather
+than beside it. It was NOT made a tab: the finder already has its own
+All/Set&nbsp;Champs/Prereleases tabs (an outer layer stacks two tab rows), a
+results list makes it far taller than the calendar so switching would bounce the
+page, and after following a shop you want to SEE it land on the calendar rather
+than flip back to check.
+
+- **App owns it** — `eventFinderOpen` + `openEventFinder(mode)`, rendered as
+  `<UpcomingSCsBox overlay onClose/>`. `overlay` starts it expanded and hands the
+  close UP: hiding in place would leave a mounted backdrop swallowing the next
+  click.
+- **⚠ A `?sczip` deep link now opens the OVERLAY.** It used to work by
+  force-showing the panel even for someone who had hidden it (`panelCol`'s
+  `if(!m.setChamps && SC_DEEP_LINKED)`); with no panel to force, the overlay is
+  the only thing that can honour the link. `SC_DEEP_LINKED` seeds
+  `eventFinderOpen`.
+- **⚠ The mode travels in localStorage, never a `?scmode=` link** from inside the
+  app: `SC_DEEP_SEED` is captured once at MODULE LOAD, so nothing client-side
+  would ever see the param. The box reads localStorage in its `useState`
+  initialiser and is mounted fresh on every open.
+- **Retiring the panel needed no migration** — `normalizeHomeLayout` drops keys it
+  does not recognise, so a stored layout holding `setChamps` repairs itself on the
+  next load. Verified live.
+- **⚠ The calendar panel carries the invitation, and that is load-bearing.**
+  Retiring the panel removed a visible ZIP box from the home page, and a button
+  one click inside a tile is a weaker prompt than an input sitting there asking to
+  be filled. `nothingFollowed` renders "Find events near you" while you follow
+  nothing, and disappears once you do — then the events themselves are the answer.
+  Delete that line and the feature loses its only cold-start route.
+
+### How the finder itself works
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.
 
@@ -3223,12 +3260,11 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   none while its six products were already listed — so the id join would find
   nothing exactly when this is most interesting. Cases are filtered out; they are
   a distributor SKU, not a thing a player walks out with.
-- **A prerelease offers "Find a prerelease near you"**, which drops you on the
-  home event finder already in that mode. **⚠ The mode travels in localStorage,
-  not a `?scmode=` link**: `SC_DEEP_SEED` is captured once at MODULE LOAD, so a
-  client-side navigation would never see the param, whereas `UpcomingSCsBox` reads
-  localStorage in its `useState` initialiser and leaving /calendar unmounts
-  HomeView, so returning mounts it fresh.
+- **A prerelease offers "Find a prerelease near you"**, which opens the finder
+  overlay already in that mode — see the Upcoming-events finder section for why
+  that is an overlay and not a second box beside the calendar. There is also a
+  plain **"Near me"** control in the page header and a fourth tool button on the
+  home panel.
 
 ### Keeping it current
 
@@ -3278,7 +3314,7 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   every other panel, which pops out below 1100px. Popping this one out would
   re-show the identical six-row list over a dimmed page; the month grid and the
   filters are what "bigger" means here. It is therefore excluded from
-  `HOME_POPOUT_KEYS` too, same as `setChamps`.
+  `HOME_POPOUT_KEYS` too.
 - **⚠ `HOME_POPOUT_KEYS` must stay on ONE line** — `scripts/test_share_links.mjs`
   extracts it with a single-line grab, and splitting it truncated the const into a
   syntax error that only surfaced in that test.
