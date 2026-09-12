@@ -3743,9 +3743,18 @@ Guarded by `node scripts/test_calendar.mjs` (194 checks).
   script, no cookie, nobody profiling a reader for looking at where a tournament
   is. `osmTileLayout` is Web-Mercator and returns the covering tiles plus the pin;
   **x WRAPS at the antimeridian** (a box straddling it must fetch from the other
-  edge of the world) and y is clamped. It cost one `img-src` entry in BOTH copies
-  of the CSP in `_headers`, a line in `privacy.html`, and the attribution OSM's
-  tile policy requires — that credit is not decoration, don't remove it.
+  edge of the world) and y is clamped. It cost a line in `privacy.html`, the
+  attribution OSM's tile policy requires — that credit is not decoration, don't
+  remove it — and **`tile.openstreetmap.org` in BOTH `img-src` AND `connect-src`,
+  in both copies of the CSP in `_headers`**. It shipped with the img-src half
+  only, which reads as working: a first load has no service worker, so the map
+  renders, and `_headers` does not apply on the dev server either. On every
+  RELOAD the SW re-fetches the tile through `fetch()` — that is **`connect-src`,
+  not `img-src`** — the block makes `fetch` reject, sw.js's image branch
+  `.catch(() => cached)` hands `respondWith` an `undefined` for a tile it has
+  never cached, and the map goes blank. The rule is general (every cross-origin
+  img/font/style host needs the connect-src half, because the SW re-fetches all
+  of them); guarded by `node scripts/test_csp_headers.mjs`.
   Curated rows carry **city-level** coordinates (a DLC is announced months before
   a venue exists); store events carry the venue's own, from `lorcana_events`.
 - **A set event lists what comes out that day**, matched on sealed-product NAME
