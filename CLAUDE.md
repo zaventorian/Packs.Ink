@@ -3115,7 +3115,7 @@ than flip back to check.
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
 month grid, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (103 cases).
+Guarded by `node scripts/test_calendar.mjs` (194 checks).
 
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
@@ -3265,6 +3265,52 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   that is an overlay and not a second box beside the calendar. There is also a
   plain **"Near me"** control in the page header and a fourth tool button on the
   home panel.
+
+### What each kind LOOKS like — a photo where one exists, a glyph where none should
+
+A coloured dot told you which filter an event came from, which you already knew
+from the chips. `CalendarKindDot` draws a kind glyph (`CALENDAR_KINDS[].icon`)
+and, **where real art exists, an `<img>` over the top of it** — the glyph is the
+layer underneath, so a 404 or a blocked host degrades to the drawn icon rather
+than to a gap. `hideBrokenImg` on `onError` is what makes that true.
+
+- **⚠ Only `set` and `product` events resolve art, and that is a licensing line,
+  not an oversight.** A booster pack is a product photo we already show on every
+  Sealed surface; the Disney Lorcana Challenge, Championship and qualifier marks
+  are Disney/Ravensburger trademarks, and this site's own footer disclaims
+  affiliation — so DLC, CCQ and store events get distinctive drawn glyphs
+  (`trophy`, `medal`, `store`) in the same Tabler/Lucide vocabulary as every
+  other icon on the site. Don't "finish the set" by pasting in the official logos.
+- **A set's art IS its Booster Pack photo.** `CAL_ART_PREF` ranks
+  `booster pack` > `sleeved booster pack` > `illumineer's trove` > `booster box`,
+  because the plain pack is the one product every set has and the one whose photo
+  is the set's own artwork. **A `Case` is skipped outright** — a distributor
+  carton is a photo of cardboard, and its name contains "Booster Box", so without
+  the skip it would win on some sets.
+- **`calendarArtIndex(sealedRows, names)` is keyed on the lowercased set or
+  product name**, built once per view with `useMemo` from `sealedPrices` (already
+  in App for the Screener's sealed mode — no new fetch). `calendarEventArt` reads
+  `set_name` before `title` on a set event, so "Hyperia City Prerelease" finds
+  Hyperia City.
+- **A curated `image_url` always wins** (migration 145, `calendar_events`). It is
+  the only way to correct a wrong automatic match, and a wrong picture is worse
+  than no picture — so it is checked before the kind test, which also makes it
+  the way to give a DLC or a CCQ its own art by hand if we ever license one. The
+  admin editor has an "Image URL (optional)" field for it.
+  - **⚠ Its host must be in the CSP `img-src` in BOTH copies of the policy in
+    `_headers`**, or the image is blocked with no visible error — the glyph shows
+    and everything looks deliberate. `tcgplayer-cdn.tcgplayer.com` is already
+    allowed, which is why the automatic matches work.
+- **`CAL_COL_LADDER` = `[CAL_FULL_COLS, CAL_GEO_COLS, CAL_BASE_COLS]`.** The
+  fetch walks down it on 42703 so a schema missing `image_url` cannot also cost
+  the geo columns — the failure mode a single "with columns / without columns"
+  retry has.
+- Sizes are set per surface in CSS, not per call site: 13px in a list row and a
+  month chip, 18px in the home panel, 22px in the detail modal.
+
+Guarded by `node scripts/test_calendar.mjs` — the preference order, the `Case`
+skip, the curated override winning, and (the one that matters) that a DLC, CCQ or
+store event never borrows a set's pack art just because its title names the set.
 
 ### Hiding one event
 
@@ -3602,6 +3648,16 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - **`supabase/144_calendar_hide.sql`** — STAGED, not applied. Widens
   `calendar_subscriptions.kind` to allow `'hide'`. Safe to ship the client
   first: hiding falls back to per-device until it lands.
+  **⚠ Its NUMBER collides** with a concurrent session's
+  `144_scout_off_roster.sql` (and `143_calendar_geo.sql` with `143_scout_team.sql`).
+  Numbering is first-come across sessions and nothing enforces it, so say the
+  FULL FILENAME when asking for one of these to be run.
+- **`supabase/145_calendar_image.sql`** — STAGED, not applied. One nullable
+  `calendar_events.image_url`, the per-event art override. Safe to ship the
+  client first: `CAL_COL_LADDER` drops the column on 42703 and every event falls
+  back to its automatic match or its glyph. Its header carries the two rules that
+  are easy to get wrong later — don't store a Disney/Ravensburger mark in it, and
+  the host must be in the CSP `img-src` in BOTH copies in `_headers`.
 - **`supabase/142_calendar_geo_and_read_fix.sql`** — **HALF-APPLIED.** Its policy
   fix IS live (2026-09-12, verified: an anon read of `calendar_events` returns 34
   rows where it used to raise 42501). Its `alter table` half never ran — selecting

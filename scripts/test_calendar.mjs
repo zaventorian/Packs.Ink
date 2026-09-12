@@ -56,6 +56,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const _calKindRank = "),
   grab("const calendarSort = (events) =>", "|| String(a.title || \"\").localeCompare(String(b.title || \"\")));"),
   grab("const calendarCombine = (curated, store) => {", NL + "};"),
+  grabLine("const CAL_ART_PREF = "),
+  grab("const calendarArtIndex = (sealedRows, names) => {", NL + "};"),
+  grab("const calendarEventArt = (ev, artIndex) => {", NL + "};"),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -87,7 +90,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,",
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
-  " calendarHiddenSet, calendarApplyHidden,",
+  " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
 ].join(NL)));
 
@@ -98,6 +101,7 @@ const {
   calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
+  calendarArtIndex, calendarEventArt,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
 } = mod;
 
@@ -531,6 +535,58 @@ ok("a bad date has no label", calShortDay("nope") === "");
   ok("if both rows somehow exist, the save wins",
     calendarApplyHidden([ev("z")], new Set(["z"]), new Set(["z"])).length === 1);
 }
+
+// -- Event art -------------------------------------------------------------
+// A coloured dot said which filter something came from, not what it is. Where
+// real art exists we show it; where it does not, a drawn glyph. Nothing here
+// reaches for an official Disney/Ravensburger mark.
+{
+  const sealed = [
+    {name: "Disney Lorcana: Hyperia City Booster Box Case", image_url: "case.jpg"},
+    {name: "Disney Lorcana: Hyperia City Booster Box",      image_url: "box.jpg"},
+    {name: "Disney Lorcana: Hyperia City Booster Pack",     image_url: "pack.jpg"},
+    {name: "Disney Lorcana: Hyperia City Illumineer's Trove", image_url: "trove.jpg"},
+    {name: "Rapunzel Collector's Gift Set",                 image_url: "gift.jpg"},
+    {name: "Disney Lorcana: Winterspell Booster Pack",      image_url: "winter.jpg"},
+    {name: "Some Product With No Picture",                  image_url: null},
+  ];
+  const idx = calendarArtIndex(sealed, ["Hyperia City", "Winterspell", "Rapunzel Collector's Gift Set",
+                                        "Some Product With No Picture", "Nothing At All"]);
+  // ⚠ The plain Booster Pack IS the set's art, and it is the one product every
+  // set has. A Case is a distributor carton - a photo of cardboard.
+  ok("a set resolves to its booster pack, not its box or case",
+    idx.get("hyperia city") === "pack.jpg", idx.get("hyperia city"));
+  ok("a case is never chosen", [...idx.values()].every(v => v !== "case.jpg"));
+  ok("a product resolves to its own photo",
+    idx.get("rapunzel collector's gift set") === "gift.jpg");
+  ok("a product with no image is absent rather than null",
+    !idx.has("some product with no picture"));
+  ok("an unmatched name is absent", !idx.has("nothing at all"));
+  ok("one set does not borrow another set's art", idx.get("hyperia city") !== "winter.jpg");
+
+  const ev = (k, extra) => ({id: "x", kind: k, title: "Hyperia City", starts_on: "2026-10-16", ...extra});
+  ok("a set event finds its art", calendarEventArt(ev("set"), idx) === "pack.jpg");
+  ok("a set event prefers set_name over title",
+    calendarEventArt(ev("set", {set_name: "Winterspell"}), idx) === "winter.jpg");
+  // ⚠ The curated override always wins - it is the only way to correct a wrong
+  // automatic match, and a wrong picture is worse than no picture.
+  ok("a curated image_url beats the automatic match",
+    calendarEventArt(ev("set", {image_url: "mine.png"}), idx) === "mine.png");
+  ok("a curated image_url works on a kind that resolves nothing",
+    calendarEventArt(ev("dlc", {image_url: "mine.png"}), idx) === "mine.png");
+  // A Challenge or a qualifier has no product behind it and must not inherit a
+  // set's pack art just because its title mentions the set.
+  ok("a dlc does not borrow set art", calendarEventArt(ev("dlc"), idx) === null);
+  ok("a ccq does not borrow set art", calendarEventArt(ev("ccq"), idx) === null);
+  ok("a store event does not borrow set art", calendarEventArt(ev("store"), idx) === null);
+  ok("no index means no art", calendarEventArt(ev("set"), null) === null);
+  ok("art tolerates nulls", calendarEventArt(null, idx) === null
+    && calendarArtIndex(null, null).size === 0);
+}
+ok("the kinds with no product behind them use drawn glyphs", (() => {
+  const by = Object.fromEntries(CALENDAR_KINDS.map(k => [k.key, k.icon]));
+  return by.dlc === "trophy" && by.ccq === "medal" && by.product === "gift" && by.store === "store";
+})());
 
 // ── Store entries ───────────────────────────────────────────────────────────
 const storeEv = calendarStoreEntry({
