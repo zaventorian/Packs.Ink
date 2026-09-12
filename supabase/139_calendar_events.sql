@@ -108,14 +108,21 @@ grant select, insert, update, delete on public.calendar_events to service_role;
 -- failure a calendar must never have, and a confident wrong date is worse than
 -- an empty row. Set releases arrive from SET_RELEASE_DATES (see above), so the
 -- calendar is populated on day one regardless.
-insert into public.calendar_events (kind, title, subtitle, starts_on, ends_on, location, url, source)
+insert into public.calendar_events (id, kind, title, subtitle, starts_on, ends_on, location, url, source)
 values
-  ('dlc', 'North American Championship', 'Disney Lorcana Challenge',
+  ('7afbb8d1-51f9-5a5a-bca9-6d6636a9fc42', 'dlc', 'North American Championship', 'Disney Lorcana Challenge',
    date '2026-08-28', date '2026-08-30', 'Disneyland Hotel, Anaheim, CA',
    'https://www.fanfinity.gg/event/disney-lorcana-tcg-challenge-north-american-championship-2026/', 'manual'),
-  ('dlc', 'European Championship', 'Disney Lorcana Challenge',
+  ('27870d16-a0e4-553a-a593-cd1396d08af3', 'dlc', 'European Championship', 'Disney Lorcana Challenge',
    date '2026-09-11', date '2026-09-13', 'Disneyland Paris',
    'https://www.fanfinity.gg/event/disney-lorcana-tcg-challenge-european-championship-2026/', 'manual')
-on conflict do nothing;
+-- ⚠ Fixed ids, so re-running this migration UPDATES these two instead of
+-- inserting a second copy. `on conflict do nothing` on its own could never have
+-- worked here: the only unique column is event_id, which is null on both, so a
+-- re-run would have duplicated them silently.
+on conflict (id) do update set
+  starts_on = excluded.starts_on, ends_on = excluded.ends_on,
+  location  = excluded.location,  url     = excluded.url,
+  updated_at = now();
 
 notify pgrst, 'reload schema';

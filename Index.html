@@ -34621,6 +34621,14 @@ const HOME_COLUMNS = [
   {key:"right",    label:"Right rail"},
 ];
 const HOME_PANELS = [
+  // "What's coming for the game", and FIRST in the left rail on purpose — above
+  // the news feed, per Zaven. A dated list of what is about to happen is the
+  // thing you scan a home page for; news is what you read once you are there.
+  // Its position here is what puts it above news for a browser with no stored
+  // layout (defaultHomeLayout keeps this order); an existing browser is hoisted
+  // once by HOME_LAYOUT_CALENDAR_KEY, since normalizeHomeLayout APPENDS new
+  // keys and would otherwise bury it at the foot of the column.
+  {key:"calendar",    label:"Lorcana calendar",     col:"left"},
   {key:"news",        label:"News feed",            col:"left"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
@@ -34631,18 +34639,12 @@ const HOME_PANELS = [
   // same place — its title links to /gear, which is the whole catalogue.
   // normalizeHomeLayout DROPS a key it doesn't recognise, so every stored
   // layout holding "gear" repairs itself on the next load with no migration.
-  {key:"setChamps",   label:"Upcoming events",      col:"right"},
-  // "What's coming for the game" — the sibling of "what's near me" above, and
-  // deliberately a SEPARATE box rather than a tab inside it: one is a geo search
-  // you run, the other is a schedule you glance at. Appended at the foot of its
-  // default column for existing browsers, per normalizeHomeLayout — a new box
-  // has not earned the right to shove somebody's arrangement around.
   // Accessories, all Amazon. Appended rather than hoisted for existing
   // browsers (normalizeHomeLayout puts a new key at the foot of its default
   // column): a shop box has not earned the right to shove somebody's
   // arrangement around, unlike the at-the-table shortcuts that did.
   {key:"gear",        label:"Gear",                 col:"right"},
-  {key:"calendar",    label:"Lorcana calendar",     col:"right"},
+  {key:"setChamps",   label:"Upcoming events",      col:"right"},
   {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
   // Off by default: it is empty for anyone with no graded slabs, and the
@@ -34684,11 +34686,21 @@ const HOME_FIXED_KEYS = new Set(HOME_PANELS.filter(p => p.fixed).map(p => p.key)
 // movers, so a box you want to actually see has to ride a banner. Now any of
 // the three can ride any banner, on either side, and it is a layout choice
 // rather than something baked into one component.
-const HOME_PAIRABLE_KEYS = new Set(["news", "following", "tournaments"]);
+const HOME_PAIRABLE_KEYS = new Set(["news", "following", "tournaments", "calendar"]);
 const HOME_PAIR_SIDES = ["right", "left"];
 const HOME_PANEL_LABELS = Object.fromEntries(HOME_PANELS.map(p => [p.key, p.label]));
 // Every panel except setChamps can be popped out and linked to.
-const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps" && !HOME_FIXED_KEYS.has(k)));
+// ⚠ calendar is excluded for the same reason as setChamps: its title does
+// something else. Popping it out would re-show the identical six-row list over
+// a dimmed page, which is not "bigger" by any reading — /calendar, with the
+// month grid and the filters, is. HOME_ALWAYS_SECTION is what sends it there at
+// every width instead of only above 1100px.
+// ⚠ Keep this on ONE line — scripts/test_share_links.mjs extracts it with a
+// single-line grab, and splitting it truncated the const to a syntax error.
+const HOME_POPOUT_KEYS = new Set(HOME_PANEL_KEYS.filter(k => k !== "setChamps" && k !== "calendar" && !HOME_FIXED_KEYS.has(k)));
+// Panels whose title goes to their own section at EVERY width, because the
+// pop-out would show the same thing the panel already shows.
+const HOME_ALWAYS_SECTION = new Set(["calendar"]);
 // A panel's TITLE is a link, and `panelNav` (see HomeView) decides where to.
 // Where the box summarises a section of the site, that is where it goes —
 // Tournament Results to Decks · Tournaments — because on a wide home page the
@@ -34725,6 +34737,13 @@ const HOME_LAYOUT_TOOLBOX_KEY = "packsink:homeLayoutToolbox";
 // hidden on the next load.
 const HOME_LAYOUT_TABLE_SHORTCUTS_KEY = "packsink:homeLayoutTableShortcuts";
 const HOME_TABLE_SHORTCUT_KEYS = ["dice", "lore"];
+// One-shot stamp for the calendar panel (2026-09-12). Same reason as the
+// Toolbox: normalizeHomeLayout APPENDS a key it has never seen, so a brand-new
+// panel lands at the FOOT of its column for every browser that has ever loaded
+// the site — which for a "what's coming up" box is the one place it is useless.
+// It belongs above the news feed, so hoist it to the top of the left rail once.
+// Stamped rather than coerced, so moving it afterwards sticks.
+const HOME_LAYOUT_CALENDAR_KEY = "packsink:homeLayoutCalendarRail";
 // Movers-banner ordering (edit mode ▲▼). null = the built-in order, where
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
@@ -37045,13 +37064,17 @@ const CalendarPanel = ({panelNav, user}) => {
     ${rows.length === 0
       ? html`<div class="cal-panel-empty muted">Nothing scheduled in the next while.</div>`
       : html`<ul class="cal-panel-list">
-        ${rows.map(ev => html`<li key=${ev.id} class="cal-panel-row">
-          <span class="cal-panel-when">
-            <span class="cal-panel-date">${calDayLabel(ev.starts_on)}</span>
-            <span class="cal-panel-count">${calCountdown(ev, today)}</span>
+        ${/* ⚠ TWO LINES, not three columns. This box lives in the ~200px left
+              rail, and a row of [date | title | subtitle] left the title about
+              80px — "GNG Attack of the Vine! Set Championship" rendered as
+              "GNG …", which is no information at all. Date, countdown and
+              subtitle are all secondary, so they share one muted line and the
+              title gets the full width on its own. */
+          rows.map(ev => html`<li key=${ev.id} class="cal-panel-row">
+          <span class="cal-panel-meta">
+            ${[calDayLabel(ev.starts_on), calCountdown(ev, today), ev.subtitle].filter(Boolean).join(" · ")}
           </span>
           <span class="cal-panel-title"><${CalendarKindDot} kind=${ev.kind}/><span>${ev.title}</span></span>
-          ${ev.subtitle && html`<span class="cal-panel-sub">${ev.subtitle}</span>`}
         </li>`)}
       </ul>`}
   </aside>`;
@@ -39242,7 +39265,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // widths keep it. News has no section of its own and pops out at every width.
   const wideHome = !useMaxWidth(1100);
   const panelTitleNav = (key, label) => {
-    const dest = wideHome ? panelDest[key] : null;
+    const dest = (wideHome || HOME_ALWAYS_SECTION.has(key)) ? panelDest[key] : null;
     if(dest) return {href: dest.href, go: dest.go, title: dest.cta};
     if(!HOME_POPOUT_KEYS.has(key)) return null;
     return {href: homePanelHref(key), go: () => popOutPanel(key),
@@ -47039,7 +47062,7 @@ function App(){
   // any more, so move news to the rail once. Stamped rather than coerced, so a
   // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
-    let fixNews = false, hoistTools = false, onShortcuts = false;
+    let fixNews = false, hoistTools = false, onShortcuts = false, hoistCal = false;
     try {
       fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
       if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
@@ -47047,6 +47070,8 @@ function App(){
       if(hoistTools) localStorage.setItem(HOME_LAYOUT_TOOLBOX_KEY, "1");
       onShortcuts = !localStorage.getItem(HOME_LAYOUT_TABLE_SHORTCUTS_KEY);
       if(onShortcuts) localStorage.setItem(HOME_LAYOUT_TABLE_SHORTCUTS_KEY, "1");
+      hoistCal = !localStorage.getItem(HOME_LAYOUT_CALENDAR_KEY);
+      if(hoistCal) localStorage.setItem(HOME_LAYOUT_CALENDAR_KEY, "1");
     } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
@@ -47071,6 +47096,19 @@ function App(){
         if(onShortcuts){
           list = list.map(p => HOME_TABLE_SHORTCUT_KEYS.includes(p.key)
               ? {...p, on: true} : p);
+        }
+        // The calendar was appended at the foot of the left rail; it belongs at
+        // the top of it, above the news feed. Splice it in ahead of the first
+        // left-column panel rather than at index 0 — the array is one flat list
+        // across every column, so index 0 could be a right-rail panel and the
+        // calendar would silently change column.
+        if(hoistCal){
+          const cal = list.find(p => p.key === "calendar");
+          if(cal && cal.col === "left"){
+            list = list.filter(p => p.key !== "calendar");
+            const i = list.findIndex(p => p.col === "left");
+            if(i >= 0) list.splice(i, 0, cal); else list.push(cal);
+          }
         }
         return list;
       }

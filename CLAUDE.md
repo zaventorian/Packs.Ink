@@ -3118,9 +3118,75 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
 - URL params `ck` / `cv` / `cm` (chips / list-vs-month / which month), registered in
   BOTH `dirtyParams` and `VIEW_OWNED.calendar` per the standing rule, written with
   `replaceState` (a filter is not a page).
-- **Next set is `Hyperia City`** — prereleases start **2026-10-15** (1,685 events
-  reference it in `lorcana_events` as of 2026-09-12). Its LGS/retail dates are not
-  published yet; type them into the editor rather than inferring them.
+### Where the curated data comes from
+
+- **The 2026-27 season ("Season of Villainy") is seeded by migration 141** — 14
+  CCQs and 17 DLCs — from the **Lorcana Fandom wiki's Competitive Season page**,
+  which is the only public list of a whole season. Ravensburger announces DLCs
+  piecemeal, and **most of these CCQs never appear on RPH at all** (checked:
+  White Rabbit, CCS Raleigh, Senigallia, Osaka, RareHunter all return nothing
+  from `lorcana_events`), so the wiki is genuinely additive rather than a
+  convenience. Three entries that DO overlap were cross-checked and matched to
+  the day (D23 Aug 15, Woodzshack Aug 22, Brainwash Cards Sep 19).
+- **⚠ `lorcana.fandom.com` 403s both curl and WebFetch, but `api.php` answers
+  200.** Read it as `api.php?action=parse&page=<Page>&prop=wikitext&format=json`.
+  Same shape of workaround as the lorcanaplayer.com/Jetpack-mirror trick.
+- **⚠ The wiki's DLC table has its Players and "Sets Legal" columns transposed**
+  (DLC Bangkok's player count reads "Fabled-Hyperia City"). Only NAME and DATE
+  are safe to take from it.
+- **Everything wiki-sourced carries `source='wiki-2026-27'` and a note saying so**,
+  because fan-maintained is a starting point, not an authority. That is the handle
+  for replacing a date once the official one exists.
+- **`scripts/link_calendar_events.py` is the "add the links as we get them" half.**
+  It matches curated rows against `lorcana_events` and attaches the real RPH
+  `event_id` + registration `url`. **It only ever ADDS** — a row with a `url` or
+  `event_id` is skipped, so a hand-typed link can never be overwritten — and it
+  **refuses ambiguity**: a wrong link sends somebody to register for a different
+  shop's tournament, so two candidates with equal evidence are both dropped.
+  Matching is DATE first (±1 day) and distinctive words second, which is why the
+  word test can afford to be loose. `--self-test` (12 pinned pairs, runs before
+  any live work) guards the two failure shapes: run-together store names
+  (`Woodzshacktcg`, `MalmoGameWeek`) and same-circuit cities that share every
+  other word (Brisbane vs Tokyo CCQ must NOT link).
+- **fanfinity links are NOT automatable** — no feed, and the slugs aren't
+  derivable from an event name. Those are typed into the editor.
+- **Set rotation for the season, from the wiki's "Sets Legal" column**: Attack of
+  the Vine! → **Hyperia City** → **Into the Inkdark** → **Cosmic Quest**.
+  Hyperia City's **prerelease weekend is Fri 2026-10-16 – Sun 2026-10-18**, derived
+  from our own feed (1,628 listings: 349 / 588 / 368, tailing to 55 on the Monday)
+  and seeded by 141. **Its LGS and retail dates are published nowhere** — type them
+  in when they are, never infer them.
+
+### On the home page
+
+- **Default position is the TOP of the LEFT rail, above the news feed** (Zaven,
+  2026-09-12). Two mechanisms, because one is not enough: its place in the
+  `HOME_PANELS` array covers a browser with no stored layout
+  (`defaultHomeLayout` keeps that order), and `HOME_LAYOUT_CALENDAR_KEY` is the
+  one-shot stamp for every browser that has one — `normalizeHomeLayout` APPENDS
+  an unknown key, which for a "what's coming up" box buries it in the one place
+  it is useless. **⚠ The hoist splices before the first LEFT-column panel, not at
+  index 0**: the layout is one flat array across all columns, so index 0 may be a
+  right-rail panel and the calendar would silently change column.
+- **⚠ On mobile it spans BOTH columns of the rail** (`grid-column:1/-1`). At
+  ≤1100px `.home-left-col` is a 2-up grid, which suits Following and Tournament
+  Results — a name and a number — but measured at 375px the calendar got a 169px
+  box and clipped **6 of 6 meta lines and 5 of 6 titles**. Full width is the
+  difference between a list and a column of ellipses.
+- **The panel row is TWO STACKED LINES, not three columns.** In the 240px rail a
+  `[date | title | subtitle]` row left the title ~80px, so "GNG Attack of the
+  Vine! Set Championship" rendered as "GNG …". Date, countdown and subtitle share
+  one muted line; the title gets the full width. The meta line is **sentence case
+  with no letter-spacing** — uppercasing it cost ~15% of the width and clipped the
+  store name on every row, to make secondary text look like a tag.
+- **Its title goes to `/calendar` at EVERY width** (`HOME_ALWAYS_SECTION`), unlike
+  every other panel, which pops out below 1100px. Popping this one out would
+  re-show the identical six-row list over a dimmed page; the month grid and the
+  filters are what "bigger" means here. It is therefore excluded from
+  `HOME_POPOUT_KEYS` too, same as `setChamps`.
+- **⚠ `HOME_POPOUT_KEYS` must stay on ONE line** — `scripts/test_share_links.mjs`
+  extracts it with a single-line grab, and splitting it truncated the const into a
+  syntax error that only surfaced in that test.
 
 ## Swiss simulator (`/lab/swiss`) — unlisted, added 2026-08-20
 
@@ -3304,6 +3370,12 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   reads as "no curated events", and the page still renders its derived set
   releases and your followed stores. Until it lands, `/calendar` shows an
   admin-only banner naming the file, and `scan_ccq_candidates.py` exits saying so.
+- **`supabase/141_calendar_season_2026_27.sql`** — STAGED, not applied. Seeds the
+  Season of Villainy (14 CCQs + 17 DLCs from the Fandom wiki, plus Hyperia City's
+  prerelease weekend from our own feed). Apply it AFTER 139. Ids are
+  `uuid5(6b3e1d2a-…, '<kind>:<title>')` so a re-run updates in place, and the
+  conflict clause deliberately does not touch `url`, `event_id` or `confirmed` —
+  a re-seed must never undo what a person or the linker added on top.
 - **`supabase/140_calendar_subscriptions.sql`** — STAGED, not applied. The
   per-user layer (followed stores, pinned series, saved events) + a
   `(store_id, start_datetime)` index on `lorcana_events`, which is the query the
