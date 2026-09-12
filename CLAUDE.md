@@ -3266,6 +3266,38 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   plain **"Near me"** control in the page header and a fourth tool button on the
   home panel.
 
+### Per-store event kinds
+
+**A followed shop's weeklies outnumber the events you follow shops FOR by about
+ten to one** — Griffonest Games lists 13 locals against 1 Set Championship and 1
+prerelease — so a blanket follow buried the SC under six copies of "Weekly Core
+Constructed". A follow now carries a subset: **Set Champs / Prereleases /
+Locals**, toggled per store in "My stores + saved events".
+
+- Stored in the subscription's `meta.kinds`, matched against `lorcana_events.kind`
+  (`sc` / `prerelease` / `other`).
+- **⚠ ABSENT means EVERYTHING, and that is what makes it backwards-compatible** —
+  every follow made before this shipped has no `meta.kinds` and must keep
+  delivering the whole feed. An empty array is treated as unset too. Only a
+  deliberate toggle ever writes the array.
+- **⚠ An excluded kind FALLS THROUGH to the pinned checks** rather than returning
+  false: a series you pinned at that shop, or a single date you saved, is a
+  deliberate choice and outranks the blanket filter.
+- **An unrecognised kind rides with the catch-all.** RPH only sets those three
+  today, but a fourth must not vanish silently — the same thing the feed itself
+  does with `kind='other'`.
+- `calStoreKindsOf` returns them in CANONICAL order, not stored order, or the
+  chips would reorder themselves as you toggle. `other` is last because it is the
+  catch-all and the noisy one — the toggle most people want to find.
+- **The last active chip can't be switched off** — same invariant as the movers
+  chip groups and the calendar's own kind chips. A follow that delivers nothing is
+  a confusing way to spell "unfollow", and × is right there.
+- **⚠ `updateMeta` computes the merge from `subs`, not inside the setState
+  updater.** An updater must be pure and React may call it twice; deriving the
+  value there and writing it through would fire the remote call on a value that
+  is not necessarily the one that won. It MERGES, so a store's `city`/`state`
+  survive a kind toggle.
+
 ### The home panel's list pager
 
 - **‹ › step through time in list mode** (Zaven, 2026-09-12) — the panel shows a

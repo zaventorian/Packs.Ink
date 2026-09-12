@@ -36681,7 +36681,21 @@ function useCalendarSubs(user){
     if(subs.some(s => s.kind === sub.kind && String(s.ref) === String(sub.ref))) remove(sub.kind, sub.ref);
     else add(sub);
   }, [subs, add, remove]);
-  return {subs, has, add, remove, toggle};
+  // Merge a patch into one subscription's meta. Computed from `subs` rather than
+  // inside the setState updater: an updater has to be pure, and React may call
+  // it twice — deriving the value there and writing it through would fire the
+  // remote call on a value that is not necessarily the one that won.
+  const updateMeta = useCallback((kind, ref, patch) => {
+    const cur = subs.find(s => s.kind === kind && String(s.ref) === String(ref));
+    if(!cur) return;
+    const meta = {...(cur.meta || {}), ...patch};
+    const next = subs.map(s => s === cur ? {...s, meta} : s);
+    setSubs(next);
+    calWriteLocalSubs(next);
+    if(uid) sbClient.from("calendar_subscriptions").update({meta})
+      .eq("user_id", uid).eq("kind", kind).eq("ref", String(ref)).then(() => {}, () => {});
+  }, [subs, uid]);
+  return {subs, has, add, remove, toggle, updateMeta};
 }
 
 // The local weekday + HH:MM an event falls on IN ITS OWN ZONE — the two fields
@@ -36711,6 +36725,37 @@ const calSeriesMatches = (sub, ev) => {
   if(m.dow != null && Number(m.dow) !== slot.dow) return false;
   if(m.local_time && String(m.local_time).slice(0, 5) !== slot.hhmm) return false;
   return true;
+};
+
+// ── What you follow a store FOR ─────────────────────────────────────────────
+// A shop's weeklies outnumber everything else it runs by an order of magnitude,
+// so "follow this store" used to mean six copies of "Weekly Core Constructed"
+// pushing the Set Championship you actually care about off the panel. These are
+// the three things a store puts on, and a follow can carry any subset.
+//
+// `other` is last because it is the catch-all AND the noisy one — the subset
+// most people will want to switch off.
+const CAL_STORE_KINDS = [
+  {key: "sc",         label: "Set Champs",  long: "Set Championships"},
+  {key: "prerelease", label: "Prereleases", long: "Set-launch prereleases"},
+  {key: "other",      label: "Locals",      long: "Locals, league nights and everything else"},
+];
+const CAL_STORE_KIND_KEYS = CAL_STORE_KINDS.map(k => k.key);
+// ⚠ An ABSENT selection means everything, and that is what makes this
+// backwards-compatible: every follow made before this existed has no
+// `meta.kinds` and must keep delivering the whole feed. Only a deliberate
+// toggle ever writes the array.
+const calStoreKindsOf = (sub) => {
+  const k = sub && sub.meta && sub.meta.kinds;
+  return (Array.isArray(k) && k.length) ? CAL_STORE_KIND_KEYS.filter(x => k.includes(x))
+                                        : CAL_STORE_KIND_KEYS.slice();
+};
+const calStoreAllows = (sub, evKind) => {
+  const k = sub && sub.meta && sub.meta.kinds;
+  if(!Array.isArray(k) || !k.length) return true;
+  // RPH only ever sets sc / prerelease / other, but an unknown kind must not
+  // vanish silently — it falls in with the catch-all, same as the feed does.
+  return k.includes(CAL_STORE_KIND_KEYS.includes(evKind) ? evKind : "other");
 };
 
 const CAL_EVENT_COLS = "event_id,kind,name,set_name,store_id,store_name,start_datetime,end_datetime,timezone,city,state,country,latitude,longitude,gameplay_format,url";
@@ -36771,13 +36816,18 @@ function useStoreCalendarEvents(subs){
   }, [key]);
 
   return useMemo(() => {
-    const followed = new Set((subs || []).filter(s => s.kind === "store").map(s => String(s.ref)));
+    const followed = new Map((subs || []).filter(s => s.kind === "store").map(s => [String(s.ref), s]));
     const series = (subs || []).filter(s => s.kind === "series");
     const pinned = new Set(eventIds);
     return rows
-      .filter(ev => followed.has(String(ev.store_id))
-                 || pinned.has(Number(ev.event_id))
-                 || series.some(s => calSeriesMatches(s, ev)))
+      .filter(ev => {
+        // ⚠ A store whose selection excludes this kind FALLS THROUGH rather than
+        // returning false: a series you pinned at that shop, or a single date you
+        // saved, is a deliberate choice and outranks the blanket filter.
+        const follow = followed.get(String(ev.store_id));
+        if(follow && calStoreAllows(follow, ev.kind)) return true;
+        return pinned.has(Number(ev.event_id)) || series.some(s => calSeriesMatches(s, ev));
+      })
       .map(ev => calendarStoreEntry(ev))
       .filter(Boolean);
   }, [rows, subs, eventIds]);
@@ -37594,10 +37644,39 @@ function CalendarView({user, onSignIn, onFindEvents}){
               every result has a ${uiIcon("calendarPlus", 12)} button, and a
               <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.</p>`
           : html`<ul class="cal-follow-list">
-              ${followedStores.map(s => html`<li key=${"st" + s.ref}>
-                ${uiIcon("store", 12)} <span>${s.label || `Store ${s.ref}`}</span>
-                <em>every event</em>
-                <button type="button" aria-label="Unfollow" onClick=${() => subs.remove("store", s.ref)}>×</button></li>`)}
+              ${followedStores.map(st => {
+                const on = calStoreKindsOf(st);
+                const all = on.length === CAL_STORE_KIND_KEYS.length;
+                return html`<li key=${"st" + st.ref} class="cal-follow-store">
+                  <div class="cal-follow-line">
+                    ${uiIcon("store", 12)} <span>${st.label || `Store ${st.ref}`}</span>
+                    <em>${all ? "every event" : on.length
+                      ? CAL_STORE_KINDS.filter(k => on.includes(k.key)).map(k => k.label).join(" · ")
+                      : "nothing"}</em>
+                    <button type="button" aria-label="Unfollow"
+                      onClick=${() => subs.remove("store", st.ref)}>×</button>
+                  </div>
+                  <div class="cal-follow-kinds">
+                    ${CAL_STORE_KINDS.map(k => {
+                      const isOn = on.includes(k.key);
+                      // Same invariant as every other chip group on the site: the
+                      // LAST active one cannot be switched off. An empty selection
+                      // is a follow that delivers nothing, which is just a confusing
+                      // way to spell "unfollow" — and × is right there.
+                      const last = isOn && on.length === 1;
+                      return html`<button key=${k.key} type="button"
+                        class=${"cal-kind-chip" + (isOn ? " on" : "")}
+                        aria-pressed=${isOn ? "true" : "false"}
+                        title=${last ? "Keep at least one, or unfollow the store with ×" : k.long}
+                        onClick=${() => { if(last) return;
+                          subs.updateMeta("store", st.ref, {kinds: isOn
+                            ? on.filter(x => x !== k.key)
+                            : CAL_STORE_KIND_KEYS.filter(x => on.includes(x) || x === k.key)});
+                        }}>${k.label}</button>`;
+                    })}
+                  </div>
+                </li>`;
+              })}
               ${followedSeries.map(s => html`<li key=${"se" + s.ref}>
                 ${uiIcon("pin", 12)} <span>${s.label || "Pinned series"}</span>
                 <em>${(s.meta && s.meta.name) || "recurring"}</em>

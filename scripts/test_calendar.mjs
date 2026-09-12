@@ -56,6 +56,10 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const _calKindRank = "),
   grab("const calendarSort = (events) =>", "|| String(a.title || \"\").localeCompare(String(b.title || \"\")));"),
   grab("const calendarCombine = (curated, store) => {", NL + "};"),
+  grab("const CAL_STORE_KINDS = [", NL + "];"),
+  grabLine("const CAL_STORE_KIND_KEYS = "),
+  grab("const calStoreKindsOf = (sub) => {", NL + "};"),
+  grab("const calStoreAllows = (sub, evKind) => {", NL + "};"),
   grab("const calendarStoreEntry = (ev, extra) => {", NL + "};"),
   grabLine("const CAL_MAX_SPAN_DAYS = "),
   grab("const calendarEventDays = (ev) => {", NL + "};"),
@@ -80,7 +84,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,",
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
-  " calendarPanelWindow, calShortDay,",
+  " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
 ].join(NL)));
 
@@ -89,7 +93,8 @@ const {
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,
   calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
-  calendarPanelWindow, calShortDay,
+  calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
+  CAL_STORE_KIND_KEYS,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
 } = mod;
 
@@ -443,6 +448,44 @@ ok("tile urls point at openstreetmap over https",
 }
 ok("the pager label is compact", calShortDay("2026-09-12") === "Sep 12", calShortDay("2026-09-12"));
 ok("a bad date has no label", calShortDay("nope") === "");
+
+// ── Per-store event-kind toggles ────────────────────────────────────────────
+// A shop's weeklies outnumber its Set Championships ~10:1, so a blanket follow
+// buried the events people follow shops FOR. These decide what a follow delivers.
+{
+  const sub = (kinds) => kinds === undefined ? {kind: "store", ref: "1", meta: {}}
+                                             : {kind: "store", ref: "1", meta: {kinds}};
+  // ⚠ Backwards compatibility is the whole reason "absent" means "everything":
+  // every follow made before this shipped has no meta.kinds.
+  ok("a follow with no selection delivers everything",
+    calStoreAllows(sub(), "sc") && calStoreAllows(sub(), "prerelease") && calStoreAllows(sub(), "other"));
+  ok("so does a follow with no meta at all",
+    calStoreAllows({kind: "store", ref: "1"}, "other"));
+  ok("an empty array is treated as unset, not as 'nothing'",
+    calStoreAllows(sub([]), "other"));
+  ok("a narrowed follow keeps what it names", calStoreAllows(sub(["sc"]), "sc"));
+  ok("and drops what it does not", !calStoreAllows(sub(["sc"]), "other"));
+  ok("two kinds keep both", calStoreAllows(sub(["sc","prerelease"]), "prerelease")
+    && !calStoreAllows(sub(["sc","prerelease"]), "other"));
+  // RPH only sets sc / prerelease / other, but an unrecognised kind must not
+  // vanish silently — it falls in with the catch-all, as the feed itself does.
+  ok("an unknown kind rides with the catch-all",
+    calStoreAllows(sub(["other"]), "weird-new-kind") && !calStoreAllows(sub(["sc"]), "weird-new-kind"));
+  ok("a null kind rides with the catch-all", calStoreAllows(sub(["other"]), null));
+
+  ok("an unset follow reports every kind",
+    calStoreKindsOf(sub()).join(",") === CAL_STORE_KIND_KEYS.join(","), calStoreKindsOf(sub()).join(","));
+  // Stored order must not leak into the UI, or the chips reorder themselves.
+  ok("the reported order is the canonical one, not the stored one",
+    calStoreKindsOf(sub(["other","sc"])).join(",") === "sc,other",
+    calStoreKindsOf(sub(["other","sc"])).join(","));
+  ok("junk in the stored array is dropped",
+    calStoreKindsOf(sub(["sc","nonsense"])).join(",") === "sc");
+  ok("the catch-all is last, so the noisiest toggle is the easy one to find",
+    CAL_STORE_KIND_KEYS[CAL_STORE_KIND_KEYS.length - 1] === "other");
+  ok("every store kind has a short label and a long one",
+    CAL_STORE_KINDS.every(k => k.label && k.long && k.label.length <= 12));
+}
 
 // ── Store entries ───────────────────────────────────────────────────────────
 const storeEv = calendarStoreEntry({
