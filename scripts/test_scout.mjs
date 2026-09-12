@@ -27,6 +27,7 @@ const css = read("../styles.css");
 const sql = read("../supabase/143_scout_team.sql");
 const sql144 = read("../supabase/144_scout_off_roster.sql");
 const sql147 = read("../supabase/147_scout_window_24h.sql");
+const sql148 = read("../supabase/148_scout_any_event.sql");
 const fn = read("../supabase/functions/refresh-elo-rosters/index.ts");
 const NL = "\n";
 
@@ -61,12 +62,21 @@ const ok = (name, cond) => check(name, !!cond, true);
 // read the same: one is a deploy step, the other is "you aren't on the team".
 ok("pre-143 reads as a deploy step",
   /migration 143/.test(m.scoutErrText({code: "PGRST202", message: 'Could not find the function public.get_scout_event'})));
+// ⚠ …and names the RIGHT migration. "Apply 143" on a site that already has 143
+// sends whoever reads it to check the wrong thing.
+ok("a missing 148 names 148",
+  /migration 148/.test(m.scoutErrText({code: "PGRST202", message: 'Could not find the function public.scout_event_add(p_event_id)'})));
 ok("a refusal reads as team-only",
   /team-only/.test(m.scoutErrText({message: "not authorized"})));
 ok("a postgres permission denial reads as team-only too",
   /team-only/.test(m.scoutErrText("permission denied for function get_roster_scout")));
-ok("an out-of-scope event says so",
-  /store we track/i.test(m.scoutErrText({message: "event 12345 is not one we scout"})));
+// ⚠ Since 148 this is no longer a dead end — an out-of-scope event is one a
+// scout can ADD — so the copy has to name the way out rather than just the wall.
+ok("an out-of-scope event names the way out",
+  /scouting list/i.test(m.scoutErrText({message: "event 12345 is not one we scout"})) &&
+  /Add this event/i.test(m.scoutErrText({message: "event 12345 is not one we scout"})));
+ok("an unresolvable event says there is nothing to scout",
+  /nothing to scout/i.test(m.scoutErrText({message: "we have no event 12345 on file"})));
 ok("a plain string error survives", m.scoutErrText("boom") === "boom");
 
 // The reminder shape Zaven asked for is "9/12 <store> <deck>", so the date has
@@ -125,7 +135,8 @@ for (const t of ["scout_notes", "scout_members"]) {
 ok("the Scout tab renders on canScout", /\$\{tab==="scout" && canScout &&/.test(src));
 ok("the Scout tab button renders on canScout", /\$\{canScout && html`<button class=\$\{"elo-tab-scout"/.test(src));
 ok("the scout modal renders on canScout", /\$\{scoutEvent && canScout && html`<\$\{ScoutEventModal\}/.test(src));
-ok("the calendar's Scout tab renders on canScout", /const canScout = useContext\(ScoutContext\);\n  const tracked = useTrackedStoreIds\(canScout\);/.test(src));
+ok("the calendar's Scout tab renders on canScout",
+  /const canScout = useContext\(ScoutContext\);\n  const scoutable = !!\(canScout && ev && ev\.event_id != null\);/.test(src));
 ok("no scout surface is gated on canViewStore",
   !/(scout|Scout)[^\n]*\bcanViewStore\b[^\n]*ScoutEvent/.test(src));
 
@@ -370,6 +381,153 @@ ok("the Scout row marks an event that has already begun",
 // It sits inside the .muted meta line, so it has to take its colour back or the
 // one thing separating a live row from a listing is the grey of the address.
 ok("the chip is not muted grey", /\.elo-scout-began\{color:var\(--accent\)/.test(css));
+
+// ── 148: scouting an event outside the tracked bubble ────────────────────
+// Zaven's ask: some of the team lives outside Chicagoland, and the event they
+// are actually going to is exactly the one with no sheet. The constraint that
+// came with it — "don't auto add any more to our main scouting tab" — is what
+// most of this section pins: the AUTOMATIC slate is still elo_tracked_stores
+// and nothing here may widen it. Only an explicit, attributed opt-in does.
+const created148 = new Map();
+{
+  const re = /create (?:or replace )?function public\.([a-z_0-9]+)\(([^)]*)\)([\s\S]*?)\n\$\$;/g;
+  let mm;
+  while ((mm = re.exec(sql148))) created148.set(mm[1], {args: mm[2], body: mm[3]});
+}
+
+// The ledger is definer-only, like every other scouting table.
+ok("148 creates the opt-in ledger", /create table if not exists public\.scout_events \(/.test(sql148));
+ok("scout_events has RLS on", sql148.includes("alter table public.scout_events enable row level security;"));
+ok("scout_events has no RLS policy", !/create policy[^;]*on public\.scout_events/.test(sql148));
+ok("scout_events is not granted to anon or authenticated",
+  !/grant [^;]*on public\.scout_events to [^;]*(anon|authenticated)/.test(sql148));
+// ⚠ Same durability rule as scout_notes: lorcana_events is an UPCOMING feed that
+// prunes what has happened, so a hand-added event that ages out of every feed
+// must still resolve off its own stored label or the sheet stops opening.
+for (const col of ["event_name", "start_datetime", "event_tz", "store_name"]) {
+  ok(`scout_events stores ${col} on the row`, new RegExp(`\\n  ${col} +\\w`).test(sql148));
+}
+ok("the ledger is a resolution source of its own",
+  /from public\.scout_events a where a\.event_id = p_event_id/.test(created148.get("scout_event_meta").body));
+
+// ⚠ REVERSIBILITY. Removing an aged-out event must not orphan its sheet: without
+// scout_notes as a last-resort source, scout_event_add refuses an event nothing
+// can name, the notes survive only in each player's own history, and the sheet
+// can never be opened again. That is the exact failure the graded view's
+// per-card Hide was killed for — and this harness caught it being rebuilt.
+ok("a note's own label can resolve an event",
+  /from public\.scout_notes n where n\.event_id = p_event_id/.test(created148.get("scout_event_meta").body));
+ok("remove reports the notes it leaves behind",
+  /notes_kept/.test(created148.get("scout_event_remove").body));
+
+// ⚠ The gate WIDENS IN PLACE rather than being renamed. Every caller — both
+// versions of get_scout_event, save_scout_note, and the edge function — reads
+// scout_event_meta's `tracked` and means "may we scout this". A new column plus
+// a re-gate of every caller would mean 144 and 148 both re-create
+// get_scout_event, so pasting 144 AFTER 148 would silently revert the gate and
+// an added event would stop opening, blaming the store. Widening the flag the
+// callers already read makes the paste order stop mattering.
+ok("scout_event_meta must be dropped before it is re-created",
+  /drop function if exists public\.scout_event_meta\(bigint\);\s*\ncreate function public\.scout_event_meta\(/.test(sql148));
+ok("tracked now means tracked-store OR opted-in",
+  /\(t\.store_id is not null or a\.event_id is not null\)/.test(created148.get("scout_event_meta").body));
+ok("the narrow facts are still reported separately",
+  /store_tracked boolean, opted_in boolean/.test(sql148));
+ok("get_scout_event still gates on v_meta.tracked",
+  /if not v_meta\.tracked then[\s\S]{0,200}untracked_store/.test(created148.get("get_scout_event").body));
+// The drop takes the grants with it, and service_role's is what the edge
+// function needs — the matview-grant trap in function form, a second time.
+for (const role of ["authenticated", "service_role"]) {
+  ok(`148 re-grants scout_event_meta to ${role}`,
+    new RegExp(`grant execute on function public\\.scout_event_meta\\(bigint\\) to ${role};`).test(sql148));
+}
+
+// The two new RPCs: gated, granted, revoked, and refusing an event nothing can
+// name (a ledger row pointing at a bare number is worse than no row).
+for (const name of ["scout_event_add", "scout_event_remove"]) {
+  ok(`client calls ${name}`, new RegExp(`sbClient\\.rpc\\("${name}"`).test(src));
+  ok(`148 defines ${name}`, created148.has(name));
+  ok(`${name} checks can_scout() itself`,
+    /if not public\.can_scout\(\) then\s*\n\s*raise exception 'not authorized';/.test(created148.get(name).body));
+  ok(`${name} is granted to authenticated`,
+    new RegExp(`grant execute on function public\\.${name}\\(bigint\\) to authenticated;`).test(sql148));
+  ok(`${name} is revoked from anon`,
+    new RegExp(`revoke all on function public\\.${name}\\(bigint\\) from public, anon;`).test(sql148));
+}
+ok("adding refuses an event we cannot name",
+  /if v_meta\.event_id is null then[\s\S]{0,120}raise exception/.test(created148.get("scout_event_add").body));
+ok("re-adding keeps whoever added it first",
+  !/added_by\s*=\s*excluded\.added_by/.test(created148.get("scout_event_add").body));
+
+// ⚠ ZAVEN'S CONSTRAINT. The automatic half of the slate must stay exactly what
+// 147 shipped: set_championships joined to elo_tracked_stores. The only new rows
+// come from the ledger, and they are MARKED, so the tab never quietly grows.
+const rosterBody148 = rosterBody(sql148);
+ok("the automatic slate still comes from the tracked stores alone",
+  /from public\.set_championships sc\n      join public\.elo_tracked_stores t on t\.store_id = sc\.store_id/.test(rosterBody148));
+ok("the added rows come from the ledger", /from public\.scout_events a/.test(rosterBody148));
+ok("an added row is marked", /'added',\s+e\.added/.test(rosterBody148));
+ok("and says who added it", /'added_by',\s+e\.added_by/.test(rosterBody148));
+// An added SC at a tracked store is already on the automatic half; without this
+// it lists twice and the tab reads as a duplicate-rows bug.
+ok("an added tracked SC cannot list twice",
+  /not exists \(select 1 from tracked_ev te where te\.event_id = a\.event_id\)/.test(rosterBody148));
+// 148 supersedes 147, so pasting 148 alone still gets the 24-hour window — on
+// BOTH halves, or a hand-added event would vanish the moment it started.
+check("148 carries 147's window on both halves",
+  (rosterBody148.match(/>= now\(\) - interval '24 hours'/g) || []).length, 2);
+// …and supersedes 144's get_scout_event, so pasting 144 afterwards can only cost
+// the "added by" line, never the roster/notes union it exists for.
+for (const marker of ["extra as (", "true as off_roster", "'n_off_roster'"]) {
+  ok(`148 carries 144's union (${marker})`, created148.get("get_scout_event").body.includes(marker));
+}
+ok("148 reloads PostgREST's schema", sql148.trimEnd().endsWith("notify pgrst, 'reload schema';"));
+
+// ── 148: the client ──────────────────────────────────────────────────────
+// The tracked-store gate used to sit on the calendar and the near-me finder as
+// well, which made the out-of-bubble events a scout most wants a sheet for the
+// exact ones with no way in. get_scout_event is the scope now, and its refusal
+// is where you add the event.
+ok("no client surface pre-filters on the tracked-store list",
+  !/useTrackedStoreIds|scoutTracked/.test(src));
+ok("the finder offers scouting on any listing",
+  /canScoutBox && o\.event_id &&/.test(src) && !/scoutTracked\.has/.test(src));
+ok("the refusal offers the add", /class="scout-btn scout-btn--add"[\s\S]{0,120}onClick=\$\{addEvent\}/.test(src));
+// Adding and then hunting for a second button is two steps for one intention,
+// and the roster is the whole reason you added it.
+ok("adding pulls the roster when we have never seen one",
+  /if\(after && after\.event && !after\.event\.scraped_at\) await refresh\(\);/.test(src));
+// ⚠ A chip inside .elo-scout-ev-store is simply GONE on a long store name — that
+// span ellipses — with nothing on screen to say it existed.
+ok("the Scout row's Added chip is a sibling of the ellipsing store name",
+  /<span class="elo-scout-ev-storeline">\s*\n\s*<span class="elo-scout-ev-store">\$\{ev\.store_name\}<\/span>/.test(src));
+ok("the storeline lets the name ellipse and the chip keep its width",
+  /\.elo-scout-ev-storeline\{display:flex/.test(css) &&
+  /\.elo-scout-added\{flex:0 0 auto/.test(css) &&
+  /\.elo-scout-ev-store\{[^}]*min-width:0/.test(css));
+// An added event at a TRACKED store is on the tab either way, so "Added" would
+// name the wrong reason and Remove would appear to do nothing.
+check("the Added chip and Remove need an untracked store",
+  (src.match(/ev\.added && !ev\.store_tracked/g) || []).length, 2);
+ok("removing is two-tap", /if\(!armedRemove\)\{ setArmedRemove\(true\); return; \}/.test(src));
+ok("and says the notes are kept", /kept in \$\{kept===1\?"that player's":"those players'"\} history/.test(src));
+ok("the empty Scout tab says the tab can be filled by hand",
+  /add it to scouting\.<\/div><\/div>`/.test(src));
+
+// The behaviour harness. The SQL above is text; these run it. Not wired into CI
+// (no Postgres there), so the guard is that they exist and still cover the one
+// case that was actually found broken.
+{
+  const fixture = read("../supabase/diagnostics/scout_any_event_fixture.sql");
+  const checks = read("../supabase/diagnostics/scout_any_event_checks.sql");
+  ok("the fixture builds a stub auth schema", /create schema if not exists auth;/.test(fixture));
+  ok("the fixture warns it is not for a real database", /NEVER point this at a real database/.test(fixture));
+  ok("the checks cover reversibility", /must still RESOLVE, so the UI can offer Add again/.test(checks));
+  ok("the checks cover the 24-hour window on added events", /40-day-old added event is on the slate/.test(checks));
+  ok("the checks cover the de-dupe", /listed % times/.test(checks));
+  ok("the checks cover the gate", /let a stranger in/.test(checks));
+  ok("the checks end on a verdict", /ALL SCOUT CHECKS PASSED/.test(checks));
+}
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

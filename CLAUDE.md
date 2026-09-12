@@ -2882,7 +2882,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v398`; `styles.css?v=398`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v399`; `styles.css?v=399`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
@@ -3325,12 +3325,15 @@ Guarded by `node scripts/test_scout.mjs`.
   `get_scout_event` returns it, `save_scout_note` recomputes it from `(rph_user_id, name)` —
   so the client has no mirror that could drift. The test pins that the client never builds one.
 
-### Scope: tracked stores only, ANY event kind
+### Scope: tracked stores, ANY event kind — plus anything a scout adds by hand
 
 - Every read and write resolves the event through **`scout_event_meta`** (the upcoming feed →
-  the archive → `set_championships`, first hit wins) and refuses anything whose store is not
-  in `elo_tracked_stores`. Without that check, pasting an event id starts logging notes on a
-  shop in another state.
+  the archive → `set_championships` → the opt-in ledger → a note's own label, first hit wins)
+  and refuses anything out of scope. Without that check, pasting an event id starts logging
+  notes on a shop in another state.
+- **Scope is TWO things since migration 148**: the automatic half is `elo_tracked_stores` and
+  nothing widens it, and the opt-in half is one row in `scout_events` per event a scout added.
+  See "Scouting an event outside the bubble" below.
 - **But not SCs only.** `elo_event_roster` **loses its FK to `set_championships`** here, so a
   league night at a shop you scout — full of the same people, and already on the calendar —
   can carry a roster. `scrape_rosters.py --event` looks in `lorcana_events` first for the
@@ -3376,6 +3379,71 @@ write it up, and is the same grace whatever time the event started.
   aggregate quietly goes missing.
 - **Upcoming SCs, the calendar and the "Near me" finder are untouched.** A list called
   *Upcoming* holding a finished event is a different claim, and nobody asked for it.
+
+### Scouting an event outside the bubble (migration 148 — STAGED, 2026-09-12)
+
+Zaven: *"some team members might be outside the bubble a little … if a scouting user pins an
+SC or clicks on one, give them the option to add roster for that and scout and have those
+players in the database (even if non elo matches)."* So scope splits in two and the ceiling
+comes off:
+
+- **The AUTOMATIC half is untouched.** `elo_tracked_stores` still decides what reaches the
+  Scout tab on its own — *"don't auto add any more to our main scouting tab"* — and
+  `scripts/test_scout.mjs` pins the slate's tracked half as byte-identical to 147's.
+- **The OPT-IN half is `scout_events`**, one row per event a scout pressed Add on, carrying who
+  added it. The event then behaves like any other: roster pull, sheet, notes, player history.
+- **An added event DOES appear on the Scout tab, marked `Added`.** That reads the constraint as
+  forbidding a wider automatic scope, not as hiding what somebody deliberately added — notes
+  written at an out-of-bubble event would otherwise be reachable only through a player's own
+  history, which is a strange place to have to go to finish the sheet you filled in an hour ago.
+- **Players needed nothing new.** `scout_player_key` already falls back to `name:<lowercased>`,
+  `get_scout_event` LEFT JOINs the leaderboard so an unrated player renders NR, and 144's "Add
+  player" covers a walk-in. The tracked gate was the only thing in the way.
+
+- **⚠ The gate WIDENS IN PLACE: `scout_event_meta.tracked` now means "in scope for scouting",
+  and `store_tracked` / `opted_in` carry the narrow facts.** Every consumer — get_scout_event in
+  BOTH 143 and 144, `save_scout_note`, and the `refresh-elo-rosters` edge function — already read
+  that one flag and already meant the wider thing. The tidy alternative (a new `scoutable` column
+  plus a re-gate of every caller) would mean 144 and 148 both re-create `get_scout_event`, so
+  pasting **144 after 148** would silently revert the gate and an added event would stop opening
+  with a message blaming the store. Widening the flag the callers already read makes the paste
+  order stop mattering. **Verified** against a real Postgres in the worst order (143 → 148 → 144
+  → 147): the gate stays open and notes still write; the only losses are the `Added` chip and the
+  tab listing.
+- **⚠ `scout_event_meta` must be DROPped before it is re-created** (a `RETURNS TABLE` signature
+  cannot be changed by `CREATE OR REPLACE`) and **re-granted to `authenticated` AND
+  `service_role`** — the drop takes the grants with it, and service_role's is what the edge
+  function needs. The matview-grant trap, in function form, for the second time in this feature.
+- **⚠ REMOVING an event must stay reversible, and that is why `scout_notes` is a resolution
+  source.** The upcoming feed prunes what has happened, so an aged-out event resolves only off a
+  stored label. With the ledger as the last source, taking such an event back off the board left
+  `scout_event_add` unable to name it ever again: the sheet was orphaned permanently and the
+  notes survived only in each player's history — exactly the failure the graded view's per-card
+  Hide was killed for. Reading a note's own denormalised label after the ledger means anything
+  with something to lose can always be re-added. **The fixture harness caught this**; nothing in
+  the static tests would have.
+- **⚠ The `Added` chip and Remove require `!store_tracked`.** An added event at a tracked store is
+  on the tab either way, so the chip would name the wrong reason and Remove would appear to do
+  nothing. Same reason the slate's added branch carries a `NOT EXISTS` against the tracked half:
+  without it an added SC lists twice and reads as a duplicate-rows bug.
+- **⚠ The Scout row's chip is a SIBLING of the store name, not a child.** `.elo-scout-ev-store`
+  ellipses, so a chip inside it is simply gone on a long store name with nothing on screen to say
+  it existed — the `.scanner-qa-rowinfo` lesson again. `.elo-scout-ev-storeline` is the flex row.
+- **Adding pulls the roster immediately** when the event has never had one. Adding and then
+  hunting for a second button is two steps for one intention, and the roster is the whole reason
+  you added it. Remove is two-tap (the graded slot-remove contract) and its toast says the notes
+  are kept.
+- **The calendar modal and the near-me finder no longer pre-filter on the tracked-store list** —
+  that gate hid the button on exactly the events a scout most wants a sheet for. `get_scout_event`
+  is the scope, and its refusal is where the Add button lives. `useTrackedStoreIds` is gone with
+  it; the Stores tab's own `elo_tracked_stores` fetch is unrelated and stays.
+- **The edge function needs NO change** — it reads `meta.tracked`, which widened. (The redeploy
+  outstanding from 143 is still outstanding.)
+- **`supabase/diagnostics/scout_any_event_fixture.sql` + `_checks.sql` are a throwaway-Postgres
+  behaviour harness** for the whole chain (143 → 144 → 147 → 148): 12 assertions, run order in
+  the fixture's header. Not wired into CI (no Postgres there, and a red job everyone ignores is
+  worse than a script you run when you touch the file). `scripts/test_scout.mjs` pins the SQL's
+  text; this pins what it does. Every scouting failure mode is silent, so both are wanted.
 
 ### Where it renders
 
@@ -4106,6 +4174,17 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- **`supabase/148_scout_any_event.sql`** — STAGED, not applied. Lets a scout add ANY
+  event to scouting by hand: `scout_events` (the opt-in ledger), a widened
+  `scout_event_meta`, `scout_event_add` / `scout_event_remove`, and the slate + sheet
+  carrying the `Added` mark. The automatic tracked-store scope is untouched. See
+  "Scouting an event outside the bubble". **It is a SUPERSET of 144 and 147 for the
+  scouting functions**, so `144 → 147 → 148` in ascending order is right and pasting
+  **148 alone** is also right. The one mistake is running an EARLIER file AFTER it —
+  that costs the hand-added events on the tab (147) or the "added by" line (144), never
+  the gate, which is verified. **Safe to ship the client first**: without it
+  `scout_event_add` answers PGRST202 and the Add button says scouting isn't switched on,
+  which is today's behaviour.
 - **`supabase/147_scout_window_24h.sql`** — STAGED, not applied. The Scout tab's
   slate keeps an event for **24 hours past its start** instead of dropping it the
   minute the doors open: `get_roster_scout`'s window goes from
@@ -4114,8 +4193,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   exact moment a scouting sheet starts being useful. **Only that predicate
   changes**; the body is 143's verbatim, and the test asserts it. Independent of
   144_scout_off_roster.sql (which never touches this function), so either may land
-  first. **Safe to ship the client first** — until it runs, the "Started" chip
-  simply never has anything to mark, which is today's behaviour.
+  first — but **148 contains this change, so never run 147 AFTER 148** (it would
+  drop the hand-added events from the slate). **Safe to ship the client first** —
+  until it runs, the "Started" chip simply never has anything to mark, which is
+  today's behaviour.
 - **`supabase/144_scout_off_roster.sql`** — STAGED, not applied. Fixes a SILENT
   data-hiding bug in 143 found on review: the panel listed only the roster, and
   the roster scrape is delete-then-insert, so a note about a player who dropped
@@ -4126,7 +4207,9 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `scout_member_delete(uuid)` so the admin panel's Remove works on a row added by
   user_id. **Safe to ship the client first** — without it an off-roster note is
   simply not listed (143's behaviour), and Add player says so rather than
-  failing. `create or replace` only; no DDL a human has to review.
+  failing. `create or replace` only; no DDL a human has to review. **148 contains
+  this file's `get_scout_event` and `scout_member_delete`, so never run 144 AFTER
+  148** — it would drop the "added by" line from the sheet header.
 - ~~`supabase/143_scout_team.sql`~~ — **APPLIED 2026-09-12 by Zaven; verified via
   anon REST probes**: all ten functions answer `42501 permission denied` rather
   than `PGRST202`, and `scout_notes` / `scout_members` are unreachable directly.
