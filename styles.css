@@ -688,8 +688,12 @@ body:has(.cards-bulk-bar--docked) .cards-toast{bottom:calc(78px + env(safe-area-
 
 /* Sub-tab strip used inside the Market view. Sits at the top of the page,
    below the main nav, with a softer treatment so it reads as secondary. */
-.market-subtabs{display:flex;flex-wrap:wrap;gap:4px;align-items:center;
-  margin:-4px 0 16px 0;padding-bottom:10px;border-bottom:1px solid var(--border);}
+/* A real tab strip, not a row of loose words: each tab is a folder tab sitting
+   ON the rail, so a half-clipped one at the scroll edge is itself the "there is
+   more this way" affordance. That matters most on a phone, where ten tools do
+   not fit and the old bare-text chips gave no hint they scrolled at all. */
+.market-subtabs{display:flex;flex-wrap:wrap;gap:2px;align-items:flex-end;
+  margin:-4px 0 16px 0;padding-bottom:0;border-bottom:1px solid var(--border);}
 
 /* ── Price Database ─────────────────────────────────────────────────── */
 .price-db{display:flex;flex-direction:column;gap:10px;}
@@ -1205,17 +1209,20 @@ button.price-db-multiitem.active{background:var(--accent-glow);color:var(--accen
 }
 /* Rendered as <a href="/analytics?a=…"> (not <button>) so modifier-clicks
    open a tool in a new tab, per the site's SPA-navigation convention. */
-.market-subtab{padding:5px 12px;font-size:12px;font-weight:600;
+.market-subtab{padding:9px 13px 8px;font-size:12px;font-weight:600;
   background:transparent;color:var(--text-dim);
-  border:1px solid transparent;border-radius:6px;cursor:pointer;
+  border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;
+  box-shadow:inset 0 2px 0 transparent;cursor:pointer;
   text-decoration:none;display:inline-flex;align-items:center;white-space:nowrap;
-  transition:background 0.1s,color 0.1s,border-color 0.1s;}
+  transition:background 0.1s,color 0.1s,border-color 0.1s,box-shadow 0.1s;}
 .market-subtab:hover{color:var(--text);background:var(--bg-surface);}
-.market-subtab.active{color:var(--accent);background:var(--accent-glow);
-  border-color:var(--border-accent);}
+.market-subtab.active{color:var(--accent);background:var(--bg-surface);
+  border-color:var(--border);box-shadow:inset 0 2px 0 var(--accent);}
 /* Outbound pointer chip — where the retired Sealed tab went (Screener's
-   Sealed mode). Pushed right on desktop so it reads as "elsewhere". */
-.market-subtab-ext{color:var(--text-muted);margin-left:auto;}
+   Sealed mode). Pushed right on desktop so it reads as "elsewhere"; it is a
+   destination, not one of the folder tabs, so it keeps the flatter chip shape. */
+.market-subtab-ext{color:var(--text-muted);margin-left:auto;border-radius:6px;
+  padding:6px 11px;margin-bottom:2px;}
 .market-subtab-ext:hover{color:var(--accent);}
 /* Swiss Odds tab — the standalone /swiss page embedded. The page owns
    its own scrolling; the frame fills the viewport below the tab bar. */
@@ -2042,10 +2049,25 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
   background:var(--stat-bg,transparent);transition:border-color 0.15s ease;}
 .amz-tile:hover{border-color:var(--accent);}
 .amz-tile-art{position:relative;display:flex;align-items:center;justify-content:center;
-  aspect-ratio:1/1;border-radius:5px;background:#fff;color:#aaa396;overflow:hidden;}
+  aspect-ratio:1/1;border-radius:5px;color:#aaa396;overflow:hidden;}
 .amz-tile-art img{position:absolute;inset:6px;width:calc(100% - 12px);
   height:calc(100% - 12px);object-fit:contain;}
-.amz-tile-glyph{display:flex;}
+/* A cut-out product doesn't need — and shouldn't have — a white box behind
+   it: it sits straight on the tile, the way the pin board's photos do. */
+.amz-tile-art .prod-photo-wrap:not(.on-white) img{inset:2px;width:calc(100% - 4px);height:calc(100% - 4px);}
+/* ProductPhoto (Index.html): the glyph is drawn UNDER the <img> so a product
+   TCGplayer has no photo for degrades to a drawn icon rather than a broken
+   image. The wrapper is inset:0 of whatever well encloses it, so the per-well
+   `img` rules still address the photo directly.
+   — THE WHITE GROUND LIVES HERE, on the wrapper, rather than on each enclosing
+   well. The alternative is one `:has(.prod-photo.is-cut)` rule per well, which
+   works but needs a selector (and a matching white default) added for every new
+   surface that shows a product photo; this way ProductPhoto carries its own
+   ground and a new well only has to not paint one. */
+.prod-photo-wrap{position:absolute;inset:0;display:flex;align-items:center;
+  justify-content:center;transition:background-color .18s ease;}
+.prod-photo-wrap.on-white{background:#fff;}
+.prod-photo-glyph{display:flex;}
 .amz-tile-name{font-size:11px;font-weight:700;line-height:1.25;color:var(--text);
   text-decoration:none;display:-webkit-box;-webkit-line-clamp:2;
   -webkit-box-orient:vertical;overflow:hidden;min-height:2.5em;}
@@ -2977,10 +2999,6 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .elo-row--static{cursor:default;}
 .sc-modal-cta--roster{background:var(--btn-bg);color:var(--text);border:1px solid var(--border-accent);margin-top:6px;}
 .sc-modal-cta--roster:hover{background:var(--accent-glow);}
-.elo-roster-refresh{margin-top:8px;background:var(--btn-bg);border:1px solid var(--btn-border);
-  color:var(--text-dim);border-radius:8px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;font-family:inherit;align-self:flex-start;}
-.elo-roster-refresh:hover:not(:disabled){border-color:var(--border-accent);color:var(--accent);}
-.elo-roster-refresh:disabled{opacity:0.5;cursor:wait;}
 .sc-search-row{display:flex;gap:6px;margin-bottom:7px;}
 .sc-country-select{flex-shrink:0;padding:7px 6px;font-size:13px;font-family:inherit;font-weight:600;
   border:1px solid var(--btn-border);border-radius:6px;background:var(--bg-solid);color:var(--text);cursor:pointer;}
@@ -3294,35 +3312,6 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-toolbox-title{text-decoration:none;display:block;}
 .home-toolbox-title:hover{text-decoration:underline;}
 .home-toolbox-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
-/* Gear \2014 a compact list, each row with a small product thumbnail. The
-   photos are TCGplayer's catalog images (Amazon licenses its own only through
-   its API); the glyph under each <img> shows when TCGplayer has no photo. */
-.home-gear-thumb{position:relative;flex:0 0 auto;width:28px;height:28px;border-radius:5px;
-  background:#fff;border:1px solid var(--border);display:flex;align-items:center;
-  justify-content:center;color:#9c9687;overflow:hidden;}
-.home-gear-thumb img{position:absolute;inset:1px;width:calc(100% - 2px);
-  height:calc(100% - 2px);object-fit:contain;}
-.home-gear-body{display:flex;flex-direction:column;gap:10px;}
-.home-gear-sec-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px;
-  margin-bottom:3px;}
-.home-gear-sec-name{font-size:10px;font-weight:800;letter-spacing:0.6px;
-  text-transform:uppercase;color:var(--text-muted);}
-.home-gear-sec-note{font-size:10.5px;}
-.home-gear-list{list-style:none;margin:0;padding:0;display:flex;
-  flex-direction:column;gap:2px;}
-.home-gear-item{display:flex;align-items:center;gap:7px;padding:3px 7px 3px 3px;
-  border-radius:5px;text-decoration:none;color:var(--text);font-size:12px;
-  border:1px solid transparent;}
-.home-gear-item:hover{border-color:var(--border-accent);
-  background:var(--accent-glow);}
-.home-gear-item-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;}
-.home-gear-item-meta{flex:0 0 auto;font-size:10.5px;}
-.home-gear-item-ext{flex:0 0 auto;font-size:10px;color:var(--text-muted);}
-.home-gear-item:hover .home-gear-item-ext{color:var(--accent);}
-/* The FTC wants the disclosure near the links, not only in the footer, and
-   this panel is nothing but affiliate links \2014 so it carries its own. */
-.home-gear-disclosure{font-size:10.5px;line-height:1.45;margin:2px 0 0;}
 /* ── /gear — the Amazon directory page ─────────────────────────────────── */
 .gear-page{max-width:1080px;}
 .gear-hero{margin:0 0 14px;}
@@ -3361,14 +3350,15 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   transition:border-color .12s ease,transform .12s ease,box-shadow .12s ease;}
 .gear-card:hover{border-color:var(--border-accent);transform:translateY(-1px);
   box-shadow:0 6px 16px rgba(0,0,0,0.14);}
-/* White well: TCGplayer shoots product on white, so a themed well would frame
-   every photo in a white box anyway. The glyph sits UNDER the <img> and only
-   shows when there is no photo to cover it. */
+/* The white ground is on .prod-photo-wrap, which drops it the moment
+   cutProductWhiteBg succeeds on the photo inside — see prod-photo below. Both
+   states have to exist: the cut runs in the browser and can decline, and a photo
+   still in its white box needs a white ground or it reads as a torn-out
+   rectangle. */
 .gear-card-art{position:relative;display:flex;align-items:center;justify-content:center;
-  aspect-ratio:1/1;background:#fff;color:#aaa396;border-bottom:1px solid var(--border);}
+  aspect-ratio:1/1;color:#aaa396;border-bottom:1px solid var(--border);}
 .gear-card-art img{position:absolute;inset:10px;width:calc(100% - 20px);
   height:calc(100% - 20px);object-fit:contain;}
-.gear-card-glyph{display:flex;opacity:0.85;}
 .gear-card-body{display:flex;flex-direction:column;gap:3px;padding:9px 10px 10px;
   flex:1;min-width:0;}
 .gear-card-name{font-size:13px;font-weight:700;line-height:1.3;color:var(--text);
@@ -3406,19 +3396,37 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .amz-check-help{font-size:11.5px;line-height:1.45;margin:6px 0 8px;max-width:80ch;}
 .amz-check-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;
   max-height:440px;overflow-y:auto;}
-.amz-check-row{display:grid;grid-template-columns:34px minmax(0,1fr) auto auto 70px;
-  align-items:center;gap:8px;padding:4px 6px;border-radius:6px;}
+/* Two verdicts per listing now (stock and price) plus an MSRP field, which is
+   more than fits beside a name on one line 4 so the row is thumb + body, and
+   the body stacks the name over a wrapping control strip. */
+.amz-check-row{display:grid;grid-template-columns:34px minmax(0,1fr);
+  align-items:start;gap:8px;padding:5px 6px;border-radius:6px;}
 .amz-check-row:nth-child(odd){background:var(--accent-glow);}
 .amz-check-row.is-done{opacity:0.6;}
 .amz-check-row.is-out .amz-check-name b{text-decoration:line-through;}
-.amz-check-thumb{position:relative;width:34px;height:34px;border-radius:5px;background:#fff;
+.amz-check-thumb{position:relative;width:34px;height:34px;border-radius:5px;
   border:1px solid var(--border);display:flex;align-items:center;justify-content:center;
   color:#9c9687;overflow:hidden;}
 .amz-check-thumb img{position:absolute;inset:1px;width:calc(100% - 2px);
   height:calc(100% - 2px);object-fit:contain;}
+.amz-check-body{display:flex;flex-direction:column;gap:4px;min-width:0;}
+.amz-check-ctl{display:flex;align-items:center;flex-wrap:wrap;gap:5px 8px;}
 .amz-check-name{display:flex;flex-direction:column;min-width:0;font-size:12px;line-height:1.25;}
 .amz-check-name b,.amz-check-name span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .amz-check-name span{font-size:10.5px;color:var(--text-muted);}
+/* MSRP is the MANUFACTURER's price, typed in once. It is never Amazon's price
+   and never leaves this admin list 4 the ceiling beside it is what makes the
+   daily pass a glance instead of arithmetic. */
+.amz-check-msrp{display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:700;
+  letter-spacing:0.4px;text-transform:uppercase;color:var(--text-muted);white-space:nowrap;}
+.amz-check-msrp input{font:inherit;font-size:11.5px;font-weight:600;letter-spacing:0;
+  text-transform:none;width:66px;padding:3px 5px;border-radius:5px;
+  border:1px solid var(--border);background:var(--bg-modal);color:var(--text);
+  font-variant-numeric:tabular-nums;}
+.amz-check-msrp input:disabled{opacity:0.55;}
+.amz-check-cap{font-size:10.5px;font-weight:700;white-space:nowrap;color:var(--text-dim);
+  font-variant-numeric:tabular-nums;}
+.amz-check-cap.is-unset{color:var(--text-muted);font-weight:400;font-style:italic;}
 .amz-check-open{font-size:11px;font-weight:700;color:var(--accent);text-decoration:none;white-space:nowrap;}
 .amz-check-open:hover{text-decoration:underline;}
 .amz-check-seg{display:inline-flex;border:1px solid var(--border);border-radius:6px;overflow:hidden;}
@@ -3429,18 +3437,16 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .amz-check-seg button.active.is-out{background:#b3452c;color:#fff;}
 .amz-check-seg button:disabled{cursor:default;opacity:0.55;}
 .amz-check-seg button.active:disabled{opacity:1;}
-.amz-check-when{font-size:10.5px;text-align:right;white-space:nowrap;}
+.amz-check-when{font-size:10.5px;text-align:right;white-space:nowrap;margin-left:auto;
+  color:var(--text-muted);}
 .gear-card.is-out{opacity:0.5;}
 .gear-card-out{font-size:9.5px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:#c4553a;}
 @media (max-width:640px){
-  .amz-check-row{grid-template-columns:30px minmax(0,1fr) auto;
-    grid-template-areas:"thumb name name" "thumb open seg";}
-  .amz-check-thumb{grid-area:thumb;width:30px;height:30px;}
-  .amz-check-name{grid-area:name;}
-  .amz-check-open{grid-area:open;}
-  .amz-check-seg{grid-area:seg;}
+  .amz-check-row{grid-template-columns:30px minmax(0,1fr);}
+  .amz-check-thumb{width:30px;height:30px;}
   .amz-check-when{display:none;}
   .amz-check-bulk{margin-left:0;}
+  .amz-check-list{max-height:none;}
 }
 @media (max-width:520px){
   .gear-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;}
@@ -7115,13 +7121,177 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
 .elo-hero{margin-bottom:20px;}
 .elo-title{font-family:'Cinzel',serif;font-size:26px;font-weight:700;margin:0 0 4px;color:var(--accent);letter-spacing:0.5px;}
 .elo-sub{margin:0 0 18px;color:var(--text-muted);font-size:13px;max-width:680px;line-height:1.5;}
-.elo-innertabs{display:flex;flex-wrap:wrap;gap:4px;border-bottom:1px solid var(--btn-border);}
-.elo-innertabs button{background:transparent;border:none;color:var(--text-muted);
-  padding:10px 18px;cursor:pointer;font-family:'Cinzel',serif;font-size:14px;
-  font-weight:600;letter-spacing:0.4px;border-bottom:2px solid transparent;
-  margin-bottom:-1px;transition:color 120ms ease, border-color 120ms ease;}
-.elo-innertabs button:hover{color:var(--text);}
-.elo-innertabs button.active{color:var(--accent);border-bottom-color:var(--accent);}
+/* ⚠ These do NOT wrap. Five tabs at 'Upcoming SCs' / 'Tournament Results'
+   widths wrapped to a third row on a narrow phone, and the fifth — Scout — was
+   the one that fell off it. A single scrolling row of folder tabs cannot orphan
+   one: the active tab is scrolled into view on mount, and a half-clipped
+   neighbour is the affordance that says the row keeps going. */
+.elo-innertabs{display:flex;flex-wrap:nowrap;gap:2px;align-items:flex-end;
+  overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none;
+  border-bottom:1px solid var(--btn-border);}
+.elo-innertabs::-webkit-scrollbar{display:none;}
+/* Trailing gutter lives on a CHILD — container padding is dropped at the end of
+   the scroll range in several engines. */
+.elo-innertabs::after{content:"";flex:0 0 6px;}
+.elo-innertabs button{flex:0 0 auto;background:transparent;color:var(--text-muted);
+  padding:10px 15px 9px;cursor:pointer;font-family:'Cinzel',serif;font-size:14px;
+  font-weight:600;letter-spacing:0.4px;white-space:nowrap;
+  border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;
+  box-shadow:inset 0 2px 0 transparent;
+  transition:color 120ms ease,background 120ms ease,border-color 120ms ease,box-shadow 120ms ease;}
+.elo-innertabs button:hover{color:var(--text);background:var(--bg-surface);}
+.elo-innertabs button.active{color:var(--accent);background:var(--bg-surface);
+  border-color:var(--btn-border);box-shadow:inset 0 2px 0 var(--accent);}
+/* Scout is the team-only tab; the dot says "not everyone sees this". Not scoped
+   to .elo-innertabs — the calendar's event modal reuses the same class. */
+button.elo-tab-scout::before{content:"";width:5px;height:5px;border-radius:50%;
+  background:var(--accent);display:inline-block;margin-right:6px;vertical-align:middle;opacity:0.75;}
+
+/* ── Scouting panel (team-only, migration 143) ────────────────────────────
+   Deck + notes per player per event. Rendered three ways from one component:
+   inside its own modal, inline in the Elo Scout tab, and inline in the
+   calendar's event modal — so everything here has to work at 320px wide and
+   inside a scrolling dialog. */
+.scout-panel{display:flex;flex-direction:column;gap:10px;}
+.scout-panel-head{display:flex;flex-direction:column;gap:2px;}
+.scout-modal{max-width:860px;}
+/* Four stats in a flex row wrap 3+1, which leaves "Logged" stranded on its own
+   line. A grid keeps them square at every width. */
+.scout-field-stats{margin:2px 0 0;display:grid;gap:8px;
+  grid-template-columns:repeat(auto-fit,minmax(72px,1fr));}
+.scout-field-stats .elo-store-stat{flex:none;}
+.scout-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.scout-search{flex:1 1 160px;min-width:0;padding:7px 10px;font-size:13px;
+  background:var(--btn-bg);color:var(--text);border:1px solid var(--btn-border);border-radius:7px;}
+.scout-asof{font-size:11px;margin-top:-4px;}
+/* Someone RPH never recorded, or who dropped their registration after we wrote
+   about them. Marked rather than hidden — a note that silently stops rendering
+   on the event it describes is the bug migration 144 exists to fix. */
+.scout-offroster{flex:0 0 auto;margin-left:6px;font-size:9.5px;font-weight:700;
+  letter-spacing:0.4px;text-transform:uppercase;color:var(--text-muted);
+  border:1px solid var(--btn-border);border-radius:20px;padding:1px 6px;}
+.scout-add{display:flex;gap:6px;align-items:center;margin-top:2px;}
+.scout-add input{flex:1 1 auto;min-width:0;padding:6px 9px;font-size:12.5px;
+  background:var(--bg-modal);color:var(--text);border:1px dashed var(--btn-border);border-radius:7px;}
+.scout-add input:focus{outline:none;border-style:solid;border-color:var(--accent);}
+
+.scout-btn{background:var(--btn-bg);color:var(--text);border:1px solid var(--btn-border);
+  border-radius:7px;padding:6px 11px;font-size:12px;font-weight:600;cursor:pointer;
+  min-height:32px;white-space:nowrap;transition:background .1s,color .1s,border-color .1s;}
+.scout-btn:hover:not(:disabled){border-color:var(--border-accent);color:var(--accent);}
+.scout-btn:disabled{opacity:0.55;cursor:default;}
+.scout-btn--primary{background:var(--accent);color:var(--bg-solid);border-color:var(--accent);}
+.scout-btn--primary:hover:not(:disabled){color:var(--bg-solid);filter:brightness(1.08);}
+.scout-btn--danger{color:var(--red);}
+.scout-btn--danger:hover:not(:disabled){border-color:var(--red);color:var(--red);}
+.scout-btn--refresh{flex:0 0 auto;}
+
+/* The roster as a SHEET. Zaven's ask, and the right shape for the job: logging a
+   room of 24 people one modal at a time is what makes a scouting tool go unused.
+   Type in a cell, Tab to the next, it's saved — no Edit/Save/Cancel anywhere.
+
+   ⚠ It stays a real <table> at every width and SCROLLS SIDEWAYS on a phone
+   rather than collapsing to stacked cards (the site's usual mobile-table
+   pattern). Collapsing would put you back where you started: one player per
+   screenful. The wrap is the scroll container, and the Player column is sticky
+   so you can always see whose row you are typing in. */
+.scout-sheet-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:9px;
+  background:var(--bg-surface);}
+.scout-sheet{width:100%;border-collapse:collapse;font-size:12.5px;min-width:520px;}
+.scout-sheet th{position:sticky;top:0;z-index:2;background:var(--bg-modal);
+  text-align:left;font-size:9.5px;font-weight:700;letter-spacing:0.6px;
+  text-transform:uppercase;color:var(--text-muted);padding:6px 8px;
+  border-bottom:1px solid var(--border);white-space:nowrap;}
+.scout-sheet td{padding:0;border-bottom:1px solid var(--border);vertical-align:top;text-align:left;}
+.scout-sheet tbody tr:last-child td{border-bottom:0;}
+.scout-sheet tbody tr.logged{background:var(--accent-glow);}
+.scout-sheet tbody tr:hover{background:var(--bg-surface);}
+.scout-sheet tbody tr.logged:hover{background:var(--accent-glow);}
+
+.scout-sheet .ss-elo{width:52px;padding:7px 8px;font-variant-numeric:tabular-nums;
+  font-weight:700;color:var(--accent);white-space:nowrap;}
+.scout-sheet .ss-name{min-width:140px;max-width:220px;padding:7px 8px;}
+/* ⚠ The name column pins ONLY where the sheet actually scrolls sideways. Sticky
+   needs an opaque background (--bg-modal — --bg-card and --btn-bg are both
+   translucent in the dark themes and the scrolling columns show straight
+   through, same rule as the Screener's NAME column), and on a desktop-width
+   sheet that never scrolls, that opaque panel just reads as a stray box drawn
+   around every name. */
+@media (max-width:760px){
+  .scout-sheet .ss-name{position:sticky;left:0;z-index:1;background:var(--bg-modal);
+    box-shadow:1px 0 0 var(--border), 6px 0 8px -6px rgba(0,0,0,0.35);}
+  .scout-sheet tbody tr.logged .ss-name{background:var(--bg-modal);}
+}
+.scout-sheet .ss-deck{min-width:150px;}
+.scout-sheet .ss-notes{min-width:220px;width:100%;}
+.scout-sheet .ss-by{display:block;font-size:9.5px;margin-top:1px;}
+
+/* A cell is the input. No border at rest so the grid reads as a sheet; it only
+   frames itself when you are in it. */
+.scout-cell{display:block;width:100%;box-sizing:border-box;margin:0;
+  padding:7px 8px;font:inherit;font-size:12.5px;line-height:1.4;
+  background:transparent;color:var(--text);border:1px solid transparent;
+  border-radius:5px;resize:vertical;min-height:32px;}
+.scout-cell::placeholder{color:var(--text-muted);opacity:0.5;}
+.scout-cell:hover{background:var(--bg-surface);}
+.scout-cell:focus{outline:none;background:var(--bg-modal);border-color:var(--accent);
+  box-shadow:0 0 0 2px var(--accent-glow);}
+.scout-cell.saving{opacity:0.55;}
+textarea.scout-cell{min-height:34px;field-sizing:content;}
+
+/* ⚠ There is a GLOBAL `button{border;background;border-radius;padding}` rule, so
+   anything meant to read as text inside the sheet has to unset all four — a name
+   left at the default renders as a chip and the sheet stops looking like a
+   sheet. (This is what happened when the old card-row styles were replaced and
+   these resets went with them.) */
+.scout-namebtn,.scout-elobtn{background:none;border:none;padding:0;font:inherit;
+  cursor:pointer;text-align:left;border-radius:0;}
+.scout-namebtn{color:var(--text);font-weight:600;max-width:100%;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.scout-namebtn:hover{color:var(--accent);text-decoration:underline;}
+.scout-elobtn{color:var(--accent);font-weight:700;font-variant-numeric:tabular-nums;}
+.scout-elobtn:hover{text-decoration:underline;}
+/* The "we have seen them N times" chip. A pill here is deliberate — it is a
+   count, not text in the row. */
+.scout-prior{display:inline-flex;align-items:center;gap:3px;margin-left:5px;
+  background:var(--accent-glow);color:var(--accent);border:1px solid var(--border-accent);
+  border-radius:20px;padding:0 6px;min-height:18px;font-size:10px;font-weight:700;cursor:pointer;}
+.scout-prior:hover{filter:brightness(1.15);}
+.scout-sheet .scout-offroster{margin-left:5px;}
+
+.scout-history-modal{max-width:520px;}
+.scout-history{list-style:none;margin:10px 0 0;padding:0;display:flex;flex-direction:column;gap:10px;}
+.scout-history-row{display:flex;gap:10px;border-left:2px solid var(--border-accent);padding-left:10px;}
+.scout-history-when{flex:0 0 74px;display:flex;flex-direction:column;font-size:12px;}
+.scout-history-when .muted{font-size:10.5px;overflow-wrap:anywhere;}
+.scout-history-body{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;}
+.scout-history-ev{font-size:11px;}
+.scout-history-deck{font-size:13px;font-weight:600;color:var(--accent);}
+.scout-history-notes{font-size:12.5px;line-height:1.45;white-space:pre-wrap;overflow-wrap:anywhere;}
+.scout-history-by{font-size:10.5px;}
+
+/* Team management — admin only, collapsed by default. */
+.scout-members{margin:10px 0 4px;}
+.scout-members-toggle{display:inline-flex;align-items:center;gap:6px;background:transparent;
+  border:1px dashed var(--btn-border);border-radius:7px;padding:5px 10px;color:var(--text-muted);
+  font-size:12px;font-weight:600;cursor:pointer;min-height:32px;}
+.scout-members-toggle:hover{color:var(--accent);border-color:var(--border-accent);}
+.scout-members-body{margin-top:8px;padding:10px;border:1px solid var(--border);border-radius:9px;
+  background:var(--bg-surface);display:flex;flex-direction:column;gap:8px;}
+.scout-members-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:5px;font-size:12.5px;}
+.scout-members-list li{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+.scout-member-who{font-weight:600;overflow-wrap:anywhere;}
+.scout-members-list .scout-btn{margin-left:auto;padding:3px 8px;min-height:26px;font-size:11px;}
+.scout-members-add{display:flex;gap:6px;flex-wrap:wrap;}
+.scout-members-add input{flex:1 1 150px;min-width:0;padding:6px 9px;font-size:12.5px;
+  background:var(--bg-modal);color:var(--text);border:1px solid var(--btn-border);border-radius:7px;}
+.scout-members-note{font-size:11px;margin:0;line-height:1.45;}
+
+.sc-modal-cta--scout{background:var(--accent-glow);border-color:var(--border-accent);}
+
+@media (max-width:560px){
+  .scout-history-when{flex-basis:60px;}
+}
 
 /* Roster Scout (admin) — by-day slate + player search over upcoming rosters. */
 .elo-scout{margin-top:18px;max-width:820px;}
@@ -7129,7 +7299,6 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
 .elo-scout-titlewrap{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;}
 .elo-scout-title{font-family:'Cinzel',serif;font-size:18px;font-weight:700;color:var(--accent);margin:0;}
 .elo-scout-summary{font-size:12px;}
-.elo-scout-orgtoggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;}
 .elo-scout-modes{margin-bottom:14px;}
 .elo-scout-search{width:100%;box-sizing:border-box;padding:9px 12px;margin-bottom:12px;border:1px solid var(--border);
   border-radius:8px;background:var(--bg-card);color:var(--text);font-size:14px;}
@@ -7147,11 +7316,7 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
 .elo-scout-ev-stats{display:flex;align-items:center;gap:12px;flex-shrink:0;font-size:12px;}
 .elo-scout-stat b{color:var(--text);font-variant-numeric:tabular-nums;}
 .elo-scout-caret{color:var(--text-muted);width:12px;text-align:center;}
-.elo-scout-ev-roster{padding:4px 12px 10px;border-top:1px solid var(--border);}
-.elo-scout-rosterlist{list-style:decimal;margin:6px 0 0;padding-left:26px;display:flex;flex-direction:column;gap:3px;}
-.elo-scout-rosterlist li,.elo-scout-hit-events li{display:flex;align-items:center;gap:8px;font-size:12.5px;}
-.elo-scout-rname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.elo-scout-noros{font-size:12px;padding:4px 0;}
+.elo-scout-hit-events li{display:flex;align-items:center;gap:8px;font-size:12.5px;}
 .elo-scout-elo{font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent);font-size:12px;white-space:nowrap;}
 .elo-scout-elo.elo-scout-unrated{color:var(--text-muted);font-weight:400;font-style:italic;}
 .elo-scout-namebtn{background:none;border:none;padding:0;color:var(--text);font:inherit;cursor:pointer;text-align:left;}
@@ -7201,9 +7366,6 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
 
 .elo-store-stat--elo{background:var(--accent-glow);border-color:var(--border-accent);}
 .elo-store-stat--elo .n{color:var(--accent);}
-.elo-exclude-toggle{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);
-  cursor:pointer;margin:0 0 16px;padding:5px 9px;border:1px dashed var(--border);border-radius:6px;}
-.elo-exclude-toggle input{margin:0;width:14px;height:14px;accent-color:var(--accent);cursor:pointer;}
 
 /* Store scouting report (credential-gated). */
 .elo-store{margin-top:6px;}
@@ -7315,8 +7477,9 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
      a full line on its own and the pin toggle wraps below it; align both to
      the left so the wrapped pin doesn't float weirdly to the far right. */
   .elo-hero-row{gap:8px;justify-content:flex-start;}
-  /* Inner tabs (Leaderboard / Tournaments) need a touch larger tap target. */
-  .elo-innertabs button{padding:10px 14px;font-size:13.5px;}
+  /* Inner tabs need a touch larger tap target; the row scrolls, so a tighter
+     horizontal pad here buys nothing and costs thumb accuracy. */
+  .elo-innertabs button{padding:11px 13px 10px;font-size:13.5px;}
   .elo-toolbar{flex-direction:column;align-items:stretch;}
   /* Filter chips row (All / RPH / Melee) — allow wrap if a 4th chip is
      ever added; gives the pill icons breathing room. */
@@ -9472,6 +9635,20 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-products li em{font-style:normal;font-size:10px;color:var(--text-muted);flex:0 0 auto;}
 
 /* dl rows in the detail modal */
+/* Details / Scout inside the calendar's event modal — same folder-tab chrome as
+   the Analytics and Elo strips, at modal scale. */
+.cal-modal-tabs{display:flex;gap:2px;align-items:flex-end;margin:12px 0 0;
+  border-bottom:1px solid var(--border);}
+.cal-modal-tabs button{flex:0 0 auto;background:transparent;color:var(--text-dim);
+  border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;
+  padding:8px 13px 7px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+  box-shadow:inset 0 2px 0 transparent;min-height:34px;
+  transition:background .1s,color .1s,border-color .1s,box-shadow .1s;}
+.cal-modal-tabs button:hover{color:var(--text);background:var(--bg-surface);}
+.cal-modal-tabs button.active{color:var(--accent);background:var(--bg-surface);
+  border-color:var(--border);box-shadow:inset 0 2px 0 var(--accent);}
+.cal-modal-tabs + .scout-panel{margin-top:12px;}
+
 .cal-modal-rows{margin:10px 0 0;font-size:12px;}
 .cal-modal-rows > div{display:flex;gap:10px;padding:3px 0;border-bottom:1px solid var(--border);}
 .cal-modal-rows > div:last-child{border-bottom:none;}
@@ -9492,7 +9669,6 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
   border:1px dashed var(--btn-border);background:none;color:var(--text-muted);}
 .cal-panel-find:hover{border-color:var(--accent);color:var(--accent);
   background:var(--accent-glow);border-style:solid;}
-
 /* List-mode pager on the home calendar panel. A footer, not a heading: the rows
    carry their own dates, so this only has to say where in time you are. */
 .cal-panel-page{display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;
@@ -9505,7 +9681,6 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-panel-page-lbl{flex:1;text-align:center;font-size:10px;color:var(--text-muted);
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cal-panel-now{width:auto !important;padding:0 8px;font-size:10px;font-weight:600;}
-
 /* Per-store event-kind toggles in "My stores + saved events". A followed shop's
    weeklies outnumber its Set Championships ~10:1, so this is how you keep the
    shop without the noise. */
@@ -9526,7 +9701,6 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-kind-chip.on{border-color:var(--border-accent);background:var(--accent-glow);
   color:var(--accent);}
 .cal-kind-chip:hover{border-color:var(--accent);}
-
 /* A hidden event, listed in "My stores + saved events". Dimmed, because it is
    not delivering anything -- but present, because a hide you cannot see is the
    bug that killed the graded view's Hide. */
