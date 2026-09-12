@@ -3037,6 +3037,91 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 - **Pruning.** Every upsert stamps `last_seen_at`; after the pull, upcoming rows RPH hasn't listed for `PRUNE_GRACE_HOURS` (36h) are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
 - **⚠ Even a COMPLETE pull misses live events, so one miss must never delete one** (2026-09-10). The scan pages by offset through ~21k rows that move while it reads; the three orderings and the name net narrow the gap but don't close it. That night's pull came back without 10 of the 508 upcoming events at tracked stores, and the old prune (delete whatever this run didn't see) had deleted Gemini Games' 9/20 Set Championship, so it never reached Upcoming SCs although RPH listed it. Two fixes, both in `discover_events.py`: the 36h grace (two daily misses in a row, with room for cron to run late), and **`add_tracked_store_feeds()`**, which folds each tracked store's own upcoming feed into the scan before anything is classified, upserted or pruned. It reads both store-filter spellings and re-checks `store.id`, through `scrape_store_history.fetch_store_feed`. The feeds are a supplement, never a gate: an unreadable store list or feed leaves the scan's rows as they were, with a `::warning::` once more than half the feeds fail. Guarded by `python scripts/elo/test_events_archive.py`.
 
+## Lorcana calendar (`/calendar` + home panel) — 2026-09-12
+
+"What's coming for the GAME", the sibling of the geo box above: set releases,
+product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
+Championship Qualifiers, plus every event at the stores you follow. List view and
+month grid, five filter chips, `.ics` + Google Calendar export.
+Guarded by `node scripts/test_calendar.mjs` (103 cases).
+
+- **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
+  hand; `lorcana_events` is the live RPH feed and contributes **only** what you
+  followed. There are ~17k upcoming events — a month grid carrying every Tuesday
+  league night on earth answers no question anybody has.
+- **⚠ Set releases are DERIVED from `SET_RELEASE_DATES`, not seeded into the
+  table**, and a table row OVERRIDES one on `(set_name, subtitle)`. That gets
+  history free and correct (it is the same map the Set EV chart's markers are
+  drawn from, so the two can never disagree) while a slipped date stays a one-row
+  edit instead of a commit + cache bump + metered deploy. Seeding would fork one
+  fact into two stores. **The subtitle spelling IS the merge key** — use
+  `SET_RELEASE_LABELS`' exact words (`Prerelease` / `LGS release` / `Retail
+  release`) or the row adds a duplicate entry instead of correcting the first.
+  A derived row can be corrected but not deleted; that is the documented contract.
+- **⚠ Only `kind='set'` rows participate in that merge.** Keying every kind by
+  title would silently swallow two genuinely different events sharing a name —
+  two stores both running a "Lorcana 2K CCQ" is the ordinary case, and losing one
+  reads as the scan having missed it.
+- **⚠ Every date is a plain `"YYYY-MM-DD"` string, never parsed into a local
+  `Date`.** `new Date("2026-03-07")` is midnight UTC, i.e. March 6 everywhere west
+  of Greenwich — a set release read a day early, invisible on a US dev machine.
+  Arithmetic goes through `calAddDays` (UTC frame: no DST, so +1 day can never
+  land on the same date twice). A store event uses `calTzYmd` to sit on the day it
+  is in **at the store** — 9pm Friday in LA is Friday for the people going.
+- **⚠ CCQs cannot be auto-detected, and this was MEASURED** (2026-09-12). The
+  `phase_template_group` trick behind Set Championship detection does not work:
+  the template two CCQs shared (`7ffe1457…`) turns out to be a generic Swiss
+  template covering Set Championships and "Sunday Evening Weekly Play" alike, 10
+  of 992 upcoming events sampled. RPH's `event_type` reads LOCALS for ~99%. So
+  `scripts/scan_ccq_candidates.py` (daily, in `discover_scs.yml`,
+  `continue-on-error`) **proposes rows at `confirmed=false`** and a person rules
+  on them in the editor — the `catalog_watch.json` ack shape. **Never let a script
+  flip `confirmed`**: a wrong date beside a tournament somebody would travel for
+  is the most expensive mistake this calendar can make. Titles that hedge
+  ("possible CCQ") are kept but flagged in the note.
+- **The personal layer is localStorage first, Supabase when signed in**
+  (migration 140, `screener_views` pattern) — signed-out has to keep working, and
+  the table is what carries six followed stores from a laptop to a phone. Three
+  kinds: `event` (one date), `series` (a recurring slot), `store` (**every event
+  at that shop, now and in future** — the ask that made this a table, since it has
+  to keep paying out). A followed store is re-queried by `store_id`; a series
+  without one resolves only through the event ids captured at pin time, so it goes
+  stale rather than vanishing.
+- **⚠ The ✚ popover is `position:fixed`, anchored by measurement.** It opens
+  inside the Upcoming-events box, whose `.sc-tile` is `overflow:hidden` and whose
+  `.sc-list` is `overflow:auto`: an absolute menu is clipped to nothing by the tile
+  before it reaches the scroller. Measured — the menu's top landed 3px below the
+  tile's clip box, so the button lit up and no menu appeared. `useCalPopAnchor`
+  uses `useLayoutEffect` (coordinates before paint, or it flashes at the fallback
+  position) and a **capturing** scroll listener, or scrolling the inner list
+  leaves the menu hanging over the page. Same lesson as `.gc-caps-tip`.
+- **⚠ `.ics` `DTEND` is EXCLUSIVE**: a one-day release on the 13th ends on the
+  14th. Emit the same date for both and Google renders it while Apple Calendar
+  silently drops the event. Folding is at 75 **octets**, not characters, and a
+  fold splitting a multi-byte character makes the whole file unreadable in Outlook
+  rather than merely ugly. Both pinned by the test, along with escaping order
+  (backslash first, or every comma double-escapes).
+- **⚠ An empty calendar is NORMAL, not a bug** — sets ship roughly quarterly, so
+  between a retail release and the next announcement there is genuinely nothing
+  ahead, for weeks. Both surfaces refuse to go blank: the page has a **Show past**
+  toggle, and the home panel falls back to the last two things that happened
+  ("Attack of the Vine! · retail release · 7 wk ago"). A box that blanks for a
+  month reads as broken and earns a Hide.
+- **A month cell labels a set release by its PHASE, not its name** (`calChipLabel`).
+  A set puts two or three dates in one month all carrying the same title, so
+  "Attack of the Vine!" twice a week apart is two identical chips distinguishing
+  nothing; "LGS release" / "Retail release" is what you opened a month view to
+  read. Everything else keeps its title.
+- **The countdown takes the EVENT, not a date**, because "now" has to mean *in
+  progress*: day 2 of a three-day championship started yesterday. A start-date-only
+  version labelled every 2023 set release **"NOW"** — it shipped into a screenshot.
+- URL params `ck` / `cv` / `cm` (chips / list-vs-month / which month), registered in
+  BOTH `dirtyParams` and `VIEW_OWNED.calendar` per the standing rule, written with
+  `replaceState` (a filter is not a page).
+- **Next set is `Hyperia City`** — prereleases start **2026-10-15** (1,685 events
+  reference it in `lorcana_events` as of 2026-09-12). Its LGS/retail dates are not
+  published yet; type them into the editor rather than inferring them.
+
 ## Swiss simulator (`/lab/swiss`) — unlisted, added 2026-08-20
 
 Monte Carlo odds for Lorcana Swiss events. **Standalone `swiss.html`, NOT part of the SPA** — the
@@ -3213,6 +3298,18 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- **`supabase/139_calendar_events.sql`** — STAGED, not applied. The curated
+  calendar (sets / products / DLCs / CCQs) + the two championship rows already
+  committed in `EVENT_TILES`. Safe to ship the client first: every read failure
+  reads as "no curated events", and the page still renders its derived set
+  releases and your followed stores. Until it lands, `/calendar` shows an
+  admin-only banner naming the file, and `scan_ccq_candidates.py` exits saying so.
+- **`supabase/140_calendar_subscriptions.sql`** — STAGED, not applied. The
+  per-user layer (followed stores, pinned series, saved events) + a
+  `(store_id, start_datetime)` index on `lorcana_events`, which is the query the
+  feature is built on and the one 113 does not have. Also safe to ship first:
+  without it the client stays on localStorage, which is exactly the signed-out
+  path, so nothing breaks — follows just don't travel between devices yet.
 - ~~`supabase/127_watchlists.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Watchlists + items.
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.

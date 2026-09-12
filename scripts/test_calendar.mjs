@@ -1,0 +1,404 @@
+// test_calendar.mjs — guards the Lorcana calendar's pure core.
+//
+//     node scripts/test_calendar.mjs
+//
+// Extracts the real functions out of Index.html, house pattern, so they cannot
+// drift from what ships.
+//
+// Every case below is a failure that is SILENT: a calendar that is confidently
+// wrong by one day, an override that quietly becomes a duplicate, or an .ics
+// that imports as nothing at all. None of them throw, and none of them look
+// wrong in a screenshot.
+import { readFileSync } from "node:fs";
+
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+const NL = String.fromCharCode(10);
+const grab = (a, b) => {
+  const i = src.indexOf(a);
+  if (i < 0) throw new Error("missing marker: " + a);
+  const j = src.indexOf(b, i);
+  if (j < 0) throw new Error("missing end: " + b);
+  return src.slice(i, j + b.length);
+};
+const grabLine = (p) => {
+  const l = src.split(/\r?\n/).find((x) => x.startsWith(p));
+  if (!l) throw new Error("missing line: " + p);
+  return l;
+};
+
+const mod = await import("data:text/javascript," + encodeURIComponent([
+  grabLine("const CAL_D = "),
+  grab("const calYmdParts = (s) => {", NL + "};"),
+  grabLine("const calYmdToUTC = "),
+  grab("const calUTCToYmd = (ms) => {", NL + "};"),
+  grabLine("const calAddDays = "),
+  grabLine("const calDayDiff = "),
+  grab("const calTodayYmd = () => {", NL + "};"),
+  grab("const calTzYmd = (iso, tz) => {", NL + "};"),
+  grab("const CALENDAR_KINDS = [", NL + "];"),
+  grabLine("const CALENDAR_KIND_KEYS = "),
+  grab("const CALENDAR_KIND_LONG = {", NL + "};"),
+  grabLine("const SET_RELEASE_LABELS = "),
+  grabLine("const SET_RELEASE_PHASES = "),
+  grab("const calendarSetEntries = (releaseDates) => {", NL + "};"),
+  grabLine("const _calSetKey = "),
+  grab("const calendarMergeEvents = (derived, rows) => {", NL + "};"),
+  grabLine("const _calKindRank = "),
+  grab("const calendarSort = (events) =>", "|| String(a.title || \"\").localeCompare(String(b.title || \"\")));"),
+  grab("const calendarStoreEntry = (ev, extra) => {", NL + "};"),
+  grabLine("const CAL_MAX_SPAN_DAYS = "),
+  grab("const calendarEventDays = (ev) => {", NL + "};"),
+  grab("const calendarMonthGrid = (year, month, events) => {", NL + "};"),
+  grab("const calendarUpcoming = (events, fromYmd, limit) => {", NL + "};"),
+  grabLine("const calChipLabel = "),
+  grab("const calCountdown = (ev, todayYmd) => {", NL + "};"),
+  grabLine("const _calEnc = "),
+  grab("const icsEscape = (s) =>", ".replace(/\\r\\n|\\r|\\n/g, \"\\\\n\");"),
+  grab("const icsFold = (line) => {", NL + "};"),
+  grabLine("const icsDate = "),
+  grabLine("const icsStamp = "),
+  grabLine("const CAL_DEFAULT_EVENT_HOURS = "),
+  grabLine("const calendarIcsUid = "),
+  grab("const icsEventLines = (ev, nowMs) => {", NL + "};"),
+  grab("const buildIcs = (events, opts) => {", NL + "};"),
+  grab("const googleCalUrl = (ev) => {", NL + "};"),
+  "export {calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,",
+  " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
+  " googleCalUrl, calCountdown, calChipLabel,",
+  " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
+].join(NL)));
+
+const {
+  calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,
+  calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
+  googleCalUrl, calCountdown, calChipLabel,
+  CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
+} = mod;
+
+let failed = 0;
+const ok = (name, cond, detail) => {
+  if (!cond) failed++;
+  console.log((cond ? "PASS  " : "FAIL  ") + name + (cond ? "" : "  → " + (detail ?? "")));
+};
+const enc = new TextEncoder();
+
+// ── Calendar days never shift by timezone ───────────────────────────────────
+// The bug this guards: `new Date("2026-03-07")` is midnight UTC, which is
+// March 6 anywhere west of Greenwich. A set release read a day early is the
+// single most embarrassing thing a release calendar can do, and on a US-hosted
+// dev machine it is invisible.
+ok("day arithmetic crosses a month boundary", calAddDays("2026-02-28", 1) === "2026-03-01",
+  calAddDays("2026-02-28", 1));
+ok("day arithmetic crosses a leap day", calAddDays("2024-02-28", 1) === "2024-02-29",
+  calAddDays("2024-02-28", 1));
+ok("day arithmetic crosses a year", calAddDays("2025-12-31", 1) === "2026-01-01");
+// US DST begins 2026-03-08. A local-time implementation adding 86400000ms here
+// lands back on the 8th, so the day silently repeats.
+ok("day arithmetic survives a DST spring-forward", calAddDays("2026-03-08", 1) === "2026-03-09",
+  calAddDays("2026-03-08", 1));
+ok("day arithmetic survives a DST fall-back", calAddDays("2026-11-01", 1) === "2026-11-02",
+  calAddDays("2026-11-01", 1));
+
+// A store event belongs to the day it is in AT THE STORE. 9pm Friday in Los
+// Angeles is 04:00 Saturday UTC — a reader in London must still see Friday.
+ok("store event keeps the STORE's calendar day, not the reader's",
+  calTzYmd("2026-03-07T04:00:00Z", "America/Los_Angeles") === "2026-03-06",
+  calTzYmd("2026-03-07T04:00:00Z", "America/Los_Angeles"));
+ok("store event east of UTC keeps its own day",
+  calTzYmd("2026-03-06T22:00:00Z", "Asia/Tokyo") === "2026-03-07",
+  calTzYmd("2026-03-06T22:00:00Z", "Asia/Tokyo"));
+// RPH does send malformed zone names; Intl throws on them. Losing the row is
+// worse than showing it in the reader's zone.
+ok("a bad timezone name degrades instead of throwing",
+  typeof calTzYmd("2026-03-07T04:00:00Z", "Not/AZone") === "string");
+ok("a null instant is null, not a crash", calTzYmd(null, "UTC") === null);
+
+// ── Set releases derive from SET_RELEASE_DATES ──────────────────────────────
+const FIXTURE = {
+  "Winterspell":     {lgs: "2026-02-13", retail: "2026-02-20"},
+  "Wilds Unknown":   {lgs: "2026-05-08", retail: "2026-05-15"},
+  "Attack of the Vine!": {lgs: "2026-07-17", retail: "2026-07-24", prerelease: "2026-07-11"},
+};
+const derived = calendarSetEntries(FIXTURE);
+ok("every dated phase becomes a row", derived.length === 7, derived.length);
+ok("all derived rows are kind=set", derived.every(e => e.kind === "set"));
+ok("a set with no prerelease date contributes no prerelease row",
+  !derived.some(e => e.title === "Winterspell" && e.subtitle === SET_RELEASE_LABELS.prerelease));
+ok("a prerelease date is carried when present",
+  derived.some(e => e.title === "Attack of the Vine!" && e.starts_on === "2026-07-11"));
+ok("a set with no dates at all is skipped", calendarSetEntries({"Ghost Set": {}}).length === 0);
+ok("garbage dates are skipped, not rendered",
+  calendarSetEntries({"Bad": {lgs: "soon", retail: null}}).length === 0);
+
+// ── The override is an override, not a duplicate ────────────────────────────
+// The silent failure: a slipped date is typed in, the merge key does not match,
+// and the calendar now shows the set releasing on BOTH days. Both rows look
+// right; only the pair is wrong.
+const slipped = [{
+  id: "row-1", kind: "set", title: "Wilds Unknown", subtitle: "LGS release",
+  starts_on: "2026-05-22", set_name: "Wilds Unknown",
+}];
+const merged = calendarMergeEvents(derived, slipped);
+const wuLgs = merged.filter(e => e.set_name === "Wilds Unknown" && e.subtitle === "LGS release");
+ok("a table row REPLACES the derived set row", wuLgs.length === 1, `${wuLgs.length} rows`);
+ok("the replacement carries the new date", wuLgs[0] && wuLgs[0].starts_on === "2026-05-22",
+  wuLgs[0] && wuLgs[0].starts_on);
+ok("the set's other phases are untouched",
+  merged.some(e => e.set_name === "Wilds Unknown" && e.subtitle === "Retail release" && e.starts_on === "2026-05-15"));
+// The subtitle spelling IS the merge key — this is the one that breaks quietly
+// if SET_RELEASE_LABELS is reworded without migrating stored rows.
+const misspelled = calendarMergeEvents(derived, [{
+  id: "row-2", kind: "set", title: "Wilds Unknown", subtitle: "LGS Release",  // capital R
+  starts_on: "2026-05-22", set_name: "Wilds Unknown",
+}]);
+ok("the merge key is case-insensitive, so casing drift still overrides",
+  misspelled.filter(e => e.set_name === "Wilds Unknown" && /lgs release/i.test(e.subtitle || "")).length === 1);
+
+// ⚠ Two different CCQs sharing a name must BOTH survive. Keying every kind by
+// title would swallow one, and it would read as the scan having missed it.
+const twoCcqs = calendarMergeEvents([], [
+  {id: "a", kind: "ccq", title: "Lorcana 2K CCQ", starts_on: "2026-10-04", location: "Store A"},
+  {id: "b", kind: "ccq", title: "Lorcana 2K CCQ", starts_on: "2026-11-15", location: "Store B"},
+]);
+ok("two same-named CCQs both survive the merge", twoCcqs.length === 2, twoCcqs.length);
+const twoProducts = calendarMergeEvents([], [
+  {id: "a", kind: "product", title: "Gift Set", starts_on: "2026-10-04"},
+  {id: "b", kind: "product", title: "Gift Set", starts_on: "2027-02-01"},
+]);
+ok("two same-named products both survive", twoProducts.length === 2, twoProducts.length);
+
+ok("merged output is sorted by date", merged.every((e, i) =>
+  i === 0 || merged[i - 1].starts_on <= e.starts_on));
+ok("merge tolerates null inputs", calendarMergeEvents(null, null).length === 0);
+
+// ── Multi-day spans ─────────────────────────────────────────────────────────
+ok("a one-day event occupies one day",
+  calendarEventDays({starts_on: "2026-08-28"}).length === 1);
+ok("a three-day championship occupies three days",
+  calendarEventDays({starts_on: "2026-08-28", ends_on: "2026-08-30"}).length === 3,
+  calendarEventDays({starts_on: "2026-08-28", ends_on: "2026-08-30"}).join(","));
+ok("a span ending before it starts falls back to one day",
+  calendarEventDays({starts_on: "2026-08-28", ends_on: "2026-08-01"}).length === 1);
+// A typo'd year is the realistic version of this: 2260 instead of 2026 would
+// try to paint ~85,000 cells and hang the grid with no error.
+ok("an absurd span is capped rather than hanging the grid",
+  calendarEventDays({starts_on: "2026-08-28", ends_on: "2260-08-30"}).length === 60,
+  calendarEventDays({starts_on: "2026-08-28", ends_on: "2260-08-30"}).length);
+
+// ── Month grid ──────────────────────────────────────────────────────────────
+// Feb 2026 starts on a Sunday and has 28 days → exactly 4 weeks, no padding.
+const feb = calendarMonthGrid(2026, 2, []);
+ok("a 28-day month starting Sunday is exactly 4 weeks", feb.length === 4, feb.length);
+ok("every week has 7 days", feb.every(w => w.length === 7));
+ok("Feb 2026 grid starts on the 1st with no lead-in", feb[0][0].date === "2026-02-01");
+// Mar 2026: starts Sunday, 31 days → 5 weeks with 4 trailing days from April.
+const mar = calendarMonthGrid(2026, 3, []);
+ok("a 31-day month starting Sunday is 5 weeks", mar.length === 5, mar.length);
+ok("trailing days are marked out-of-month",
+  mar[4][mar[4].length - 1].inMonth === false);
+// Aug 2026 starts on a Saturday — 6 lead-in days, the worst case.
+const aug = calendarMonthGrid(2026, 8, []);
+ok("a month starting Saturday pads 6 lead-in days",
+  aug[0].filter(d => !d.inMonth).length === 6, aug[0].filter(d => !d.inMonth).length);
+ok("the grid always starts on a Sunday",
+  [feb, mar, aug].every(g => new Date(g[0][0].date + "T00:00:00Z").getUTCDay() === 0));
+ok("no month emits an entirely empty trailing week",
+  [feb, mar, aug].every(g => g[g.length - 1].some(d => d.inMonth)));
+
+// A three-day event paints a cell in every day it covers.
+const augEvents = calendarMonthGrid(2026, 8, [
+  {id: "x", kind: "dlc", title: "NA Championship", starts_on: "2026-08-28", ends_on: "2026-08-30"},
+]);
+const painted = augEvents.flat().filter(d => d.events.length > 0);
+ok("a 3-day event paints 3 cells", painted.length === 3, painted.length);
+ok("it paints the right cells",
+  painted.map(d => d.date).join(",") === "2026-08-28,2026-08-29,2026-08-30",
+  painted.map(d => d.date).join(","));
+// An event that starts in the previous month must still paint this month's cells.
+const spillover = calendarMonthGrid(2026, 9, [
+  {id: "y", kind: "dlc", title: "Spillover", starts_on: "2026-08-30", ends_on: "2026-09-02"},
+]);
+const sepPainted = spillover.flat().filter(d => d.inMonth && d.events.length > 0);
+ok("an event spanning into this month paints it", sepPainted.length === 2, sepPainted.length);
+
+// ── Upcoming ────────────────────────────────────────────────────────────────
+const upcomingPool = [
+  {id: "past",   kind: "set",     title: "Past",   starts_on: "2026-01-01"},
+  {id: "live",   kind: "dlc",     title: "Live",   starts_on: "2026-09-11", ends_on: "2026-09-13"},
+  {id: "soon",   kind: "product", title: "Soon",   starts_on: "2026-09-20"},
+  {id: "later",  kind: "ccq",     title: "Later",  starts_on: "2026-10-04"},
+];
+const up = calendarUpcoming(upcomingPool, "2026-09-12", 10);
+ok("a finished event drops out of upcoming", !up.some(e => e.id === "past"));
+// The one people get wrong: day 2 of a 3-day championship is not "past".
+ok("an event happening RIGHT NOW is still upcoming", up.some(e => e.id === "live"),
+  up.map(e => e.id).join(","));
+ok("upcoming is ordered soonest-first", up[0].id === "live" && up[1].id === "soon");
+ok("the limit is honoured", calendarUpcoming(upcomingPool, "2026-09-12", 2).length === 2);
+ok("limit 0 means no limit", calendarUpcoming(upcomingPool, "2026-09-12", 0).length === 3);
+
+// ── Countdown ───────────────────────────────────────────────────────────────
+// The bug this guards shipped and was visible in one screenshot: a start-date
+// comparison called every past event "NOW", so The First Chapter's 2023 release
+// sat in the list labelled as happening right now.
+const TODAY = "2026-09-12";
+const cd = (o) => calCountdown(o, TODAY);
+ok("today reads today", cd({starts_on: "2026-09-12"}) === "today", cd({starts_on: "2026-09-12"}));
+ok("tomorrow reads tomorrow", cd({starts_on: "2026-09-13"}) === "tomorrow");
+ok("this week counts days", cd({starts_on: "2026-09-15"}) === "in 3 days", cd({starts_on: "2026-09-15"}));
+ok("a month out reads in weeks", /^in \d+ wk$/.test(cd({starts_on: "2026-10-04"})), cd({starts_on: "2026-10-04"}));
+ok("yesterday reads yesterday", cd({starts_on: "2026-09-11"}) === "yesterday", cd({starts_on: "2026-09-11"}));
+ok("last week reads days ago", cd({starts_on: "2026-09-08"}) === "4 days ago", cd({starts_on: "2026-09-08"}));
+ok("a 2023 release is NOT 'now'", cd({starts_on: "2023-08-18"}) !== "now", cd({starts_on: "2023-08-18"}));
+ok("a 2023 release reads in years", cd({starts_on: "2023-08-18"}) === "3 yr ago", cd({starts_on: "2023-08-18"}));
+// ⚠ The reason it takes the event: day 2 of a 3-day championship STARTED
+// yesterday but is happening while you read it.
+ok("day 2 of a multi-day event reads 'now'",
+  cd({starts_on: "2026-09-11", ends_on: "2026-09-13"}) === "now",
+  cd({starts_on: "2026-09-11", ends_on: "2026-09-13"}));
+ok("day 1 of a multi-day event reads 'today'",
+  cd({starts_on: "2026-09-12", ends_on: "2026-09-14"}) === "today");
+ok("the day after a multi-day event ends, it is past",
+  cd({starts_on: "2026-09-08", ends_on: "2026-09-11"}) === "yesterday",
+  cd({starts_on: "2026-09-08", ends_on: "2026-09-11"}));
+ok("an undated event has no countdown", cd({title: "x"}) === "");
+
+// A month cell labels a set release by PHASE — two chips reading "Attack of the
+// Vine!" a week apart distinguish nothing.
+ok("a set chip is labelled by its phase",
+  calChipLabel({kind: "set", title: "Attack of the Vine!", subtitle: "LGS release"}) === "LGS release");
+ok("a non-set chip keeps its name",
+  calChipLabel({kind: "dlc", title: "NA Championship", subtitle: "Disney Lorcana Challenge"}) === "NA Championship");
+ok("a set with no phase falls back to its name",
+  calChipLabel({kind: "set", title: "Some Set"}) === "Some Set");
+
+// ── Store entries ───────────────────────────────────────────────────────────
+const storeEv = calendarStoreEntry({
+  event_id: 853992, name: "Lorcana X Brainwash Cards 2K CCQ", store_name: "Brainwash Cards",
+  store_id: 42, start_datetime: "2026-09-19T15:00:00+00:00", timezone: "America/New_York",
+  city: "Philadelphia", state: "PA", kind: "other", url: "https://tcg.ravensburgerplay.com/events/853992",
+});
+ok("a store entry lands on its local day", storeEv.starts_on === "2026-09-19", storeEv.starts_on);
+ok("a store entry is kind=store", storeEv.kind === "store");
+ok("a store entry keeps its instant for the .ics", !!storeEv.starts_at);
+ok("a store entry names the store and the town",
+  /Brainwash Cards/.test(storeEv.location) && /Philadelphia, PA/.test(storeEv.location), storeEv.location);
+ok("a nameless store event still has a title",
+  calendarStoreEntry({event_id: 1, name: "", store_name: "Shop", start_datetime: "2026-09-19T15:00:00Z"}).title === "Shop");
+ok("an undated store event is dropped",
+  calendarStoreEntry({event_id: 1, name: "x", start_datetime: null}) === null);
+
+// ── .ics ────────────────────────────────────────────────────────────────────
+const NOW = Date.parse("2026-09-12T12:00:00Z");
+const ics = buildIcs([
+  {id: "set:Winterspell:lgs", kind: "set", title: "Winterspell", subtitle: "LGS release", starts_on: "2026-02-13"},
+  {id: "dlc-na", kind: "dlc", title: "NA Championship", subtitle: "Disney Lorcana Challenge",
+   starts_on: "2026-08-28", ends_on: "2026-08-30", location: "Disneyland Hotel, Anaheim, CA",
+   url: "https://example.test/na"},
+  storeEv,
+], {nowMs: NOW, name: "Lorcana calendar"});
+
+ok("the file uses CRLF line endings", ics.includes("\r\n") && !/[^\r]\n/.test(ics));
+ok("it opens and closes a VCALENDAR",
+  ics.startsWith("BEGIN:VCALENDAR\r\n") && ics.trimEnd().endsWith("END:VCALENDAR"));
+ok("VERSION comes before the events", ics.indexOf("VERSION:2.0") < ics.indexOf("BEGIN:VEVENT"));
+ok("every event opens and closes",
+  (ics.match(/BEGIN:VEVENT/g) || []).length === 3 &&
+  (ics.match(/END:VEVENT/g) || []).length === 3);
+ok("every event carries a DTSTAMP", (ics.match(/DTSTAMP:/g) || []).length === 3);
+ok("every event carries a UID", (ics.match(/\r\nUID:/g) || []).length === 3);
+
+// ⚠ THE classic .ics bug. DTEND is exclusive: a one-day event on the 13th ends
+// on the 14th. Emit 20260213 for both and Google renders it while Apple
+// Calendar silently drops the event.
+ok("a one-day all-day event ends on the NEXT day",
+  ics.includes("DTSTART;VALUE=DATE:20260213") && ics.includes("DTEND;VALUE=DATE:20260214"),
+  (ics.match(/DTEND;VALUE=DATE:2026021\d/) || [])[0]);
+ok("a three-day event ends the day after the last day",
+  ics.includes("DTSTART;VALUE=DATE:20260828") && ics.includes("DTEND;VALUE=DATE:20260831"),
+  (ics.match(/DTEND;VALUE=DATE:202608\d\d/) || [])[0]);
+ok("a timed event is stamped, not all-day",
+  ics.includes("DTSTART:20260919T150000Z"), (ics.match(/DTSTART:\S+/) || [])[0]);
+ok("a timed event with no end gets a 2h default",
+  ics.includes("DTEND:20260919T170000Z"), (ics.match(/DTEND:\d\S+/) || [])[0]);
+ok("the summary joins title and subtitle",
+  ics.includes("SUMMARY:Winterspell — LGS release"));
+ok("a location is carried", ics.includes("LOCATION:Disneyland Hotel"));
+ok("a url is carried", ics.includes("URL:https://example.test/na"));
+ok("an undated row is skipped rather than emitting a broken VEVENT",
+  (buildIcs([{id: "bad", title: "No date"}], {nowMs: NOW}).match(/BEGIN:VEVENT/g) || []).length === 0);
+
+// Escaping: RFC 5545 reserves \ ; , and newline inside a TEXT value. A store
+// called "Cards, Comics & Games" unescaped truncates the summary at the comma
+// in some clients and corrupts the property in others.
+ok("commas are escaped", icsEscape("Cards, Comics") === "Cards\\, Comics");
+ok("semicolons are escaped", icsEscape("a;b") === "a\\;b");
+ok("backslashes are escaped FIRST", icsEscape("a\\b") === "a\\\\b");
+ok("newlines become \\n", icsEscape("a\nb") === "a\\nb");
+ok("escaping order does not double-escape a comma",
+  icsEscape("a\\,b") === "a\\\\\\,b", icsEscape("a\\,b"));
+
+// ⚠ Folding is measured in OCTETS, and a fold inside a multi-byte character
+// makes the whole file unreadable rather than merely ugly.
+const longAscii = "SUMMARY:" + "x".repeat(200);
+const foldedAscii = icsFold(longAscii);
+ok("a long line is folded", foldedAscii.includes("\r\n"));
+ok("every folded segment is <= 75 octets",
+  foldedAscii.split("\r\n").every(l => enc.encode(l).length <= 75),
+  foldedAscii.split("\r\n").map(l => enc.encode(l).length).join(","));
+ok("continuation lines begin with a space",
+  foldedAscii.split("\r\n").slice(1).every(l => l.startsWith(" ")));
+ok("unfolding restores the original",
+  foldedAscii.split("\r\n").map((l, i) => i ? l.slice(1) : l).join("") === longAscii);
+const longUtf8 = "SUMMARY:" + "日本語のイベント".repeat(12);
+const foldedUtf8 = icsFold(longUtf8);
+ok("a multi-byte line folds within 75 octets",
+  foldedUtf8.split("\r\n").every(l => enc.encode(l).length <= 75),
+  foldedUtf8.split("\r\n").map(l => enc.encode(l).length).join(","));
+ok("no multi-byte character is split by a fold",
+  foldedUtf8.split("\r\n").map((l, i) => i ? l.slice(1) : l).join("") === longUtf8);
+ok("a short line is left alone", icsFold("SUMMARY:hi") === "SUMMARY:hi");
+ok("the built file folds nothing over 75 octets",
+  ics.split("\r\n").every(l => enc.encode(l).length <= 75),
+  ics.split("\r\n").filter(l => enc.encode(l).length > 75)[0]);
+
+// ── Google Calendar handoff ─────────────────────────────────────────────────
+const g = googleCalUrl({title: "NA Championship", subtitle: "Disney Lorcana Challenge",
+  starts_on: "2026-08-28", ends_on: "2026-08-30", location: "Anaheim", url: "https://example.test/na"});
+ok("google url points at the template endpoint",
+  g.startsWith("https://calendar.google.com/calendar/render?"));
+// Same exclusive-end rule as .ics — and the same silent failure if it is wrong.
+ok("google all-day range uses an exclusive end",
+  decodeURIComponent(new URL(g).searchParams.get("dates")) === "20260828/20260831",
+  new URL(g).searchParams.get("dates"));
+ok("google url carries the joined title",
+  new URL(g).searchParams.get("text") === "NA Championship — Disney Lorcana Challenge");
+ok("google url carries location and details",
+  new URL(g).searchParams.get("location") === "Anaheim" &&
+  /example\.test/.test(new URL(g).searchParams.get("details")));
+const gTimed = googleCalUrl(storeEv);
+ok("google timed range is stamped",
+  /^\d{8}T\d{6}Z\/\d{8}T\d{6}Z$/.test(new URL(gTimed).searchParams.get("dates")),
+  new URL(gTimed).searchParams.get("dates"));
+ok("an undated event yields no google url", googleCalUrl({title: "x"}) === null);
+
+// ── The kind table is the contract ──────────────────────────────────────────
+ok("the four curated kinds plus stores are offered",
+  CALENDAR_KIND_KEYS.join(",") === "set,product,dlc,ccq,store", CALENDAR_KIND_KEYS.join(","));
+ok("every kind has an icon key and a hue",
+  CALENDAR_KINDS.every(k => k.icon && k.hue));
+// A chip saying "CCQ" with no explanation anywhere is the reason this exists.
+ok("every kind has a long-form explanation",
+  CALENDAR_KIND_KEYS.every(k => (CALENDAR_KIND_LONG[k] || "").length > 12));
+ok("DLC and CCQ are spelled out somewhere",
+  /Disney Lorcana Challenge/.test(CALENDAR_KIND_LONG.dlc) &&
+  /Challenge Championship Qualifier/.test(CALENDAR_KIND_LONG.ccq));
+// No emoji in the UI — the icons rule. A pictograph must come from UI_ICON_PATHS.
+ok("no kind smuggles in an emoji",
+  !CALENDAR_KINDS.some(k => /\p{Extended_Pictographic}/u.test(k.label + k.icon)));
+ok("every kind icon exists in UI_ICON_PATHS",
+  CALENDAR_KINDS.every(k => new RegExp("^\\s*" + k.icon + ":\\s", "m").test(src)),
+  CALENDAR_KINDS.filter(k => !new RegExp("^\\s*" + k.icon + ":\\s", "m").test(src)).map(k => k.icon).join(","));
+
+console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
+process.exit(failed ? 1 : 0);

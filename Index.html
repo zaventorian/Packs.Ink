@@ -2067,11 +2067,324 @@ const UI_ICON_PATHS = {
   toploader: _icoSvg(html`<rect x="5.5" y="3.5" width="13" height="17" rx="1"/><rect x="8" y="6" width="8" height="12" rx="0.6"/>`),
   mat:       _icoSvg(html`<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6.5 10h4v4h-4z"/><path d="M13.5 10h4v4h-4z"/>`),
   storage:   _icoSvg(html`<path d="M3 9.5h18v9A1.5 1.5 0 0 1 19.5 20h-15A1.5 1.5 0 0 1 3 18.5z"/><path d="M5 9.5v-3h14v3"/><path d="M9 14h6"/>`),
+  // Calendar. `calendar` is the page + nav glyph; `calendarPlus` is the "put this
+  // on my calendar" action, which has to read as ADD at 14px — hence the plus in
+  // the grid's own body rather than a badge hanging off the corner, which turns
+  // to mush at this size.
+  calendar:  _icoSvg(html`<rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.8h17"/><path d="M8 3.5v3"/><path d="M16 3.5v3"/>`),
+  calendarPlus: _icoSvg(html`<path d="M20.5 12.2V7a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v11.5a2 2 0 0 0 2 2h7.3"/><path d="M3.5 9.8h17"/><path d="M8 3.5v3"/><path d="M16 3.5v3"/><path d="M17.5 15v6"/><path d="M14.5 18h6"/>`),
+  store:     _icoSvg(html`<path d="M4 9.5h16v9.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 19z"/><path d="M3 9.5L4.8 4.3A1 1 0 0 1 5.8 3.5h12.4a1 1 0 0 1 1 .8L21 9.5a2.6 2.6 0 0 1-4.5 1.8 2.6 2.6 0 0 1-4.5 0 2.6 2.6 0 0 1-4.5 0A2.6 2.6 0 0 1 3 9.5z"/>`),
 };
 
 const uiIcon = (key, size) => {
   const f = UI_ICON_PATHS[key];
   return f ? f(size) : null;
+};
+
+// ── Lorcana calendar ────────────────────────────────────────────────────────
+// What is coming for the GAME (set releases, product drops, championship
+// weekends, qualifiers) plus what is coming at YOUR stores. Two data sources
+// that never mix: public.calendar_events is curated by hand, lorcana_events is
+// the live Ravensburger Play feed and only contributes what you followed.
+//
+// ⚠ Every date here is a PLAIN CALENDAR DAY held as "YYYY-MM-DD" and never
+// parsed into a local Date. A set releases on March 7 in every timezone, and
+// `new Date("2026-03-07")` is midnight UTC — which is March 6 everywhere west
+// of Greenwich, so half the world would read the release a day early. The grid,
+// the list and the .ics all work off the string; only a timed event (a CCQ's
+// 10am registration) ever becomes an instant.
+const CAL_D = (s) => String(s || "").slice(0, 10);
+const calYmdParts = (s) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(CAL_D(s));
+  return m ? {y: +m[1], m: +m[2], d: +m[3]} : null;
+};
+// UTC is the safe arithmetic frame for a calendar day: it has no DST, so adding
+// a day is always +86400s and can never land on the same date twice.
+const calYmdToUTC = (s) => { const p = calYmdParts(s); return p ? Date.UTC(p.y, p.m - 1, p.d) : NaN; };
+const calUTCToYmd = (ms) => {
+  const d = new Date(ms);
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+};
+const calAddDays = (s, n) => { const t = calYmdToUTC(s); return Number.isNaN(t) ? null : calUTCToYmd(t + n * 86400000); };
+const calDayDiff = (a, b) => Math.round((calYmdToUTC(b) - calYmdToUTC(a)) / 86400000);
+const calTodayYmd = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+// The calendar day an instant falls on IN THE EVENT'S OWN ZONE. A Friday 9pm
+// league night in Los Angeles is Friday for the people going, whatever zone the
+// person reading the calendar is in. Intl throws on a bad zone name (RPH does
+// send some), so fall back to the reader's zone rather than losing the row.
+const calTzYmd = (iso, tz) => {
+  if(!iso) return null;
+  const t = Date.parse(iso);
+  if(Number.isNaN(t)) return null;
+  const fmt = (zone) => {
+    const p = new Intl.DateTimeFormat("en-CA", {timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit"})
+      .formatToParts(new Date(t)).reduce((o, x) => (o[x.type] = x.value, o), {});
+    return `${p.year}-${p.month}-${p.day}`;
+  };
+  try { if(tz) return fmt(tz); } catch {}
+  try { return fmt(undefined); } catch { return CAL_D(iso); }
+};
+
+// The filter chips, in render order. `store` is the personal category — it holds
+// whatever you pinned or whichever stores you follow — and is last because the
+// four above it are true of the whole game while it is true only of you.
+const CALENDAR_KINDS = [
+  {key: "set",     label: "Sets",      icon: "box",      hue: "var(--accent)"},
+  {key: "product", label: "Products",  icon: "sparkle",  hue: "#7c9cf5"},
+  {key: "dlc",     label: "DLCs",      icon: "trophy",   hue: "#e0a33e"},
+  {key: "ccq",     label: "CCQs",      icon: "pennant",  hue: "#d06ba8"},
+  {key: "store",   label: "My stores", icon: "store",    hue: "#5bb98c"},
+];
+const CALENDAR_KIND_KEYS = CALENDAR_KINDS.map(k => k.key);
+const CALENDAR_KIND_BY_KEY = new Map(CALENDAR_KINDS.map(k => [k.key, k]));
+// A DLC is a Disney Lorcana Challenge and a CCQ a Challenge Championship
+// Qualifier — the chips are the abbreviations people actually say, so the long
+// form lives in the tooltip and in the empty state rather than in the chip.
+const CALENDAR_KIND_LONG = {
+  set: "Set releases — prerelease, local game store, and wide retail",
+  product: "Product releases not tied to a set",
+  dlc: "Disney Lorcana Challenge — the official championship weekends",
+  ccq: "Challenge Championship Qualifier",
+  store: "Events at the stores you follow, and anything you pinned",
+};
+
+// The three dates a set has. The KEYS are internal; the VALUES are the merge
+// key against calendar_events.subtitle, so changing a label here without
+// changing the stored rows turns an override into a duplicate entry.
+const SET_RELEASE_LABELS = {prerelease: "Prerelease", lgs: "LGS release", retail: "Retail release"};
+const SET_RELEASE_PHASES = ["prerelease", "lgs", "retail"];
+
+// SET_RELEASE_DATES (a const, far below) expanded into calendar rows. Passed in
+// rather than read from scope so the guard test can drive it with a fixture.
+const calendarSetEntries = (releaseDates) => {
+  const out = [];
+  for(const [setName, d] of Object.entries(releaseDates || {})){
+    for(const phase of SET_RELEASE_PHASES){
+      const day = CAL_D(d && d[phase]);
+      if(!calYmdParts(day)) continue;
+      out.push({
+        id: `set:${setName}:${phase}`,
+        kind: "set",
+        title: setName,
+        subtitle: SET_RELEASE_LABELS[phase],
+        starts_on: day,
+        set_name: setName,
+        derived: true,
+      });
+    }
+  }
+  return out;
+};
+
+// Table rows override derived set rows on (set_name, subtitle) so a slipped date
+// is a one-row edit rather than a deploy.
+//
+// ⚠ Only kind='set' rows participate. Keying every kind by title would silently
+// swallow two genuinely different events that happen to share a name — two
+// stores both running a "Lorcana 2K CCQ" is the ordinary case, not the odd one,
+// and losing one of them would look like the scan had missed it.
+const _calSetKey = (e) => `${(e.set_name || e.title || "").toLowerCase().trim()}|${(e.subtitle || "").toLowerCase().trim()}`;
+const calendarMergeEvents = (derived, rows) => {
+  const sets = new Map();
+  const rest = [];
+  for(const e of derived || []) if(e) sets.set(_calSetKey(e), e);
+  for(const r of rows || []){
+    if(!r) continue;
+    if(r.kind === "set") sets.set(_calSetKey(r), r);
+    else rest.push(r);
+  }
+  return calendarSort([...sets.values(), ...rest]);
+};
+
+const _calKindRank = (k) => { const i = CALENDAR_KIND_KEYS.indexOf(k); return i < 0 ? 99 : i; };
+const calendarSort = (events) => (events || []).slice().sort((a, b) =>
+  CAL_D(a.starts_on).localeCompare(CAL_D(b.starts_on))
+  || _calKindRank(a.kind) - _calKindRank(b.kind)
+  || String(a.title || "").localeCompare(String(b.title || "")));
+
+// One lorcana_events row (or one occurrence of a grouped series) as a calendar
+// entry. The day is the store's local day, not the reader's — see calTzYmd.
+const calendarStoreEntry = (ev, extra) => {
+  if(!ev) return null;
+  const day = calTzYmd(ev.start_datetime, ev.timezone);
+  if(!day) return null;
+  const where = [ev.city, ev.state].filter(Boolean).join(", ");
+  return {
+    id: `ev:${ev.event_id}`,
+    kind: "store",
+    title: (ev.name || "").trim() || ev.store_name || "Lorcana event",
+    subtitle: ev.store_name || "",
+    starts_on: day,
+    starts_at: ev.start_datetime || null,
+    ends_at: ev.end_datetime || null,
+    timezone: ev.timezone || null,
+    location: [ev.store_name, where].filter(Boolean).join(" · ") || null,
+    url: ev.url || null,
+    event_id: ev.event_id,
+    store_id: ev.store_id != null ? String(ev.store_id) : null,
+    rph_kind: ev.kind || "other",
+    ...(extra || {}),
+  };
+};
+
+// Every calendar day an entry occupies, so a three-day championship paints three
+// cells. Capped: a malformed ends_on (a typo'd year) would otherwise try to
+// render tens of thousands of cells and hang the grid.
+const CAL_MAX_SPAN_DAYS = 60;
+const calendarEventDays = (ev) => {
+  const start = CAL_D(ev && ev.starts_on);
+  if(!calYmdParts(start)) return [];
+  const end = CAL_D(ev.ends_on);
+  if(!calYmdParts(end)) return [start];
+  const span = calDayDiff(start, end);
+  if(!(span > 0)) return [start];
+  const days = [];
+  for(let i = 0; i <= Math.min(span, CAL_MAX_SPAN_DAYS - 1); i++) days.push(calAddDays(start, i));
+  return days;
+};
+
+// A month as weeks of days, Sunday-first, each day carrying the entries that
+// touch it. Emits only the weeks the month actually needs (5 or 6) — a fixed six
+// rows leaves a whole empty week on short months, which reads as a broken grid.
+const calendarMonthGrid = (year, month, events) => {
+  const first = Date.UTC(year, month - 1, 1);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const lead = new Date(first).getUTCDay();                 // 0 = Sunday
+  const gridStart = first - lead * 86400000;
+  const cells = Math.ceil((lead + daysInMonth) / 7) * 7;
+  const byDay = new Map();
+  for(const ev of events || []){
+    for(const day of calendarEventDays(ev)){
+      if(!byDay.has(day)) byDay.set(day, []);
+      byDay.get(day).push(ev);
+    }
+  }
+  const weeks = [];
+  for(let i = 0; i < cells; i++){
+    const date = calUTCToYmd(gridStart + i * 86400000);
+    const p = calYmdParts(date);
+    if(i % 7 === 0) weeks.push([]);
+    weeks[weeks.length - 1].push({
+      date,
+      day: p ? p.d : 0,
+      inMonth: !!p && p.y === year && p.m === month,
+      events: calendarSort(byDay.get(date) || []),
+    });
+  }
+  return weeks;
+};
+
+// The next `limit` entries from `fromYmd` forward. An entry that STARTED but has
+// not ended (day 2 of a 3-day championship) still counts as upcoming — it is
+// happening right now, which is the most useful thing a "what's next" box can say.
+const calendarUpcoming = (events, fromYmd, limit) => {
+  const from = CAL_D(fromYmd) || calTodayYmd();
+  const live = (events || []).filter(e => {
+    const end = calYmdParts(CAL_D(e.ends_on)) ? CAL_D(e.ends_on) : CAL_D(e.starts_on);
+    return !!calYmdParts(CAL_D(e.starts_on)) && end >= from;
+  });
+  const sorted = calendarSort(live);
+  return limit > 0 ? sorted.slice(0, limit) : sorted;
+};
+
+// ── .ics export ─────────────────────────────────────────────────────────────
+// Hand-rolled, same call as the deck-proxy PDF writer: the only feature used is
+// "one VEVENT with a title, a day and a link", and a library for that is dead
+// weight in a file that ships uncompiled.
+const _calEnc = new TextEncoder();
+const icsEscape = (s) => String(s == null ? "" : s)
+  .replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,")
+  .replace(/\r\n|\r|\n/g, "\\n");
+// ⚠ RFC 5545 folds at 75 OCTETS, not characters, and a fold that splits a
+// multi-byte character mid-sequence makes the whole file unreadable in Outlook
+// rather than merely ugly. Iterating the string with for..of walks code points,
+// so an emoji in a store's event name can never be cut in half.
+const icsFold = (line) => {
+  if(_calEnc.encode(line).length <= 75) return line;
+  const out = [];
+  let cur = "", used = 0;
+  for(const ch of String(line)){
+    const n = _calEnc.encode(ch).length;
+    if(used + n > 75){ out.push(cur); cur = " "; used = 1; }
+    cur += ch; used += n;
+  }
+  out.push(cur);
+  return out.join("\r\n");
+};
+const icsDate = (ymd) => CAL_D(ymd).replace(/-/g, "");
+const icsStamp = (ms) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+const CAL_DEFAULT_EVENT_HOURS = 2;
+
+const calendarIcsUid = (ev) => `${String(ev.id || ev.event_id || ev.title || "event").replace(/[^A-Za-z0-9:._-]/g, "-")}@packs.ink`;
+
+// ⚠ DTEND is EXCLUSIVE for an all-day event: a one-day release is
+// DTSTART;VALUE=DATE:20260307 / DTEND;VALUE=DATE:20260308. Emitting the same
+// date for both is the classic .ics bug — Google renders it, Apple Calendar
+// drops the event entirely, and nothing reports an error either way.
+const icsEventLines = (ev, nowMs) => {
+  const lines = ["BEGIN:VEVENT", `UID:${calendarIcsUid(ev)}`, `DTSTAMP:${icsStamp(nowMs)}`];
+  const timed = ev.starts_at && !Number.isNaN(Date.parse(ev.starts_at));
+  if(timed){
+    const startMs = Date.parse(ev.starts_at);
+    const endMs = (ev.ends_at && !Number.isNaN(Date.parse(ev.ends_at)) && Date.parse(ev.ends_at) > startMs)
+      ? Date.parse(ev.ends_at)
+      : startMs + CAL_DEFAULT_EVENT_HOURS * 3600000;
+    lines.push(`DTSTART:${icsStamp(startMs)}`, `DTEND:${icsStamp(endMs)}`);
+  } else {
+    const start = CAL_D(ev.starts_on);
+    const lastDay = calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) >= start ? CAL_D(ev.ends_on) : start;
+    lines.push(`DTSTART;VALUE=DATE:${icsDate(start)}`, `DTEND;VALUE=DATE:${icsDate(calAddDays(lastDay, 1))}`);
+  }
+  const title = [ev.title, ev.subtitle].filter(Boolean).join(" — ");
+  lines.push(`SUMMARY:${icsEscape(title)}`);
+  if(ev.location) lines.push(`LOCATION:${icsEscape(ev.location)}`);
+  const desc = [ev.notes, ev.url].filter(Boolean).join("\n");
+  if(desc) lines.push(`DESCRIPTION:${icsEscape(desc)}`);
+  if(ev.url) lines.push(`URL:${icsEscape(ev.url)}`);
+  lines.push("END:VEVENT");
+  return lines;
+};
+
+const buildIcs = (events, opts) => {
+  const o = opts || {};
+  const nowMs = o.nowMs != null ? o.nowMs : Date.now();
+  const lines = [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Packs.Ink//Lorcana Calendar//EN",
+    "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    `X-WR-CALNAME:${icsEscape(o.name || "Lorcana calendar")}`,
+  ];
+  for(const ev of events || []) if(ev && calYmdParts(CAL_D(ev.starts_on))) lines.push(...icsEventLines(ev, nowMs));
+  lines.push("END:VCALENDAR");
+  // CRLF is required by the spec, not a Windows habit.
+  return lines.map(icsFold).join("\r\n") + "\r\n";
+};
+
+// Google Calendar's template URL takes the same exclusive end date as .ics.
+const googleCalUrl = (ev) => {
+  if(!ev || !calYmdParts(CAL_D(ev.starts_on))) return null;
+  let dates;
+  const timed = ev.starts_at && !Number.isNaN(Date.parse(ev.starts_at));
+  if(timed){
+    const s = Date.parse(ev.starts_at);
+    const e = (ev.ends_at && Date.parse(ev.ends_at) > s) ? Date.parse(ev.ends_at) : s + CAL_DEFAULT_EVENT_HOURS * 3600000;
+    dates = `${icsStamp(s)}/${icsStamp(e)}`;
+  } else {
+    const start = CAL_D(ev.starts_on);
+    const lastDay = calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) >= start ? CAL_D(ev.ends_on) : start;
+    dates = `${icsDate(start)}/${icsDate(calAddDays(lastDay, 1))}`;
+  }
+  const q = new URLSearchParams({
+    action: "TEMPLATE",
+    text: [ev.title, ev.subtitle].filter(Boolean).join(" — "),
+    dates,
+  });
+  if(ev.location) q.set("location", ev.location);
+  const details = [ev.notes, ev.url].filter(Boolean).join("\n");
+  if(details) q.set("details", details);
+  return `https://calendar.google.com/calendar/render?${q.toString()}`;
 };
 
 const CostHex = ({n, label}) => {
@@ -34312,12 +34625,24 @@ const HOME_PANELS = [
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
   {key:"tools",       label:"Analytics toolbox",    col:"right"},
+  // There was a "Gear" panel here, an accessories list in the right rail.
+  // Removed 2026-09-12 (Zaven): once the "Lorcana on Amazon" row shipped it was
+  // a second Amazon prompt on the same page, and the row already reaches the
+  // same place — its title links to /gear, which is the whole catalogue.
+  // normalizeHomeLayout DROPS a key it doesn't recognise, so every stored
+  // layout holding "gear" repairs itself on the next load with no migration.
+  {key:"setChamps",   label:"Upcoming events",      col:"right"},
+  // "What's coming for the game" — the sibling of "what's near me" above, and
+  // deliberately a SEPARATE box rather than a tab inside it: one is a geo search
+  // you run, the other is a schedule you glance at. Appended at the foot of its
+  // default column for existing browsers, per normalizeHomeLayout — a new box
+  // has not earned the right to shove somebody's arrangement around.
   // Accessories, all Amazon. Appended rather than hoisted for existing
   // browsers (normalizeHomeLayout puts a new key at the foot of its default
   // column): a shop box has not earned the right to shove somebody's
   // arrangement around, unlike the at-the-table shortcuts that did.
   {key:"gear",        label:"Gear",                 col:"right"},
-  {key:"setChamps",   label:"Upcoming events",      col:"right"},
+  {key:"calendar",    label:"Lorcana calendar",     col:"right"},
   {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
   // Off by default: it is empty for anyone with no graded slabs, and the
@@ -36077,6 +36402,856 @@ const EVENT_TILES = [
   },
 ];
 
+// ── Lorcana calendar: data + personal layer ─────────────────────────────────
+// Two sources that never mix. public.calendar_events is curated by hand (sets,
+// products, DLCs, CCQs — migration 139 says why a table rather than a const).
+// lorcana_events is the live Ravensburger Play feed and contributes ONLY the
+// stores you follow and the series you pinned: there are ~17k upcoming events,
+// and a month grid carrying every Tuesday league night on earth answers no
+// question anybody has.
+
+// A year plus a margin: sets are announced ~2 quarters out and a store's weekly
+// is listed ~3 months ahead, so nothing real falls outside this.
+const CAL_HORIZON_DAYS = 400;
+const CAL_EVENTS_TTL_MS = 10 * 60 * 1000;
+const CAL_PANEL_ROWS = 6;
+
+// Every failure reads as "no curated events" — the pre-139 state of the world,
+// in which the calendar still renders set releases (derived, not stored) and
+// your followed stores. A table that isn't deployed must never take a page down.
+const calendarUnavailable = (err) => {
+  const code = err && (err.code || "");
+  return code === "42P01" || code === "PGRST205" || code === "42501"
+    || /calendar_events|calendar_subscriptions/i.test(String((err && err.message) || ""));
+};
+
+let _calEventsCache = null;
+async function fetchCalendarEvents(force){
+  if(!force && _calEventsCache && Date.now() - _calEventsCache.at < CAL_EVENTS_TTL_MS) return _calEventsCache;
+  let out;
+  try {
+    // ⚠ confirmed=true is passed EXPLICITLY even though the policy already
+    // filters it for everyone but an admin (migration 139). Without it an admin
+    // browses a calendar salted with unconfirmed CCQ candidates nobody else can
+    // see, with nothing on screen saying which is which.
+    const {data, error} = await sbClient.from("calendar_events")
+      .select("id,kind,title,subtitle,starts_on,ends_on,starts_at,timezone,location,url,set_name,source,event_id,notes")
+      .eq("confirmed", true)
+      .gte("starts_on", calAddDays(calTodayYmd(), -370))
+      .order("starts_on", {ascending: true})
+      .limit(2000);
+    out = error
+      ? {rows: [], at: Date.now(), unavailable: calendarUnavailable(error)}
+      : {rows: data || [], at: Date.now(), unavailable: false};
+  } catch { out = {rows: [], at: Date.now(), unavailable: false}; }
+  _calEventsCache = out;
+  return out;
+}
+
+function useCalendarEvents(){
+  const [state, setState] = useState(() => _calEventsCache || {rows: [], at: 0, unavailable: false});
+  const reload = useCallback((force) => fetchCalendarEvents(force).then(setState), []);
+  useEffect(() => { reload(false); }, [reload]);
+  const events = useMemo(
+    () => calendarMergeEvents(calendarSetEntries(SET_RELEASE_DATES), state.rows),
+    [state.rows]);
+  return {events, rows: state.rows, unavailable: state.unavailable, reload};
+}
+
+// localStorage is the source of truth for a signed-out visitor and the mirror
+// for everyone else; Supabase is what carries six followed stores from a laptop
+// to a phone. Same shape as screener_views: read remote, upload whatever exists
+// only locally, then write through to both.
+const CAL_SUBS_LS = "packsink:calSubs";
+const calSubKey = (s) => `${s.kind}:${s.ref}`;
+const calReadLocalSubs = () => {
+  try {
+    const a = JSON.parse(localStorage.getItem(CAL_SUBS_LS) || "[]");
+    return Array.isArray(a) ? a.filter(s => s && s.kind && s.ref) : [];
+  } catch { return []; }
+};
+const calWriteLocalSubs = (subs) => { try { localStorage.setItem(CAL_SUBS_LS, JSON.stringify(subs)); } catch {} };
+
+function useCalendarSubs(user){
+  const uid = user && user.id;
+  const [subs, setSubs] = useState(calReadLocalSubs);
+  const migrated = useRef(false);
+  useEffect(() => {
+    let cancelled = false;
+    if(!uid){ setSubs(calReadLocalSubs()); return; }
+    (async () => {
+      // .eq(user_id) even though the policy is owner-only with no OR branch —
+      // the house rule from the RLS-broadening trap, free insurance if a future
+      // policy grows one.
+      const {data, error} = await sbClient.from("calendar_subscriptions")
+        .select("kind,ref,label,meta").eq("user_id", uid).limit(2000);
+      if(cancelled || error) return;              // not deployed → stay local, silently
+      const remote = data || [];
+      const have = new Set(remote.map(calSubKey));
+      const orphans = calReadLocalSubs().filter(s => !have.has(calSubKey(s)));
+      let merged = remote;
+      if(orphans.length && !migrated.current){
+        migrated.current = true;
+        const {error: upErr} = await sbClient.from("calendar_subscriptions").upsert(
+          orphans.map(s => ({user_id: uid, kind: s.kind, ref: String(s.ref), label: s.label || null, meta: s.meta || null})),
+          {onConflict: "user_id,kind,ref"});
+        if(!upErr) merged = remote.concat(orphans);
+      }
+      if(!cancelled){ setSubs(merged); calWriteLocalSubs(merged); }
+    })();
+    return () => { cancelled = true; };
+  }, [uid]);
+
+  const has = useCallback((kind, ref) => subs.some(s => s.kind === kind && String(s.ref) === String(ref)), [subs]);
+  const add = useCallback((sub) => {
+    const row = {kind: sub.kind, ref: String(sub.ref), label: sub.label || null, meta: sub.meta || null};
+    setSubs(prev => {
+      const next = prev.some(s => calSubKey(s) === calSubKey(row)) ? prev : prev.concat([row]);
+      calWriteLocalSubs(next);
+      return next;
+    });
+    if(uid) sbClient.from("calendar_subscriptions")
+      .upsert({user_id: uid, ...row}, {onConflict: "user_id,kind,ref"}).then(() => {}, () => {});
+  }, [uid]);
+  const remove = useCallback((kind, ref) => {
+    setSubs(prev => {
+      const next = prev.filter(s => !(s.kind === kind && String(s.ref) === String(ref)));
+      calWriteLocalSubs(next);
+      return next;
+    });
+    if(uid) sbClient.from("calendar_subscriptions").delete()
+      .eq("user_id", uid).eq("kind", kind).eq("ref", String(ref)).then(() => {}, () => {});
+  }, [uid]);
+  const toggle = useCallback((sub) => {
+    if(subs.some(s => s.kind === sub.kind && String(s.ref) === String(sub.ref))) remove(sub.kind, sub.ref);
+    else add(sub);
+  }, [subs, add, remove]);
+  return {subs, has, add, remove, toggle};
+}
+
+// The local weekday + HH:MM an event falls on IN ITS OWN ZONE — the two fields
+// the RPC's series_key is built from, recomputed client-side so a followed
+// series can be matched against raw lorcana_events rows.
+const calSeriesSlot = (iso, tz) => {
+  if(!iso) return null;
+  const t = Date.parse(iso);
+  if(Number.isNaN(t)) return null;
+  const read = (zone) => {
+    const p = new Intl.DateTimeFormat("en-US", {
+      timeZone: zone, weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    }).formatToParts(new Date(t)).reduce((o, x) => (o[x.type] = x.value, o), {});
+    const dow = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].indexOf(p.weekday);
+    return dow < 0 ? null : {dow, hhmm: `${p.hour}:${p.minute}`};
+  };
+  try { if(tz) return read(tz); } catch {}
+  try { return read(undefined); } catch { return null; }
+};
+const calSeriesMatches = (sub, ev) => {
+  const m = (sub && sub.meta) || {};
+  if(m.store_id != null && String(m.store_id) !== String(ev.store_id)) return false;
+  if(m.kind && ev.kind && m.kind !== ev.kind) return false;
+  if(m.format && (ev.gameplay_format || "-") !== m.format) return false;
+  const slot = calSeriesSlot(ev.start_datetime, ev.timezone);
+  if(!slot) return false;
+  if(m.dow != null && Number(m.dow) !== slot.dow) return false;
+  if(m.local_time && String(m.local_time).slice(0, 5) !== slot.hhmm) return false;
+  return true;
+};
+
+const CAL_EVENT_COLS = "event_id,kind,name,set_name,store_id,store_name,start_datetime,end_datetime,timezone,city,state,country,gameplay_format,url";
+
+// Followed stores + pinned series → calendar entries.
+//
+// A followed STORE is re-queried by store_id, so a weekly listed next month
+// turns up on its own — that is the whole reason to follow a shop rather than
+// pin its current dates. A pinned SERIES with a store_id rides the same query
+// and is then filtered to its slot; one without (the RPC falls back to an
+// address key when RPH sends no store id) resolves only through the event ids
+// captured at pin time, so it goes stale rather than vanishing.
+function useStoreCalendarEvents(subs){
+  const [rows, setRows] = useState([]);
+  const storeIds = useMemo(() => {
+    const s = new Set();
+    for(const sub of subs || []){
+      if(sub.kind === "store") s.add(String(sub.ref));
+      else if(sub.kind === "series" && sub.meta && sub.meta.store_id != null) s.add(String(sub.meta.store_id));
+    }
+    return [...s];
+  }, [subs]);
+  const eventIds = useMemo(() => {
+    const s = new Set();
+    for(const sub of subs || []){
+      if(sub.kind !== "series" || (sub.meta && sub.meta.store_id != null)) continue;
+      for(const id of (sub.meta && sub.meta.event_ids) || []) s.add(Number(id));
+    }
+    for(const sub of subs || []) if(sub.kind === "event" && sub.meta && sub.meta.store_id != null) s.add(Number(sub.ref));
+    return [...s].filter(Number.isFinite);
+  }, [subs]);
+
+  const key = storeIds.join(",") + "|" + eventIds.join(",");
+  useEffect(() => {
+    let cancelled = false;
+    if(!storeIds.length && !eventIds.length){ setRows([]); return; }
+    (async () => {
+      // Yesterday, so an event running right now is never dropped by clock skew.
+      const from = new Date(Date.now() - 86400000).toISOString();
+      const to = new Date(Date.now() + CAL_HORIZON_DAYS * 86400000).toISOString();
+      const out = new Map();
+      try {
+        if(storeIds.length){
+          const {data} = await sbClient.from("lorcana_events").select(CAL_EVENT_COLS)
+            .in("store_id", storeIds).gte("start_datetime", from).lte("start_datetime", to)
+            .order("start_datetime", {ascending: true}).limit(1000);
+          for(const r of data || []) out.set(r.event_id, r);
+        }
+        if(eventIds.length){
+          const {data} = await sbClient.from("lorcana_events").select(CAL_EVENT_COLS)
+            .in("event_id", eventIds).order("start_datetime", {ascending: true}).limit(1000);
+          for(const r of data || []) out.set(r.event_id, r);
+        }
+      } catch {/* offline → keep what we had */}
+      if(!cancelled) setRows([...out.values()]);
+    })();
+    return () => { cancelled = true; };
+  }, [key]);
+
+  return useMemo(() => {
+    const followed = new Set((subs || []).filter(s => s.kind === "store").map(s => String(s.ref)));
+    const series = (subs || []).filter(s => s.kind === "series");
+    const pinned = new Set(eventIds);
+    return rows
+      .filter(ev => followed.has(String(ev.store_id))
+                 || pinned.has(Number(ev.event_id))
+                 || series.some(s => calSeriesMatches(s, ev)))
+      .map(ev => calendarStoreEntry(ev))
+      .filter(Boolean);
+  }, [rows, subs, eventIds]);
+}
+
+// A plain <a download>. An installed PWA on iOS can still refuse it, so every
+// surface offering the download offers the Google Calendar link beside it — one
+// of the two always works, and neither needs a server.
+const downloadIcs = (events, filename, name) => {
+  try {
+    const blob = new Blob([buildIcs(events, {name})], {type: "text/calendar;charset=utf-8"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => { try { URL.revokeObjectURL(url); a.remove(); } catch {} }, 4000);
+    return true;
+  } catch { return false; }
+};
+
+const CAL_MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+const CAL_DOW_SHORT = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const calMonthLabel = (ym) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ""));
+  return m ? `${CAL_MONTHS[+m[2] - 1]} ${m[1]}` : "";
+};
+const calMonthOf = (ymd) => CAL_D(ymd).slice(0, 7);
+const calShiftMonth = (ym, n) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ""));
+  if(!m) return ym;
+  const t = new Date(Date.UTC(+m[1], +m[2] - 1 + n, 1));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}`;
+};
+const calDayLabel = (ymd) => {
+  const p = calYmdParts(ymd);
+  if(!p) return "";
+  const dow = CAL_DOW_SHORT[new Date(Date.UTC(p.y, p.m - 1, p.d)).getUTCDay()];
+  return `${dow} ${CAL_MONTHS[p.m - 1].slice(0, 3)} ${p.d}`;
+};
+// "in 3 days" / "today" / "2 yr ago" — what people actually want from a
+// calendar, and why the list view leads with it instead of with the date.
+//
+// ⚠ It takes the whole EVENT, not a date, because "now" has to mean *in
+// progress*: day 2 of a three-day championship started yesterday, so a
+// start-date-only version calls it "1 day ago" while people are standing in the
+// hall. Reading the span is the only way to tell in-progress from over, and
+// getting it wrong labelled every 2023 set release "NOW".
+const calCountdown = (ev, todayYmd) => {
+  const start = CAL_D(ev && ev.starts_on);
+  if(!calYmdParts(start)) return "";
+  const end = calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) > start ? CAL_D(ev.ends_on) : start;
+  if(todayYmd >= start && todayYmd <= end) return start === todayYmd ? "today" : "now";
+  const n = calDayDiff(todayYmd, start);
+  if(!Number.isFinite(n)) return "";
+  if(n < 0){
+    // Days since it ENDED (calDayDiff is b − a, so this is already positive for
+    // anything in the past) — a three-day event that finished yesterday is
+    // "yesterday", not "3 days ago" because that is when it opened.
+    const a = calDayDiff(end, todayYmd);
+    if(a === 1) return "yesterday";
+    if(a < 7) return `${a} days ago`;
+    if(a < 60) return `${Math.round(a / 7)} wk ago`;
+    if(a < 365) return `${Math.round(a / 30)} mo ago`;
+    return `${Math.round(a / 365)} yr ago`;
+  }
+  if(n === 1) return "tomorrow";
+  if(n < 7) return `in ${n} days`;
+  if(n < 60) return `in ${Math.round(n / 7)} wk`;
+  return `in ${Math.round(n / 30)} mo`;
+};
+// ⚠ In a MONTH cell a set release is labelled by its PHASE, not its name. A set
+// contributes two or three dates to the same month and they all carry the same
+// title, so "Attack of the Vine!" twice a week apart is two identical chips that
+// distinguish nothing — whereas "LGS release" / "Retail release" is exactly the
+// fact you opened a month view to read. Everything else keeps its title, since
+// for a product or a championship the name IS the information. Both halves stay
+// in the chip's tooltip and in the detail modal.
+const calChipLabel = (ev) => (ev.kind === "set" && ev.subtitle) ? ev.subtitle : ev.title;
+
+const calTimeLabel = (ev) => {
+  if(!ev || !ev.starts_at) return "";
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      hour: "numeric", minute: "2-digit", timeZone: ev.timezone || undefined,
+    }).format(new Date(ev.starts_at));
+  } catch { return ""; }
+};
+
+// ── Lorcana calendar: UI ────────────────────────────────────────────────────
+
+const CalendarKindDot = ({kind}) => {
+  const k = CALENDAR_KIND_BY_KEY.get(kind);
+  return html`<span class="cal-dot" aria-hidden="true"
+    style=${{background: (k && k.hue) || "var(--muted)"}}></span>`;
+};
+
+// ⚠ The ✚ popover is position:FIXED, anchored by measurement — never absolute.
+// It opens inside the Upcoming-events box, whose `.sc-tile` is overflow:hidden
+// and whose `.sc-list` is overflow:auto, so an absolutely-positioned menu is
+// clipped to nothing by the tile before it ever reaches the scroller. Measured:
+// the menu's top landed 3px BELOW the tile's clip box, so the button lit up and
+// no menu appeared. Same lesson as .gc-caps-tip and the settings popover.
+//
+// useLayoutEffect (not useEffect) so the coordinates land before paint —
+// otherwise the menu flashes at its CSS fallback position for one frame. The
+// scroll listener is CAPTURING, or scrolling the inner list leaves the menu
+// hanging in space over the page.
+const CAL_POP_W = 252, CAL_POP_H = 190, CAL_POP_M = 8;
+const useCalPopAnchor = (open, btnRef) => {
+  const [style, setStyle] = useState(null);
+  useLayoutEffect(() => {
+    if(!open || !btnRef.current){ setStyle(null); return; }
+    const place = () => {
+      const el = btnRef.current;
+      if(!el) return;
+      const r = el.getBoundingClientRect();
+      // Right-align to the button, then clamp inside the viewport — on a phone a
+      // menu anchored to a button near the right edge would otherwise run off.
+      const left = Math.max(CAL_POP_M, Math.min(r.right - CAL_POP_W, window.innerWidth - CAL_POP_W - CAL_POP_M));
+      const flipUp = r.bottom + 4 + CAL_POP_H > window.innerHeight && r.top > CAL_POP_H;
+      setStyle(flipUp
+        ? {position: "fixed", left: `${left}px`, top: "auto", right: "auto",
+           bottom: `${window.innerHeight - r.top + 4}px`}
+        : {position: "fixed", left: `${left}px`, top: `${r.bottom + 4}px`, right: "auto", bottom: "auto"});
+    };
+    place();
+    window.addEventListener("scroll", place, true);
+    window.addEventListener("resize", place);
+    return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
+  }, [open]);
+  return style;
+};
+
+// The ✚ affordance. A DERIVED set release has no row to subscribe to (it comes
+// from SET_RELEASE_DATES, not the table), so it is export-only — which is right:
+// "everything" already includes every set release, and there is nothing to opt
+// into. Everything else can join your packs.ink calendar as well as a real one.
+const CalendarAddMenu = ({ev, subs, compact}) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const btnRef = useRef(null);
+  const popStyle = useCalPopAnchor(open, btnRef);
+  useEffect(() => {
+    if(!open) return;
+    const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if(e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const gUrl = googleCalUrl(ev);
+  const subRef = ev.kind === "store" ? String(ev.event_id) : (ev.derived ? null : String(ev.id));
+  const on = subRef && subs && subs.has("event", subRef);
+  const fileSlug = String(ev.title || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  return html`<div class="cal-add-wrap" ref=${ref}>
+    <button type="button" aria-expanded=${open ? "true" : "false"} ref=${btnRef}
+      class=${"cal-add-btn" + (on ? " on" : "") + (compact ? " compact" : "")}
+      title=${on ? "On your calendar" : "Add to a calendar"}
+      onClick=${(e) => { e.stopPropagation(); setOpen(o => !o); }}>
+      ${uiIcon(on ? "check" : "calendarPlus", compact ? 13 : 14)}
+    </button>
+    ${open && html`<div class="cal-add-pop" style=${popStyle} onClick=${e => e.stopPropagation()}>
+      ${subRef && html`<button type="button" class="cal-add-item" onClick=${() => {
+        subs.toggle({kind: "event", ref: subRef, label: ev.title,
+                     meta: ev.kind === "store" ? {store_id: ev.store_id} : null});
+        setOpen(false);
+        flashToast(on ? "Removed from your calendar" : "Added to your calendar");
+      }}>${uiIcon(on ? "close" : "calendarPlus", 13)} ${on ? "Remove from my calendar" : "Add to my calendar"}</button>`}
+      ${gUrl && html`<a class="cal-add-item" href=${gUrl} target="_blank" rel="noopener noreferrer"
+        onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar ↗</a>`}
+      <button type="button" class="cal-add-item" onClick=${() => {
+        setOpen(false);
+        const done = downloadIcs([ev], `packsink-${fileSlug || "event"}.ics`, ev.title);
+        flashToast(done ? "Calendar file downloaded" : "Couldn't download — try the Google Calendar link");
+      }}>${uiIcon("save", 13)} Download .ics</button>
+    </div>`}
+  </div>`;
+};
+
+const CalendarRow = ({ev, today, subs, onOpen}) => {
+  const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
+  // The subtitle REPLACES the kind label rather than sitting beside it: a set
+  // row's "LGS release · Sets" says the same thing twice and the second half is
+  // a plural category name in a sentence about one event. Where there is no
+  // subtitle the kind is the only label available, so it shows then.
+  const meta = [ev.subtitle || (ev.kind === "store" ? null : (k && k.label)), calTimeLabel(ev)]
+    .filter(Boolean).join(" · ");
+  return html`<li class="cal-row">
+    <div class="cal-row-main" role="button" tabIndex="0"
+      onClick=${() => onOpen && onOpen(ev)}
+      onKeyDown=${(e) => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); onOpen && onOpen(ev); } }}>
+      <div class="cal-row-when">
+        <span class="cal-row-date">${calDayLabel(ev.starts_on)}</span>
+        <span class="cal-row-count">${calCountdown(ev, today)}</span>
+      </div>
+      <div class="cal-row-body">
+        <div class="cal-row-title"><${CalendarKindDot} kind=${ev.kind}/><span>${ev.title}</span></div>
+        ${meta && html`<div class="cal-row-sub">${meta}</div>`}
+      </div>
+    </div>
+    <${CalendarAddMenu} ev=${ev} subs=${subs}/>
+  </li>`;
+};
+
+const CalendarDetailModal = ({ev, subs, onClose}) => {
+  useEffect(() => {
+    const onKey = (e) => { if(e.key === "Escape") onClose(); };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  if(!ev) return null;
+  const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
+  const end = calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) > CAL_D(ev.starts_on) ? CAL_D(ev.ends_on) : null;
+  const when = (end ? `${calDayLabel(ev.starts_on)} – ${calDayLabel(end)}` : calDayLabel(ev.starts_on))
+    + (calTimeLabel(ev) ? ` · ${calTimeLabel(ev)}` : "");
+  const link = safeHttpUrl(ev.url);
+  return html`<div class="cal-modal-overlay" onClick=${onClose}>
+    <div class="cal-modal" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
+      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      <div class="cal-modal-kind"><${CalendarKindDot} kind=${ev.kind}/>${(k && k.label) || "Event"}</div>
+      <h3 class="cal-modal-title">${ev.title}</h3>
+      ${ev.subtitle && html`<div class="cal-modal-sub">${ev.subtitle}</div>`}
+      <div class="cal-modal-when">${when}</div>
+      ${ev.location && html`<div class="cal-modal-where">${ev.location}</div>`}
+      ${ev.notes && html`<p class="cal-modal-notes">${ev.notes}</p>`}
+      <div class="cal-modal-actions">
+        ${link && html`<a class="cal-modal-cta" href=${link} target="_blank" rel="noopener noreferrer">
+          More details ↗</a>`}
+        ${googleCalUrl(ev) && html`<a class="cal-modal-link" href=${googleCalUrl(ev)} target="_blank" rel="noopener noreferrer">
+          ${uiIcon("link", 13)} Google Calendar ↗</a>`}
+        <button type="button" class="cal-modal-link" onClick=${() => {
+          const slug = String(ev.title || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+          const done = downloadIcs([ev], `packsink-${slug || "event"}.ics`, ev.title);
+          flashToast(done ? "Calendar file downloaded" : "Couldn't download — try the Google Calendar link");
+        }}>${uiIcon("save", 13)} Download .ics</button>
+      </div>
+      ${!ev.derived && html`<div class="cal-modal-foot"><${CalendarAddMenu} ev=${ev} subs=${subs}/>
+        <span class="muted">Add to your Packs.Ink calendar</span></div>`}
+    </div>
+  </div>`;
+};
+
+// ⚠ The month grid is the SECONDARY view and `list` is the default, deliberately.
+// Seven columns on a 390px phone gives each day ~48px, which fits a dot and
+// nothing else — fine for "when is it", useless for "what is it". The list
+// answers both, and this is a phone feature first.
+const CalendarMonthView = ({month, events, today, onOpen, onMonth}) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  const weeks = useMemo(() => m ? calendarMonthGrid(+m[1], +m[2], events) : [], [month, events]);
+  if(!m) return null;
+  return html`<div class="cal-month">
+    <div class="cal-month-bar">
+      <button type="button" class="cal-month-nav" aria-label="Previous month"
+        onClick=${() => onMonth(calShiftMonth(month, -1))}>‹</button>
+      <div class="cal-month-label">${calMonthLabel(month)}</div>
+      <button type="button" class="cal-month-nav" aria-label="Next month"
+        onClick=${() => onMonth(calShiftMonth(month, 1))}>›</button>
+      <button type="button" class="cal-month-today"
+        onClick=${() => onMonth(calMonthOf(calTodayYmd()))}>Today</button>
+    </div>
+    <div class="cal-grid-head" aria-hidden="true">
+      ${CAL_DOW_SHORT.map(d => html`<div key=${d} class="cal-grid-dow">${d}</div>`)}
+    </div>
+    <div class="cal-grid">
+      ${weeks.map((week, wi) => week.map(day => html`<div key=${day.date}
+        class=${"cal-cell" + (day.inMonth ? "" : " out") + (day.date === today ? " today" : "")}>
+        <div class="cal-cell-num">${day.day}</div>
+        <div class="cal-cell-events">
+          ${day.events.slice(0, 3).map(ev => html`<button key=${ev.id} type="button" class="cal-chip"
+            title=${[ev.title, ev.subtitle].filter(Boolean).join(" — ")}
+            onClick=${() => onOpen(ev)}>
+            <${CalendarKindDot} kind=${ev.kind}/><span>${calChipLabel(ev)}</span>
+          </button>`)}
+          ${day.events.length > 3 && html`<span class="cal-cell-more">+${day.events.length - 3} more</span>`}
+        </div>
+      </div>`))}
+    </div>
+  </div>`;
+};
+
+// The admin editor. Gated on GradedAdminContext at the call site; the table's
+// RLS is the real gate, so a hidden button is convenience, not security.
+const CalendarAdminModal = ({row, onClose, onSaved}) => {
+  const blank = {kind: "product", title: "", subtitle: "", starts_on: calTodayYmd(),
+                 ends_on: "", location: "", url: "", set_name: "", notes: "", confirmed: true};
+  const [f, setF] = useState(() => ({...blank, ...(row || {}),
+    starts_on: CAL_D((row && row.starts_on) || calTodayYmd()),
+    ends_on: CAL_D(row && row.ends_on) || "",
+  }));
+  const [busy, setBusy] = useState(false);
+  const set = (k) => (e) => setF(p => ({...p, [k]: e.target.value}));
+  const save = async () => {
+    if(!f.title.trim() || !calYmdParts(f.starts_on)){ flashToast("A title and a start date are required"); return; }
+    setBusy(true);
+    const payload = {
+      kind: f.kind, title: f.title.trim(), subtitle: f.subtitle.trim() || null,
+      starts_on: f.starts_on, ends_on: calYmdParts(f.ends_on) ? f.ends_on : null,
+      location: f.location.trim() || null, url: f.url.trim() || null,
+      set_name: f.set_name.trim() || null, notes: f.notes.trim() || null,
+      confirmed: !!f.confirmed, updated_at: new Date().toISOString(),
+    };
+    const q = row && row.id
+      ? sbClient.from("calendar_events").update(payload).eq("id", row.id)
+      : sbClient.from("calendar_events").insert(payload);
+    const {error} = await q;
+    setBusy(false);
+    if(error){ flashToast(calendarUnavailable(error) ? "Apply migration 139 first" : "Couldn't save — " + error.message); return; }
+    flashToast(row && row.id ? "Event updated" : "Event added");
+    onSaved();
+  };
+  const del = async () => {
+    if(!row || !row.id) return;
+    setBusy(true);
+    const {error} = await sbClient.from("calendar_events").delete().eq("id", row.id);
+    setBusy(false);
+    if(error){ flashToast("Couldn't delete — " + error.message); return; }
+    flashToast("Event deleted");
+    onSaved();
+  };
+  return html`<div class="cal-modal-overlay" onClick=${onClose}>
+    <div class="cal-modal cal-admin" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
+      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      <h3 class="cal-modal-title">${row && row.id ? "Edit calendar event" : "Add a calendar event"}</h3>
+      <div class="cal-form">
+        <label class="cal-field"><span>Type</span>
+          <select value=${f.kind} onChange=${set("kind")}>
+            ${CALENDAR_KINDS.filter(k => k.key !== "store").map(k =>
+              html`<option key=${k.key} value=${k.key}>${k.label}</option>`)}
+          </select></label>
+        <label class="cal-field"><span>Title</span>
+          <input type="text" value=${f.title} onInput=${set("title")} placeholder="Rapunzel Collector's Gift Set"/></label>
+        <label class="cal-field"><span>Subtitle</span>
+          <input type="text" value=${f.subtitle} onInput=${set("subtitle")} placeholder="Retail release"/></label>
+        <label class="cal-field"><span>Starts</span>
+          <input type="date" value=${f.starts_on} onInput=${set("starts_on")}/></label>
+        <label class="cal-field"><span>Ends <em>(multi-day only)</em></span>
+          <input type="date" value=${f.ends_on} onInput=${set("ends_on")}/></label>
+        <label class="cal-field"><span>Where</span>
+          <input type="text" value=${f.location} onInput=${set("location")} placeholder="Disneyland Hotel, Anaheim"/></label>
+        <label class="cal-field"><span>Link</span>
+          <input type="url" value=${f.url} onInput=${set("url")} placeholder="https://…"/></label>
+        <label class="cal-field"><span>Set <em>(for a set release)</em></span>
+          <input type="text" value=${f.set_name} onInput=${set("set_name")} placeholder="Attack of the Vine!"/></label>
+        <label class="cal-field cal-field--wide"><span>Notes</span>
+          <textarea rows="2" value=${f.notes} onInput=${set("notes")}></textarea></label>
+        <label class="cal-check"><input type="checkbox" checked=${!!f.confirmed}
+          onChange=${e => setF(p => ({...p, confirmed: e.target.checked}))}/>
+          <span>Confirmed — unticked, it stays a candidate only admins can see</span></label>
+      </div>
+      ${f.kind === "set" && html`<p class="cal-form-note">
+        A <strong>set</strong> row overrides the built-in release date when its set name and
+        subtitle match — use <em>Prerelease</em>, <em>LGS release</em> or <em>Retail release</em> exactly,
+        or this adds a second entry instead of correcting the first.</p>`}
+      <div class="cal-modal-actions">
+        <button type="button" class="cal-modal-cta" disabled=${busy} onClick=${save}>
+          ${busy ? "Saving…" : "Save"}</button>
+        ${row && row.id && html`<button type="button" class="cal-modal-link cal-danger" disabled=${busy}
+          onClick=${del}>${uiIcon("trash", 13)} Delete</button>`}
+      </div>
+    </div>
+  </div>`;
+};
+
+const CAL_KINDS_LS = "packsink:cal:kinds";
+const CAL_VIEW_LS = "packsink:cal:view";
+const calReadKindPref = (seed) => {
+  const parse = (raw) => {
+    const wanted = String(raw || "").split(",").map(s => s.trim()).filter(s => CALENDAR_KIND_KEYS.includes(s));
+    return wanted.length ? wanted : null;
+  };
+  return parse(seed) || (() => { try { return parse(localStorage.getItem(CAL_KINDS_LS)); } catch { return null; } })()
+    || CALENDAR_KIND_KEYS.slice();
+};
+
+// The chip row. Same invariant as the movers banners' chip groups: the LAST
+// active chip cannot be switched off, because an empty calendar's only way back
+// is the chip you just used to empty it.
+const CalendarFilterChips = ({kinds, onToggle, counts}) => html`<div class="cal-chips">
+  ${CALENDAR_KINDS.map(k => {
+    const on = kinds.includes(k.key);
+    const last = on && kinds.length === 1;
+    return html`<button key=${k.key} type="button"
+      class=${"cal-chip-filter" + (on ? " on" : "")}
+      style=${on ? {borderColor: k.hue, color: k.hue} : null}
+      aria-pressed=${on ? "true" : "false"}
+      title=${last ? "At least one type has to stay on" : CALENDAR_KIND_LONG[k.key]}
+      onClick=${() => { if(!last) onToggle(k.key); }}>
+      ${uiIcon(k.icon, 13)}<span>${k.label}</span>
+      ${counts && counts[k.key] != null && html`<span class="cal-chip-n">${counts[k.key]}</span>`}
+    </button>`;
+  })}
+</div>`;
+
+// The home panel: the next few things, nothing else. The title links to /calendar
+// through the standard panelNav, so ⌘-click and "Copy link address" work.
+const CalendarPanel = ({panelNav, user}) => {
+  const {events} = useCalendarEvents();
+  const subs = useCalendarSubs(user);
+  const storeEvents = useStoreCalendarEvents(subs.subs);
+  const [kinds] = useState(calReadKindPref);
+  const today = calTodayYmd();
+  // ⚠ Between a retail release and the next set's announcement there is
+  // genuinely nothing ahead — weeks of it, several times a year. A box that goes
+  // blank in that window reads as broken and earns a Hide, so it falls back to
+  // the last couple of things that happened: "Attack of the Vine! · retail
+  // release · 2 mo ago" still tells you where you are in the season.
+  const {rows, past} = useMemo(() => {
+    const pool = events.concat(storeEvents).filter(e => kinds.includes(e.kind));
+    const next = calendarUpcoming(pool, today, CAL_PANEL_ROWS);
+    if(next.length) return {rows: next, past: false};
+    return {rows: calendarSort(pool).slice(-2).reverse(), past: true};
+  }, [events, storeEvents, kinds, today]);
+  return html`<aside class="home-feed home-feed--calendar">
+    ${homePanelTitle({cls: "home-feed-title home-cal-title", label: "Lorcana calendar", panelKey: "calendar", panelNav})
+      || html`<div class="home-feed-title home-cal-title">Lorcana calendar</div>`}
+    ${past && rows.length > 0 && html`<div class="cal-panel-note muted">Nothing announced yet — most recently:</div>`}
+    ${rows.length === 0
+      ? html`<div class="cal-panel-empty muted">Nothing scheduled in the next while.</div>`
+      : html`<ul class="cal-panel-list">
+        ${rows.map(ev => html`<li key=${ev.id} class="cal-panel-row">
+          <span class="cal-panel-when">
+            <span class="cal-panel-date">${calDayLabel(ev.starts_on)}</span>
+            <span class="cal-panel-count">${calCountdown(ev, today)}</span>
+          </span>
+          <span class="cal-panel-title"><${CalendarKindDot} kind=${ev.kind}/><span>${ev.title}</span></span>
+          ${ev.subtitle && html`<span class="cal-panel-sub">${ev.subtitle}</span>`}
+        </li>`)}
+      </ul>`}
+  </aside>`;
+};
+
+function CalendarView({user, onSignIn}){
+  const isAdmin = useContext(GradedAdminContext);
+  const {events, rows: curated, unavailable, reload} = useCalendarEvents();
+  const subs = useCalendarSubs(user);
+  const storeEvents = useStoreCalendarEvents(subs.subs);
+  const seed = useMemo(() => {
+    try { const q = new URLSearchParams(location.search); return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm")}; }
+    catch { return {}; }
+  }, []);
+  const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
+  const [mode, setMode] = useState(() => {
+    const raw = seed.cv || (() => { try { return localStorage.getItem(CAL_VIEW_LS); } catch { return null; } })();
+    return raw === "month" ? "month" : "list";
+  });
+  const [month, setMonth] = useState(() =>
+    /^\d{4}-\d{2}$/.test(seed.cm || "") ? seed.cm : calMonthOf(calTodayYmd()));
+  const [sel, setSel] = useState(null);
+  const [editing, setEditing] = useState(null);     // {} = new row, {id,…} = edit
+  const [showStores, setShowStores] = useState(false);
+  const today = calTodayYmd();
+
+  useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
+  useEffect(() => { try { localStorage.setItem(CAL_VIEW_LS, mode); } catch {} }, [mode]);
+  // replaceState, never push: a filter is not a page, and pushing would make Back
+  // walk backwards through every chip the user toggled.
+  useEffect(() => {
+    try {
+      const url = new URL(location.href);
+      const all = kinds.length === CALENDAR_KIND_KEYS.length;
+      all ? url.searchParams.delete("ck") : url.searchParams.set("ck", kinds.join(","));
+      mode === "list" ? url.searchParams.delete("cv") : url.searchParams.set("cv", mode);
+      (mode !== "month" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
+      if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
+    } catch {}
+  }, [kinds, mode, month, today]);
+
+  const all = useMemo(() => calendarSort(events.concat(storeEvents)), [events, storeEvents]);
+  const counts = useMemo(() => {
+    const c = {};
+    for(const k of CALENDAR_KIND_KEYS) c[k] = 0;
+    for(const e of calendarUpcoming(all, today, 0)) if(c[e.kind] != null) c[e.kind]++;
+    return c;
+  }, [all, today]);
+  const shown = useMemo(() => all.filter(e => kinds.includes(e.kind)), [all, kinds]);
+  const upcoming = useMemo(() => calendarUpcoming(shown, today, 0), [shown, today]);
+  // ⚠ A Lorcana calendar is EMPTY for weeks at a time and that is normal, not a
+  // bug: sets ship roughly quarterly, so between a retail release and the next
+  // set's announcement there is genuinely nothing ahead. A page that says only
+  // "nothing coming up" in that window reads as broken, so past events stay one
+  // click away — seeing "Attack of the Vine! · retail release · Jul 24" is how
+  // you know where you are in the season.
+  const [showPast, setShowPast] = useState(false);
+  const listed = showPast ? shown : upcoming;
+  const byMonth = useMemo(() => {
+    const m = new Map();
+    for(const ev of listed){
+      const key = calMonthOf(ev.starts_on);
+      if(!m.has(key)) m.set(key, []);
+      m.get(key).push(ev);
+    }
+    return [...m.entries()];
+  }, [listed]);
+
+  const followedStores = subs.subs.filter(s => s.kind === "store");
+  const followedSeries = subs.subs.filter(s => s.kind === "series");
+  const savedEvents = subs.subs.filter(s => s.kind === "event");
+  const followCount = followedStores.length + followedSeries.length + savedEvents.length;
+
+  const exportAll = () => {
+    const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana calendar");
+    flashToast(done ? `Exported ${upcoming.length} events` : "Couldn't download the calendar file");
+  };
+
+  return html`<div class="cal-view">
+    <header class="ev-header mkt-header cal-header">
+      <div>
+        <h2 class="cal-h1">${uiIcon("calendar", 20)} Lorcana calendar</h2>
+        <p class="cal-lede">
+          Set releases, product drops, Disney Lorcana Challenge weekends and Challenge Championship
+          Qualifiers — plus every event at the stores you follow.
+        </p>
+      </div>
+      <div class="cal-header-actions">
+        <button type="button" class="cal-act" onClick=${exportAll} title="Download everything shown as an .ics file">
+          ${uiIcon("save", 14)} Export .ics</button>
+        ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
+          onClick=${() => setEditing({})}>${uiIcon("edit", 14)} Add event</button>`}
+      </div>
+    </header>
+
+    ${unavailable && isAdmin && html`<div class="cal-warn">
+      ${uiIcon("warn", 14)} The curated calendar table isn't deployed yet — apply
+      <code>supabase/139_calendar_events.sql</code>. Set releases below are derived from the
+      catalog, so the page still works.</div>`}
+
+    <div class="cal-toolbar">
+      <${CalendarFilterChips} kinds=${kinds} counts=${counts}
+        onToggle=${(k) => setKinds(p => p.includes(k) ? p.filter(x => x !== k) : CALENDAR_KIND_KEYS.filter(x => p.includes(x) || x === k))}/>
+      <div class="cal-toolbar-right">
+        ${mode === "list" && html`<label class="cal-past">
+          <input type="checkbox" checked=${showPast} onChange=${e => setShowPast(e.target.checked)}/>
+          <span>Show past</span></label>`}
+        <div class="seg-toggle cal-modes">
+          <button type="button" class=${mode === "list" ? "active" : ""} onClick=${() => setMode("list")}>
+            ${uiIcon("list", 13)} List</button>
+          <button type="button" class=${mode === "month" ? "active" : ""} onClick=${() => setMode("month")}>
+            ${uiIcon("calendar", 13)} Month</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cal-follow">
+      <button type="button" class="cal-follow-toggle" aria-expanded=${showStores ? "true" : "false"}
+        onClick=${() => setShowStores(v => !v)}>
+        ${uiIcon("store", 13)} My stores + saved events
+        <span class="cal-follow-n">${followCount}</span>
+        <span class="cal-follow-caret">${showStores ? "⌃" : "⌄"}</span>
+      </button>
+      ${showStores && html`<div class="cal-follow-body">
+        ${followCount === 0
+          ? html`<p class="muted cal-follow-empty">
+              Nothing followed yet. Find your shops in <strong>Upcoming near me</strong> on the home page —
+              every event there has a ${uiIcon("calendarPlus", 12)} button, and a
+              <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.</p>`
+          : html`<ul class="cal-follow-list">
+              ${followedStores.map(s => html`<li key=${"st" + s.ref}>
+                ${uiIcon("store", 12)} <span>${s.label || `Store ${s.ref}`}</span>
+                <em>every event</em>
+                <button type="button" aria-label="Unfollow" onClick=${() => subs.remove("store", s.ref)}>×</button></li>`)}
+              ${followedSeries.map(s => html`<li key=${"se" + s.ref}>
+                ${uiIcon("pin", 12)} <span>${s.label || "Pinned series"}</span>
+                <em>${(s.meta && s.meta.name) || "recurring"}</em>
+                <button type="button" aria-label="Unpin" onClick=${() => subs.remove("series", s.ref)}>×</button></li>`)}
+              ${savedEvents.map(s => html`<li key=${"ev" + s.ref}>
+                ${uiIcon("calendarPlus", 12)} <span>${s.label || "Saved event"}</span>
+                <em>one date</em>
+                <button type="button" aria-label="Remove" onClick=${() => subs.remove("event", s.ref)}>×</button></li>`)}
+            </ul>`}
+        ${!user && followCount > 0 && html`<p class="muted cal-follow-signin">
+          Saved on this device only. <button type="button" class="cal-linkish" onClick=${onSignIn}>Sign in</button>
+          and they follow you to your phone.</p>`}
+      </div>`}
+    </div>
+
+    ${mode === "month"
+      ? html`<${CalendarMonthView} month=${month} events=${shown} today=${today}
+          onOpen=${setSel} onMonth=${setMonth}/>`
+      : listed.length === 0
+        ? (() => {
+            const off = CALENDAR_KINDS.filter(k => !kinds.includes(k.key)).map(k => k.label);
+            const last = shown.length ? shown[shown.length - 1] : null;
+            return html`<div class="cal-empty">
+              <p>Nothing coming up${off.length ? " in the types you've got switched on" : ""}.</p>
+              ${off.length > 0 && html`<p class="muted">${off.join(", ")} ${off.length === 1 ? "is" : "are"} switched off.</p>`}
+              ${last && !showPast && html`<p class="muted">
+                The last thing was <strong>${last.title}</strong> on ${calDayLabel(last.starts_on)} —
+                <button type="button" class="cal-linkish" onClick=${() => setShowPast(true)}>show past events</button>.</p>`}
+              ${isAdmin && html`<p class="muted">
+                <button type="button" class="cal-linkish" onClick=${() => setEditing({})}>Add the next set's dates</button>
+                as soon as Ravensburger announces them.</p>`}
+            </div>`;
+          })()
+        : html`<div class="cal-list">
+            ${byMonth.map(([ym, list]) => html`<section key=${ym} class="cal-month-group">
+              <h3 class="cal-month-head">${calMonthLabel(ym)}</h3>
+              <ul class="cal-rows">
+                ${list.map(ev => html`<${CalendarRow} key=${ev.id} ev=${ev} today=${today}
+                  subs=${subs} onOpen=${setSel}/>`)}
+              </ul>
+            </section>`)}
+          </div>`}
+
+    ${isAdmin && curated.length > 0 && html`<details class="cal-admin-list">
+      <summary>${uiIcon("gear", 13)} Curated rows (${curated.length}) — admin</summary>
+      <ul>
+        ${curated.map(r => html`<li key=${r.id}>
+          <button type="button" onClick=${() => setEditing(r)}>${uiIcon("edit", 12)}</button>
+          <span class="cal-admin-kind">${r.kind}</span>
+          <span>${r.title}${r.subtitle ? ` — ${r.subtitle}` : ""}</span>
+          <em>${CAL_D(r.starts_on)}</em>
+        </li>`)}
+      </ul>
+    </details>`}
+
+    ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onClose=${() => setSel(null)}/>`}
+    ${editing && html`<${CalendarAdminModal} row=${editing} onClose=${() => setEditing(null)}
+      onSaved=${() => { setEditing(null); reload(true); }}/>`}
+
+    <p class="cal-foot muted">
+      Set release dates come from the catalog; everything else is curated by hand. Spotted something
+      missing or wrong? Use the feedback button — a wrong date on a calendar is worse than no date.
+    </p>
+  </div>`;
+}
+
 // ── Upcoming Set Championships near a ZIP ───────────────────────────────────
 // Data: the public.set_championships table (scraped from Ravensburger Play by
 // scripts/elo/discover_wu_scs.py). ZIP → lat/lng via zippopotam.us (free, CORS
@@ -36180,7 +37355,76 @@ const SC_DEEP_LINKED = !!SC_DEEP_SEED;
 // that (home → Cards → home) must NOT re-open it.
 const clearScSeed = () => { SC_DEEP_SEED = null; };
 
-const UpcomingSCsBox = () => {
+// The ✚ on a series tile. Three different things a person might mean by "add
+// this", and they are genuinely different commitments:
+//   · these dates  — the occurrences RPH lists today, frozen. A one-off.
+//   · follow store — every Lorcana event at this shop, now and in future. This
+//                    is the one Zaven asked for, and the reason the personal
+//                    layer is a table: it has to keep paying out.
+//   · export       — hand it to Google Calendar or a .ics, no account needed.
+const ScCalendarButton = ({series, subs}) => {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const btnRef = useRef(null);
+  const popStyle = useCalPopAnchor(open, btnRef);
+  useEffect(() => {
+    if(!open) return;
+    const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const onKey = (e) => { if(e.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
+  }, [open]);
+  const occ = series._occ || [];
+  const entries = occ.map(o => calendarStoreEntry({
+    ...series, ...o, event_id: o.event_id, name: o.name || series.name,
+    start_datetime: o.start_datetime, end_datetime: o.end_datetime,
+  })).filter(Boolean);
+  const storeId = series.store_id != null ? String(series.store_id) : null;
+  const following = storeId && subs.has("store", storeId);
+  const pinned = subs.has("series", series.series_key);
+  const on = following || pinned;
+  return html`<div class="cal-add-wrap" ref=${ref}>
+    <button type="button" aria-expanded=${open ? "true" : "false"} ref=${btnRef}
+      class=${"sc-tile-pin cal-add-btn" + (on ? " on" : "")}
+      title=${on ? "On your calendar" : "Add to a calendar"}
+      aria-label=${on ? "On your calendar" : "Add to a calendar"}
+      onClick=${(e) => { e.stopPropagation(); setOpen(o => !o); }}>
+      ${uiIcon(on ? "check" : "calendarPlus", 13)}
+    </button>
+    ${open && html`<div class="cal-add-pop cal-add-pop--sc" style=${popStyle}
+      onClick=${e => e.stopPropagation()}>
+      <button type="button" class="cal-add-item" onClick=${() => {
+        setOpen(false);
+        subs.toggle({kind: "series", ref: series.series_key, label: series.store_name,
+          meta: {store_id: series.store_id, kind: series.kind, format: series.gameplay_format || "-",
+                 dow: series.dow, local_time: series.local_time, name: series.name,
+                 event_ids: occ.map(o => o.event_id)}});
+        flashToast(pinned ? "Removed from your calendar" : `Added ${occ.length || 1} date${occ.length === 1 ? "" : "s"} to your calendar`);
+      }}>${uiIcon(pinned ? "close" : "calendarPlus", 13)}
+        ${pinned ? "Remove these dates" : `Add ${occ.length > 1 ? `these ${occ.length} dates` : "this date"}`}</button>
+      ${storeId && html`<button type="button" class="cal-add-item" onClick=${() => {
+        setOpen(false);
+        subs.toggle({kind: "store", ref: storeId, label: series.store_name,
+                     meta: {city: series.city, state: series.state}});
+        flashToast(following ? `Unfollowed ${series.store_name}` : `Following ${series.store_name} — every event lands on your calendar`);
+      }}>${uiIcon(following ? "close" : "store", 13)}
+        ${following ? "Unfollow this store" : "Follow this store — every event"}</button>`}
+      ${entries[0] && googleCalUrl(entries[0]) && html`<a class="cal-add-item"
+        href=${googleCalUrl(entries[0])} target="_blank" rel="noopener noreferrer"
+        onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar (next date) ↗</a>`}
+      ${entries.length > 0 && html`<button type="button" class="cal-add-item" onClick=${() => {
+        setOpen(false);
+        const slug = String(series.store_name || "events").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+        const done = downloadIcs(entries, `packsink-${slug || "events"}.ics`, series.store_name || "Lorcana events");
+        flashToast(done ? `Exported ${entries.length} dates` : "Couldn't download — try the Google Calendar link");
+      }}>${uiIcon("save", 13)} Download .ics (${entries.length})</button>`}
+    </div>`}
+  </div>`;
+};
+
+const UpcomingSCsBox = ({user}) => {
+  const calSubs = useCalendarSubs(user);
   // Deep-link seed: ?sczip / scc / scdist / scdate let a shared link reproduce
   // a specific view. Taken from the module-load capture (not live URL) so it
   // wins over localStorage no matter when the box mounts, and so the first
@@ -36453,6 +37697,7 @@ const UpcomingSCsBox = () => {
               onClick=${()=>togglePin(e.series_key)}
               aria-label=${isPinned(e.series_key)?"Unpin event":"Pin event to top"}
               title=${isPinned(e.series_key)?"Unpin":"Pin to top"}>${uiIcon("pin", 13)}</button>
+            <${ScCalendarButton} series=${e} subs=${calSubs}/>
             </div>
             ${more && html`<button class=${"sc-tile-more"+(isOpen?" open":"")} type="button"
               aria-expanded=${isOpen}
@@ -36502,6 +37747,13 @@ const UpcomingSCsBox = () => {
             ${safeHttpUrl(o.url) && html`<a class="sc-modal-cta" href=${safeHttpUrl(o.url)} target="_blank" rel="noopener noreferrer">Register on Ravensburger Play ↗</a>`}
             <a class="sc-modal-link" href=${`https://www.google.com/maps/dir/?api=1&destination=${s.latitude},${s.longitude}`} target="_blank" rel="noopener noreferrer">Directions ↗</a>
             ${safeHttpUrl(s.store_website) && html`<a class="sc-modal-link" href=${safeHttpUrl(s.store_website)} target="_blank" rel="noopener noreferrer">Store website ↗</a>`}
+            ${(() => {
+              // This ONE date, not the series — the tile's ✚ is where you take
+              // the whole recurring slot or follow the shop.
+              const entry = calendarStoreEntry({...s, ...o, event_id: o.event_id,
+                name: o.name || s.name, start_datetime: o.start_datetime, end_datetime: o.end_datetime});
+              return entry ? html`<${CalendarAddMenu} ev=${entry} subs=${calSubs}/>` : null;
+            })()}
           </div>
         </div>
       </div>`;
@@ -37350,8 +38602,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // Convenience: nav shortcuts wired below from header click handlers.
   const goScreener   = openView ? (()=>openView("screener"))   : null;
   const goCollection = openView ? (()=>openView("collection")) : null;
-  const goFollowing  = openDecksSection ? (()=>openDecksSection("following")) : null;
   const goGear       = openView ? (()=>openView("gear"))       : null;
+  const goCalendar   = openView ? (()=>openView("calendar"))   : null;
+  const goFollowing  = openDecksSection ? (()=>openDecksSection("following")) : null;
   // Build a Screener filter payload from the home banner's current state.
   // - "chase"   → rarities = Enchanted/Iconic/Epic, sort by current window
   // - "rareLeg" → rarities = Rare/Super Rare/Legendary
@@ -37973,9 +39226,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                                  cta: "Open your Collection"},
     gradedOwned: goCollection && {href: "/collection", go: goCollection,
                                  cta: "Open your graded collection"},
-    news:        null,
     gear:        goGear && {href: "/gear", go: goGear,
                                  cta: "Open Lorcana on Amazon"},
+    calendar:    goCalendar && {href: "/calendar", go: goCalendar,
+                                 cta: "Open the calendar"},
+    news:        null,
   };
   const panelCta = Object.fromEntries(Object.entries(panelDest)
     .map(([k, d]) => [k, d ? {label: d.cta, go: d.go} : null]));
@@ -38008,7 +39263,9 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}
         panelNav=${panelTitleNav}/>`;
       case "gear":       return html`<${GearPanel} key="gear" panelNav=${panelTitleNav}/>`;
-      case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps"/>`;
+      case "setChamps":  return html`<${UpcomingSCsBox} key="setChamps" user=${user}/>`;
+      case "calendar":   return html`<${CalendarPanel} key="calendar" user=${user}
+        panelNav=${panelTitleNav}/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} panelNav=${panelTitleNav}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
@@ -44574,6 +45831,7 @@ const VIEW_PATHS = {
   decks:      "/decks",
   faq:        "/how-it-works",
   gear:       "/gear",
+  calendar:   "/calendar",
   elo:        "/elo",   // hidden — Chicagoland Lorcana Elo leaderboard (no nav entry)
 };
 // Per-view document.title (+ canonical) — set by the view-sync effect so
@@ -44589,6 +45847,7 @@ const VIEW_TITLES = {
   decks:      "Lorcana Decks & Tournaments — Packs.Ink",
   faq:        "How Packs.Ink Works",
   gear:       "Lorcana on Amazon — Packs.Ink",
+  calendar:   "Lorcana Release & Event Calendar — Packs.Ink",
   elo:        "Chicagoland Lorcana Elo — Packs.Ink",
 };
 // Analytics sub-tools get their own tab titles — every ?a= URL is shareable,
@@ -45235,6 +46494,7 @@ function App(){
                            "s","f","m","c","card","panel","v",
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
+                           "ck","cv","cm",
                            ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
@@ -45257,6 +46517,8 @@ function App(){
         history:    new Set(["g","hm","hr","hs"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
         home:       new Set(["panel"]),
+        // ?ck= the type chips, ?cv= list vs month, ?cm= which month.
+        calendar:   new Set(["ck","cv","cm"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));
@@ -47786,6 +49048,7 @@ function App(){
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
     ${view==="gear"&&html`<${GearView} sealedPrices=${sealedPrices} setsMeta=${setsMeta}/>`}
+    ${view==="calendar"&&html`<${CalendarView} user=${user} onSignIn=${signIn}/>`}
     ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}
