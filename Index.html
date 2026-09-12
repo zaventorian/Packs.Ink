@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=389">
+<link rel="stylesheet" href="styles.css?v=390">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -13209,13 +13209,84 @@ const SCANNER_QA_ONLY = true;
 // sessions have already been burned testing stale code). A simple scanner
 // version counter (v10, v11, …) — bump by ONE on every scanner-affecting
 // deploy. Independent of the site-wide SW CACHE_VERSION now.
-const SCANNER_BUILD = "v19";
+const SCANNER_BUILD = "v20";
 // Version of the beta notice the user agreed to (scanner_consents.version,
 // migration 114). Bump ONLY when the notice's substance changes — what we
 // upload, why, how long we keep it, who sees it — which re-prompts everyone.
 // Wording/typo fixes don't count; re-prompting for those trains people to
 // click through the one screen that has to actually be read.
 const SCAN_BETA_VERSION = "2026-08-04";
+// ── Card VERSIONS in a scan review row (2026-09-12) ─────────────────────
+// Two different questions sit on one review row and must not be conflated. The
+// Non-Foil/Foil segment is the FINISH — one card_id, two SKUs. This is the
+// VERSION — different card_ids that share a Product Name: the base card, its
+// Enchanted/Epic/Iconic, and its promos.
+//
+// The scanner can never answer the first (a photo does not show foil reliably)
+// and it gets the second wrong often enough to be the beta's most-reported
+// friction: 623 names in the shipped index carry more than one version, and a
+// chase print is the same artwork under a different treatment, so the Epic
+// Heihei lands on the Rare. The fix was to go and search by name for a card
+// already on screen — "basically right card but extra steps for the variant"
+// (Aaron P, 2026-09-11).
+const SCAN_VARIANT_MAX = 4;
+// An Extras/CUSTOM_VARIANTS row is named by its variant_label ("Deep Trouble",
+// "Text Error"); everything else is named by its rarity, which is the axis the
+// chase and promo prints actually differ on.
+const scanVariantLabel = (r) => r.variant_label || normalizeRarity(r.Rarity) || "Base";
+// Chip text. "Super Rare" is the one canonical rarity too wide for a row that
+// also carries Non-Foil/Foil — at 360px it pushed a fourth version off the
+// edge, and .scanner-qa-rowinfo clips rather than scrolls, so the chip was
+// unreachable with nothing on screen to say it existed. "SR" is already the
+// site's own shorthand (smart search takes it as a rarity token); the full
+// name stays in the title and in the editor's list.
+const scanVariantShort = (label) => label === "Super Rare" ? "SR" : label;
+// Every version of one card, base rarity first. Takes ONE representative row
+// per card_id (Normal printing preferred — the finish is the other segment's
+// business) and never collapses two card_ids into one entry: a Rare and its
+// Epic are two cards you can physically hold apart.
+const scanVariantsFor = (rows) => {
+  const out = [];
+  for(const r of rows || []){
+    if(!r || !r.card_id || r.isCoconut || !r["Product Name"]) continue;
+    const label = scanVariantLabel(r);
+    out.push({ id: r.card_id, name: r["Product Name"], label, short: scanVariantShort(label),
+      rarity: normalizeRarity(r.Rarity) || null, set: r.Set || "",
+      rank: (r.set_id && _setRankById.get(r.set_id)) || null,
+      number: String(r.Number || ""), img: r.img_small || r.img_normal || null });
+  }
+  if(out.length < 2) return [];
+  // Rarity leads, because that is the axis the chips label and a base print is
+  // what you reach for first. Release rank is the tiebreak, so a reprint falls
+  // in behind the printing it reprints instead of wherever the alphabet puts
+  // its set.
+  out.sort((a, b) => {
+    const ai = CARDS_RARITIES.indexOf(a.rarity), bi = CARDS_RARITIES.indexOf(b.rarity);
+    return ((ai < 0 ? 99 : ai) - (bi < 0 ? 99 : bi))
+      || String(a.rank || "9999").localeCompare(String(b.rank || "9999"))
+      || a.set.localeCompare(b.set)
+      || ((parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0))
+      || a.id.localeCompare(b.id);
+  });
+  return out;
+};
+// ⚠ The inline chip row is the RARITY axis and nothing else. Two booster
+// printings of the same card both label as "Common" — true, and an answer to
+// nothing — so a family whose labels collide gets no chips at all and is left
+// to the editor's list, which shows each version's ART and set and therefore
+// cannot lie. That covers the 205 of 623 families (reprints, multi-promo runs)
+// where a one-word label would be a coin flip dressed as a choice.
+const scanVariantChipsOk = (vars) => vars.length >= 2 && vars.length <= SCAN_VARIANT_MAX
+  && new Set(vars.map(v => v.label)).size === vars.length;
+const scanVariantTitle = (v) => v.label + (v.set ? " · " + v.set : "")
+  + (v.number ? " #" + v.number : "");
+// ⚠ Case-folded, because Lorcast's own spelling is not stable across sets:
+// "HeiHei - Persistent Presence" and "Heihei - Persistent Presence" are one
+// card, and so are four base/promo pairs (Cruella, Scrooge, Down in New
+// Orleans, Vanellope) — exactly the promos this segment exists to offer. Nine
+// families in the shipped index hang on this one call. Each entry keeps its
+// OWN name string; only the grouping folds.
+const scanVariantFamilyKey = (productName) => String(productName || "").toLowerCase();
 function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose, onOpenDetail, onOpenReview, onOpenDeck }){
   const videoRef = useRef(null);
   const stageRef = useRef(null);
@@ -13263,7 +13334,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     // tester review actions — the free-QA labeling signal (edits are hard
     // negatives, confirms are verified positives; all also land per-row in
     // scan_samples via labelSample).
-    userEdits: 0, userConfirms: 0, userDeletes: 0, userFoilFlips: 0, flipAlls: 0, savedRows: 0, deckRows: 0 }, ocrMs: [], device: null });
+    userEdits: 0, userConfirms: 0, userDeletes: 0, userFoilFlips: 0, userVariantPicks: 0, flipAlls: 0, savedRows: 0, deckRows: 0 }, ocrMs: [], device: null });
   const filmRef = useRef({ frames: [], i: 0 });   // ring of last 6 small raw frames
   // 2 pre-tap frames — the snap picks the sharpest vs live. 1200 not 1600: the
   // rectify target is 1200 wide, so the extra pixels were only ever discarded,
@@ -14832,6 +14903,27 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     });
     return out.slice(0, 12);
   }, [qaEditQ, qaSearchPool]);
+  // card_id → every version of that card, for the row's version segment and the
+  // editor's "Other versions" list. Keyed on card_id rather than Product Name
+  // so a lookup can't be defeated by the two name strings being built from
+  // different sources (the scan index's label vs the catalog's).
+  const qaVariantIndex = useMemo(() => {
+    const byName = new Map();
+    for(const r of qaSearchPool){
+      const n = r["Product Name"];
+      if(!n || r.isCoconut) continue;
+      const k = scanVariantFamilyKey(n);
+      const arr = byName.get(k);
+      if(arr) arr.push(r); else byName.set(k, [r]);
+    }
+    const out = new Map();
+    for(const arr of byName.values()){
+      if(arr.length < 2) continue;
+      const vars = scanVariantsFor(arr);
+      for(const v of vars) out.set(v.id, vars);
+    }
+    return out;
+  }, [qaSearchPool]);
   // loaded-or-loading catalog art for the on-camera label (canvas drawImage
   // needs a COMPLETE image — returns null until the fetch lands, then draws)
   // LRU-bounded: this cache existed to draw a ~40px art chip on the overlay, but
@@ -15360,6 +15452,18 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       : r));
     setQaEditOpen(null);
   };
+  // One-tap version switch. Identical truth-write to picking the card out of
+  // the search — it IS that pick, sourced from a card already on screen — so a
+  // corrected row still reads as a scanner miss in the flywheel, which it is.
+  // Tapping the version already selected is a NO-OP, matching the foil
+  // segment: it would otherwise stamp reviewed=true on a row nobody judged,
+  // and unreviewed shown-✓ rows are the only honest precision sample we have.
+  const qaPickVariant = (rid, v) => {
+    const x = qaResults.find(r => r.id === rid);
+    if(!x || !v || !v.id || x.guessId === v.id) return;
+    traceRef.current.n.userVariantPicks++;
+    qaCorrectRow(rid, { id: v.id, label: v.name, rarity: v.rarity }, "variant");
+  };
   const qaConfirmRow = (rid) => {
     const x = qaResults.find(r => r.id === rid);
     if(!x || !x.guessId) return;
@@ -15650,6 +15754,13 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   const qaRowJsx = (x) => {
     const editing = qaEditOpen === x.id;
     const others = (x.cands || []).filter(c => c.id !== x.guessId).slice(0, 4);
+    const vars = (x.status !== "identifying" && x.guessId && qaVariantIndex.get(x.guessId)) || [];
+    const varChips = scanVariantChipsOk(vars) ? vars : [];
+    // A lone chase print has no Non-Foil side to offer, so its printing is
+    // stated rather than chosen. Nothing to state and nothing to choose means
+    // no segment row at all — an empty one still costs the row a gap.
+    const prOnly = !x.hasFoilPair && x.printing && x.printing !== "Normal"
+      && x.printing !== "Non-Foil" && x.status !== "identifying";
     return html`<div class=${"scanner-session-row scanner-qa-row" + (x.status === "identifying" ? " scanner-qa-pending" : "") + (editing ? " editing" : "")} key=${x.id}>
       ${x.thumb ? html`<img class="scanner-session-thumb" src=${x.thumb} loading="lazy" title="Your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-thumb-empty"></span>`}
       ${x.cardImg ? html`<img class="scanner-session-thumb scanner-qa-cardimg" src=${x.cardImg} loading="lazy" title="Matched card — compare with your snap"/>` : html`<span class="scanner-session-thumb scanner-qa-cardimg empty"></span>`}
@@ -15658,11 +15769,16 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
           ? html`<span class="scanner-session-name scanner-qa-identifying">Identifying…</span>`
           : html`<span class="scanner-session-name">${qaConfChip(x.conf, x.ver)} ${x.conf === "unread" ? html`<span class="scanner-qa-unread">${x.foreign ? "Non-English card — not supported yet" : "Couldn't read — tap edit to pick"}</span>` : (x.guess || "(no match)")}</span>`}
         ${x.alts && x.status !== "identifying" ? html`<span class="scanner-qa-alts">maybe: ${x.alts}</span>` : null}
-        ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
-            <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>Non-Foil</button>
-            <button class=${"scanner-qa-foilbtn" + (x.printing === x.prF ? " on" : "")} onClick=${() => qaFlipRow(x.id, "F")}>${x.prF === "Holofoil" ? "Holo" : "Foil"}</button>
-          </span>`
-          : (x.printing && x.printing !== "Normal" && x.printing !== "Non-Foil" && x.status !== "identifying" ? html`<span class="scanner-qa-pronly">${x.printing === "Holofoil" ? "Holo" : x.printing}</span>` : null)}
+        ${(x.hasFoilPair || prOnly || varChips.length) ? html`<span class="scanner-qa-segs">
+          ${x.hasFoilPair ? html`<span class="scanner-qa-foilseg" title="Which printing is the physical card?">
+              <button class=${"scanner-qa-foilbtn" + (x.printing === x.prN ? " on" : "")} onClick=${() => qaFlipRow(x.id, "N")}>Non-Foil</button>
+              <button class=${"scanner-qa-foilbtn" + (x.printing === x.prF ? " on" : "")} onClick=${() => qaFlipRow(x.id, "F")}>${x.prF === "Holofoil" ? "Holo" : "Foil"}</button>
+            </span>` : (prOnly ? html`<span class="scanner-qa-pronly">${x.printing === "Holofoil" ? "Holo" : x.printing}</span>` : null)}
+          ${varChips.length ? html`<span class="scanner-qa-varseg" title="Which version is the physical card?">
+              ${varChips.map(v => html`<button key=${v.id} class=${"scanner-qa-varbtn" + (v.id === x.guessId ? " on" : "")}
+                title=${scanVariantTitle(v)} aria-pressed=${v.id === x.guessId} onClick=${() => qaPickVariant(x.id, v)}>${v.short}</button>`)}
+            </span>` : null}
+        </span>` : null}
       </div>
       <div class="scanner-qa-side">
         <span class="scanner-session-price">${x.price != null ? "$" + Number(x.price).toFixed(2) : ""}</span>
@@ -15674,6 +15790,15 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       </div>
       ${editing ? html`<div class="scanner-qa-edit">
         ${x.guessId && !x.userSet && x.status !== "identifying" ? html`<button class="scanner-qa-okbtn" onClick=${() => qaConfirmRow(x.id)}>✓ This is right</button>` : null}
+        ${vars.length ? html`<div class="scanner-session-alts-lbl">This card’s versions:</div>
+        <div class="scanner-cand-row scanner-qa-verrow">
+          ${vars.map(v => html`<button key=${v.id} class=${"scanner-cand" + (v.id === x.guessId ? " top" : "")}
+            title=${scanVariantTitle(v)} onClick=${() => qaPickVariant(x.id, v)}>
+            <img src=${v.img || SCAN_THUMB_SMALL(v.id)} alt=${v.label} loading="lazy"/>
+            <span class="scanner-cand-name">${v.label}</span>
+            <span class="scanner-cand-sub">${v.set}</span>
+          </button>`)}
+        </div>` : null}
         ${others.length ? html`<div class="scanner-session-alts-lbl">Scanner's other guesses:</div>
         <div class="scanner-cand-row">
           ${others.map(c => html`<button key=${c.id} class="scanner-cand" onClick=${() => qaCorrectRow(x.id, { id: c.id, label: qaLabelOf(c), rarity: c.rarity }, "cand")}>

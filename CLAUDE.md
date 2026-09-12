@@ -84,6 +84,55 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 - **`SCANNER_QA_ONLY` stays `true` — PERMANENTLY, as of 2026-08-23.** Zaven's call: *"I don't want auto-add to collection; let the user confirm the list after running a session."* Review-before-save is the shipping UX, so the ≥95% precision bar gates nothing any more; flipping this to false restores the Stack-scan / Single auto-add flow and needs a new product decision, not a metric.
   - **The bar was measured anyway that day, the honest way** (photo-verify a random sample of UNREVIEWED shown-✓ rows — labelled rows cannot tell you, per round 11): 170 v16 samples judged against official art in two disjoint seeded rounds → **167 correct = 98.2%, one-sided 95% lower bound 95.7%. It clears.** Retired pre-v16 builds: 83.3% (25/30); the gap is real (Fisher exact p=0.009), so v16's matcher work is what moved it. All 3 v16 misses were name/art collisions between distinct cards (Minnie *Curious Adventurer* vs *Drum Major*; *Genie - Hard to Grasp* read as *Gene - Niceland Resident*; one red-panda song read as another) — exactly the class review catches. Method, if it ever needs re-running: pull `scan_samples` where `reviewed=false AND corrected=false AND debug->>conf='high'`, seeded-sample per build, compose side-by-side sheets of the stored scan crop vs the claimed card's `image_normal`, judge each pair, then Wilson-interval the result.
 
+### Version chips in the review row (2026-09-12)
+
+A scan answers "which CARD is this", never "which PRINTING of it", so the review row
+carries one control per question. The **Non-Foil / Foil** segment is the FINISH (one
+card_id, two SKUs); the segment beside it is the **VERSION** — different card_ids that
+share a Product Name: the base card, its Enchanted/Epic/Iconic, and its promos. Tapping
+one is exactly the pick the editor's search already made, sourced from a card that is
+already on screen.
+
+From the beta's most-reported friction (Aaron P, 2026-09-11): the Epic *Heihei - Created
+by the Vine* read as the Rare, and the fix was to go and search by name for a card that
+was on the screen — *"basically right card but extra steps for the variant"*. Same
+report: a set's league promos "aren't an option whenever you click the pencil".
+
+- **623 of the shipped index's 2,479 names carry more than one version** — 541 pairs, 66
+  threes, 16 with four or more, topping out at *Mickey Mouse - True Friend* (7). **593 of
+  those families have genuinely different art**, so the matcher CAN separate them; it just
+  lands on a sibling often enough to matter. The other 30 are byte-identical art
+  (`art_key` collisions) where no matcher work will ever help and a button is the only
+  possible answer.
+- **⚠ The chip row is the RARITY axis and nothing else.** Two booster printings of one
+  card both label "Common" — true, and an answer to nothing — so `scanVariantChipsOk`
+  refuses a family whose labels collide and leaves it to the editor. That is **205 of
+  623**: reprints and multi-promo runs, where a one-word chip would be a coin flip dressed
+  as a choice. `SCAN_VARIANT_MAX` (4) caps the rest; 616 of 623 families are 4 or fewer.
+- **The editor carries everything the chips refuse.** "This card's versions" lists every
+  printing with its ART and its set, above the search box, uncapped — a picture cannot
+  lie the way a word can. It is also the direct answer to the league-promo half of the
+  report.
+- **⚠ The family key is CASE-FOLDED** (`scanVariantFamilyKey`), because Lorcast's own
+  spelling is not stable across sets: "HeiHei" vs "Heihei", "Down In New Orleans" vs "Down
+  in New Orleans". Nine families and **19 printings** hang on that one `toLowerCase()`,
+  four of them base/promo pairs — exactly the promos this exists to offer.
+- **⚠ Tapping the version already selected is a NO-OP**, matching the foil segment. It
+  would otherwise stamp `reviewed: true` on a row nobody judged, and unreviewed shown-✓
+  rows are the only honest precision sample there is (round 11).
+- **⚠ `.scanner-qa-rowinfo` clips, it does not scroll.** A chip pushed past the right edge
+  is simply gone with nothing on screen to say it existed — which is what a 4-version card
+  plus a foil pair did at 360px. The segment wraps inside its own border, and "Super Rare"
+  renders as **SR** on the chip only (the site's own smart search already takes `sr` as a
+  rarity token); the full name stays in the tooltip and in the editor.
+- Ordering is rarity first, then release rank — so a reprint falls in behind the printing
+  it reprints rather than wherever the alphabet puts its set.
+- A pick writes the same truth label as a search pick, so a switched row still reads as a
+  scanner miss in the flywheel, which it is.
+
+Guarded by `node scripts/test_scan_variants.mjs`, which replays the real helpers over the
+shipped `scanner/index.json` and so re-measures every count above.
+
 ### Consent + the upload opt-out (migration 114)
 
 - **`scanner_consents(user_id pk, version, accepted_at, uploads_enabled, updated_at)`** — owner-only RLS on select/insert/update, no admin read branch. One row per user, updated in place: we need the CURRENT preference on every scan, not an audit trail.
@@ -2633,7 +2682,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v374`; `styles.css?v=374`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v390`; `styles.css?v=390`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
