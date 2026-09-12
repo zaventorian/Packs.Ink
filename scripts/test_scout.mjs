@@ -26,6 +26,7 @@ const src = read("../Index.html");
 const css = read("../styles.css");
 const sql = read("../supabase/143_scout_team.sql");
 const sql144 = read("../supabase/144_scout_off_roster.sql");
+const sql147 = read("../supabase/147_scout_window_24h.sql");
 const fn = read("../supabase/functions/refresh-elo-rosters/index.ts");
 const NL = "\n";
 
@@ -40,7 +41,9 @@ function grab(start, end) {
 const moduleSrc = [
   grab("const scoutErrText = (e) => {", NL + "};"),
   grab("const scoutShortDate = (iso, tz) => {", NL + "};"),
-  "export {scoutErrText, scoutShortDate};",
+  grab("const SCOUT_LIVE_HOURS = 24;",
+       "return `Started ${Math.floor(mins / 60)}h ago`;" + NL + "};"),
+  "export {scoutErrText, scoutShortDate, SCOUT_LIVE_HOURS, scoutStartedAgo};",
 ].join(NL);
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
 
@@ -308,6 +311,65 @@ ok("it is not duplicated on Upcoming SCs", !/refreshingRosters/.test(src));
 // Removed outright — no orphan state, props, RPC args or CSS left behind.
 ok("exclude-org is gone from the client", !/excludeOrg|eloExcludeOrg/.test(src));
 ok("exclude-org is gone from the styles", !/elo-exclude-toggle|elo-scout-orgtoggle/.test(css));
+
+// ── 147: the slate keeps an event for 24 hours past its start ─────────────
+// Reported from the floor 2026-09-12: three 3:00 PM Set Championships were on
+// the Scout tab at 2:59 and gone at 3:00. 143 scoped the slate to
+// `start_datetime >= now()`, so an event left the list at the exact moment it
+// became the one you were standing in — and a sheet is filled in DURING the
+// event and finished on the drive home.
+const rosterBody = (sqlText) => {
+  const a = sqlText.indexOf("create or replace function public.get_roster_scout(");
+  if (a < 0) throw new Error("missing get_roster_scout");
+  return sqlText.slice(a, sqlText.indexOf(NL + "$$;", a));
+};
+ok("147 re-creates get_roster_scout", /create or replace function public\.get_roster_scout\(/.test(sql147));
+ok("the slate keeps an event for 24 hours past its start",
+  /where sc\.start_datetime >= now\(\) - interval '24 hours'/.test(rosterBody(sql147)));
+ok("the start-line cutoff is gone", !/start_datetime >= now\(\)\s*$/m.test(rosterBody(sql147)));
+// ⚠ The window is the ONLY thing 147 may change. Re-typing a 120-line function
+// to move one predicate is exactly how a gate, a join or an aggregate quietly
+// goes missing, and every one of those failures is silent: a widened gate shows
+// one team's slate to another, a dropped LEFT JOIN hides every event whose
+// roster has not been pulled yet.
+check("nothing else about 143's body changed",
+  rosterBody(sql147).replace(" - interval '24 hours'", ""), rosterBody(sql));
+ok("147 keeps the grant it needs",
+  /grant execute on function public\.get_roster_scout\(boolean\) to authenticated;/.test(sql147));
+ok("147 reloads PostgREST's schema", sql147.trimEnd().endsWith("notify pgrst, 'reload schema';"));
+
+// ⚠ The BULK sweep is deliberately NOT widened to match. It replaces a roster
+// delete-then-insert, so pointing the automatic pull at events that have already
+// been played risks overwriting the roster of the very sheet somebody is filling
+// in. What makes that safe is the PER-EVENT refresh — the ↻ inside the sheet —
+// which has never had a date filter and is how you re-pull the event you are
+// sitting in. Put one there and the in-room workflow dies with no error.
+{
+  const i = fn.indexOf("if (onlyEventId != null) {");
+  ok("the edge function has a single-event branch", i > 0);
+  ok("the per-event refresh is not date-filtered",
+    !/start_datetime/.test(fn.slice(i, fn.indexOf("} else {", i))));
+}
+
+// The chip that says a row has already begun. Before 147 the slate was all
+// future, so the list needed no marker; now it does, or a Sunday-morning tab
+// headed "Saturday, Sep 12" reads as stale data rather than as the event you
+// were just at.
+const ago = (mins) => m.scoutStartedAgo(new Date(Date.now() - mins * 60000).toISOString());
+check("an event that has not started carries no chip", ago(-90), null);
+check("the first hour just says it started", ago(30), "Started");
+check("on the hour it starts counting", ago(60), "Started 1h ago");
+check("after that it says how long ago", ago(190), "Started 3h ago");
+check("a junk timestamp renders nothing", m.scoutStartedAgo("not a date"), null);
+check("a missing timestamp renders nothing", m.scoutStartedAgo(null), null);
+// The chip explains a window the database enforces. Two numbers, one fact.
+ok("the client's stated window is the one the migration enforces",
+  m.SCOUT_LIVE_HOURS === 24 && /interval '24 hours'/.test(sql147));
+ok("the Scout row marks an event that has already begun",
+  /began=scoutStartedAgo\(ev\.start_datetime\)/.test(src) && /class="elo-scout-began"/.test(src));
+// It sits inside the .muted meta line, so it has to take its colour back or the
+// one thing separating a live row from a listing is the grey of the address.
+ok("the chip is not muted grey", /\.elo-scout-began\{color:var\(--accent\)/.test(css));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

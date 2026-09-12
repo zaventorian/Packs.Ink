@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=397">
+<link rel="stylesheet" href="styles.css?v=398">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -27637,6 +27637,27 @@ const scoutShortDate = (iso, tz) => {
   catch { return String(iso).slice(5,10); }
 };
 
+// The Scout tab keeps an event for SCOUT_LIVE_HOURS past its start (migration
+// 147): a sheet is filled in DURING the event and finished on the drive home, so
+// dropping the row the minute the doors open takes it away at exactly the moment
+// it becomes the one you are standing in.
+//
+// ⚠ That means the slate is no longer all-future, and a row that has already
+// begun has to SAY so. Unmarked, a Sunday-morning tab whose first entry is
+// Saturday 3:00 PM reads as stale data rather than as the event you were just
+// at — the same "is this thing even updating?" confusion a silent window costs
+// everywhere else on this site. Returns null for an event that hasn't started,
+// which is what renders no chip at all.
+const SCOUT_LIVE_HOURS = 24;
+const scoutStartedAgo = (iso, nowMs) => {
+  const t = Date.parse(iso || "");
+  if(!Number.isFinite(t)) return null;
+  const mins = Math.floor(((nowMs == null ? Date.now() : nowMs) - t) / 60000);
+  if(mins < 0) return null;
+  if(mins < 60) return "Started";
+  return `Started ${Math.floor(mins / 60)}h ago`;
+};
+
 // One cell of the sheet. Spreadsheet rules: type, then Tab or click away and it
 // is saved — there is no Save button, because logging a room of 24 people one
 // modal at a time is the thing that makes a scouting tool go unused.
@@ -28157,14 +28178,15 @@ function EloRosterScout({onPlayerClick, onOpenScout, isEloAdmin}){
           ${days.map(d=> html`<div key=${d.key} class="elo-scout-day">
             <div class="elo-scout-day-hdr">${d.label} <span class="muted">· ${d.events.length} event${d.events.length===1?"":"s"}</span></div>
             <div class="elo-scout-evlist">
-              ${d.events.map(ev=>{ const f=ev.field||{}; return html`<div key=${ev.event_id} class="elo-scout-ev">
+              ${d.events.map(ev=>{ const f=ev.field||{}, began=scoutStartedAgo(ev.start_datetime); return html`<div key=${ev.event_id} class="elo-scout-ev">
                 <button class="elo-scout-ev-row" onClick=${()=>onOpenScout && onOpenScout({
                     event_id: ev.event_id, store_name: ev.store_name, name: ev.name,
                     capacity: ev.capacity, start_datetime: ev.start_datetime, timezone: ev.timezone})}
                   title="Open the scouting sheet for this event">
                   <span class="elo-scout-ev-main">
                     <span class="elo-scout-ev-store">${ev.store_name}</span>
-                    <span class="muted elo-scout-ev-meta">${where(ev)} · ${timeLbl(ev)}</span>
+                    <span class="muted elo-scout-ev-meta">${where(ev)} · ${timeLbl(ev)}
+                      ${began ? html`<span class="elo-scout-began" title="Underway or just finished — the sheet stays here for ${SCOUT_LIVE_HOURS} hours after the start.">· ${began}</span>` : ""}</span>
                   </span>
                   <span class="elo-scout-ev-stats">
                     <span class="elo-scout-stat" title="Signed up (rated)"><b>${f.n_signed_up||0}</b>${f.n_rated!=null?html` <span class="muted">(${f.n_rated} rated)</span>`:""}</span>

@@ -2882,7 +2882,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v395`; `styles.css?v=395`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v398`; `styles.css?v=398`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
@@ -3297,6 +3297,42 @@ Guarded by `node scripts/test_scout.mjs`.
   the panel's Refresh button is the only way to pull one. You could not reach the control
   that would have made the event visible. Its gate widens to `can_view_store_report() OR
   can_scout()`; the body is otherwise 89's, unchanged.
+
+### The slate keeps an event for 24 HOURS past its start (migration 147 — STAGED)
+
+143 scoped `get_roster_scout` to `start_datetime >= now()`, so an event left the Scout tab at
+the exact moment it became the one you were standing in. Reported from the floor 2026-09-12:
+three 3:00 PM Set Championships were on the tab at 2:59 and gone at 3:00. **A sheet is filled
+in DURING the event and finished on the drive home**, so the start line is the worst possible
+cutoff. The window is `now() - interval '24 hours'`, which is a day's play plus the evening you
+write it up, and is the same grace whatever time the event started.
+
+- **⚠ The bulk roster sweep is deliberately NOT widened to match** — the edge function's
+  "Refresh all rosters" and `scrape_rosters.py`'s scheduled run still scope to
+  `start_datetime >= today`. Those replace a roster **delete-then-insert**, so pointing the
+  automatic pull at events that have already been played risks overwriting the roster of the
+  very sheet somebody is filling in, with whatever RPH's registration list says afterwards.
+  What makes that safe is that the **per-event** refresh — the ↻ inside a sheet, and
+  `scrape_rosters.py --event` — resolves through `scout_event_meta` and has never had a date
+  filter, so re-pulling the event you are sitting in already works. Put one there and the
+  in-room workflow dies with no error.
+- **⚠ The slate is no longer all-future, so a started row has to SAY so.** Unmarked, a
+  Sunday-morning tab headed "Saturday, Sep 12" reads as stale data rather than as the event
+  you were just at — the same "is this thing even updating?" confusion a silent window costs
+  everywhere else here. `scoutStartedAgo` renders `Started` for the first hour and
+  `Started Nh ago` after that, in the accent colour: it sits inside the `.muted` meta line, so
+  `.elo-scout-began` has to take its colour back or the one thing separating a live row from a
+  listing is the grey of the address beside it. Its gap is a `margin-left`, because htm
+  collapses the newline between `${timeLbl(ev)}` and the span away and the dot would otherwise
+  butt straight against the time.
+- **Order stays chronological**, so a started event sorts FIRST. That is right for the person
+  it exists for — you are in the shop — and the chip is what stops it reading as clutter.
+- `SCOUT_LIVE_HOURS` (client) and the migration's `interval '24 hours'` are two spellings of
+  one fact; `scripts/test_scout.mjs` pins that they agree, and that 147 changes **only** that
+  predicate — re-typing a 120-line function to move one line is how a gate, a join or an
+  aggregate quietly goes missing.
+- **Upcoming SCs, the calendar and the "Near me" finder are untouched.** A list called
+  *Upcoming* holding a finished event is a different claim, and nobody asked for it.
 
 ### Where it renders
 
@@ -4027,6 +4063,16 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- **`supabase/147_scout_window_24h.sql`** — STAGED, not applied. The Scout tab's
+  slate keeps an event for **24 hours past its start** instead of dropping it the
+  minute the doors open: `get_roster_scout`'s window goes from
+  `start_datetime >= now()` to `>= now() - interval '24 hours'`. Reported from the
+  floor — three 3:00 PM SCs were on the tab at 2:59 and gone at 3:00, which is the
+  exact moment a scouting sheet starts being useful. **Only that predicate
+  changes**; the body is 143's verbatim, and the test asserts it. Independent of
+  144_scout_off_roster.sql (which never touches this function), so either may land
+  first. **Safe to ship the client first** — until it runs, the "Started" chip
+  simply never has anything to mark, which is today's behaviour.
 - **`supabase/144_scout_off_roster.sql`** — STAGED, not applied. Fixes a SILENT
   data-hiding bug in 143 found on review: the panel listed only the roster, and
   the roster scrape is delete-then-insert, so a note about a player who dropped
