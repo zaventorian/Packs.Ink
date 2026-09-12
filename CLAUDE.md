@@ -3266,6 +3266,40 @@ Guarded by `node scripts/test_calendar.mjs` (103 cases).
   plain **"Near me"** control in the page header and a fourth tool button on the
   home panel.
 
+### Hiding one event
+
+"Show me European CCQs, except that one." A hide is a fourth
+`calendar_subscriptions` kind (migration 144) keyed on the entry's own `id`,
+which is stable for all three shapes the calendar renders — a curated uuid,
+`ev:<rph id>`, and `set:<Set>:<phase>`.
+
+**⚠ This feature has a known way to go wrong and it is already written down in
+this file.** The graded view's per-card Hide was KILLED in 2026-05 because a
+hidden thing became invisible with no way back. Three defences, none optional:
+
+1. **A structural bypass** — `calendarApplyHidden` takes the SAVED set and an
+   explicitly saved event is never hidden. "Add this to my calendar" is a clearer
+   statement of intent than a hide you may not remember making.
+2. **Hidden events are LISTED** in "My stores + saved events", dimmed, with an
+   un-hide ×, and they count toward the badge. A hide you cannot see is the
+   original bug.
+3. **It lives behind the ✚ popover** with an undo toast — not a × on a row, which
+   is how the graded one collected accidental clicks.
+
+- **⚠ SAVED and HIDDEN are mutually exclusive, and `add()` enforces BOTH
+  directions.** Saving retires a hide (defence 1). Hiding retires a save for a
+  subtler reason found while testing: without it, hiding something you had saved
+  left both rows, the bypass kept it on screen, and **the Hide button silently
+  did nothing**. Both halves live in `add()` so every future caller inherits them.
+  The bypass is then defence in depth — it only decides if both rows somehow
+  coexist (stale storage, a half-synced device), and it decides for showing it.
+- Until migration 144 runs, hiding works **per device**: the CHECK constraint
+  rejects `kind='hide'` and the remote write fails silently, while localStorage
+  keeps it. Same degradation as every other pre-migration state here.
+- **⚠ 144 drops the old CHECK by LOOKUP, not by name.** A column CHECK gets an
+  auto-generated name; guessing it wrong would leave the old constraint in place,
+  rejecting every hide while the migration reported success.
+
 ### Per-store event kinds
 
 **A followed shop's weeklies outnumber the events you follow shops FOR by about
@@ -3565,6 +3599,9 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   reads as "no curated events", and the page still renders its derived set
   releases and your followed stores. Until it lands, `/calendar` shows an
   admin-only banner naming the file, and `scan_ccq_candidates.py` exits saying so.
+- **`supabase/144_calendar_hide.sql`** — STAGED, not applied. Widens
+  `calendar_subscriptions.kind` to allow `'hide'`. Safe to ship the client
+  first: hiding falls back to per-device until it lands.
 - **`supabase/142_calendar_geo_and_read_fix.sql`** — **HALF-APPLIED.** Its policy
   fix IS live (2026-09-12, verified: an anon read of `calendar_events` returns 34
   rows where it used to raise 42501). Its `alter table` half never ran — selecting

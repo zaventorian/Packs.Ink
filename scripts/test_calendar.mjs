@@ -56,6 +56,8 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const _calKindRank = "),
   grab("const calendarSort = (events) =>", "|| String(a.title || \"\").localeCompare(String(b.title || \"\")));"),
   grab("const calendarCombine = (curated, store) => {", NL + "};"),
+  grabLine("const calendarHiddenSet = (subs) =>"),
+  grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
   grabLine("const CAL_STORE_KIND_KEYS = "),
   grab("const calStoreKindsOf = (sub) => {", NL + "};"),
@@ -85,6 +87,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,",
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
+  " calendarHiddenSet, calendarApplyHidden,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
 ].join(NL)));
 
@@ -94,7 +97,7 @@ const {
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,
   calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
-  CAL_STORE_KIND_KEYS,
+  CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
 } = mod;
 
@@ -485,6 +488,48 @@ ok("a bad date has no label", calShortDay("nope") === "");
     CAL_STORE_KIND_KEYS[CAL_STORE_KIND_KEYS.length - 1] === "other");
   ok("every store kind has a short label and a long one",
     CAL_STORE_KINDS.every(k => k.label && k.long && k.label.length <= 12));
+}
+
+// -- Hiding one event -------------------------------------------------------
+// ⚠ The graded view's per-card Hide was KILLED because a hidden thing became
+// invisible with no way back. These pin the defences that stop a repeat.
+{
+  const ev = (id) => ({id, kind: "ccq", title: "E" + id, starts_on: "2026-10-04"});
+  const pool = ["a", "ev:12", "set:Hyperia City:prerelease"].map(ev);
+  const subs = [
+    {kind: "hide", ref: "ev:12"},
+    {kind: "store", ref: "2308"},
+  ];
+  const hidden = calendarHiddenSet(subs);
+  ok("only hide rows make the hidden set", hidden.size === 1 && hidden.has("ev:12"));
+  ok("a hidden event is dropped",
+    calendarApplyHidden(pool, hidden, new Set()).map(e => e.id).join(",") === "a,set:Hyperia City:prerelease");
+  ok("everything else survives", calendarApplyHidden(pool, hidden, new Set()).length === 2);
+  ok("no hides means no filtering", calendarApplyHidden(pool, new Set(), new Set()).length === 3);
+
+  // ⚠ THE STRUCTURAL BYPASS. "Add this to my calendar" is a clearer statement of
+  // intent than a hide you may not remember making. Without this rule a stale
+  // hide silently defeats a deliberate add -- precisely the bug that killed the
+  // graded version.
+  ok("an explicitly saved event is never hidden",
+    calendarApplyHidden(pool, hidden, new Set(["ev:12"])).length === 3);
+  ok("the bypass is per-event, not a blanket off-switch",
+    calendarApplyHidden(pool, new Set(["a", "ev:12"]), new Set(["ev:12"])).map(e => e.id).join(",")
+      === "ev:12,set:Hyperia City:prerelease");
+
+  // Every id shape the calendar renders has to be hideable.
+  ok("a derived set release can be hidden",
+    calendarApplyHidden(pool, new Set(["set:Hyperia City:prerelease"]), new Set()).length === 2);
+  ok("a curated uuid can be hidden", calendarApplyHidden(pool, new Set(["a"]), new Set()).length === 2);
+  ok("hidden ids compare as strings", calendarApplyHidden([{id: 12, kind: "ccq", title: "x", starts_on: "2026-10-04"}],
+    new Set(["12"]), new Set()).length === 0);
+  ok("applyHidden tolerates nulls", calendarApplyHidden(null, null, null).length === 0);
+  // ⚠ The bypass is defence in depth, not the primary mechanism: add() keeps
+  // saved and hidden mutually exclusive, so both rows should never coexist. If
+  // they ever do (stale storage, a half-synced device), THIS is what decides —
+  // and it decides in favour of the thing the user asked to see.
+  ok("if both rows somehow exist, the save wins",
+    calendarApplyHidden([ev("z")], new Set(["z"]), new Set(["z"])).length === 1);
 }
 
 // ── Store entries ───────────────────────────────────────────────────────────

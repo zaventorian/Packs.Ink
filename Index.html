@@ -2305,6 +2305,34 @@ const calendarCombine = (curated, store) => {
     (store || []).filter(e => e && !claimed.has(Number(e.event_id)))));
 };
 
+// ── Hiding one event ────────────────────────────────────────────────────────
+// "Show me European CCQs, except that one." A hide is keyed on the entry's own
+// id, which is stable for all three shapes the calendar renders: a curated row's
+// uuid, "ev:<rph id>" for a store event, and "set:<Set>:<phase>" for a derived
+// release.
+//
+// ⚠ THIS FEATURE HAS A KNOWN WAY TO GO WRONG, and it is written down: the graded
+// view's per-card Hide was KILLED in 2026-05 because a hidden thing became
+// invisible with no way back — an accidental click and the card was gone, even
+// after the user acted in a way that clearly meant they wanted it. Three
+// defences, and none of them is optional:
+//   1. a STRUCTURAL bypass — see calendarApplyHidden;
+//   2. hidden events are LISTED in "My stores + saved events" with an un-hide,
+//      so the state is never invisible;
+//   3. hiding lives behind the ✚ popover and offers an undo toast, so it is not
+//      a stray click on a row.
+const calendarHiddenSet = (subs) => new Set((subs || []).filter(s => s.kind === "hide").map(s => String(s.ref)));
+
+// ⚠ AN EVENT YOU EXPLICITLY SAVED IS NEVER HIDDEN. That is the structural
+// bypass: "add this to my calendar" is a clearer statement of intent than a hide
+// you may not remember making, so saving an event brings it back whatever the
+// hide list says. Without a rule like this a stale hide silently defeats a
+// deliberate add, which is exactly the bug that killed the graded version.
+const calendarApplyHidden = (events, hidden, saved) => {
+  if(!hidden || !hidden.size) return events || [];
+  return (events || []).filter(e => !hidden.has(String(e.id)) || (saved && saved.has(String(e.id))));
+};
+
 // One lorcana_events row (or one occurrence of a grouped series) as a calendar
 // entry. The day is the store's local day, not the reader's — see calTzYmd.
 const calendarStoreEntry = (ev, extra) => {
@@ -36660,13 +36688,25 @@ function useCalendarSubs(user){
   const has = useCallback((kind, ref) => subs.some(s => s.kind === kind && String(s.ref) === String(ref)), [subs]);
   const add = useCallback((sub) => {
     const row = {kind: sub.kind, ref: String(sub.ref), label: sub.label || null, meta: sub.meta || null};
+    // ⚠ SAVED and HIDDEN are mutually exclusive, and each retires the other.
+    // Saving retires a hide — the structural bypass the graded post-mortem
+    // demands. Hiding retires a save for a subtler reason: without it, hiding
+    // something you had saved left BOTH rows, the bypass kept it on screen, and
+    // the Hide button silently did nothing. Doing it here rather than at the
+    // call sites means every future caller inherits both halves.
+    const opposite = row.kind === "event" ? "hide" : row.kind === "hide" ? "event" : null;
     setSubs(prev => {
-      const next = prev.some(s => calSubKey(s) === calSubKey(row)) ? prev : prev.concat([row]);
+      let next = opposite ? prev.filter(s => !(s.kind === opposite && String(s.ref) === row.ref)) : prev;
+      next = next.some(s => calSubKey(s) === calSubKey(row)) ? next : next.concat([row]);
       calWriteLocalSubs(next);
       return next;
     });
-    if(uid) sbClient.from("calendar_subscriptions")
-      .upsert({user_id: uid, ...row}, {onConflict: "user_id,kind,ref"}).then(() => {}, () => {});
+    if(uid){
+      if(opposite) sbClient.from("calendar_subscriptions").delete()
+        .eq("user_id", uid).eq("kind", opposite).eq("ref", row.ref).then(() => {}, () => {});
+      sbClient.from("calendar_subscriptions")
+        .upsert({user_id: uid, ...row}, {onConflict: "user_id,kind,ref"}).then(() => {}, () => {});
+    }
   }, [uid]);
   const remove = useCallback((kind, ref) => {
     setSubs(prev => {
@@ -37024,6 +37064,7 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
   const gUrl = googleCalUrl(ev);
   const subRef = ev.kind === "store" ? String(ev.event_id) : (ev.derived ? null : String(ev.id));
   const on = subRef && subs && subs.has("event", subRef);
+  const hidden = subs && subs.has("hide", String(ev.id));
   const fileSlug = String(ev.title || "event").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
   return html`<div class="cal-add-wrap" ref=${ref}>
     <button type="button" aria-expanded=${open ? "true" : "false"} ref=${btnRef}
@@ -37046,6 +37087,16 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
         const done = downloadIcs([ev], `packsink-${fileSlug || "event"}.ics`, ev.title);
         flashToast(done ? "Calendar file downloaded" : "Couldn't download — try the Google Calendar link");
       }}>${uiIcon("save", 13)} Download .ics</button>
+      ${/* Hiding lives behind this popover on purpose: the graded view's per-card
+            Hide died of stray × clicks on rows. Two clicks, plus an undo, plus a
+            standing list of what is hidden. */
+        subs && html`<button type="button" class="cal-add-item cal-add-item--hide" onClick=${() => {
+        setOpen(false);
+        const id = String(ev.id);
+        if(hidden){ subs.remove("hide", id); flashToast("Back on your calendar"); return; }
+        subs.add({kind: "hide", ref: id, label: calEventTitle(ev)});
+        flashToast(`Hidden — undo it under "My stores + saved events"`);
+      }}>${uiIcon(hidden ? "eye" : "close", 13)} ${hidden ? "Un-hide this event" : "Hide this event"}</button>`}
     </div>`}
   </div>`;
 };
@@ -37401,9 +37452,11 @@ const CalendarPanel = ({panelNav, user, onFindEvents}) => {
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_PANEL_VIEW_LS, mode); } catch {} }, [mode]);
 
-  const pool = useMemo(() => calendarCombine(events, storeEvents)
+  const pool = useMemo(() => calendarApplyHidden(
+      calendarCombine(events, storeEvents), calendarHiddenSet(subs.subs),
+      new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))))
     .filter(e => kinds.includes(e.kind) && calMatchesRegion(e, region)),
-    [events, storeEvents, kinds, region]);
+    [events, storeEvents, kinds, region, subs.subs]);
   // ⚠ Between a retail release and the next set's announcement there is
   // genuinely nothing ahead — weeks of it, several times a year. A box that goes
   // blank in that window reads as broken and earns a Hide, so it falls back to
@@ -37539,7 +37592,11 @@ function CalendarView({user, onSignIn, onFindEvents}){
     } catch {}
   }, [kinds, mode, month, today]);
 
-  const all = useMemo(() => calendarCombine(events, storeEvents), [events, storeEvents]);
+  const hidden = useMemo(() => calendarHiddenSet(subs.subs), [subs.subs]);
+  const savedIds = useMemo(() => new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))),
+    [subs.subs]);
+  const all = useMemo(() => calendarApplyHidden(calendarCombine(events, storeEvents), hidden, savedIds),
+    [events, storeEvents, hidden, savedIds]);
   const counts = useMemo(() => {
     const c = {};
     for(const k of CALENDAR_KIND_KEYS) c[k] = 0;
@@ -37578,7 +37635,11 @@ function CalendarView({user, onSignIn, onFindEvents}){
   const followedStores = subs.subs.filter(s => s.kind === "store");
   const followedSeries = subs.subs.filter(s => s.kind === "series");
   const savedEvents = subs.subs.filter(s => s.kind === "event");
-  const followCount = followedStores.length + followedSeries.length + savedEvents.length;
+  // ⚠ Hidden events are LISTED, not merely remembered. A hide you cannot see is
+  // the failure that killed the graded view's Hide — the state has to be
+  // somewhere you can find it without knowing what you are looking for.
+  const hiddenEvents = subs.subs.filter(s => s.kind === "hide");
+  const followCount = followedStores.length + followedSeries.length + savedEvents.length + hiddenEvents.length;
 
   const exportAll = () => {
     const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana calendar");
@@ -37685,6 +37746,11 @@ function CalendarView({user, onSignIn, onFindEvents}){
                 ${uiIcon("calendarPlus", 12)} <span>${s.label || "Saved event"}</span>
                 <em>one date</em>
                 <button type="button" aria-label="Remove" onClick=${() => subs.remove("event", s.ref)}>×</button></li>`)}
+              ${hiddenEvents.map(s => html`<li key=${"hd" + s.ref} class="cal-follow-hidden">
+                ${uiIcon("eye", 12)} <span>${s.label || "Hidden event"}</span>
+                <em>hidden</em>
+                <button type="button" aria-label="Un-hide" title="Show this again"
+                  onClick=${() => subs.remove("hide", s.ref)}>×</button></li>`)}
             </ul>`}
         ${!user && followCount > 0 && html`<p class="muted cal-follow-signin">
           Saved on this device only. <button type="button" class="cal-linkish" onClick=${onSignIn}>Sign in</button>
