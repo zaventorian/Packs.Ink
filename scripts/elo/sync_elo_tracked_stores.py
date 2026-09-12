@@ -1,7 +1,9 @@
 """Sync public.elo_tracked_stores — the RPH store_ids whose Set Championships
 should appear on the ELO section's "Upcoming SCs" tab.
 
-A store qualifies if ANY of:
+A store is EXCLUDED outright if it is in elo_scope.EXCLUDED_STORE_IDS — a
+geographic ruling that beats every rule below, and one this script also ENFORCES
+by deleting the row (see prune_excluded). Otherwise it qualifies if ANY of:
   1. HISTORY: its name matches a store in our results history (Supabase
      elo_events) AND it's in the broad region (IL/IN/WI/MI). The region guard
      drops same-name collisions (Victoria-BC "Gauntlet Games" vs our Bradley-IL
@@ -30,7 +32,19 @@ script run in the daily discover workflow on its own.
 
 The site reads the view public.elo_upcoming_scs = set_championships ⋈
 elo_tracked_stores, so adding a store_id here makes ALL its future SCs (already
-in set_championships) show up on the tab.
+in set_championships) show up on the tab. The same table also gates the Scout
+tab, whether a scouting sheet opens at all, the roster scrape and the Stores
+tab's history backfill — so a store wrongly listed here is visible in four
+places, not one.
+
+⚠ The upsert ADDS and never removes, so tightening a rule cannot take effect on
+its own: a store that qualified once stays tracked forever. That is how Good
+Games - Indianapolis (excluded as out-of-region) was still on the Scout tab
+months later (reported 2026-09-12). prune_excluded() closes it for the explicit
+ruling; drift from the inferred rules is REPORTED, not deleted — pass 2 resolves
+store_ids over the live RPH API, so a 404 or a timeout makes a perfectly good
+store look unmatched, and deleting on that would take a real shop off four
+surfaces because a network call blipped.
 
 Run AFTER discover_wu_scs.py refreshes set_championships:
     python sync_elo_tracked_stores.py
@@ -52,7 +66,7 @@ try:
 except Exception:
     pass
 
-from elo_scope import ONE_OFF_EVENT_IDS
+from elo_scope import EXCLUDED_STORE_IDS, ONE_OFF_EVENT_IDS
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
 SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
@@ -180,6 +194,51 @@ def upsert(rows: list[dict]) -> None:
         raise SystemExit(f"upsert failed [{e.code}]: {e.read().decode('utf-8','ignore')[:400]}")
 
 
+def fetch_tracked() -> list[dict]:
+    """What elo_tracked_stores holds right now."""
+    return _page("elo_tracked_stores", "store_id,store_name")
+
+
+def _delete_ids(ids: str) -> None:
+    """DELETE elo_tracked_stores rows by a PostgREST in.(…) id list."""
+    endpoint = f"{SUPABASE_URL}/rest/v1/elo_tracked_stores?store_id=in.({ids})"
+    headers = {"apikey": SERVICE_KEY, "Authorization": f"Bearer {SERVICE_KEY}",
+               "Prefer": "return=minimal"}
+    req = urllib.request.Request(endpoint, headers=headers, method="DELETE")
+    try:
+        urllib.request.urlopen(req, timeout=60).read()
+    except urllib.error.HTTPError as e:
+        raise SystemExit(f"delete failed [{e.code}]: {e.read().decode('utf-8','ignore')[:400]}")
+
+
+def prune_excluded(dry: bool) -> list[dict]:
+    """DELETE every EXCLUDED_STORE_IDS row from elo_tracked_stores.
+
+    ⚠ The upsert above only ever ADDS, so before this existed a ruling could not
+    be enforced retroactively: Good Games - Indianapolis was excluded as
+    out-of-region and still sat on the Scout tab months later, because nothing in
+    the pipeline could take a row back out. An exclusion has to be able to REMOVE.
+
+    Deliberately narrow — only the explicit list, never "whatever this run did not
+    match". Pass 2 resolves store_ids over the live RPH API, so a 404 or a timeout
+    makes a perfectly good store look unmatched, and deleting on that would drop a
+    real shop off the Upcoming SCs tab, the Scout tab, its scouting sheets and the
+    Stores tab's history because one network call blipped. Drift from the inferred
+    rules is REPORTED by main() instead.
+    """
+    doomed = [r for r in fetch_tracked() if r.get("store_id") in EXCLUDED_STORE_IDS]
+    if not doomed:
+        return []
+    ids = ",".join(str(r["store_id"]) for r in doomed)
+    for r in doomed:
+        print(f"  - {r['store_id']:>6}  {r.get('store_name') or '?'}  ← excluded, removing")
+    if dry:
+        print("  (dry run — not deleting)")
+        return doomed
+    _delete_ids(ids)
+    return doomed
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
@@ -193,7 +252,7 @@ def main() -> None:
     reason: dict[int, str] = {}
     for r in scs:
         sid = r.get("store_id")
-        if not sid:
+        if not sid or sid in EXCLUDED_STORE_IDS:
             continue
         name = r.get("store_name")
         us = r.get("country") == "US"
@@ -221,6 +280,8 @@ def main() -> None:
             if not st:
                 continue
             sid = st.get("id")
+            if sid in EXCLUDED_STORE_IDS:
+                continue
             if sid and sid not in matched and st.get("state") in REGION:
                 matched[sid] = st.get("name") or "?"
                 reason[sid] = "history-no-upcoming"
@@ -242,9 +303,28 @@ def main() -> None:
         print(f"  {sid:>6}  {r['store_name']}{flag}")
     if args.dry_run:
         print("  (dry run — not writing)")
-        return
-    upsert(rows)
-    print(f"\nupserted {len(rows)} store_ids into public.elo_tracked_stores")
+    else:
+        upsert(rows)
+        print(f"\nupserted {len(rows)} store_ids into public.elo_tracked_stores")
+
+    # An exclusion is a RULING, so it is enforced rather than merely not re-added.
+    print("\nexclusions:")
+    removed = prune_excluded(args.dry_run)
+    if not removed:
+        print(f"  none of the {len(EXCLUDED_STORE_IDS)} excluded stores is tracked")
+
+    # Drift: tracked stores no rule matched this run. REPORTED, NEVER DELETED —
+    # pass 2 asks the live RPH API, so one 404 would otherwise drop a real shop
+    # off four surfaces. If an entry here is genuinely out of scope, the fix is to
+    # add it to EXCLUDED_STORE_IDS, which the pass above then enforces.
+    gone = [r for r in fetch_tracked()
+            if r.get("store_id") not in matched
+            and r.get("store_id") not in EXCLUDED_STORE_IDS]
+    if gone:
+        print(f"\n{len(gone)} tracked store(s) matched no rule this run "
+              f"(left alone — add to EXCLUDED_STORE_IDS to remove):")
+        for r in sorted(gone, key=lambda r: r.get("store_name") or ""):
+            print(f"  ? {r['store_id']:>6}  {r.get('store_name') or '?'}")
 
 
 if __name__ == "__main__":
