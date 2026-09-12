@@ -288,6 +288,12 @@ def main() -> None:
     REPRINT_PROMOS = [
         (702677, AVP_SET, "9",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo
         (702660, AVP_SET, "10", "crd_avp_10_tigger_hunny_barbarian",  705083),  # buy-a-box promo
+        # Set Championship pair for Attack of the Vine!, both printings of
+        # AOTV #95 (base pid 702655). Participant is non-foil, the Top-8
+        # winner's copy is Holofoil — two numbers, two SKUs, same shape as the
+        # Promo Set 3 pairs (Tinker Bell #33/#34, Woody #53/#54).
+        (702655, AVP_SET, "15", "crd_avp_15_rapunzel_escaping_sc_participant", 705084),
+        (702655, AVP_SET, "16", "crd_avp_16_rapunzel_escaping_sc_champion",    705085),
         (504451, CC1_SET, "1",  "crd_cc1_1_ariel_spectacular_singer", 702517),
         (619434, CC1_SET, "2",  "crd_cc1_2_elsa_trusted_sister",      702518),
         (586172, CC1_SET, "3",  "crd_cc1_3_jasmine_royal_seafarer",   702519),
