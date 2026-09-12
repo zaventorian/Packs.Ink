@@ -37,6 +37,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calTzYmd = (iso, tz) => {", NL + "};"),
   grab("const CALENDAR_KINDS = [", NL + "];"),
   grabLine("const CALENDAR_KIND_KEYS = "),
+  grabLine("const CALENDAR_KIND_BY_KEY = "),
+  grabLine("const LORCANA_ART = "),
+  grab("const LORCANA_MARKS = {", NL + "};"),
   grab("const CALENDAR_KIND_LONG = {", NL + "};"),
   grabLine("const SET_RELEASE_LABELS = "),
   grabLine("const SET_RELEASE_PHASES = "),
@@ -53,14 +56,20 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const osmTileUrl = "),
   grabLine("const osmViewUrl = "),
   grab("const calendarSetEntries = (releaseDates) => {", NL + "};"),
+  grab("const calendarProductEntries = (products) => {", NL + "};"),
   grabLine("const _calSetKey = "),
   grab("const calendarMergeEvents = (derived, rows) => {", NL + "};"),
   grabLine("const _calKindRank = "),
-  grab("const calendarSort = (events) =>", "|| String(a.title || \"\").localeCompare(String(b.title || \"\")));"),
+  grab("const _calPhaseRank = (e) => {", NL + "};"),
+  grab("const calendarSort = (events) =>", "|| _calPhaseRank(a) - _calPhaseRank(b));"),
   grab("const calendarCombine = (curated, store) => {", NL + "};"),
   grabLine("const CAL_ART_PREF = "),
   grab("const calendarArtIndex = (sealedRows, names) => {", NL + "};"),
   grab("const calendarEventArt = (ev, artIndex) => {", NL + "};"),
+  grabLine("const CAL_SET_PHASE_ICONS = "),
+  grab("const _calSetPhase = (ev) => {", NL + "};"),
+  grabLine("const CAL_STORE_KIND_ICONS = "),
+  grab("const calendarEventIcon = (ev, artIndex) => {", NL + "};"),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -87,7 +96,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const icsEventLines = (ev, nowMs) => {", NL + "};"),
   grab("const buildIcs = (events, opts) => {", NL + "};"),
   grab("const googleCalUrl = (ev) => {", NL + "};"),
-  "export {calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,",
+  "export {calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon,",
+  " LORCANA_MARKS,",
+  " calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
@@ -97,7 +108,8 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
 ].join(NL)));
 
 const {
-  calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,
+  calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon, LORCANA_MARKS,
+  calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
   calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
@@ -786,6 +798,94 @@ ok("no kind smuggles in an emoji",
 ok("every kind icon exists in UI_ICON_PATHS",
   CALENDAR_KINDS.every(k => new RegExp("^\\s*" + k.icon + ":\\s", "m").test(src)),
   CALENDAR_KINDS.filter(k => !new RegExp("^\\s*" + k.icon + ":\\s", "m").test(src)).map(k => k.icon).join(","));
+
+// ── One icon per kind of thing that happens ─────────────────────────────────
+// The reported bug was that a Set Championship and a Tuesday league night drew
+// the same shopfront, and all three of a set's dates drew the same booster
+// pack. Both are "the icon came from the CHIP, not from the event", so what
+// these check is that no two DIFFERENT things can end up looking the same.
+const icoOf = (ev) => { const r = calendarEventIcon(ev); return `${r.icon}|${r.hue}|${r.img || ""}`; };
+
+const setPhaseIcons = ["Prerelease", "LGS release", "Retail release"]
+  .map(sub => icoOf({kind: "set", title: "Hyperia City", subtitle: sub}));
+ok("a set's three dates get three different icons",
+  new Set(setPhaseIcons).size === 3, setPhaseIcons.join(" / "));
+
+const storeIcons = ["sc", "prerelease", "other"]
+  .map(k => icoOf({kind: "store", title: "X", rph_kind: k}));
+ok("an SC, a store prerelease and a league night get three different icons",
+  new Set(storeIcons).size === 3, storeIcons.join(" / "));
+// ...but they stay ONE family, or "at a shop I follow" stops being readable
+// as a group at a glance.
+ok("all three store kinds keep the store hue",
+  new Set(["sc", "prerelease", "other"].map(k =>
+    calendarEventIcon({kind: "store", rph_kind: k}).hue)).size === 1);
+ok("an unknown rph_kind falls back to the store glyph, never to a blank",
+  calendarEventIcon({kind: "store", rph_kind: "wat"}).icon === "store");
+
+ok("a DLC and a CCQ carry different official marks",
+  calendarEventIcon({kind: "dlc"}).img === LORCANA_MARKS.challengeBadge &&
+  calendarEventIcon({kind: "ccq"}).img === LORCANA_MARKS.lorcanaHex);
+
+// ⚠ The regression this guards: every set date resolved the same booster-pack
+// photo, which sat ON TOP of the glyph and made the three phases identical
+// again however different their glyphs were.
+const artIdx = new Map([["hyperia city", "https://cdn/pack.png"]]);
+ok("a set date resolves no automatic photo at icon size",
+  calendarEventIcon({kind: "set", title: "Hyperia City", subtitle: "Prerelease",
+                     set_name: "Hyperia City"}, artIdx).img === null);
+ok("a product still resolves its own photo",
+  calendarEventIcon({kind: "product", title: "Hyperia City"}, artIdx).img === "https://cdn/pack.png");
+ok("a curated image_url still overrides everything",
+  calendarEventIcon({kind: "set", title: "Hyperia City", subtitle: "Prerelease",
+                     image_url: "https://cdn/curated.png"}, artIdx).img === "https://cdn/curated.png");
+// The phase is read out of the SUBTITLE, which is the merge key against
+// calendar_events — so a curated row that spells it differently still lands on
+// the right glyph rather than silently dropping to the category default.
+ok("the phase is matched case- and wording-insensitively",
+  calendarEventIcon({kind: "set", subtitle: "PRE-RELEASE"}).icon ===
+  calendarEventIcon({kind: "set", subtitle: "Prerelease"}).icon);
+ok("a set row with no subtitle still gets an icon",
+  !!calendarEventIcon({kind: "set", title: "Fabled"}).icon);
+
+// ⚠ Every recent Lorcana set opens its prerelease weekend on the SAME Friday the
+// shops may first sell it, so two rows share a day AND a title — and the title
+// tiebreak is then a coin flip decided by whether a phase came from the const or
+// from calendar_events. They have to read in the order they happen.
+const sameDay = calendarMergeEvents([], [
+  {id: "r", kind: "set", title: "Hyperia City", subtitle: "Retail release", starts_on: "2026-10-16"},
+  {id: "l", kind: "set", title: "Hyperia City", subtitle: "LGS release", starts_on: "2026-10-16"},
+  {id: "p", kind: "set", title: "Hyperia City", subtitle: "Prerelease", starts_on: "2026-10-16"},
+]).map(e => e.subtitle);
+ok("two of a set's dates on one day sort prerelease → LGS → retail",
+  sameDay.join(" < ") === "Prerelease < LGS release < Retail release", sameDay.join(" < "));
+
+// ── Derived product releases ────────────────────────────────────────────────
+const PRODUCTS = [
+  {title: "Illumineer's Quest: The Great Hunny Rescue", on: "2026-10-02", notes: "n"},
+  {title: "Hyperia City Beast Gift Box", on: "2026-11-13"},
+  {title: "Broken", on: "soon"},
+];
+const prods = calendarProductEntries(PRODUCTS);
+ok("a product with an unparseable date is skipped", prods.length === 2, prods.length);
+ok("derived products are kind=product and flagged derived",
+  prods.every(p => p.kind === "product" && p.derived === true));
+ok("a derived product keeps its notes", prods[0].notes === "n");
+ok("product entries tolerate null", calendarProductEntries(null).length === 0);
+
+// ⚠ ASYMMETRIC, and both halves have a failure mode. A curated row must
+// SUPERSEDE the const's copy (or fixing a date in the table leaves the old one
+// sitting beside it), while two curated rows sharing a name must both survive
+// (or two years of the same annual gift set collapse into one).
+const supersede = calendarMergeEvents(prods, [
+  {id: "t", kind: "product", title: "Hyperia City Beast Gift Box", starts_on: "2026-12-04"},
+]);
+ok("a curated product supersedes the derived one of the same name",
+  supersede.filter(e => /Beast Gift Box/.test(e.title)).length === 1, supersede.length);
+ok("and the surviving one is the curated row",
+  supersede.find(e => /Beast Gift Box/.test(e.title)).starts_on === "2026-12-04");
+ok("a derived product with no curated twin survives",
+  supersede.some(e => /Hunny Rescue/.test(e.title)));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

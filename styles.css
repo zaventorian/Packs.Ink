@@ -9241,6 +9241,74 @@ body:has(.deck-quickadd) .offline-pill{
   max-height:88vh;overflow-y:auto;box-shadow:0 20px 50px rgba(0,0,0,0.4);}
 .cal-modal-close{position:absolute;top:max(8px,env(safe-area-inset-top));right:10px;
   border:none;background:none;font-size:22px;line-height:1;color:var(--text-muted);cursor:pointer;}
+/* ── Official set logos ─────────────────────────────────────────────────────
+   Baked from Ravensburger's brand bundle by scripts/bake_brand_assets.py. Sized
+   by HEIGHT at every call site, never width: the thirteen wordmarks run from
+   1.2:1 (Reign of Jafar) to 2.7:1 (Winterspell), so a shared width makes one a
+   sliver and the other a slab. Same lesson as pinWidthOf on the pin board.
+
+   ⚠ .set-logo--mono is The First Chapter and only ever will be. It is the one
+   set with no colour logo in the bundle — black line art in every variant — so
+   it ships as a plain black SVG. Without this rule it renders black on black on
+   all three dark themes, which is not a broken image and not an error, just an
+   absence nobody can explain.
+
+   Inverting the <img> is the only lever available: an <img src="x.svg"> cannot
+   inherit currentColor from the page (it resolves against the SVG document's
+   own initial colour, which is UA-dependent), which is exactly why the bake
+   leaves this one black instead of recolouring it like the glyphs below.
+
+   Keyed on data-mode, not on each dark theme's name, so a seventh theme gets it
+   for free — the house rule for every dark override in this file. */
+.set-logo{display:block;height:100%;width:auto;object-fit:contain;flex:0 0 auto;}
+html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
+
+/* A set's name as its official logo, with the text still in the DOM for screen
+   readers and ctrl-F. `.has-logo` is set only when a logo actually resolved, so
+   a promo set (no logo in the bundle) falls back to plain type with no gap and
+   no empty box — the fallback is the DEFAULT here, not an error path.
+
+   Height, never width: the thirteen wordmarks run 1.2:1 to 2.7:1, so a fixed
+   width makes Winterspell a letterbox and Reign of Jafar a tower. The
+   clip-path hide is the standard visually-hidden recipe — `display:none` and
+   `visibility:hidden` both take the text away from the screen reader too. */
+.set-heading{display:flex;align-items:center;min-width:0;}
+.set-heading.has-logo{height:30px;}
+.set-heading.has-logo .set-heading-text{position:absolute;width:1px;height:1px;
+  overflow:hidden;clip-path:inset(50%);white-space:nowrap;}
+.set-heading:not(.has-logo) .set-heading-text{overflow:hidden;text-overflow:ellipsis;
+  white-space:nowrap;}
+/* The promo stamp is a mark, not a name, so it sits BEFORE the text rather than
+   replacing it — and it inherits the heading's colour, which is the whole point
+   of shipping these as masks instead of <img>. */
+.set-heading-stamp{margin-right:7px;opacity:0.85;}
+.setdet-title-heading.has-logo{height:38px;}
+@media (max-width:640px){
+  .setdet-title-heading.has-logo{height:30px;}
+}
+
+/* Single-colour official glyphs (promo stamps, card-face icons), painted as a
+   MASK so they take `currentColor` from whatever they sit in. An <img> cannot:
+   currentColor inside an img-loaded SVG resolves against the SVG document, not
+   the page. -webkit- first for older WebKit, which still needs the prefix. */
+.lorcana-glyph{display:inline-block;flex:0 0 auto;vertical-align:-0.18em;
+  background-color:currentColor;
+  -webkit-mask:var(--lg-src) center/contain no-repeat;
+  mask:var(--lg-src) center/contain no-repeat;}
+/* The stat glyphs are the card's own strength / willpower / lore marks. They
+   label the filter group, so they take the heading's muted colour and sit a
+   little brighter than the type beside them — the glyph is the recognisable
+   half of the label for anyone who knows the card face. */
+.drawer-section-head:has(.drawer-head-glyph){display:flex;align-items:center;gap:5px;}
+.drawer-head-glyph{vertical-align:baseline;}
+
+/* The set logo / product photo at the head of a detail modal. Height-capped,
+   width auto: these are wordmarks of wildly different proportions (Winterspell
+   is 2.7:1, Reign of Jafar 1.5:1) and pinning the WIDTH would make one a
+   letterbox and the other a tower. Left-aligned with the title under it rather
+   than centred, so the block reads as a heading rather than as a hero image. */
+.cal-modal-art{display:block;height:56px;width:auto;max-width:min(100%,300px);
+  object-fit:contain;object-position:left center;margin:0 24px 10px 0;}
 .cal-modal-kind{display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700;
   text-transform:uppercase;letter-spacing:0.08em;color:var(--text-muted);}
 .cal-modal-title{font-family:'Cinzel',serif;font-size:17px;font-weight:700;color:var(--accent);

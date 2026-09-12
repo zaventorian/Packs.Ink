@@ -459,6 +459,78 @@ the Graded collection in Index.html), with three views: **Pin board · Counter b
 - The Sealed tab carries a one-line pointer to the new tab, for everyone who remembers the pins
   living there.
 
+## Official Lorcana brand art (2026-09-12)
+
+Ravensburger distributes a **"Complete Bundle"** of brand assets — 890 files, 313 MB: all 13 set
+logos, 21 ink badges (singles AND the 15 dual pairs), 9 rarity icons, the promo stamps printed on
+promo cards, the card-face glyphs, the Challenge badge, the card back, playmat and social borders,
+punch-out tokens, and per-set background textures. **They update it as new sets come out.** Zaven
+holds the link; ask him for it.
+
+**`python scripts/bake_brand_assets.py --bundle "<...>/Complete Bundle"`** is the whole pipeline,
+bundle → `Logos/lorcana/` (44 files, 728 KB). Guarded by `node scripts/test_brand_art.mjs`.
+
+- **It is an explicit MANIFEST, not a directory sweep** — same rule as `build_dist.mjs`.
+  Ravensburger renames files between drops ("Set6_Colour" one set, "AzuriteSea-Color" the next), so
+  a sweep would silently ship whatever it found under whatever name it found it under. `--check`
+  writes nothing and NAMES anything that moved, which is exactly the report you want the day a new
+  bundle lands.
+- **`--contact` writes a light/dark sheet. Look at it.** Same lesson as `cut_collectible_bg.py`: a
+  logo with an empty alpha channel bakes to a 1px file and a "white" glyph that was actually black
+  is invisible on one theme, and neither produces an error. It is what caught the CCQ mark being
+  white-on-transparent (see below).
+- **Format is a decision, not a convention.** WebP for the big airbrushed art — set logos are
+  1.3 MB as PNGs and 350 KB as WebP, and their SVGs are 300 KB–1.8 MB each because Illustrator
+  exports every gradient mesh as thousands of paths. PNG for small multi-colour icons. SVG,
+  rewritten to `currentColor`, for single-colour glyphs. NOT palette-quantized (that is right for
+  `cut_collectible_bg.py`'s photos and bands an airbrushed wordmark visibly).
+- **⚠ A single-colour SVG must be rendered as a CSS MASK (`LorcanaGlyph`), never an `<img>`.**
+  Inside an `<img>`, `currentColor` does not reach the file — it resolves against the SVG
+  document's own initial `color`, which is UA-dependent and flips with the browser's dark
+  preference. A mask ignores colour and paints the shape's alpha in `background`, which is what
+  makes one file work on all seven themes. (This is NOT the `mask-image` pitfall in the CSS notes —
+  that one is about a mask on a CONTAINER, which softens child `<img>`s. This is a leaf span.)
+- **⚠ SET LOGOS ARE WORDMARKS**, legible from ~40px of height and an unreadable smudge at 13px. They
+  go in headers, modals and section titles; a list row gets a glyph. `SetHeading` renders the logo
+  in place of the set NAME and keeps the name in the DOM, visually hidden — a logo is a picture of a
+  word, and dropping the text takes the set out of reach of a screen reader and of ctrl-F.
+- **⚠ The First Chapter is black line art and always will be** — the bundle has no colour version in
+  any variant. It ships as an SVG so `.set-logo--mono` can invert it on the dark themes, and it is
+  copied VERBATIM rather than recoloured, for the `currentColor`-in-an-`<img>` reason above.
+  Its viewBox is TIGHTENED at bake time using the sibling PNG's alpha bbox: every set logo is
+  exported on a square canvas, so a wide wordmark occupies a 927x263 band inside 1000x1000 and
+  renders a third the size of the twelve trimmed WebPs beside it. `trim_alpha` handles that for
+  rasters; an SVG has no alpha to trim, so the number comes from the PNG of the same artwork
+  (verified against the browser's own `getBBox()` to a tenth of a unit).
+- **`lorcanaSetArt(name)` returns null for any set with no logo** — every promo set, Extras, and the
+  newest set for the few weeks between its release and the next bundle drop. That is the normal
+  steady state, so every call site renders without one.
+- **Dual-ink PAIRS are the gap the bundle filled.** A dual-ink card used to render two single
+  shields side by side (twice the width in the narrowest column on the site) or a flat slate pie
+  slice. `inkShieldSrc(inks, ink)` is the one accessor; `inkPairIcon` **sorts the two names before
+  building the filename**, because Lorcast publishes `inks` in the card's PRINT order — the live
+  catalog holds both `Ruby/Sapphire` (18 rows) and `Sapphire/Ruby` (2 rows), 16 orderings over 15
+  files. Getting this wrong 404s about half of all dual-ink cards, which reads as a CDN hiccup.
+  The six SINGLE shields stay at `Logos/inks/*.png` — re-baking them would move their box from
+  96x96 to 96x110 and reflow every ink shield on the site to no end.
+- **A per-CARD ink slot gets the pair badge; a per-DECK ink list does not.** A deck's two inks come
+  from different cards and each shield is independently clickable as a filter.
+- **`PROMO_STAMPS` is keyed by SET name**, and only for stamps that map to a set in `SET_ORDER`. The
+  bundle also carries GenCon, Disney100, League, Cruise, Film, Publishing and Magical Places marks;
+  baking them would ship icons nothing can render. A promo set with no stamp (EPCOT Festival,
+  Curator's Collection) falls back to the generic Promo rarity icon.
+- **The rarity icons already shipped from an earlier copy of this bundle** — 6 of the 8 are
+  byte-identical to `Rarity Icons/*-Color.svg`. `uncommon` and `legendary` are the Outlined
+  variants, deliberately.
+- **Deliberately NOT baked**: the punch-out Tokens (gold-on-transparent with a red die-cut line —
+  print assets, not icons), the Dividers (binder inserts), the playmat and social borders, and the
+  Background Images (only 8 of 13 sets, several with a Ravensburger logo baked in — incomplete
+  coverage makes them unusable as a systematic per-set treatment).
+- **The update reminder is a `brand-assets` scheduled review** in `scripts/catalog_watch.json`,
+  due 2026-11-07 and every 90 days after. Nothing can watch for a new bundle: there is no feed, no
+  version number and no notification, and a missing logo is invisible because the fallback is
+  correct behaviour.
+
 ## Icons — there are no emoji in the UI (2026-08-24)
 
 **`uiIcon(key, size)`** (Index.html, right below `NAV_ICONS`) is the one accessor for every
@@ -3540,51 +3612,90 @@ Guarded by `node scripts/test_calendar.mjs` (194 checks).
   plain **"Near me"** control in the page header and a fourth tool button on the
   home panel.
 
-### What each kind LOOKS like — a photo where one exists, a glyph where none should
+### What each kind LOOKS like — one icon per kind of THING, not per chip
 
-A coloured dot told you which filter an event came from, which you already knew
-from the chips. `CalendarKindDot` draws a kind glyph (`CALENDAR_KINDS[].icon`)
-and, **where real art exists, an `<img>` over the top of it** — the glyph is the
-layer underneath, so a 404 or a blocked host degrades to the drawn icon rather
-than to a gap. `hideBrokenImg` on `onError` is what makes that true.
+The five `CALENDAR_KINDS` are FILTER categories, and two of them cover several
+genuinely different events. Drawing one glyph per category is what put a Set
+Championship and a Tuesday league night behind the same little shopfront, and all
+three of a set's dates behind the same booster pack (Zaven, 2026-09-12). So the
+icon is resolved from the EVENT — `calendarEventIcon(ev, artIndex)` returns
+`{icon, hue, img}` and `CalendarKindDot` draws it, glyph underneath and image over
+the top, so a 404 or a blocked host degrades to the drawn icon rather than a gap.
 
-- **⚠ Only `set` and `product` events resolve art, and that is a licensing line,
-  not an oversight.** A booster pack is a product photo we already show on every
-  Sealed surface; the Disney Lorcana Challenge, Championship and qualifier marks
-  are Disney/Ravensburger trademarks, and this site's own footer disclaims
-  affiliation — so DLC, CCQ and store events get distinctive drawn glyphs
-  (`trophy`, `medal`, `store`) in the same Tabler/Lucide vocabulary as every
-  other icon on the site. Don't "finish the set" by pasting in the official logos.
-- **A set's art IS its Booster Pack photo.** `CAL_ART_PREF` ranks
-  `booster pack` > `sleeved booster pack` > `illumineer's trove` > `booster box`,
-  because the plain pack is the one product every set has and the one whose photo
-  is the set's own artwork. **A `Case` is skipped outright** — a distributor
-  carton is a photo of cardboard, and its name contains "Booster Box", so without
-  the skip it would win on some sets.
-- **`calendarArtIndex(sealedRows, names)` is keyed on the lowercased set or
-  product name**, built once per view with `useMemo` from `sealedPrices` (already
-  in App for the Screener's sealed mode — no new fetch). `calendarEventArt` reads
-  `set_name` before `title` on a set event, so "Hyperia City Prerelease" finds
-  Hyperia City.
-- **A curated `image_url` always wins** (migration 145, `calendar_events`). It is
-  the only way to correct a wrong automatic match, and a wrong picture is worse
-  than no picture — so it is checked before the kind test, which also makes it
-  the way to give a DLC or a CCQ its own art by hand if we ever license one. The
-  admin editor has an "Image URL (optional)" field for it.
+| event | icon |
+|---|---|
+| set · Prerelease / LGS / Retail | `sparkle` / `box` / `cart`, accent gold |
+| product | `gift` + the product's own photo |
+| DLC | the official **Challenge badge** (a shield) |
+| CCQ | the official **Lorcana hex sigil** (a hexagon) |
+| store · sc / prerelease / other | `trophy` / `sparkle` / `store`, all in the store green |
+
+- **⚠ A set date resolves NO automatic photo any more.** All three phases matched
+  the same booster pack, which sat ON TOP of the glyph and made them identical
+  again however different the glyphs were — and a pack photo in a 13px box is a
+  brown smear. `CAL_ART_PREF` / `calendarArtIndex` still exist and still serve
+  PRODUCT rows, where there is one product per row and the photo IS the thing.
+- **The set's own LOGO moved to the detail modal**, which has 56px of height to
+  read a wordmark in. See "Official Lorcana brand art".
+- **This supersedes the old note here** reasoning that Challenge and championship
+  marks could never appear because they are Disney's and Ravensburger's. Those
+  marks are in Ravensburger's own published brand bundle. The disclaimer is about
+  affiliation; using a brand's published assets to label that brand's own events
+  is not a claim of affiliation.
+- **⚠ The DLC/CCQ pair is a SHIELD against a HEXAGON, and that is the point.** The
+  obvious pairing — the filled Challenge badge against the bundle's outline
+  version of the same badge — was baked and thrown away twice: two shields
+  differing only by a gold frame is unreadable at 13px, which is the exact
+  complaint this work exists to fix, AND the outline version is white on
+  transparency, invisible on all four light themes. The contact sheet caught the
+  second one.
+- **A curated `image_url` still wins over everything** (migration 145). It is the
+  only way to correct a wrong automatic match, and a wrong picture is worse than
+  no picture.
   - **⚠ Its host must be in the CSP `img-src` in BOTH copies of the policy in
     `_headers`**, or the image is blocked with no visible error — the glyph shows
     and everything looks deliberate. `tcgplayer-cdn.tcgplayer.com` is already
-    allowed, which is why the automatic matches work.
+    allowed, which is why the automatic product matches work.
 - **`CAL_COL_LADDER` = `[CAL_FULL_COLS, CAL_GEO_COLS, CAL_BASE_COLS]`.** The
   fetch walks down it on 42703 so a schema missing `image_url` cannot also cost
   the geo columns — the failure mode a single "with columns / without columns"
   retry has.
+- **`_calPhaseRank` breaks the same-day tie.** Every recent set opens its
+  prerelease weekend on the same Friday shops may first sell it, so two rows share
+  a day AND a title, and the title tiebreak was a coin flip decided by whether a
+  phase came from the const or from `calendar_events`.
 - Sizes are set per surface in CSS, not per call site: 13px in a list row and a
   month chip, 18px in the home panel, 22px in the detail modal.
 
-Guarded by `node scripts/test_calendar.mjs` — the preference order, the `Case`
-skip, the curated override winning, and (the one that matters) that a DLC, CCQ or
-store event never borrows a set's pack art just because its title names the set.
+Guarded by `node scripts/test_calendar.mjs`: that no two different things share a
+glyph AND a hue, that the store kinds stay one family, that a set date resolves no
+photo, and that a curated override still wins.
+
+### Set 14, and products that are not a set
+
+- **`SET_RELEASE_DATES` gained Hyperia City** (`lgs 2026-10-16`, `retail
+  2026-10-23`, sourced from lorcanaplayer.com 2026-09-12 — never inferred; the gap
+  has moved before, Archazia's Island ran two weeks where every set since has run
+  one). This is what makes the retail release appear at all: it was missing
+  because the const stopped at Attack of the Vine!, not because of a bug.
+  **Deliberately NOT added to `MAINLINE_SETS`** — that drives EV, both sims,
+  Playset Cost and the home "newest set", all of which would render an empty set.
+  Prestaging is its own decision with its own scheduled review.
+- **`PRODUCT_RELEASE_DATES`** derives `kind:'product'` rows the way
+  `SET_RELEASE_DATES` derives set rows: quests, gift boxes and starter sets, which
+  no feed we read announces. A const rather than seeded table rows, so a date lands
+  without a migration. Use the PUBLISHER's US street date — a EU webshop's
+  "release" is its own ship date and runs a day or two off.
+- **⚠ The product merge is ASYMMETRIC, and both halves have a failure mode.** A
+  curated row SUPERSEDES a derived one of the same name (or fixing a date in the
+  table leaves the const's copy sitting beside it), while two CURATED rows sharing
+  a name both survive (or two years of the same annual "Gift Set" collapse into
+  one). The derived list is a fallback for what the table has not been told yet,
+  not a peer of it.
+- `supabase/146_hyperia_city_dates.sql` (STAGED) only rewrites 141's note on the
+  prerelease row, which now says the LGS and retail dates are unpublished. The
+  dates themselves stay in `SET_RELEASE_DATES` — putting them in the table too
+  would fork one fact into two stores.
 
 ### Hiding one event
 
@@ -3949,6 +4060,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `144_scout_off_roster.sql` (and `143_calendar_geo.sql` with `143_scout_team.sql`).
   Numbering is first-come across sessions and nothing enforces it, so say the
   FULL FILENAME when asking for one of these to be run.
+- **`supabase/146_hyperia_city_dates.sql`** — STAGED, not applied. One UPDATE, correcting 141's
+  note on the Hyperia City prerelease row, which says its LGS and retail dates are unpublished —
+  they now are, and the calendar shows them two lines below it. Seeds no dates (they live in
+  `SET_RELEASE_DATES`); safe before or after the client ships, and a no-op where 141 never landed.
 - **`supabase/145_calendar_image.sql`** — STAGED, not applied. One nullable
   `calendar_events.image_url`, the per-event art override. Safe to ship the
   client first: `CAL_COL_LADDER` drops the column on 42703 and every event falls

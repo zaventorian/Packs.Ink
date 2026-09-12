@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=396">
+<link rel="stylesheet" href="styles.css?v=397">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1863,6 +1863,157 @@ const RARITY_ICONS = {
   "Iconic":     "Logos/rarity/iconic.svg",
   "Promo":      "Logos/rarity/promo.svg",
 };
+// ── Official Lorcana brand art ──────────────────────────────────────────────
+// Everything under Logos/lorcana/ is baked out of Ravensburger's brand bundle
+// by `python scripts/bake_brand_assets.py --bundle "<Complete Bundle>"`, which
+// carries the full manifest and the reasoning for each format. Nothing here is
+// hand-placed, so re-running that script after a new bundle drop is the whole
+// update. Guarded by `node scripts/test_brand_art.mjs`, which checks these maps
+// against the files on disk in BOTH directions — a typo'd path and an orphaned
+// asset are equally invisible otherwise.
+const LORCANA_ART = "Logos/lorcana/";
+
+// ⚠ SET LOGOS ARE WORDMARKS. They are legible from about 40px of height and are
+// an unreadable smudge in a 13px list row, so they belong in headers, modals and
+// section titles — never as a row icon. `calChipLabel` and CalendarKindDot exist
+// precisely because a month cell cannot show one.
+//
+// The First Chapter is the odd one out and always will be: the bundle ships it
+// as black line art in every variant, with no colour version anywhere, so it is
+// an SVG whose fills were rewritten to `currentColor`. That is the only reason
+// `mono` exists — it tells a call site to colour the thing rather than let it
+// render black-on-black on Velvet.
+const LORCANA_SET_ART = {
+  "The First Chapter":     {src: "sets/the-first-chapter.svg", mono: true},
+  "Rise of the Floodborn": {src: "sets/rise-of-the-floodborn.webp"},
+  "Into the Inklands":     {src: "sets/into-the-inklands.webp"},
+  "Ursula's Return":       {src: "sets/ursulas-return.webp"},
+  "Shimmering Skies":      {src: "sets/shimmering-skies.webp"},
+  "Azurite Sea":           {src: "sets/azurite-sea.webp"},
+  "Archazia's Island":     {src: "sets/archazias-island.webp"},
+  "Reign of Jafar":        {src: "sets/reign-of-jafar.webp"},
+  "Fabled":                {src: "sets/fabled.webp"},
+  "Whispers in the Well":  {src: "sets/whispers-in-the-well.webp"},
+  "Winterspell":           {src: "sets/winterspell.webp"},
+  "Wilds Unknown":         {src: "sets/wilds-unknown.webp"},
+  "Attack of the Vine!":   {src: "sets/attack-of-the-vine.webp"},
+};
+// Returns {src, mono} or null. Null for every promo set, Extras, and any set
+// released after the last bundle drop — which is the normal steady state for a
+// few weeks after each new set, so every call site has to render without one.
+const lorcanaSetArt = (setName) => {
+  const hit = LORCANA_SET_ART[setName];
+  return hit ? {src: LORCANA_ART + hit.src, mono: !!hit.mono} : null;
+};
+
+// A set logo, sized by its container's height. Renders nothing at all when the
+// set has no logo yet, so a caller can drop it in beside a text title and let
+// the title carry the meaning on its own.
+const SetLogo = ({set, klass, title}) => {
+  const art = lorcanaSetArt(set);
+  if(!art) return null;
+  // The onError is written out rather than reusing hideBrokenImg, which is
+  // declared ~11k lines below this point. It would in fact resolve by the time
+  // anything renders, but a reader here cannot tell that without going to look.
+  return html`<img class=${"set-logo" + (art.mono ? " set-logo--mono" : "") + (klass ? " " + klass : "")}
+    src=${art.src} alt="" aria-hidden="true" title=${title || set} loading="lazy"
+    onError=${e => { e.currentTarget.style.visibility = "hidden"; }}/>`;
+};
+
+// A set's NAME, rendered as its logo where one exists and as type where it does
+// not — the promo sets, Extras, and every set for the few weeks between its
+// release and the next brand-bundle drop.
+//
+// ⚠ The name stays in the DOM either way, visually hidden behind the logo. A
+// logo is a picture of a word: dropping the text takes the set out of reach of
+// a screen reader, of ctrl-F, and of every "why can I not find Fabled on this
+// page" that follows. The <img> is aria-hidden precisely so the two are not
+// announced twice.
+const SetHeading = ({set, klass, textClass}) => {
+  const art = lorcanaSetArt(set);
+  // A promo set has no wordmark in the bundle — it has the STAMP printed on its
+  // cards, which is a small mark rather than a name, so it sits beside the text
+  // instead of replacing it. That is also why this is not tried when a logo
+  // exists: a booster set's stamp is the same generic mark on every card.
+  const stamp = art ? null : PROMO_STAMPS[set];
+  // A <span>, not a <div>: one call site is inside an <h2>, whose content model
+  // is phrasing content only.
+  return html`<span class=${"set-heading" + (art ? " has-logo" : "") + (klass ? " " + klass : "")}>
+    <${SetLogo} set=${set}/>
+    ${stamp && html`<${LorcanaGlyph} src=${stamp} size=${15} klass="set-heading-stamp"/>`}
+    <span class=${"set-heading-text" + (textClass ? " " + textClass : "")}>${set}</span>
+  </span>`;
+};
+
+// ⚠ Dual-ink PAIRS only — the six single shields live in INK_ICONS above and
+// come from the same bundle. The key is the two ink names sorted A-Z and joined
+// with "-", because Lorcast publishes `inks` in the card's own print order
+// ("Sapphire","Amber") and there is exactly one icon per unordered pair.
+const inkPairIcon = (inks) => {
+  if(!Array.isArray(inks) || inks.length !== 2) return null;
+  const [a, b] = inks.map(s => String(s || "").toLowerCase()).sort();
+  if(!a || !b || a === b) return null;
+  return `${LORCANA_ART}inks/${a}-${b}.png`;
+};
+// One shield for a card's ink, whichever it is: the official pair badge for a
+// dual, the single shield otherwise. Returns null rather than a placeholder —
+// a card with no ink (an Item printed colourless) should show nothing.
+const inkShieldSrc = (inks, ink) => {
+  const list = (Array.isArray(inks) && inks.length) ? inks : (ink ? [ink] : []);
+  if(list.length >= 2) return inkPairIcon(list.slice(0, 2)) || INK_ICONS[list[0]] || null;
+  return INK_ICONS[list[0]] || null;
+};
+
+// The stamp actually PRINTED on a promo card, keyed by the set the site files it
+// under. These are single-fill SVGs rewritten to currentColor, so one file works
+// on all seven themes. A promo set with no stamp in the bundle (EPCOT Festival,
+// Curator's Collection) simply falls back to the generic Promo rarity icon.
+const PROMO_STAMPS = {
+  "Promo Set 1":                  LORCANA_ART + "promo/promo-set-1.svg",
+  "Promo Set 2":                  LORCANA_ART + "promo/promo-set-2.svg",
+  "Promo Set 3":                  LORCANA_ART + "promo/promo-set-3.svg",
+  "Lorcana Challenge Promo (C1)": LORCANA_ART + "promo/challenge.svg",
+  "Lorcana Challenge Promo (C2)": LORCANA_ART + "promo/challenge.svg",
+  "D23 Collection":               LORCANA_ART + "promo/d23.svg",
+};
+
+// ⚠ A single-colour SVG must be rendered as a CSS MASK, never as an <img>.
+// Inside an <img>, `currentColor` does not reach the file — it resolves against
+// the SVG document's own initial `color`, which is UA-dependent — so the glyph
+// comes out some browser's idea of black and cannot be themed. A mask ignores
+// colour entirely and paints the shape's alpha in `background`, which is what
+// makes one file work on all seven themes.
+//
+// (This is NOT the mask-image pitfall documented in CLAUDE.md. That one is about
+// a mask on a CONTAINER, which forces offscreen compositing and softens child
+// <img>s. This is a leaf span with no children — the standard icon technique.)
+const LorcanaGlyph = ({src, size, klass, title}) => html`<span
+  class=${"lorcana-glyph" + (klass ? " " + klass : "")} role=${title ? "img" : null}
+  aria-hidden=${title ? null : "true"} aria-label=${title || null} title=${title || null}
+  style=${{"--lg-src": `url("${src}")`, width: (size || 14) + "px", height: (size || 14) + "px"}}/>`;
+
+// Card-face glyphs, all currentColor. `lore` is the official four-pointed pip;
+// `inkable`/`uninkable` the hexes printed top-left of every card.
+const LORCANA_CARD_GLYPHS = {
+  lore:      LORCANA_ART + "card/lore.svg",
+  loreBuff:  LORCANA_ART + "card/lore-buff.svg",
+  inkable:   LORCANA_ART + "card/inkable.svg",
+  uninkable: LORCANA_ART + "card/uninkable.svg",
+  strength:  LORCANA_ART + "card/strength.svg",
+  willpower: LORCANA_ART + "card/willpower.svg",
+  moveCost:  LORCANA_ART + "card/move-cost.svg",
+  exert:     LORCANA_ART + "card/exert.svg",
+};
+// Full-colour marks. `challengeBadge` is the Disney Lorcana Challenge shield and
+// `lorcanaHex` the game's own sigil — the calendar uses them for a Challenge and
+// a Challenge Championship Qualifier respectively, where a shield against a
+// hexagon is the only pairing that stays readable at 13px.
+const LORCANA_MARKS = {
+  challengeBadge: LORCANA_ART + "marks/challenge-badge.png",
+  lorcanaHex:     LORCANA_ART + "marks/lorcana-hex.png",
+  cardBack:       LORCANA_ART + "marks/card-back.webp",
+};
+
 // Inline helper: rarity icon + text, used wherever we previously rendered
 // rarity as bare text (card-row metadata, graded picker, etc.). The icon
 // gracefully no-ops when the file is missing.
@@ -2147,17 +2298,25 @@ const calTzYmd = (iso, tz) => {
 };
 
 // ── What an event LOOKS like ────────────────────────────────────────────────
-// A coloured dot says which filter something came from, not what it is. Where
-// real art exists we show it: a set release and a product drop both resolve a
-// photo out of the sealed catalog — and for a set, the BOOSTER PACK photo is the
-// set's own art, which is the closest thing to a set logo we are entitled to
-// show. Those are TCGplayer catalog photos the site already displays on /gear.
+// A coloured dot says which filter something came from, not what it is — and a
+// PHOTO, it turns out, is barely better at 13px. Shipping one taught two things
+// at once: every one of a set's three dates showed the identical booster-pack
+// thumbnail, so prerelease, LGS release and retail release were indistinguishable
+// from each other; and a pack photo scaled into a 13px box is a brown smear.
 //
-// ⚠ Everything else gets a DRAWN glyph, deliberately. The Disney Lorcana
-// Challenge and championship marks are Disney's and Ravensburger's, and the
-// site's footer disclaims that affiliation — shipping their event logos is the
-// one thing that would make the disclaimer untrue. A curated `image_url`
-// (migration 145) is the override for anything we ARE entitled to show.
+// So the ICON is a glyph that says which KIND of thing this is (see
+// calendarEventIcon), and the photo has moved to where there is room to read
+// it: the detail modal, which shows the set's own official LOGO for a set date
+// and the product photo for a product drop.
+//
+// This supersedes an earlier note here reasoning that Challenge and
+// championship marks could never appear because they are Disney's and
+// Ravensburger's. Those marks are in Ravensburger's own brand bundle, published
+// for exactly this — see LORCANA_MARKS. The site's disclaimer is about
+// affiliation, and using a brand's published assets to label that brand's own
+// events is not a claim of affiliation.
+//
+// A curated `image_url` (migration 145) still overrides everything below.
 //
 // Preference order within a set: the plain Booster Pack first (every set has
 // one, and it is the pack art), then a Trove, then a Box. A "Case" is a
@@ -2211,6 +2370,57 @@ const CALENDAR_KIND_LONG = {
   dlc: "Disney Lorcana Challenge — the official championship weekends, and the Continental & World Championships",
   ccq: "Challenge Championship Qualifier — how you earn an invite to a Challenge",
   store: "Events at the stores you follow, and anything you pinned",
+};
+
+// ── One icon per kind of thing that happens ─────────────────────────────────
+// The five CALENDAR_KINDS are FILTER categories, not event types, and two of
+// them cover several genuinely different events. Drawing one glyph per category
+// is what put a Set Championship and a Tuesday league night behind the same
+// little shopfront, and all three of a set's dates behind the same booster pack.
+//
+// So the icon is resolved from the event, not from its chip. What separates
+// them, in order of how much it matters:
+//   · a set's PHASE — prerelease is a thing you play, LGS is the day you can
+//     buy it, retail is the day everyone else can. Three shapes.
+//   · a store event's RPH KIND (`sc` / `prerelease` / `other`) — a championship,
+//     a prerelease, or a league night. Three shapes, all in the store hue, so
+//     they still read as one family: "at a shop I follow".
+//   · a Challenge vs a Qualifier — a SHIELD against a HEXAGON, using
+//     Ravensburger's own marks. Two navy shields differing by a gold frame,
+//     which is the obvious pairing, is unreadable at this size.
+//
+// Returns {icon, hue, img}. `img` is a real picture to lay over the glyph (the
+// glyph stays underneath, so a blocked or 404'd file degrades to a drawn icon
+// rather than a hole — same contract as ProductPhoto and /gear).
+const CAL_SET_PHASE_ICONS = {prerelease: "sparkle", lgs: "box", retail: "cart"};
+const _calSetPhase = (ev) => {
+  const s = String((ev && ev.subtitle) || "").toLowerCase();
+  if(s.includes("prerelease") || s.includes("pre-release")) return "prerelease";
+  if(s.includes("retail")) return "retail";
+  if(s.includes("lgs") || s.includes("game store")) return "lgs";
+  return null;
+};
+const CAL_STORE_KIND_ICONS = {sc: "trophy", prerelease: "sparkle", other: "store"};
+const calendarEventIcon = (ev, artIndex) => {
+  const k = CALENDAR_KIND_BY_KEY.get(ev && ev.kind);
+  let icon = (k && k.icon) || "calendar";
+  const hue = (k && k.hue) || "var(--muted)";
+  if(ev){
+    if(ev.kind === "set"){
+      icon = CAL_SET_PHASE_ICONS[_calSetPhase(ev)] || icon;
+    } else if(ev.kind === "store"){
+      icon = CAL_STORE_KIND_ICONS[ev.rph_kind] || CAL_STORE_KIND_ICONS.other;
+    }
+  }
+  // ⚠ A set date resolves NO automatic photo any more — the three phases share
+  // one booster pack and it made them identical. A product still does: a gift
+  // box IS its photo, and there is one product per row. A curated image_url
+  // overrides either way.
+  const img = (ev && (ev.image_url
+    || (ev.kind === "product" && calendarEventArt(ev, artIndex)))) || null;
+  const mark = ev && (ev.kind === "dlc" ? LORCANA_MARKS.challengeBadge
+             : ev.kind === "ccq" ? LORCANA_MARKS.lorcanaHex : null);
+  return {icon, hue, img: img || mark};
 };
 
 // The three dates a set has. The KEYS are internal; the VALUES are the merge
@@ -2350,18 +2560,53 @@ const calendarSetEntries = (releaseDates) => {
   return out;
 };
 
+// PRODUCT_RELEASE_DATES expanded the same way. Separate from the set entries
+// because a product has one date, not three phases — a gift box is out or it
+// isn't.
+const calendarProductEntries = (products) => {
+  const out = [];
+  for(const p of products || []){
+    const day = CAL_D(p && p.on);
+    if(!calYmdParts(day)) continue;
+    out.push({
+      id: `product:${p.title}`,
+      kind: "product",
+      title: p.title,
+      subtitle: p.subtitle || "",
+      starts_on: day,
+      notes: p.notes || null,
+      derived: true,
+    });
+  }
+  return out;
+};
+
 // Table rows override derived set rows on (set_name, subtitle) so a slipped date
 // is a one-row edit rather than a deploy.
 //
-// ⚠ Only kind='set' rows participate. Keying every kind by title would silently
-// swallow two genuinely different events that happen to share a name — two
-// stores both running a "Lorcana 2K CCQ" is the ordinary case, not the odd one,
-// and losing one of them would look like the scan had missed it.
+// ⚠ Only kind='set' rows are keyed like this. Keying every kind by title would
+// silently swallow two genuinely different events that happen to share a name —
+// two stores both running a "Lorcana 2K CCQ" is the ordinary case, not the odd
+// one, and losing one of them would look like the scan had missed it.
+//
+// Products are the in-between case and get an ASYMMETRIC rule: a curated row
+// SUPERSEDES a derived one of the same name, but two curated rows of the same
+// name both survive. Both halves matter. Without the first, adding
+// "Illumineer's Quest" to calendar_events to fix its date leaves the const's
+// version sitting beside it on the old day; without the second, two years of
+// the same annual "Gift Set" collapse into one. The derived list is a fallback
+// for what the table has not been told yet — not a peer of it.
 const _calSetKey = (e) => `${(e.set_name || e.title || "").toLowerCase().trim()}|${(e.subtitle || "").toLowerCase().trim()}`;
 const calendarMergeEvents = (derived, rows) => {
   const sets = new Map();
   const rest = [];
-  for(const e of derived || []) if(e) sets.set(_calSetKey(e), e);
+  const curatedProducts = new Set();
+  for(const r of rows || []) if(r && r.kind === "product") curatedProducts.add(_calSetKey(r));
+  for(const e of derived || []){
+    if(!e) continue;
+    if(e.kind === "set") sets.set(_calSetKey(e), e);
+    else if(!(e.kind === "product" && curatedProducts.has(_calSetKey(e)))) rest.push(e);
+  }
   for(const r of rows || []){
     if(!r) continue;
     if(r.kind === "set") sets.set(_calSetKey(r), r);
@@ -2371,10 +2616,21 @@ const calendarMergeEvents = (derived, rows) => {
 };
 
 const _calKindRank = (k) => { const i = CALENDAR_KIND_KEYS.indexOf(k); return i < 0 ? 99 : i; };
+// A set can put two of its three dates on ONE day — every recent Lorcana set
+// opens its prerelease weekend on the same Friday the shops may sell it — and
+// with the same title on both rows the title tiebreak is a coin flip decided by
+// whether a phase came from the const or the table. Prerelease before LGS before
+// retail, which is the order they happen in.
+const _calPhaseRank = (e) => {
+  if(!e || e.kind !== "set") return 0;
+  const i = SET_RELEASE_PHASES.indexOf(_calSetPhase(e));
+  return i < 0 ? 99 : i;
+};
 const calendarSort = (events) => (events || []).slice().sort((a, b) =>
   CAL_D(a.starts_on).localeCompare(CAL_D(b.starts_on))
   || _calKindRank(a.kind) - _calKindRank(b.kind)
-  || String(a.title || "").localeCompare(String(b.title || "")));
+  || String(a.title || "").localeCompare(String(b.title || ""))
+  || _calPhaseRank(a) - _calPhaseRank(b));
 
 // ⚠ ONE event, ONE row. A curated CCQ that the linker matched to its Ravensburger
 // Play listing carries that listing's event_id — and if you also follow the shop
@@ -6434,9 +6690,13 @@ const CardTileImpl = ({group, onSelectGroup, collection, deckQty, deckQtyAcrossN
       return html`<div class=${"card-row card-row-compact"+(isSelected?" is-selected":"")} onClick=${onClick}>
         ${checkboxEl}
         <span class="card-row-ink-shields" title=${inkList.join(" / ")||undefined} aria-hidden="true">
-          ${inkList.map(ink => INK_ICONS[ink]
-            ? html`<img key=${ink} src=${INK_ICONS[ink]} alt="" class="card-row-ink-shield"/>`
-            : null)}
+          ${/* A dual-ink card gets Ravensburger's own PAIR badge — one shield
+                split down the middle — rather than two single shields crammed
+                into the same slot. Two shields cost twice the width in the
+                narrowest column on the site and still did not look like what is
+                printed on the card. Single-ink is unchanged. */
+            inkShieldSrc(inkList, group.ink) && html`<img src=${inkShieldSrc(inkList, group.ink)}
+              alt="" class="card-row-ink-shield"/>`}
         </span>
         <span class="card-row-costshield"
           title=${group.inkable===false?`Cost ${group.cost ?? "—"} · Uninkable`:`Cost ${group.cost ?? "—"} · Inkable`}>
@@ -8400,7 +8660,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         </div>
       </div>
       <div class="drawer-section">
-        <div class="drawer-section-head">Strength</div>
+        <div class="drawer-section-head"><${LorcanaGlyph} src=${LORCANA_CARD_GLYPHS.strength} size=${14} klass="drawer-head-glyph"/>Strength</div>
         <div class="cards-chipgroup">
           ${STRENGTH_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.strengths.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,strengths:toggleSet(f.strengths,n)}))}
@@ -8408,7 +8668,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         </div>
       </div>
       <div class="drawer-section">
-        <div class="drawer-section-head">Willpower</div>
+        <div class="drawer-section-head"><${LorcanaGlyph} src=${LORCANA_CARD_GLYPHS.willpower} size=${14} klass="drawer-head-glyph"/>Willpower</div>
         <div class="cards-chipgroup">
           ${WILLPOWER_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.willpowers.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,willpowers:toggleSet(f.willpowers,n)}))}
@@ -8416,7 +8676,7 @@ const FilterDrawer = ({filter, setFilter, setsByGroup, allIllustrators, onClose,
         </div>
       </div>
       <div class="drawer-section">
-        <div class="drawer-section-head">Lore</div>
+        <div class="drawer-section-head"><${LorcanaGlyph} src=${LORCANA_CARD_GLYPHS.lore} size=${14} klass="drawer-head-glyph"/>Lore</div>
         <div class="cards-chipgroup">
           ${LORE_BUCKETS.map(n => html`<button key=${n} class=${"chip "+(filter.lores.has(n)?"active":"")}
             onClick=${()=>setFilter(f=>({...f,lores:toggleSet(f.lores,n)}))}
@@ -17752,7 +18012,8 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   return html`<div>
     <div class="setdet-header">
       <button class="setdet-back" onClick=${onBack}>← Back to Collection</button>
-      <h2 class="title-font setdet-title">${allMode ? "All Cards" : setName}</h2>
+      <h2 class="title-font setdet-title">${allMode ? "All Cards"
+        : html`<${SetHeading} set=${setName} klass="setdet-title-heading"/>`}</h2>
       <div class="setdet-count">${visibleGroups.length} / ${groups.length} cards</div>
       ${!allMode && user && bulkUpdateCollection && html`<button class="setdet-bulk-add" onClick=${()=>setBulkAddOpen(true)}
         title="Bulk-add cards by rarity — e.g. a master set of Commons + Uncommons or a playset of Enchanteds">
@@ -18364,7 +18625,36 @@ const SET_RELEASE_DATES = {
   "Winterspell":           {lgs:"2026-02-13", retail:"2026-02-20"},
   "Wilds Unknown":         {lgs:"2026-05-08", retail:"2026-05-15"},
   "Attack of the Vine!":   {lgs:"2026-07-17", retail:"2026-07-24"},
+  // ⚠ Set 14, and the FIRST entry here for a set that has not shipped. Sourced
+  // (lorcanaplayer.com/set/hyperia-city, read 2026-09-12), never inferred from
+  // the cadence — which is exactly what the standing rule forbids, because the
+  // cadence has moved before: Archazia's Island ran two weeks LGS-to-retail
+  // where every set since has run one.
+  //
+  // Deliberately NOT added to MAINLINE_SETS. That list drives EV, both pack
+  // sims, Playset Cost, Card Averages and the home "newest set", all of which
+  // would render an empty set; prestaging it is its own decision, and it has a
+  // scheduled review (`set-spoilers`) with a date on it. This const is dates
+  // only — the calendar derives its three rows from it and `inferEventSet`
+  // starts attributing post-Oct-16 events to Hyperia City, both correct.
+  "Hyperia City":          {lgs:"2026-10-16", retail:"2026-10-23"},
 };
+
+// ── Products that are not a set ─────────────────────────────────────────────
+// Quests, gift boxes, starter sets: dated things a player would put in a diary,
+// which no feed we read announces. They derive into calendar rows exactly as
+// SET_RELEASE_DATES does — one const here rather than seeded table rows, so a
+// date lands without a migration, and calendar_events still overrides it by
+// (title, subtitle) the moment somebody wants to correct one.
+//
+// Dates are US street dates. A EU webshop's "release" is usually its own ship
+// date and runs a day or two off; take the publisher's, not a retailer's.
+const PRODUCT_RELEASE_DATES = [
+  {title: "Illumineer's Quest: The Great Hunny Rescue", on: "2026-10-02",
+   notes: "Standalone co-op scenario box, $59.99. The two included decks are Lorcana-legal; the scenario deck is not."},
+  {title: "Attack of the Vine! Collection Starter Set", subtitle: "Rapunzel Edition", on: "2026-09-04"},
+  {title: "Hyperia City Beast Gift Box", on: "2026-11-13"},
+];
 
 // Infer which set a (Store/Set) Championship was for. Many event titles don't
 // name the set, so: (1) prefer an explicit set name in the title, else
@@ -26113,7 +26403,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
           return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
-            <div class="set-progress-name">${setName}</div>
+            <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
               <div class="set-progress-row-counts" style=${{gridColumn:"1 / -1",textAlign:"right"}}>
                 ${total} / ${denom} <span class="set-progress-pct">${pct.toFixed(0)}%</span>
@@ -26133,7 +26423,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
           const denom = tot.normal + tot.foil + tot.enchanted + tot.iconic + tot.epic;
           const pct = denom ? (total/denom*100) : 0;
           return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
-            <div class="set-progress-name">${setName}</div>
+            <${SetHeading} set=${setName} klass="set-progress-name"/>
             <div class="set-progress-row">
               <div class="set-progress-row-label">Promos</div>
               <div class="set-progress-row-counts">${total} / ${denom} <span class="set-progress-pct">${pct.toFixed(0)}%</span></div>
@@ -26146,7 +26436,7 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
         const fPct = tot.foil   ? (fOwn/tot.foil*100)   : 0;
         const mis = setMissing[setName];
         return html`<div key=${setName} class="set-progress-card" onClick=${()=>setSelectedSet(setName)}>
-          <div class="set-progress-name">${setName}</div>
+          <${SetHeading} set=${setName} klass="set-progress-name"/>
           <div class="set-progress-row">
             <div class="set-progress-row-label">Non-Foil</div>
             <div class="set-progress-row-counts">${nOwn} / ${tot.normal} <span class="set-progress-pct">${nPct.toFixed(0)}%</span></div>
@@ -37472,7 +37762,8 @@ function useCalendarEvents(){
   const reload = useCallback((force) => fetchCalendarEvents(force).then(setState), []);
   useEffect(() => { reload(false); }, [reload]);
   const events = useMemo(
-    () => calendarMergeEvents(calendarSetEntries(SET_RELEASE_DATES), state.rows),
+    () => calendarMergeEvents([...calendarSetEntries(SET_RELEASE_DATES),
+                               ...calendarProductEntries(PRODUCT_RELEASE_DATES)], state.rows),
     [state.rows]);
   return {events, rows: state.rows, unavailable: state.unavailable, reload};
 }
@@ -37849,12 +38140,10 @@ const calTimeLabel = (ev) => {
 // no picture for (or a curated URL a CSP change later blocks) degrades to the
 // glyph instead of leaving a hole, with no error handling at the call site.
 const CalendarKindDot = ({kind, ev, art}) => {
-  const k = CALENDAR_KIND_BY_KEY.get(kind);
-  const hue = (k && k.hue) || "var(--muted)";
-  const src = ev ? calendarEventArt(ev, art) : null;
+  const {icon, hue, img} = calendarEventIcon(ev || {kind}, art);
   return html`<span class="cal-ico" aria-hidden="true" style=${{color: hue}}>
-    <span class="cal-ico-glyph">${uiIcon((k && k.icon) || "calendar", 13)}</span>
-    ${src && html`<img class="cal-ico-img" src=${src} alt="" onError=${hideBrokenImg}/>`}
+    <span class="cal-ico-glyph">${uiIcon(icon, 13)}</span>
+    ${img && html`<img class="cal-ico-img" src=${img} alt="" onError=${hideBrokenImg}/>`}
   </span>`;
 };
 
@@ -38073,6 +38362,16 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
   return html`<div class="cal-modal-overlay" onClick=${onClose}>
     <div class="cal-modal" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
       <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      ${/* The one place a set's own logo is legible. The row icon cannot be a
+            wordmark, and a booster-pack thumbnail said nothing useful at 13px
+            and the same nothing for all three of a set's dates — so the art
+            lives here, where there is 56px of height to read it in. A product
+            drop shows its photo in the same slot; every other kind shows
+            nothing, and the title carries it. */
+        isSet ? html`<${SetLogo} set=${ev.set_name || ev.title} klass="cal-modal-art"/>`
+        : (ev.kind === "product" && calendarEventArt(ev, art)) ? html`<img class="cal-modal-art"
+            src=${calendarEventArt(ev, art)} alt="" aria-hidden="true" loading="lazy"
+            onError=${hideBrokenImg}/>` : null}
       <div class="cal-modal-kind"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/>${(k && k.label) || "Event"}</div>
       <h3 class="cal-modal-title">${title}</h3>
       ${/* The title is the STORE on a store row, so this line is what the shop
@@ -46961,12 +47260,14 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           </div>`;
         }
         const inkList = (meta.inks && meta.inks.length) ? meta.inks : (meta.ink ? [meta.ink] : []);
-        // Ink shields — small PNGs from Logos/inks/. Dual-ink renders both.
-        const inkSwatch = inkList.length
+        // Ink shield — one per CARD, so a dual-ink card gets Ravensburger's own
+        // split pair badge rather than two shields side by side. (A DECK's two
+        // inks stay two separate shields elsewhere: they come from different
+        // cards, and each one is independently clickable as a filter.)
+        const inkSwatch = inkShieldSrc(inkList, meta.ink)
           ? html`<span class="deck-row-ink-shields" title=${inkList.join(" / ")}>
-              ${inkList.map(ink => INK_ICONS[ink]
-                ? html`<img key=${ink} src=${INK_ICONS[ink]} alt=${ink} class="deck-row-ink-shield"/>`
-                : null)}
+              <img src=${inkShieldSrc(inkList, meta.ink)} alt=${inkList.join(" / ")}
+                class="deck-row-ink-shield"/>
             </span>`
           : null;
         const previewSrc = meta.img_large || meta.img_normal || meta.img_small;
