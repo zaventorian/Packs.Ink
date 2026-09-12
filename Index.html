@@ -33709,6 +33709,13 @@ function LoreTracker({onOpen, onHome}){
   const leftMs = timerMins * 60000 - elapsedMs;
   const flipSeat = (i) => count === 2 && faceOff && i === 1;
   const seatLabel = (i) => (names[i] || "").trim() || loreDefaultName(i);
+  // Player 1 sits at the BOTTOM of the screen, the opponent at the top. A phone
+  // on a table between two people is propped facing whoever set it down, so the
+  // near half is theirs and the far half is the other player's — which is also
+  // the half "Face-to-face" turns around. Rendering seat 0 first put you at the
+  // top and turned YOUR side around, backwards on both counts.
+  const seatOrder = game.players.length === 2
+    ? [1, 0] : game.players.map((_, i) => i);
 
   const settings = html`<div class="lore-menu-body">
     <div class="lore-set-row">
@@ -33875,12 +33882,16 @@ function LoreTracker({onOpen, onHome}){
         title=${p.name+" played it — everyone else needs "+m.win}>${p.name}</button>`)}
     </div>`)}
     <div class=${"lore-seats lore-seats--n"+game.players.length+(flipSeat(1)?" lore-seats--face":"")}>
-      ${game.players.map((p, i) => html`<${LoreSeat} key=${i} idx=${i} name=${p.name} ink=${p.ink}
+      ${/* seatOrder, not players.map — the render order is the SEATING order,
+            while idx stays the true player index (it keys the score, the
+            rename and every stored event). */""}
+      ${seatOrder.map(i => { const p = game.players[i];
+        return html`<${LoreSeat} key=${i} idx=${i} name=${p.name} ink=${p.ink}
         art=${p.art}
         total=${totals[i]} target=${targets[i]} delta=${delta} flip=${flipSeat(i)}
         winner=${winners.includes(i)} dim=${winners.length>0 && !winners.includes(i)}
         format=${format} modArt=${seatMods(i)}
-        onRename=${rename}/>`)}
+        onRename=${rename}/>`; })}
     </div>
     ${winners.length > 0 && !ended && html`<div class="lore-winbar">
       <span>${winners.map(i => game.players[i].name).join(" & ")}
