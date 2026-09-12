@@ -41,7 +41,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const SET_RELEASE_LABELS = "),
   grabLine("const SET_RELEASE_PHASES = "),
   grab("const calEventTitle = (ev) => !ev ? \"\"", ": (ev.title || \"\");"),
-  grabLine("const calEventSubtitle = "),
+  grab("const calStoreEventName = (ev) => {", NL + "};"),
+  grab("const calEventSubtitle = (ev) => !ev ? null", ": (ev.subtitle || null);"),
+  grabLine("const calEventFullLabel = "),
   grab("const CALENDAR_REGIONS = [", NL + "];"),
   grab("const _CAL_REGION_BY_CC = (() => {", NL + "})();"),
   grabLine("const calRegionOf = "),
@@ -73,7 +75,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_MONTHS = "),   // one line — a block grab here runs on and swallows calShortDay
   grab("const calShortDay = (ymd) => {", NL + "};"),
   grab("const calendarPanelWindow = (pool, todayYmd, size, page) => {", NL + "};"),
-  grabLine("const calChipLabel = "),
+  grab("const calChipLabel = (ev) => (ev && ev.kind === \"store\")", ": calEventTitle(ev);"),
   grab("const calCountdown = (ev, todayYmd) => {", NL + "};"),
   grabLine("const _calEnc = "),
   grab("const icsEscape = (s) =>", ".replace(/\\r\\n|\\r|\\n/g, \"\\\\n\");"),
@@ -87,7 +89,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const googleCalUrl = (ev) => {", NL + "};"),
   "export {calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
-  " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,",
+  " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
@@ -97,7 +99,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
 const {
   calAddDays, calTzYmd, calendarSetEntries, calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
-  googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle,
+  googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
   calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
@@ -314,6 +316,62 @@ ok("a set event reports no separate subtitle",
 ok("a DLC still reports its subtitle",
   calEventSubtitle({kind: "dlc", title: "DLC London", subtitle: "Disney Lorcana Challenge"})
     === "Disney Lorcana Challenge");
+
+// ── A STORE event is named by its STORE ────────────────────────────────────
+// Reported from the wild: a row reading "Core Constructed" does not say which
+// shop it is, and a calendar built by FOLLOWING STORES is nothing but that
+// question. RPH stores the pair the other way round, so this is a display swap
+// — and it has to stay a display swap, because ev.subtitle is what the scout
+// hand-off reads as the store name.
+const locals = {kind: "store", title: "Core Constructed", subtitle: "Dice Dojo"};
+ok("a store event leads with the store", calEventTitle(locals) === "Dice Dojo",
+  calEventTitle(locals));
+ok("the event's own name is the second line",
+  calEventSubtitle(locals) === "Core Constructed", calEventSubtitle(locals));
+ok("one line names both, store first",
+  calEventFullLabel(locals) === "Dice Dojo — Core Constructed", calEventFullLabel(locals));
+// A month cell is one line and its ellipsis is at the END, so leading with the
+// store is what makes the store the half that survives a narrow column.
+ok("a store chip carries the pair, store first",
+  calChipLabel(locals) === "Dice Dojo · Core Constructed", calChipLabel(locals));
+// ...but ONLY for store rows. A curated subtitle is the category, which the
+// kind icon beside the chip already says.
+ok("a curated chip does NOT gain its category",
+  calChipLabel({kind: "ccq", title: "White Rabbit CCQ", subtitle: "Challenge Championship Qualifier"})
+    === "White Rabbit CCQ");
+// Printing the store twice down two stacked lines reads as a bug, and RPH event
+// names carry the store about as often as not.
+ok("a name that is just the store leaves no second line",
+  calEventSubtitle({kind: "store", title: "Dice Dojo", subtitle: "Dice Dojo"}) === null);
+ok("a store-prefixed name is trimmed to the part that is new",
+  calEventSubtitle({kind: "store", title: "Dice Dojo Core Constructed", subtitle: "Dice Dojo"})
+    === "Core Constructed",
+  calEventSubtitle({kind: "store", title: "Dice Dojo Core Constructed", subtitle: "Dice Dojo"}));
+ok("a separator after the store prefix goes with it",
+  calEventSubtitle({kind: "store", title: "Dice Dojo - Core Constructed", subtitle: "Dice Dojo"})
+    === "Core Constructed");
+ok("a store SUFFIX is trimmed too",
+  calEventSubtitle({kind: "store", title: "Friday Night Lorcana Dice Dojo", subtitle: "Dice Dojo"})
+    === "Friday Night Lorcana",
+  calEventSubtitle({kind: "store", title: "Friday Night Lorcana Dice Dojo", subtitle: "Dice Dojo"}));
+ok("case does not defeat the trim",
+  calEventSubtitle({kind: "store", title: "DICE DOJO Core Constructed", subtitle: "Dice Dojo"})
+    === "Core Constructed");
+// A row RPH gave no store name for must still say something.
+ok("no store name falls back to the event name",
+  calEventTitle({kind: "store", title: "Core Constructed", subtitle: ""}) === "Core Constructed");
+ok("no store name still reports the event name",
+  calEventSubtitle({kind: "store", title: "Core Constructed", subtitle: ""}) === "Core Constructed");
+// calendarStoreEntry is what actually builds these, so check the real shape and
+// not only hand-written fixtures.
+{
+  const e = calendarStoreEntry({event_id: 9, name: "Core Constructed", store_name: "Dice Dojo",
+    start_datetime: "2026-09-17T23:00:00Z", timezone: "America/Chicago", city: "Chicago", state: "IL"});
+  ok("a real store entry renders store over event",
+    calEventTitle(e) === "Dice Dojo" && calEventSubtitle(e) === "Core Constructed",
+    calEventTitle(e) + " / " + calEventSubtitle(e));
+  ok("the scout hand-off still reads the store off ev.subtitle", e.subtitle === "Dice Dojo");
+}
 
 // ── Regions ─────────────────────────────────────────────────────────────────
 ok("US is North America", calRegionOf("US") === "na");
@@ -643,6 +701,15 @@ ok("the summary uses the display name",
 ok("a DLC summary keeps both halves",
   ics.includes("SUMMARY:NA Championship — Disney Lorcana Challenge"),
   ics.split(String.fromCharCode(13,10)).find(l => l.startsWith("SUMMARY:NA")));
+// The downloaded entry is read weeks later, in a calendar app full of other
+// things, where "Core Constructed" alone names nothing at all.
+ok("a store summary names the shop first",
+  buildIcs([{kind: "store", title: "Core Constructed", subtitle: "Dice Dojo",
+             starts_on: "2026-09-13", id: "ev:1"}], {nowMs: 0})
+    .includes("SUMMARY:Dice Dojo — Core Constructed"),
+  buildIcs([{kind: "store", title: "Core Constructed", subtitle: "Dice Dojo",
+             starts_on: "2026-09-13", id: "ev:1"}], {nowMs: 0})
+    .split(String.fromCharCode(13,10)).find(l => l.startsWith("SUMMARY:")));
 ok("a location is carried", ics.includes("LOCATION:Disneyland Hotel"));
 ok("a url is carried", ics.includes("URL:https://example.test/na"));
 ok("an undated row is skipped rather than emitting a broken VEVENT",

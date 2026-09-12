@@ -2366,12 +2366,15 @@ non-compliant one.
   Amazon wins on UX and revenue at once. The Ravensburger link stays in the modal for the two
   Disney-Store exclusives. **Pins and lore counters are NOT sold** (`buy_url` null by design)
   and stay linkless — a checklist is what a collector wants there.
-- **Gear** (`LORCANA_GEAR` + `GearPanel`) — a home panel, right rail, with the standard
-  pop-out. Sleeves / portfolios / deck boxes, all **first-party Ravensburger**: third-party
-  sleeves outsell them and pay the same, but a fan site naming a brand it has not tested is
-  making a claim, whereas listing the official line is a catalogue. Appended rather than
-  hoisted for existing browsers — a shop box has not earned the right to shove somebody's
-  layout around, unlike the at-the-table shortcuts that did.
+- **Gear** (`LORCANA_GEAR`) — a catalogue of sleeves / portfolios / deck boxes / grading
+  supplies, rendered on `/gear`. It **used to have a right-rail home panel too** (`GearPanel`,
+  its `.home-gear-*` CSS, and a `home: true` flag choosing which sections it showed); all of
+  that is **DELETED 2026-09-12** at Zaven's request. Once the "Lorcana on Amazon" row shipped
+  the panel was the page's second Amazon prompt, reaching a place the row's own title already
+  reaches. `normalizeHomeLayout` drops a key it doesn't recognise, so a browser holding `gear`
+  in its stored layout repairs itself on the next load — no migration, no stamp. Don't re-add
+  a `home:` flag to `LORCANA_GEAR`; nothing reads it, and the guard test now fails if one
+  reappears rather than passing vacuously.
 - **Every "buy on TCGplayer" control has an Amazon twin (2026-09-10)**, per Zaven: the card
   popup's Price-changes rows ("Find on Amazon" beside "Buy on TCGplayer"), Sealed and Graded
   collection tiles (`TCG ↗` + `Amazon ↗`), the Price Graphing single-product preview, the
@@ -2416,6 +2419,54 @@ troves, single packs, starter decks, gift sets, puzzles, then the accessories. ~
 - Needs **no worker or dev_server route** — both already SPA-fallback unknown paths, so
   `VIEW_PATHS` + `VIEW_TITLES` + a line in `sitemap.xml` is the whole routing change.
 
+### Product photos cut out of their white sweep (2026-09-12)
+
+TCGplayer shoots sealed product on a white sweep and serves JPEG, so every photo arrives as
+a product **in a white box** — which on the velvet/aurora/black themes is a bright rectangle
+in the middle of a dark page, and is what Zaven objected to about the Amazon row. There is no
+transparent source to switch to: the CDN serves `.jpg` only (a `.png` variant 403s).
+
+**`cutProductWhiteBg` removes it in the browser**, and `ProductPhoto` is the one accessor that
+renders a product photo — used by the home Amazon row, `/gear`'s cards and the admin checklist.
+Same algorithm as `scripts/cut_collectible_bg.py`, which does this to the pin and lore-counter
+photos before upload, and for the same two reasons it works there: the background is found by
+**flood fill from the BORDER** (never "white → transparent", which punches through every white
+logo and highlight inside the product), and the subject is **eroded one pixel** first, because
+a JPEG of a dark object on white carries a ring of genuinely half-white pixels that reads as a
+bright fringe. Doing it client-side rather than in a script is what makes it maintenance-free:
+a new set's boxes are cut the first time anyone looks at them, nothing to re-run, nothing to
+upload. Measured on the live shelf: **50 of 52 loaded photos cut**, the other two a full-bleed
+box shot that correctly declined.
+
+- **⚠ It MUST be able to decline, and the two failures want OPPOSITE grounds.** All four
+  corners are tested first, and the fill is thrown away if it removed almost nothing or almost
+  everything. "Not on a white sweep" (a full-bleed shot — the Disney100 Collector's Edition
+  fills its frame bar a corner sliver) needs **no** white behind it and looks framed if it gets
+  one; "I couldn't read it" (taint, no canvas) **keeps** the white, since the photo probably
+  does have a sweep.
+- **⚠ `crossOrigin="anonymous"` is only safe on a URL we actually proxy.** A canvas can't read
+  back a photo off the bare CDN (neither Lorcast's nor TCGplayer's sends ACAO), so these load
+  through `proxyImg` → `/tcg-img-proxy/*`, where the worker sets `ACAO:*`. But asking a host
+  that sends **no** ACAO for a CORS image fails the request outright and the photo goes blank —
+  which is what it did to the Ravensburger puzzle shots (`ravensburger.cloud`, which `proxyImg`
+  does not rewrite). So the flag rides on whether the proxy applied, and an un-proxied photo
+  renders uncut.
+- **The white ground is on `.prod-photo-wrap`, not on each enclosing well** — one class on the
+  element that knows its own state, so a new surface only has to not paint a ground of its own.
+  It is ON only for a photo we can inspect (proxied, i.e. TCGplayer, where the sweep is the
+  rule): the ground only shows in the margin an `object-fit:contain` photo leaves around itself,
+  and a guessed white frame around a full-bleed shot is the worse mistake.
+- **`onLoad` alone is not enough.** An image already in the browser cache can finish decoding
+  before React attaches the handler, in which case `onLoad` never fires — so the mount effect
+  checks `img.complete` too. That silent half is how a returning visitor would have kept seeing
+  white boxes.
+- One cut per product per session however many tiles show it (`_productCuts`, src → Promise),
+  encoded as **WebP with alpha** (PNG holds a photograph at ~5x the size; an older browser hands
+  back a PNG blob, which works identically, only bigger) and capped at 420px.
+- **Still white, deliberately out of scope: the Sealed Movers row** directly above, and the
+  Sealed collection tiles. Same defect, same one-line fix now that `ProductPhoto` exists —
+  Zaven named the Amazon row, so the rest is his call.
+
 ### The home shelf — "Lorcana on Amazon" (2026-09-10)
 
 A movers row (`MoversBanner` + `renderTile` → `AmazonShelfTile`), keyed `amazon` in
@@ -2436,17 +2487,35 @@ A movers row (`MoversBanner` + `renderTile` → `AmazonShelfTile`), keyed `amazo
 - `MoversBanner` grew a `titleHint` prop: its title button had "Open Screener with this
   filter" hardcoded, which this row's title (→ `/gear`) is not.
 
-### Out of stock → hidden, by a MANUAL daily check (migration 137)
+### Out of stock, or scalped → hidden, by a MANUAL daily check (migration 137)
 
-Until Creators API access, whether a shelf product is in stock is checked **by a person**,
-from an admin-only checklist at the top of `/gear` (`AmazonStockCheck`, gated on
-`GradedAdminContext`). Marking one **Out** writes `amazon_stock_checks` and hides it from
-the home row and from `/gear` for visitors; admins still see it dimmed so it can be
-marked back in.
+Until Creators API access, whether a shelf product is in stock — and whether it is being
+scalped — is checked **by a person**, from an admin-only checklist at the top of `/gear`
+(`AmazonStockCheck`, gated on `GradedAdminContext`). Marking one **Out** or **Over** writes
+`amazon_stock_checks` and hides it from the home row and from `/gear` for visitors; admins
+still see it dimmed and labelled with which, so it can be marked back in.
 
+- **The price ceiling is MSRP + 20%** (`AMAZON_PRICE_CEILING`, 2026-09-12, Zaven: "manually
+  confirm if the price is no more than 20% above msrp and hide if it is higher"). A featured
+  link at 2x MSRP costs more than its commission is worth, because the person who clicked it
+  stops trusting the row. Two things keep the judgement quick and licensed:
+  - **We store the MANUFACTURER's price (`msrp`), never Amazon's.** The recorded verdict is a
+    bare boolean (`price_over`), so the number on the listing is read and discarded. MSRP is
+    entered once per listing and persists; the verdict is daily.
+  - **The checklist prints MSRP and the computed ceiling beside each link**, so the daily pass
+    is a glance rather than arithmetic — which is what makes a sweep of forty listings
+    something a person actually does. Neither reaches a visitor: an overpriced listing simply
+    isn't there.
+  The multiplier lives in the client, so changing the policy moves one constant and re-reads
+  every stored MSRP rather than invalidating a column of numbers.
+- **`amazonListingHidden(rec)` is the ONE predicate** for "don't feature this link", so the
+  home row, `/gear` and the checklist's own counts can never disagree. A listing nobody has
+  checked is SHOWN — an empty table means "no rulings yet", not "hide the shop".
 - **⚠ The flag decides which links we feature; it is never DISPLAYED.** No "in stock" badge,
-  no price. Amazon licenses stock and price only through its API; curating our own list
-  is not Program Content.
+  no price, no "fair price" badge. Amazon licenses stock and price only through its API;
+  curating our own list is not Program Content, and MSRP is a manufacturer fact rather than
+  Amazon's number — but both stay admin-only, because a green tick beside a buy button reads
+  as a claim about the price on the other end of it.
 - **⚠ Never automate it.** Reading Amazon pages on a schedule is the automated data
   gathering Amazon's Conditions of Use prohibit, and it trips their bot checks. A person
   opening forty listings is the design, not a stopgap to "improve".
@@ -2458,8 +2527,16 @@ marked back in.
   the next product takes a hidden one's slot. The checklist walks `amazonShelfPool`, every
   candidate, not just the 30 on screen.
 - **Every failure reads as "nothing hidden"**, the pre-137 behaviour, and `amazonStockUnavailable`
-  lets the checklist say "apply migration 137" instead of throwing. Cached 10 min in
-  module scope (`_amazonStock`), refetched after each save.
+  lets the checklist say "apply migration 137" instead of throwing — including **42703**, a
+  database on the ORIGINAL 137 that has the table but not `msrp` / `price_over`, where the
+  whole select 400s. Cached 10 min in module scope (`_amazonStock`), refetched after each save.
+- **⚠ `saveAmazonCheck(keys, patch)` applies ONE patch to every key**, and must keep doing so:
+  PostgREST rejects a bulk body whose objects carry different key sets (PGRST102), and an
+  upsert only updates the columns the body names — which is exactly what lets a stock click
+  leave a stored MSRP alone.
+- **137 is idempotent and was EXTENDED in place** (2026-09-12) rather than followed by a 141:
+  `create table if not exists` plus `add column if not exists`, so re-running it is the
+  upgrade whether or not the original ever landed.
 - Test it signed out: on localhost, `localStorage["packsink:gradedAdminPreview"] = "1"`
   renders the admin checklist (writes still need a real admin session).
 
@@ -2467,9 +2544,10 @@ marked back in.
 
 `HomeGearBar`, the bottom-left "Sleeves, binders & deck boxes" pill, is gone at Zaven's
 request: component, CSS and render line together. Once the "Lorcana on Amazon" row and the
-Gear panel both existed it was a third Amazon prompt on one page. Don't re-add it; the
-row's title and the Gear panel's title both already lead to `/gear`. A leftover
-`packsink:gearBarDismissed` key in someone's browser is harmless.
+Gear panel both existed it was a third Amazon prompt on one page. The Gear PANEL followed it
+out on 2026-09-12 for the same reason, so the home page's one Amazon surface is now the row,
+whose title leads to `/gear`. Leftover `packsink:gearBarDismissed` / `packsink:home:gearCollapsed`
+keys in someone's browser are harmless.
 
 ### Disclosure
 
@@ -2485,7 +2563,6 @@ Amazon-bearing surface carries its own:
 | Sealed detail modal | `.sealed-detail-affiliate`, under the buy row |
 | Sealed collection tiles | `.sealed-coll-affiliate`, foot of the view |
 | EV tool (box-price column) | appended to the existing "Prices via TCGCSV" footer |
-| Gear home panel | `.home-gear-disclosure` |
 | `/gear` | `.gear-page-note`, above the list |
 | Card popup (Price changes) | `.cd-affiliate-note`, above the rows |
 | Graded collection tiles | `.sealed-coll-affiliate`, foot of the set list |
@@ -2719,7 +2796,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v390`; `styles.css?v=390`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v395`; `styles.css?v=395`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
@@ -3024,7 +3101,11 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 
 ## Chicagoland Elo — Stores tab (2026-08-19)
 
-`EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views). Adding a tab means touching four places: `applyUrlToState`, the state→URL effect, the `.elo-innertabs` nav, and the render list. `eloUrlFor` also has to know the target or `EloLink`'s href points at the wrong view on a middle-click — it deletes `store` along with `p`/`e`/`sub` for exactly that reason. `.elo-innertabs` is `flex-wrap:wrap` — at 5 tabs it clipped on phones, and a clipped tab reads as a deleted feature.
+`EloView`'s inner tabs are `leaderboard | tournaments | stores | upcoming | scout`, mirrored to `?sub=<tab>` (plus `?p=`/`?e=`/`?store=` for the player / event / store-report leaf views) — the KEYS are unchanged; only the labels read **Tournament Results** and **Store Status** now. Adding a tab means touching four places: `applyUrlToState`, the state→URL effect, the `.elo-innertabs` nav, and the render list. `eloUrlFor` also has to know the target or `EloLink`'s href points at the wrong view on a middle-click — it deletes `store` along with `p`/`e`/`sub` for exactly that reason.
+
+**⚠ `.elo-innertabs` is `flex-wrap:nowrap` + `overflow-x:auto`, and must stay that way (2026-09-12).** It was `flex-wrap:wrap`, which on a narrow phone pushed the fifth tab onto a third row — and the fifth tab is **Scout**, so the team-only feature was the one that fell off. Measured at 320px: wrapping gave an 81px three-row nav with Scout below the fold of the header; one scrolling row is 40px and every tab is reachable. The active tab is scrolled into view on mount, so landing on `?sub=scout` shows Scout rather than a row that starts at Leaderboard. The trailing gutter is an `::after` CHILD, per the standing rule that container padding is dropped at the end of a scroll range.
+
+Both tab strips — `.elo-innertabs` and Analytics' `.market-subtabs` — are **folder tabs on a rail**, not loose text: a rounded top, a 1px box and a 2px accent bar on the active one. That shape is what makes a half-clipped tab at the scroll edge read as "there is more this way"; the previous bare-text chips gave a phone reader no hint the row scrolled at all, which is the whole "the sub-tabs are messy on mobile" complaint. The Analytics strip also scrolls its active tab into view, so `/analytics?a=lore` opens showing Lore Tracker.
 
 **Stores** answers, for a chosen window of sets: how many events did this shop run, how many distinct people came through the door, how many tickets (seats) did that add up to. **It covers EVERY event we've ingested for the store — SCs, locals, league nights, drafts — not just Set Championships.** Every number is derived at render time; there is no per-store table anywhere.
 
@@ -3046,10 +3127,161 @@ melee against `heyzeus` on RPH is the shape. Somebody has to say so, and
 - **Layout: totals come BEFORE the per-set detail.** They sit immediately right of the pinned store name so they never scroll off; expanding the breakdown appends detail to the right instead of shoving the numbers people came for off the edge. That was the first cut's bug.
 - **Wide tables get `.elo-stores-wrap--wide` (a `max-height`).** A table wider than the viewport puts its horizontal scrollbar at the bottom of a 30-row table, so reaching it means scrolling the whole page past the data — a mouse user simply cannot scroll sideways. Capping the height puts both scrollbars in one viewport-sized box. Same short-viewport escape as the Screener. Only fires past the default window; at 4 sets the table fits.
 - **The sticky store column must use `--bg-modal`.** `--bg-card` is translucent in the dark themes and `--btn-bg` is transparent in *every* theme, so either lets the scrolling season columns show straight through the pinned cell. Same rule as the Screener's sticky NAME column. The name clamp lives on an inner `.elo-stores-nametxt` block, not the `<td>` — `table-layout:auto` treats a cell `max-width` as a hint.
+- **The "Exclude org" toggle is GONE** (2026-09-12, Zaven) — it hid I&L⟡Zaven / I&L⟡jacobayy from every avg-Elo stat, and appeared on four different surfaces. The `p_exclude_org` parameter survives on `get_store_report` / `get_event_roster` / `get_roster_scout` / `get_tracked_store_strength` with its `false` default; nothing passes it any more. Don't re-add the toggle without a reason — it was four controls answering a question nobody was asking.
 - Store names link to the gated store report only when `can_view_store_report()` passes; everyone else sees plain text. The tab itself is public — it aggregates data the Tournaments tab already lists per-event.
 - **RPH tier verdicts (`RPH_TIERS` / `rphTierFor`)** are the doc's published bars over "the four most recent set seasons" — Standard 25/25/250, Legendary 50/50/500 (events / unique fans / tickets). All three are scored now that Fans is a real head count. The window still matters — three sets can't clear a four-set bar and ten sets clears it trivially — so the legend warns when the selection isn't four sets rather than blanking the column. The **Prerelease requirement is NOT scored**: `Pre` counts sets the store ran a prerelease for, but not which sets RPH considered available to it, hence the asterisk.
 - **The pro-rated lens scores ONE season, not the selection.** The memo's 8/8/80 is 1/6 of Legendary over a two-month window — one set season's worth of activity, not four — so applying it to a four-set window cleared it for everybody. `eloProSeasonKey` picks the most recent *completed* set (seasons are newest-first; index 0 is the set still running) and the lens overrides the set chips while it's on, so the numbers shown and the verdict come from the same window.
 - **Guarded by `node scripts/test_elo_store_activity.mjs`**, which extracts `buildEloStoreActivity` + `eloStoreTotals` out of Index.html so they can't drift. Run it after touching the pivot or the rollup.
+
+## Scouting is a TEAM tool now (migration 143 — STAGED, 2026-09-12)
+
+"Who is in this room, what are they playing, and what did they play last time?" Two open
+text fields — **deck** and **notes** — per PLAYER per EVENT, shared across the scouting team,
+readable from three surfaces and durable across events so next month's roster arrives
+pre-annotated: *9/12 · Gemini Games · Cosmic Destroyers · tapped out turn 4 every game*.
+Guarded by `node scripts/test_scout.mjs`.
+
+### Access is an EMAIL allowlist, and it is NOT the store-report gate
+
+- **`can_scout()`** = tournament admin **OR** an address in **`scout_members`**. Every
+  scouting surface and every scouting RPC runs on this one.
+- **`can_view_store_report()` is deliberately untouched.** It is the wider allowlist
+  (admins + `elo_report_viewers`, keyed on `user_id`) and still gates the store report and
+  the plain roster. Notes are the team's own intel; re-gating a scout surface on the store
+  report silently shows them to a wider room, which is why `test_scout.mjs` pins every
+  render site to `canScout`.
+- **Email, not `user_id`, because a `user_id` can only be added AFTER someone has signed in**
+  and you have gone and looked it up. An email is addable before a teammate has ever opened
+  the site. `scout_members.user_id` remains as the escape hatch for a provider that omits
+  `email` from the JWT. Emails are lowercased by a trigger so the lookup is an equality test.
+- **`ScoutContext`** (App, beside `GradedAdminContext`) carries the answer; three unrelated
+  surfaces ask and it never changes mid-session. **It decides what to OFFER, never what to
+  allow** — every RPC re-checks `can_scout()` itself, and `scout_notes` / `scout_members` are
+  RLS-on with NO policies, so PostgREST cannot reach them directly at all.
+- Admins manage the list in-app: **Who can scout** at the top of the Scout tab
+  (`ScoutMembers`, `scout_members_list` / `_add` / `_remove`, all `is_tournament_admin`).
+- Localhost preview: `packsink:scoutPreview=1` renders the UI; every write still needs a
+  real allowlisted session.
+
+### One note per (event, player) — shared, attributed, and it OUTLIVES the event
+
+- **Not one row per author.** A decklist is a fact about the table, not an opinion, so a
+  teammate amending yours is the wanted behaviour; `updated_by_name` + `updated_at` keep it
+  attributable rather than anonymous. The editor shows the existing text, so an amendment is
+  deliberate rather than a blind overwrite.
+- **⚠ The event label (`event_name` / `event_date` / `event_tz` / `store_name`) is
+  DENORMALISED onto the note.** `lorcana_events` is an UPCOMING feed that prunes what has
+  already happened (migration 121), and the archive does not reach back before it landed.
+  The entire point of a note is that you read it next month, so the log has to survive its
+  event row disappearing. `get_scout_player` reads `scout_notes` and nothing else. Never
+  "normalise" these away. `event_tz` is stored because a 7pm Friday in Elgin is Friday for
+  whoever was in the room — the log says the day they were actually there.
+- **Emptying both fields DELETES the row** rather than storing two blanks: an empty note
+  would still count toward the prior-notes badge, and that count is the one thing it must
+  not lie about.
+- **⚠ The panel lists the roster UNIONED with this event's notes (migration 144), not the
+  roster alone.** 143 listed only `elo_event_roster_members`, and the roster scrape is
+  DELETE-then-INSERT — so the moment a player dropped their registration, every note the
+  team had written about them **stopped rendering on the event it described**, while the row
+  sat untouched in the table and still showed in that player's own history. No error, no
+  empty state, nothing to notice; the data was fine and the panel quietly disagreed. The
+  union also gives you **Add player**, for someone RPH never recorded (`scout_player_key`
+  already produces a `name:` key when there is no RPH id — it only lacked somewhere to
+  appear). An off-roster row is **marked, never hidden**: `off_roster` drives the badge and
+  its own stat. **`Signed up` still counts the ROSTER only** — folding our own hand-added
+  rows into it would restate RPH's number as something it isn't.
+- **`player_key` is `rph:<user id>`, falling back to `name:<lowercased display name>`.** The
+  RPH account id is the real key; the name fallback exists because a guest plays without an
+  account and a fuzzy key beats no key. **Computed SERVER-side in both directions** —
+  `get_scout_event` returns it, `save_scout_note` recomputes it from `(rph_user_id, name)` —
+  so the client has no mirror that could drift. The test pins that the client never builds one.
+
+### Scope: tracked stores only, ANY event kind
+
+- Every read and write resolves the event through **`scout_event_meta`** (the upcoming feed →
+  the archive → `set_championships`, first hit wins) and refuses anything whose store is not
+  in `elo_tracked_stores`. Without that check, pasting an event id starts logging notes on a
+  shop in another state.
+- **But not SCs only.** `elo_event_roster` **loses its FK to `set_championships`** here, so a
+  league night at a shop you scout — full of the same people, and already on the calendar —
+  can carry a roster. `scrape_rosters.py --event` looks in `lorcana_events` first for the
+  same reason.
+- **`get_roster_scout` (89) is re-created with a LEFT JOIN.** It INNER JOINed the roster, so
+  an event whose roster had never been pulled did not appear in the Scout tab at all — and
+  the panel's Refresh button is the only way to pull one. You could not reach the control
+  that would have made the event visible. Its gate widens to `can_view_store_report() OR
+  can_scout()`; the body is otherwise 89's, unchanged.
+
+### Where it renders
+
+`ScoutEventPanel` is the one component; `inline` renders it in place, otherwise
+`ScoutEventModal` wraps it.
+
+**It is a SHEET, not a list of cards** (2026-09-12, Zaven: *"I'd rather just click on
+the event name and it's a nice layout and interface there, like an excel sheet"*).
+Columns are **Elo · Player · Deck · Notes**; Deck and Notes are the inputs themselves.
+Type, Tab, saved — there is no Edit / Save / Cancel anywhere, because logging a room of
+24 people one modal at a time is the thing that makes a scouting tool go unused.
+
+- **A cell commits on BLUR and only when it changed.** Without that test, tabbing across
+  a full sheet fires a write per cell.
+- **⚠ `save_scout_note` writes BOTH fields, so a cell edit has to send its sibling back —
+  and each save triggers a reload, which opens a race.** Tab from Deck into Notes fast
+  enough and the second save is built from the PRE-save row: it sends the old deck back
+  and silently undoes the edit you just made. `inflight` (a ref, keyed by player) holds
+  what was last SENT and beats the loaded row until its reload lands, then is dropped so
+  a teammate's concurrent edit degrades to the documented last-write-wins. Verified
+  against a deliberately slow 600ms server — without it the second write carries `deck:""`.
+- **⚠ There is a GLOBAL `button{border;background;border-radius;padding}` rule.** Anything
+  in the sheet meant to read as text (the name, the Elo) must unset all four or it renders
+  as a chip and the sheet stops looking like a sheet. This broke exactly once, when the old
+  card-row styles were swapped out and took the resets with them.
+- **⚠ It SCROLLS sideways on a phone rather than collapsing to stacked cards**, against the
+  site's usual mobile-table pattern — collapsing puts you back at one player per screenful,
+  which is what the sheet exists to fix. The Player column pins **only under 760px**, where
+  it actually scrolls: sticky needs an opaque `--bg-modal` (the usual translucent tokens let
+  the scrolling columns show through, same rule as the Screener's NAME column), and on a
+  desktop sheet that never scrolls that opaque panel just draws a stray box around every name.
+- **The event row IS the way in.** No expand-then-button: clicking a row in the Scout tab
+  opens its sheet. The old inline roster preview is gone.
+
+| Surface | How you get there |
+|---|---|
+| Elo » Scout tab | expand a day's event → **Log decks + notes** |
+| Elo » Upcoming SCs | an event's modal → **Scout this event** (replaces the roster CTA for scouts) |
+| Calendar | a store event's modal → the **Scout** tab (only for a tracked store) |
+| Home » Upcoming near me | an event's modal → **Scout this event** |
+
+- **Clicking a player's NAME opens their whole history**, because that is the question you
+  opened a scouting panel to answer. The **Elo rating** is the link to the Elo profile. The
+  `⟲N` chip is the "we have seen this person N times before" flag and opens the same history.
+- **⚠ Esc belongs to the innermost dialog.** `useEscToClose` and the calendar modal's own
+  handler are both document-level, so one keypress would otherwise close the history modal
+  AND the panel underneath it. Both now skip when `.scout-history-modal` is in the DOM.
+- The calendar decides whether to offer the tab from `useTrackedStoreIds` (one module-cached
+  fetch of the public `elo_tracked_stores`). A curated row carrying an `event_id` but no
+  `store_id` is offered anyway and the panel answers — refusing on a missing field would hide
+  the one event you wanted.
+
+### Pulling a roster on demand
+
+- **Per event, for any scout**: `↻ Refresh roster` inside the sheet → the `refresh-elo-rosters`
+  edge function with `{event_id}`. It resolves through `scout_event_meta`, refuses an
+  untracked store, and scrapes that one event.
+- **Every roster, admin only**: `↻ Refresh all rosters` in the **Scout tab header** — not on
+  Upcoming SCs, where it used to be and where nobody looked for it. It walks every tracked
+  upcoming SC, one paginated round trip each, which is why members get the per-event button
+  instead. One master button, in one place.
+- The function now accepts **either** credential (`can_view_store_report` OR `can_scout`),
+  each in its own try/catch so a pre-143 database missing `can_scout` does not sink a request
+  the other gate opens.
+- **⚠ The edge function needs redeploying** (`supabase functions deploy refresh-elo-rosters`).
+  A function deployed before this ignores the body and refreshes every tracked upcoming SC
+  instead — which reaches the event when it IS an SC and never when it is a league night.
+  It **echoes `event_id` back when it understood us**, which is how the client tells, so the
+  toast says which happened instead of reporting a site-wide total as this event's count.
+  `scripts/elo/scrape_rosters.py` is the cron safety net and mirrors the logic; keep the two
+  in sync.
 
 ## Upcoming-events finder (the "Near me" overlay)
 
@@ -3246,6 +3478,34 @@ Guarded by `node scripts/test_calendar.mjs` (194 checks).
   without saying what. `title`/`subtitle` stay separate in the DATA because they
   are the merge key against `SET_RELEASE_DATES`; this is display only, and
   `calEventSubtitle` returns null for set rows so the phase is not printed twice.
+- **⚠ A STORE event is named by its STORE, and its own name is the second line**
+  (2026-09-12, Zaven) — the opposite way round from how RPH stores it.
+  "Core Constructed" is what Dice Dojo calls its Thursday night and what a dozen
+  other shops call theirs, so on a calendar you built by FOLLOWING STORES the
+  event name identifies nothing: *"I can't tell it's Dice Dojo without clicking
+  on it."* The store is the half that answers which row is yours, so it takes the
+  full-width line and the event name takes the muted one under it — list row,
+  home panel, modal and `.ics` SUMMARY alike. It now matches the shape the event
+  finder's `.sc-tile` has always used.
+  - **It is a DISPLAY swap and has to stay one.** `ev.subtitle` is still the
+    store name in the data, because that is what the scout hand-off reads out of
+    a calendar entry.
+  - **`calStoreEventName` trims the store back off the event name.** RPH names
+    carry it about as often as not ("Liga Donnerstag Ravensburger Store Wien",
+    "DemonicalTCG Lorcana Free Play"), and the store printed twice down two
+    stacked lines reads as a bug. Prefix or suffix, case-insensitive, separator
+    goes with it; a name that is only the store leaves no second line at all.
+  - **A month chip carries the PAIR on its one line, store first** — so the store
+    is the half that survives the ellipsis in a 131px cell, and a day holding two
+    events at one shop is still two distinguishable chips where there is room.
+    **Store kind only**: a curated row's subtitle is its category ("Challenge
+    Championship Qualifier"), which only repeats what the kind icon beside it
+    already says. The cell cannot take two lines — three two-line chips need
+    ~105px against its 86px — so the tooltip carries the full pair instead.
+  - **`calEventFullLabel` is the one-line form**, and everything that has to name
+    an event in one line uses it: the `.ics` SUMMARY, the Google handoff, the
+    month tooltip, the `.ics` filename, and the saved/hidden lists under "My
+    stores + saved events". Four separate joins was four chances to drift.
 - **The mini map is OpenStreetMap tiles as plain `<img>`** — no library, no
   script, no cookie, nobody profiling a reader for looking at where a tournament
   is. `osmTileLayout` is Web-Mercator and returns the covering tiles plus the pin;
@@ -3639,6 +3899,29 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
+  `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
+  (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- **`supabase/144_scout_off_roster.sql`** — STAGED, not applied. Fixes a SILENT
+  data-hiding bug in 143 found on review: the panel listed only the roster, and
+  the roster scrape is delete-then-insert, so a note about a player who dropped
+  their registration stopped rendering on its own event while staying in the
+  table and in that player's history. `get_scout_event` is re-created to union
+  the roster with this event's notes (`off_roster` marks which), which also
+  enables **Add player** for someone RPH never recorded. Plus
+  `scout_member_delete(uuid)` so the admin panel's Remove works on a row added by
+  user_id. **Safe to ship the client first** — without it an off-roster note is
+  simply not listed (143's behaviour), and Add player says so rather than
+  failing. `create or replace` only; no DDL a human has to review.
+- ~~`supabase/143_scout_team.sql`~~ — **APPLIED 2026-09-12 by Zaven; verified via
+  anon REST probes**: all ten functions answer `42501 permission denied` rather
+  than `PGRST202`, and `scout_notes` / `scout_members` are unreachable directly.
+  The team scouting feature: `scout_members` (the email allowlist), `scout_notes`,
+  `can_scout()`, `scout_event_meta`, `get_scout_event`, `save_scout_note`,
+  `get_scout_player`, the three admin member RPCs, a re-created `get_roster_scout`
+  (LEFT JOIN + the scout gate), and the `elo_event_roster` FK drop. See "Scouting
+  is a TEAM tool now". **Still outstanding: redeploy `refresh-elo-rosters`**, or
+  the per-event roster refresh falls back to refreshing every tracked SC.
 - **`supabase/139_calendar_events.sql`** — STAGED, not applied. The curated
   calendar (sets / products / DLCs / CCQs) + the two championship rows already
   committed in `EVENT_TILES`. Safe to ship the client first: every read failure
@@ -3697,8 +3980,12 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
   lands, boards save on the device and the tab says so. See "Pins & Counters".
 - **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
-  check: anon-readable, graded-admin writes. Until it lands, `/gear`'s admin checklist says
-  "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
+  **and price** check: anon-readable, graded-admin writes. **Extended in place 2026-09-12**
+  with `msrp` + `price_over` (the 20%-above-MSRP ceiling) rather than followed by a new
+  migration — the whole file is idempotent (`create table if not exists`, `add column if not
+  exists`, `drop policy if exists`), so running it once is the install and running it again is
+  the upgrade, whichever state the database is in. Until it lands, `/gear`'s admin checklist
+  says "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
 - ~~`supabase/138_feedback_threads.sql`~~ — **APPLIED 2026-09-11 by Zaven; verified via REST
   probes** with the publishable key: the unread count and the thread list return 200, both the
   4-argument and the old 3-argument `submit_feedback` call shapes resolve (each raises `empty
