@@ -326,7 +326,7 @@ extracts the real pure functions out of Index.html.
 
 ## Pin + lore-counter photos (2026-08-24)
 
-41 pins and 21 lore counters render on their own Collection tab (Pins & Counters — see the next
+44 pins and 23 lore counters render on their own Collection tab (Pins & Counters — see the next
 section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from the static
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
 **Lorcana Player's, re-hosted with their permission**, cut out and served from our own storage.
@@ -334,8 +334,43 @@ section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from t
 - **`collectibleArtUrl(folder, n)`** derives the URL from `n`:
   `card-art/collectibles/{pins|counters}/NN.png`. That makes **`n` the stable id twice over** —
   it keys the owned mark AND names the photo — so renumbering an entry both moves someone's
-  collection and silently repoints its art. Append with the next free `n`, never renumber.
-  Adding an entry means uploading its photo in the same commit or the tile 404s.
+  collection and silently repoints its art. Take the next free `n`, never renumber.
+
+### ⚠ Release order is the ARRAY's order, not `n` (2026-09-12)
+
+**Both lists were a faithful copy of lorcanaplayer.com's two list pages — including that
+source's own omissions.** Backfilling them is what split the two numbers, because a
+late-discovered 2022 pin cannot be given a 2022 `n` without renumbering. So **`n` is only an
+id; `collectible_seq` (the array index, stamped by `_collectibleRow`) is release order**, and a
+backfill goes at its CHRONOLOGICAL position in the array with whatever `n` is free. The two
+`SealedCollectionView` sorts read `collectible_seq` — sorting on `n` files the Steel pin after
+the Oct 2026 entries. Every pre-existing entry had `n == index + 1`, so the swap reordered
+nothing that had shipped.
+
+What was missing, and why none of it was visible: the site agreed with its source exactly, and
+the source is a fan site with gaps.
+
+| Added | Evidence |
+|---|---|
+| **Steel Ink Symbol** pin (`n:42`, Wilds Unknown league) | Completes the six-ink run, one per season — Amber/Amethyst/Emerald/Ruby/Sapphire were all present. Pin & Pop dates it 2026-05-08, which is Wilds Unknown's own `SET_RELEASE_DATES` LGS date, and its Sapphire date (2026-02-13) matches our record to the day. |
+| **Mickey - Brave Little Tailor (card-backed)** (`n:43`) and **Maleficent Logo (Purple) (card-backed)** (`n:44`) | Both 2022 pins shipped two ways — loose in a baggie, or on a printed cardboard backer. Collectors track the backer separately, so it is its own entry. The `n:1` / `n:2` sources now say "pin only" and name D23 Expo 2022 rather than a league season that did not exist for another year. |
+| **Wilds Unknown** trove counter (`n:22`) | disneylorcana.com's own product page: "eight booster packs, storage box, lore counter, and six damage dice". Our trove run jumped Winterspell → Attack of the Vine!. |
+| **Elsa**, China exclusive (`n:23`) | Simplified Chinese organized play, which ran its own season from Jan 2025 with its own promos and appears on no English-language list. |
+
+- **Still open, deliberately not invented**: a second Chinese counter ("Purple", known only from a
+  secondary-market "set of 2" listing), and the Wilds Unknown / Attack of the Vine! **Weekly Play**
+  counters — lorcanaplayer says every Weekly Play season has had one but documents neither, and a
+  guessed name would mint a permanent `n` and a permanent photo path for it.
+- **`noArt: true`** means "real photo still wanted". Until 2026-09-12 an entry with no uploaded
+  photo rendered a broken `<img>`, because `collectibleArtUrl` always returns a URL — so the
+  glyph stand-ins were only ever reachable in theory. Now `image_url` goes null and `collectiblePh`
+  draws `COLLECTIBLE_GLYPHS` at **all six** CollectiblesView render sites (both boards, the tray,
+  the add drawer, the checklist row, the drag ghost), sized per context in styles.css because every
+  sizing rule there is `img`-scoped. The aspect probe skips photoless pins, and they are excluded
+  from `aspectsReady` — a pin that can never report an aspect must not hold the
+  first-arrangement gate open. **Photos for the five new entries are still wanted**; lifting them
+  from Pin & Pop or eBay is not an option (the permission we have is Lorcana Player's).
+- Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
 - **`scripts/cut_collectible_bg.py`** removes the white studio background. Two things make it
   work: the background is found by **flood fill from the border**, not by "white → transparent"
   (which punches straight through Baymax, every logo pin and every ink symbol's highlight); and

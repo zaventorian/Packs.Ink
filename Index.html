@@ -12739,16 +12739,33 @@ const SEALED_PUZZLES = [
 // clear of the puzzles' 912.0M range and of TCGplayer's real id space.
 //
 // ⚠️ `n` is the STABLE id, not the array index — never renumber an existing
-// entry or you silently move somebody's owned mark onto a different pin.
-// Append new ones with the next free n.
+// entry or you silently move somebody's owned mark onto a different pin AND
+// silently repoint its photo (see collectibleArtUrl). Take the next free n.
 //
-// Images are deliberately absent for now (there is no official catalog for
-// either; every photo in circulation belongs to a fan site). The tiles render
-// name + source + date and degrade cleanly — add `img` per entry later and the
-// grid picks it up with no other change.
+// ⚠️ Release order is the ARRAY's order (`collectible_seq`), NOT `n`. The two
+// were the same number until 2026-09-12, when backfilling items our source had
+// simply omitted (the Steel pin, the card-backed 2022 variants, the Wilds
+// Unknown trove counter) made them diverge: a late-discovered 2022 pin cannot
+// take a 2022 `n` without renumbering, and sorting on `n` would have filed it
+// after the Oct 2026 entries. So insert a backfill at its CHRONOLOGICAL spot in
+// the array and give it whatever `n` is free. Every existing entry is unmoved
+// (n was index+1 throughout), so the swap changed no order that shipped.
+//
+// `noArt: true` means "real photo still wanted" — the tile, the board and the
+// checklist draw the hand-drawn stand-in (COLLECTIBLE_GLYPHS) instead of a
+// broken <img>, so an undocumented collectible is still a checklist line.
+// Drop the flag in the same commit that uploads the photo.
 const LORCANA_PINS = [
-  {n:1,  name:"Mickey Mouse - Brave Little Tailor",        source:"League - The First Chapter",       date:"Sep 2022"},
-  {n:2,  name:"Maleficent Logo (Purple)",                  source:"League - The First Chapter",       date:"Sep 2022"},
+  // The 2022 pair predates league play by a year; both were handed out at the
+  // D23 Expo 2022 reveal, and both exist two ways — loose in a plastic baggie,
+  // or mounted on a printed cardboard backer. Collectors track the backer as
+  // its own item, so it is its own entry. Mickey's backer is printed like the
+  // Brave Little Tailor card; the logo pin's shows Maleficent with her staff
+  // (The First Chapter pack art) over "Your Adventure Begins Fall 2023".
+  {n:1,  name:"Mickey Mouse - Brave Little Tailor",        source:"D23 Expo 2022 - pin only",         date:"Sep 2022"},
+  {n:43, name:"Mickey Mouse - Brave Little Tailor (card-backed)", source:"Gala TCG Paris / UKGE - on backer card", date:"Sep 2022", noArt:true},
+  {n:2,  name:"Maleficent Logo (Purple)",                  source:"D23 Expo 2022 - pin only",         date:"Sep 2022"},
+  {n:44, name:"Maleficent Logo (Purple) (card-backed)",    source:"Press & invitees - on backer card", date:"Sep 2022", noArt:true},
   {n:3,  name:"Ariel - Whoseit Collector",                 source:"League - The First Chapter",       date:"Aug 2023"},
   {n:4,  name:"Scar - Fiery Usurper",                      source:"League - The First Chapter",       date:"Aug 2023"},
   {n:5,  name:"The First Chapter Logo",                    source:"League - The First Chapter",       date:"Aug 2023"},
@@ -12783,6 +12800,10 @@ const LORCANA_PINS = [
   {n:34, name:"Elsa - Ice Maker",                          source:"Challenge prize wall",             date:"Oct 2025"},
   {n:35, name:"Ruby Ink Symbol",                           source:"League - Whispers in the Well",    date:"Nov 2025"},
   {n:36, name:"Sapphire Ink Symbol",                       source:"League - Winterspell",             date:"Feb 2026"},
+  // Completes the six-ink run (Amber → Amethyst → Emerald → Ruby → Sapphire →
+  // Steel), one per season. Absent from the fan-site list we built this from;
+  // dated 2026-05-08 elsewhere, which is Wilds Unknown's own LGS release date.
+  {n:42, name:"Steel Ink Symbol",                          source:"League - Wilds Unknown",           date:"May 2026", noArt:true},
   {n:37, name:"Be Prepared",                               source:"League - Season of Villainy",      date:"Sep 2026"},
   {n:38, name:"Gaston - Superior Archer",                  source:"League - Season of Villainy",      date:"Sep 2026"},
   {n:39, name:"Madam Mim - Resourceful Trickster",         source:"League - Season of Villainy",      date:"Sep 2026"},
@@ -12813,7 +12834,16 @@ const LORCANA_LORE_COUNTERS = [
   {n:18, name:"Fabled",                           source:"Illumineer's Trove",                   date:"Aug 2025"},
   {n:19, name:"Whispers in the Well",             source:"Illumineer's Trove",                   date:"Nov 2025"},
   {n:20, name:"Winterspell",                      source:"Illumineer's Trove",                   date:"Feb 2026"},
+  // Every trove ships one, this one included — disneylorcana.com lists "eight
+  // booster packs, storage box, lore counter, and six damage dice". The
+  // fan-site list we built from skips it, which is why we did.
+  {n:22, name:"Wilds Unknown",                    source:"Illumineer's Trove",                   date:"May 2026", noArt:true},
   {n:21, name:"Attack of the Vine!",              source:"Illumineer's Trove",                   date:"Jul 2026"},
+  // Simplified Chinese (Mainland China) organized play, which started its own
+  // season in Jan 2025 with its own promos — none of it appears on the
+  // English-language lists. Sold on the secondary market paired with a second
+  // design ("Purple"), which is unconfirmed and so has no id yet.
+  {n:23, name:"Elsa",                             source:"Weekly Play - China exclusive",        date:"2025",     noArt:true},
 ];
 // Stand-ins until real photos exist — without one, a grid tile collapses to a
 // bare line of text and the section reads as broken rather than as a checklist.
@@ -12828,6 +12858,11 @@ const COLLECTIBLE_GLYPHS = {
     <circle cx="12" cy="12" r="8.4"/><path d="M12 12l3.6-2.6"/>
     <path d="M12 3.6v1.8M20.4 12h-1.8M12 20.4v-1.8M3.6 12h1.8"/></svg>`,
 };
+// A collectible carrying `noArt` has no licensed photo yet, so every surface
+// draws the stand-in above rather than a broken <img>. Sized per context in
+// styles.css (.cb-item/.cb-tray-item/.cb-row-thumb/... > .collectible-ph).
+const collectiblePh = (r) => html`<div class="collectible-ph" aria-hidden="true">
+  ${COLLECTIBLE_GLYPHS[r.product_type] || null}</div>`;
 // Photographs of the pins and dials, cut out of Lorcana Player's product shots
 // with their permission (2026-08-24) and re-hosted on our own storage. The
 // white studio background is removed before upload -- see
@@ -12841,7 +12876,7 @@ const COLLECTIBLE_GLYPHS = {
 const collectibleArtUrl = (folder, n) =>
   `${SUPABASE_URL}/storage/v1/object/public/card-art/collectibles/${folder}/${String(n).padStart(2,"0")}.png`;
 
-const _collectibleRow = (c, kind, base, setId, folder) => ({
+const _collectibleRow = (c, kind, base, setId, folder, seq) => ({
   tcgplayer_product_id: base + c.n,
   name: c.name,
   clean_name: c.name,
@@ -12850,16 +12885,17 @@ const _collectibleRow = (c, kind, base, setId, folder) => ({
   printing: "Normal",
   low_price: null,
   market_price: null,
-  image_url: c.img || collectibleArtUrl(folder, c.n),
+  image_url: c.noArt ? null : (c.img || collectibleArtUrl(folder, c.n)),
   buy_url: null,
   is_collectible: true,
   collectible_n: c.n,
+  collectible_seq: seq,
   collectible_source: c.source,
   collectible_date: c.date,
 });
 const SEALED_COLLECTIBLES = [
-  ...LORCANA_PINS.map(c => _collectibleRow(c, "Pin", 950000000, "__pins__", "pins")),
-  ...LORCANA_LORE_COUNTERS.map(c => _collectibleRow(c, "Lore Counter", 960000000, "__lore_counters__", "counters")),
+  ...LORCANA_PINS.map((c, i) => _collectibleRow(c, "Pin", 950000000, "__pins__", "pins", i)),
+  ...LORCANA_LORE_COUNTERS.map((c, i) => _collectibleRow(c, "Lore Counter", 960000000, "__lore_counters__", "counters", i)),
 ];
 // Strip the "Disney Lorcana: " prefix that TCGCSV prepends to every product —
 // the set pill already says where this is from; the prefix is just noise.
@@ -20843,9 +20879,11 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
       for(const [type, list] of byType){
         // Inside each type-section, sort newest-set first then by name.
         list.sort((a, b) => {
-          // Collectibles are a timeline; `n` is release order, and several
-          // share a name across sources, so alphabetical is actively wrong.
-          if(a.collectible_n != null && b.collectible_n != null) return a.collectible_n - b.collectible_n;
+          // Collectibles are a timeline; `collectible_seq` is release order —
+          // NOT `n`, which is only an id and runs ahead of it for a backfilled
+          // entry. Several share a name across sources, so alphabetical is
+          // actively wrong.
+          if(a.collectible_seq != null && b.collectible_seq != null) return a.collectible_seq - b.collectible_seq;
           const ai = a.set_id != null ? (setOrder[a.set_id] ?? 999) : 1000;
           const bi = b.set_id != null ? (setOrder[b.set_id] ?? 999) : 1000;
           if(ai !== bi) return ai - bi;
@@ -20866,8 +20904,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     const out = [];
     for(const [sid, list] of bySet){
       list.sort((a, b) =>
-        (a.collectible_n != null && b.collectible_n != null)
-          ? a.collectible_n - b.collectible_n
+        (a.collectible_seq != null && b.collectible_seq != null)
+          ? a.collectible_seq - b.collectible_seq
           : sealedDisplayTypeRank(deriveSealedDisplayType(a)) - sealedDisplayTypeRank(deriveSealedDisplayType(b))
             || (a.name||"").localeCompare(b.name||""));
       out.push({
@@ -21386,6 +21424,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
   useEffect(() => {
     let alive = true;
     for(const r of pinRows){
+      if(!r.image_url) continue;   // noArt: nothing to measure, takes the typical box
       const img = new Image();
       img.onload = () => {
         if(!alive || !img.naturalWidth || !img.naturalHeight) return;
@@ -21399,7 +21438,8 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
   const aspectOf = (n) => aspects[String(n)] || PIN_TYPICAL_ASPECT;
   const [aspectWaitOver, setAspectWaitOver] = useState(false);
   useEffect(() => { const t = setTimeout(() => setAspectWaitOver(true), 3000); return () => clearTimeout(t); }, []);
-  const aspectsReady = ownedPinNs.every(k => aspects[k]);
+  const photoPinNs = useMemo(() => new Set(pinRows.filter(r => r.image_url).map(r => String(r.collectible_n))), [pinRows]);
+  const aspectsReady = ownedPinNs.every(k => aspects[k] || !photoPinNs.has(k));
   const aspectsKey = ownedPinNs.map(k => aspects[k] ? "1" : "0").join("");
 
   // Boards: null until loaded, then {pins?, counters?}. A board with no stored
@@ -21795,7 +21835,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       onPointerDown=${e => beginDrag(e, "pins", k, false)}
       onClick=${readOnly ? (() => setDetail(r)) : undefined}
       onKeyDown=${onItemKey("pins", k)}>
-      <img src=${r.image_url} alt="" draggable="false"/>
+      ${r.image_url ? html`<img src=${r.image_url} alt="" draggable="false"/>` : collectiblePh(r)}
     </button>`;
   });
   const counterItems = (b) => ownedCounters.filter(r => b.items[String(r.collectible_n)]).map(r => {
@@ -21811,7 +21851,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       onPointerDown=${e => beginDrag(e, "counters", k, false)}
       onClick=${readOnly ? (() => setDetail(r)) : undefined}
       onKeyDown=${onItemKey("counters", k)}>
-      <img src=${r.image_url} alt="" draggable="false"/>
+      ${r.image_url ? html`<img src=${r.image_url} alt="" draggable="false"/>` : collectiblePh(r)}
     </button>`;
   });
   const renderBoard = (kind) => {
@@ -21879,7 +21919,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
             title=${r.name} aria-label=${"Place " + r.name + " on the board"}
             onPointerDown=${e => beginDrag(e, kind, k, true)}
             onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); placeFromTray(kind, k); } }}>
-            <img src=${r.image_url} alt="" draggable="false"/>
+            ${r.image_url ? html`<img src=${r.image_url} alt="" draggable="false"/>` : collectiblePh(r)}
           </button>`;
         })}
       </div>
@@ -21893,7 +21933,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       <summary>+ Add ${kind === "pins" ? "pins" : "lore counters"} you own <span class="muted" style=${{fontWeight: 400}}>${missing.length} missing</span></summary>
       <div class="cb-add-list">
         ${missing.map(r => html`<div key=${r.tcgplayer_product_id} class="cb-add-item">
-          <img src=${r.image_url} alt="" loading="lazy"/>
+          ${r.image_url ? html`<img src=${r.image_url} alt="" loading="lazy"/>` : collectiblePh(r)}
           <div style=${{minWidth: 0}}>
             <div class="cb-add-name" title=${r.name}>${r.name}</div>
             <div class="cb-add-src" title=${r.collectible_source}>${r.collectible_source} · ${r.collectible_date}</div>
@@ -21939,7 +21979,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
                   role="button" tabIndex=${0} title="Where it came from, and your copies"
                   onClick=${() => setDetail(r)}
                   onKeyDown=${e => { if(e.key === "Enter"){ e.preventDefault(); setDetail(r); } }}>
-                  <div class="cb-row-thumb"><img src=${r.image_url} alt="" loading="lazy"/></div>
+                  <div class="cb-row-thumb">${r.image_url ? html`<img src=${r.image_url} alt="" loading="lazy"/>` : collectiblePh(r)}</div>
                   <div class="cb-row-meta">
                     <div class="cb-row-name">${r.name}</div>
                     <div class="cb-row-src">${r.collectible_source} · ${r.collectible_date}</div>
@@ -21985,7 +22025,7 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
         : "Couldn't reach your saved boards, so changes stay on this device for now."}</div>`}
     <//>`}
     ${ghostRow && html`<div class="cb-ghost" style=${{left: drag.cx + "px", top: drag.cy + "px"}}>
-      <img src=${ghostRow.image_url} alt=""/>
+      ${ghostRow.image_url ? html`<img src=${ghostRow.image_url} alt=""/>` : collectiblePh(ghostRow)}
     </div>`}
     ${detail && html`<${SealedDetailModal} product=${detail}
       sealedCollection=${owned} sealedMeta=${sealedMeta || {}}

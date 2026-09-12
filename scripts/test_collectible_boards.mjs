@@ -46,6 +46,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("function nextFreeCounterCell(board, drawnNs, geom, n){", NL + "}"),
   grab("const tidyCounters = (ns, geom) => {", NL + "};"),
   grab("const collectibleBoardsUnavailable = (err) => {", NL + "};"),
+  grab("const LORCANA_PINS = [", NL + "];"),
+  grab("const LORCANA_LORE_COUNTERS = [", NL + "];"),
+  "export {LORCANA_PINS, LORCANA_LORE_COUNTERS};",
   "export {isCollectiblePid, PIN_BOARD_ASPECT, PIN_BOARD_BASE, PIN_TYPICAL_ASPECT, PIN_BOARD_SCALES, pinWidthOf, pinRectOf,",
   "  COUNTER_BOARD_COLS, counterBoardGeom, counterCellCenter, counterCellAt, normalizeCollectibleBoard,",
   "  nextFreePinSpot, tidyPins, nextFreeCounterCell, tidyCounters, collectibleBoardsUnavailable};",
@@ -195,6 +198,37 @@ const checkTidy = (ns) => {
   ok("tidy fills sockets in reading order", JSON.stringify(tidy) === JSON.stringify({3: {c: 0, r: 0}, 7: {c: 1, r: 0}, 11: {c: 2, r: 0}}),
     JSON.stringify(tidy));
   ok("tidy never overflows the grid", Object.keys(mod.tidyCounters(Array.from({length: 99}, (_, i) => String(i)), g)).length === g.cols * g.rows);
+}
+
+// ── The catalogs: `n` is an id forever, the array is the timeline ──────────
+// Both failure modes are silent. Reusing or renumbering an `n` moves somebody's
+// owned mark onto a different pin AND repoints its photo (collectibleArtUrl
+// derives the URL from `n`). Sorting the timeline on `n` instead of the array
+// order files a backfilled entry — the Steel pin, the card-backed 2022 pair —
+// at the wrong end of the list, which just reads as a jumbled shelf.
+for (const [label, list, expectMin] of [["pins", mod.LORCANA_PINS, 44], ["counters", mod.LORCANA_LORE_COUNTERS, 23]]) {
+  const ns = list.map((c) => c.n);
+  ok(label + ": every n is a distinct positive integer", ns.length === new Set(ns).size
+    && ns.every((n) => Number.isInteger(n) && n > 0), JSON.stringify(ns));
+  ok(label + ": the list only ever grows", list.length >= expectMin, list.length + " < " + expectMin);
+  ok(label + ": every entry names a source and a date", list.every((c) => c.name && c.source && c.date));
+  ok(label + ": noArt is a bare flag, so image_url goes null rather than 404",
+    list.every((c) => !("noArt" in c) || c.noArt === true));
+}
+ok("a backfilled pin sits out of n-order on purpose, so n can't be the sort key",
+  mod.LORCANA_PINS.some((c, i) => c.n !== i + 1), "no backfilled pin — did someone renumber?");
+{
+  // The six ink-symbol pins are one per season and the set must stay complete —
+  // Steel was missing from the fan-site list this catalog was built from.
+  const inks = ["Amber", "Amethyst", "Emerald", "Ruby", "Sapphire", "Steel"];
+  const missing = inks.filter((i) => !mod.LORCANA_PINS.some((c) => c.name === i + " Ink Symbol"));
+  ok("all six ink-symbol pins are catalogued", missing.length === 0, "missing: " + missing);
+  // Every Illumineer's Trove ships a lore counter, so the run can have no holes.
+  const troves = mod.LORCANA_LORE_COUNTERS.filter((c) => c.source === "Illumineer's Trove").map((c) => c.name);
+  const want = ["Into the Inklands", "Ursula's Return", "Shimmering Skies", "Azurite Sea", "Archazia's Island",
+    "Reign of Jafar", "Fabled", "Whispers in the Well", "Winterspell", "Wilds Unknown", "Attack of the Vine!"];
+  const gone = want.filter((s) => !troves.includes(s));
+  ok("every Illumineer's Trove has its lore counter", gone.length === 0, "missing: " + gone);
 }
 
 // ── The pre-migration fallback ─────────────────────────────────────────────
