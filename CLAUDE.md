@@ -46,6 +46,7 @@ node scripts/build_dist.mjs && npx wrangler@4 deploy
 - **`Zone → Workers Routes → Edit` was GRANTED to the token 2026-08-23** (edited in the dashboard, packs.ink-scoped, same secret — no roll, so the GitHub secret is untouched). Historical context: the missing permission made every real run of this workflow "fail" after a SUCCESSFUL deploy (found 2026-08-20) — wrangler uploads the script first, then reconciles `wrangler.toml`'s `routes` against the zone; that second call 403'd (`Authentication error [code: 10000]`, `/zones/*/workers/routes`) and the bare non-zero exit skipped the purge and the verify. The deploy step's swallow for that one case (upload succeeded AND the error names `workers/routes`) stays as belt-and-braces; with the grant in place the annotation should simply stop appearing — if it ever returns, the token permission regressed.
 - **The verify step is the point of the workflow, not decoration.** It curls `packs.ink/__deploy-check-<random>` — a path that cannot be cached, so it hits the SPA fallback and reports what the Worker is really serving — and fails the run if the served `styles.css?v=` doesn't match what was built. That is the difference between "deployed" and "deployed but the edge is still stale", which is exactly the failure that froze prod at v309 for five days.
 - It also warns (never blocks) when the `Index.html` / `sw.js CORE_ASSETS` / `CACHE_VERSION` trio fall out of lockstep.
+- **⚠ The verify step is blind to a version that never moved, and on 2026-09-08 two shells shipped as `v377`.** PR #31 and PR #32 each branched from a main at v376 and each bumped to 377; #31 deployed, then #32 merged and deployed, and its verify compared the served `styles.css?v=377` against the built `377` and passed — against the *previous* PR's HTML. Nothing was broken for users (Workers Assets is content-addressed, so wrangler re-uploaded the three changed files, and `Index.html` / `styles.css` / `logo.js` are network-first anyway), but the run proved nothing and the number now names two different shells. **When two PRs are in flight, the second one to merge must bump PAST the version, not to it.** The workflow now records what the edge serves BEFORE deploying and warns when new `Index.html` bytes ship under a version that was already live — the one signal that separates a genuine collision from an innocent redeploy is wrangler's own `+ /index.html` line, which only appears when the bytes actually differ. It stays a warning: by the time it can be known the deploy has already happened and is fine, and it is the label that is ambiguous, not the code.
 - **DB**: Supabase (Postgres + PostgREST).
   - **Catalog**: `cards`, `sets`, `prices_daily`, `sealed_products`, `graded_prices_daily`.
   - **User**: `profiles` (carries collection-sharing visibility + share_token cols), `collection_items`, `sealed_collection_items`, `graded_collection_items`, `graded_collection_goals`, `decks`, `deck_cards`, `deck_favorites`, `user_follows`, `deck_views`, `screener_views`.
@@ -83,6 +84,55 @@ Accuracy work (round-by-round history, replay harness, the miss taxonomy) lives 
 - **`scanner_testers` + `is_scanner_tester()` still gate the WRITE path in the repo's own migrations — and that is the open question of the 2026-09-04 audit.** Migration 98 requires `is_scanner_tester() OR is_graded_admin()` on `scan_samples` INSERT/UPDATE and on the `scan-samples` storage INSERT (the READ policy is 91's owner-or-graded-admin and never mentions testers). No later migration drops that clause, so either every non-allowlisted user's uploads have been failing silently since the public beta (`uploadSample` swallows every error) or the live policy was changed outside the repo. **`supabase/132_scan_samples_public_beta.sql` — APPLIED 2026-09-05 by Zaven** — drops the tester clause and adds a per-user rolling-24h storage-object cap (3000 = 1000 rows × 3 objects), so public uploads work from that day whichever way the history went. Whether `scanner_testers` / `is_scanner_tester()` still have any referrer is a question for §1 of `supabase/diagnostics/public_release_live_checks.sql`; don't drop them without running it.
 - **`SCANNER_QA_ONLY` stays `true` — PERMANENTLY, as of 2026-08-23.** Zaven's call: *"I don't want auto-add to collection; let the user confirm the list after running a session."* Review-before-save is the shipping UX, so the ≥95% precision bar gates nothing any more; flipping this to false restores the Stack-scan / Single auto-add flow and needs a new product decision, not a metric.
   - **The bar was measured anyway that day, the honest way** (photo-verify a random sample of UNREVIEWED shown-✓ rows — labelled rows cannot tell you, per round 11): 170 v16 samples judged against official art in two disjoint seeded rounds → **167 correct = 98.2%, one-sided 95% lower bound 95.7%. It clears.** Retired pre-v16 builds: 83.3% (25/30); the gap is real (Fisher exact p=0.009), so v16's matcher work is what moved it. All 3 v16 misses were name/art collisions between distinct cards (Minnie *Curious Adventurer* vs *Drum Major*; *Genie - Hard to Grasp* read as *Gene - Niceland Resident*; one red-panda song read as another) — exactly the class review catches. Method, if it ever needs re-running: pull `scan_samples` where `reviewed=false AND corrected=false AND debug->>conf='high'`, seeded-sample per build, compose side-by-side sheets of the stored scan crop vs the claimed card's `image_normal`, judge each pair, then Wilson-interval the result.
+
+### Version chips in the review row (2026-09-12)
+
+A scan answers "which CARD is this", never "which PRINTING of it", so the review row
+carries one control per question. The **Non-Foil / Foil** segment is the FINISH (one
+card_id, two SKUs); the segment beside it is the **VERSION** — different card_ids that
+share a Product Name: the base card, its Enchanted/Epic/Iconic, and its promos. Tapping
+one is exactly the pick the editor's search already made, sourced from a card that is
+already on screen.
+
+From the beta's most-reported friction (Aaron P, 2026-09-11): the Epic *Heihei - Created
+by the Vine* read as the Rare, and the fix was to go and search by name for a card that
+was on the screen — *"basically right card but extra steps for the variant"*. Same
+report: a set's league promos "aren't an option whenever you click the pencil".
+
+- **623 of the shipped index's 2,479 names carry more than one version** — 541 pairs, 66
+  threes, 16 with four or more, topping out at *Mickey Mouse - True Friend* (7). **593 of
+  those families have genuinely different art**, so the matcher CAN separate them; it just
+  lands on a sibling often enough to matter. The other 30 are byte-identical art
+  (`art_key` collisions) where no matcher work will ever help and a button is the only
+  possible answer.
+- **⚠ The chip row is the RARITY axis and nothing else.** Two booster printings of one
+  card both label "Common" — true, and an answer to nothing — so `scanVariantChipsOk`
+  refuses a family whose labels collide and leaves it to the editor. That is **205 of
+  623**: reprints and multi-promo runs, where a one-word chip would be a coin flip dressed
+  as a choice. `SCAN_VARIANT_MAX` (4) caps the rest; 616 of 623 families are 4 or fewer.
+- **The editor carries everything the chips refuse.** "This card's versions" lists every
+  printing with its ART and its set, above the search box, uncapped — a picture cannot
+  lie the way a word can. It is also the direct answer to the league-promo half of the
+  report.
+- **⚠ The family key is CASE-FOLDED** (`scanVariantFamilyKey`), because Lorcast's own
+  spelling is not stable across sets: "HeiHei" vs "Heihei", "Down In New Orleans" vs "Down
+  in New Orleans". Nine families and **19 printings** hang on that one `toLowerCase()`,
+  four of them base/promo pairs — exactly the promos this exists to offer.
+- **⚠ Tapping the version already selected is a NO-OP**, matching the foil segment. It
+  would otherwise stamp `reviewed: true` on a row nobody judged, and unreviewed shown-✓
+  rows are the only honest precision sample there is (round 11).
+- **⚠ `.scanner-qa-rowinfo` clips, it does not scroll.** A chip pushed past the right edge
+  is simply gone with nothing on screen to say it existed — which is what a 4-version card
+  plus a foil pair did at 360px. The segment wraps inside its own border, and "Super Rare"
+  renders as **SR** on the chip only (the site's own smart search already takes `sr` as a
+  rarity token); the full name stays in the tooltip and in the editor.
+- Ordering is rarity first, then release rank — so a reprint falls in behind the printing
+  it reprints rather than wherever the alphabet puts its set.
+- A pick writes the same truth label as a search pick, so a switched row still reads as a
+  scanner miss in the flywheel, which it is.
+
+Guarded by `node scripts/test_scan_variants.mjs`, which replays the real helpers over the
+shipped `scanner/index.json` and so re-measures every count above.
 
 ### Consent + the upload opt-out (migration 114)
 
@@ -276,7 +326,8 @@ extracts the real pure functions out of Index.html.
 
 ## Pin + lore-counter photos (2026-08-24)
 
-41 pins and 21 lore counters render as checklist tiles in the Sealed collection, from the static
+41 pins and 21 lore counters render on their own Collection tab (Pins & Counters — see the next
+section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from the static
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
 **Lorcana Player's, re-hosted with their permission**, cut out and served from our own storage.
 
@@ -307,6 +358,57 @@ extracts the real pure functions out of Index.html.
   `i0.wp.com/lorcanaplayer.com/wp-content/uploads/...`, which serves the same files. The Weekly
   Play counters are not in the counters page's HTML at all — `product-sitemap.xml` enumerates
   them and each `/product/` page carries its photo path.
+
+## Pins & Counters — a Collection tab of its own (2026-09-11)
+
+Pins and lore counters were two sections of tiles at the foot of the Sealed tab. They aren't
+sealed product — nobody sells them — and what a collector does with them is *display* them, so
+Zaven asked for their own tab: *"make it look like an actual pin board (and lore counter board,
+since they all can kinda snap together) … but also still having a list element and way to see
+what you're missing and where it's from."* `/collection?c=pins` → `CollectiblesView` (just above
+the Graded collection in Index.html), with three views: **Pin board · Counter board · Checklist**
+(`packsink:collectibles:view`). Guarded by `node scripts/test_collectible_boards.mjs`.
+
+- **Ownership did not move.** An owned pin is still a `sealed_collection_items` row under its
+  synthetic pid (950000000+n / 960000000+n), so the owned marks, the offline mirror and sharing are
+  untouched. `isCollectiblePid` keeps them out of the Sealed tab's unit / SKU counts, its Δ% fetch
+  and the viewer compare counts, where pins used to inflate "Units owned".
+- **Sharing rides the SEALED visibility axis**, because the data behind the tab lives there: the
+  tab appears in viewer mode exactly when sealed is visible (`effectiveSection`).
+- **Only the arrangement is new — migration 139 (STAGED):** `collectible_boards(user_id, board,
+  layout jsonb)`, one document per board, owner-only RLS, and `get_shared_collectible_boards` for
+  viewers under the same rule as `get_shared_collection_sealed`. **Safe to ship first**: until it
+  lands, boards save to `localStorage["packsink:collectibleBoards:<uid8>"]` and the tab says
+  "saved on this device"; the first load after it lands carries a device-only board up.
+- **⚠ `sync === "offline"` writes nothing to the account.** A load that failed for any reason
+  other than a missing table leaves the device copy on screen and neither saves nor
+  auto-arranges — writing a fresh arrangement over a board we couldn't read would destroy it.
+- **The pin board is a 3:2 cork sheet, and placements are fractions of it** (`{x, y, r, z}`), so an
+  arrangement made on a monitor reads the same on a phone. **Every pin gets the same AREA, not the
+  same width** (`pinWidthOf`): the 41 photos run 0.70–2.35 wide-to-tall, and one fixed width made
+  logo pins slivers and pendant pins towers. Aspects are measured as the photos load.
+- **The counter board is a honeycomb of POINTY-TOP hexagons because that is the counters' shape** —
+  measured off the photos: the Weekly Play dials and most Trove dials are 0.866 wide-to-tall with a
+  point at the top. Placements are sockets (`{c, r}`), odd rows shifted half a socket, so
+  neighbouring counters butt edge to edge. The test asserts every neighbouring pair of sockets is
+  exactly one socket-width apart, which is what makes it a honeycomb. A few Trove dials were
+  photographed at an angle (1.25–1.58 wide-to-tall) and sit smaller in their socket.
+- One pointer-event drag path for mouse and touch. Items are `touch-action:none`; the board keeps
+  `pan-y` so the page still scrolls past it. Drop a counter on another to swap them; drag anything
+  off the board to send it back to the tray. Keyboard: arrows move, `[` `]` turn a pin, Delete
+  takes it down.
+- **The first look at a never-saved board lays out what you own** (`tidyPins` / `tidyCounters`),
+  but only once the store has actually been read. After that, newly owned items wait in the TRAY
+  so they never disturb an arranged board — except "I have it" in the add drawer, which is you
+  asking to put that one up.
+- `normalizeCollectibleBoard` is the only way a stored layout enters: it repairs, never throws. A
+  placement for something you no longer own is KEPT (re-own it and it goes back where it was) but
+  never drawn, and on the honeycomb it can't hold a socket against a counter you can see.
+- The Checklist is the "what am I missing, and where did it come from" view: All / Missing /
+  Owned, Pins / Lore counters, a name-or-source search, and the owned stepper. A row opens the
+  collectible branch of `SealedDetailModal`.
+- The Sealed tab carries a one-line pointer to the new tab, for everyone who remembers the pins
+  living there.
 
 ## Icons — there are no emoji in the UI (2026-08-24)
 
@@ -725,6 +827,57 @@ Four guards, all because raw TCGCSV is noisy: **`market_price` first** (low_pric
 - **Cooldown is per (rule, card)**, not per rule: one card cooling off must not silence the rest of a list. Without it, a card parked above its threshold alerts every day forever.
 - **The unread badge is on the profile AVATAR, not a nav bubble.** A third bubble in right-cluster row 2 is the documented regression that tips ANALYTICS off the edge at ≤420px. `.profile-alert-badge` is absolutely positioned so it costs no layout width, and renders only when the count is non-zero.
 - Retention: `cleanup_old_alert_events()` (180 days) runs in the selfheal job beside `cleanup_old_trades()`.
+
+## Feedback replies (migration 138)
+
+The footer feedback box was one-way. Now every submission is the first message of a
+conversation: an admin replies from the inbox, the sender reads it the next time they open the
+box, and can follow up in the same thread. `FeedbackModal` / `FeedbackAdminModal` sit above
+`Footer` in Index.html. Guarded by `node scripts/test_feedback_threads.mjs`, which also checks
+the migration against the client (every RPC defined, every grant on the declared signature).
+
+- **A signed-in thread is keyed on the account; an anonymous one on `reply_token`**, a 128-bit
+  secret the browser mints with `genTradeToken` and keeps in
+  `localStorage["packsink:feedback:tokens"]`. It travels in request BODIES only, never a URL,
+  and it is the only thing that can carry a reply back to someone who never signed in. Notes
+  sent anonymously before 138 have neither, so the inbox hides Reply on them
+  (`reachable: false`) rather than letting a reply go nowhere.
+- **⚠ `packsink:feedback:` must never match `AUX_EVICTABLE_PREFIXES`.** A wiped token strands an
+  anonymous sender's conversation with no error anywhere. The test pins it.
+- **Unread is timestamps, both ways**: `last_user_at` / `last_admin_at` (newest message per
+  side) against `user_seen_at` / `admin_seen_at`. **Marking seen takes the timestamp the reader
+  actually saw (`p_until`), clamped to now()** — a reply that lands between loading a thread and
+  marking it read has to stay unread.
+- **Three surfaces for one fact**: the badge on the footer's Send feedback button (the literal
+  ask), the badge on the admin's Feedback inbox button, and a corner notice
+  (`.feedback-reply-notice`). The notice exists because the footer is below the fold on every
+  long page, and a badge nobody scrolls to is not a notification. It dismisses PER REPLY
+  (`packsink:feedback:noticeDismissed` holds the newest reply's time), so reading one of two
+  replies can't resurrect it for the other. z-index 50: under the Lore Tracker board (60) and
+  every modal, over the deck editor's docked bars.
+- **App asks for one cheap count** (`get_my_feedback_unread`, plus `get_feedback_admin_unread`
+  for admins) on sign-in change, on return to the tab (at most every 5 min) and when either box
+  closes — and **not at all for an anonymous visitor holding no tokens**, which is almost
+  everyone. After a `feedbackThreadsUnavailable` error it stops asking for the session.
+- **Opening the box lands on the newest unread thread**; the badge or the notice is why it was
+  opened. Opening a thread marks it read.
+- **A follow-up reopens a resolved thread** and spends from the same per-IP (10/h) and global
+  (120/h) limits as a new note. `_feedback_rate_limit()` is 133's body, moved, not rewritten.
+- **The inbox marks sender activity seen when it LOADS**, up to the newest activity that load
+  returned; the "New" chips stay up for that visit. An admin reply never touches
+  `admin_seen_at` (a follow-up typed meanwhile hasn't been seen), and an admin's own
+  submissions arrive already seen.
+- **Pre-138 databases degrade to the old one-way box** via `feedbackThreadsUnavailable`
+  (PGRST202 / 42883 / 42P01 / 42703). An anonymous send retries without `p_reply_token` on that
+  error and stores no token. Safe to ship the client first.
+- `submit_feedback` gained a 4th parameter, so 138 DROPS the 3-argument version first — two
+  overloads make PostgREST's resolution ambiguous. The new one defaults the token to null, so a
+  client that never sends it still works.
+- `feedback_messages` is RLS-on with no policies (definer-only, like `feedback`). `service_role`
+  gets SELECT so the scripts that work the queue can read follow-ups; the original note stays in
+  `feedback.comment` where they already read it.
+- **No email and no push.** A reply reaches someone only when they come back to the site. Say
+  "shows up in your feedback box", never "we'll notify you" — same honesty rule as price alerts.
 
 ## Price Graphing Compare
 
@@ -1434,7 +1587,7 @@ Decks' sections and the Screener's mode were localStorage-only, so every one of 
 - **`/decks?s=<section>`** — `yours|favorites|following|discover|tournaments` (`DECK_SECTION_KEYS`).
 - **`/decks?f=<format>`** — `core|infinity|coconut`; implies Discover, so `/decks?f=coconut` alone is the short share link.
 - **`/screener?m=<mode>`** — `raw|graded|sealed` (`SCREENER_MODES`).
-- **`/collection?c=<section>`** — `cards|sealed|graded` (`COLLECTION_SECTIONS`, added 2026-08-24). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
+- **`/collection?c=<section>`** — `cards|sealed|graded|pins` (`COLLECTION_SECTIONS`, added 2026-08-24; `pins` = Pins & Counters, 2026-09-11). Same rules as the rest; `cards` is the default so it's omitted. In viewer mode the tab hrefs keep `?collection=`+`?token=` (`collectionSectionHref`) — drop the token and you hand someone a link that dead-ends on "this collection is private", which the owner can never reproduce.
 
 Rules that keep this from fighting the rest of the URL machinery:
 
@@ -1565,6 +1718,13 @@ are tuning counts — the thing you're working on was the small column. **`workL
   `groupCards(deckRaw)` — the single-canonical-matcher rule, and the same
   mainline-sets-only universe the CardBrowser gets. Behaviour matches the browser
   it replaces exactly, strict-keyword quirks included.
+- **The deck's own inks pre-select its ink chips**, the same `defaultInks` rule the
+  CardBrowser follows: 1-2 inks, seeded once on mount, and a chip the user turns off
+  stays off. Until 2026-09-11 the bar passed a blank filter, so "belle" in a
+  green/blue deck listed every Belle in every ink (Zaven's report). The six shields
+  sit in the bar (`.deck-quickadd-inks`), and when the ink filter empties the
+  results the message names the inks and offers **search every ink** — a filter you
+  can't see from the results is a search that silently lies.
 - **Results open UPWARD.** The bar is the last thing on screen; a downward list has
   nowhere to go.
 - **The whole ROW adds a copy**, art included — the `+` is the affordance, not the
@@ -1838,9 +1998,10 @@ the growth: two 600px cards read as a mistake, not as emphasis.
 
 ### Movers-banner chip filters (`MoverChipGroup`)
 
-Two banners carry a multi-select chip group in their `controls` slot. Both use the shared `MoverChipGroup` + `toggleChipKey` + `readChipPref` trio — **don't hand-roll a third one.**
+Three banners carry a multi-select chip group in their `controls` slot. All use the shared `MoverChipGroup` + `toggleChipKey` + `readChipPref` trio — **don't hand-roll another one.**
 
 - **Chase Movers** — `CHASE_RAR_ORDER` (Epic / Enchanted / Iconic), persisted at `packsink:home:chaseRars`.
+- **Sealed Movers** — `SEALED_MOVER_KIND_ORDER` (`boxes` / `troves` / `specials`), persisted at `packsink:home:sealedKinds`. See "Sealed Movers" below.
 - **Rare–Legendary Movers** — `RL_PRINTING_ORDER` (`normal` / `foil`, labelled Normal / Cold Foil), persisted at `packsink:home:rlPrintings`. Was a one-of-N `Both | Normal | Cold Foil` seg-grp keyed `packsink:home:rlPrinting` until 2026-08-02; the old key is still read once as a migration (`"all"` falls through to the default). `MOVER_FOIL_PRINTINGS` buckets Holofoil under foil, so there's no third state.
 
 Invariants:
@@ -1850,6 +2011,46 @@ Invariants:
 - **The banner subtitle and the title-click Screener jump both read the selection.** Chase passes `filterRarities`; rare–leg passes `showFoil` / `showNonFoil`. Both are in the buckets `useMemo` deps.
 - **These keys are preferences, not caches.** They live under `packsink:home:` but do NOT match any `AUX_EVICTABLE_PREFIXES` entry (`packsink:home:tourneys:` is the tournament *cache* — note the trailing colon, and that `packsink:home:tourneyCollapsed` deliberately doesn't match it). Don't add a bare `packsink:home:` prefix to that list or every home preference resets on the next `AUX_CACHE_VERSION` bump.
 - Persistence is **per browser (localStorage), not per account** — these aren't in the `user_metadata` prefs-sync effect, so picks don't follow a signed-in user across devices.
+
+### Sealed Movers (2026-09-11)
+
+A movers row for sealed product, from Zaven's feedback: *"Toggles for product types. Maybe boxes,
+Troves, specials. Ignore packs, puzzles, etc."* `sealedMoverCandidates` → `sealedMoverRows` →
+`SealedMoverTile`, all just below `MoverTile`. Guarded by `node scripts/test_sealed_movers.mjs`.
+
+- **Three chips, not the Screener's type list.** `SEALED_MOVER_KIND_OF_TYPE` maps
+  `deriveSealedDisplayType` onto Boxes (Booster Boxes), Troves (Illumineer's Troves) and Specials
+  (Gift Sets, Collector's Edition, Bundles, Quests). Packs, starter decks, prerelease packs,
+  cases/displays, promo singles, `[Set of N]`, stale rows, puzzles, pins and counters never reach
+  the banner, and a display type the map doesn't name stays out until someone decides where it
+  belongs.
+- **Same qualifying rules as the card banners** (`qualifies` / `cmpAbs` in HomeView): Δ% on Low,
+  prior Low in the window ≥ $5, a flat 0% is not a move, the direction toggles filter, and the top
+  20 is taken AFTER the chips narrow. The prior Low is derived from the Δ%
+  (`low_today / (1 + pct/100)`), because `computeSealedDeltas` doesn't carry the prior price.
+- **History is fetched per HORIZON, not per window.** One `fetchCollectionPriceHistory` over every
+  candidate, reaching `SEALED_MOVER_WINDOW_DAYS[window] + 14` days back: 1D costs two weeks of rows
+  and only 1Y pays for a year (measured ~2.8s cold in the preview). A deeper fetch serves every
+  shallower window, and the module-level `_sealedMoverHist` survives HomeView unmounting on every
+  tab switch (1h ceiling). A chip toggle re-filters, never refetches.
+- **It asks for `market_price`** (`{market:true}`). The default select leaves it out because the
+  collection rollup values on Low — and without it every MKT delta and `market_today` is null. The
+  Screener's Sealed mode had exactly that bug (a dash in every NM Market cell) and passes it now too.
+- **`SealedMoverTile` is MoverTile's markup with three changes**: the photo is `object-fit:contain`
+  (`.mover-tile--sealed`; a box cover-cropped into 5:7 loses its name), type + set sit where rarity
+  goes, and the links are the product's own (`tcgUrl(pid)` + `amazonForSealed`). It renders through
+  `MoversBanner`'s `renderTile`, so the row has no camera export — that paints MoverTile-shaped cards.
+- **`MoversBanner` takes `emptyText`**, so the row says "Loading sealed prices…" while its history
+  is on the way instead of claiming nothing moved.
+- A tile opens `SealedDetailModal` on the home page (HomeView now receives `updateSealedQty` /
+  `updateSealedMeta`); the title opens the Screener's Sealed mode with the chips carried onto
+  `filterSealedTypes`.
+- **Banner key `sealed`, seated after `promo`.** A stored order (anyone who has pressed ▲▼) would
+  get it appended at the bottom, so App's `homeBannerOrder` init inserts it after Promo once, behind
+  the `packsink:homeBannerOrderSealed` stamp — stamped, not coerced, so a later ▲▼ sticks.
+- **Every card banner's Screener jump now says `showSealed:false`.** `applyView` only touches the
+  Sealed flag when a payload names it, so a Screener last left in Sealed mode opened Chase /
+  Rare–Legendary / Promo / Most-Valuable filters on top of the sealed table.
 
 ## Mobile top-nav
 
@@ -2482,7 +2683,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v374`; `styles.css?v=374`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v390`; `styles.css?v=390`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
@@ -3016,9 +3217,20 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/128_market_index.sql`~~ — **APPLIED 2026-08-25 by Zaven**, then superseded by 130 the same day. Do NOT re-run it: its flat `MIN_COMPONENTS = 20` is the bug 130 exists to fix, and re-running would silently empty every narrow scope again.
 - ~~`supabase/129_price_alerts.sql`~~ — **APPLIED 2026-08-25 by Zaven.** Alert rules + firing ledger.
 - ~~`supabase/130_market_index_scopes.sql`~~ — **DDL APPLIED** (confirmed 2026-09-01: `universe` is present in the live PostgREST schema for both matviews, and 128 had no such column). But it is a **two-step** migration and **step 2 was never run**, so both matviews sat empty from the day it landed until 131 — every read a 500 (`55000 … has not been populated`), and the Screener's vs-Mkt column plus Price Graphing's benchmark picker / By Index mode silently showed nothing. Nothing alerted: the client returns `null` on the failure path, so there was no crash to notice.
+- **`supabase/139_collectible_boards.sql`** — STAGED, not applied. Where pins and lore counters
+  sit on the Pins & Counters boards: `collectible_boards` (owner-only RLS, grants in the same
+  file) + `get_shared_collectible_boards` for viewers. Safe to ship the client first — until it
+  lands, boards save on the device and the tab says so. See "Pins & Counters".
 - **`supabase/137_amazon_stock_checks.sql`** — STAGED, not applied. The manual Amazon stock
   check: anon-readable, graded-admin writes. Until it lands, `/gear`'s admin checklist says
   "apply migration 137" and nothing is ever hidden. Safe to ship the client first.
+- ~~`supabase/138_feedback_threads.sql`~~ — **APPLIED 2026-09-11 by Zaven; verified via REST
+  probes** with the publishable key: the unread count and the thread list return 200, both the
+  4-argument and the old 3-argument `submit_feedback` call shapes resolve (each raises `empty
+  feedback` before any write), a follow-up on a nonexistent thread raises `feedback not found`,
+  and anon is refused both admin functions with `42501`. Feedback replies and follow-ups:
+  `feedback_messages`, the unread columns on `feedback`, and nine functions (see "Feedback
+  replies").
 - **`supabase/136_elo_player_rounds_intentional_draw.sql`** — STAGED, not applied. Appends
   `is_intentional_draw` to `elo_player_rounds_v` so the profile prints `ID` instead of `DRAW`.
   `create or replace view` (not drop+create — the view may have dependents, and replace allows a

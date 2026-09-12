@@ -111,6 +111,10 @@ from tcgcsv_common import LORCANA_CATEGORY_ID, TCGCSV_BASE
 # a deliberate exclusion can't come back as a watch finding. Adding a pattern
 # there silences it here in the same commit.
 from load_sealed_products import SKIP_NAME_PATTERNS as LOADER_SKIP_PATTERNS
+# Same name-matching rules link_preorder_pids uses to bind a SKU to a card.
+# Imported, never re-implemented: two normalizers that drift produce a
+# classifier that disagrees with the linker about what matches what.
+from link_preorder_pids import _norm_name as norm_name
 
 USER_AGENT = "PacksInk/1.0 (+https://packs.ink) reconcile-catalog"
 
@@ -379,6 +383,89 @@ def fetch_all_products() -> tuple[list[dict], dict[int, dict]]:
     return groups, index
 
 
+# ── Promo printings ──────────────────────────────────────────────────────────
+# Most of what the promo groups ever produce is a second printing of a card we
+# already hold, and recognising that is nearly all of the work of filing one.
+# TCGplayer names such a product after the card and puts the promo's identity in
+# a trailing bracket: "Rapunzel - Escaping the Tower (Store Championship)".
+_TRAILING_PAREN_RE = re.compile(r"\s*\([^()]*\)\s*$")
+
+
+def promo_base_candidates(name: str) -> list[str]:
+    """Names to try when asking "is this a promo printing of a card we hold?".
+
+    The full name first — plenty of promo SKUs carry no bracket at all (Morph -
+    Little Imitator) — then the name with ONE trailing bracket removed. Only
+    one: stripping repeatedly would eat a genuinely parenthesised version.
+    """
+    name = (name or "").strip()
+    if not name:
+        return []
+    out = [name]
+    stripped = _TRAILING_PAREN_RE.sub("", name).strip()
+    if stripped and stripped != name:
+        out.append(stripped)
+    return out
+
+
+def promo_suffix_of(name: str) -> str | None:
+    """The bracketed text — what says WHICH promo this is (Store Championship,
+    Store Championship Participant, Magical Places Promo, Foil, …)."""
+    m = re.search(r"\(([^()]*)\)\s*$", name or "")
+    return (m.group(1).strip() or None) if m else None
+
+
+def classify_promo_printing(name: str, cards_by_name: dict) -> dict | None:
+    """Resolve a missing single to the card it is a promo printing OF.
+
+    Returns {matched, suffix, base:[rows]} or None when we have no opinion.
+    Deliberately makes no guess when the name matches several cards (a card
+    printed in two sets has no single base row to clone) — it still reports
+    them, because "which of these two" is a far cheaper question than "what
+    even is this".
+    """
+    for cand in promo_base_candidates(name):
+        rows = cards_by_name.get(norm_name(cand))
+        if rows:
+            return {"matched": cand, "suffix": promo_suffix_of(name), "base": rows}
+    return None
+
+
+def promo_printing_hint(pid, info: dict, set_name: dict) -> str:
+    """The finding's hint, as a line you can nearly paste.
+
+    Everything in a REPRINT_PROMOS entry is derivable except the PRINTED
+    collector number, and that one is a trap worth spelling out every time:
+    TCGplayer's promo groups hold several unrelated numbering series at once,
+    so the group's own number is routinely not the number on the card.
+    """
+    rows = info["base"]
+    suffix = info["suffix"]
+    what = f'promo printing of "{info["matched"]}"'
+    if suffix:
+        what += f' — {suffix}'
+    if len(rows) > 1:
+        where = "; ".join(
+            f'{set_name.get(r.get("set_id"), r.get("set_id"))} #{r.get("collector_number")}'
+            f' (pid {r.get("tcgplayer_product_id")})' for r in rows[:4])
+        return (f'{what}. Matches {len(rows)} cards we hold — pick the base: {where}. '
+                f'Then add a REPRINT_PROMOS entry in scripts/patch_pid_overrides.py.')
+    r = rows[0]
+    base_pid = r.get("tcgplayer_product_id")
+    sname = set_name.get(r.get("set_id"), r.get("set_id"))
+    return (
+        f'{what}, i.e. {sname} #{r.get("collector_number")} (base pid {base_pid}). '
+        f'Add to REPRINT_PROMOS in scripts/patch_pid_overrides.py:  '
+        f'({base_pid}, <PROMO_SET>, "<printed cn>", "crd_<slug>_{pid}", {pid})  '
+        f'— read the printed collector number AND ITS SERIES off the card art at '
+        f'https://tcgplayer-cdn.tcgplayer.com/product/{pid}_400w.jpg . One TCGplayer '
+        f'promo group holds several series at once (P4 league/buy-a-box, PD1 '
+        f'prerelease, DIS Disney Parks, C2 Challenge), so a bare number never '
+        f'identifies a card: 4/PD1 and 4/DIS are different cards, and this group\'s '
+        f'#15/#16 are BOTH the C2 Challenge cards and the P4 Rapunzel pair.'
+    )
+
+
 def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = None) -> list[dict]:
     """Everything the catalog is missing or hasn't wired up, as flat findings."""
     groups, products = fetch_all_products()
@@ -390,6 +477,14 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
                    if r.get("tcgplayer_product_id") is not None}
     sets_rows = sb.select("sets", columns="id,name,tcgplayer_group_id", order="id.asc")
     set_name = {r["id"]: r.get("name") or r["id"] for r in sets_rows}
+    # Name -> the cards we already hold under it, so a missing single can be
+    # recognised as a promo PRINTING of one rather than reported as an unknown.
+    cards_by_name: dict[str, list[dict]] = {}
+    for r in sb.select("cards",
+                       columns="name,version,collector_number,set_id,tcgplayer_product_id",
+                       order="set_id.asc"):
+        disp = (r.get("name") or "") + (f" - {r['version']}" if r.get("version") else "")
+        cards_by_name.setdefault(norm_name(disp), []).append(r)
     bound_groups = {r["tcgplayer_group_id"] for r in sets_rows
                     if r.get("tcgplayer_group_id") is not None}
 
@@ -405,13 +500,19 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
         if any(pat in low for pat in LOADER_SKIP_PATTERNS):
             continue  # load_sealed_products drops it on purpose
         is_card = bool(m["number"]) and not looks_sealed(m["name"])
+        promo = classify_promo_printing(m["name"], cards_by_name) if is_card else None
+        if promo:
+            hint = promo_printing_hint(pid, promo, set_name)
+        elif is_card:
+            hint = "add a `cards` row (see MISSING SINGLES flow)"
+        else:
+            hint = "run `python scripts/load_sealed_products.py --skip-promo-singles`"
         out.append({
             "kind": "missing_single" if is_card else "missing_sealed",
             "key": str(pid),
             "name": m["name"],
             "detail": f"{m['group']} #{m['number'] or '?'} · {m['rarity'] or '—'}",
-            "hint": ("add a `cards` row (see MISSING SINGLES flow)" if is_card
-                     else "run `python scripts/load_sealed_products.py --skip-promo-singles`"),
+            "hint": hint,
         })
 
     # 3. A TCGCSV group nothing points at. A brand-new set or Quest shows up
@@ -573,7 +674,17 @@ def _send_watch_webhook(fresh: list[dict]) -> None:
         print(f"  (webhook post failed, non-fatal: {e})")
 
 
-def run_ack(key: str, why: str | None, until: str | None) -> int:
+# An acknowledgement is one of exactly two things, and the file has to say
+# which: a PERMANENT one ("this null is the correct steady state" — a JP
+# exclusive with no SKU, a promo group no single set can own), or a DEFERRAL
+# ("not now"). A deferral with no expiry is how a found problem goes quiet:
+# the Rapunzel Store Championship pair was acked on 2026-09-05 with no `until`
+# and would have stayed silent indefinitely, having been found the day it was
+# listed. So a deferral always gets one, and this is the default.
+DEFAULT_ACK_DAYS = 30
+
+
+def run_ack(key: str, why: str | None, until: str | None, permanent: bool = False) -> int:
     if ":" not in key:
         print(f"Key must look like kind:id, e.g. missing_single:711520 (got {key!r})")
         return 2
@@ -591,13 +702,29 @@ def run_ack(key: str, why: str | None, until: str | None) -> int:
         except ValueError:
             print(f"--until must be YYYY-MM-DD (got {until!r})")
             return 2
+    if permanent and until:
+        print("--permanent and --until contradict each other. --permanent means this "
+              "finding's current state is CORRECT and should never re-alert; --until "
+              "means come back to it. Pick one.")
+        return 2
+    if not permanent and not until:
+        until = (date.today() + timedelta(days=DEFAULT_ACK_DAYS)).isoformat()
+        defaulted = True
+    else:
+        defaulted = False
     ack = load_ack(ACK_PATH)
     entry = {"why": why.strip(), "added": date.today().isoformat()}
     if until:
         entry["until"] = until
     ack["acks"][key] = entry
     save_ack(ACK_PATH, ack)
-    print(f"Acknowledged {key}" + (f" until {until}" if until else "") + f"\n  {why.strip()}")
+    if permanent:
+        print(f"Acknowledged {key} PERMANENTLY (never re-alerts)")
+    else:
+        print(f"Acknowledged {key} until {until}"
+              + (f" (defaulted to {DEFAULT_ACK_DAYS} days — pass --until to choose, "
+                 "or --permanent if this state is correct forever)" if defaulted else ""))
+    print(f"  {why.strip()}")
     print("Commit scripts/catalog_watch.json so CI picks it up.")
     return 0
 
@@ -658,6 +785,11 @@ def main() -> int:
                     help="With --done: when it is due again (defaults to every_days).")
     ap.add_argument("--why", default=None,
                     help="Required with --ack: why this finding is acceptable.")
+    ap.add_argument("--permanent", action="store_true",
+                    help="This finding's current state is CORRECT and must never re-alert "
+                         "(a regional card with no SKU, a promo group no set can own). "
+                         "Without it, and without --until, an ack expires in "
+                         f"{DEFAULT_ACK_DAYS} days so a deferral cannot go silent.")
     ap.add_argument("--until", default=None, metavar="YYYY-MM-DD",
                     help="With --ack: expire the acknowledgement on this date so it re-alerts.")
     ap.add_argument("--pid", action="append", default=None, metavar="ID",
@@ -667,7 +799,7 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.ack:
-        return run_ack(args.ack, args.why, args.until)
+        return run_ack(args.ack, args.why, args.until, args.permanent)
 
     if args.done:
         return run_done(args.done, args.next_due)

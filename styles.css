@@ -1736,6 +1736,92 @@ html[data-mode="dark"] .ev-delta-down{background:rgba(232,140,140,0.12);color:#e
 .footer-social a{font-size:11px;color:var(--accent);text-decoration:none;opacity:0.8;}
 .footer-social a:hover{opacity:1;text-decoration:underline;}
 .footer-disclosure{font-size:12px;color:var(--text-muted);margin-top:6px;max-width:560px;line-height:1.45;}
+/* Feedback threads (migration 138). The badge counts unread replies to YOUR
+   feedback; the corner notice says the same thing to the many people who never
+   scroll to the footer. z-index 50: over the deck editor's docked bars (38/40),
+   under the Lore Tracker board (60), the card-detail overlay and every modal. */
+.footer-feedback-btn{position:relative;}
+.footer-feedback-badge{position:absolute;top:-7px;right:-7px;min-width:18px;height:18px;
+  padding:0 4px;border-radius:9px;box-sizing:border-box;border:2px solid var(--bg-solid);
+  background:var(--red);color:#fff;font-size:10px;font-weight:800;line-height:1;
+  display:flex;align-items:center;justify-content:center;font-variant-numeric:tabular-nums;
+  pointer-events:none;}
+.feedback-reply-notice{position:fixed;z-index:50;left:max(14px, env(safe-area-inset-left));
+  bottom:calc(14px + env(safe-area-inset-bottom));max-width:calc(100vw - 28px);box-sizing:border-box;
+  display:flex;align-items:center;background:var(--bg-modal);border:1px solid var(--border-accent);
+  border-radius:999px;box-shadow:0 6px 22px rgba(0,0,0,0.28);animation:fadeIn .2s ease;}
+.feedback-reply-notice-open{display:flex;align-items:center;gap:8px;min-width:0;flex:1 1 auto;
+  background:none;border:0;border-radius:999px;cursor:pointer;padding:9px 6px 9px 14px;
+  color:var(--text);font:inherit;font-size:13px;font-weight:600;}
+.feedback-reply-notice-open > svg{color:var(--accent);}
+.feedback-reply-notice-text{min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.feedback-reply-notice-cta{color:var(--accent);white-space:nowrap;}
+.feedback-reply-notice-x{flex:0 0 auto;width:32px;height:32px;margin-right:3px;padding:0;border:0;
+  border-radius:50%;background:none;color:var(--text-muted);cursor:pointer;
+  display:flex;align-items:center;justify-content:center;}
+.feedback-reply-notice-x:hover{color:var(--accent);}
+body:has(.offline-pill) .feedback-reply-notice{bottom:calc(58px + env(safe-area-inset-bottom));}
+/* The floating Tour launcher owns the same corner, but only where it renders —
+   mirror its two hide rules, or phones get a lift for a button they don't have. */
+@media (min-width:701px) and (min-height:501px){
+  body:has(.section-tour-btn) .feedback-reply-notice{bottom:calc(58px + env(safe-area-inset-bottom));}
+}
+body:has(.deck-editor-mobile-tabs) .feedback-reply-notice{bottom:calc(74px + env(safe-area-inset-bottom));}
+body:has(.deck-quickadd) .feedback-reply-notice{bottom:calc(76px + env(safe-area-inset-bottom));}
+.fb-sub{font-size:12px;color:var(--text-muted);margin:0 0 12px;line-height:1.5;}
+.fb-textarea{display:block;width:100%;box-sizing:border-box;resize:vertical;min-height:96px;
+  padding:9px 11px;border:1px solid var(--btn-border);border-radius:6px;background:var(--bg-solid);
+  color:var(--text);font-size:13px;font-family:inherit;line-height:1.45;}
+.fb-textarea--reply{min-height:58px;}
+.fb-note{font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5;}
+.fb-err{padding-top:8px;color:var(--red);font-size:12px;}
+.fb-actions{display:flex;gap:8px;justify-content:flex-end;align-items:center;flex-wrap:wrap;margin-top:12px;}
+.fb-section-title{font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--text-muted);margin:20px 0 8px;padding-top:14px;border-top:1px solid var(--border);}
+.fb-list{display:flex;flex-direction:column;gap:6px;}
+.fb-item{display:flex;align-items:flex-start;gap:9px;width:100%;box-sizing:border-box;text-align:left;
+  padding:9px 11px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);
+  color:var(--text);cursor:pointer;font:inherit;}
+.fb-item:hover{border-color:var(--accent);}
+.fb-item.is-unread{border-color:var(--border-accent);
+  background:color-mix(in srgb, var(--accent) 8%, var(--bg-modal));}
+.fb-dot{flex:0 0 auto;width:8px;height:8px;margin-top:5px;border-radius:50%;background:var(--accent);visibility:hidden;}
+.fb-item.is-unread .fb-dot{visibility:visible;}
+.fb-item-main{flex:1 1 auto;min-width:0;}
+.fb-item-snippet{display:block;font-size:13px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.fb-item.is-unread .fb-item-snippet{font-weight:700;}
+.fb-item-meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;margin-top:3px;font-size:11px;color:var(--text-muted);}
+.fb-chip{display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.3px;text-transform:uppercase;
+  line-height:1;padding:3px 6px;border-radius:999px;border:1px solid var(--border);color:var(--text-muted);white-space:nowrap;}
+.fb-chip--new{background:var(--accent);border-color:var(--accent);color:#fff;}
+.fb-chip--ok{border-color:color-mix(in srgb, var(--green) 55%, transparent);color:var(--green);}
+.fb-chip--warn{border-color:color-mix(in srgb, var(--accent) 60%, transparent);color:var(--accent);}
+.fb-back{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:4px 10px;margin-bottom:10px;}
+.fb-sent{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--green);margin-bottom:10px;}
+.fb-thread-origin{font-size:11px;color:var(--text-muted);text-align:center;margin-bottom:10px;}
+.fb-thread{display:flex;flex-direction:column;gap:10px;}
+.fb-msg{display:flex;flex-direction:column;max-width:86%;}
+.fb-msg--mine{align-self:flex-end;align-items:flex-end;}
+.fb-msg--theirs{align-self:flex-start;align-items:flex-start;}
+.fb-bubble{padding:8px 12px;border-radius:14px;font-size:13px;line-height:1.5;color:var(--text);
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}
+.fb-msg--mine .fb-bubble{background:color-mix(in srgb, var(--accent) 18%, var(--bg-modal));
+  border:1px solid color-mix(in srgb, var(--accent) 38%, transparent);border-bottom-right-radius:4px;}
+.fb-msg--theirs .fb-bubble{background:var(--bg-surface);border:1px solid var(--border);border-bottom-left-radius:4px;}
+.fb-msg-meta{font-size:10.5px;color:var(--text-muted);margin-top:3px;padding:0 4px;}
+.fb-resolved-note{font-size:11.5px;color:var(--text-muted);text-align:center;margin:12px 0 0;}
+.fb-composer{flex:0 0 auto;border-top:1px solid var(--border);background:var(--bg-surface);padding:10px 14px 12px;}
+.fb-composer .fb-actions{margin-top:8px;}
+.fb-admin-list{display:flex;flex-direction:column;gap:8px;}
+.fb-admin-card{padding:10px 12px;border:1px solid var(--border);border-radius:8px;background:var(--bg-card);}
+.fb-admin-card.is-new{border-color:var(--border-accent);}
+.fb-admin-card.is-resolved{background:var(--bg-surface);opacity:.72;}
+.fb-admin-comment{font-size:13px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;}
+.fb-admin-meta{display:flex;flex-wrap:wrap;align-items:center;gap:3px 8px;margin-top:6px;font-size:11px;color:var(--text-muted);}
+.fb-admin-thread{display:flex;flex-direction:column;gap:8px;margin-top:10px;padding-top:10px;border-top:1px dashed var(--border);}
+.fb-admin-reply{margin-top:10px;}
+.fb-admin-btns{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;margin-top:8px;}
+.fb-admin-btns > button{font-size:12px;padding:3px 10px;}
 .sc-zip-note{font-size:11px;color:var(--text-muted);margin:4px 0 6px;line-height:1.35;}
 .cd-affiliate-note{font-size:11px;color:var(--text-muted);margin:0 0 6px;line-height:1.35;}
 .theme-toggle{cursor:pointer;background:none;border:1px solid var(--btn-border);border-radius:50%;width:32px;height:32px;display:flex;align-items:center;justify-content:center;font-size:16px;color:var(--text-dim);padding:0;transition:all 0.15s;}
@@ -1982,6 +2068,13 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    previous crisp-edges value was for pixel-art sprites and was making the
    AVIF card art look blocky. */
 .mover-tile .mt-img-wrap img{width:100%;aspect-ratio:5/7;object-fit:cover;border-radius:3px;display:block;}
+/* Sealed Movers: a box photo is square-ish, and cover-cropping it into the
+   card's 5:7 cuts the product name off both sides. Same slot, whole photo. */
+.mover-tile--sealed .mt-img-wrap img,
+.mover-tile--sealed .mt-img-fallback{object-fit:contain;background:var(--bg-surface);
+  padding:6px;box-sizing:border-box;}
+.mover-tile--sealed .mt-img-fallback{display:flex;align-items:center;justify-content:center;
+  color:var(--text-muted);}
 .mover-tile .mt-img-fallback{width:100%;aspect-ratio:5/7;border-radius:3px;
   background:var(--accent-glow);display:flex;align-items:center;justify-content:center;
   text-align:center;font-size:8px;color:var(--text-muted);padding:3px;box-sizing:border-box;}
@@ -4435,7 +4528,10 @@ html[data-mode="dark"] .cd-reprint--original{--cdr:#6fce96;}
 .collection-controls{display:flex;align-items:center;gap:14px;margin-bottom:14px;flex-wrap:wrap;}
 
 /* Cards / Sealed top-level toggle inside the Collection tab. */
-.collection-section-tabs{display:flex;gap:4px;margin-bottom:18px;
+/* flex-wrap since the fourth tab (Pins & Counters, 2026-09-11): four labels
+   plus the Share button run past a 375px phone, and a clipped tab reads as a
+   missing one. */
+.collection-section-tabs{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:18px;
   padding-bottom:10px;border-bottom:1px solid var(--border);}
 /* <a> since 2026-08-24 (each section is a real /collection?c= URL), so it needs
    the anchor resets a <button> gave for free. */
@@ -4447,6 +4543,142 @@ html[data-mode="dark"] .cd-reprint--original{--cdr:#6fce96;}
 .collection-section-tab:hover{color:var(--text);background:var(--bg-surface);}
 .collection-section-tab.active{color:var(--accent);background:var(--accent-glow);
   border-color:var(--border-accent);}
+
+/* ── Pins & Counters (Collection tab, 2026-09-11) ─────────────────────────
+   Two boards and a checklist. The boards are OBJECTS — a framed cork sheet, a
+   felt mat — so their colours are fixed rather than themed, the way a photo is.
+   Positions are percentages of .cb-surface, so the frame's padding never enters
+   the drag maths (pointer coordinates are read off the surface, not the frame). */
+.cb-view{display:flex;flex-direction:column;gap:12px;}
+.cb-head{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center;justify-content:space-between;}
+.cb-stats{display:flex;gap:10px 22px;flex-wrap:wrap;}
+.cb-stat{min-width:150px;}
+.cb-stat-top{display:flex;justify-content:space-between;align-items:baseline;gap:8px;
+  font-size:12px;color:var(--text-muted);}
+.cb-stat-top b{font-size:16px;color:var(--text);font-variant-numeric:tabular-nums;}
+.cb-bar{height:5px;border-radius:3px;background:var(--bg-surface);overflow:hidden;margin-top:5px;}
+.cb-bar > i{display:block;height:100%;background:var(--accent);border-radius:inherit;}
+.cb-sync{font-size:11px;color:var(--text-muted);}
+.cb-toolbar{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;}
+.cb-swatches{display:inline-flex;gap:6px;align-items:center;}
+.cb-swatch{width:26px;height:26px;border-radius:50%;padding:0;cursor:pointer;
+  border:2px solid var(--border);box-shadow:inset 0 0 0 2px var(--bg-solid);}
+.cb-swatch.active{border-color:var(--accent);}
+.cb-tool-btn{font-size:12px;padding:5px 11px;border:1px solid var(--border);border-radius:7px;
+  background:var(--btn-bg);color:var(--text);cursor:pointer;
+  display:inline-flex;align-items:center;gap:6px;}
+.cb-tool-btn:hover:not(:disabled){border-color:var(--accent);color:var(--accent);}
+.cb-tool-btn:disabled{opacity:0.45;cursor:not-allowed;}
+.cb-hint{font-size:11px;color:var(--text-muted);}
+
+.cb-frame{padding:9px;border-radius:12px;
+  background:linear-gradient(145deg,#8a5f37 0%,#6a4526 45%,#4b2f17 100%);
+  box-shadow:0 8px 22px rgba(0,0,0,0.28), inset 0 1px 0 rgba(255,255,255,0.18),
+    inset 0 -1px 0 rgba(0,0,0,0.35);}
+.cb-surface{position:relative;width:100%;border-radius:5px;overflow:hidden;
+  box-shadow:inset 0 2px 12px rgba(0,0,0,0.35);touch-action:pan-y;
+  user-select:none;-webkit-user-select:none;}
+.cb-bg-cork{background-color:#b98a57;
+  background-image:radial-gradient(rgba(70,40,15,0.35) 1px, transparent 1.5px),
+    radial-gradient(rgba(255,235,200,0.22) 1px, transparent 1.6px),
+    radial-gradient(rgba(90,55,25,0.25) 1.5px, transparent 2px),
+    linear-gradient(135deg,#c49763,#a9784a);
+  background-size:7px 7px, 11px 11px, 17px 17px, 100% 100%;
+  background-position:0 0, 3px 5px, 8px 2px, 0 0;}
+.cb-bg-felt{background-color:#1d3a34;
+  background-image:radial-gradient(ellipse at 50% 40%, rgba(255,255,255,0.08), transparent 65%),
+    repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 4px),
+    repeating-linear-gradient(-45deg, rgba(0,0,0,0.06) 0 2px, transparent 2px 5px);}
+.cb-bg-linen{background-color:#ece3d2;
+  background-image:repeating-linear-gradient(0deg, rgba(120,100,70,0.08) 0 1px, transparent 1px 3px),
+    repeating-linear-gradient(90deg, rgba(120,100,70,0.07) 0 1px, transparent 1px 4px),
+    radial-gradient(ellipse at 30% 20%, rgba(255,255,255,0.5), transparent 60%);}
+.cb-bg-midnight{background-color:#140b24;
+  background-image:radial-gradient(circle at 20% 25%, rgba(214,170,74,0.16), transparent 32%),
+    radial-gradient(circle at 80% 70%, rgba(120,80,200,0.22), transparent 38%),
+    radial-gradient(rgba(255,230,160,0.35) 0.8px, transparent 1.2px);
+  background-size:100% 100%, 100% 100%, 23px 23px;}
+
+/* The honeycomb's empty sockets. vector-effect keeps a 1px line through the
+   viewBox stretch (preserveAspectRatio="none"). */
+.cb-hexgrid{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;}
+.cb-hexcell{fill:rgba(255,255,255,0.035);stroke:rgba(255,255,255,0.16);
+  stroke-width:1px;vector-effect:non-scaling-stroke;}
+.cb-bg-cork .cb-hexcell,.cb-bg-linen .cb-hexcell{fill:rgba(0,0,0,0.04);stroke:rgba(60,35,15,0.25);}
+.cb-hexcell.is-target{fill:rgba(214,170,74,0.3);stroke:#d6aa4a;stroke-width:2px;}
+
+.cb-item{position:absolute;padding:0;margin:0;border:0;background:none;line-height:0;
+  cursor:grab;touch-action:none;transform:translate(-50%,-50%);}
+.cb-item img{width:100%;height:auto;display:block;pointer-events:none;
+  filter:drop-shadow(0 3px 3px rgba(0,0,0,0.45)) drop-shadow(0 1px 1px rgba(0,0,0,0.3));}
+.cb-item--counter img{height:100%;object-fit:contain;}
+.cb-item:focus{outline:none;}
+.cb-item.is-selected img,.cb-item:focus-visible img{
+  filter:drop-shadow(0 0 2px #d6aa4a) drop-shadow(0 0 7px #d6aa4a) drop-shadow(0 3px 3px rgba(0,0,0,0.45));}
+.cb-item.is-dragging{cursor:grabbing;z-index:9999 !important;}
+.cb-item.is-dragging img{filter:drop-shadow(0 12px 10px rgba(0,0,0,0.5));}
+.cb-readonly .cb-item{cursor:default;touch-action:auto;}
+.cb-empty{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+  text-align:center;padding:20px;font-size:13px;line-height:1.5;pointer-events:none;
+  color:rgba(255,255,255,0.88);text-shadow:0 1px 2px rgba(0,0,0,0.6);}
+.cb-bg-linen .cb-empty{color:#5a4a33;text-shadow:none;}
+
+.cb-selbar{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 10px;
+  border:1px solid var(--border-accent);border-radius:9px;background:var(--bg-card);}
+.cb-selbar-meta{margin-right:auto;min-width:0;display:flex;flex-direction:column;}
+.cb-selbar-name{font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cb-selbar-src{font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+.cb-tray{border:1px dashed var(--border);border-radius:10px;padding:10px;}
+.cb-tray-head{display:flex;align-items:center;gap:10px;justify-content:space-between;
+  margin-bottom:8px;font-size:12px;color:var(--text-muted);}
+.cb-tray-list{display:flex;flex-wrap:wrap;gap:8px;}
+.cb-tray-item{height:64px;min-width:40px;padding:4px;border:1px solid transparent;border-radius:8px;
+  background:var(--bg-surface);cursor:grab;touch-action:none;
+  display:flex;align-items:center;justify-content:center;}
+.cb-tray-item:hover,.cb-tray-item:focus-visible{border-color:var(--accent);outline:none;}
+.cb-tray-item img{height:100%;width:auto;max-width:110px;object-fit:contain;display:block;pointer-events:none;}
+.cb-ghost{position:fixed;z-index:200;pointer-events:none;transform:translate(-50%,-50%) scale(1.05);opacity:0.92;}
+.cb-ghost img{height:80px;width:auto;display:block;filter:drop-shadow(0 10px 12px rgba(0,0,0,0.45));}
+
+.cb-add{border:1px solid var(--border);border-radius:10px;background:var(--bg-card);}
+.cb-add > summary{cursor:pointer;padding:10px 12px;font-size:13px;font-weight:600;
+  list-style:none;display:flex;align-items:center;gap:8px;}
+.cb-add > summary::-webkit-details-marker{display:none;}
+.cb-add-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;padding:0 10px 10px;}
+.cb-add-item{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:9px;align-items:center;
+  padding:6px;border-radius:8px;background:var(--bg-surface);}
+.cb-add-item img{width:44px;height:44px;object-fit:contain;display:block;}
+.cb-add-name{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cb-add-src{font-size:10.5px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+.cb-list-filters{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;}
+.cb-search{flex:1 1 180px;max-width:280px;padding:6px 10px;border:1px solid var(--border);
+  border-radius:8px;background:var(--bg-card);color:var(--text);font-size:13px;}
+.cb-list-group{display:flex;flex-direction:column;gap:4px;}
+.cb-list-group-title{font-family:'Cinzel',serif;font-size:13px;font-weight:600;color:var(--accent);
+  margin:8px 2px 2px;display:flex;gap:8px;align-items:baseline;}
+.cb-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;gap:12px;align-items:center;
+  padding:6px 10px;border:1px solid var(--border);border-radius:9px;background:var(--bg-card);cursor:pointer;}
+.cb-row:hover{border-color:var(--border-accent);}
+.cb-row-thumb{width:52px;height:52px;display:flex;align-items:center;justify-content:center;}
+.cb-row-thumb img{max-width:52px;max-height:52px;object-fit:contain;display:block;}
+.cb-row.is-missing .cb-row-thumb img{filter:grayscale(1) opacity(0.45);}
+.cb-row-meta{min-width:0;}
+.cb-row-name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cb-row-src{font-size:11px;color:var(--text-muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cb-row-right{display:flex;align-items:center;gap:8px;}
+.cb-pill{font-size:10px;font-weight:700;letter-spacing:0.3px;text-transform:uppercase;
+  padding:2px 7px;border-radius:999px;border:1px solid var(--border);color:var(--text-muted);white-space:nowrap;}
+.cb-pill--owned{color:var(--green);border-color:color-mix(in srgb, var(--green) 45%, transparent);}
+.sealed-coll-pins-note{font-size:12px;color:var(--text-muted);margin:0;}
+.sealed-coll-pins-note a{color:var(--accent);}
+@media (max-width:640px){
+  .cb-frame{padding:6px;border-radius:10px;}
+  .cb-stat{min-width:130px;}
+  .cb-tray-item{height:52px;}
+  .cb-add-list{grid-template-columns:minmax(0,1fr);}
+}
 
 /* Sealed collection: per-user inventory view. Reuses the .sealed-* row
    styles from SealedView, but extends the grid for the owned-value column
@@ -5597,6 +5829,12 @@ html[data-mode="dark"] .deck-row-ink.dual::after{background:rgba(255,255,255,0.3
   padding:1px 5px;border:1px solid var(--border);border-bottom-width:2px;
   border-radius:4px;background:var(--bg-card);color:var(--text-dim);}
 @media (max-width: 900px){ .deck-quickadd-hint{display:none;} }
+/* The browse layout's ink chips, carried into the bar so the deck's own inks
+   are the default here too. Same bare-shield chip as the Cards toolbar. */
+.deck-quickadd-inks{display:flex;align-items:center;gap:1px;flex:0 0 auto;}
+.deck-quickadd-inks .chip.ink-icon-chip{width:27px;height:27px;margin:0;}
+.deck-quickadd-allinks{background:none;border:0;padding:0;font:inherit;
+  color:var(--accent);text-decoration:underline;cursor:pointer;}
 
 .deck-quickadd-results{max-height:min(52vh, 460px);overflow-y:auto;
   margin:8px 0 0;padding:5px;border:1px solid var(--border);border-radius:10px;
@@ -7847,6 +8085,24 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
   font-weight:700;padding:4px 9px;cursor:pointer;min-height:24px;font-family:inherit;}
 .scanner-qa-foilbtn.on{background:var(--accent,#e8c850);color:#1a1320;}
 .scanner-qa-pronly{font-size:10px;color:#e8c850;font-weight:700;margin-top:2px;}
+/* Version segment — which CARD (base / Epic / Enchanted / promo). Sits beside
+   the Non-Foil/Foil segment, which answers the different question of which
+   PRINTING, so the two wrap together rather than stacking two rows deep on a
+   phone. */
+.scanner-qa-segs{display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:100%;}
+/* Wraps INSIDE its own border rather than overflowing: the row info column
+   clips, so a chip pushed past the edge is simply gone. */
+.scanner-qa-varseg{display:inline-flex;flex-wrap:wrap;margin-top:4px;min-width:0;
+  border:1px solid rgba(255,255,255,0.22);border-radius:7px;overflow:hidden;max-width:100%;}
+.scanner-qa-varbtn{border:none;background:transparent;color:rgba(255,255,255,0.6);font-size:10px;
+  font-weight:700;padding:4px 9px;cursor:pointer;min-height:24px;font-family:inherit;white-space:nowrap;}
+.scanner-qa-varbtn + .scanner-qa-varbtn{border-left:1px solid rgba(255,255,255,0.18);}
+.scanner-qa-varbtn.on{background:var(--accent,#e8c850);color:#1a1320;}
+/* The editor's version list carries the crowded families the chip row refuses
+   (a 7-print run of promos), so it has to be free to wrap. */
+.scanner-qa-verrow{flex-wrap:wrap;}
+.scanner-cand-sub{font-size:9.5px;line-height:1.2;text-align:center;color:rgba(255,255,255,0.5);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;}
 .scanner-qa-row.editing{background:rgba(255,255,255,0.04);border-radius:8px;}
 .scanner-qa-edit{grid-column:1 / -1;display:flex;flex-direction:column;gap:8px;
   padding:8px 2px 6px;border-top:1px dashed rgba(255,255,255,0.18);margin-top:4px;}
