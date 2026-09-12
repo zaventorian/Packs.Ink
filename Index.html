@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=397">
+<link rel="stylesheet" href="styles.css?v=400">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -27568,33 +27568,6 @@ function EloEventRoster({eventId, eventMeta, onClose, onPlayerClick}){
   </div>`;
 }
 
-// Which stores the Chicagoland Elo board tracks — the scope of everything
-// scouting-related. Public and ~100 rows, so one module-level fetch shared by
-// every caller; null until it lands, which callers read as "don't know yet"
-// rather than "not tracked".
-let _trackedStoreIds = null;
-const trackedStoreIds = () => {
-  if(!_trackedStoreIds){
-    _trackedStoreIds = sbClient.from("elo_tracked_stores").select("store_id")
-      .then(({data, error}) => {
-        if(error) throw error;
-        return new Set((data || []).map(r => String(r.store_id)));
-      })
-      .catch(() => { _trackedStoreIds = null; return null; });   // retry on next ask
-  }
-  return _trackedStoreIds;
-};
-function useTrackedStoreIds(enabled){
-  const [ids, setIds] = useState(null);
-  useEffect(() => {
-    if(!enabled) return;
-    let cancelled = false;
-    trackedStoreIds().then(set => { if(!cancelled) setIds(set); });
-    return () => { cancelled = true; };
-  }, [enabled]);
-  return ids;
-}
-
 // ── Scouting: what is this person playing, and what did they play last time ──
 //
 // Two open text fields — deck, notes — per PLAYER per EVENT, shared across the
@@ -27614,8 +27587,14 @@ const scoutErrText = (e) => {
   const m = String((e && e.message) || e || "");
   if(/not authorized|permission denied/i.test(m)) return "Scouting is team-only — you're not on the list.";
   if(/PGRST202|could not find the function|schema cache|does not exist/i.test(m))
-    return "Scouting isn't switched on for this site yet — apply migration 143.";
-  if(/is not one we scout/i.test(m)) return "That event isn't at a store we track for Elo.";
+    // The error names the function it could not find, so say which migration is
+    // missing rather than always blaming 143 — "apply 143" on a site that HAS
+    // 143 sends whoever reads it to check the wrong thing.
+    return /scout_event_(add|remove)/.test(m)
+      ? "Adding events to scouting isn't switched on for this site yet — apply migration 148."
+      : "Scouting isn't switched on for this site yet — apply migration 143.";
+  if(/is not one we scout/i.test(m)) return "That event isn't on our scouting list yet — open it and use Add this event to scouting.";
+  if(/we have no event .* on file/i.test(m)) return "We don't have that event on file, so there's nothing to scout.";
   return m || "Something went wrong.";
 };
 // "9/12 · Set Championship" — the shape of the reminder Zaven asked for. Dates
@@ -27635,6 +27614,27 @@ const scoutShortDate = (iso, tz) => {
     return d.toLocaleDateString("en-US", opts);
   }
   catch { return String(iso).slice(5,10); }
+};
+
+// The Scout tab keeps an event for SCOUT_LIVE_HOURS past its start (migration
+// 147): a sheet is filled in DURING the event and finished on the drive home, so
+// dropping the row the minute the doors open takes it away at exactly the moment
+// it becomes the one you are standing in.
+//
+// ⚠ That means the slate is no longer all-future, and a row that has already
+// begun has to SAY so. Unmarked, a Sunday-morning tab whose first entry is
+// Saturday 3:00 PM reads as stale data rather than as the event you were just
+// at — the same "is this thing even updating?" confusion a silent window costs
+// everywhere else on this site. Returns null for an event that hasn't started,
+// which is what renders no chip at all.
+const SCOUT_LIVE_HOURS = 24;
+const scoutStartedAgo = (iso, nowMs) => {
+  const t = Date.parse(iso || "");
+  if(!Number.isFinite(t)) return null;
+  const mins = Math.floor(((nowMs == null ? Date.now() : nowMs) - t) / 60000);
+  if(mins < 0) return null;
+  if(mins < 60) return "Started";
+  return `Started ${Math.floor(mins / 60)}h ago`;
 };
 
 // One cell of the sheet. Spreadsheet rules: type, then Tab or click away and it
@@ -27764,6 +27764,53 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
     } finally { setRefreshing(false); }
   };
 
+  // Scouting outside the bubble (migration 148). The AUTOMATIC slate is still
+  // elo_tracked_stores and nothing here widens it — this is one scout saying "I
+  // am going to THIS event", which is the ask from team members who live a
+  // little outside Chicagoland. The event then behaves like any other: roster,
+  // sheet, notes, player history.
+  //
+  // Adding pulls the roster straight away when we have never seen one. Adding
+  // and then having to hunt for a second button is two steps for one intention,
+  // and the roster is the whole reason you added it.
+  const [addingEvent, setAddingEvent] = useState(false);
+  const addEvent = async () => {
+    if(addingEvent) return;
+    setAddingEvent(true);
+    try {
+      const {error} = await sbClient.rpc("scout_event_add", {p_event_id: eventId});
+      if(error) throw error;
+      const after = await load();
+      if(after && after.event && !after.event.scraped_at) await refresh();
+      else flashToast("Added to scouting");
+    } catch(e){ flashToast("Couldn't add this event: " + scoutErrText(e)); }
+    finally { setAddingEvent(false); }
+  };
+
+  // Two-tap, like the graded view's slot remove: it is one click away from a
+  // sheet the whole team is using. Notes are NOT deleted — they stay in each
+  // player's history and re-adding restores the sheet exactly — so the toast
+  // says so rather than letting "Remove" read as "destroy".
+  const [armedRemove, setArmedRemove] = useState(false);
+  useEffect(() => {
+    if(!armedRemove) return;
+    const t = setTimeout(() => setArmedRemove(false), 3000);
+    return () => clearTimeout(t);
+  }, [armedRemove]);
+  const removeEvent = async () => {
+    if(!armedRemove){ setArmedRemove(true); return; }
+    setArmedRemove(false);
+    try {
+      const {data: d, error} = await sbClient.rpc("scout_event_remove", {p_event_id: eventId});
+      if(error) throw error;
+      const kept = (d && d.notes_kept) || 0;
+      await load();
+      flashToast(kept
+        ? `Taken off scouting — ${kept} note${kept===1?"":"s"} kept in ${kept===1?"that player's":"those players'"} history`
+        : "Taken off scouting");
+    } catch(e){ flashToast("Couldn't remove this event: " + scoutErrText(e)); }
+  };
+
   // Log someone who is not on the roster: a walk-in RPH never recorded, or a
   // name you want to start a file on. save_scout_note keys them by folded name
   // (scout_player_key), and migration 144 is what makes the note come BACK on
@@ -27844,9 +27891,16 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
 
   const body = err ? html`<div class="elo-empty">${err}</div>`
     : data === null ? html`<div class="elo-loading">Loading the field…</div>`
-    : data.scoutable === false ? html`<div class="elo-empty">
+    : data.scoutable === false ? html`<div class="elo-empty scout-notadded">
         ${data.reason === "untracked_store"
-          ? "We only scout events at the stores the Chicagoland Elo board tracks."
+          ? html`<${React.Fragment}>
+              <div>This isn't at a store the Chicagoland Elo board tracks, so it doesn't reach the Scout tab on its own.</div>
+              <div class="scout-notadded-do">
+                <button class="scout-btn scout-btn--add" disabled=${addingEvent} onClick=${addEvent}>
+                  ${addingEvent ? "Adding…" : "Add this event to scouting"}</button>
+                <span class="muted">Pulls its roster and opens a sheet. Everyone on the scouting team sees it.</span>
+              </div>
+            </>`
           : "We don't have that event on file."}</div>`
     : html`
       <div class="elo-roster-field scout-field-stats">
@@ -27862,6 +27916,16 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
         <button class="scout-btn scout-btn--refresh" disabled=${refreshing} onClick=${refresh}
           title="Pull this event's signed-up list from Ravensburger Play right now">
           ${refreshing ? "↻ Pulling…" : "↻ Refresh roster"}</button>
+        ${/* Only when the STORE isn't tracked: an added event at a tracked store
+             is on the tab either way, so "Added" would be claiming the wrong
+             reason and Remove would appear to do nothing. */
+          ev.added && !ev.store_tracked && html`<span class="scout-addedby"
+            title=${`Added to scouting${ev.added_by ? " by " + ev.added_by : ""}${ev.added_at ? " · " + relativeTime(ev.added_at) : ""}. This store isn't on the Elo board — the event is here because somebody put it here.`}
+            >Added${ev.added_by ? " by " + ev.added_by : ""}</span>`}
+        ${ev.added && !ev.store_tracked && html`<button class=${"scout-btn scout-btn--rm" + (armedRemove ? " armed" : "")}
+            onClick=${removeEvent}
+            title="Take this event back off scouting. Notes already written stay in each player's history, and adding it again restores the sheet.">
+            ${armedRemove ? "Really remove?" : "Remove"}</button>`}
       </div>
       <div class="scout-asof muted">
         ${ev.scraped_at ? `Roster as of ${relativeTime(ev.scraped_at)}` : "Roster never pulled for this event"}
@@ -28127,7 +28191,8 @@ function EloRosterScout({onPlayerClick, onOpenScout, isEloAdmin}){
     ${err ? html`<div class="elo-empty">${scoutErrText(err)}
         ${!/team-only|migration/.test(scoutErrText(err)) && html`<div><button class="scout-btn" onClick=${load}>Try again</button></div>`}</div>`
       : data === null ? html`<div class="elo-loading">Loading rosters…</div>`
-      : data.length === 0 ? html`<div class="elo-empty">No upcoming Set Championships at the stores we track.</div>`
+      : data.length === 0 ? html`<div class="elo-empty">No upcoming Set Championships at the stores we track.
+          <div class="muted">Going to one somewhere else? Open it on the calendar or in Upcoming SCs and add it to scouting.</div></div>`
 
       : mode === "player" ? html`<div class="elo-scout-player">
           <input type="search" class="elo-scout-search" placeholder="Search a player name…" autoFocus
@@ -28157,14 +28222,26 @@ function EloRosterScout({onPlayerClick, onOpenScout, isEloAdmin}){
           ${days.map(d=> html`<div key=${d.key} class="elo-scout-day">
             <div class="elo-scout-day-hdr">${d.label} <span class="muted">· ${d.events.length} event${d.events.length===1?"":"s"}</span></div>
             <div class="elo-scout-evlist">
-              ${d.events.map(ev=>{ const f=ev.field||{}; return html`<div key=${ev.event_id} class="elo-scout-ev">
+              ${d.events.map(ev=>{ const f=ev.field||{}, began=scoutStartedAgo(ev.start_datetime); return html`<div key=${ev.event_id} class="elo-scout-ev">
                 <button class="elo-scout-ev-row" onClick=${()=>onOpenScout && onOpenScout({
                     event_id: ev.event_id, store_name: ev.store_name, name: ev.name,
                     capacity: ev.capacity, start_datetime: ev.start_datetime, timezone: ev.timezone})}
                   title="Open the scouting sheet for this event">
                   <span class="elo-scout-ev-main">
-                    <span class="elo-scout-ev-store">${ev.store_name}</span>
-                    <span class="muted elo-scout-ev-meta">${where(ev)} · ${timeLbl(ev)}</span>
+                    <span class="elo-scout-ev-storeline">
+                      <span class="elo-scout-ev-store">${ev.store_name}</span>
+                      ${/* It is on this tab because a scout put it there, not
+                           because the store is on the Elo board. Saying so is
+                           what keeps "don't auto add any more" honest.
+                           ⚠ A SIBLING of the store name, not a child: that span
+                           ellipses, so a chip inside it is simply gone on a long
+                           store name with nothing on screen to say it existed. */
+                        ev.added && html`<span class="elo-scout-added"
+                          title=${`Added to scouting${ev.added_by ? " by " + ev.added_by : ""} — this store isn't tracked for Elo.`}
+                          >Added</span>`}
+                    </span>
+                    <span class="muted elo-scout-ev-meta">${where(ev)} · ${timeLbl(ev)}
+                      ${began ? html`<span class="elo-scout-began" title="Underway or just finished — the sheet stays here for ${SCOUT_LIVE_HOURS} hours after the start.">· ${began}</span>` : ""}</span>
                   </span>
                   <span class="elo-scout-ev-stats">
                     <span class="elo-scout-stat" title="Signed up (rated)"><b>${f.n_signed_up||0}</b>${f.n_rated!=null?html` <span class="muted">(${f.n_rated} rated)</span>`:""}</span>
@@ -38338,15 +38415,14 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
   }, [onClose]);
   const isSet = !!ev && ev.kind === "set";
   const products = useSetProducts(isSet ? ev.title : null, isSet);
-  // Scouting is offered on a real RPH listing at a store the Elo board tracks —
-  // the same universe get_scout_event enforces server-side. When the entry
-  // carries no store_id (a curated CCQ row matched to a listing), offer the tab
-  // and let the panel say so; refusing on a missing field would hide the one
-  // event you actually wanted.
+  // Scouting is offered on any real RPH listing. It used to be gated here on
+  // elo_tracked_stores as well, which made the out-of-bubble events a scout
+  // most wants a sheet for the exact ones with no tab — migration 148 lets them
+  // add one, and the panel is where that happens. So the only test left is "is
+  // there an event to scout": get_scout_event still enforces the real scope
+  // server-side, and its refusal now carries the Add button.
   const canScout = useContext(ScoutContext);
-  const tracked = useTrackedStoreIds(canScout);
-  const scoutable = !!(canScout && ev && ev.event_id != null
-    && (ev.store_id == null || tracked == null || tracked.has(String(ev.store_id))));
+  const scoutable = !!(canScout && ev && ev.event_id != null);
   const [tab, setTab] = useState("details");
   useEffect(() => { setTab("details"); }, [ev && ev.id]);
   if(!ev) return null;
@@ -39220,7 +39296,6 @@ const UpcomingSCsBox = ({user, overlay, onClose}) => {
   const [sel, setSel] = useState(null);            // {series, occ} — one date of one series
   // Scouting from the finder: same panel as the Elo tab and the calendar.
   const canScoutBox = useContext(ScoutContext);
-  const scoutTracked = useTrackedStoreIds(canScoutBox);
   const [scoutEv, setScoutEv] = useState(null);
   const [openSeries, setOpenSeries] = useState({}); // series_key -> showing its full date list
   const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem("packsink:scCollapsed") === "1"; } catch { return false; } });
@@ -39509,11 +39584,12 @@ const UpcomingSCsBox = ({user, overlay, onClose}) => {
             ${o.capacity != null && html`<div><dt>Capacity</dt><dd>${o.capacity} players</dd></div>`}
             ${cadence && html`<div><dt>Runs</dt><dd>${`${cadence} ${SC_DOW[s.dow]||""} ${scLocalTime12(s.local_time)}`.trim()} · ${s.occurrence_count} upcoming</dd></div>`}
           </dl>
-          ${/* Scouting rides the same rule everywhere: a real RPH listing at a
-               store the Elo board tracks. The panel refuses anything else, so
-               offering it on an unknown store_id costs a click, not a leak. */
-            canScoutBox && o.event_id && (scoutTracked == null || scoutTracked.has(String(s.store_id)))
-            && html`<button class="sc-modal-cta sc-modal-cta--scout"
+          ${/* Scouting rides the same rule everywhere: any real RPH listing.
+               get_scout_event is the scope, and since migration 148 its refusal
+               is where an out-of-bubble event gets added — so pre-filtering on
+               the tracked-store list here would hide the button on exactly the
+               events a scout most wants a sheet for. */
+            canScoutBox && o.event_id && html`<button class="sc-modal-cta sc-modal-cta--scout"
               onClick=${()=>{ const ev = {event_id: o.event_id, store_name: s.store_name,
                 name: o.name || s.name, capacity: o.capacity,
                 start_datetime: o.start_datetime, timezone: s.timezone};

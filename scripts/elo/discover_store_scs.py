@@ -53,23 +53,15 @@ STORE_ID_CACHE = HERE / "_store_id_cache.json"
 META = "https://api.ravensburgerplay.com/api/v2/events/{eid}/"
 API = d.API
 
-# RPH store_ids that are OUT OF SCOPE for this (Chicagoland) board and must never
-# be ingested — past, present, or future — even though they ran Lorcana SCs.
-# These are central-Indiana stores, not Chicagoland. Their existing events are
-# flagged is_ignored=1 (so the leaderboard/standings/summary already exclude
-# them); this set stops the store-driven discovery from re-adding NEW events for
-# them on a future set. (tracked_store_ids also derives only from non-ignored
-# events, so a fully-dropped store falls out of scope on its own — this is the
-# explicit belt-and-suspenders guard + the documented record of the decision.)
-EXCLUDED_STORE_IDS = {
-    2237,   # Good Games - Indianapolis (Indianapolis, IN)
-    28480,  # Storming Good Games (Greencastle, IN)
-}
-
-# Hand-added one-offs: the event counts, its store does not become one we track.
-# Shared with sync_elo_tracked_stores, which derives the SAME scope from the
-# Supabase mirror — see elo_scope.py for why it has to be one list.
-from elo_scope import ONE_OFF_EVENT_IDS  # noqa: E402
+# The two hand-written scope rulings. Both MUST be shared with
+# sync_elo_tracked_stores, which derives the SAME scope from the Supabase mirror
+# — see elo_scope.py for why a second copy anywhere is the bug.
+#   EXCLUDED_STORE_IDS — the store is out of scope entirely; never ingest it.
+#   ONE_OFF_EVENT_IDS  — the event counts, its store does not become one we track.
+# EXCLUDED_STORE_IDS lived here alone until 2026-09-12, which is exactly how an
+# excluded shop kept showing on the Upcoming SCs and Scout tabs: this file gates
+# INGEST, and nothing it says ever reached the table those tabs read.
+from elo_scope import EXCLUDED_STORE_IDS, ONE_OFF_EVENT_IDS  # noqa: E402
 
 
 def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
