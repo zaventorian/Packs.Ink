@@ -4232,6 +4232,25 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- ⚠ **Granting someone the scouting feature is a PASTE, never a migration — this repo is
+  PUBLIC.** `scout_members` is an EMAIL allowlist, so a seed file is fourteen real people's
+  addresses in a git history that is permanent and world-readable. A session wrote exactly that
+  as `149_scout_members_seed.sql` (PR #52, closed unmerged 2026-09-13) and it had already been
+  pushed to a public branch before anyone looked — **`refs/pull/52/head` keeps it fetchable even
+  now**, because GitHub retains pull refs after the PR closes and the branch is deleted. So
+  there is no number 149: the grant lives at `Desktop/scout_members_seed.sql`, outside the repo,
+  and the ledger carries the gotchas instead of the data. Add people from the admin panel's
+  **Who can scout** box; reach for the file only for a bulk paste.
+  - **⚠ It is a SEED, not a reconciler.** Re-running RE-ADDS anyone an admin has since removed,
+    because a removed row is deleted and so conflicts with nothing. `on conflict do nothing`, so
+    a re-run cannot clobber a note edited since. Both verified against a throwaway Postgres 16
+    running 143's own table text.
+  - **⚠ A wrong address fails SILENTLY** — `can_scout()` returns false and the Scout tab simply
+    is not rendered, so if a teammate reports it missing, the address is the first thing to
+    check. Sign-in is Google OAuth only, so a non-gmail entry (comcast.net, yahoo.com) matches
+    only if that address is itself a Google account; and **Gmail ignores dots in the local part
+    but the JWT does not** — someone who signed up as `codybraun1@` is not matched by
+    `cody.braun1@`. Confirmed against the real function. Either way the fix is one row.
 - ~~`supabase/148_scout_any_event.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Lets a scout add ANY
   event to scouting by hand: `scout_events` (the opt-in ledger), a widened
   `scout_event_meta`, `scout_event_add` / `scout_event_remove`, and the slate + sheet
