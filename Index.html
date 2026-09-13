@@ -199,7 +199,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=400">
+<link rel="stylesheet" href="styles.css?v=401">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -5563,11 +5563,22 @@ const parseSearchQuery = (input) => {
   // Pre-pass: "non/no/not/without/exclude X" exclusion — any dimension (rarity,
   // ink, keyword, classification, type), 2-word "super rare" first.
   const EXCL_PREFIXES = ["non ", "no ", "not ", "without ", "exclude "];
+  // ⚠ The prefix has to START a token. A bare indexOf finds "no " inside
+  // "bruno madrigal" and "non " inside "last cannon", so every Bruno card
+  // parsed as an exclusion of whatever followed — "bruno madrigal" became
+  // "bru" with the Madrigal classification EXCLUDED, i.e. a search for Bruno
+  // that is guaranteed to return no Bruno. Measured over the shipped card
+  // list: bruno, cannon, rhino and bad-anon, 43 corrupted queries.
+  const exclAt = (hay, pfx) => {
+    let i = hay.indexOf(pfx);
+    while(i > 0 && hay[i - 1] !== " ") i = hay.indexOf(pfx, i + 1);
+    return i;
+  };
   let changed = true;
   while(changed){
     changed = false;
     for(const pfx of EXCL_PREFIXES){
-      const idx = raw.indexOf(pfx);
+      const idx = exclAt(raw, pfx);
       if(idx < 0) continue;
       const after = raw.slice(idx + pfx.length).split(" ");
       let d = null, take = 0;
@@ -14309,6 +14320,13 @@ const SCAN_BETA_VERSION = "2026-08-04";
 // already on screen — "basically right card but extra steps for the variant"
 // (Aaron P, 2026-09-11).
 const SCAN_VARIANT_MAX = 4;
+// How many catalog rows the review editor's search box collects before it
+// stops looking. The matcher it runs (matchesCardFilter) builds a body-text
+// haystack per row, and a one-letter query would otherwise pay that over the
+// whole catalog on every keystroke, on the one screen where the camera and
+// both scanner workers are already running. 60 candidates for 12 rendered
+// rows is the same ratio the name-only scan this replaced used.
+const QA_EDIT_SCAN_CAP = 60;
 // An Extras/CUSTOM_VARIANTS row is named by its variant_label ("Deep Trouble",
 // "Text Error"); everything else is named by its rarity, which is the axis the
 // chase and promo prints actually differ on.
@@ -14461,6 +14479,11 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
   };
   const [qaEditOpen, setQaEditOpen] = useState(null); // rid of the row with the inline editor open (one at a time)
   const [qaEditQ, setQaEditQ] = useState("");         // editor card-search query
+  // The matcher below is ~20ms over the catalog on a desktop and several times
+  // that on the phone this runs on, with the camera and both scanner workers
+  // beside it. Deferring keeps each keystroke in the input immediate and lets
+  // the list land a frame later, the same way the Cards browser does it.
+  const qaEditQd = React.useDeferredValue(qaEditQ);
   const [qaDeckBusy, setQaDeckBusy] = useState(false);
   const [qaUndo, setQaUndo] = useState(null);         // {label} — undo chip after a row delete
   const qaUndoRef = useRef(null);                     // { row, idx, timer }
@@ -15942,8 +15965,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     labelSample({ id: rid, sampleId: sid, uploadPredId: upPred }, patch);
   };
   // Editor card search: whole catalog, one entry per card_id (Normal-printing
-  // row preferred), matched with the site-wide nameMatches (diacritics,
-  // apostrophes, typo tolerance).
+  // row preferred), matched with the site-wide smart search.
   const qaSearchPool = useMemo(() => {
     if(!raw) return [];
     const seen = new Map();
@@ -15955,7 +15977,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
     return Array.from(seen.values());
   }, [raw]);
   const qaEditMatches = useMemo(() => {
-    const q = qaEditQ.trim();
+    const q = qaEditQd.trim();
     if(q.length < 2) return [];
     // collector-number search: the tester is HOLDING the card — "154" or
     // "154/204" reads straight off the bottom line and beats typing a name.
@@ -15969,11 +15991,37 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       }
       return hits;
     }
-    const out = [];
-    for(const r of qaSearchPool){
-      if(nameMatches(q, r["Product Name"])){ out.push(r); if(out.length >= 60) break; }
-    }
-    const ql = searchNorm(q.toLowerCase());
+    // Everything else is the site's smart search, through the single canonical
+    // matcher. This box is reached because the scanner picked the WRONG card,
+    // and the commonest miss is a sibling printing (the Epic Heihei read as the
+    // Rare) — so "heihei epic" has to split into a name plus a RARITY rather
+    // than hunting the whole phrase in the name, which is what it did before
+    // and why it answered "No card matches". Ink, set, cost and the rest come
+    // along for free: the tester is holding the card and can read any of them
+    // off it.
+    const parsed = parseSearchQuery(q);
+    const f = emptyFilter();
+    // smartCardFilter's AND-first/OR-fallback, with a scan cap. A broad query
+    // ("h") otherwise runs the body-text haystack over the whole catalog on
+    // every keystroke, and this screen has the camera and both scanner workers
+    // running beside it. Capping and then sorting is the same shape the
+    // name-only scan used; only the first QA_EDIT_SCAN_CAP candidates compete
+    // for the 12 rendered rows.
+    const scan = (mode) => {
+      const p = mode ? {...parsed, nameMatchMode: mode} : parsed;
+      const hits = [];
+      for(const r of qaSearchPool){
+        if(matchesCardFilter(r, f, p)){ hits.push(r); if(hits.length >= QA_EDIT_SCAN_CAP) break; }
+      }
+      return hits;
+    };
+    const multiWord = !!parsed.name && parsed.name.trim().split(/\s+/).filter(Boolean).length > 1;
+    let out = scan(multiWord ? "all" : null);
+    if(multiWord && !out.length) out = scan("any");
+    // Rank on the residual NAME, not the raw input — with "heihei epic" the
+    // rarity word is a filter, and sorting by the whole phrase would put no
+    // card first.
+    const ql = searchNorm((parsed.name || q).toLowerCase());
     const norm = (s) => searchNorm(String(s || "").toLowerCase());
     out.sort((a, b) => {
       const an = norm(a["Product Name"]), bn = norm(b["Product Name"]);
@@ -15981,7 +16029,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
       return (as - bs) || (an.length - bn.length);
     });
     return out.slice(0, 12);
-  }, [qaEditQ, qaSearchPool]);
+  }, [qaEditQd, qaSearchPool]);
   // card_id → every version of that card, for the row's version segment and the
   // editor's "Other versions" list. Keyed on card_id rather than Product Name
   // so a lookup can't be defeated by the two name strings being built from
@@ -16893,7 +16941,7 @@ function CardScannerModal({ raw, collection, updateQty, user, onSignIn, onClose,
             <span class="scanner-qa-search-name">${r["Product Name"]}</span>
             <span class="scanner-qa-search-meta">${[r.Set, r.Rarity].filter(Boolean).join(" · ")}</span>
           </button>`)}
-        </div>` : (qaEditQ.trim().length >= 2 ? html`<div class="scanner-qa-search-none">No card matches "${qaEditQ.trim()}"</div>` : null)}
+        </div>` : (qaEditQd.trim().length >= 2 ? html`<div class="scanner-qa-search-none">No card matches "${qaEditQd.trim()}"</div>` : null)}
       </div>` : null}
     </div>`;
   };

@@ -134,6 +134,54 @@ report: a set's league promos "aren't an option whenever you click the pencil".
 Guarded by `node scripts/test_scan_variants.mjs`, which replays the real helpers over the
 shipped `scanner/index.json` and so re-measures every count above.
 
+### The review editor's search IS the site's smart search (2026-09-12)
+
+The pencil's search box matched the whole typed phrase against `Product Name` and nothing
+else, so **`heihei epic` answered "No card matches"** (Zaven, from the beta). That box is
+reached precisely BECAUSE the scanner picked the wrong card, and a sibling printing is the
+commonest miss — so the one query most worth typing was the one that returned nothing, and
+it failed silently: an empty list reads exactly like a card that isn't in the catalog.
+
+- **It routes through `parseSearchQuery` + `matchesCardFilter` now**, per the
+  single-canonical-matcher rule — it was the file's ONLY remaining `nameMatches` bypass.
+  So the name splits off the dimension (`heihei epic` → name `heihei` + rarity `Epic`) and
+  ink, set, cost and the rest come free: the tester is holding the card and can read any of
+  them off it.
+- **The AND-first/OR-fallback two-pass is inlined rather than calling `smartCardFilter`**,
+  because it needs a scan cap. `matchesCardFilter` builds a body-text haystack per row, so
+  a one-letter query would run that over the whole catalog on every keystroke — on the one
+  screen where the camera and both scanner workers are already running. **`QA_EDIT_SCAN_CAP`
+  (60) candidates for 12 rendered rows** is the ratio the name-only scan already used.
+  Measured over the shipped index: ~21ms a query on a desktop, against ~13ms before.
+- **The query is `React.useDeferredValue`d**, so a keystroke paints immediately and the list
+  lands a frame later — the same treatment the Cards browser gives its filter. The empty
+  state quotes the DEFERRED query, or the message and the list could disagree mid-keystroke.
+- **Ranking is on the residual NAME, not the raw input.** With `heihei epic` the rarity word
+  is a filter; sorting by the whole phrase means no card can ever prefix-match it and the
+  order collapses to name length.
+- **⚠ A bare `154` / `154/204` is still a COLLECTOR-NUMBER lookup and must stay ahead of the
+  parser**, which would read a lone number as name text. The tester is holding the card and
+  that line is the fastest thing to read off it.
+
+Guarded by `node scripts/test_scanner_edit_search.mjs`, which rewrites only the memo's hook
+wrapper and replays the real body over the shipped index.
+
+### ⚠ `parseSearchQuery`'s exclusion prefixes match a WHOLE token — fixed 2026-09-12
+
+Found by routing the scanner through the parser: `EXCL_PREFIXES` (`non ` / `no ` / `not ` /
+`without ` / `exclude `) were located with a bare `indexOf`, so they fired **inside a word**.
+`bru`**`no `**`madrigal` parsed as name `bru` with the **Madrigal classification EXCLUDED** —
+a search for Bruno that could not return a Bruno — and `last can`**`non `** ate whatever
+followed it. `rhino` and `bad-anon` the same. Measured over the shipped card list: **43
+corrupted queries of 9,952, now 0.**
+
+This was site-wide, not a scanner bug — every Bruno card and both Cannon items were
+unsearchable by name on the **Cards tab** too. It only surfaced here because the old scanner
+box didn't use the parser at all, and because the failure looks like a normal empty result.
+The sibling `-rush` minus-exclusion was always anchored (`(^|\s)`); only this loop wasn't.
+Both directions are pinned in the test — over-tightening kills the real exclusion syntax
+just as silently.
+
 ### Consent + the upload opt-out (migration 114)
 
 - **`scanner_consents(user_id pk, version, accepted_at, uploads_enabled, updated_at)`** — owner-only RLS on select/insert/update, no admin read branch. One row per user, updated in place: we need the CURRENT preference on every scan, not an audit trail.
@@ -818,6 +866,7 @@ Every card-search surface in the app **must** route through `matchesCardFilter` 
 - Price Graphing "By Card" picker (`flatMatches` ~line 7672)
 - Price Graphing FilterDrawer reuse (`cardPassesHistoryFilter` ~line 7660)
 - Collection set-detail view (`visibleGroups` ~line 6815) — unified 2026-05-26 from a local 3-field reduced matcher
+- Card scanner's review editor (`qaEditMatches`) — unified 2026-09-12; it was the last `nameMatches` bypass in the file, and see "The review editor's search IS the site's smart search" for the scan cap it adds
 
 **Surfaces that intentionally do NOT use it:**
 - Set-name search inputs (Price Graphing's "Search sets…" — filters set names, not cards)
@@ -2882,7 +2931,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v400`; `styles.css?v=400`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v401`; `styles.css?v=401`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
