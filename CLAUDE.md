@@ -3591,6 +3591,41 @@ the body's own reason over the status, and every roster-refresh failure routes t
 - A 5xx/504 names the redeploy too — the pre-143 copy ignores `{event_id}` and scrapes every
   tracked upcoming SC, which is exactly how one event's refresh runs long enough to be killed.
 
+### Scouting an event that ALREADY HAPPENED (2026-09-13)
+
+Reported by a scout: *"Is there a way to go to previous tournaments to update this
+scouting report? When I try to open a previous tournament it just shows the tournament
+results."* **Nothing server-side ever refused.** `get_scout_event`, `save_scout_note` and
+`scout_event_add` gate on `can_scout()` and `tracked` and **never on a date**, and
+`scout_event_meta` resolves a played event through `lorcana_events_history` (and
+`set_championships`, the ledger, a note's own stored label). The sheet was willing the
+whole time; what expired was the way IN — 147 stops the Scout tab's slate 24h after an
+event starts, and that slate was the only door.
+
+So the fix is a DOOR, not a gate change: **Elo » Tournament Results → an event →
+`Log decks + notes`** (`.elo-scout-link` in `EloEventDetail`'s header, beside Store
+report), opening the same `ScoutEventModal` EloView already owns. That is exactly where
+the reporter looked.
+
+- **⚠ `get_roster_scout` is the ONLY scouting function allowed a date filter**, and the
+  guard test pins that on the other three — one `and` in the wrong function silently
+  deletes this, and the symptom is a button that 403s rather than an error anyone reads.
+  The test also asserts the slate DOES carry one, so it cannot pass vacuously.
+- **Gated on `canScout`, never `canViewStore`** — the standing access-widening trap. And
+  the button renders `canScout && onOpenScout && …`, so a dropped prop makes it vanish in
+  silence: the test pins both the signature and EloView's pass-through.
+- **`.elo-scout-link` reuses `.elo-store-link`'s rule** rather than adding a near-copy. That
+  rule exists only to let a `<button>` sit in this row: `.elo-event-link` is declared LATER
+  and wins back the pill's background, border and padding, so what actually survives from it
+  is `cursor` + `font:inherit` — which an `<a>` gets for free and a `<button>` does not.
+- **Already reachable, and worth saying so**: the CALENDAR's Scout tab is
+  `canScout && ev.event_id != null` with no date test, so a past store event opens a sheet
+  today with **Show past** on. It only covers stores you follow, which is why it did not
+  answer the report.
+- **Still migration-shaped if it is ever wanted**: a "previous events" toggle on the Scout
+  tab itself means widening 147's window in `get_roster_scout`. The button needs no
+  migration at all, so it shipped first.
+
 ### ⚠ The sheet's Elo column: the rating is DATA, the link is an AFFORDANCE (2026-09-13)
 
 The cell rendered `p.matched && onPlayerClick ? rating : "NR"`, so on the two surfaces that

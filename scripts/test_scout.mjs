@@ -144,6 +144,53 @@ check("a plain error falls back to scoutErrText",
   ok("a rating still renders with no onPlayerClick",
     /:\s*html`<span>\$\{Math\.round\(p\.current_rating\)\}<\/span>`/.test(cell));
 }
+// ── a sheet for an event that already happened ────────────────────────────
+// Reported by a scout 2026-09-13: "when I try to open a previous tournament it
+// just shows the tournament results". Nothing server-side ever refused — the
+// Scout tab's slate stops 24h after an event starts (147), so the only way IN
+// expired with it while the sheet itself stayed perfectly willing.
+//
+// ⚠ That willingness is the whole feature, and it is one `and` away from being
+// deleted by somebody "tidying up" a window. `get_roster_scout` is the ONLY
+// scouting function allowed a date filter.
+{
+  const windowish = /start_datetime\s*[<>]|now\(\)\s*-\s*interval/;
+  const body = (sql, name) => {
+    const a = sql.indexOf("function public." + name);
+    if (a < 0) throw new Error("missing " + name);
+    const b = sql.indexOf("\n$$;", a);
+    return sql.slice(a, b);
+  };
+  ok("get_scout_event has no date window",
+    !windowish.test(body(sql148, "get_scout_event")));
+  ok("save_scout_note has no date window",
+    !windowish.test(body(sql, "save_scout_note")));
+  ok("scout_event_add has no date window",
+    !windowish.test(body(sql148, "scout_event_add")));
+  // …and the check is doing work: the slate's own function DOES carry one.
+  ok("the slate is the one that does", windowish.test(sql147));
+  // A past event resolves only because scout_event_meta reads the ARCHIVE.
+  ok("scout_event_meta resolves a past event from the archive",
+    /from public\.lorcana_events_history/.test(body(sql148, "scout_event_meta")));
+}
+// So the fix is a DOOR, not a gate change: the past-event view (Elo » Tournament
+// Results → an event) opens the same sheet.
+{
+  const detail = grab("function EloEventDetail(", '<h3 class="elo-event-h3">Final Standings</h3>');
+  ok("the past-event view offers the scouting sheet",
+    /elo-scout-link/.test(detail) && /onOpenScout\(\{event_id: ev\.event_id/.test(detail));
+  // ⚠ canScout, never canViewStore — the documented access-widening trap.
+  ok("it is gated on canScout",
+    /canScout && onOpenScout && html/.test(detail));
+  ok("and not on the store-report allowlist",
+    !/canViewStore[^\n]*elo-scout-link/.test(detail));
+  // The button vanishes silently if the props stop arriving, so pin the wiring.
+  ok("EloEventDetail accepts both props",
+    /function EloEventDetail\(\{[^}]*canScout[^}]*onOpenScout[^}]*\}\)/.test(src));
+  ok("EloView passes both to it",
+    /<\$\{EloEventDetail\}[^`]*canScout=\$\{canScout\}[^`]*onOpenScout=\$\{onScoutEvent\}/.test(src));
+}
+
 // The two mounts that have nowhere to navigate to are the reason the split
 // matters — if one of them ever gains a callback, this still has to hold.
 ok("the finder overlay mounts the panel without a player callback",
