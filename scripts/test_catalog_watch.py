@@ -286,5 +286,76 @@ with tempfile.TemporaryDirectory() as d:
     code, _ = _ack_into(tmp, "missing_single:5", "   ", None)
     check("an ack with no real reason is still refused", code, 2)
 
+
+# ── check 6: a set we hold under a hand-minted id is not "missing" ────────
+#
+# Lorcast is late to promo sets, so we mint our own id and build the cards by
+# hand (migration 107's set_curators_cc1). The day Lorcast indexes one, its id
+# is new to us and the check reported it as missing with the hint "run
+# load_lorcast.py" — which upserts sets ON CONFLICT (id) and would therefore
+# add a SECOND row for a set we already own, reload its cards under the new id,
+# and strand every collection ref sitting on the hand-built one.
+#
+# Both directions matter and both fail silently. Suppressing on a code match is
+# the dangerous one: this check is how a genuinely new set announces itself, so
+# the test pins that an unknown code still reports, with the hint that tells you
+# to load it.
+
+
+class _StubSb:
+    def select(self, table, **kw):
+        return {"sets": _SETS, "sealed_products": [], "cards": []}[table]
+
+
+_SETS = [
+    {"id": "set_curators_cc1", "code": "CC1",
+     "name": "Curator's Collection: Heroines", "tcgplayer_group_id": None},
+    {"id": "set_tfc", "code": "TFC", "name": "The First Chapter",
+     "tcgplayer_group_id": 17688},
+    {"id": "set_nocode", "code": None, "name": "no code", "tcgplayer_group_id": None},
+]
+
+_LORCAST = [
+    # Same physical set as set_curators_cc1, under Lorcast's own id.
+    {"id": "set_4de576a6b64146949be957ca6a382022", "code": "cc1 ",
+     "name": "Curator's Collection: Heroines Edition", "released_at": "2026-07-17"},
+    # Genuinely new — nothing we hold carries this code.
+    {"id": "set_hyperia", "code": "14", "name": "Hyperia City",
+     "released_at": "2026-10-23"},
+    # Already ours by id: must not be reported at all.
+    {"id": "set_tfc", "code": "TFC", "name": "The First Chapter",
+     "released_at": "2023-08-18"},
+]
+
+_real = (rc.fetch_all_products, rc.column_pids, rc.fetch_results)
+rc.fetch_all_products = lambda *a, **k: ([], {})
+rc.column_pids = lambda *a, **k: set()
+rc.fetch_results = lambda url: _LORCAST
+try:
+    found = {f["key"]: f for f in rc.collect_findings(_StubSb())
+             if f["kind"] == "missing_set"}
+finally:
+    rc.fetch_all_products, rc.column_pids, rc.fetch_results = _real
+
+held = found.get("set_4de576a6b64146949be957ca6a382022")
+check("a set we already hold by code is still reported", held is not None, True)
+check("...but never told to run load_lorcast",
+      "run scripts/load_lorcast.py" in (held or {}).get("hint", ""), False)
+check("...and the hint names the id we hold it under",
+      "set_curators_cc1" in (held or {}).get("hint", ""), True)
+check("...and says not to load it",
+      "Do NOT run load_lorcast.py" in (held or {}).get("hint", ""), True)
+check("...and the detail line says we hold it",
+      "we hold it as set_curators_cc1" in (held or {}).get("detail", ""), True)
+
+new = found.get("set_hyperia")
+check("a genuinely new set is still reported", new is not None, True)
+check("...and is still told to load it",
+      (new or {}).get("hint"), "run scripts/load_lorcast.py to create the set + its cards")
+
+check("a set we hold by id is not reported at all", "set_tfc" in found, False)
+check("exactly the two expected sets are reported", len(found), 2)
+
+
 print(f"\n{failed} FAILED" if failed else "\nall passed")
 raise SystemExit(1 if failed else 0)

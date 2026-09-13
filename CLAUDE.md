@@ -1493,8 +1493,30 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 | `unbound_group` | a TCGCSV group no `sets.tcgplayer_group_id` points at — **how a new set announces itself, weeks before a card of it is listed** |
 | `sealed_no_set` | sealed row loaded with `set_id` null → renders under "Other / Promo" |
 | `card_no_pid` | `cards.tcgplayer_product_id` null → `card_prices_latest` is an INNER JOIN, so that card can never show a price |
-| `missing_set` | Lorcast published a set we never created |
+| `missing_set` | Lorcast published a set id we've never seen — **not the same as a set we don't have**, see below |
 | `review_due` | a **scheduled review** came due — see below |
+
+### ⚠ `missing_set` is an ID test, and a set id is not a set (2026-09-13)
+
+When Lorcast is late to a promo set we mint our own id and build the cards by hand —
+migration 107's **`set_curators_cc1`**, whose six singles ship as `REPRINT_PROMOS`. The day
+Lorcast finally indexes that set it arrives under *its* id, which we have never seen, so the
+check calls a set we already own "missing". That is survivable. What was not: the hint said
+**"run `scripts/load_lorcast.py` to create the set + its cards"**, and `load_lorcast` upserts
+`sets` **`on_conflict="id"`** — so following it would have added a SECOND row for one physical
+set, reloaded its six cards under the new id, given every Curator's card two tiles, and left the
+collection refs migration 107 deliberately repointed sitting on the orphan side. An alert whose
+remedy is the damage.
+
+- **The sweep now matches the `code` too** (it didn't even `select` it before) and, on a hit,
+  says *we already hold this as `<id>`, do NOT run load_lorcast* — naming the real decision,
+  which is whether to converge onto Lorcast's id or keep ours.
+- **It still REPORTS, it does not suppress.** This check is how a genuinely new set announces
+  itself; silencing on a code match would trade a bad hint for a blind spot. Both directions are
+  pinned in `test_catalog_watch.py`, which stubs the network and runs the real `collect_findings`.
+- Curator's CC1 is acked to **2026-09-28**, the `promo-printing-policy` review — all six CC1
+  cards are already in that review's scope, so "do promo printings get a tile" and "which set id
+  do they hang off" get settled in one sitting rather than two.
 
 **It is its own workflow, not an ETL job, deliberately.** ETL red = prices are broken, act now. Catalog watch red = something new exists, decide what to do with it. Sharing one light teaches you to ignore both. It also stopped firing 3–4x a day (once per prices dispatch) to answer a question that changes daily at most.
 
@@ -1513,7 +1535,7 @@ Two things it does NOT re-report, structurally rather than by ack: `load_sealed_
 | id | due | what |
 |---|---|---|
 | `set-spoilers` | 2026-09-25 | prestage the next set's revealed cards before Lorcast indexes them |
-| `promo-printing-policy` | 2026-09-28 | decide if promo *printings* are separate tracked items — 9 acks are blocked on it, and it must land before Q3 prestaging |
+| `promo-printing-policy` | 2026-09-28 | decide if promo *printings* are separate tracked items — most of the acks in the file defer to it, and it must land before Q3 prestaging. **Don't write the count down** — it has been wrong twice (this table said 9, the review said 13, it was 16); the review's `how` says how to enumerate them |
 | `japan-core` | 2026-10-30 | re-scrape the Curator's Library waves into `JAPAN_CORE_PARTIAL_NUMBERS` |
 | `pins-lore-counters` | 2026-10-30 | new season's pin + counters, and the still-missing photos |
 

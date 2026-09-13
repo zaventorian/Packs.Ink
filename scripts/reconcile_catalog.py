@@ -475,8 +475,17 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
                             order="tcgplayer_product_id.asc")
     sealed_pids = {r["tcgplayer_product_id"] for r in sealed_rows
                    if r.get("tcgplayer_product_id") is not None}
-    sets_rows = sb.select("sets", columns="id,name,tcgplayer_group_id", order="id.asc")
+    sets_rows = sb.select("sets", columns="id,code,name,tcgplayer_group_id", order="id.asc")
     set_name = {r["id"]: r.get("name") or r["id"] for r in sets_rows}
+    # Code -> the id we hold it under. Promo sets get hand-minted ids (migration
+    # 107's set_curators_cc1) whenever Lorcast hasn't indexed them yet, so once
+    # Lorcast does, its id is one we have never seen and check 6 below would call
+    # a set we already own "missing" — with a hint that would duplicate it.
+    set_id_by_code = {}
+    for r in sets_rows:
+        code = (r.get("code") or "").strip().upper()
+        if code:
+            set_id_by_code.setdefault(code, r["id"])
     # Name -> the cards we already hold under it, so a missing single can be
     # recognised as a promo PRINTING of one rather than reported as an unknown.
     cards_by_name: dict[str, list[dict]] = {}
@@ -555,15 +564,39 @@ def collect_findings(sb: Supabase, ack: dict | None = None, today: str | None = 
         })
 
     # 6. Lorcast published a set we never created.
+    #
+    #    "Never created" is an ID test, and that is not the same question as "do
+    #    we have this set". When Lorcast is late to a promo set we mint our own
+    #    id and build the cards by hand (migration 107's set_curators_cc1, whose
+    #    six singles ship as REPRINT_PROMOS), so the day Lorcast finally indexes
+    #    it, its id is one we have never seen — and the obvious hint is the one
+    #    thing you must not do: load_lorcast upserts sets ON CONFLICT (id), so it
+    #    would add a SECOND row for the same physical set and reload its cards
+    #    under the new id, duplicating every tile and stranding the collection
+    #    refs the hand-built ids carry. Match the CODE to catch that, and say so.
     try:
         for st in fetch_results("https://api.lorcast.com/v0/sets"):
-            if st.get("id") and st["id"] not in set_name:
-                out.append({
-                    "kind": "missing_set", "key": st["id"],
-                    "name": st.get("name") or st["id"],
-                    "detail": f"code {st.get('code')} · released {st.get('released_at')}",
-                    "hint": "run scripts/load_lorcast.py to create the set + its cards",
-                })
+            if not st.get("id") or st["id"] in set_name:
+                continue
+            held = set_id_by_code.get((st.get("code") or "").strip().upper())
+            if held:
+                hint = (f'NOT missing — we already hold this set as {held}, under an id we '
+                        f'minted before Lorcast indexed it. Do NOT run load_lorcast.py: it '
+                        f'upserts sets on conflict (id), so it would create a second row for '
+                        f'the same set and reload its cards under the new id, duplicating '
+                        f'every tile and orphaning the collection refs on {held}. The real '
+                        f'decision is whether to converge {held} onto Lorcast\'s id — a '
+                        f'migration repointing cards.set_id and every hand-built reference '
+                        f'to it — or to keep ours and ack this.')
+            else:
+                hint = "run scripts/load_lorcast.py to create the set + its cards"
+            out.append({
+                "kind": "missing_set", "key": st["id"],
+                "name": st.get("name") or st["id"],
+                "detail": f"code {st.get('code')} · released {st.get('released_at')}"
+                          + (f" · we hold it as {held}" if held else ""),
+                "hint": hint,
+            })
     except Exception as e:  # Lorcast down must not fail the whole watch
         print(f"  (Lorcast set check skipped, non-fatal: {e})")
 
