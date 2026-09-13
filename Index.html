@@ -27645,6 +27645,46 @@ const scoutErrText = (e) => {
   if(/we have no event .* on file/i.test(m)) return "We don't have that event on file, so there's nothing to scout.";
   return m || "Something went wrong.";
 };
+// The same, for a failed Edge Function call — where the reason is in the
+// RESPONSE BODY and supabase-js throws it away. FunctionsHttpError.message is
+// the fixed string "Edge Function returned a non-2xx status code" for ALL of
+// {not authorized, unknown event, untracked store, a database error, a platform
+// timeout}, which is what the scouting team saw when a roster refresh failed:
+// one sentence naming none of the five things it could be. The Response itself
+// rides along unread on `.context` (invoke throws before reading it), so read it
+// and say which.
+//
+// ⚠ A 403 HERE does NOT mean "you aren't on the team". This panel only renders
+// once get_scout_event has returned, i.e. after can_scout() already said yes in
+// the database — so the only way the function can still refuse is that the
+// DEPLOYED copy predates migration 143 and gates on can_view_store_report()
+// alone. That is a redeploy, and answering "scouting is team-only" would send
+// whoever reads it to check the one thing known to be fine.
+const edgeErrText = async (e) => {
+  const ctx = e && e.context;
+  if(!ctx || typeof ctx.status !== "number" || typeof ctx.text !== "function") return scoutErrText(e);
+  let raw = "";
+  try { raw = String((await ctx.text()) || ""); } catch { /* a body reads once */ }
+  let reason = raw.slice(0, 160);
+  try { const j = JSON.parse(raw); if(j && typeof j === "object") reason = String(j.error || j.message || reason); }
+  catch { /* not JSON — a gateway can answer with an HTML error page, and half of
+             one in a toast is worse than the bare status, so drop markup. */
+    if(/^\s*</.test(reason)) reason = ""; }
+  if(/not authorized/i.test(reason))
+    return "the roster function is still on the old permissions — redeploy refresh-elo-rosters (it predates migration 143).";
+  if(/not at a store we track|is not one we scout/i.test(reason))
+    return "that event isn't on our scouting list — open it and use Add this event to scouting.";
+  if(/unknown event|no event .* on file/i.test(reason))
+    return "Ravensburger Play has no event on file with that id.";
+  if(ctx.status === 404)
+    return "refresh-elo-rosters isn't deployed on this site yet.";
+  if(ctx.status === 408 || ctx.status === 504 || ctx.status >= 500)
+    // The pre-143 deployment ignores {event_id} and scrapes EVERY tracked
+    // upcoming SC instead, which is exactly how one event's refresh runs long
+    // enough to hit the platform's wall clock. Name the redeploy here too.
+    return `the roster function ${reason || "timed out or crashed"} (HTTP ${ctx.status}) — if it predates migration 143, redeploy it.`;
+  return reason || `HTTP ${ctx.status}.`;
+};
 // "9/12 · Set Championship" — the shape of the reminder Zaven asked for. Dates
 // render in the EVENT's timezone: a 7pm Friday in Elgin is Friday for whoever
 // was in the room, whatever timezone you read the note from.
@@ -27808,7 +27848,7 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
         ? `Roster updated — ${n} signed up`
         : `Refreshed every tracked Set Championship (${(d && d.events) || 0}). Redeploy refresh-elo-rosters to pull one event at a time.`);
     } catch(e){
-      flashToast("Couldn't refresh the roster: " + scoutErrText(e));
+      flashToast("Couldn't refresh the roster: " + await edgeErrText(e));
     } finally { setRefreshing(false); }
   };
 
@@ -27994,11 +28034,23 @@ function ScoutEventPanel({eventId, eventMeta, inline, onPlayerClick}){
             ${shown.map(p => html`<tr key=${p.player_key} data-k=${p.player_key} class=${(p.deck||p.notes?"logged":"")+(p.off_roster?" off":"")}>
               <td class="ss-elo">
                 ${/* The rating links to the Elo profile; the NAME opens what the
-                     team has written, which is the question you opened this for. */
-                  p.matched && onPlayerClick
+                     team has written, which is the question you opened this for.
+                     ⚠ But the RATING is data and the link is an affordance, and
+                     testing both in one branch made every rated player read "NR"
+                     on the two surfaces that mount this panel WITHOUT
+                     onPlayerClick — the calendar's Scout tab and the Near-me
+                     finder — while the header's Avg/Top Elo, aggregated
+                     server-side over these very rows, printed real numbers. A
+                     sheet claiming nobody in the room is rated is wrong about the
+                     one column it exists for, and it is wrong silently. Same
+                     split EloEventRoster already draws: the number renders from
+                     the data, the link only where there is somewhere to go. */
+                  p.current_rating == null
+                  ? html`<span class="muted">NR</span>`
+                  : p.matched && onPlayerClick
                   ? html`<button class="scout-elobtn" title="Open Elo profile"
                       onClick=${()=>onPlayerClick(p.player_id)}>${Math.round(p.current_rating)}</button>`
-                  : html`<span class="muted">NR</span>`}
+                  : html`<span>${Math.round(p.current_rating)}</span>`}
               </td>
               <td class="ss-name">
                 <button class="scout-namebtn" onClick=${()=>setHistoryFor(p)}
@@ -28167,7 +28219,7 @@ function EloRosterScout({onPlayerClick, onOpenScout, isEloAdmin}){
       if(error) throw error;
       await load();
       flashToast(`Refreshed ${(d && d.events) || 0} events · ${(d && d.players) || 0} sign-ups`);
-    } catch(e){ flashToast("Couldn't refresh: " + scoutErrText(e)); }
+    } catch(e){ flashToast("Couldn't refresh: " + await edgeErrText(e)); }
     finally { setRefreshingAll(false); }
   };
 

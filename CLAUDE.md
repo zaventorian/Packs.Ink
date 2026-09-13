@@ -3564,6 +3564,46 @@ Type, Tab, saved — there is no Edit / Save / Cancel anywhere, because logging 
   toast says which happened instead of reporting a site-wide total as this event's count.
   `scripts/elo/scrape_rosters.py` is the cron safety net and mirrors the logic; keep the two
   in sync.
+- **⚠ And until it IS redeployed, a scout who is not also a store-report viewer gets a flat
+  refusal** — the old copy gates on `can_view_store_report()` alone, so the sheet opens (the
+  database says `can_scout()`) and its one button answers 403. Reported from the floor
+  2026-09-12 as *"Couldn't refresh the roster: Edge Function returned a non-2xx status code"*.
+
+### ⚠ A failed Edge Function call hides its reason — read `error.context` (2026-09-13)
+
+`supabase-js` throws `FunctionsHttpError` whose `.message` is the FIXED string *"Edge Function
+returned a non-2xx status code"*, for every one of the five ways this call fails — not
+authorized, unknown event, untracked store, a database error, a platform timeout. The
+`Response` rides along **unread** on `.context` (`invoke` does `if(!r.ok) throw new
+FunctionsHttpError(r)` before touching the body), so the real `{ok:false, error:"…"}` is
+there for the asking and the toast was naming none of it.
+
+**`edgeErrText(e)` (beside `scoutErrText`) is the one accessor** — it reads the body, prefers
+the body's own reason over the status, and every roster-refresh failure routes through it.
+
+- **⚠ A 403 here is NOT "you aren't on the team", and must never say so.** This panel only
+  renders once `get_scout_event` has returned, i.e. after `can_scout()` already said yes in
+  the database — so the only way the function can still refuse is the stale deployment above.
+  Answering "scouting is team-only" sends the reader to check the one thing known to be fine.
+- A 404 is two different missing things: **our** `unknown event` (RPH has no such event)
+  against the **platform's** `NOT_FOUND` (the function was never deployed). The body
+  separates them; the status cannot.
+- A 5xx/504 names the redeploy too — the pre-143 copy ignores `{event_id}` and scrapes every
+  tracked upcoming SC, which is exactly how one event's refresh runs long enough to be killed.
+
+### ⚠ The sheet's Elo column: the rating is DATA, the link is an AFFORDANCE (2026-09-13)
+
+The cell rendered `p.matched && onPlayerClick ? rating : "NR"`, so on the two surfaces that
+mount `ScoutEventPanel` with **no** `onPlayerClick` — the calendar's Scout tab and the Near-me
+finder's modal — **every rated player read NR**, while the header's Avg Elo / Top Elo,
+aggregated server-side over those very rows, printed real numbers (1554 / 1777 against six
+NRs, in the report that found it). A scouting sheet claiming nobody in the room is rated is
+wrong about the one column it exists for, and nothing errors.
+
+`EloEventRoster` already had the split right and is the shape to copy: the number renders from
+`current_rating`, the click keys on `matched && onPlayerClick`. Where there is nowhere to
+navigate to, the rating is a plain `<span>` — it inherits `.ss-elo`'s accent + tabular numerals,
+so no CSS was needed and the two surfaces differ only by the hover underline.
 
 ## Upcoming-events finder (the "Near me" overlay)
 
@@ -4269,8 +4309,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   `can_scout()`, `scout_event_meta`, `get_scout_event`, `save_scout_note`,
   `get_scout_player`, the three admin member RPCs, a re-created `get_roster_scout`
   (LEFT JOIN + the scout gate), and the `elo_event_roster` FK drop. See "Scouting
-  is a TEAM tool now". **Still outstanding: redeploy `refresh-elo-rosters`**, or
-  the per-event roster refresh falls back to refreshing every tracked SC.
+  is a TEAM tool now". **Still outstanding: redeploy `refresh-elo-rosters`** —
+  the per-event roster refresh falls back to refreshing every tracked SC, and for
+  a scout who is not also a store-report viewer it just 403s (reported from the
+  floor 2026-09-12; the toast now says which, see "Pulling a roster on demand").
 - ~~`supabase/139_calendar_events.sql`~~ — **APPLIED 2026-09-12 by Zaven** (this entry
   said STAGED until 2026-09-12 while 142's own note already recorded an anon read of
   `calendar_events` returning 34 rows — the ledger contradicted itself for a day). The
