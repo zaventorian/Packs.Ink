@@ -4232,6 +4232,20 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- **`supabase/149_scout_members_seed.sql`** — **STAGED, needs pasting.** Grants scouting to the
+  14 people who put their address in #packs_ink on 2026-09-12 — 14 rows in `scout_members`,
+  the same thing the admin panel's "Who can scout" box writes, one paste instead of fourteen.
+  The `note` column carries each Discord display name so the list stays legible.
+  **⚠ It is a SEED, not a reconciler: re-running RE-ADDS anyone removed in the panel since**
+  (a removed row is deleted, so it conflicts with nothing). Run it once; remove people in the
+  panel. `on conflict do nothing`, so a re-run cannot clobber a note edited since — verified,
+  along with the resurrection, against a throwaway Postgres 16 running 143's own table text.
+  **A wrong address fails SILENTLY** — `can_scout()` returns false and the Scout tab simply is
+  not rendered — so if a teammate reports it missing, check the address first: sign-in is Google
+  OAuth only, so a comcast.net / yahoo.com entry matches only if that address is itself a Google
+  account, and Gmail's dots are ignored by Gmail but NOT by the JWT (`codybraun1@` is not matched
+  by `cody.braun1@`, confirmed against the real function). Either way the fix is one row from the
+  panel. Requires `143_scout_team.sql`.
 - ~~`supabase/148_scout_any_event.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Lets a scout add ANY
   event to scouting by hand: `scout_events` (the opt-in ledger), a widened
   `scout_event_meta`, `scout_event_add` / `scout_event_remove`, and the slate + sheet
