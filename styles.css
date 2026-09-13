@@ -251,11 +251,6 @@ html[data-theme="velvet"], html[data-theme="dark"] {
   --heatmap-text-hi: #f0e0a0;
   --heatmap-text-lo: rgba(255,255,255,0.25);
   --heatmap-color: rgba(200,168,70,VAL);
-  /* Note: color-scheme:dark was previously set here to fix unreadable
-     <select> dropdowns. Pulled off the root because Samsung Internet
-     applied a tan/cream UA tint to <button> backgrounds (incl. the
-     profile-btn / avatar tile) when color-scheme was at the root level.
-     Form-control fix moved to a dedicated rule below. */
 }
 
 html[data-theme="black"] {
@@ -331,15 +326,27 @@ html[data-theme="light"] {
 }
 *,*::before,*::after{box-sizing:border-box;}
 
-/* Native form controls (select option panels, scrollbars, focus rings) in
-   dark themes. Was previously applied as `color-scheme: dark` on root, but
-   Samsung Internet (and possibly other Chromium forks) used that signal to
-   apply a UA-default tan tint to <button> backgrounds — visible on the
-   profile-btn / avatar tile on mobile. Scoping to the form controls only
-   keeps dropdown options readable in dark mode without touching buttons. */
-html[data-mode="dark"] :where(select, input, textarea, option, datalist){
-  color-scheme: dark;
-}
+/* color-scheme is DOCUMENT-LEVEL on purpose, and it is load-bearing twice.
+   (1) It is the only signal a browser or WebView has that this page already
+   handles dark mode. Without it, Chrome's "Darken websites", Samsung
+   Internet's dark mode and Android WebView's algorithmic darkening treat the
+   page as un-themed and paint their OWN darkening filter over our already-dark
+   palette — reported 2026-09-13 from a freshly installed copy of the PWA, where
+   the whole app rendered a couple of stops darker than the same build beside
+   it. That filter hits IMAGES too (the logo and the avatar came back dimmed),
+   which is how you tell it apart from a theme bug: no stylesheet can darken a
+   PNG. (2) It keeps native <select> option panels, scrollbars and focus rings
+   readable in dark themes, which is what the old form-control-scoped version
+   was for.
+
+   It was scoped off the root once before because Samsung Internet answered the
+   dark signal by painting a tan/cream UA widget background on <button> (the
+   profile button and its avatar tile). That is guarded at source now — the
+   global button rule below sets `appearance:none`, so no button can fall back
+   to a UA-painted widget in any engine. Declare BOTH modes: a light theme left
+   undeclared is the case those darkening filters treat most aggressively. */
+html[data-mode="dark"]{ color-scheme: dark; }
+html[data-mode="light"]{ color-scheme: light; }
 
 /* Body padding uses max(designed, safe-area-inset) so iOS notched devices
    (iPhone 14 Pro+, Dynamic Island) pad content away from the Island,
@@ -370,7 +377,7 @@ th{font-weight:500;color:var(--text-muted);font-size:11px;text-transform:upperca
 th:first-child,td:first-child{text-align:left;}
 td{text-align:right;}
 tr:hover{background:var(--table-row-hover);}
-button{cursor:pointer;border:1px solid var(--btn-border);background:var(--btn-bg);border-radius:6px;padding:6px 14px;font-size:12px;color:var(--btn-text);font-family:'Nunito Sans',sans-serif;transition:all 0.15s ease;}
+button{cursor:pointer;-webkit-appearance:none;appearance:none;border:1px solid var(--btn-border);background:var(--btn-bg);border-radius:6px;padding:6px 14px;font-size:12px;color:var(--btn-text);font-family:'Nunito Sans',sans-serif;transition:all 0.15s ease;}
 button:hover{background:var(--bg-surface-hover);}
 button.active{background:var(--btn-active-bg);color:var(--btn-active-text);border-color:var(--btn-active-border);}
 button:disabled{opacity:0.3;cursor:not-allowed;}
