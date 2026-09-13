@@ -75,11 +75,15 @@ const moduleSrc = [
   grab("const amazonListingKey = (url) => {", NL + "};"),
   grab("function amazonShelfPool(sealedPrices, setNameById){", NL + "}"),
   grab("function amazonShelfItems(sealedPrices, setNameById, hidden){", NL + "}"),
+  grabLine("const AMAZON_PRICE_CEILING = "),
+  grab("const amazonPriceCeiling = (msrp) =>", ";" + NL),
+  grab("const amazonListingHidden = (rec) =>", ";" + NL),
   "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed, gearUrl,",
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
   "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory,",
   "  amazonCardSearchUrl, tcgProductImg, tcgImgSized, amazonSealedMatches,",
-  "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool};",
+  "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool,",
+  "  AMAZON_PRICE_CEILING, amazonPriceCeiling, amazonListingHidden};",
 ].join(NL);
 
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -235,13 +239,14 @@ ok("every gear item is exactly one of asin or search",
 ok("every gear search carries real terms",
   m.LORCANA_GEAR.every((s) => s.items.every((it) =>
     !it.q || it.q.trim().length > 3)));
-// The home panel renders only the `home` sections and signs off with "Official
-// Ravensburger accessories". Marking a third-party section `home` would make
-// that sentence false — silently, since nothing about the render would change.
-ok("every home-panel section is first-party",
-  m.LORCANA_GEAR.filter((s) => s.home).every((s) => s.items.every((it) => it.asin)));
-ok("the home panel is a strict subset of the page",
-  m.LORCANA_GEAR.filter((s) => s.home).length < m.LORCANA_GEAR.length);
+// The right-rail "Gear" home panel is gone (2026-09-12) and with it the `home`
+// flag that chose which sections it showed. /gear renders every section, so a
+// section that opts back in would be a field nothing reads — and the two
+// assertions that used to police it (first-party only, strict subset) would
+// pass vacuously rather than fail, which is the worst way for a guard to die.
+ok("no gear section still carries a dead `home` flag",
+  m.LORCANA_GEAR.every((s) => !("home" in s)),
+  JSON.stringify(m.LORCANA_GEAR.filter((s) => "home" in s).map((s) => s.group)));
 
 // ── The compliance boundary ─────────────────────────────────────────────────
 // An Amazon price or image may only ever come from Amazon's own API, and we
@@ -464,6 +469,33 @@ ok("it carries the Associate disclosure",
 // PSA's spec is the reason the note exists; losing it leaves a bare shop link.
 ok("it states PSA's semi-rigid spec and the toploader warning",
   /3 5\/16/.test(queue) && /toploader/i.test(queue));
+
+// ── The manual price ceiling (2026-09-12) ───────────────────────────────────
+// "Manually confirm the price is no more than 20% above MSRP and hide if it is
+// higher" (Zaven). Three things worth pinning, all of which fail SILENTLY — a
+// broken ceiling doesn't throw, it just quietly features a scalped listing or
+// quietly hides the whole shop.
+check("the ceiling is 20% above MSRP", m.AMAZON_PRICE_CEILING, 1.2);
+check("a $119.99 box tops out at $143.99",
+  Math.round(m.amazonPriceCeiling(119.99) * 100) / 100, 143.99);
+// No MSRP must NOT collapse to a ceiling of 0, which would read as "anything is
+// over" and hide every product nobody has priced yet.
+check("no MSRP means no ceiling, not a ceiling of zero", m.amazonPriceCeiling(null), null);
+check("…and neither does a zero or a negative", m.amazonPriceCeiling(0), null);
+// The hide predicate is the one place the home row, /gear and the checklist all
+// agree about what a visitor sees.
+check("an unchecked listing is shown", m.amazonListingHidden(undefined), false);
+check("a listing checked and fine is shown",
+  m.amazonListingHidden({out_of_stock: false, price_over: false}), false);
+check("sold out hides it", m.amazonListingHidden({out_of_stock: true, price_over: false}), true);
+check("over the ceiling hides it too",
+  m.amazonListingHidden({out_of_stock: false, price_over: true}), true);
+// The shelf takes the same hidden set from both reasons — the row that proves
+// stock hiding works must keep working when the reason is price instead.
+const overKey = m.amazonListingKey(shelf[0].amazon);
+ok("an overpriced item leaves the shelf by the same path",
+  !m.amazonShelfItems(shelfRows, shelfSets, new Set([overKey]))
+    .some((it) => m.amazonListingKey(it.amazon) === overKey));
 
 console.log(NL + (failed ? failed + " FAILED" : "all passed"));
 process.exit(failed ? 1 : 0);
