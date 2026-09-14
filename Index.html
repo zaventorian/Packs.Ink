@@ -38377,7 +38377,7 @@ function useNearbyScEvents(on){
   const [rows, setRows] = useState(null);
   const [err, setErr] = useState(null);
   const origin = useMemo(calNearOrigin, [on]);
-  const ready = scZipReady(origin.zip, origin.country);
+  const ready = scZipReady(origin.zip);
   const key = `${origin.country}|${origin.zip}|${origin.radius}`;
   useEffect(() => {
     if(!on || !ready){ setRows(null); setErr(null); return; }
@@ -38386,7 +38386,11 @@ function useNearbyScEvents(on){
     setErr(null);
     (async () => {
       try {
-        const o = await geocodeZip(origin.zip, origin.country);
+        // No forceCountry: scResolveOrigin's own ladder already reads
+        // packsink:scCountry (the country that last worked) as its first hint,
+        // and forcing it would stop a stale value ever falling through to a
+        // town lookup or another country. scDetectCountry reads the same key.
+        const o = await scResolveOrigin(origin.zip);
         const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
           p_lat: o.lat, p_lng: o.lng, p_radius_mi: origin.radius, p_kind: "sc",
         });
