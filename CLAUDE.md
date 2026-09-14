@@ -2745,9 +2745,38 @@ box shot that correctly declined.
 - One cut per product per session however many tiles show it (`_productCuts`, src → Promise),
   encoded as **WebP with alpha** (PNG holds a photograph at ~5x the size; an older browser hands
   back a PNG blob, which works identically, only bigger) and capped at 420px.
-- **Still white, deliberately out of scope: the Sealed Movers row** directly above, and the
-  Sealed collection tiles. Same defect, same one-line fix now that `ProductPhoto` exists —
-  Zaven named the Amazon row, so the rest is his call.
+- **The Sealed Movers row and the Sealed collection went the same way on 2026-09-12** — see
+  below. `ProductPhoto` is the one accessor for a product photo everywhere now.
+
+### Every sealed photo goes through `ProductPhoto` (2026-09-12)
+
+Zaven, on the Sealed Movers row: *"The images all have white background — can we source or make
+it so they don't have that? I guess same in sealed collection."* The row sat **directly above the
+Amazon shelf showing the same booster boxes already cut out**, so the page disagreed with itself
+one row apart. Three surfaces converted, all to the existing component: the Sealed Movers tile,
+the Sealed collection tile, and the sealed branch of `SealedDetailModal` (what those tiles open,
+and the biggest white slab of the three at 180px).
+
+- **⚠ The SLOT has to carry its own size now.** `ProductPhoto`'s wrapper is `position:absolute;
+  inset:0`, so a well that used to take its height from the `<img>` inside collapses to nothing.
+  Each one declares it: the movers tile gets `aspect-ratio:5/7` on `.mt-img-wrap`, the collection
+  tile a 56px `.sealed-card-photo`, the modal a fixed 180px square — the same 180x180 the text
+  fallback beside it already used, rather than a height the photo's aspect ratio decides.
+- **The ground moved to the slot and is the tile's own surface, never white.** `ProductPhoto`
+  paints the studio white only while it still has a sweep to hide and drops it the moment the cut
+  lands, so a decline keeps whichever answer is right for it.
+- **Measured against the live catalog** (154 sealed collection tiles, 26 movers tiles): **131
+  cut, 0 left on a white slab**, 13 declined and 9 skipped. Every decline was checked rather than
+  trusted — the worst holds **16.9% near-white pixels** and most are under 7%, i.e. genuinely
+  full-bleed shots (booster packs, sleeved packs, starter decks) where `CUT_NO_WHITE` is the
+  correct branch and a painted ground would look like a frame.
+- **The 9 skips are the Ravensburger PUZZLES**, whose photos are on `ravensburger.cloud` —
+  un-proxied, so `photo.cors` is false, no canvas read is possible and they render exactly as
+  before. Cutting them would mean a worker route for that host, which is a separate decision.
+- **Deliberately NOT converted: the Screener's sealed-mode thumbnail.** It rides the shared
+  `td-img` path every card row uses, so it needs that render branched on "is this a sealed synth
+  row" rather than a component swap — a bigger change than the ask, on the least prominent of
+  the four.
 
 ### The home shelf — "Lorcana on Amazon" (2026-09-10)
 

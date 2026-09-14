@@ -2098,12 +2098,20 @@ html[data-mode="dark"] .chip.cost-hex-chip .cost-hex{--cost-hex-fill:#0e0e0e;}
    AVIF card art look blocky. */
 .mover-tile .mt-img-wrap img{width:100%;aspect-ratio:5/7;object-fit:cover;border-radius:3px;display:block;}
 /* Sealed Movers: a box photo is square-ish, and cover-cropping it into the
-   card's 5:7 cuts the product name off both sides. Same slot, whole photo. */
-.mover-tile--sealed .mt-img-wrap img,
-.mover-tile--sealed .mt-img-fallback{object-fit:contain;background:var(--bg-surface);
-  padding:6px;box-sizing:border-box;}
-.mover-tile--sealed .mt-img-fallback{display:flex;align-items:center;justify-content:center;
-  color:var(--text-muted);}
+   card's 5:7 cuts the product name off both sides. Same slot, whole photo.
+   The photo comes from ProductPhoto, whose wrapper is position:absolute — so
+   the SLOT has to carry the 5:7 now; the <img> no longer gives it a height.
+   The ground lives here too, and it is the tile's own surface, never white:
+   ProductPhoto paints the studio white only while it still has a sweep to
+   hide, and drops it the moment the cut lands. */
+.mover-tile--sealed .mt-img-wrap{aspect-ratio:5/7;border-radius:3px;overflow:hidden;
+  background:var(--bg-surface);color:var(--text-muted);}
+.mover-tile--sealed .mt-img-wrap .prod-photo{position:absolute;inset:6px;
+  width:calc(100% - 12px);height:calc(100% - 12px);aspect-ratio:auto;
+  object-fit:contain;border-radius:0;}
+/* A cut-out box has no white edge to breathe against, so it takes the slot. */
+.mover-tile--sealed .mt-img-wrap .prod-photo-wrap:not(.on-white) .prod-photo{
+  inset:3px;width:calc(100% - 6px);height:calc(100% - 6px);}
 .mover-tile .mt-img-fallback{width:100%;aspect-ratio:5/7;border-radius:3px;
   background:var(--accent-glow);display:flex;align-items:center;justify-content:center;
   text-align:center;font-size:8px;color:var(--text-muted);padding:3px;box-sizing:border-box;}
@@ -2359,7 +2367,14 @@ body:has(.deck-quickadd) .packsink-flash-toast{
   .sealed-coll .gc-set-grid{grid-template-columns:repeat(2, minmax(0,1fr));}
   .sealed-coll .gc-set-grid.gc-compact{grid-template-columns:repeat(2, minmax(0,1fr));}
   .sealed-coll .gc-card{padding:6px;gap:7px;}
-  .sealed-coll .gc-card-img.sealed-card-img{width:40px;height:40px;}
+  /* ⚠ Both of these are currently DEFEATED by source order: the 56px defaults
+     below sit AFTER this block at the same specificity, so a phone renders 56px.
+     Pre-existing (the .gc-card-img rule has never applied) and left alone rather
+     than silently resizing every phone thumbnail — see the CSS-pitfalls note in
+     CLAUDE.md, which this block is an instance of. Fix by moving the defaults
+     above this @media, not by bumping specificity. */
+  .sealed-coll .gc-card-img.sealed-card-img,
+  .sealed-coll .sealed-card-photo{width:40px;height:40px;}
   /* Image-grid tiles are too narrow at 2-col to fit value + counter on one
      line (the value clipped). Stack them: value on its own line, counter
      right below. Reserve the value line height so owned/unowned stay equal.
@@ -2377,6 +2392,18 @@ body:has(.deck-quickadd) .packsink-flash-toast{
 .sealed-coll .gc-card-img.sealed-card-img{width:56px;height:56px;flex-shrink:0;
   object-fit:contain;background:rgba(255,255,255,0.06);padding:4px;border-radius:6px;
   align-self:flex-start;}
+/* The product thumbnail is a ProductPhoto now, so the 56px slot carries the
+   size the <img> used to — same swap as the Sealed Movers tile above, and for
+   the same reason: a booster box shot on TCGplayer's white sweep rendered as a
+   white square on every tile. A puzzle's photo is un-proxied, so ProductPhoto
+   can't read it back and simply renders it as before. */
+.sealed-coll .sealed-card-photo{position:relative;display:block;width:56px;height:56px;
+  flex-shrink:0;align-self:flex-start;border-radius:6px;overflow:hidden;
+  background:rgba(255,255,255,0.06);color:var(--text-muted);}
+.sealed-coll .sealed-card-photo .prod-photo{position:absolute;inset:4px;
+  width:calc(100% - 8px);height:calc(100% - 8px);object-fit:contain;}
+.sealed-coll .sealed-card-photo .prod-photo-wrap:not(.on-white) .prod-photo{
+  inset:2px;width:calc(100% - 4px);height:calc(100% - 4px);}
 /* Content packs to the top and the tile sizes to its content (the grid no
    longer stretches rows — see align-items:start above). Previously a 1fr
    middle row + 64px min-height force-aligned price/counter across a row,
@@ -7064,6 +7091,15 @@ html[data-mode="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
 .sealed-detail-img-wrap{flex:0 0 180px;}
 .sealed-detail-img{width:180px;max-height:240px;object-fit:contain;
   border-radius:8px;background:var(--bg-surface);}
+/* The photo is a ProductPhoto here too. Its wrapper is absolute, so the slot
+   is a fixed square — the same 180x180 the text fallback beside it already
+   uses — rather than a height the photo's own aspect ratio decides. */
+span.sealed-detail-img{position:relative;display:block;height:180px;overflow:hidden;
+  color:var(--text-muted);}
+span.sealed-detail-img .prod-photo{position:absolute;inset:8px;
+  width:calc(100% - 16px);height:calc(100% - 16px);object-fit:contain;}
+span.sealed-detail-img .prod-photo-wrap:not(.on-white) .prod-photo{
+  inset:2px;width:calc(100% - 4px);height:calc(100% - 4px);}
 .sealed-detail-img-fallback{width:180px;height:180px;display:flex;align-items:center;
   justify-content:center;text-align:center;padding:12px;font-size:11px;
   color:var(--text-muted);background:var(--bg-surface);border-radius:8px;}
@@ -7179,6 +7215,7 @@ html[data-theme="black"] .price-standing--high{color:#fbbf24;border-color:rgba(2
   .sealed-detail-head{flex-direction:column;align-items:stretch;padding-right:36px;gap:14px;}
   .sealed-detail-img-wrap{flex:none;align-self:center;}
   .sealed-detail-img,.sealed-detail-img-fallback{width:140px;max-height:200px;}
+  span.sealed-detail-img{height:140px;}
   .sealed-detail-name{font-size:16px;}
   .sealed-detail-price-val{font-size:18px;}
   .sealed-detail-buy{margin-left:0;}

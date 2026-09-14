@@ -21559,7 +21559,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
       <div class="sealed-detail-head">
         <div class="sealed-detail-img-wrap">
           ${product.image_url
-            ? html`<img class="sealed-detail-img" src=${product.image_url} alt=${product.name}/>`
+            ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph="box" size=${44}/></span>`
             : html`<div class="sealed-detail-img-fallback">${product.name||"Sealed product"}</div>`}
         </div>
         <div class="sealed-detail-info">
@@ -21998,7 +21998,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     return html`<div key=${item.tcgplayer_product_id} class=${"gc-card gc-card-clickable"+(qty>0?" gc-card-owned":"")}
                         onClick=${()=>setSelectedProduct(item)}
                         title="View price history and details">
-                      ${displayMode==="grid" && item.image_url && html`<img src=${item.image_url} alt="" class="gc-card-img sealed-card-img" loading="lazy"/>`}
+                      ${displayMode==="grid" && item.image_url && html`<span class="sealed-card-img sealed-card-photo">
+                        <${ProductPhoto} src=${item.image_url} glyph=${item.is_puzzle ? "puzzle" : "box"} size=${22}/></span>`}
                       ${displayMode==="grid" && !item.image_url && item.is_collectible && html`<div class="gc-card-img sealed-card-img collectible-ph" aria-hidden="true">
                         ${COLLECTIBLE_GLYPHS[item.product_type] || null}</div>`}
                       <div class="gc-card-body">
@@ -35870,6 +35871,11 @@ async function fetchSealedMoverHistory(key, horizon){
 // whole (a box cover-cropped into a card's 5:7 loses its name), the product
 // type stands where a card shows its rarity, and the buy links are the
 // product's own. No camera export — that paints MoverTile-shaped cards.
+//
+// The photo goes through ProductPhoto, which cuts TCGplayer's white studio
+// sweep out in the browser — without it this row is a line of white slabs
+// directly above the Amazon shelf showing the same boxes already cut out.
+// It also carries the glyph fallback the old .mt-img-fallback used to.
 const SealedMoverTile = ({row, activeWindow, visibleWindows, onClick}) => {
   const p = row._sealedProduct;
   const url = tcgUrl(row.tcgplayer_product_id);
@@ -35881,9 +35887,7 @@ const SealedMoverTile = ({row, activeWindow, visibleWindows, onClick}) => {
     onClick=${onClick}
     onKeyDown=${e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); onClick && onClick(); } }}>
     <div class="mt-img-wrap">
-      ${row.image
-        ? html`<img src=${row.image} alt=${row.name} loading="lazy" draggable="false"/>`
-        : html`<div class="mt-img-fallback">${uiIcon("box", 30)}</div>`}
+      <${ProductPhoto} src=${row.image} glyph="box" size=${30}/>
       ${url && html`<a class="mt-tcg-link" href=${url} target="_blank" rel="noopener nofollow sponsored"
           draggable="false" title="Open on TCGplayer" aria-label="Open on TCGplayer"
           onClick=${e=>e.stopPropagation()}>
