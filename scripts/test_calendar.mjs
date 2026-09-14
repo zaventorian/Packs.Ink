@@ -50,7 +50,11 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const CALENDAR_REGIONS = [", NL + "];"),
   grab("const _CAL_REGION_BY_CC = (() => {", NL + "})();"),
   grabLine("const calRegionOf = "),
-  grabLine("const calMatchesRegion = "),
+  grab("const calRegionSet = (region) => {", NL + "};"),
+  grab("const calMatchesRegion = (ev, region) => {", NL + "};"),
+  grab('const searchNorm = (s) => (s||"")', '/g, "");'),
+  grab("const calMatchesQuery = (ev, q) => {", NL + "};"),
+  grab("const calendarCustomEntries = (subs) => {", NL + "};"),
   grabLine("const OSM_TILE_PX = "),
   grab("const osmTileLayout = (lat, lng, zoom, w, h) => {", NL + "};"),
   grabLine("const osmTileUrl = "),
@@ -104,6 +108,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_GAP_PX = "),
   grabLine("const CAL_TL_RELEASE_LANE = "),
   grabLine("const CAL_TL_STORE_LANE = "),
+  grabLine("const CAL_TL_MINE_LANE = "),
   grab("const calTimelineLane = (ev) => {", NL + "};"),
   grab("const _calTlEnd = (ev) => {", NL + "};"),
   grab("const _calTlStack = (items, labelW) => {", NL + "};"),
@@ -113,7 +118,8 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
-  " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
+  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarCustomEntries,",
+  " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
@@ -125,7 +131,8 @@ const {
   calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
-  calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
+  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarCustomEntries,
+  osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt,
@@ -796,8 +803,8 @@ ok("google timed range is stamped",
 ok("an undated event yields no google url", googleCalUrl({title: "x"}) === null);
 
 // ── The kind table is the contract ──────────────────────────────────────────
-ok("the four curated kinds plus stores are offered",
-  CALENDAR_KIND_KEYS.join(",") === "set,product,dlc,ccq,store", CALENDAR_KIND_KEYS.join(","));
+ok("the four curated kinds, stores, and your own are offered",
+  CALENDAR_KIND_KEYS.join(",") === "set,product,dlc,ccq,store,mine", CALENDAR_KIND_KEYS.join(","));
 ok("every kind has an icon key and a hue",
   CALENDAR_KINDS.every(k => k.icon && k.hue));
 // A chip saying "CCQ" with no explanation anywhere is the reason this exists.
@@ -1099,6 +1106,86 @@ ok("only region lanes offer themselves as a filter",
 ok("every region lane key resolves to a label the picker also shows",
   tl.lanes.filter(l => l.region).every(l =>
     l.label === CALENDAR_REGIONS.find(r => r.key === l.key).label));
+
+
+// ── The expanded filters ────────────────────────────────────────────────────
+// ⚠ Every stored pref and every link already in the wild carries a BARE region
+// key. Widening the filter to a set is only safe if those keep parsing exactly
+// as they did — a silently-ignored `?cr=eu` shows the whole world instead.
+ok("a bare region key still filters to that region",
+  calMatchesRegion({country: "GB"}, "eu") && !calMatchesRegion({country: "US"}, "eu"));
+ok("'all', empty and null all mean everywhere",
+  ["all", "", null, undefined].every(v => calMatchesRegion({country: "JP"}, v)));
+ok("a csv holds both", calMatchesRegion({country: "US"}, "na,eu")
+  && calMatchesRegion({country: "IT"}, "na,eu") && !calMatchesRegion({country: "JP"}, "na,eu"));
+ok("junk in the csv is dropped, not honoured",
+  calRegionSet("na,nonsense").size === 1 && calRegionSet("nonsense") === null);
+ok("an ungeocoded row falls into Elsewhere rather than out of the list",
+  calMatchesRegion({country: null}, "other") && !calMatchesRegion({country: null}, "na"));
+// ⚠ Your own events bypass the region filter, the way a chase rarity bypasses
+// the Screener's foil chips: most carry no country, so narrowing to your own
+// continent would hide your own Thursday night in the one lane nobody checks.
+ok("your own events are never filtered out by region",
+  calMatchesRegion({kind: "mine", country: null}, "eu")
+  && calMatchesRegion({kind: "mine", country: "US"}, "eu"));
+
+ok("an empty query matches everything",
+  ["", "   ", null].every(q => calMatchesQuery({title: "x"}, q)));
+ok("the search reads name, place and note", calMatchesQuery({title: "DLC Turin"}, "turin")
+  && calMatchesQuery({title: "x", location: "Elgin, IL"}, "elgin")
+  && calMatchesQuery({title: "x", notes: "packs for prizes"}, "prizes"));
+// This season alone holds Düsseldorf, Malmö and Senigallia, and nobody types
+// those with the diacritics.
+ok("it folds diacritics both ways", calMatchesQuery({title: "DLC Düsseldorf"}, "dusseldorf")
+  && calMatchesQuery({title: "Malmö Game Week"}, "malmo"));
+ok("it does not match the kind or the date",
+  !calMatchesQuery({kind: "dlc", title: "Turin", starts_on: "2027-03-05"}, "dlc")
+  && !calMatchesQuery({kind: "dlc", title: "Turin", starts_on: "2027-03-05"}, "2027"));
+
+// ── Events you add yourself ─────────────────────────────────────────────────
+// ⚠ The subscription's meta IS the event: there is no feed to resolve it
+// against, so anything the builder drops is gone rather than degraded.
+const mineSubs = [
+  {kind: "custom", ref: "abc", label: "old label",
+   meta: {title: "Thursday locals", starts_on: "2026-10-08", location: "Dice Dojo", subtitle: "7pm"}},
+  {kind: "custom", ref: "two", meta: {title: "Team weekend", starts_on: "2026-11-21", ends_on: "2026-11-22"}},
+  {kind: "custom", ref: "bad", meta: {title: "No date"}},
+  {kind: "custom", ref: "junk", meta: {title: "Junk date", starts_on: "soon"}},
+  {kind: "store", ref: "77", label: "Not mine"},
+];
+const mine = calendarCustomEntries(mineSubs);
+ok("one row per custom subscription with a usable date", mine.length === 2,
+  JSON.stringify(mine.map(m => m.title)));
+ok("meta.title wins over the stored label", mine[0].title === "Thursday locals");
+ok("the id is namespaced by ref", mine[0].id === "mine:abc" && mine[0].custom_ref === "abc");
+ok("they are their own kind", mine.every(m => m.kind === "mine"));
+ok("a real end date survives and a same-day one does not",
+  mine[1].ends_on === "2026-11-22" && mine[0].ends_on === null);
+ok("blank optional fields normalise to null",
+  mine[1].location === null && mine[1].url === null && mine[1].notes === null);
+ok("a subscription of another kind is never one", !mine.some(m => /Not mine/.test(m.title)));
+ok("no subs at all is empty, not a throw",
+  calendarCustomEntries(null).length === 0 && calendarCustomEntries([]).length === 0);
+ok("a custom row with no title at all still has one",
+  calendarCustomEntries([{kind: "custom", ref: "r", meta: {starts_on: "2026-10-08"}}])[0].title === "My event");
+
+// They join the same pipeline as everything else, so search and the timeline
+// work on them without a second path.
+ok("a custom event is searchable like any other",
+  calMatchesQuery(mine[0], "dice dojo") && calMatchesQuery(mine[0], "thursday"));
+const mineTl = calendarTimeline(mine.concat([
+  tlEv("dlc", "dlc", "2026-11-13", {country: "GB"}),
+]), TL_OPTS);
+const mineLane = mineTl.lanes.find(l => l.key === "mine");
+ok("your own events get a lane of their own", mineLane && mineLane.count === 2);
+// ⚠ LABELLED, unlike the store lane: you add three of these, not fifty, and a
+// row of unnamed ticks would answer nothing.
+ok("and it is labelled, not ticks", mineLane.ticks === false && mineLane.label === "My events");
+ok("it is not offered as a region filter", mineLane.region === false);
+ok("it sits between the regions and the stores",
+  mineTl.lanes.map(l => l.key).indexOf("mine") === mineTl.lanes.length - 1);
+ok("a custom event never lands in a region lane",
+  !mineTl.lanes.some(l => l.key !== "mine" && l.items.some(i => i.ev.kind === "mine")));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

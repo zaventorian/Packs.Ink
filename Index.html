@@ -205,7 +205,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=405">
+<link rel="stylesheet" href="styles.css?v=406">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2427,6 +2427,7 @@ const CALENDAR_KINDS = [
   {key: "dlc",     label: "DLCs",      icon: "trophy",   hue: "#e0a33e"},
   {key: "ccq",     label: "CCQs",      icon: "medal",    hue: "#d06ba8"},
   {key: "store",   label: "My stores", icon: "store",    hue: "#5bb98c"},
+  {key: "mine",    label: "My events", icon: "pin",      hue: "#9b7fe8"},
 ];
 const CALENDAR_KIND_KEYS = CALENDAR_KINDS.map(k => k.key);
 const CALENDAR_KIND_BY_KEY = new Map(CALENDAR_KINDS.map(k => [k.key, k]));
@@ -2439,6 +2440,7 @@ const CALENDAR_KIND_LONG = {
   dlc: "Disney Lorcana Challenge — the official championship weekends, and the Continental & World Championships",
   ccq: "Challenge Championship Qualifier — how you earn an invite to a Challenge",
   store: "Events at the stores you follow, and anything you pinned",
+  mine: "Events you added yourself - a pod, a shop that posts nowhere else, your monthly draft",
 };
 
 // ── One icon per kind of thing that happens ─────────────────────────────────
@@ -2554,6 +2556,44 @@ const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filt
 //
 // An unknown country falls into "other" rather than being dropped, so a row we
 // have not geocoded is still reachable instead of silently invisible.
+// ── Events you add yourself ────────────────────────────────────────────────
+// Not every Lorcana night is on Ravensburger Play: a kitchen-table pod, a shop
+// that posts to Facebook and nowhere else, the monthly draft your group runs.
+// Those ride `calendar_subscriptions` as a fifth kind, exactly as `hide` does --
+// per-user, RLS'd, localStorage-first -- rather than a table of their own, so a
+// signed-out visitor keeps working and nothing new has to be granted.
+//
+// ⚠ The subscription's `meta` IS the event, and there is nothing to resolve it
+// against. Every other kind here is a pointer at a row somewhere (a curated
+// uuid, an RPH event id, a set name); this one has no feed behind it, so the
+// stored label is the only record that it exists at all. Never "normalise"
+// these into a lookup -- the same rule a scout note carries.
+const calendarCustomEntries = (subs) => {
+  const txt = (v) => { const t = String(v == null ? "" : v).trim(); return t || null; };
+  const out = [];
+  for(const sub of subs || []){
+    if(!sub || sub.kind !== "custom") continue;
+    const m = sub.meta || {};
+    const start = CAL_D(m.starts_on);
+    if(!calYmdParts(start)) continue;
+    const rawEnd = CAL_D(m.ends_on);
+    out.push({
+      id: `mine:${sub.ref}`,
+      kind: "mine",
+      title: txt(m.title) || txt(sub.label) || "My event",
+      subtitle: txt(m.subtitle),
+      starts_on: start,
+      ends_on: (calYmdParts(rawEnd) && rawEnd > start) ? rawEnd : null,
+      location: txt(m.location),
+      url: txt(m.url),
+      notes: txt(m.notes),
+      country: (txt(m.country) || "").toUpperCase() || null,
+      custom_ref: String(sub.ref),
+    });
+  }
+  return out;
+};
+
 const CALENDAR_REGIONS = [
   {key: "na",    label: "North America", cc: ["US","CA","MX"]},
   {key: "eu",    label: "Europe", cc: ["GB","IE","FR","DE","IT","ES","PT","NL","BE","LU","CH","AT",
@@ -2571,7 +2611,41 @@ const _CAL_REGION_BY_CC = (() => {
   return m;
 })();
 const calRegionOf = (country) => _CAL_REGION_BY_CC.get(String(country || "").toUpperCase()) || "other";
-const calMatchesRegion = (ev, region) => !region || region === "all" || calRegionOf(ev && ev.country) === region;
+// ⚠ The region filter holds a SET now, carried as a csv in `?cr=` and in
+// localStorage -- "how did Europe and North America compare" is a question the
+// timeline's lanes invite and a one-of-N picker cannot ask. A bare "na" and a
+// bare "all" still parse exactly as before, so every stored pref and every link
+// already in the wild keeps working; null means everywhere.
+const calRegionSet = (region) => {
+  const raw = String(region == null ? "all" : region).trim();
+  if(!raw || raw === "all") return null;
+  const keys = raw.split(",").map(x => x.trim()).filter(k => CALENDAR_REGIONS.some(r => r.key === k));
+  return keys.length ? new Set(keys) : null;
+};
+const calMatchesRegion = (ev, region) => {
+  const want = calRegionSet(region);
+  if(!want) return true;
+  // ⚠ Your OWN events are never filtered out by region, the way a chase rarity
+  // bypasses the Screener's foil chips. Most carry no country -- a pod at
+  // somebody's kitchen table has no city -- so calRegionOf files them under
+  // "Elsewhere", and narrowing to your own continent would make your own
+  // Thursday night disappear. Nobody would look for it there.
+  if(ev && ev.kind === "mine") return true;
+  return want.has(calRegionOf(ev && ev.country));
+};
+// One search box across all three modes. It reads what a person searches BY --
+// what the thing is called, where it is, the note under it -- and never the kind
+// or the date, which the chips and the window already answer. Folded through
+// searchNorm because this season alone holds Düsseldorf, Malmö and Senigallia,
+// and nobody types those with the diacritics.
+const calMatchesQuery = (ev, q) => {
+  const needle = searchNorm(String(q == null ? "" : q).toLowerCase().trim());
+  if(!needle) return true;
+  if(!ev) return false;
+  const hay = searchNorm([ev.title, ev.subtitle, ev.location, ev.set_name, ev.notes]
+    .filter(Boolean).join(" ").toLowerCase());
+  return hay.includes(needle);
+};
 
 // ── A small map, with no third party watching ───────────────────────────────
 // OpenStreetMap tiles as plain <img>: no library, no script, no cookie, nobody
@@ -38456,6 +38530,11 @@ const CAL_TL_GAP_PX = 46;          // room a "119d" chip needs between two marke
 // lanes readable as "where you would travel to".
 const CAL_TL_RELEASE_LANE = "release";
 const CAL_TL_STORE_LANE = "store";
+// ⚠ Your own events get a LABELLED lane rather than joining the region lanes.
+// Most carry no country (a pod at somebody's kitchen table has no city), so
+// calRegionOf files them under "Elsewhere" -- the one lane nobody would think
+// to look in, which is exactly the trap the release rail exists to avoid.
+const CAL_TL_MINE_LANE = "mine";
 // ⚠ A followed shop runs something most weekends, so labelling store events
 // would bury a 5-event region lane under 50 weekly league nights. They render
 // as unlabelled ticks in a lane of their own instead: the texture is the true
@@ -38465,6 +38544,7 @@ const calTimelineLane = (ev) => {
   if(!ev) return CAL_TL_RELEASE_LANE;
   if(ev.kind === "set" || ev.kind === "product") return CAL_TL_RELEASE_LANE;
   if(ev.kind === "store") return CAL_TL_STORE_LANE;
+  if(ev.kind === "mine") return CAL_TL_MINE_LANE;
   return calRegionOf(ev.country);
 };
 const _calTlEnd = (ev) => {
@@ -38539,8 +38619,9 @@ const calendarTimeline = (events, opts) => {
   }
   for(const list of laneItems.values()) list.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
 
-  const laneOrder = [...CALENDAR_REGIONS.map(r => r.key), CAL_TL_STORE_LANE];
+  const laneOrder = [...CALENDAR_REGIONS.map(r => r.key), CAL_TL_MINE_LANE, CAL_TL_STORE_LANE];
   const laneLabel = (key) => key === CAL_TL_STORE_LANE ? "My stores"
+    : key === CAL_TL_MINE_LANE ? "My events"
     : (CALENDAR_REGIONS.find(r => r.key === key) || {}).label || key;
   const lanes = [];
   for(const key of laneOrder){
@@ -38563,7 +38644,7 @@ const calendarTimeline = (events, opts) => {
       }
     }
     lanes.push({key, label: laneLabel(key), ticks, rows, items, gaps, count: items.length,
-      region: key !== CAL_TL_STORE_LANE});
+      region: key !== CAL_TL_STORE_LANE && key !== CAL_TL_MINE_LANE});
   }
 
   const release = laneItems.get(CAL_TL_RELEASE_LANE) || [];
@@ -38969,9 +39050,189 @@ const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Frag
   </button>`)}
 <//>`;
 
-const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth, art, onLane}) => {
+
+// ── The timeline as a picture ──────────────────────────────────────────────
+// Drawn on a CANVAS rather than screenshotted off the DOM, for the reason every
+// card export here already is: html2canvas paints whatever styles.css the
+// browser happens to hold, and the service worker can hold a stale one -- so a
+// CSS fix stays invisible in the export until the SW updates. This ships inside
+// Index.html (network-first) and paints explicit geometry, so it cannot split
+// from the app that way.
+//
+// ⚠ It consumes the SAME `calendarTimeline()` object the DOM does, so the two
+// agree on every position by construction instead of by two sets of maths being
+// kept in step. That is the standing contract drawCardTileCanvas carries, and
+// the only thing that makes "the copied image is what was on screen" true.
+const CAL_TL_IMG = {
+  pad: 30, gutter: 128, head: 84, axis: 30, foot: 40,
+  rowH: CAL_TL_ROW_H, railH: CAL_TL_RAIL_H, lanePad: 12, label: CAL_TL_LABEL_PX,
+};
+const _calTlLaneH = (lane) => (lane.ticks ? 1 : lane.rows) * CAL_TL_IMG.rowH
+  + CAL_TL_IMG.railH + CAL_TL_IMG.lanePad;
+
+const buildCalendarTimelineBlob = async (tl, opts = {}) => {
+  const G = CAL_TL_IMG, P = posterPalette();
+  const track = CAL_TL_MIN_PX;
+  const W = G.pad * 2 + G.gutter + track;
+  const rail = tl.release;
+  const laneList = tl.lanes.concat(rail.items.length
+    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [], ticks: false, below: true}]
+    : []);
+  const bodyH = laneList.reduce((h, l) => h + _calTlLaneH(l), 0);
+  const H = G.head + G.axis + bodyH + G.foot + G.pad;
+
+  const cv = document.createElement("canvas");
+  const dpr = 2;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.scale(dpr, dpr);
+  ctx.textBaseline = "alphabetic";
+  const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  const font = (w, sz) => { ctx.font = `${w} ${sz}px ${FONT}`; };
+  const clip = (text, maxW) => {
+    let t = String(text == null ? "" : text);
+    if(ctx.measureText(t).width <= maxW) return t;
+    while(t.length > 1 && ctx.measureText(t + "…").width > maxW) t = t.slice(0, -1);
+    return t + "…";
+  };
+  const x0 = G.pad + G.gutter;
+  const at = (f) => x0 + f * track;
+
+  ctx.fillStyle = P.bg; ctx.fillRect(0, 0, W, H);
+
+  // Header: what this is, and the exact window it covers -- a picture that
+  // leaves the year out is a picture nobody can date six months from now.
+  font(800, 25);
+  ctx.fillStyle = P.accent;
+  ctx.fillText(opts.title || "Lorcana calendar", G.pad, G.pad + 24);
+  font(600, 13);
+  ctx.fillStyle = P.dim;
+  ctx.fillText(`${calMonthLabel(tl.fromMonth)} – ${calMonthLabel(calShiftMonth(tl.fromMonth, tl.months - 1))}`,
+    G.pad, G.pad + 46);
+  if(opts.subtitle){
+    font(500, 12);
+    ctx.fillStyle = P.muted;
+    ctx.fillText(clip(opts.subtitle, W - G.pad * 2 - 180), G.pad, G.pad + 64);
+  }
+
+  const bodyTop = G.head + G.axis;
+  const bodyBot = bodyTop + bodyH;
+
+  // Alternating month bands first, so every mark lands on top of them.
+  for(const m of tl.months_){
+    const bx = at(m.x), bw = m.w * track;
+    if(tl.months_.indexOf(m) % 2 === 1){
+      ctx.fillStyle = P.surface;
+      ctx.globalAlpha = 0.5; ctx.fillRect(bx, G.head, bw, bodyBot - G.head); ctx.globalAlpha = 1;
+    }
+    ctx.strokeStyle = P.border; ctx.globalAlpha = 0.6;
+    ctx.beginPath(); ctx.moveTo(Math.round(bx) + 0.5, G.head); ctx.lineTo(Math.round(bx) + 0.5, bodyBot); ctx.stroke();
+    ctx.globalAlpha = 1;
+    font(700, 11);
+    ctx.fillStyle = P.muted;
+    ctx.fillText(clip(m.label.toUpperCase(), Math.max(10, bw - 10)), bx + 7, G.head + 20);
+  }
+  for(const sn of tl.seasons){
+    ctx.strokeStyle = P.accent; ctx.globalAlpha = 0.3;
+    ctx.beginPath(); ctx.moveTo(Math.round(at(sn.x)) + 0.5, G.head); ctx.lineTo(Math.round(at(sn.x)) + 0.5, bodyBot); ctx.stroke();
+    ctx.globalAlpha = 1;
+  }
+  if(tl.today != null){
+    ctx.strokeStyle = P.accent; ctx.lineWidth = 2; ctx.globalAlpha = 0.8;
+    ctx.beginPath(); ctx.moveTo(at(tl.today), G.head); ctx.lineTo(at(tl.today), bodyBot); ctx.stroke();
+    ctx.lineWidth = 1; ctx.globalAlpha = 1;
+  }
+
+  let y = bodyTop;
+  for(const lane of laneList){
+    const h = _calTlLaneH(lane);
+    ctx.strokeStyle = P.border; ctx.globalAlpha = 0.75;
+    ctx.beginPath(); ctx.moveTo(G.pad, Math.round(y) + 0.5); ctx.lineTo(W - G.pad, Math.round(y) + 0.5); ctx.stroke();
+    ctx.globalAlpha = 1;
+
+    font(800, 11);
+    ctx.fillStyle = lane.below ? P.accent : P.muted;
+    ctx.fillText(clip(lane.label.toUpperCase(), G.gutter - 34), G.pad, y + h / 2 + 4);
+    font(600, 10);
+    ctx.fillStyle = P.muted;
+    ctx.fillText(String(lane.items.length), G.pad + G.gutter - 24, y + h / 2 + 4);
+
+    // The rail markers sit on; labels stack away from it, which for the release
+    // rail means downward -- the same flip the DOM does.
+    const railY = lane.below ? y + 10 : y + h - 10;
+    ctx.strokeStyle = lane.below ? P.accent : P.border;
+    ctx.globalAlpha = lane.below ? 0.45 : 1;
+    ctx.lineWidth = lane.below ? 2 : 1;
+    ctx.beginPath(); ctx.moveTo(x0, Math.round(railY) + 0.5); ctx.lineTo(x0 + track, Math.round(railY) + 0.5); ctx.stroke();
+    ctx.lineWidth = 1; ctx.globalAlpha = 1;
+
+    for(const g of lane.gaps){
+      font(700, 9);
+      const label = `${g.days}d`;
+      const tw = ctx.measureText(label).width;
+      const gx = at(g.x) - tw / 2 - 6;
+      ctx.fillStyle = P.bg;
+      roundRectPath(ctx, gx, railY - 8, tw + 12, 16, 8); ctx.fill();
+      ctx.strokeStyle = P.border; ctx.stroke();
+      ctx.fillStyle = P.muted;
+      ctx.fillText(label, gx + 6, railY + 3.5);
+    }
+
+    for(const it of lane.items){
+      const hue = calendarEventIcon(it.ev, null).hue;
+      const col = hue.startsWith("var(") ? P.accent : hue;
+      const mx = at(it.x), mw = Math.max(9, it.w * track);
+      ctx.fillStyle = col;
+      if(lane.ticks){ ctx.fillRect(mx, railY - 5, 3, 10); continue; }
+      roundRectPath(ctx, mx, railY - 4.5, mw, 9, 4.5); ctx.fill();
+
+      const anchorRight = it.anchor === "right";
+      const lx = anchorRight ? mx + mw - G.label : mx;
+      const ly = lane.below
+        ? railY + 20 + it.row * G.rowH
+        : railY - G.railH - 8 - it.row * G.rowH;
+      ctx.textAlign = anchorRight ? "right" : "left";
+      const tx = anchorRight ? lx + G.label : lx;
+      font(700, 12);
+      ctx.fillStyle = P.text;
+      ctx.fillText(clip(calEventTitle(it.ev), G.label - 4), tx, ly);
+      font(500, 10.5);
+      ctx.fillStyle = P.muted;
+      ctx.fillText(clip(calTlRange(it.start, it.end), G.label - 4), tx, ly + 13);
+      ctx.textAlign = "left";
+    }
+    y += h;
+  }
+  ctx.strokeStyle = P.border;
+  ctx.beginPath(); ctx.moveTo(G.pad, Math.round(bodyBot) + 0.5); ctx.lineTo(W - G.pad, Math.round(bodyBot) + 0.5); ctx.stroke();
+
+  // The brand line is the price of a shareable picture, same as the ticker's.
+  const logo = await loadPosterImage(window.location.origin + "/Logos/packs-ink-logo.png");
+  const fy = H - G.pad - 6;
+  if(logo){
+    const lh = 24, lw = logo.naturalWidth / logo.naturalHeight * lh;
+    ctx.drawImage(logo, G.pad, fy - lh + 4, lw, lh);
+  }
+  font(600, 11);
+  ctx.fillStyle = P.muted;
+  ctx.textAlign = "right";
+  ctx.fillText(`packs.ink · ${calShortDay(calTodayYmd())}`, W - G.pad, fy);
+  ctx.textAlign = "left";
+
+  return await new Promise((res, rej) =>
+    cv.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
+};
+
+const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth, art, onLane, caption}) => {
   const tl = useMemo(() => calendarTimeline(events, {fromMonth, months, today}),
     [events, fromMonth, months, today]);
+  const exportImage = () => {
+    flashToast(isTouchDevice() ? "Preparing image\u2026" : "Copying image\u2026", 9000);
+    const blob = buildCalendarTimelineBlob(tl, {subtitle: caption});
+    blob.catch((err) => console.error("[cal-timeline] capture failed:", err));
+    deliverImage(blob, {name: "packsink-lorcana-timeline.png",
+      copiedMsg: "Timeline image copied to clipboard"});
+  };
   const step = (n) => onMonth(calShiftMonth(fromMonth, n));
   // Jump to where the events actually are. A Lorcana calendar is empty for
   // weeks at a time, so a 12-month window landing on nothing is NORMAL — and a
@@ -38989,6 +39250,8 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       <div class="cal-month-label">${calMonthLabel(tl.fromMonth)} – ${calMonthLabel(calShiftMonth(tl.fromMonth, months - 1))}</div>
       <button type="button" class="cal-month-nav" aria-label="Later" onClick=${() => step(3)}>›</button>
       <button type="button" class="cal-month-today" onClick=${() => onMonth(calMonthOf(calTodayYmd()))}>Today</button>
+      ${tl.total > 0 && html`<button type="button" class="cal-tl-export" onClick=${exportImage}
+        title="Copy this chart as an image">${uiIcon("camera", 13)}<span>Image</span></button>`}
     </div>
 
     ${tl.total === 0
@@ -39006,9 +39269,12 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       : html`<div class="cal-tl-scroll">
           <div class="cal-tl-chart" style=${{"--cal-tl-track": CAL_TL_MIN_PX + "px"}}>
             <div class="cal-tl-grid" aria-hidden="true">
+              ${tl.months_.map((m, i) => i % 2 === 1 && html`<span key=${"b" + m.ym} class="cal-tl-band"
+                style=${{left: m.x * 100 + "%", width: m.w * 100 + "%"}}/>`)}
               ${tl.months_.map(m => html`<span key=${m.ym} class="cal-tl-gridline" style=${{left: m.x * 100 + "%"}}/>`)}
-              ${tl.seasons.map(sn => html`<span key=${sn.key} class="cal-tl-season" style=${{left: sn.x * 100 + "%"}}/>`)}
-              ${tl.today != null && html`<span class="cal-tl-now" style=${{left: tl.today * 100 + "%"}}/>`}
+              ${tl.seasons.map(sn => html`<span key=${sn.key} class="cal-tl-season" style=${{left: sn.x * 100 + "%"}}
+                title=${sn.label}/>`)}
+              ${tl.today != null && html`<span class="cal-tl-now" style=${{left: tl.today * 100 + "%"}}><i/></span>`}
             </div>
 
             <div class="cal-tl-lane cal-tl-axis">
@@ -39054,6 +39320,91 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       ${tl.after > 0 && html`<button type="button" class="cal-linkish" onClick=${() => jump(1)}>
         ${tl.after} after it ›</button>`}
     </p>`}
+  </div>`;
+};
+
+
+// ── Adding an event of your own ────────────────────────────────────────────
+// Open to everyone, signed in or not: it writes through `useCalendarSubs`, so a
+// signed-out visitor keeps it on the device and a signed-in one carries it to
+// their phone -- the same deal a followed store already gets.
+//
+// ⚠ There is no country field, deliberately. A pod at somebody's kitchen table
+// has no city, and `calMatchesRegion` exempts `mine` rows outright rather than
+// asking people to classify their own Thursday night into a continent.
+const CalendarMineModal = ({row, subs, onClose, onSaved}) => {
+  const editing = !!(row && row.custom_ref);
+  const [f, setF] = useState(() => ({
+    title:     (row && row.title && row.title !== "My event" ? row.title : "") || "",
+    subtitle:  (row && row.subtitle) || "",
+    starts_on: CAL_D(row && row.starts_on) || calTodayYmd(),
+    ends_on:   CAL_D(row && row.ends_on) || "",
+    location:  (row && row.location) || "",
+    url:       (row && row.url) || "",
+    notes:     (row && row.notes) || "",
+  }));
+  const [armed, setArmed] = useState(false);
+  const set = (k) => (e) => setF(p => ({...p, [k]: e.target.value}));
+  useEscToClose(onClose);
+
+  const save = () => {
+    const title = f.title.trim();
+    if(!title || !calYmdParts(f.starts_on)){ flashToast("A name and a date are required"); return; }
+    const end = calYmdParts(f.ends_on) && f.ends_on > f.starts_on ? f.ends_on : null;
+    const meta = {
+      title, subtitle: f.subtitle.trim() || null, starts_on: f.starts_on, ends_on: end,
+      location: f.location.trim() || null, url: f.url.trim() || null, notes: f.notes.trim() || null,
+    };
+    if(editing) subs.updateMeta("custom", row.custom_ref, meta);
+    else subs.add({kind: "custom", ref: genTradeToken(), label: title, meta});
+    flashToast(editing ? "Event updated" : "Event added to your calendar");
+    onSaved && onSaved();
+    onClose();
+  };
+
+  return html`<div class="cal-modal-overlay" onClick=${onClose}>
+    <div class="cal-modal cal-admin" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
+      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
+      <h3 class="cal-modal-title">${editing ? "Edit your event" : "Add your own event"}</h3>
+      <p class="cal-mine-lede muted">
+        Anything that isn't on Ravensburger Play — a pod, a shop that only posts to Discord,
+        your monthly draft. It shows up under <strong>My events</strong> alongside everything else.
+      </p>
+      <div class="cal-form">
+        <label class="cal-field cal-field--wide"><span>What is it</span>
+          <input type="text" value=${f.title} onInput=${set("title")} autoFocus
+            placeholder="Thursday locals"/></label>
+        <label class="cal-field"><span>Date</span>
+          <input type="date" value=${f.starts_on} onInput=${set("starts_on")}/></label>
+        <label class="cal-field"><span>Ends <em>(multi-day only)</em></span>
+          <input type="date" value=${f.ends_on} onInput=${set("ends_on")}/></label>
+        <label class="cal-field"><span>Where <em>(optional)</em></span>
+          <input type="text" value=${f.location} onInput=${set("location")}
+            placeholder="Dice Dojo, Chicago"/></label>
+        <label class="cal-field"><span>Note <em>(optional)</em></span>
+          <input type="text" value=${f.subtitle} onInput=${set("subtitle")}
+            placeholder="Core Constructed, 7pm"/></label>
+        <label class="cal-field cal-field--wide"><span>Link <em>(optional)</em></span>
+          <input type="url" value=${f.url} onInput=${set("url")} placeholder="https://…"/></label>
+        <label class="cal-field cal-field--wide"><span>Details <em>(optional)</em></span>
+          <textarea rows="2" value=${f.notes} onInput=${set("notes")}
+            placeholder="$5 entry, packs for prizes"></textarea></label>
+      </div>
+      <div class="cal-modal-actions">
+        ${editing && html`<button type="button"
+          class=${"cal-act cal-act--danger" + (armed ? " armed" : "")}
+          onClick=${() => {
+            if(!armed){ setArmed(true); setTimeout(() => setArmed(false), 3000); return; }
+            subs.remove("custom", row.custom_ref);
+            flashToast("Event removed");
+            onClose();
+          }}>${uiIcon("trash", 13)} ${armed ? "Tap again to delete" : "Delete"}</button>`}
+        <span class="cal-modal-spacer"/>
+        <button type="button" class="cal-act" onClick=${onClose}>Cancel</button>
+        <button type="button" class="cal-act cal-act--primary" onClick=${save}>
+          ${editing ? "Save" : "Add to calendar"}</button>
+      </div>
+    </div>
   </div>`;
 };
 
@@ -39106,7 +39457,7 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
       <div class="cal-form">
         <label class="cal-field"><span>Type</span>
           <select value=${f.kind} onChange=${set("kind")}>
-            ${CALENDAR_KINDS.filter(k => k.key !== "store").map(k =>
+            ${CALENDAR_KINDS.filter(k => k.key !== "store" && k.key !== "mine").map(k =>
               html`<option key=${k.key} value=${k.key}>${k.label}</option>`)}
           </select></label>
         <label class="cal-field"><span>Title</span>
@@ -39149,28 +39500,56 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
 const CAL_KINDS_LS = "packsink:cal:kinds";
 const CAL_VIEW_LS = "packsink:cal:view";
 const CAL_VIEW_MODES = ["list", "month", "timeline"];
+// How much of the season the timeline draws at once. 12 is one competitive
+// season; 6 is a quarter-by-quarter read and 24 spans a rotation.
+const CAL_TL_SPANS = [6, 12, 24];
+const CAL_SPAN_LS = "packsink:cal:span";
+const calReadSpanPref = (seed) => {
+  const ok = (v) => CAL_TL_SPANS.includes(Number(v)) ? Number(v) : null;
+  return ok(seed) || (() => { try { return ok(localStorage.getItem(CAL_SPAN_LS)); } catch { return null; } })()
+    || CAL_TL_MONTHS;
+};
 // The home panel keeps its own list/month choice. The FILTERS are shared with
 // the page — "which kinds of thing am I interested in" is one preference about
 // you, not about a surface — but a month grid in a 240px rail and a month grid
 // on a full page are different enough that forcing them to agree is annoying.
 const CAL_PANEL_VIEW_LS = "packsink:cal:panelView";
 const CAL_REGION_LS = "packsink:cal:region";
+const calNormRegionPref = (v) => {
+  const set = calRegionSet(v);
+  if(!set) return String(v || "").trim() === "" ? null : "all";
+  // Canonical order, never the order they were clicked in, or the chips appear
+  // to reshuffle themselves and two identical filters produce two URLs.
+  return CALENDAR_REGIONS.filter(r => set.has(r.key)).map(r => r.key).join(",");
+};
 const calReadRegionPref = (seed) => {
-  const ok = (v) => v === "all" || CALENDAR_REGIONS.some(r => r.key === v);
-  if(ok(seed)) return seed;
-  try { const v = localStorage.getItem(CAL_REGION_LS); if(ok(v)) return v; } catch {}
+  const fromSeed = calNormRegionPref(seed);
+  if(fromSeed) return fromSeed;
+  try { const v = calNormRegionPref(localStorage.getItem(CAL_REGION_LS)); if(v) return v; } catch {}
   return "all";
 };
-const CalendarRegionSelect = ({region, onChange, counts}) => html`<label class="cal-region">
-  <span class="cal-region-lbl">${uiIcon("compass", 13)}</span>
-  <select value=${region} onChange=${e => onChange(e.target.value)}
-    title="Show only events in one part of the world">
-    <option value="all">All regions</option>
-    ${CALENDAR_REGIONS.map(r => html`<option key=${r.key} value=${r.key}
-      disabled=${counts && !counts[r.key]}>
-      ${r.label}${counts && counts[r.key] != null ? ` (${counts[r.key]})` : ""}</option>`)}
-  </select>
-</label>`;
+// Toggling the last active region turns the filter OFF rather than emptying the
+// page -- the movers chip groups' rule, and the only sane reading of unticking
+// your one remaining region.
+const calToggleRegion = (region, key) => {
+  const set = calRegionSet(region);
+  if(!set) return key;
+  if(set.has(key)) return set.size === 1 ? "all" : calNormRegionPref([...set].filter(k => k !== key).join(","));
+  return calNormRegionPref([...set, key].join(","));
+};
+const CalendarRegionChips = ({region, onChange, counts, compact}) => {
+  const set = calRegionSet(region);
+  return html`<div class=${"cal-regions" + (compact ? " cal-regions--compact" : "")} role="group" aria-label="Region">
+    <button type="button" class=${"cal-region-chip" + (!set ? " on" : "")}
+      title="Everywhere" onClick=${() => onChange("all")}>${uiIcon("compass", 12)} All</button>
+    ${CALENDAR_REGIONS.map(r => html`<button key=${r.key} type="button"
+      class=${"cal-region-chip" + (set && set.has(r.key) ? " on" : "") + (counts && !counts[r.key] ? " empty" : "")}
+      title=${`Show ${r.label}`} aria-pressed=${set && set.has(r.key) ? "true" : "false"}
+      onClick=${() => onChange(calToggleRegion(region, r.key))}>
+      ${r.label}${counts && counts[r.key] != null ? html`<span class="cal-region-n">${counts[r.key]}</span>` : null}
+    </button>`)}
+  </div>`;
+};
 const calReadKindPref = (seed) => {
   const parse = (raw) => {
     const wanted = String(raw || "").split(",").map(s => s.trim()).filter(s => CALENDAR_KIND_KEYS.includes(s));
@@ -39222,8 +39601,11 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_PANEL_VIEW_LS, mode); } catch {} }, [mode]);
 
+  // Your own events belong here too: a box called "what is coming up" that
+  // omits the thing you put on it yourself is the one omission you would notice.
   const pool = useMemo(() => calendarApplyHidden(
-      calendarCombine(events, storeEvents), calendarHiddenSet(subs.subs),
+      calendarCombine(events.concat(calendarCustomEntries(subs.subs)), storeEvents),
+      calendarHiddenSet(subs.subs),
       new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))))
     .filter(e => kinds.includes(e.kind) && calMatchesRegion(e, region)),
     [events, storeEvents, kinds, region, subs.subs]);
@@ -39268,7 +39650,7 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
       <${CalendarFilterChips} kinds=${kinds} compact=${true}
         onToggle=${(k) => setKinds(p => p.includes(k) ? p.filter(x => x !== k)
           : CALENDAR_KIND_KEYS.filter(x => p.includes(x) || x === k))}/>
-      <${CalendarRegionSelect} region=${region} onChange=${setRegion}/>
+      <${CalendarRegionChips} region=${region} onChange=${setRegion} compact=${true}/>
     </div>`}
     ${mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${pool} today=${today}
@@ -39339,11 +39721,18 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const subs = useCalendarSubs(user);
   const storeEvents = useStoreCalendarEvents(subs.subs);
   const seed = useMemo(() => {
-    try { const q = new URLSearchParams(location.search); return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm"), cr: q.get("cr")}; }
+    try { const q = new URLSearchParams(location.search);
+      return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm"), cr: q.get("cr"),
+              cq: q.get("cq"), cspan: q.get("cspan")}; }
     catch { return {}; }
   }, []);
   const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
   const [region, setRegion] = useState(() => calReadRegionPref(seed.cr));
+  const [query, setQuery] = useState(() => seed.cq || "");
+  const [span, setSpan] = useState(() => calReadSpanPref(seed.cspan));
+  // Same treatment the Cards browser gives its filter: a keystroke paints at
+  // once and the (whole-calendar) re-filter lands a frame later.
+  const dQuery = React.useDeferredValue(query);
   const [mode, setMode] = useState(() => {
     const raw = seed.cv || (() => { try { return localStorage.getItem(CAL_VIEW_LS); } catch { return null; } })();
     return CAL_VIEW_MODES.includes(raw) ? raw : "list";
@@ -39352,12 +39741,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     /^\d{4}-\d{2}$/.test(seed.cm || "") ? seed.cm : calMonthOf(calTodayYmd()));
   const [sel, setSel] = useState(null);
   const [editing, setEditing] = useState(null);     // {} = new row, {id,…} = edit
+  const [mineEdit, setMineEdit] = useState(null);   // {} = new personal event
   const [showStores, setShowStores] = useState(false);
   const today = calTodayYmd();
 
   useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_VIEW_LS, mode); } catch {} }, [mode]);
+  useEffect(() => { try { localStorage.setItem(CAL_SPAN_LS, String(span)); } catch {} }, [span]);
   // replaceState, never push: a filter is not a page, and pushing would make Back
   // walk backwards through every chip the user toggled.
   useEffect(() => {
@@ -39367,16 +39758,20 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       all ? url.searchParams.delete("ck") : url.searchParams.set("ck", kinds.join(","));
       mode === "list" ? url.searchParams.delete("cv") : url.searchParams.set("cv", mode);
       region === "all" ? url.searchParams.delete("cr") : url.searchParams.set("cr", region);
+      query.trim() ? url.searchParams.set("cq", query.trim()) : url.searchParams.delete("cq");
+      (mode !== "timeline" || span === CAL_TL_MONTHS) ? url.searchParams.delete("cspan") : url.searchParams.set("cspan", String(span));
       (mode === "list" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
       if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
     } catch {}
-  }, [kinds, mode, month, region, today]);
+  }, [kinds, mode, month, region, today, query, span]);
 
   const hidden = useMemo(() => calendarHiddenSet(subs.subs), [subs.subs]);
   const savedIds = useMemo(() => new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))),
     [subs.subs]);
-  const all = useMemo(() => calendarApplyHidden(calendarCombine(events, storeEvents), hidden, savedIds),
-    [events, storeEvents, hidden, savedIds]);
+  const mineEvents = useMemo(() => calendarCustomEntries(subs.subs), [subs.subs]);
+  const all = useMemo(() => calendarApplyHidden(
+    calendarCombine(events.concat(mineEvents), storeEvents), hidden, savedIds),
+    [events, mineEvents, storeEvents, hidden, savedIds]);
   // Built once over the names actually on the calendar rather than per row:
   // the sealed catalog is ~600 products and the walk is a substring match.
   const art = useMemo(() => calendarArtIndex(sealedPrices,
@@ -39385,19 +39780,22 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const counts = useMemo(() => {
     const c = {};
     for(const k of CALENDAR_KIND_KEYS) c[k] = 0;
-    for(const e of calendarUpcoming(all, today, 0)) if(c[e.kind] != null) c[e.kind]++;
+    for(const e of calendarUpcoming(all.filter(e => calMatchesQuery(e, dQuery)), today, 0))
+      if(c[e.kind] != null) c[e.kind]++;
     return c;
-  }, [all, today]);
+  }, [all, today, dQuery]);
   // Region counts are computed BEFORE the region filter is applied — a picker
   // whose options all read (0) because you already narrowed by them is useless.
   const regionCounts = useMemo(() => {
     const c = {};
     for(const r of CALENDAR_REGIONS) c[r.key] = 0;
-    for(const e of calendarUpcoming(all.filter(e => kinds.includes(e.kind)), today, 0)) c[calRegionOf(e.country)]++;
+    for(const e of calendarUpcoming(all.filter(e => kinds.includes(e.kind) && calMatchesQuery(e, dQuery)), today, 0))
+      c[calRegionOf(e.country)]++;
     return c;
-  }, [all, kinds, today]);
-  const shown = useMemo(() => all.filter(e => kinds.includes(e.kind) && calMatchesRegion(e, region)),
-    [all, kinds, region]);
+  }, [all, kinds, today, dQuery]);
+  const shown = useMemo(() => all.filter(e =>
+    kinds.includes(e.kind) && calMatchesRegion(e, region) && calMatchesQuery(e, dQuery)),
+    [all, kinds, region, dQuery]);
   const upcoming = useMemo(() => calendarUpcoming(shown, today, 0), [shown, today]);
   // ⚠ A Lorcana calendar is EMPTY for weeks at a time and that is normal, not a
   // bug: sets ship roughly quarterly, so between a retail release and the next
@@ -39417,6 +39815,18 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     return [...m.entries()];
   }, [listed]);
 
+  // Says what the picture is narrowed to, so an exported chart can never be
+  // read as the whole season. Empty when nothing is filtered.
+  const filterCaption = useMemo(() => {
+    const bits = [];
+    if(kinds.length < CALENDAR_KIND_KEYS.length)
+      bits.push(kinds.map(k => (CALENDAR_KIND_BY_KEY.get(k) || {}).label || k).join(" \u00b7 "));
+    const regionSet = calRegionSet(region);
+    if(regionSet) bits.push(CALENDAR_REGIONS.filter(r => regionSet.has(r.key)).map(r => r.label).join(" \u00b7 "));
+    if(dQuery.trim()) bits.push(`\u201c${dQuery.trim()}\u201d`);
+    return bits.join("  \u2014  ");
+  }, [kinds, region, dQuery]);
+
   const followedStores = subs.subs.filter(s => s.kind === "store");
   const followedSeries = subs.subs.filter(s => s.kind === "series");
   const savedEvents = subs.subs.filter(s => s.kind === "event");
@@ -39424,7 +39834,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // the failure that killed the graded view's Hide — the state has to be
   // somewhere you can find it without knowing what you are looking for.
   const hiddenEvents = subs.subs.filter(s => s.kind === "hide");
-  const followCount = followedStores.length + followedSeries.length + savedEvents.length + hiddenEvents.length;
+  const followCount = followedStores.length + followedSeries.length + savedEvents.length
+    + hiddenEvents.length + mineEvents.length;
 
   const exportAll = () => {
     const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana calendar");
@@ -39444,6 +39855,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${onFindEvents && html`<button type="button" class="cal-act cal-act--find"
           title="Search Ravensburger Play for events near you, and follow the shops you play at"
           onClick=${() => onFindEvents()}>${uiIcon("store", 14)} Near me</button>`}
+        <button type="button" class="cal-act cal-act--mine" onClick=${() => setMineEdit({})}
+          title="Add an event that isn't on Ravensburger Play">
+          ${uiIcon("calendarPlus", 14)} Add event</button>
         <button type="button" class="cal-act" onClick=${exportAll} title="Download everything shown as an .ics file">
           ${uiIcon("save", 14)} Export .ics</button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
@@ -39462,10 +39876,6 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       <${CalendarFilterChips} kinds=${kinds} counts=${counts}
         onToggle=${(k) => setKinds(p => p.includes(k) ? p.filter(x => x !== k) : CALENDAR_KIND_KEYS.filter(x => p.includes(x) || x === k))}/>
       <div class="cal-toolbar-right">
-        <${CalendarRegionSelect} region=${region} counts=${regionCounts} onChange=${setRegion}/>
-        ${mode === "list" && html`<label class="cal-past">
-          <input type="checkbox" checked=${showPast} onChange=${e => setShowPast(e.target.checked)}/>
-          <span>Show past</span></label>`}
         <div class="seg-toggle cal-modes">
           <button type="button" class=${mode === "list" ? "active" : ""} onClick=${() => setMode("list")}>
             ${uiIcon("list", 13)} List</button>
@@ -39475,6 +39885,33 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
             title="The whole season on one axis, by region">
             ${uiIcon("timeline", 13)} Timeline</button>
         </div>
+      </div>
+    </div>
+    ${/* Row two: the dimensions that narrow WHAT is on the chart, kept off the
+          row that chooses the chart. The search box leads because it is the one
+          control you reach for knowing what you are after. */""}
+    <div class="cal-filters2">
+      <label class="cal-search">
+        ${uiIcon("search", 13)}
+        <input type="search" value=${query} placeholder="Search events, stores, cities…"
+          onChange=${e => setQuery(e.target.value)}
+          onKeyDown=${e => { if(e.key === "Escape"){ e.stopPropagation(); setQuery(""); } }}/>
+        ${query && html`<button type="button" class="cal-search-x" aria-label="Clear search"
+          onClick=${() => setQuery("")}>${uiIcon("close", 11)}</button>`}
+      </label>
+      <${CalendarRegionChips} region=${region} counts=${regionCounts} onChange=${setRegion}/>
+      <div class="cal-filters2-end">
+        ${mode === "timeline" && html`<div class="seg-toggle cal-spans" role="group" aria-label="Window length">
+          ${CAL_TL_SPANS.map(m => html`<button key=${m} type="button" class=${span === m ? "active" : ""}
+            title=${`Draw ${m} months at a time`} onClick=${() => setSpan(m)}>${m} mo</button>`)}
+        </div>`}
+        ${mode === "list" && html`<label class="cal-past">
+          <input type="checkbox" checked=${showPast} onChange=${e => setShowPast(e.target.checked)}/>
+          <span>Show past</span></label>`}
+        ${(query.trim() || region !== "all" || kinds.length < CALENDAR_KIND_KEYS.length) && html`<button
+          type="button" class="cal-linkish cal-filters-reset"
+          onClick=${() => { setQuery(""); setRegion("all"); setKinds(CALENDAR_KIND_KEYS.slice()); }}>
+          Reset filters</button>`}
       </div>
     </div>
 
@@ -39491,7 +39928,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               Nothing followed yet. <button type="button" class="cal-linkish"
                 onClick=${() => onFindEvents && onFindEvents()}>Find events near you</button> —
               every result has a ${uiIcon("calendarPlus", 12)} button, and a
-              <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.</p>`
+              <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.
+              Running something that isn't listed at all?
+              <button type="button" class="cal-linkish" onClick=${() => setMineEdit({})}>Add it yourself</button>.</p>`
           : html`<ul class="cal-follow-list">
               ${followedStores.map(st => {
                 const on = calStoreKindsOf(st);
@@ -39534,6 +39973,13 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                 ${uiIcon("calendarPlus", 12)} <span>${s.label || "Saved event"}</span>
                 <em>one date</em>
                 <button type="button" aria-label="Remove" onClick=${() => subs.remove("event", s.ref)}>×</button></li>`)}
+              ${mineEvents.map(ev => html`<li key=${"mine" + ev.custom_ref} class="cal-follow-mine">
+                ${uiIcon("pin", 12)}
+                <button type="button" class="cal-follow-edit" title="Edit this event"
+                  onClick=${() => setMineEdit(ev)}>${ev.title}</button>
+                <em>${calTlRange(ev.starts_on, ev.ends_on)}</em>
+                <button type="button" aria-label="Delete" title="Delete this event"
+                  onClick=${() => { subs.remove("custom", ev.custom_ref); flashToast("Event removed"); }}>×</button></li>`)}
               ${hiddenEvents.map(s => html`<li key=${"hd" + s.ref} class="cal-follow-hidden">
                 ${uiIcon("eye", 12)} <span>${s.label || "Hidden event"}</span>
                 <em>hidden</em>
@@ -39547,9 +39993,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     </div>
 
     ${mode === "timeline"
-      ? html`<${CalendarTimelineView} fromMonth=${month} months=${CAL_TL_MONTHS} events=${shown}
-          today=${today} onOpen=${setSel} onMonth=${setMonth} art=${art}
-          onLane=${(k) => setRegion(r => r === k ? "all" : k)}/>`
+      ? html`<${CalendarTimelineView} fromMonth=${month} months=${span} events=${shown}
+          today=${today} onOpen=${setSel} onMonth=${setMonth} art=${art} caption=${filterCaption}
+          onLane=${(k) => setRegion(r => calToggleRegion(r, k))}/>`
       : mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${shown} today=${today}
           onOpen=${setSel} onMonth=${setMonth} art=${art}/>`
@@ -39594,6 +40040,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       onClose=${() => setSel(null)}/>`}
     ${editing && html`<${CalendarAdminModal} row=${editing} onClose=${() => setEditing(null)}
       onSaved=${() => { setEditing(null); reload(true); }}/>`}
+    ${mineEdit && html`<${CalendarMineModal} row=${mineEdit} subs=${subs}
+      onClose=${() => setMineEdit(null)}
+      onSaved=${() => setKinds(p => p.includes("mine") ? p : CALENDAR_KIND_KEYS.filter(x => p.includes(x) || x === "mine"))}/>`}
 
     <p class="cal-foot muted">
       Set release dates come from the catalog; everything else is curated by hand. Spotted something
@@ -48864,7 +49313,7 @@ function App(){
                            "s","f","m","c","card","panel","v",
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
-                           "ck","cv","cm","cr",
+                           "ck","cv","cm","cr","cq","cspan",
                            ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
@@ -48887,9 +49336,10 @@ function App(){
         history:    new Set(["g","hm","hr","hs"]),
         cards:      new Set(["q","set","ink","rarity","cost","type","inkable","legal","owned","card"]),
         home:       new Set(["panel"]),
-        // ?ck= the type chips, ?cv= list vs month, ?cm= which month,
-        // ?cr= which region.
-        calendar:   new Set(["ck","cv","cm","cr"]),
+        // ?ck= the type chips, ?cv= list/month/timeline, ?cm= the window anchor,
+        // ?cr= which regions (a csv), ?cq= the search box, ?cspan= how many
+        // months the timeline draws.
+        calendar:   new Set(["ck","cv","cm","cr","cq","cspan"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));

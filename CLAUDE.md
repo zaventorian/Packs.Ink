@@ -4435,6 +4435,98 @@ row is one row tall whether the next thing is tomorrow or in June. A third mode
   (`--bg-modal`, per the Screener's sticky-NAME rule; `--bg-card` is translucent in
   the dark themes and would let the months show through).
 
+### The filter row, and what it can now say (2026-09-14)
+
+The toolbar was one line holding the kind chips, a region `<select>` and the mode
+toggle. Row one now chooses the CHART; **row two (`.cal-filters2`) chooses what is
+on it** — search, regions, and the timeline's window length. Splitting them is what
+stopped a single row wrapping into a pile once the third and fourth control landed.
+
+- **⚠ `?cr=` holds a SET now, as a csv** — "how did Europe and North America
+  compare" is a question the timeline's lanes invite and a one-of-N picker cannot
+  ask. `calRegionSet` parses it; **a bare `na` and a bare `all` still parse exactly
+  as before**, so every stored pref and every link in the wild keeps working. The
+  `<select>` is gone: one control that can express the set, rather than a picker
+  that can only ever say one thing. `calNormRegionPref` sorts to canonical order,
+  or two identical filters produce two different URLs.
+- **⚠ Your own events BYPASS the region filter**, the way a chase rarity bypasses
+  the Screener's foil chips. Most carry no country — a pod at somebody's kitchen
+  table has no city — so `calRegionOf` files them under *Elsewhere*, and narrowing
+  to your own continent would hide your own Thursday night in the one lane nobody
+  would look in. The rule lives inside `calMatchesRegion`, not at a call site.
+- **`?cq=` is one search box across all three modes.** It reads what a person
+  searches BY — the name, the place, the note — and never the kind or the date,
+  which the chips and the window already answer. **Folded through `searchNorm`**,
+  because this season alone holds Düsseldorf, Malmö and Senigallia and nobody types
+  those with the diacritics. `useDeferredValue`d, same as the Cards browser.
+- **`?cspan=` is 6 / 12 / 24 months**, timeline only. 12 is one competitive season
+  and stays the default, so the param is omitted at 12 and the URL stays clean.
+- Counts on both chip rows are computed AFTER the search but BEFORE their own
+  dimension, so no chip ever claims rows the page is not showing and no option
+  reads (0) purely because you already narrowed by it.
+
+### Events you add yourself (migration 151)
+
+Not every Lorcana night is on Ravensburger Play: a pod, a shop that only posts to
+Discord, your group's monthly draft. **`+ Add event` in the header is open to
+everyone**, signed in or not.
+
+- **They ride `calendar_subscriptions` as a FIFTH kind (`custom`)**, exactly as
+  `hide` does — per-user, already RLS'd owner-only, already localStorage-first — so
+  nothing new has to be granted and a signed-out visitor keeps working. **Until 151
+  lands it works PER DEVICE**: the CHECK rejects the insert, the remote write fails
+  silently, localStorage keeps it. Same degradation 144 had, and the same
+  drop-the-constraint-BY-LOOKUP body.
+- **⚠ The subscription's `meta` IS the event.** Every other kind here points at a
+  row somewhere (a curated uuid, an RPH event id, a set name); this one has no feed
+  behind it, so the stored label is the only record that it exists at all. Never
+  "normalise" it into a lookup — the rule a scout note already carries.
+- **⚠ Adding one turns its own chip on.** `calReadKindPref` filters a stored pref
+  to KNOWN keys, so every browser that has ever loaded the site holds a five-key
+  string and would get `mine` **off** — you would add an event and it would not
+  appear. `onSaved` unions the key in. A later deliberate Hide still sticks.
+- **No country field, deliberately**, per the region bypass above. Asking somebody
+  to classify their own Thursday night into a continent is a worse form than the
+  one it would serve.
+- On the timeline they get a **labelled lane of their own** (`CAL_TL_MINE_LANE`),
+  not the store lane's unlabelled ticks: you add three of these, not fifty.
+- The rows are listed and EDITABLE in "My stores + saved events" — the one kind on
+  this calendar you can change, so the row opens the form rather than only offering
+  an ×. Delete is two-tap inside the form.
+- **An edit goes through `updateMeta`, never remove-then-add**: two async writes
+  racing on one key can land in either order, and the delete winning loses the
+  event outright.
+- The home panel's pool includes them too. A box called "what is coming up" that
+  omits the thing you put on it yourself is the one omission you would notice.
+
+### Export image — drawn, not screenshotted
+
+`buildCalendarTimelineBlob(tl, opts)` paints the chart on a `<canvas>` and hands it
+to `deliverImage` (desktop = sync clipboard, touch = share sheet), the same path
+every card export takes. **Not html2canvas**, for the documented reason: it paints
+whatever `styles.css` the browser happens to hold and the service worker can hold a
+stale one, so a CSS fix stays invisible in the export until the SW updates.
+
+- **⚠ It consumes the SAME `calendarTimeline()` object the DOM does**, so the two
+  agree on every position by construction rather than by two sets of maths being
+  kept in step. That is `drawCardTileCanvas`'s standing contract and the only thing
+  that makes "the copied image is what was on screen" true.
+- **⚠ The DOM positions a label by its BOTTOM EDGE; canvas positions text by its
+  BASELINE.** Porting the DOM's offset straight across drops every label by its own
+  descender plus its second line — which printed the date through the dots it
+  labels, on every lane, and looked deliberate.
+- The picture carries the window's own months in its header and the active filters
+  as a subtitle (`filterCaption`), so a shared chart can never be read as the whole
+  season.
+
+### Prettier: the month bands are the load-bearing one
+
+Alternating month bands (`.cal-tl-band`, every other column) are the single biggest
+readability win on a year-wide axis — gridlines alone leave one undifferentiated
+grey field with nothing to track a row across. The today line gained a pip so it
+reads as a marker rather than another gridline, and a lane tints on hover.
+
+
 ### ⚠ The season seed is short one Challenge, and five dates are disputed (2026-09-14)
 
 Checked against a published 2026-27 season schedule. Everything in 141 matched to
@@ -4673,6 +4765,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
   until ruled on in the /calendar editor. Numbered 150, not 149, for the reason
   the 149 entry below gives. Pure ASCII, short header, per the 142 lesson.
+- ~~`supabase/151_calendar_custom_events.sql`~~ - **STAGED 2026-09-14, needs a paste.**
+  Widens `calendar_subscriptions`' kind CHECK to allow `custom`, so an event you add
+  yourself follows you between devices. Until it runs, adding one works per device
+  and nothing errors. Pure ASCII, drops the old constraint by lookup (144's body).
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
