@@ -57,9 +57,6 @@ const moduleSrc = [
   grabLine("const gearKey = "),
   grab("const AMAZON_DIR_SETS = [", NL + "];"),
   grab("function amazonDirectory(){", NL + "}"),
-  grab("const normalizeRarity = r => {", NL + "};"),
-  grabLine("const AMAZON_CARD_RARITY_WORDS = "),
-  grab("const amazonCardSearchUrl = (name, rarity) => {", NL + "};"),
   grabLine("const TCG_IMG_BASE = "),
   grab("const tcgProductImg = (pid, px = 400) =>", ";" + NL),
   grab("const tcgImgSized = (url, px = 400) => {", NL + "};"),
@@ -81,7 +78,7 @@ const moduleSrc = [
   "export {AMAZON_TAG, amazonUrl, amazonSearchUrl, amazonForSealed, gearUrl,",
   "  AMAZON_ASIN_BY_SET, AMAZON_SEALED_RULES, AMAZON_PUZZLE_ASINS,",
   "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory,",
-  "  amazonCardSearchUrl, tcgProductImg, tcgImgSized, amazonSealedMatches,",
+  "  tcgProductImg, tcgImgSized, amazonSealedMatches,",
   "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool,",
   "  AMAZON_PRICE_CEILING, amazonPriceCeiling, amazonListingHidden};",
 ].join(NL);
@@ -312,19 +309,20 @@ ok("the directory renders no image URLs",
   (dirBlob.match(/https?:\/\/[^"]+/g) || []).every((u) => OURS.test(u)),
   (dirBlob.match(/https?:\/\/[^"]+/g) || []).filter((u) => !OURS.test(u)).slice(0, 3).join(" "));
 
-// ── Cards on Amazon ─────────────────────────────────────────────────────────
-// Singles are always a search. The name's dash goes (Amazon titles never carry
-// it) and a chase rarity is added, or the common outranks the Enchanted.
-const elsaUrl = m.amazonCardSearchUrl("Elsa - Spirit of Winter", "Common");
-ok("a card search carries the tag", elsaUrl.includes("tag=packsink-20"), elsaUrl);
-ok("…searches the name without its dash",
-  decodeURIComponent(elsaUrl).includes("k=Disney Lorcana Elsa Spirit of Winter&"), decodeURIComponent(elsaUrl));
-ok("…and adds no base rarity", !/Common/.test(decodeURIComponent(elsaUrl)));
-ok("a chase card searches with its rarity",
-  decodeURIComponent(m.amazonCardSearchUrl("Elsa - Spirit of Winter", "enchanted")).includes("Spirit of Winter Enchanted&"));
-ok("an em-dashed tile title is cleaned the same way",
-  decodeURIComponent(m.amazonCardSearchUrl("Elsa — Spirit of Winter", "Rare")).includes("k=Disney Lorcana Elsa Spirit of Winter&"));
-check("no name yields no link", m.amazonCardSearchUrl("", "Rare"), null);
+// ── No card ever links to Amazon ──────────────────────────────────────
+// Amazon does not carry Lorcana singles, so a per-card "Find on Amazon"
+// link sends the reader to a page of booster boxes or to somebody's
+// third-party lot — removed 2026-09-13 at Zaven's request. It earns nothing
+// and it makes the site look like it does not know what it sells. Nothing
+// errors if one comes back, which is the whole reason this is a guard: a
+// card surface gets TCGplayer, and Amazon gets sealed, the puzzles and the
+// accessories.
+ok("no per-card Amazon search helper exists",
+  !/amazonCardSearchUrl|AMAZON_CARD_RARITY_WORDS/.test(src),
+  "Index.html still defines a per-card Amazon search helper");
+ok("…and no card surface links to Amazon",
+  !/Find this card on Amazon|Search Amazon for this card/.test(src),
+  "a card surface still renders an Amazon link");
 
 // ── Resolver fixes found against the live catalog (2026-09-10) ──────────────
 // A case or display is not the single product a rule's ASIN points at.

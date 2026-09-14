@@ -3818,19 +3818,10 @@ const amazonSearchUrl = (query, dept) =>
   `&i=${encodeURIComponent(dept || AMAZON_DEPT_DEFAULT)}` +
   `&tag=${AMAZON_TAG}&linkCode=ll2`;
 
-// A single card on Amazon. Always a SEARCH, never a curated ASIN: singles there
-// are third-party listings that come and go, so there is no product page worth
-// pinning, and the search for the card's own name commissions exactly like a
-// product link. Chase rarities carry the rarity word, or a search for "Elsa
-// Spirit of Winter" finds the common long before the Enchanted somebody was
-// actually looking at.
-const AMAZON_CARD_RARITY_WORDS = new Set(["Enchanted", "Iconic", "Epic"]);
-const amazonCardSearchUrl = (name, rarity) => {
-  const base = String(name || "").replace(/\s+[-–—]\s+/g, " ").trim();
-  if(!base) return null;
-  const r = normalizeRarity(rarity);
-  return amazonSearchUrl("Disney Lorcana " + base + (AMAZON_CARD_RARITY_WORDS.has(r) ? " " + r : ""));
-};
+// There is deliberately NO per-CARD Amazon link anywhere on this site. Amazon
+// does not carry Lorcana singles — only sealed product, the Ravensburger
+// puzzles and accessories — so a search for one lands on a page of boxes or on
+// somebody's third-party lot. Singles are TCGplayer's; keep it that way.
 
 // Product photos on anything Amazon-linked come from TCGPLAYER's catalog CDN,
 // never from Amazon: Amazon licenses its images only through its API, while
@@ -7773,7 +7764,7 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
 // poster draws its own rows on a canvas in buildCardPosterBlob).
-const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing, amazonHref}) => {
+const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing}) => {
   const buyUrl = tcgUrl(productId, printing);
   return html`
   <div class="cd-stat">
@@ -7789,11 +7780,6 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
       ${buyUrl && html`<a class="cd-stat-buy" href=${buyUrl} target="_blank" rel="noopener nofollow sponsored"
         onClick=${e=>e.stopPropagation()} title="Buy this printing on TCGplayer (affiliate link)">
         Buy on TCGplayer
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
-      </a>`}
-      ${amazonHref && html`<a class="cd-stat-buy cd-stat-buy--amazon" href=${amazonHref} target="_blank" rel="noopener nofollow sponsored"
-        onClick=${e=>e.stopPropagation()} title="Search Amazon for this card (affiliate link)">
-        Find on Amazon
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
       <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
@@ -8254,7 +8240,6 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     const rows = [];
     if(history.normal && history.normal.length) rows.push({
       key:"__normal", label:"Non-Foil", color:"#1d8d4a", sub:null,
-      amazonHref: amazonCardSearchUrl(group["Product Name"], group.Rarity),
       productId: group.normal && group.normal.tcgplayer_product_id,
       printing: (group.normal && group.normal.tcg_printing) || "Normal",
       low: computeSeriesDeltas(history.normal, "low_price"),
@@ -8263,7 +8248,6 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     });
     if(history.foil && history.foil.length) rows.push({
       key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
-      amazonHref: amazonCardSearchUrl(group["Product Name"], group.Rarity),
       productId: group.foil && group.foil.tcgplayer_product_id,
       printing: (group.foil && group.foil.tcg_printing) || "Foil",
       low: computeSeriesDeltas(history.foil, "low_price"),
@@ -8283,7 +8267,6 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           sub: (v.row.Set || "") + num,
           color: null,
           productId: v.row.tcgplayer_product_id,
-          amazonHref: amazonCardSearchUrl(v.row["Product Name"], v.row.Rarity),
           printing: v.printing,
           standing: priceStanding(vr),
           low: computeSeriesDeltas(vr, "low_price"),
@@ -8529,7 +8512,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     </div>`}
 
     ${!isGradedMode && statRows.length > 0 && html`<div class="card-detail-screener">
-      <div class="cd-affiliate-note">Buy links open TCGplayer and Amazon through their affiliate programs — we may earn a commission at no extra cost to you. As an Amazon Associate I earn from qualifying purchases.</div>
+      <div class="cd-affiliate-note">Buy links open TCGplayer through their affiliate program — we may earn a commission at no extra cost to you.</div>
       <div class="card-detail-screener-head">
         <span class="cd-screener-title">Price changes</span>
         ${variantRows.length > 0 && html`<button class="cd-variants-btn"
@@ -8541,7 +8524,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       <div class="cd-stat-list">
         ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub}
           color=${r.color} low=${r.low} market=${r.market} standing=${r.standing}
-          productId=${r.productId} printing=${r.printing} amazonHref=${r.amazonHref}/>`)}
+          productId=${r.productId} printing=${r.printing}/>`)}
       </div>
     </div>`}
 
@@ -20205,21 +20188,13 @@ const HistoryView = ({raw, sets, theme, historyTarget, sealedPrices, setsMeta, i
                || cardOptions.find(c => c.card_id === previewItem.card_id)?.img_small
                || previewItem.image))
         : null;
-      // Amazon beside "View on TCGplayer". A card is always a search (Amazon has
-      // no dependable singles catalog); sealed goes through the resolver so a
-      // curated listing lands on its own product page.
+      // Amazon beside "View on TCGplayer", for SEALED only — Amazon does not
+      // carry singles, so a card gets a TCGplayer link and nothing else.
       const previewAmazon = (() => {
-        if(!previewItem) return null;
-        if(previewItem.kind === "sealed"){
-          const row = (sealedPrices || []).find(s => s.tcgplayer_product_id === previewItem.productId);
-          const setName = row ? ((setsMeta || []).find(s => s.id === row.set_id) || {}).name : null;
-          return amazonForSealed(row || {name: previewItem.name}, setName || null);
-        }
-        if(previewItem.kind !== "card") return null;
-        const baseId = String(previewItem.card_id || "").split("::")[0];
-        const row = raw.find(r => r.card_id === baseId);
-        const url = amazonCardSearchUrl(row ? row["Product Name"] : previewItem.name, row && row.Rarity);
-        return url ? {url, exact: false} : null;
+        if(!previewItem || previewItem.kind !== "sealed") return null;
+        const row = (sealedPrices || []).find(s => s.tcgplayer_product_id === previewItem.productId);
+        const setName = row ? ((setsMeta || []).find(s => s.id === row.set_id) || {}).name : null;
+        return amazonForSealed(row || {name: previewItem.name}, setName || null);
       })();
 
       const filtersButton = html`<button class=${"history-picker-filters-btn"+(histActiveCount>0?" active":"")}
@@ -24871,10 +24846,6 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
                               target="_blank" rel="noopener nofollow sponsored"
                               onClick=${e=>e.stopPropagation()}
                               title="Buy a raw copy on TCGplayer (affiliate link)">TCG ↗</a>`}
-                          ${card.tcgplayer_product_id && !isCustomVariant && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amazonCardSearchUrl(card["Product Name"], card.Rarity)}
-                              target="_blank" rel="noopener nofollow sponsored"
-                              onClick=${e=>e.stopPropagation()}
-                              title="Search Amazon for this card (affiliate link)">Amazon ↗</a>`}
                         </div>`}
                         <div class="gc-card-slots">
                           ${slots.map((s, si) => {
@@ -25027,9 +24998,8 @@ const GradedCollectionView = ({raw, user, onSignIn, theme, readOnly, viewedGrade
               </div>`;
             })}
         <p class="sealed-coll-affiliate muted">
-          Buy links are affiliate links — TCGplayer and Amazon. We may earn a
-          commission at no extra cost to you. As an Amazon Associate I earn from
-          qualifying purchases.
+          Buy links are TCGplayer affiliate links — we may earn a commission at
+          no extra cost to you.
         </p>
       </div>
       ${!readOnly && (gradedView==="tracking" || (gradedPremium && submissions.length>0)) && html`<aside class="graded-collection-side" id="graded-goals-panel">
@@ -29656,10 +29626,6 @@ function SetDetail({data,mult,activeRars,theme,onOpenCard}){
               onClick=${e=>e.stopPropagation()}
               class="playset-tcg-btn"
               title="Open on TCGplayer">TCG ↗</a>`}
-            ${url && html`<a href=${amazonCardSearchUrl(c.name, c.rarity)} target="_blank" rel="noopener nofollow sponsored"
-              onClick=${e=>e.stopPropagation()}
-              class="playset-tcg-btn playset-amzn-btn"
-              title="Find this card on Amazon (affiliate link)">Amazon ↗</a>`}
           </td>
           <td><${Badge} rarity=${c.rarity} theme=${theme}/></td>
           <td style=${{fontWeight:600}}>${fmt((c.price||0)*mult)}</td>
@@ -30143,9 +30109,6 @@ function TradeView({ raw, shareToken, shareBlob, theme, user, collection, update
       </span>
       ${url && html`<span class="trade-pr-links">
         <a class="trade-pr-link" href=${url} target="_blank" rel="noopener nofollow sponsored" title=${"View "+label+" on TCGplayer"}>↗</a>
-        <a class="trade-pr-link trade-pr-link--amzn" href=${amazonCardSearchUrl(g["Product Name"], g.Rarity)} target="_blank"
-          rel="noopener nofollow sponsored" aria-label="Find on Amazon"
-          title=${"Find " + (g["Product Name"] || "this card") + " on Amazon (affiliate link)"}>${uiIcon("cart", 12)}</a>
       </span>`}
     </div>`;
   };
@@ -33377,10 +33340,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
                   ${tcg && html`<a class="td-tcg-link" href=${tcg} target="_blank"
                     rel="noopener nofollow sponsored"
                     title="Open on TCGplayer (affiliate link)">↗</a>`}
-                  ${tcg && (() => {
-                    const az = isSealedRow
-                      ? amazonForSealed(r._sealedProduct, setNameById[r.set_id] || null)
-                      : {url: amazonCardSearchUrl(r.version ? r.name + " - " + r.version : r.name, r.rarity), exact: false};
+                  ${tcg && isSealedRow && (() => {
+                    const az = amazonForSealed(r._sealedProduct, setNameById[r.set_id] || null);
                     return az && az.url && html`<a class="td-tcg-link td-amzn-link" href=${az.url} target="_blank"
                       rel="noopener nofollow sponsored" aria-label="Amazon"
                       title=${az.exact ? "Buy on Amazon (affiliate link)" : "Find on Amazon (affiliate link)"}>${uiIcon("cart", 11)}</a>`;
@@ -35739,10 +35700,6 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
           <path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/>
         </svg>
       </a>`}
-      ${url && html`<a class="mt-amzn-link" href=${amazonCardSearchUrl(name, card.rarity)} target="_blank"
-          rel="noopener nofollow sponsored" data-h2c-ignore
-          title="Find this card on Amazon (affiliate link)" aria-label="Find this card on Amazon"
-          onClick=${e=>e.stopPropagation()}>${uiIcon("cart", 10)}</a>`}
     </div>
     <div class="mt-name">${name}</div>
     <div class="mt-meta">${card.rarity}${prBadge?" · "+prBadge:""}</div>

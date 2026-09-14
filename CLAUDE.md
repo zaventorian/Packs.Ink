@@ -2706,13 +2706,27 @@ non-compliant one.
   in its stored layout repairs itself on the next load — no migration, no stamp. Don't re-add
   a `home:` flag to `LORCANA_GEAR`; nothing reads it, and the guard test now fails if one
   reappears rather than passing vacuously.
-- **Every "buy on TCGplayer" control has an Amazon twin (2026-09-10)**, per Zaven: the card
-  popup's Price-changes rows ("Find on Amazon" beside "Buy on TCGplayer"), Sealed and Graded
-  collection tiles (`TCG ↗` + `Amazon ↗`), the Price Graphing single-product preview, the
-  movers-tile corner (a cart glyph left of the ↗), the home "Recent set EV" box price,
-  Playset Cost rows, Trade Compare printings and every Screener row. A single card is always
-  `amazonCardSearchUrl(name, rarity)` — a search, with the rarity word appended for
-  Enchanted / Iconic / Epic — because Amazon has no singles catalog worth pinning.
+- **Sealed product has an Amazon twin; a CARD never does (2026-09-13).** Every "buy on
+  TCGplayer" control gained an Amazon link beside it on 2026-09-10, and the per-CARD half was
+  **removed** three days later at Zaven's request: Amazon does not carry Lorcana singles, so a
+  search for one lands on a page of booster boxes or on somebody's third-party lot. It earned
+  nothing and it made the site look like it did not know what it sells.
+  `amazonCardSearchUrl` and `AMAZON_CARD_RARITY_WORDS` are gone with their six call sites —
+  the card popup's Price-changes rows, Graded collection tiles, Playset Cost rows, Trade
+  Compare printings, the movers-tile corner, and the Screener's card rows — and the three
+  card-only CSS rules (`.playset-amzn-btn`, `.cd-stat-buy--amazon`, `.trade-pr-link--amzn`).
+  Two affiliate notes narrowed to TCGplayer-only with them (`.cd-affiliate-note` and the
+  graded view's `.sealed-coll-affiliate`), so the Associate string is no longer claimed on a
+  surface that no longer links to Amazon.
+  **⚠ Nothing errors if a card link comes back** — it just quietly resumes sending readers to
+  the wrong shop — so `test_amazon_links.mjs` asserts both that the helper does not exist and
+  that no card surface renders an Amazon link. That is the part that makes it stop.
+- **What KEEPS its Amazon twin**, every one of them sealed or product: the Sealed detail
+  modal, Sealed collection tiles, the Screener's SEALED rows (`isSealedRow`-gated), the Price
+  Graphing single-product preview (sealed only), both EV box prices (`.ev-box-amzn`,
+  `.home-ev-strip-amzn`), the home "Lorcana on Amazon" shelf and `/gear`. `.td-amzn-link`,
+  `.gc-card-buy--amazon` and `.mt-amzn-link` are still live for exactly those — don't sweep
+  them as orphans.
   **Deliberately NOT twinned:** a *price* that merely happens to be a TCGplayer link (Cards
   list rows, set-detail rows, deck tile price chips, pack-sim results) — doubling every
   price chip would bury the prices — and TCGplayer's mass-entry "shop missing" buttons,
@@ -2924,8 +2938,6 @@ Amazon-bearing surface carries its own:
 | Sealed collection tiles | `.sealed-coll-affiliate`, foot of the view |
 | EV tool (box-price column) | appended to the existing "Prices via TCGCSV" footer |
 | `/gear` | `.gear-page-note`, above the list |
-| Card popup (Price changes) | `.cd-affiliate-note`, above the rows |
-| Graded collection tiles | `.sealed-coll-affiliate`, foot of the set list |
 | Home "Lorcana on Amazon" row | the row's subtitle |
 
 Every Amazon anchor is `rel="noopener nofollow sponsored"`.
