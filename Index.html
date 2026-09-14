@@ -205,7 +205,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=403">
+<link rel="stylesheet" href="styles.css?v=404">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -633,6 +633,68 @@ const gradedVariantLabel = (printing, setName) => {
   if(printing === "Foil" || printing === "Cold Foil" || printing === "Holofoil") return "Foil";
   if(printing === "Non-Foil") return "Non-Foil";
   return variantBadge(printing);                            // Two Swords / Text Error / null
+};
+// ── Does this card's PRINTING deserve a word on a tile? ───────────────────────
+// One answer for every surface that stamps a finish on a card: the movers
+// tiles and their canvas exports, the Graded Market strip and its export, and
+// the collection's Your Top Movers rows. Each of those asked
+// `printing !== "Normal"` on its own, and each was therefore wrong in exactly
+// the same way — an Enchanted is cold foil BY DEFINITION, has one printing and
+// nothing to be distinguished from, so "ENCHANTED · FOIL" states a difference
+// that does not exist. Same for every Epic, Iconic and single-print promo.
+// Zaven has reported this repeatedly; what makes it stop is that there is now
+// one predicate, and test_printing_badge.mjs fails when a surface grows its own.
+//
+// ⚠ The test is NOT "is this a chase rarity". Two ways that is wrong, and the
+// live catalog holds examples of both:
+//   · Challenge Promo (C1) is rarity Promo and its 8 cards DO split — into
+//     Top Prize foil and Prize Wall non-foil, two genuinely different markets
+//     (Cinderella - Stouthearted PSA 10: $1,707 vs $280). Those must be
+//     labelled, and with the Challenge words, never "Foil".
+//   · PD1's Beast - Snowfield Troublemaker is rarity Promo and splits Normal /
+//     Cold Foil like an ordinary booster card.
+// So the question is not what a card is CALLED, it is whether a second printing
+// exists to be told apart from — which only the catalog can answer.
+let _printBadge = new Map();   // `${card_id}|${Foil|Non-Foil}` -> badge text
+const setPrintingBadges = (rows) => {
+  const byCard = new Map();    // card_id -> the printings the catalog holds
+  for(const r of rows || []){
+    const id = r && r.card_id, p = r && (r.tcg_printing || r.Printing);
+    if(!id || !p) continue;
+    let e = byCard.get(id);
+    if(!e){ e = {set: r.Set || "", prints: new Map()}; byCard.set(id, e); }
+    e.prints.set(gradedFoilBucket(p), p);
+  }
+  const m = new Map();
+  for(const [id, e] of byCard){
+    // One printing = nothing to distinguish. This is the whole fix: every
+    // Enchanted / Epic / Iconic and every single-print promo lands here.
+    if(!e.prints.has("Foil") || !e.prints.has("Non-Foil")) continue;
+    const c1 = SPLIT_BY_PRINTING_SETS_GLOBAL.has(e.set);
+    // C1's two printings are VERSIONS, so both get named. Everywhere else the
+    // non-foil IS the base printing and needs no label — only the foil is a
+    // departure from it.
+    // ⚠ The Challenge words are looked up by BUCKET, never by the raw printing:
+    // PRINTING_VARIANT_LABEL is keyed "Foil"/"Non-Foil", and C1 stores its foil
+    // as "Holofoil", which variantBadge deliberately suppresses as a finish word.
+    // Passing the raw value therefore returns null and silently drops Top Prize /
+    // Prize Wall — the one split on the site where the label is worth $1,400.
+    m.set(id + "|Foil", c1 ? variantBadge("Foil") : "Foil");
+    if(c1) m.set(id + "|Non-Foil", variantBadge("Non-Foil"));
+  }
+  _printBadge = m;
+};
+// The badge for one (card, printing), or null when the printing distinguishes
+// nothing. `printing` may come from the catalog or from a graded sale, whose
+// value is whatever an eBay title said — which is why a finish word is folded
+// through gradedFoilBucket before the lookup, and why three sales saying "foil"
+// on an Enchanted still produce null here.
+const printingBadge = (printing, cardId) => {
+  if(!printing || !cardId) return null;
+  // A NAMED version (Two Swords / Text Error) is a different card, not a
+  // finish — always worth saying, and never lives in _printBadge.
+  if(!isFinishOnlyPrinting(printing)) return variantBadge(printing);
+  return _printBadge.get(cardId + "|" + gradedFoilBucket(printing)) || null;
 };
 // Raw market price of a catalog row, used as a PLACEHOLDER value for graded
 // copies of cards that have no graded-sales data yet (so they still contribute
@@ -25571,7 +25633,7 @@ const GradedBulkAddModal = ({raw, setIdsByName, setNameById, cardsBySetId, onClo
                         : html`<div style=${{width:28,height:39,background:"var(--bg-surface)",borderRadius:3}}/>`}
                       <div style=${{minWidth:0}}>
                         <div style=${{fontSize:12,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>${c.name}</div>
-                        <div class="muted" style=${{fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#${c.number || "?"} · ${c.rarity}${c.printing !== "Normal" ? " · " + c.printing : ""}</div>
+                        <div class="muted" style=${{fontSize:10,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#${c.number || "?"} · ${c.rarity}${printingBadge(c.printing, c.card_id) ? " · " + printingBadge(c.printing, c.card_id) : ""}</div>
                       </div>
                       <select value=${st.grader || defGrader} onChange=${e=>setRowGrader(c.rowKey, e.target.value)} onClick=${e=>e.stopPropagation()}
                         style=${{width:"100%",boxSizing:"border-box",padding:"3px 4px",fontSize:11,border:"1px solid var(--btn-border)",borderRadius:4,background:"var(--bg-solid)",color:"var(--text)",minWidth:0}}>
@@ -35340,7 +35402,7 @@ function drawCardTileCanvas(canvas, {artImg, logoImg, name, meta, low, market, d
 function paintMoverTile(ctx, ox, oy, TW, tileH, card, artImg, wins, P){
   const PAD = 12, R = 10, ROW_H = 16;
   const artW = TW - PAD*2, artH = Math.round(artW * 7 / 5);
-  const isFoil = card.printing && card.printing !== "Normal";
+  const prBadge = printingBadge(card.printing, card.card_id);
   const name = card.version ? `${card.name} — ${card.version}` : card.name;
   // panel
   roundRectPath(ctx, ox+0.5, oy+0.5, TW-1, tileH-1, R+2); ctx.fillStyle = P.bg; ctx.fill();
@@ -35357,7 +35419,7 @@ function paintMoverTile(ctx, ox, oy, TW, tileH, card, artImg, wins, P){
   y += 15; ctx.fillText(nameLine, ox+PAD, y);
   // meta
   y += 15; ctx.fillStyle = P.muted; ctx.font = "600 10px 'Nunito Sans', sans-serif";
-  ctx.fillText(((card.rarity||"") + (isFoil?" · FOIL":"")).toUpperCase().trim(), ox+PAD, y);
+  ctx.fillText(((card.rarity||"") + (prBadge?" · "+prBadge:"")).toUpperCase().trim(), ox+PAD, y);
   // Low / Mkt
   y += 19;
   const drawPx = (label, val, yy) => {
@@ -35531,7 +35593,7 @@ function paintGradedTile(ctx, x, y, w, h, c, art, gridWins, P){
   ctx.textAlign = "left"; ctx.fillStyle = P.text; ctx.font = "700 12px 'Nunito Sans', sans-serif";
   ctx.fillText(trunc(c.name, w-24), x+12, cy); cy += 16;
   ctx.fillStyle = P.accent; ctx.font = "800 11px 'Nunito Sans', sans-serif";
-  ctx.fillText((c.grader||"").toUpperCase()+" "+c.grade + (isFoilPrinting(c.printing)?" · Foil":""), x+12, cy);
+  ctx.fillText((c.grader||"").toUpperCase()+" "+c.grade + (c.prBadge?" · "+c.prBadge:""), x+12, cy);
   ctx.textAlign = "right"; ctx.fillStyle = P.text; ctx.font = "800 12px 'Nunito Sans', sans-serif";
   ctx.fillText("$"+Math.round(c.price), x+w-12, cy); cy += 17;
   const cellW = (w-24)/gridWins.length;
@@ -35585,7 +35647,10 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
   // crisp. Slightly heavier payload (~80kb vs 30kb per tile) but a banner
   // shows max 20 cards so the total cost is bounded.
   const img = card.image_large || card.image_normal || card.image_small;
-  const isFoil = card.printing && card.printing !== "Normal";
+  // NOT `printing !== "Normal"` — see printingBadge. Every card in the Chase
+  // banner is an Enchanted / Epic / Iconic, i.e. cold foil by definition with
+  // one printing, so that test stamped "· Foil" on all of them.
+  const prBadge = printingBadge(card.printing, card.card_id);
   const wins = visibleWindows || MOVER_WINDOWS.slice(0,3);
   return html`<div class="mover-tile"
     role="button" tabIndex=${0}
@@ -35622,7 +35687,7 @@ const MoverTile = ({card, onClick, activeWindow, visibleWindows}) => {
           onClick=${e=>e.stopPropagation()}>${uiIcon("cart", 10)}</a>`}
     </div>
     <div class="mt-name">${name}</div>
-    <div class="mt-meta">${card.rarity}${isFoil?" · Foil":""}</div>
+    <div class="mt-meta">${card.rarity}${prBadge?" · "+prBadge:""}</div>
     <div class="mt-prices">
       <${Tip} text=${TIP_LOW} class="mt-lbl">LOW<//>
       <span class="mt-now">${fmt(parseP(card.low_today))}</span>
@@ -36949,15 +37014,14 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
               No ${moversWin.label} movement in your collection matching the filters.</div>`
           : html`<table class="panel-movers-table"><tbody>
             ${collectionMovers.map(({row, mover, pct}) => {
-              // Foil-printing sub-label: Cold Foil only (Holofoil and regular
-              // Foil are not flagged here per UX — Cold Foil is the variant
-              // that meaningfully changes value vs the base printing and is
-              // the one users want to spot at a glance). Label reads "FOIL"
-              // for terseness — the column is narrow and "FOIL" is the
-              // identifier users care about (vs base Normal). Rendered on a
-              // second line below the name so name X-alignment stays
-              // consistent across rows regardless of badge presence.
-              const printingLabel = (row.tcg_printing === "Cold Foil") ? "FOIL" : null;
+              // Foil sub-label. Rendered on a second line below the name so name
+              // X-alignment stays consistent across rows regardless of badge
+              // presence; "FOIL" rather than "Cold Foil" because the column is
+              // narrow and the identifier users care about is "not the base
+              // printing". printingBadge is what decides there IS a base
+              // printing to differ from — a chase card has only the one.
+              const prBadge = printingBadge(row.tcg_printing, row.card_id);
+              const printingLabel = prBadge ? prBadge.toUpperCase() : null;
               return html`<tr key=${row.card_id+":"+row.tcg_printing}
                 onClick=${()=>onTileClick && onTileClick(mover)}>
                 <td class="panel-movers-img">${row.img_small
@@ -39780,7 +39844,6 @@ const GRADED_HOME_GRADERS = ["PSA","CGC","BGS","SGC","TAG"];
 const GRADED_HOME_GRADES = ["10","9.5","9","8.5","8","7"];
 // Graded movers are limited to the cards people actually grade + chase.
 const GRADED_HOME_RARITIES = new Set(["Epic","Enchanted","Iconic","Promo"]);
-const isFoilPrinting = (p) => !!p && p !== "Non-Foil" && p !== "Normal";
 const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
   // Defaults are Top Sales / 1D: a realized sale from the last day is the
   // freshest honest signal we have, where a Δ% needs a settled rollup to mean
@@ -39847,7 +39910,8 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       const pct = sanePct(r[pctKey]);
       if(pct == null || pct === 0) continue;
       rows.push({card_id: r.card_id, _initialTab: "graded", _initialPrinting: r.printing, grader: r.grader, grade: r.grade,
-        printing: r.printing, name: meta["Product Name"], img: meta.img_normal || meta.img_small,
+        printing: r.printing, prBadge: printingBadge(r.printing, r.card_id),
+        name: meta["Product Name"], img: meta.img_normal || meta.img_small,
         price: r.last_sold_price, pct, pct_1d: r.pct_1d, pct_7d: r.pct_7d, pct_30d: r.pct_30d, pct_90d: r.pct_90d});
     }
     rows.sort((a,b) => Math.abs(b.pct) - Math.abs(a.pct));
@@ -39867,7 +39931,8 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
       if(!meta || !GRADED_HOME_RARITIES.has(meta.Rarity)) continue;
       seen.add(key);
       rows.push({card_id: s.card_id, _initialTab: "graded", _initialPrinting: s.printing, grader: s.grader, grade: s.grade,
-        printing: s.printing, name: meta["Product Name"], img: meta.img_normal || meta.img_small,
+        printing: s.printing, prBadge: printingBadge(s.printing, s.card_id),
+        name: meta["Product Name"], img: meta.img_normal || meta.img_small,
         price: s.sale_price, sold_date: s.sold_date});
       if(rows.length >= 20) break;
     }
@@ -39919,12 +39984,12 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
         : html`<${AutoScrollStrip} items=${cards}
             keyFor=${(c,i)=>`${c.card_id}|${c.grader}|${c.grade}|${c.sold_date||c.pct}|${i}`}
             renderItem=${(c, key) => html`<button key=${key} class="gmover-tile" onClick=${()=>onCard(c)}
-              title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}${isFoilPrinting(c.printing)?" · "+c.printing:""}`}>
+              title=${`${c.name} · ${(c.grader||"").toUpperCase()} ${c.grade}${c.prBadge?" · "+c.prBadge:""}`}>
               ${c.img ? html`<img src=${c.img} alt="" loading="lazy"/>` : html`<div class="gmover-img-fallback"></div>`}
               <div class="gmover-name">${c.name}</div>
               <div class="gmover-meta">
                 <span class="gmover-grade">${(c.grader||"").toUpperCase()} ${c.grade}</span>
-                ${isFoilPrinting(c.printing) && html`<span class="gmover-foil">Foil</span>`}
+                ${c.prBadge && html`<span class="gmover-foil">${c.prBadge}</span>`}
                 <span class="gmover-price">$${Math.round(c.price)}</span>
               </div>
               ${tab === "movers"
@@ -48001,6 +48066,12 @@ function App(){
   // child renders — the card detail modal's reprint verdict reads it straight
   // out of a useMemo, so an effect would land a frame late.
   useMemo(() => setSetReleaseDates(setsMeta), [setsMeta]);
+  // Same reason, same ordering: the movers banners and the Graded Market strip
+  // stamp a printing badge from a useMemo of their own, so an effect would land
+  // a frame late and paint a wrong label first. Nothing renders before `raw` is
+  // non-empty (see bootLoading), so this is always populated by the time a tile
+  // asks it a question.
+  useMemo(() => setPrintingBadges(raw), [raw]);
   const [sealedPrices, setSealedPrices] = useState(()=>{
     const cached = readSealedCache();
     return (cached && cached.rows.length) ? cached.rows : [];

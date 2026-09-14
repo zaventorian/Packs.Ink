@@ -1156,6 +1156,52 @@ Guarded by `node scripts/test_reprints.mjs` (33 cases).
 Two silent bugs shipped here, both on Peter Pan - Pirate's Bane (Enchanted, Into the Inklands).
 Guarded by `node scripts/test_card_versions.mjs`.
 
+### `printingBadge` is the ONLY thing that decides a tile says "Foil" (2026-09-13)
+
+Zaven, on seeing an Enchanted and a promo both wearing FOIL in the Graded Market strip:
+*"age old problem that keeps coming back."* It kept coming back because **five surfaces each
+asked `printing !== "Normal"` on their own**, and each was therefore wrong in the same way: an
+Enchanted is cold foil BY DEFINITION, has exactly one printing, and has nothing to be told apart
+from — so "ENCHANTED · FOIL" states a difference that does not exist. Nothing errors, and it
+goes out in the shareable PNG exports too.
+
+**`printingBadge(printing, cardId)` is the one answer now**, reading `_printBadge`, an index
+stamped from the catalog in App's render beside `setSetReleaseDates` (same reason — an effect
+lands a frame late and paints the wrong label first; nothing renders before `raw` is non-empty,
+see `bootLoading`). Converted: `MoverTile`, `paintMoverTile` (banner + single-tile PNG),
+the Graded Market tile, `paintGradedTile` (its PNG), Your Top Movers, and the graded bulk-add row.
+
+- **⚠ The rule is NOT "is this a chase rarity", and the live catalog holds counterexamples in
+  BOTH directions.** Challenge Promo (C1) is rarity *Promo* and its 8 cards genuinely split, into
+  Top Prize foil and Prize Wall non-foil — two different markets (Cinderella - Stouthearted PSA
+  10: **$1,707 vs $280**). PD1's *Beast - Snowfield Troublemaker* is also rarity Promo and splits
+  Normal / Cold Foil like an ordinary booster card. So the question is **whether a second printing
+  exists**, which only the catalog can answer — hence an index rather than a rarity list.
+- **⚠ The Challenge words are looked up by BUCKET, never by the raw printing.**
+  `PRINTING_VARIANT_LABEL` is keyed `"Foil"`/`"Non-Foil"`, and C1 stores its foil as `"Holofoil"`,
+  which `variantBadge` deliberately suppresses as a finish word — so passing the raw value returns
+  null and silently drops Top Prize / Prize Wall, the one split on the site where the label is
+  worth $1,400. The guard test caught exactly this in the first cut of the fix.
+- **A graded sale's `printing` is whatever an eBay title said**, so a finish word is folded through
+  `gradedFoilBucket` before the lookup. Three sales saying "foil" once grew Peter Pan - Pirate's
+  Bane a third version tab; the same words reach the Graded Market strip, and Gramma Tala wearing
+  FOIL is that bug in its second home.
+- **⚠ The graded tile's badge sits OVER the art, not in the meta row** (`.nav-tab-beta` trick — it
+  costs no layout width there). In the row it was `flex:0 0 auto` beside an ellipsing
+  `.gmover-grade`, so "TOP PRIZE" (51.8px in a 106px row) crushed "PSA 10" from 36.4px to 6.3px
+  and clipped it at 375px. The grade is the whole point of a graded tile; a badge must never eat it.
+- **Measured over the whole live catalog (5,896 rows) the day it shipped**: 2,662 rows KEEP their
+  Foil badge (every genuine mainline split, untouched), **512 stop claiming one** (225 Enchanted,
+  90 Epic, 10 Iconic, 162 single-print promos, 25 Extras), and 7 C1 cards go from "Foil" to
+  **"Top Prize"** with their siblings gaining "Prize Wall". Nothing legitimate was lost.
+- **Still says a finish on a single-printing card, deliberately left alone:** the scanner review
+  row's `.scanner-qa-pronly` chip (`prOnly` in ScannerOverlay), which shows "Holo" on an
+  Enchanted. That surface answers a different question — *which SKU am I about to save* — so it
+  is Zaven's call, not a silent cleanup.
+
+Guarded by `node scripts/test_printing_badge.mjs` (41 cases), whose last section fails when a
+render site grows its own copy of the predicate again. That is the part that makes it stop.
+
 - **"Top Prize" / "Prize Wall" are CHALLENGE PROMO words.** `PRINTING_VARIANT_LABEL` maps
   Foil/Non-Foil to them, and applying it globally put a **"Top Prize" version tab on an Into the
   Inklands card**. `gradedVariantLabel(printing, setName)` is the one place that knows the
