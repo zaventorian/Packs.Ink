@@ -117,9 +117,34 @@ def tracked_store_ids(refresh: bool) -> tuple[set[int], dict[int, set[str]]]:
 
 
 def ingested_event_ids() -> set[int]:
+    """Events discovery must NOT offer again — deliberately the SAME test
+    ingest.event_already_ingested() applies: an event is done only when the
+    platform says EVENT_FINISHED *and* we actually hold matches for it.
+
+    ⚠ This used to be every rph event_id in the table, which quietly broke the
+    half of the design that re-queues an unplayed SC. Discovery stores a
+    not-yet-played event with no rounds so a later refresh comes back for it
+    (ingest_event's "queued for refresh" branch) — but a mere-presence test then
+    put it in `have` forever, so the refresh never offered it again and the
+    results NEVER landed. Nothing went red: ingest.py skips its already-ingested
+    spreadsheet events, the discovery step is soft, and the run reported "0 at
+    tracked stores & not yet ingested" because, to itself, that was true. Found
+    2026-09-13 with 30 played events sitting at 0 matches — every SC of that
+    weekend, plus every one still in progress, which would have stayed frozen at
+    whatever partial state it was first seen in.
+
+    Re-offering a queued event is cheap and safe: ingest_event is idempotent, it
+    honours is_ignored itself, and an event that still has no rounds is simply
+    re-queued. is_ignored is excluded here anyway so a did-not-run event doesn't
+    come back as a candidate every week."""
     conn = sqlite3.connect(DB)
     ids = {r[0] for r in conn.execute(
-        "SELECT event_id FROM events WHERE platform='rph'")}
+        """SELECT e.event_id FROM events e
+            WHERE e.platform='rph'
+              AND (e.is_ignored = 1
+                   OR (e.status = 'EVENT_FINISHED'
+                       AND EXISTS(SELECT 1 FROM matches m
+                                   WHERE m.event_id = e.event_id)))""")}
     conn.close()
     return ids
 
