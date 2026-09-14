@@ -793,6 +793,34 @@ The `resolvedTheme` (aliased `theme` for back-compat) is what gets written to `<
 
 **`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
 
+### ⚠ `color-scheme` is declared at the DOCUMENT level — don't scope it off again (2026-09-13)
+
+`<meta name="color-scheme" content="dark light">` in the head, plus
+`html[data-mode="dark"]{color-scheme:dark}` / `[data-mode="light"]{…light}` in styles.css.
+It is the **only** signal a browser has that this page already handles dark mode. Without
+it, Chrome's "Darken websites", Samsung Internet's dark mode and Android WebView's
+algorithmic darkening treat the app as un-themed and paint their **own** darkening filter
+over our already-dark palette.
+
+- **Reported from a freshly installed copy of the PWA**, sitting beside an older install of
+  the same build that looked correct — so it reads as "the app changed", and nothing in the
+  app had. Both were standalone, same theme, same commit.
+- **How to tell this apart from a theme bug in one step: it darkens IMAGES.** The logo PNG
+  and the profile avatar came back dimmed, and no stylesheet can do that. Measured on the
+  two screenshots: layout pixel-identical, and the good one rendered Aurora's own gradient
+  stop `#2a1450` to the byte while the bad one crushed it to `#0f0134`. Whites (the OS
+  status bar, nav labels) were untouched — a shadow-crushing dark filter, not a dim setting.
+- **It was scoped to form controls once before**, because Samsung Internet answered the dark
+  signal by painting a tan/cream UA widget background on `<button>` (the profile button and
+  its avatar tile). That is guarded at source now: the global `button` rule sets
+  `appearance:none`, so no button can fall back to a UA-painted widget in any engine. Don't
+  remove that `appearance:none` and don't re-scope `color-scheme` — fix the widget, not the
+  signal.
+- **Declare BOTH modes.** A light theme left undeclared is the case those filters treat most
+  aggressively.
+- The root declaration also covers what the old form-control-scoped rule was for: native
+  `<select>` option panels, scrollbars and focus rings stay readable in dark themes.
+
 ## price_movers matview gotcha
 
 Computes Δ% across 6 windows (1D / 1W / 1M / 3M / 6M / 1Y) for both low and market. **`low_prev` is "most recent non-null low BEFORE low_today's own date"** — migration 26 fixes the original bug that collapsed pct_1d to 0 for sparse-listing chase cards.
@@ -1493,8 +1521,30 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 | `unbound_group` | a TCGCSV group no `sets.tcgplayer_group_id` points at — **how a new set announces itself, weeks before a card of it is listed** |
 | `sealed_no_set` | sealed row loaded with `set_id` null → renders under "Other / Promo" |
 | `card_no_pid` | `cards.tcgplayer_product_id` null → `card_prices_latest` is an INNER JOIN, so that card can never show a price |
-| `missing_set` | Lorcast published a set we never created |
+| `missing_set` | Lorcast published a set id we've never seen — **not the same as a set we don't have**, see below |
 | `review_due` | a **scheduled review** came due — see below |
+
+### ⚠ `missing_set` is an ID test, and a set id is not a set (2026-09-13)
+
+When Lorcast is late to a promo set we mint our own id and build the cards by hand —
+migration 107's **`set_curators_cc1`**, whose six singles ship as `REPRINT_PROMOS`. The day
+Lorcast finally indexes that set it arrives under *its* id, which we have never seen, so the
+check calls a set we already own "missing". That is survivable. What was not: the hint said
+**"run `scripts/load_lorcast.py` to create the set + its cards"**, and `load_lorcast` upserts
+`sets` **`on_conflict="id"`** — so following it would have added a SECOND row for one physical
+set, reloaded its six cards under the new id, given every Curator's card two tiles, and left the
+collection refs migration 107 deliberately repointed sitting on the orphan side. An alert whose
+remedy is the damage.
+
+- **The sweep now matches the `code` too** (it didn't even `select` it before) and, on a hit,
+  says *we already hold this as `<id>`, do NOT run load_lorcast* — naming the real decision,
+  which is whether to converge onto Lorcast's id or keep ours.
+- **It still REPORTS, it does not suppress.** This check is how a genuinely new set announces
+  itself; silencing on a code match would trade a bad hint for a blind spot. Both directions are
+  pinned in `test_catalog_watch.py`, which stubs the network and runs the real `collect_findings`.
+- Curator's CC1 is acked to **2026-09-28**, the `promo-printing-policy` review — all six CC1
+  cards are already in that review's scope, so "do promo printings get a tile" and "which set id
+  do they hang off" get settled in one sitting rather than two.
 
 **It is its own workflow, not an ETL job, deliberately.** ETL red = prices are broken, act now. Catalog watch red = something new exists, decide what to do with it. Sharing one light teaches you to ignore both. It also stopped firing 3–4x a day (once per prices dispatch) to answer a question that changes daily at most.
 
@@ -1513,7 +1563,7 @@ Two things it does NOT re-report, structurally rather than by ack: `load_sealed_
 | id | due | what |
 |---|---|---|
 | `set-spoilers` | 2026-09-25 | prestage the next set's revealed cards before Lorcast indexes them |
-| `promo-printing-policy` | 2026-09-28 | decide if promo *printings* are separate tracked items — 9 acks are blocked on it, and it must land before Q3 prestaging |
+| `promo-printing-policy` | 2026-09-28 | decide if promo *printings* are separate tracked items — most of the acks in the file defer to it, and it must land before Q3 prestaging. **Don't write the count down** — it has been wrong twice (this table said 9, the review said 13, it was 16); the review's `how` says how to enumerate them |
 | `japan-core` | 2026-10-30 | re-scrape the Curator's Library waves into `JAPAN_CORE_PARTIAL_NUMBERS` |
 | `pins-lore-counters` | 2026-10-30 | new season's pin + counters, and the still-missing photos |
 
@@ -4307,6 +4357,25 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- ⚠ **Granting someone the scouting feature is a PASTE, never a migration — this repo is
+  PUBLIC.** `scout_members` is an EMAIL allowlist, so a seed file is fourteen real people's
+  addresses in a git history that is permanent and world-readable. A session wrote exactly that
+  as `149_scout_members_seed.sql` (PR #52, closed unmerged 2026-09-13) and it had already been
+  pushed to a public branch before anyone looked — **`refs/pull/52/head` keeps it fetchable even
+  now**, because GitHub retains pull refs after the PR closes and the branch is deleted. So
+  there is no number 149: the grant lives at `Desktop/scout_members_seed.sql`, outside the repo,
+  and the ledger carries the gotchas instead of the data. Add people from the admin panel's
+  **Who can scout** box; reach for the file only for a bulk paste.
+  - **⚠ It is a SEED, not a reconciler.** Re-running RE-ADDS anyone an admin has since removed,
+    because a removed row is deleted and so conflicts with nothing. `on conflict do nothing`, so
+    a re-run cannot clobber a note edited since. Both verified against a throwaway Postgres 16
+    running 143's own table text.
+  - **⚠ A wrong address fails SILENTLY** — `can_scout()` returns false and the Scout tab simply
+    is not rendered, so if a teammate reports it missing, the address is the first thing to
+    check. Sign-in is Google OAuth only, so a non-gmail entry (comcast.net, yahoo.com) matches
+    only if that address is itself a Google account; and **Gmail ignores dots in the local part
+    but the JWT does not** — someone who signed up as `codybraun1@` is not matched by
+    `cody.braun1@`. Confirmed against the real function. Either way the fix is one row.
 - ~~`supabase/148_scout_any_event.sql`~~ — **APPLIED 2026-09-12 by Zaven.** Lets a scout add ANY
   event to scouting by hand: `scout_events` (the opt-in ledger), a widened
   `scout_event_meta`, `scout_event_add` / `scout_event_remove`, and the slate + sheet

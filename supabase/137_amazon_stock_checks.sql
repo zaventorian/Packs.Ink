@@ -1,14 +1,20 @@
--- 137_amazon_stock_checks.sql — the manual Amazon stock check (2026-09-10).
+-- 137_amazon_stock_checks.sql — the manual Amazon stock + price check.
+--   2026-09-10  stock
+--   2026-09-12  price ceiling (msrp, price_over) — appended below, and the
+--               whole file is idempotent, so re-running it is the upgrade.
 --
 -- Until Creators API access (10 shipped sales in 30 days), whether a shelf
--- product is in stock on Amazon is checked BY A PERSON: an admin opens each
--- listing from the checklist on /gear and marks it. A product marked out of
--- stock is HIDDEN from the home "Lorcana on Amazon" row and from /gear.
+-- product is in stock on Amazon — and whether it is being scalped — is checked
+-- BY A PERSON: an admin opens each listing from the checklist on /gear and
+-- marks it. A product marked out of stock, or marked over its price ceiling,
+-- is HIDDEN from the home "Lorcana on Amazon" row and from /gear.
 --
 -- Two things this table must never become:
 --   · a display source. Amazon licenses stock and price only through its API,
---     so nothing here is ever shown — the flag only decides which links we
---     feature, which is ordinary editorial curation;
+--     so no Amazon number is ever stored here or shown — the flags only decide
+--     which links we feature, which is ordinary editorial curation. `msrp` is
+--     the MANUFACTURER's published price, typed in by a person; it is not
+--     Amazon's price and is never displayed to visitors either way.
 --   · filled by a script. Reading Amazon pages on a schedule is the automated
 --     data gathering Amazon's Conditions of Use prohibit, and it trips their
 --     bot checks anyway.
@@ -22,6 +28,17 @@ create table if not exists public.amazon_stock_checks (
   out_of_stock boolean not null default false,
   checked_at   timestamptz not null default now()
 );
+
+-- The price half (2026-09-12). `msrp` is entered once per listing and persists;
+-- `price_over` is the daily judgement — "Amazon is asking more than MSRP plus
+-- the ceiling" — recorded as a bare boolean precisely so no Amazon price is
+-- ever written down. The ceiling multiplier itself lives in the client
+-- (AMAZON_PRICE_CEILING), so changing the policy moves one constant and
+-- re-reads every stored MSRP rather than invalidating a column of numbers.
+alter table public.amazon_stock_checks
+  add column if not exists msrp numeric(10,2) check (msrp is null or (msrp > 0 and msrp < 100000));
+alter table public.amazon_stock_checks
+  add column if not exists price_over boolean not null default false;
 
 alter table public.amazon_stock_checks enable row level security;
 
