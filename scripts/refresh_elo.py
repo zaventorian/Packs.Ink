@@ -140,6 +140,16 @@ def main() -> None:
     # merge applied outside a refresh is overwritten by the next one.
     run([sys.executable, "apply_manual_merges.py", "--apply"], cwd=ELO_DIR)
 
+    # Geography rulings, applied from the committed list rather than remembered.
+    # elo_scope.py already called EXCLUDED_STORE_IDS the record and is_ignored
+    # merely the applied state — but nothing applied it, so the two Indiana
+    # stores were flagged by hand and any later widening would have needed the
+    # same undocumented UPDATE. Same class of trap as apply_manual_merges below:
+    # a hand-edit of the DB is a decision that happens to be true right now.
+    # Idempotent, and it only ever SETS the flag — an event ignored for some
+    # other reason (did-not-run, duplicate) is never quietly un-ignored here.
+    run([sys.executable, "apply_excluded_stores.py", "--apply"], cwd=ELO_DIR)
+
     # MUST run before elo.py, every time — not once by hand. The flags live in
     # the DB and survive the round trip through storage, but a match ingested
     # this week has never been classified, so without this step every new
