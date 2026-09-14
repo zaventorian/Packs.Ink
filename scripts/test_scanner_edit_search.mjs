@@ -19,7 +19,12 @@
 // both scanner workers.
 import { readFileSync } from "node:fs";
 
-const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8");
+// ⚠ Normalise the line endings. git here runs core.autocrlf=true, so the blob
+// is LF in the index and the working tree is CRLF — and grab()'s markers below
+// span lines. Without this the test throws "missing end marker" on every
+// Windows checkout while passing on Linux CI, which reads as a broken test
+// rather than as the environment difference it is.
+const src = readFileSync(new URL("../Index.html", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const NL = String.fromCharCode(10);
 
 function grab(start, end) {
