@@ -42,8 +42,11 @@ BUCKET = "card-art"
 PREFIX_PINS = "collectibles/pins"
 PREFIX_COUNTERS = "collectibles/counters"
 
-EXPECTED_PINS = 41
-EXPECTED_COUNTERS = 21
+# The HIGHEST valid `n` in each list, not a photo count — it bounds the
+# "unexpected number" check, and an entry flagged noArt has no photo to upload.
+# Both lists happen to run 1..max with no gaps today.
+EXPECTED_PINS = 44
+EXPECTED_COUNTERS = 23
 MAX_BYTES = 400 * 1024   # a tile photo past this means the cut script was skipped
 
 

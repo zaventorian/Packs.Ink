@@ -13316,12 +13316,15 @@ const LORCANA_PINS = [
   // D23 Expo 2022 reveal, and both exist two ways — loose in a plastic baggie,
   // or mounted on a printed cardboard backer. Collectors track the backer as
   // its own item, so it is its own entry. Mickey's backer is printed like the
-  // Brave Little Tailor card; the logo pin's shows Maleficent with her staff
-  // (The First Chapter pack art) over "Your Adventure Begins Fall 2023".
+  // Brave Little Tailor card and carries "Your Adventure Begins Fall 2023" in
+  // English, German and French; the logo pin's is the First Chapter pack art of
+  // Maleficent with her staff, with the pin mounted across the top and no such
+  // line (the trilingual text is Mickey's alone — this comment used to hang it
+  // on both, corrected 2026-09-13 against the photos that now ship).
   {n:1,  name:"Mickey Mouse - Brave Little Tailor",        source:"D23 Expo 2022 - pin only",         date:"Sep 2022"},
-  {n:43, name:"Mickey Mouse - Brave Little Tailor (card-backed)", source:"Gala TCG Paris / UKGE - on backer card", date:"Sep 2022", noArt:true},
+  {n:43, name:"Mickey Mouse - Brave Little Tailor (card-backed)", source:"Gala TCG Paris / UKGE - on backer card", date:"Sep 2022"},
   {n:2,  name:"Maleficent Logo (Purple)",                  source:"D23 Expo 2022 - pin only",         date:"Sep 2022"},
-  {n:44, name:"Maleficent Logo (Purple) (card-backed)",    source:"Press & invitees - on backer card", date:"Sep 2022", noArt:true},
+  {n:44, name:"Maleficent Logo (Purple) (card-backed)",    source:"Press & invitees - on backer card", date:"Sep 2022"},
   {n:3,  name:"Ariel - Whoseit Collector",                 source:"League - The First Chapter",       date:"Aug 2023"},
   {n:4,  name:"Scar - Fiery Usurper",                      source:"League - The First Chapter",       date:"Aug 2023"},
   {n:5,  name:"The First Chapter Logo",                    source:"League - The First Chapter",       date:"Aug 2023"},
@@ -22453,7 +22456,16 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
   const [listFilter, setListFilter] = useState("all");
   const [listKind, setListKind] = useState("both");
   const [listQuery, setListQuery] = useState("");
-  useEffect(() => { setSelected(null); }, [view]);
+  // "<kind>|<n>" while a remove is armed. Two-tap, like the graded view's slot
+  // remove: both boards are drag surfaces, so a one-tap destructive control
+  // here is one mis-drop away from deleting an owned mark.
+  const [armedRemove, setArmedRemove] = useState(null);
+  useEffect(() => {
+    if(!armedRemove) return;
+    const t = setTimeout(() => setArmedRemove(null), 3000);
+    return () => clearTimeout(t);
+  }, [armedRemove]);
+  useEffect(() => { setSelected(null); setArmedRemove(null); }, [view]);
   const hexCells = useMemo(() => {
     const out = [];
     for(let r = 0; r < geom.rows; r++) for(let c = 0; c < geom.cols; c++){
@@ -22586,6 +22598,24 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
     if(!updateSealedQty) return;
     const q = qtyOf(r), next = cbClamp(q + delta, 0, 99);
     if(next !== q) updateSealedQty(r.tcgplayer_product_id, next);
+  };
+  // The mirror of the add drawer's "I have it". Until this existed the boards
+  // were one-way — the drawer only lists what you DON'T own, "Take off board"
+  // deliberately keeps the owned mark, and the only way back was the Checklist
+  // tab or the detail modal's stepper, neither of which is on screen here.
+  //
+  // The board PLACEMENT is left alone on purpose: normalizeCollectibleBoard
+  // keeps a placement for something you no longer own and simply never draws
+  // it, so re-owning a pin puts it back exactly where it sat.
+  const removeKey = (kind, n) => kind + "|" + n;
+  const removeOwned = (kind, r) => {
+    if(!updateSealedQty) return;
+    const key = removeKey(kind, r.collectible_n);
+    if(armedRemove !== key){ setArmedRemove(key); return; }
+    setArmedRemove(null);
+    updateSealedQty(r.tcgplayer_product_id, 0);
+    setSelected(null);
+    flashToast(r.name + " — removed from your collection");
   };
 
   // Pointer drag, one code path for mouse and touch. Items carry
@@ -22776,6 +22806,9 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       <button type="button" class="cb-tool-btn" onClick=${() => setDetail(r)}>Details</button>
       <button type="button" class="cb-tool-btn" title="Back to the tray — it stays in your collection"
         onClick=${() => takeOff(kind, k)}>Take off board</button>
+      <button type="button" class=${"cb-tool-btn cb-tool-btn--rm" + (armedRemove === removeKey(kind, k) ? " armed" : "")}
+        title="Mark it not owned. It leaves the board for the add list below — where it sat is remembered, so re-adding puts it back."
+        onClick=${() => removeOwned(kind, r)}>${armedRemove === removeKey(kind, k) ? "Really remove?" : "I don't have it"}</button>
     </div>`;
   };
   const renderTray = (kind, b) => {
@@ -22790,13 +22823,22 @@ const CollectiblesView = ({user, sealedCollection, sealedMeta, updateSealedQty, 
       </div>
       <div class="cb-tray-list">
         ${off.map(r => {
-          const k = String(r.collectible_n);
-          return html`<button key=${k} type="button" class="cb-tray-item"
-            title=${r.name} aria-label=${"Place " + r.name + " on the board"}
-            onPointerDown=${e => beginDrag(e, kind, k, true)}
-            onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); placeFromTray(kind, k); } }}>
-            ${r.image_url ? html`<img src=${r.image_url} alt="" draggable="false"/>` : collectiblePh(r)}
-          </button>`;
+          const k = String(r.collectible_n), armed = armedRemove === removeKey(kind, k);
+          // The × is a SIBLING of the draggable button, never a child: a button
+          // inside a button is invalid markup, and nesting would also hand its
+          // pointerdown straight to beginDrag.
+          return html`<div key=${k} class="cb-tray-slot">
+            <button type="button" class="cb-tray-item"
+              title=${r.name} aria-label=${"Place " + r.name + " on the board"}
+              onPointerDown=${e => beginDrag(e, kind, k, true)}
+              onKeyDown=${e => { if(e.key === "Enter" || e.key === " "){ e.preventDefault(); placeFromTray(kind, k); } }}>
+              ${r.image_url ? html`<img src=${r.image_url} alt="" draggable="false"/>` : collectiblePh(r)}
+            </button>
+            <button type="button" class=${"cb-tray-rm" + (armed ? " armed" : "")}
+              title=${armed ? "Tap again to remove it from your collection" : "I don't have this one"}
+              aria-label=${(armed ? "Confirm removing " : "Remove ") + r.name + " from your collection"}
+              onClick=${() => removeOwned(kind, r)}>×</button>
+          </div>`;
         })}
       </div>
     </div>`;

@@ -50,6 +50,19 @@ from PIL import Image, ImageChops, ImageDraw, ImageFilter
 # a thing you can measure (see hole_fraction) rather than a thing you have to
 # notice on a contact sheet.
 LADDER = [(226, 22), (238, 14), (246, 8), (251, 4)]
+# ...and a LOOSER rung than any of these can be prepended per run with
+# --white-min / --sat-max, for a source the ladder cannot see at all. The 2023
+# card-backed pin shots are the case that needed it: their surface measures
+# 159-220 on the darkest channel with saturation to 36, so it never qualifies
+# as near-white at rung 1 (226, 22) and the cut silently returned the photo
+# untouched -- 0 transparent pixels, studio grey still in all four corners.
+#
+# It is an override rather than a new rung because the four above were measured
+# over all 62 shipped photos and re-measuring needs source files we no longer
+# have. What makes it safe is that a prepended rung is walked and GATED like
+# any other: if it leaks, raggedness/hole_fraction reject it and the standard
+# ladder takes over exactly as before.
+
 # Leak detector. RAGGEDNESS is the cut's perimeter over the perimeter a circle
 # of the same area would have, so 1.0 is a disc and a hexagonal pin lands near
 # 1.3. A leak shreds the outline, and the separation is not subtle: across all
@@ -138,7 +151,7 @@ def has_real_alpha(im: Image.Image) -> bool:
     return lo < 250   # something in there is not fully opaque
 
 
-def cut(path: str, size: int) -> Image.Image:
+def cut(path: str, size: int, ladder=LADDER) -> Image.Image:
     src = Image.open(path)
     src.load()
 
@@ -148,7 +161,7 @@ def cut(path: str, size: int) -> Image.Image:
     else:
         rgb = src.convert("RGB")
         chosen = None
-        for i, (wmin, smax) in enumerate(LADDER):
+        for i, (wmin, smax) in enumerate(ladder):
             mask = flood_from_border(near_white_mask(rgb, wmin, smax))
             solid = mask.point(lambda v: 0 if v == BG else 255)
             rag = raggedness(solid)
@@ -159,7 +172,7 @@ def cut(path: str, size: int) -> Image.Image:
                 break
         solid, wmin, smax, rag, holes, step = chosen
         if step:
-            note = "  [step %d/%d wmin=%d sat=%d]" % (step + 1, len(LADDER), wmin, smax)
+            note = "  [step %d/%d wmin=%d sat=%d]" % (step + 1, len(ladder), wmin, smax)
         if rag > MAX_RAGGEDNESS or holes > MAX_HOLE_FRAC:
             note = "  <-- LEAKED even at the strictest step (ragged %.2f)" % rag
         # Erode one pixel to drop the half-white JPEG ring, then feather so the
@@ -219,8 +232,20 @@ def main() -> int:
                     help="longest side, px. 400 is 2x a checklist tile.")
     ap.add_argument("--no-quantize", action="store_true",
                     help="keep 24-bit colour (roughly 8x the bytes)")
+    ap.add_argument("--white-min", type=int,
+                    help="prepend a looser rung than the measured ladder, for a source "
+                         "shot on an off-white surface. Still leak-gated: if it leaks, "
+                         "the standard ladder takes over.")
+    ap.add_argument("--sat-max", type=int, default=40,
+                    help="saturation ceiling for --white-min (default 40)")
     ap.add_argument("--contact")
     args = ap.parse_args()
+
+    ladder = LADDER
+    if args.white_min is not None:
+        ladder = [(args.white_min, args.sat_max)] + LADDER
+        print("extra rung: wmin=%d sat=%d (leak-gated like the rest)"
+              % (args.white_min, args.sat_max))
 
     os.makedirs(args.dst, exist_ok=True)
     names = sorted(os.listdir(args.src),
@@ -231,7 +256,7 @@ def main() -> int:
         if not os.path.isfile(p):
             continue
         try:
-            im = cut(p, args.size)
+            im = cut(p, args.size, ladder)
         except Exception as e:                      # noqa: BLE001
             print("SKIP %-22s %s" % (f, e))
             continue
