@@ -3006,6 +3006,43 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   border:1px solid var(--border);border-radius:14px;background:var(--bg-solid);
   box-shadow:0 18px 60px rgba(0,0,0,0.5);}
 .sc-box--expanded .sc-list{max-height:none;}
+/* Embedded as a section of the home calendar tile. The tile already carries the
+   border and the surface, so this sheds both and separates itself with a rule
+   instead — a bordered box inside a bordered box reads as a mistake. The 2px
+   side inset is .cal-panel-row's, so the finder's rows line up with the
+   calendar's above it. */
+.sc-box--embed{background:none;border:none;border-top:1px solid var(--border);
+  border-radius:0;padding:10px 2px 0;margin-top:8px;}
+.sc-box--embed .sc-box-body{margin-top:7px;}
+/* ⚠ The three mode labels have to survive a ~220px rail: at the standard 8px
+   side padding "All / Set Champs / Prereleases" measures ~198px against ~220px
+   of usable width, which is inside the margin of error for a longer future
+   label. 4px buys ~24px back and costs nothing — the segment is already full
+   width, so the buttons keep their hit area. */
+.sc-box--embed .sc-mode-btn{padding:6px 4px;font-size:11px;}
+/* Shorter than the 340px standalone list: the pins float to the top, so ~4
+   tiles is the pinned shops plus a look at what is next, and the rest is a
+   scroll rather than a tile that owns the rail. */
+.sc-box--embed .sc-list{max-height:300px;}
+/* ⚠ A result tile has to STACK at this width. `auto minmax(0,1fr) auto` gives
+   the date and the distance their full nowrap widths and hands the store name
+   whatever is left — which measured 10–22px against names 76–204px wide, so the
+   one thing a result tile exists to tell you (which shop) was gone entirely,
+   ellipsed down to a letter and a half. Date and distance share the top line;
+   the store stack takes the whole width beneath them. */
+.sc-box--embed .sc-tile-main-btn{grid-template-columns:minmax(0,1fr) auto;
+  grid-template-areas:"date mi" "main main";gap:1px 8px;align-items:baseline;}
+/* Row, not column, so the top line costs one line instead of two — and wrapping
+   rather than clipping, so a long timezone drops under the date the way it used
+   to sit rather than vanishing off the end of a nowrap flex child. */
+.sc-box--embed .sc-tile-date{grid-area:date;flex-direction:row;flex-wrap:wrap;
+  align-items:baseline;gap:0 5px;min-width:0;}
+.sc-box--embed .sc-tile-mi{grid-area:mi;}
+.sc-box--embed .sc-tile-main{grid-area:main;}
+/* One line, not two: the event name is the muted qualifier under the store (the
+   same call the calendar rows above it make), and two lines of it in a 300px
+   list costs a whole tile. The modal carries the full name. */
+.sc-box--embed .sc-tile-evname{-webkit-line-clamp:1;}
 
 /* Elo event roster / field scouting (I4) */
 .elo-roster-modal{max-width:480px;max-height:88vh;overflow-y:auto;text-align:left;}
@@ -3076,6 +3113,10 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
   cursor:pointer;font-size:13px;line-height:1;color:var(--text-muted);filter:grayscale(1) opacity(0.5);
   transition:filter 0.12s,background 0.12s;}
 .sc-tile-pin:hover{background:var(--accent-glow);filter:grayscale(0.3) opacity(0.9);}
+/* ⚠ .cal-add-wrap is a plain block, so its 30px button pinned to the top of a
+   full-height tile row while the pin beside it centred — 21px apart, reading as
+   one control and a stray mark rather than a pair. Centre it to match. */
+.sc-tile-row .cal-add-wrap{display:flex;align-items:center;}
 .sc-tile-pin.pinned{filter:none;background:var(--accent-glow);}
 /* "Every Thu 6:00 PM" — the recurrence, so a weekly reads as one listing
    instead of N near-identical tiles. */
@@ -9716,12 +9757,6 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
    second events box beside it. */
 .cal-act--find{border-style:solid;}
 .cal-act--find:hover{background:var(--accent-glow);}
-.cal-panel-find{display:flex;align-items:center;justify-content:center;gap:6px;
-  width:100%;box-sizing:border-box;margin-top:8px;padding:7px 10px;font-size:11px;
-  font-weight:600;font-family:inherit;cursor:pointer;border-radius:7px;
-  border:1px dashed var(--btn-border);background:none;color:var(--text-muted);}
-.cal-panel-find:hover{border-color:var(--accent);color:var(--accent);
-  background:var(--accent-glow);border-style:solid;}
 /* List-mode pager on the home calendar panel. A footer, not a heading: the rows
    carry their own dates, so this only has to say where in time you are. */
 .cal-panel-page{display:flex;align-items:center;gap:6px;margin-top:6px;padding-top:6px;

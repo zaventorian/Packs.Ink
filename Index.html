@@ -38043,12 +38043,18 @@ const calReadLocalSubs = () => {
 };
 const calWriteLocalSubs = (subs) => { try { localStorage.setItem(CAL_SUBS_LS, JSON.stringify(subs)); } catch {} };
 
-function useCalendarSubs(user){
+// `skip` is for a component that has been HANDED a subs object by its parent:
+// the hook still has to run (hook order), but it must not fetch the same rows
+// again — and, more importantly, must not become a second, diverging copy of
+// the user's follows. See UpcomingSCsBox, which takes them from the calendar
+// tile so that following a store there updates the calendar above it at once.
+function useCalendarSubs(user, skip){
   const uid = user && user.id;
   const [subs, setSubs] = useState(calReadLocalSubs);
   const migrated = useRef(false);
   useEffect(() => {
     let cancelled = false;
+    if(skip) return;
     if(!uid){ setSubs(calReadLocalSubs()); return; }
     (async () => {
       // .eq(user_id) even though the policy is owner-only with no OR branch —
@@ -38071,7 +38077,7 @@ function useCalendarSubs(user){
       if(!cancelled){ setSubs(merged); calWriteLocalSubs(merged); }
     })();
     return () => { cancelled = true; };
-  }, [uid]);
+  }, [uid, skip]);
 
   const has = useCallback((kind, ref) => subs.some(s => s.kind === kind && String(s.ref) === String(ref)), [subs]);
   const add = useCallback((sub) => {
@@ -38874,7 +38880,7 @@ const CalendarFilterChips = ({kinds, onToggle, counts, compact}) => html`<div cl
 
 // The home panel: the next few things, nothing else. The title links to /calendar
 // through the standard panelNav, so ⌘-click and "Copy link address" work.
-const CalendarPanel = ({panelNav, user, onFindEvents, sealedPrices}) => {
+const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices}) => {
   const {events} = useCalendarEvents();
   const subs = useCalendarSubs(user);
   const storeEvents = useStoreCalendarEvents(subs.subs);
@@ -38916,12 +38922,6 @@ const CalendarPanel = ({panelNav, user, onFindEvents, sealedPrices}) => {
     pool.filter(e => e.kind === "set" || e.kind === "product").map(e => e.set_name || e.title)),
     [sealedPrices, pool]);
   const nFilters = (kinds.length < CALENDAR_KIND_KEYS.length ? 1 : 0) + (region !== "all" ? 1 : 0);
-  // ⚠ THE INVITATION. Retiring the "Upcoming near me" panel removed a visible
-  // ZIP box from the home page, and a button one click inside a tile is a worse
-  // prompt than an input sitting there asking to be filled. This line is what
-  // pays that back: while you follow nothing, the calendar asks. Once you follow
-  // something it disappears, because then the events themselves are the answer.
-  const nothingFollowed = !subs.subs.some(x => x.kind === "store" || x.kind === "series");
 
   return html`<aside class="home-feed home-feed--calendar">
     <div class="cal-panel-head">
@@ -38976,9 +38976,20 @@ const CalendarPanel = ({panelNav, user, onFindEvents, sealedPrices}) => {
                 onClick=${() => setPage(0)}>Now</button>`}
             </div>`}
           </>`}
-    ${nothingFollowed && onFindEvents && html`<button type="button" class="cal-panel-find"
-      onClick=${() => onFindEvents()}>
-      ${uiIcon("store", 12)} Find events near you</button>`}
+    ${/* THE FINDER, back on the home page. It was a panel of its own until
+          2026-09-12 and an overlay after that, which put a ZIP box and a pinned
+          list of your regular shops one click out of sight — and those are the
+          two halves of the same question the calendar answers. So it returns as
+          a SECTION of this tile: the pinned shops and the dated calendar on one
+          screen. Its own ▾ folds it away and its ⤢ still takes it full screen.
+
+          ⚠ Not rendered while the App-level overlay is up. Both instances
+          persist the same localStorage keys on change, and `packsink:scPinned`
+          is the one that bites: pin a series in the overlay and this copy still
+          holds the pre-pin array, so its next write drops that pin, silently.
+          Unmounting means it re-reads localStorage on the way back. (`subs` is
+          shared rather than duplicated — see UpcomingSCsBox.) */
+      !finderOpen && html`<${UpcomingSCsBox} user=${user} embed=${true} subs=${subs}/>`}
     ${sel && html`<${CalendarDetailModal} ev=${sel} subs=${subs} onFindEvents=${onFindEvents} art=${art}
       onClose=${() => setSel(null)}/>`}
   </aside>`;
@@ -39439,8 +39450,13 @@ const ScCalendarButton = ({series, subs}) => {
 // panel of its own: the finder is how you FIND shops and the calendar is where
 // they live once you have, so it reads as a step in that funnel rather than a
 // second events box competing with it on the same page.
-const UpcomingSCsBox = ({user, overlay, onClose}) => {
-  const calSubs = useCalendarSubs(user);
+const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
+  // Embedded in the calendar tile it shares the tile's follows rather than
+  // keeping its own: following a shop from a result tile has to make that shop's
+  // events appear in the calendar list above it immediately, and two independent
+  // copies of the same table would disagree until a reload.
+  const ownSubs = useCalendarSubs(user, !!subs);
+  const calSubs = subs || ownSubs;
   // Deep-link seed: ?sczip / scc / scdist / scdate let a shared link reproduce
   // a specific view. Taken from the module-load capture (not live URL) so it
   // wins over localStorage no matter when the box mounts, and so the first
@@ -39604,20 +39620,30 @@ const UpcomingSCsBox = ({user, overlay, onClose}) => {
     } catch { flashToast("Couldn't copy the link."); }
   };
 
-  const scBox = html`<section class=${"sc-box"+(collapsed&&!expanded?" sc-collapsed":"")+(expanded?" sc-box--expanded":"")}
+  // Embedded as a section of the calendar tile: the tile already carries a
+  // border and a background, so a second one reads as a box in a box. The title
+  // also has to survive a ~220px rail — "Upcoming Lorcana Events Near Me" under a
+  // heading that already says "Lorcana calendar" is both too long and saying it
+  // twice, and the mode chips directly below name the kind anyway. Copy link
+  // goes with it: sharing a view is something you do from the full-screen one,
+  // and at that width the button pushes the ▾ off the row.
+  // ⚠ It keys on `embed && !expanded` — expanding the embedded box makes it the
+  // floating full-screen card, which must shed every one of those decisions.
+  const inTile = embed && !expanded;
+  const scBox = html`<section class=${"sc-box"+(collapsed&&!expanded?" sc-collapsed":"")+(expanded?" sc-box--expanded":"")+(inTile?" sc-box--embed":"")}
     onClick=${expanded ? (e=>e.stopPropagation()) : undefined}>
     <div class="sc-box-head">
       <button class="sc-box-title sc-box-title-btn" type="button" onClick=${()=>expanded?closeExpanded():setExpanded(true)}
         title=${expanded?"Exit full screen":"Expand to full screen"}>
-        Upcoming ${KIND_PLURAL} Near Me
+        ${inTile ? "Events near me" : `Upcoming ${KIND_PLURAL} Near Me`}
         <span class="sc-title-expand-hint" aria-hidden="true">${expanded?"✕":"⤢"}</span>
       </button>
       <div class="sc-box-head-actions">
-        <button class="sc-copy-link" type="button" onClick=${copyLink}
+        ${!inTile && html`<button class="sc-copy-link" type="button" onClick=${copyLink}
           disabled=${!scZipReady(zip, country)}
           title="Copy a link that reopens this view (ZIP, distance, date)">
           ${copied ? html`${uiIcon("check")} Copied` : html`${uiIcon("link")} Copy link`}
-        </button>
+        </button>`}
         ${expanded
           ? html`<button class="sc-collapse-btn" type="button" onClick=${closeExpanded}
               aria-label="Exit full screen" title="Exit full screen">✕</button>`
@@ -40578,7 +40604,7 @@ const HomePanelModal = ({panelKey, label, node, cta, onClose, onNavAway}) => {
   </div>`;
 };
 
-const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, onEventArtistClick, layout, homeEdit}) => {
+const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, sealedPrices, sealedCollection, sealedMeta, updateSealedQty, updateSealedMeta, setsMeta, updateQty, onSignIn, openDeckById, openTournamentById, openTournamentsList, openView, openDecksSection, openCardsWithSearch, openCardsFilteredBySet, openScreenerWithFilter, openAnalyticsTool, openEventFinder, finderOpen, onEventArtistClick, layout, homeEdit}) => {
   // Resolved home layout (set in App from the settings popover): which panels
   // are on, which column each sits in, and their order within that column.
   const homeLayout = useMemo(() => normalizeHomeLayout(layout), [layout]);
@@ -41249,7 +41275,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
       case "tools":      return html`<${HomeToolboxPanel} key="tools" onOpenTool=${openAnalyticsTool}
         panelNav=${panelTitleNav}/>`;
       case "calendar":   return html`<${CalendarPanel} key="calendar" user=${user}
-        panelNav=${panelTitleNav} onFindEvents=${openEventFinder} sealedPrices=${sealedPrices}/>`;
+        panelNav=${panelTitleNav} onFindEvents=${openEventFinder} finderOpen=${finderOpen}
+        sealedPrices=${sealedPrices}/>`;
       case "setEv":      return html`<${HomeEvStrip} key="setEv" sets=${sets} avgs=${avgs}
         sealedPrices=${sealedPrices} setsMeta=${setsMeta} panelNav=${panelTitleNav}/>`;
       case "collection": return html`<${CollectionPanel} key="collection" raw=${raw} user=${user}
@@ -51001,7 +51028,7 @@ function App(){
       openCardsWithSearch=${openCardsWithSearch}
       openCardsFilteredBySet=${openCardsFilteredBySet}
       openScreenerWithFilter=${openScreenerWithFilter}
-      openAnalyticsTool=${openAnalyticsTool} openEventFinder=${openEventFinder}
+      openAnalyticsTool=${openAnalyticsTool} openEventFinder=${openEventFinder} finderOpen=${eventFinderOpen}
       layout=${homeLayout}
       homeEdit=${{editing: homeEditMode, start: startHomeEdit,
         done: ()=>finishHomeEdit(true), cancel: ()=>finishHomeEdit(false),

@@ -3736,18 +3736,46 @@ wrong about the one column it exists for, and nothing errors.
 navigate to, the rating is a plain `<span>` — it inherits `.ss-elo`'s accent + tabular numerals,
 so no CSS was needed and the two surfaces differ only by the hover underline.
 
-## Upcoming-events finder (the "Near me" overlay)
+## Upcoming-events finder — a SECTION of the calendar tile (2026-09-13)
 
-**⚠ It stopped being a home panel on 2026-09-12** and is now a full-screen
-overlay reached from the calendar — its `setChamps` entry is gone from
-`HOME_PANELS`. Two events boxes side by side on one page read as redundant, and
-they are not peers: **the finder is how you FIND shops, the calendar is where
-they live once you have**, so it belongs one click inside the calendar rather
-than beside it. It was NOT made a tab: the finder already has its own
-All/Set&nbsp;Champs/Prereleases tabs (an outer layer stacks two tab rows), a
-results list makes it far taller than the calendar so switching would bounce the
-page, and after following a shop you want to SEE it land on the calendar rather
-than flip back to check.
+It was its own home panel until 2026-09-12, a full-screen overlay for a day, and
+is now **a section inside the calendar tile** (`<UpcomingSCsBox embed/>` at the
+foot of `CalendarPanel`). The panel step was right that the two are not peers —
+**the finder is how you FIND shops, the calendar is where they live once you
+have** — but making it overlay-only put the ZIP box and the pinned list of your
+regular shops one click out of sight, and those are the two halves of one
+question. Zaven's ask, verbatim: *"add back the upcoming events near me section
+w/tiles, zipcode, results, w/a drop down there too. Just so it's super easy to
+see that pinned list and the calendar if you want."* Its own ▾ folds it away
+(`packsink:scCollapsed`) and its ⤢ still takes it full screen.
+
+- **`setChamps` stays out of `HOME_PANELS`.** This is a section of another
+  panel, not a panel: it has no title link, no pop-out, no column of its own,
+  and it travels with the calendar wherever the layout editor puts it.
+- **It was NOT made a tab** of the calendar: the finder already has its own
+  All/Set&nbsp;Champs/Prereleases tabs (an outer layer stacks two tab rows), and
+  after following a shop you want to SEE it land on the calendar rather than
+  flip back to check — which is exactly what stacking them delivers.
+- **⚠ It shares the tile's `subs`, and that is the point.** `UpcomingSCsBox`
+  takes a `subs` prop and `useCalendarSubs(user, skip)` sits out when it gets
+  one. Two independent copies of the same table would disagree until a reload,
+  so following a shop from a result tile would leave the calendar six inches
+  above it unchanged — verified the other way round: a Follow now drops that
+  store's events into the list in the same tick.
+- **⚠ NOT rendered while the App overlay is up** (`finderOpen`, plumbed App →
+  HomeView → CalendarPanel). Both instances persist the same localStorage keys
+  on change, and `packsink:scPinned` is the one that bites: pin a series in the
+  overlay and the embed still holds the pre-pin array, so its next write drops
+  that pin, silently. Unmounting means it re-reads on the way back — verified as
+  exactly one `.sc-box` in the DOM while the overlay is open.
+- **⚠ A result tile STACKS at rail width** (`.sc-box--embed .sc-tile-main-btn`).
+  The standalone `auto minmax(0,1fr) auto` grid gives the date and the distance
+  their full nowrap widths and hands the store name what is left — measured
+  **10–22px against names 76–204px wide**, so the one thing a result tile exists
+  to say was gone. Date and distance share the top line, the store stack takes
+  the whole width beneath. The mode chips also tighten to 6px/4px padding: at the
+  standalone padding the three labels measure ~198px against ~220px of usable
+  rail, which is inside the margin of error for a longer future label.
 
 - **App owns it** — `eventFinderOpen` + `openEventFinder(mode)`, rendered as
   `<UpcomingSCsBox overlay onClose/>`. `overlay` starts it expanded and hands the
@@ -3765,12 +3793,14 @@ than flip back to check.
 - **Retiring the panel needed no migration** — `normalizeHomeLayout` drops keys it
   does not recognise, so a stored layout holding `setChamps` repairs itself on the
   next load. Verified live.
-- **⚠ The calendar panel carries the invitation, and that is load-bearing.**
-  Retiring the panel removed a visible ZIP box from the home page, and a button
-  one click inside a tile is a weaker prompt than an input sitting there asking to
-  be filled. `nothingFollowed` renders "Find events near you" while you follow
-  nothing, and disappears once you do — then the events themselves are the answer.
-  Delete that line and the feature loses its only cold-start route.
+- **The `nothingFollowed` invitation is GONE**, and its own rationale is why. It
+  existed because retiring the panel removed a visible ZIP box from the home page
+  and "a button one click inside a tile is a weaker prompt than an input sitting
+  there asking to be filled" — the input is back, directly below where the button
+  was, so the line had nothing left to pay back. `.cal-panel-find` went with it.
+- **The store-icon tool in `cal-panel-tools` stays.** It is the way to the
+  full-screen finder when the embed is folded away, and `CalendarDetailModal`'s
+  "Find a prerelease near you" still needs `onFindEvents` regardless.
 
 ### How the finder itself works
 
