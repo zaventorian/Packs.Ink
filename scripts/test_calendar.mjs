@@ -1,4 +1,4 @@
-// test_calendar.mjs — guards the Lorcana calendar's pure core.
+// test_calendar.mjs — guards the Almanac's pure core.
 //
 //     node scripts/test_calendar.mjs
 //
@@ -120,6 +120,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_LABELLED_RPH = "),
   grab("const calTimelineLabels = (ev) =>", "CAL_TL_LABELLED_RPH.has(ev.rph_kind);"),
   grab("const _calTlEnd = (ev) => {", NL + "};"),
+  grab("const calTlLabelParts = (ev, range, below) => {", NL + "};"),
   grab("const _calTlStack = (items, labelW, maxRows) => {", NL + "};"),
   grab("const calendarTimeline = (events, opts) => {", NL + "};"),
   "export {calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon,",
@@ -127,7 +128,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
-  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore,",
+  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
@@ -142,7 +143,7 @@ const {
   calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
-  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore,
+  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
@@ -716,7 +717,7 @@ const ics = buildIcs([
    starts_on: "2026-08-28", ends_on: "2026-08-30", location: "Disneyland Hotel, Anaheim, CA",
    url: "https://example.test/na"},
   storeEv,
-], {nowMs: NOW, name: "Lorcana calendar"});
+], {nowMs: NOW, name: "Lorcana Almanac"});
 
 ok("the file uses CRLF line endings", ics.includes("\r\n") && !/[^\r]\n/.test(ics));
 ok("it opens and closes a VCALENDAR",
@@ -1311,6 +1312,51 @@ ok("the tail rolls into one named lane",
 ok("and nothing is lost to the roll-up",
   manyTl.total === manyShops.length
   && new Set(manyTl.lanes.flatMap(l => l.items.map(i => i.ev.id))).size === manyShops.length);
+
+// ── The release rail's two-line label ───────────────────────────────────────
+// ⚠ Both failures here are SILENT and look like a rendering glitch rather than
+// a rule that stopped firing: the rail's names are long and several are long in
+// the same way, so on one line they clip mid-word into near-identical strings
+// whose clipped-off half was the only thing telling them apart.
+const lpSet = calTlLabelParts(
+  {kind: "set", title: "Hyperia City", set_name: "Hyperia City", subtitle: "Retail release"},
+  "Oct 23", true);
+ok("a set release puts its PHASE on the second line",
+  lpSet.title === "Hyperia City" && lpSet.qual === "Retail release" && lpSet.range === "Oct 23");
+
+const lpProdSub = calTlLabelParts(
+  {kind: "product", title: "Attack of the Vine! Collection Starter Set", subtitle: "Rapunzel Edition"},
+  "Sep 4", true);
+ok("a product uses its own subtitle as the qualifier",
+  lpProdSub.title === "Attack of the Vine! Collection Starter Set"
+  && lpProdSub.qual === "Rapunzel Edition");
+
+const lpProdColon = calTlLabelParts(
+  {kind: "product", title: "Illumineer's Quest: The Great Hunny Rescue"}, "Oct 2", true);
+ok("a product with no subtitle splits at its colon",
+  lpProdColon.title === "Illumineer's Quest" && lpProdColon.qual === "The Great Hunny Rescue");
+
+const lpProdPlain = calTlLabelParts({kind: "product", title: "Hyperia City Beast Gift Box"}, "Nov 13", true);
+ok("a name with neither keeps its ellipsis rather than an invented break",
+  lpProdPlain.title === "Hyperia City Beast Gift Box" && !lpProdPlain.qual);
+
+// ⚠ The split is the RELEASE RAIL's rule and nowhere else. A Challenge lane's
+// label is a name and a date; giving it a second line would restate the kind
+// the glyph beside it already draws.
+const lpAbove = calTlLabelParts(
+  {kind: "set", title: "Hyperia City", set_name: "Hyperia City", subtitle: "Retail release"},
+  "Oct 23", false);
+ok("above the rail the label stays one line",
+  lpAbove.title === calEventTitle({kind: "set", title: "Hyperia City", subtitle: "Retail release"})
+  && !lpAbove.qual);
+
+// ⚠ The DATE is a field of its own, never concatenated into the qualifier —
+// that is what lets the renderer pin it and shrink the qualifier instead. As one
+// string it was the date that got eaten ("The Great Hunny Rescue · O…"), and the
+// date is the one thing a timeline label cannot do without.
+ok("the date is always its own field",
+  [lpSet, lpProdSub, lpProdColon, lpProdPlain, lpAbove].every(
+    lp => lp.range && !String(lp.qual || "").includes(lp.range)));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

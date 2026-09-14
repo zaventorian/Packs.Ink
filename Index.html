@@ -204,8 +204,16 @@
      Cinzel titles visibly FOUT on first visit. -->
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=408">
+<!-- ⚠ Both families are requested as a weight RANGE, which makes Google serve ONE
+     variable woff2 per family instead of one static face per weight. That is not a
+     micro-optimisation: the site declares font-weight 700 or 800 in ~450 places, and
+     with only 300;400;500;600 loaded EVERY ONE of them fell back to the 600 face —
+     so nothing on the site could render a real bold, and "bold" and "semibold" text
+     were the same pixels. Measured on the latin subset: 7 files / 202 KB before,
+     2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
+     and keep the ranges — narrowing one back to a list silently flattens bold again. -->
+<link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css?v=409">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2319,7 +2327,7 @@ const uiIcon = (key, size) => {
   return f ? f(size) : null;
 };
 
-// ── Lorcana calendar ────────────────────────────────────────────────────────
+// ── Almanac ─────────────────────────────────────────────────────────────────
 // What is coming for the GAME (set releases, product drops, championship
 // weekends, qualifiers) plus what is coming at YOUR stores. Two data sources
 // that never mix: public.calendar_events is curated by hand, lorcana_events is
@@ -2931,9 +2939,9 @@ const buildIcs = (events, opts) => {
   const o = opts || {};
   const nowMs = o.nowMs != null ? o.nowMs : Date.now();
   const lines = [
-    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Packs.Ink//Lorcana Calendar//EN",
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Packs.Ink//Almanac//EN",
     "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
-    `X-WR-CALNAME:${icsEscape(o.name || "Lorcana calendar")}`,
+    `X-WR-CALNAME:${icsEscape(o.name || "Lorcana Almanac")}`,
   ];
   for(const ev of events || []) if(ev && calYmdParts(CAL_D(ev.starts_on))) lines.push(...icsEventLines(ev, nowMs));
   lines.push("END:VCALENDAR");
@@ -36239,7 +36247,7 @@ const HOME_PANELS = [
   // layout (defaultHomeLayout keeps this order); an existing browser is hoisted
   // once by HOME_LAYOUT_CALENDAR_KEY, since normalizeHomeLayout APPENDS new
   // keys and would otherwise bury it at the foot of the column.
-  {key:"calendar",    label:"Lorcana calendar",     col:"left"},
+  {key:"calendar",    label:"Almanac",              col:"left"},
   {key:"news",        label:"News feed",            col:"left"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
@@ -38021,7 +38029,7 @@ const EVENT_TILES = [
   },
 ];
 
-// ── Lorcana calendar: data + personal layer ─────────────────────────────────
+// ── Almanac: data + personal layer ─────────────────────────────────────────
 // Two sources that never mix. public.calendar_events is curated by hand (sets,
 // products, DLCs, CCQs — migration 139 says why a table rather than a const).
 // lorcana_events is the live Ravensburger Play feed and contributes ONLY the
@@ -38819,7 +38827,7 @@ const calendarTimeline = (events, opts) => {
   };
 };
 
-// ── Lorcana calendar: UI ────────────────────────────────────────────────────
+// ── Almanac: UI ─────────────────────────────────────────────────────────────
 
 // ⚠ The glyph is drawn UNDER the <img>, not instead of it — same pattern /gear
 // uses. hideBrokenImg hides a failed photo by style, so a product TCGplayer has
@@ -39175,9 +39183,20 @@ const calTlRange = (a, b) => {
 // puts the set name whole on the title line and the phase, which is short,
 // where it survives.
 const calTlLabelParts = (ev, range, below) => {
-  if(below && ev && ev.kind === "set" && ev.subtitle)
-    return {title: ev.set_name || ev.title, sub: `${ev.subtitle} \u00b7 ${range}`};
-  return {title: calEventTitle(ev), sub: range};
+  const two = (title, qual) => ({title, qual, range});
+  if(below && ev){
+    if(ev.kind === "set" && ev.subtitle) return two(ev.set_name || ev.title, ev.subtitle);
+    // A product's qualifier is its own subtitle, or whatever follows a colon in
+    // its name ("Illumineer's Quest: The Great Hunny Rescue"). A name with
+    // neither keeps its ellipsis — inventing a break point would cut a word in a
+    // place the name does not have one, which is what this rule exists to stop.
+    if(ev.kind === "product"){
+      if(ev.subtitle) return two(ev.title, ev.subtitle);
+      const i = String(ev.title || "").indexOf(":");
+      if(i > 0) return two(ev.title.slice(0, i), ev.title.slice(i + 1).trim());
+    }
+  }
+  return {title: calEventTitle(ev), qual: "", range};
 };
 const CAL_TL_ROW_H = 32;           // one stacked label (title 11.5 + date 9.5 + air)
 const CAL_TL_RAIL_H = 16;          // the marker rail under the labels
@@ -39201,8 +39220,16 @@ const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Frag
       [below ? "top" : "bottom"]: (CAL_TL_RAIL_H + it.row * CAL_TL_ROW_H) + "px",
     }}
     onClick=${() => onOpen(it.ev)}>
-    <span class="cal-tl-label-t"><${CalendarKindDot} kind=${it.ev.kind} ev=${it.ev} art=${art}/>${lp.title}</span>
-    <span class="cal-tl-label-d">${lp.sub}</span>
+    ${/* ⚠ The title is wrapped in its own span because .cal-tl-label-t is a FLEX
+          row (glyph + text), and text-overflow never reaches an anonymous flex
+          item — so a long name hard-cut mid-word with no ellipsis and read as a
+          broken label rather than a truncated one. */""}
+    <span class="cal-tl-label-t"><${CalendarKindDot} kind=${it.ev.kind} ev=${it.ev} art=${art}/><span class="cal-tl-label-n">${lp.title}</span></span>
+    ${/* ⚠ The DATE is the half that must survive the truncation — it is what a
+          timeline label is for — so the qualifier is the flex item that shrinks
+          and the date is pinned. As one string it was the date that got eaten
+          ("The Great Hunny Rescue · O…"). */""}
+    <span class="cal-tl-label-d">${lp.qual && html`<span class="cal-tl-label-q">${lp.qual}</span>`}<span class="cal-tl-label-r">${lp.range}</span></span>
   </button>`; })}
 <//>`;
 
@@ -39232,7 +39259,8 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   const W = G.pad * 2 + G.gutter + track;
   const rail = tl.release;
   const laneList = tl.lanes.concat(rail.items.length
-    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [], below: true}]
+    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [],
+       group: "release", below: true}]
     : []);
   const bodyH = laneList.reduce((h, l) => h + _calTlLaneH(l), 0);
   const H = G.head + G.axis + bodyH + G.foot + G.pad;
@@ -39243,15 +39271,20 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   const ctx = cv.getContext("2d");
   ctx.scale(dpr, dpr);
   ctx.textBaseline = "alphabetic";
-  const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-  // ⚠ The DOM sets the page title and the structural row names in Cinzel, so
-  // the picture has to as well or the export is visibly a different document
-  // from the screen it was copied off. A canvas will silently fall back to the
-  // generic serif if the face is not loaded AT THE WEIGHT ASKED FOR, so both
-  // are requested explicitly first and the whole thing is best-effort.
+  const FONT = '"Nunito Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  // ⚠ The picture has to be set in the SAME TWO FACES as the screen — Nunito
+  // Sans for the body, Cinzel for the page title and the structural row names —
+  // or the export is visibly a different document from the one it was copied
+  // off. A canvas silently falls back to the generic family if the face is not
+  // loaded AT THE WEIGHT ASKED FOR, and `document.fonts.load` is per (weight,
+  // size), so every weight the painter uses is requested up front. Best-effort
+  // throughout: a blocked font network must degrade to the fallback stack, not
+  // fail the export.
   const TITLE_FONT = '"Cinzel", Georgia, serif';
-  try { await Promise.all([document.fonts.load('700 25px "Cinzel"'),
-                           document.fonts.load('600 11px "Cinzel"')]); } catch {}
+  try { await Promise.all([
+    document.fonts.load('700 25px "Cinzel"'), document.fonts.load('600 11px "Cinzel"'),
+    ...[500, 600, 700].map(w => document.fonts.load(`${w} 12px "Nunito Sans"`)),
+  ]); } catch {}
   const font = (w, sz) => { ctx.font = `${w} ${sz}px ${FONT}`; };
   const titleFont = (w, sz) => { ctx.font = `${w} ${sz}px ${TITLE_FONT}`; };
   const clip = (text, maxW) => {
@@ -39269,7 +39302,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   // leaves the year out is a picture nobody can date six months from now.
   titleFont(700, 25);
   ctx.fillStyle = P.accent;
-  ctx.fillText(opts.title || "Lorcana calendar", G.pad, G.pad + 24);
+  ctx.fillText(opts.title || "Lorcana Almanac", G.pad, G.pad + 24);
   font(600, 13);
   ctx.fillStyle = P.dim;
   ctx.fillText(`${calMonthLabel(tl.fromMonth)} – ${calMonthLabel(calShiftMonth(tl.fromMonth, tl.months - 1))}`,
@@ -39321,7 +39354,12 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     // A shop's name is a proper noun in the body face; a category the chart
     // invented is Cinzel — the same split the gutter makes on screen.
     if(lane.store){ font(700, 11); ctx.fillStyle = "#5bb98c"; }
-    else { titleFont(600, 11); ctx.fillStyle = lane.below ? P.accent : P.muted; }
+    // ⚠ The colour is the CIRCUIT's, not the rail's: the circuit is the chart's
+    // subject so its name carries the text colour, and everything else stays
+    // muted — the same rule .cal-tl-lane--circuit makes on screen. Keyed on
+    // `below` this was inverted, so the picture lit up RELEASES in gold and
+    // greyed out the one lane the chart is about.
+    else { titleFont(600, 11); ctx.fillStyle = lane.group === "circuit" ? P.text : P.muted; }
     ctx.fillText(clip(lane.store ? lane.label : lane.label.toUpperCase(), G.gutter - 34),
       G.pad, y + h / 2 + 4);
     font(600, 10);
@@ -39338,7 +39376,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     ctx.lineWidth = 1; ctx.globalAlpha = 1;
 
     for(const g of lane.gaps){
-      font(700, 9);
+      font(600, 9);
       const label = `${g.days}d`;
       const tw = ctx.measureText(label).width;
       const gx = at(g.x) - tw / 2 - 6;
@@ -39366,12 +39404,18 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
       const tx = anchorRight ? lx + G.label : lx;
       // Same split the DOM does — the picture has to agree with the screen.
       const lp = calTlLabelParts(it.ev, calTlRange(it.start, it.end), lane.below);
-      font(800, 12);
+      font(700, 12);
       ctx.fillStyle = P.text;
       ctx.fillText(clip(lp.title, G.label - 4), tx, ly);
       font(600, 10);
       ctx.fillStyle = P.muted;
-      ctx.fillText(clip(lp.sub, G.label - 4), tx, ly + 13);
+      // ⚠ Same rule the DOM follows: the DATE is pinned and the QUALIFIER is
+      // what shrinks. Clipping the pair as one string eats the date, which is
+      // the one thing a timeline label cannot do without.
+      const tail = lp.qual ? ` \u00b7 ${lp.range}` : "";
+      const room = G.label - 4 - ctx.measureText(tail).width;
+      const q = lp.qual && room > 14 ? clip(lp.qual, room) : "";
+      ctx.fillText(q ? q + tail : lp.range, tx, ly + 13);
       ctx.textAlign = "left";
     }
     y += h;
@@ -39407,7 +39451,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       copiedMsg: "Timeline image copied to clipboard"});
   };
   const step = (n) => onMonth(calShiftMonth(fromMonth, n));
-  // Jump to where the events actually are. A Lorcana calendar is empty for
+  // Jump to where the events actually are. The Almanac is empty for
   // weeks at a time, so a 12-month window landing on nothing is NORMAL — and a
   // blank chart that does not say which way to go reads as broken.
   const jump = (dir) => {
@@ -39733,8 +39777,8 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
 
   return html`<aside class="home-feed home-feed--calendar">
     <div class="cal-panel-head">
-      ${homePanelTitle({cls: "home-feed-title home-cal-title", label: "Lorcana calendar", panelKey: "calendar", panelNav})
-        || html`<div class="home-feed-title home-cal-title">Lorcana calendar</div>`}
+      ${homePanelTitle({cls: "home-feed-title home-cal-title", label: "Almanac", panelKey: "calendar", panelNav})
+        || html`<div class="home-feed-title home-cal-title">Almanac</div>`}
       <div class="cal-panel-tools">
         <button type="button" class=${"cal-panel-tool" + (openFilters || nFilters ? " on" : "")}
           aria-expanded=${openFilters ? "true" : "false"}
@@ -39918,7 +39962,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     kinds.includes(e.kind) && calMatchesRegion(e, region) && calMatchesQuery(e, dQuery)),
     [all, kinds, region, dQuery]);
   const upcoming = useMemo(() => calendarUpcoming(shown, today, 0), [shown, today]);
-  // ⚠ A Lorcana calendar is EMPTY for weeks at a time and that is normal, not a
+  // ⚠ The Almanac is EMPTY for weeks at a time and that is normal, not a
   // bug: sets ship roughly quarterly, so between a retail release and the next
   // set's announcement there is genuinely nothing ahead. A page that says only
   // "nothing coming up" in that window reads as broken, so past events stay one
@@ -39962,14 +40006,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     + hiddenEvents.length;
 
   const exportAll = () => {
-    const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana calendar");
+    const done = downloadIcs(upcoming, "packsink-lorcana-almanac.ics", "Lorcana Almanac");
     flashToast(done ? `Exported ${upcoming.length} events` : "Couldn't download the calendar file");
   };
 
   return html`<div class=${"cal-view" + (mode === "timeline" ? " cal-view--wide" : "")}>
     <header class="ev-header mkt-header cal-header">
       <div>
-        <h2 class="cal-h1">${uiIcon("calendar", 20)} Lorcana calendar</h2>
+        <h2 class="cal-h1">${uiIcon("calendar", 20)} Almanac</h2>
         <p class="cal-lede">
           Set releases, product drops, Disney Lorcana Challenge weekends and Challenge Championship
           Qualifiers — plus every event at the stores you follow.
@@ -40537,7 +40581,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Embedded as a section of the calendar tile: the tile already carries a
   // border and a background, so a second one reads as a box in a box. The title
   // also has to survive a ~220px rail — "Upcoming Lorcana Events Near Me" under a
-  // heading that already says "Lorcana calendar" is both too long and saying it
+  // heading that already says "Almanac" is both too long and saying it
   // twice, and the mode chips directly below name the kind anyway. Copy link
   // goes with it: sharing a view is something you do from the full-screen one,
   // and at that width the button pushes the ▾ off the row.

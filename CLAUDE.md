@@ -2435,6 +2435,47 @@ Audited 2026-05-24 — all menus/popovers now use `--bg-modal`: `.cards-bulk-men
 
 The 3rd column is `position: sticky; left: 0` with `background: var(--bg-modal)` + right-edge `box-shadow: 1px 0 0 var(--border), 6px 0 8px -6px rgba(0,0,0,0.35)`. The shadow makes other columns visually pass UNDER the sticky column when scrolling horizontally (prevents header overlap that the previous translucent `--bg-surface` background caused).
 
+## Fonts — ask for a RANGE, or the site has no bold (2026-09-14)
+
+Two families, two files: **Cinzel** (`h1,h2,h3,.title-font`, the display face) and
+**Nunito Sans** (everything else). Both are requested as a weight **range**
+(`Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800`), which makes Google serve
+**one variable woff2 per family**.
+
+**⚠ That is not a size optimisation, it is the only reason `font-weight:700` does
+anything.** The request used to be a LIST — `Nunito+Sans:wght@300;400;500;600` — while
+the stylesheet declares 700 or 800 in **~450 places**. CSS font matching resolves a
+missing 700 down to the nearest loaded face, which was 600, and Chrome only synthesises
+bold when the matched face is *below* 600 — so it did not synthesise either. Every
+"bold" on the site rendered as **SemiBold**, identical to the 600 beside it, and nothing
+anywhere errored. Found chasing *"font isn't cool"* on the Almanac's timeline, where the
+label title (800) and its date (600) were supposed to be two tiers and were the same
+pixels.
+
+- **Measured on the latin subset: 7 files / 202 KB → 2 files / 57 KB**, and every weight
+  300–800 becomes real. The range form is smaller AND more correct; there is no tradeoff
+  to weigh here.
+- **⚠ Narrowing either family back to a `;`-list silently flattens bold again**, and the
+  symptom is "the type looks a bit flat", not an error. The families must also stay in
+  alphabetical order — css2 rejects the request otherwise.
+- **Real 700 is ~1.6% wider than the 600 it used to fall back to** (800, ~3.3%). Cleared
+  against the documented tight spots on the day: no horizontal overflow at 360/375/412/1400
+  on home, /calendar, /screener, /cards, /analytics, and `.home-toolbar .seg-grp` still
+  holds one row from 375px up (it wraps at 360px, which is its documented contract).
+- **All four HTML entry points ask for the same two files** — `Index.html`, `swiss.html`,
+  `picks.html`, `ticker.html`. They had drifted into three different requests, so moving
+  between pages pulled a second set of statics instead of reusing the cache.
+- **A canvas export must `document.fonts.load` every (weight, size) it paints**, because a
+  canvas falls back to the generic family silently when a face is not loaded at the exact
+  weight asked for. `buildCalendarTimelineBlob` loads Cinzel 700/600 and Nunito Sans
+  500/600/700 up front, all best-effort — a blocked font network degrades to the fallback
+  stack rather than failing the export.
+- Verifying any of this needs the fonts actually loaded, and **`fonts.googleapis.com` is
+  egress-blocked from the agent browser** (`document.fonts` comes back empty, so every
+  weight collapses and the probe lies). Route `fonts.googleapis.com/**` and
+  `fonts.gstatic.com/**` in Playwright and fulfil them from a shell `curl`, which does have
+  egress.
+
 ## CSS pitfalls
 
 - **`mask-image` on a container softens child `<img>`s** by forcing offscreen compositing. Use absolutely-positioned gradient pseudo-elements for edge fades. Same caution: `will-change: transform`, `filter: blur(0)`, `transform: translateZ(0)`, `opacity: 0.99`.
@@ -3972,13 +4013,33 @@ see that pinned list and the calendar if you want."* Its own ▾ folds it away
 - **Pruning.** Every upsert stamps `last_seen_at`; after the pull, upcoming rows RPH hasn't listed for `PRUNE_GRACE_HOURS` (36h) are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
 - **⚠ Even a COMPLETE pull misses live events, so one miss must never delete one** (2026-09-10). The scan pages by offset through ~21k rows that move while it reads; the three orderings and the name net narrow the gap but don't close it. That night's pull came back without 10 of the 508 upcoming events at tracked stores, and the old prune (delete whatever this run didn't see) had deleted Gemini Games' 9/20 Set Championship, so it never reached Upcoming SCs although RPH listed it. Two fixes, both in `discover_events.py`: the 36h grace (two daily misses in a row, with room for cron to run late), and **`add_tracked_store_feeds()`**, which folds each tracked store's own upcoming feed into the scan before anything is classified, upserted or pruned. It reads both store-filter spellings and re-checks `store.id`, through `scrape_store_history.fetch_store_feed`. The feeds are a supplement, never a gate: an unreadable store list or feed leaves the scan's rows as they were, with a `::warning::` once more than half the feeds fail. Guarded by `python scripts/elo/test_events_archive.py`.
 
-## Lorcana calendar (`/calendar` + home panel) — 2026-09-12
+## Almanac (`/calendar` + home panel) — 2026-09-12, renamed 2026-09-14
+
+**It is the "Almanac" everywhere a user reads it** — the h1, the home panel, the
+layout editor. Zaven, 2026-09-14: *"'Lorcana calendar' sounds bad."* An almanac is
+literally a calendar of coming events organised by a year, which is what the timeline
+view made it, and it sits in the site's flavour-name register beside Lore Tracker,
+Dice Tray and Artist Alley. Two rules keep the rename from spreading too far:
+
+- **The word "Lorcana" comes BACK wherever the name LEAVES the app** — the `.ics`
+  `X-WR-CALNAME` and filename, the `PRODID`, and the exported picture's title all say
+  **"Lorcana Almanac"**. Inside the app the game is implied; in a file that lands in
+  somebody's calendar next to "Work" and "Family", a bare "Almanac" names nothing.
+- **"calendar" stays the generic noun.** "Add to my calendar", "Back on your
+  calendar", "Google Calendar ↗", "Add a calendar event" are all untouched — the
+  personal saved list IS a calendar, and the ✚ popover's muted line ("Add to your
+  Packs.Ink calendar") is doing disambiguation work against the Google link beside it.
+- **The `/calendar` URL does NOT move.** It is in `VIEW_PATHS` and `sitemap.xml`, and
+  links exist in the wild. `VIEW_TITLES.calendar` also keeps its keyword-shaped SEO
+  title ("Lorcana Release & Event Calendar"), the same way `market` reads "Lorcana
+  Analytics & Tools" while the tab says Analytics.
+
 
 "What's coming for the GAME", the sibling of the geo box above: set releases,
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
 month grid, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (194 checks).
+Guarded by `node scripts/test_calendar.mjs` (321 checks).
 
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
@@ -4486,19 +4547,42 @@ structure and which was content.
   beside them stay body-face and tabular - a Cinzel numeral beside a Cinzel word
   reads as part of the title rather than as a tally.
 - **Three tiers now, and they are meant to be unequal**: the title is CONTENT and
-  leads (11.5px/800), the date is DATA and recedes (9.5px/600, tabular), the axis
-  and row names are STRUCTURE and are quieter than both.
+  leads (11.5px/700), the date is DATA and recedes (9.5px/500, tabular), the axis
+  and row names are STRUCTURE and are quieter than both (600).
+  **⚠ Those numbers were retuned on 2026-09-14 and the first set was a lie** — they
+  were picked while the font request loaded no weight above 600, so 800 and 600
+  rendered as the same face and the "three tiers" were two. See "Fonts — ask for a
+  RANGE". With real weights loaded the old numbers over-fired, so each dropped one
+  step. Anything that touches these should check what is actually LOADED first.
 - **The year turn is the one real event on the axis** and was the twelfth
   identical grey word in the row; `.cal-tl-mon--year` gives it the text colour.
 - **A three-day Challenge draws as a BAR and a one-day CCQ as a dot**, so the
   shape says how long it runs before the label does. The bar is deliberately
   flatter than the dot is round - a fat lozenge just reads as a bigger dot.
-- **⚠ On the RELEASE rail the phase moves to the SECOND line** (`calTlLabelParts`),
-  and that is the difference between reading the rail and not. `calEventTitle`
-  joins set and phase into "Hyperia City LGS release" - 24 characters into a
-  140px label, so a set with three dates rendered as "Hyperia City LGS rel",
-  "Hyperia City Retail r" and "Hyperia City Beast G": three near-identical
-  clipped strings whose clipped-off half was the only thing telling them apart.
+- **⚠ On the RELEASE rail the QUALIFIER moves to the SECOND line**
+  (`calTlLabelParts`), and that is the difference between reading the rail and not.
+  `calEventTitle` joins set and phase into "Hyperia City LGS release" - 24
+  characters into a 140px label, so a set with three dates rendered as "Hyperia
+  City LGS rel", "Hyperia City Retail r" and "Hyperia City Beast G": three
+  near-identical clipped strings whose clipped-off half was the only thing telling
+  them apart. **PRODUCTS get the same rule** (2026-09-14): a product's qualifier is
+  its own `subtitle`, or whatever follows a colon in its name ("Illumineer's Quest:
+  The Great Hunny Rescue"). A name with **neither keeps its ellipsis** - inventing a
+  break point would cut a word where the name does not have one, which is the thing
+  this rule exists to stop.
+- **⚠ The DATE is its own field (`{title, qual, range}`), never concatenated into
+  the qualifier** - that is what lets both renderers PIN it and shrink the qualifier
+  instead. As one ellipsing string it was the date that got eaten ("The Great Hunny
+  Rescue · O…"), and the date is the one thing a timeline label cannot do without.
+  The DOM makes the sub-line a flex row with `.cal-tl-label-q` shrinking and
+  `.cal-tl-label-r` fixed; the canvas measures the tail first and clips only the
+  qualifier into what is left.
+- **⚠ `text-overflow:ellipsis` does NOT reach an anonymous flex item.**
+  `.cal-tl-label-t` is a flex row (glyph + text), so the title hard-cut mid-word with
+  **no ellipsis at all** - which reads as a broken label rather than a truncated one,
+  and is why the release rail looked wrong even where truncating was the right answer.
+  The text lives in its own `.cal-tl-label-n` span now, and that span carries the
+  ellipsis. Any future flex label needs the same wrapper.
 - **⚠ `CAL_TL_LABEL_PX` (140) and `.cal-tl-label`'s width are ONE number in two
   files** - the packing is measured against it. It grew from 126 with this pass,
   which also moved a test fixture: a date chosen to anchor LEFT at 126px anchors
@@ -4506,11 +4590,18 @@ structure and which was content.
 - **⚠ `CAL_TL_GAP_PX` is 64, not 46.** At 46 the chip fitted its own box and
   still sat on the dots either side of it, and a 47-day gap is not the number
   anybody opened a season chart to read. Only a real drought earns a chip.
-- **The canvas export asks for Cinzel explicitly** (`document.fonts.load` at both
-  weights, best-effort) and uses it for the title and the structural row names. A
-  canvas falls back to the generic serif silently when a face is not loaded AT
-  THE WEIGHT ASKED FOR, so the picture would otherwise be visibly a different
-  document from the screen it was copied off.
+- **The canvas export is set in the SAME TWO FACES as the screen** - Nunito Sans for
+  the body, Cinzel for the title and the structural row names - and loads every
+  (weight, size) it paints up front, best-effort. A canvas falls back to the generic
+  family silently when a face is not loaded AT THE WEIGHT ASKED FOR, so the picture
+  would otherwise be visibly a different document from the screen it was copied off.
+  Its body stack was the OS UI font until 2026-09-14, which was exactly that bug in
+  its other half.
+- **⚠ A lane name's colour is the CIRCUIT's, not the rail's.** The canvas keyed it on
+  `lane.below`, which is inverted: the picture lit RELEASES up in gold and greyed out
+  the one lane the chart is about. It reads `lane.group === "circuit"` now, matching
+  `.cal-tl-lane--circuit` on screen. Nothing tests the canvas, so compare the two by
+  eye whenever either side's colours move.
 - **The bar states a WINDOW, so it uses `calMonthLabelShort`** - "Sep 2026 - Aug
   2027". The full form wrapped to three lines at 390px and out-weighed the chart
   under it at every width. The EXPORT header keeps the long form: that is a
