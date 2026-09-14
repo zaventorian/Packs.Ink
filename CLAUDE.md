@@ -2435,6 +2435,47 @@ Audited 2026-05-24 — all menus/popovers now use `--bg-modal`: `.cards-bulk-men
 
 The 3rd column is `position: sticky; left: 0` with `background: var(--bg-modal)` + right-edge `box-shadow: 1px 0 0 var(--border), 6px 0 8px -6px rgba(0,0,0,0.35)`. The shadow makes other columns visually pass UNDER the sticky column when scrolling horizontally (prevents header overlap that the previous translucent `--bg-surface` background caused).
 
+## Fonts — ask for a RANGE, or the site has no bold (2026-09-14)
+
+Two families, two files: **Cinzel** (`h1,h2,h3,.title-font`, the display face) and
+**Nunito Sans** (everything else). Both are requested as a weight **range**
+(`Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800`), which makes Google serve
+**one variable woff2 per family**.
+
+**⚠ That is not a size optimisation, it is the only reason `font-weight:700` does
+anything.** The request used to be a LIST — `Nunito+Sans:wght@300;400;500;600` — while
+the stylesheet declares 700 or 800 in **~450 places**. CSS font matching resolves a
+missing 700 down to the nearest loaded face, which was 600, and Chrome only synthesises
+bold when the matched face is *below* 600 — so it did not synthesise either. Every
+"bold" on the site rendered as **SemiBold**, identical to the 600 beside it, and nothing
+anywhere errored. Found chasing *"font isn't cool"* on the Almanac's timeline, where the
+label title (800) and its date (600) were supposed to be two tiers and were the same
+pixels.
+
+- **Measured on the latin subset: 7 files / 202 KB → 2 files / 57 KB**, and every weight
+  300–800 becomes real. The range form is smaller AND more correct; there is no tradeoff
+  to weigh here.
+- **⚠ Narrowing either family back to a `;`-list silently flattens bold again**, and the
+  symptom is "the type looks a bit flat", not an error. The families must also stay in
+  alphabetical order — css2 rejects the request otherwise.
+- **Real 700 is ~1.6% wider than the 600 it used to fall back to** (800, ~3.3%). Cleared
+  against the documented tight spots on the day: no horizontal overflow at 360/375/412/1400
+  on home, /calendar, /screener, /cards, /analytics, and `.home-toolbar .seg-grp` still
+  holds one row from 375px up (it wraps at 360px, which is its documented contract).
+- **All four HTML entry points ask for the same two files** — `Index.html`, `swiss.html`,
+  `picks.html`, `ticker.html`. They had drifted into three different requests, so moving
+  between pages pulled a second set of statics instead of reusing the cache.
+- **A canvas export must `document.fonts.load` every (weight, size) it paints**, because a
+  canvas falls back to the generic family silently when a face is not loaded at the exact
+  weight asked for. `buildCalendarTimelineBlob` loads Cinzel 700/600 and Nunito Sans
+  500/600/700 up front, all best-effort — a blocked font network degrades to the fallback
+  stack rather than failing the export.
+- Verifying any of this needs the fonts actually loaded, and **`fonts.googleapis.com` is
+  egress-blocked from the agent browser** (`document.fonts` comes back empty, so every
+  weight collapses and the probe lies). Route `fonts.googleapis.com/**` and
+  `fonts.gstatic.com/**` in Playwright and fulfil them from a shell `curl`, which does have
+  egress.
+
 ## CSS pitfalls
 
 - **`mask-image` on a container softens child `<img>`s** by forcing offscreen compositing. Use absolutely-positioned gradient pseudo-elements for edge fades. Same caution: `will-change: transform`, `filter: blur(0)`, `transform: translateZ(0)`, `opacity: 0.99`.
@@ -4049,13 +4090,33 @@ Measured the day it landed — 57% of the 35,576 upcoming events are US, **43% a
 - **Pruning.** Every upsert stamps `last_seen_at`; after the pull, upcoming rows RPH hasn't listed for `PRUNE_GRACE_HOURS` (36h) are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
 - **⚠ Even a COMPLETE pull misses live events, so one miss must never delete one** (2026-09-10). The scan pages by offset through ~21k rows that move while it reads; the three orderings and the name net narrow the gap but don't close it. That night's pull came back without 10 of the 508 upcoming events at tracked stores, and the old prune (delete whatever this run didn't see) had deleted Gemini Games' 9/20 Set Championship, so it never reached Upcoming SCs although RPH listed it. Two fixes, both in `discover_events.py`: the 36h grace (two daily misses in a row, with room for cron to run late), and **`add_tracked_store_feeds()`**, which folds each tracked store's own upcoming feed into the scan before anything is classified, upserted or pruned. It reads both store-filter spellings and re-checks `store.id`, through `scrape_store_history.fetch_store_feed`. The feeds are a supplement, never a gate: an unreadable store list or feed leaves the scan's rows as they were, with a `::warning::` once more than half the feeds fail. Guarded by `python scripts/elo/test_events_archive.py`.
 
-## Lorcana calendar (`/calendar` + home panel) — 2026-09-12
+## Almanac (`/calendar` + home panel) — 2026-09-12, renamed 2026-09-14
+
+**It is the "Almanac" everywhere a user reads it** — the h1, the home panel, the
+layout editor. Zaven, 2026-09-14: *"'Lorcana calendar' sounds bad."* An almanac is
+literally a calendar of coming events organised by a year, which is what the timeline
+view made it, and it sits in the site's flavour-name register beside Lore Tracker,
+Dice Tray and Artist Alley. Two rules keep the rename from spreading too far:
+
+- **The word "Lorcana" comes BACK wherever the name LEAVES the app** — the `.ics`
+  `X-WR-CALNAME` and filename, the `PRODID`, and the exported picture's title all say
+  **"Lorcana Almanac"**. Inside the app the game is implied; in a file that lands in
+  somebody's calendar next to "Work" and "Family", a bare "Almanac" names nothing.
+- **"calendar" stays the generic noun.** "Add to my calendar", "Back on your
+  calendar", "Google Calendar ↗", "Add a calendar event" are all untouched — the
+  personal saved list IS a calendar, and the ✚ popover's muted line ("Add to your
+  Packs.Ink calendar") is doing disambiguation work against the Google link beside it.
+- **The `/calendar` URL does NOT move.** It is in `VIEW_PATHS` and `sitemap.xml`, and
+  links exist in the wild. `VIEW_TITLES.calendar` also keeps its keyword-shaped SEO
+  title ("Lorcana Release & Event Calendar"), the same way `market` reads "Lorcana
+  Analytics & Tools" while the tab says Analytics.
+
 
 "What's coming for the GAME", the sibling of the geo box above: set releases,
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
 month grid, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (194 checks).
+Guarded by `node scripts/test_calendar.mjs` (321 checks).
 
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
@@ -4483,6 +4544,335 @@ add, it is a trap.) The watcher fetches both and merges.
   modal, so it says "Announced for the 2026-27 season. Confirm … with the
   organiser" instead.
 
+
+### Timeline mode - the season on one axis (2026-09-14)
+
+List and Month both answer "what is on this date". Neither answers the question a
+competitive season actually raises - **how far apart the Challenges are, and which
+regions have a run of them against a four-month drought** - because in a list every
+row is one row tall whether the next thing is tomorrow or in June. A third mode
+(`?cv=timeline`) draws distance as time. `calendarTimeline()` is the pure core,
+`CalendarTimelineView` the render; guarded by `node scripts/test_calendar.mjs`.
+
+- **The default is ONE PACKED TRACK, not one row per region** - see "Region rows
+  are a PICK, not the layout" below, which is where that decision and its
+  failure modes live. (This originally read "lanes are `CALENDAR_REGIONS`", and
+  that swimlane default is exactly what the section replaced.)
+- **Positions are FRACTIONS of the window (0..1), never pixels**, the same rule the
+  pin board's placements follow - the layout has to hold at the 1120px floor and at
+  2400px, and the component only ever multiplies by 100 and writes a `%`.
+- **⚠ `CAL_TL_MIN_PX` is inline-styled onto the chart from JS, not set in
+  styles.css.** The label de-collision is measured against it, so a second copy of
+  the number in the stylesheet is how the packing and the thing being packed
+  quietly stop agreeing. Same for `CAL_TL_LABEL_PX` and `.cal-tl-label`'s width.
+- **⚠ A right-anchored label is drawn BACKWARDS from its marker**, so `_calTlStack`
+  has to reserve *that* span. Reserving forwards for both leaves a label-wide hole
+  to the left of every right-anchored label that an earlier title is then free to
+  be drawn into - two names on top of each other, at the one end of the chart with
+  no room to notice. Anchoring at all is the `.scanner-qa-rowinfo` lesson on a
+  horizontal axis: a label past the right edge is simply gone.
+- **⚠ The label stack starts ABOVE the rail** (`CAL_TL_RAIL_H`). Offsetting row 0
+  from zero puts the titles on top of the dots, the span bars and the gap chips
+  they describe, and it looks deliberate.
+- **The gap chip is measured END to START** - the number a list cannot show you,
+  and the reason to draw any of this. Start to start would count a three-day
+  Challenge's own length as part of the wait for the next one.
+- **⚠ Sets and products are not in a PLACE**, so they get a release rail of their
+  own under the lanes - which is also what lets the lanes read as "where you would
+  travel to". Their `country` is null, so a lane assignment that only asks
+  `calRegionOf` files every release under **Elsewhere**, which is both wrong and
+  the one lane nobody would think to look in.
+- **A set release is projected UP through every lane** (`seasons`), so a Challenge
+  can be read as "that one is in the Hyperia City season". Without it the release
+  rail is a second list that happens to sit underneath rather than the context for
+  the first. **One line per SET, never per phase** - a set puts two or three dates
+  in the window a week apart, and three lines that close together is a smear; the
+  prerelease is skipped so the line lands on the LGS date, when the set is
+  generally on sale.
+- **Store events get one lane per SHOP, and only the SC and the prerelease in it
+  are labelled** - see "Your local shops are LANES" below, which is where that
+  rule and its failure modes live. (This originally read "unlabelled ticks in a
+  lane of their own", and that lane-level answer is the thing that section
+  replaced.)
+- **Sharing is the LINK, not a picture**, and that is principled rather than a
+  shortcut: `?cv=timeline` + `?cm=` + `?ck=` + `?cr=` already reproduce exactly what
+  the sender saw, and a live link picks up a corrected date where a rendered PNG
+  freezes the sender's copy - the same reasoning `?g=` carries for being identity
+  only. **⚠ `cm` had to start being written for timeline as well as month**, or a
+  shared link silently snaps back to today.
+- **`.cal-view--wide` (1260px) applies in timeline mode only.** 1224px of chart
+  (104 gutter + 1120 track) fits the 1300px body's content box, so a desktop sees
+  the whole season at once and anything narrower scrolls sideways - which is the
+  natural gesture here, with the lane names `position:sticky` and opaque
+  (`--bg-modal`, per the Screener's sticky-NAME rule; `--bg-card` is translucent in
+  the dark themes and would let the months show through).
+
+### Region rows are a PICK, not the layout (2026-09-14)
+
+Zaven, on the first cut: *"the region rows, I dont want to just copy the layout
+from that tweet we saw."* Correct, and the reason is structural rather than a
+matter of taste. **Five fixed swimlanes is the shape a global announcement
+graphic uses, because it is addressing five continents at once and knows nothing
+about any of its readers.** This site knows where you are: the region CHIPS in
+the filter row already ask that question, with live counts, so lanes asking it
+again is the same control drawn twice - and two of the five (Latin America,
+Elsewhere) are near-empty all season, spending a third of the chart's height
+saying nothing.
+
+- **`CAL_TL_CIRCUIT_LANE` is the default**: DLCs and CCQs sort by date and pack
+  into as many rows as they need, so **the row COUNT is the density** and an
+  empty vertical band across the whole track is the drought. That reads the gaps
+  BETTER than five lanes you have to scan in parallel, and narrowing to one
+  region re-packs the track for that region.
+- **⚠ The circuit is the one lane that is NEVER row-capped.** `CAL_TL_STORE_ROWS`
+  caps the personal lanes because an SC cluster would stack twenty rows deep on
+  one weekend; the circuit is the content, and capping it would demote the back
+  half of a busy month to unlabelled dots - exactly the information the chart
+  exists to carry. Pinned in both modes by the test.
+- **Region rows stay REACHABLE** as `?cg=region` (a Packed / By region control in
+  the timeline bar, `packsink:cal:group`). Comparing two regions' runs against
+  each other is a real question; it is just not the one most readers arrive with,
+  and an empty region lane is not rendered at all, so even that mode is not the
+  graphic's fixed five.
+- **⚠ Only a real region lane offers itself as a filter.** "Challenges" is every
+  region at once, so clicking it could only mean "all", which is where you
+  already are.
+- **The grouping NEVER reaches the personal lanes or the release rail** - a shop
+  is a subject rather than a category, and a release is in no place at all. The
+  test pins that for both modes.
+- **Three blocks, ruled apart: Challenges -> yours -> Releases** (`lane.group`,
+  `lane.first`). They separate by SPACE (`margin-top`), not by a heavier border:
+  a 2px grey line across the chart read as a scar. The month bands run
+  continuously through the gap because the grid is one absolute overlay.
+
+### The chart's typography (2026-09-14)
+
+Same day, same ask: *"work on the formatting and font."* Everything in the chart
+was within a pixel of everything else - 10px grey caps for the row names, 10px
+grey caps for the months, 11px for the titles - so nothing said which was
+structure and which was content.
+
+- **⚠ A STRUCTURAL row name is set in Cinzel**, the site's own display face, used
+  nowhere else in this chart. That is what separates "Challenges" and "Releases"
+  (categories the chart invented) from a shop's name, which is a proper noun
+  somebody chose and stays in the body face and the store green. The counts
+  beside them stay body-face and tabular - a Cinzel numeral beside a Cinzel word
+  reads as part of the title rather than as a tally.
+- **Three tiers now, and they are meant to be unequal**: the title is CONTENT and
+  leads (11.5px/700), the date is DATA and recedes (9.5px/500, tabular), the axis
+  and row names are STRUCTURE and are quieter than both (600).
+  **⚠ Those numbers were retuned on 2026-09-14 and the first set was a lie** — they
+  were picked while the font request loaded no weight above 600, so 800 and 600
+  rendered as the same face and the "three tiers" were two. See "Fonts — ask for a
+  RANGE". With real weights loaded the old numbers over-fired, so each dropped one
+  step. Anything that touches these should check what is actually LOADED first.
+- **The year turn is the one real event on the axis** and was the twelfth
+  identical grey word in the row; `.cal-tl-mon--year` gives it the text colour.
+- **A three-day Challenge draws as a BAR and a one-day CCQ as a dot**, so the
+  shape says how long it runs before the label does. The bar is deliberately
+  flatter than the dot is round - a fat lozenge just reads as a bigger dot.
+- **⚠ On the RELEASE rail the QUALIFIER moves to the SECOND line**
+  (`calTlLabelParts`), and that is the difference between reading the rail and not.
+  `calEventTitle` joins set and phase into "Hyperia City LGS release" - 24
+  characters into a 140px label, so a set with three dates rendered as "Hyperia
+  City LGS rel", "Hyperia City Retail r" and "Hyperia City Beast G": three
+  near-identical clipped strings whose clipped-off half was the only thing telling
+  them apart. **PRODUCTS get the same rule** (2026-09-14): a product's qualifier is
+  its own `subtitle`, or whatever follows a colon in its name ("Illumineer's Quest:
+  The Great Hunny Rescue"). A name with **neither keeps its ellipsis** - inventing a
+  break point would cut a word where the name does not have one, which is the thing
+  this rule exists to stop.
+- **⚠ The DATE is its own field (`{title, qual, range}`), never concatenated into
+  the qualifier** - that is what lets both renderers PIN it and shrink the qualifier
+  instead. As one ellipsing string it was the date that got eaten ("The Great Hunny
+  Rescue · O…"), and the date is the one thing a timeline label cannot do without.
+  The DOM makes the sub-line a flex row with `.cal-tl-label-q` shrinking and
+  `.cal-tl-label-r` fixed; the canvas measures the tail first and clips only the
+  qualifier into what is left.
+- **⚠ `text-overflow:ellipsis` does NOT reach an anonymous flex item.**
+  `.cal-tl-label-t` is a flex row (glyph + text), so the title hard-cut mid-word with
+  **no ellipsis at all** - which reads as a broken label rather than a truncated one,
+  and is why the release rail looked wrong even where truncating was the right answer.
+  The text lives in its own `.cal-tl-label-n` span now, and that span carries the
+  ellipsis. Any future flex label needs the same wrapper.
+- **⚠ `CAL_TL_LABEL_PX` (140) and `.cal-tl-label`'s width are ONE number in two
+  files** - the packing is measured against it. It grew from 126 with this pass,
+  which also moved a test fixture: a date chosen to anchor LEFT at 126px anchors
+  right at 140px, and the pair then tests nothing.
+- **⚠ `CAL_TL_GAP_PX` is 64, not 46.** At 46 the chip fitted its own box and
+  still sat on the dots either side of it, and a 47-day gap is not the number
+  anybody opened a season chart to read. Only a real drought earns a chip.
+- **The canvas export is set in the SAME TWO FACES as the screen** - Nunito Sans for
+  the body, Cinzel for the title and the structural row names - and loads every
+  (weight, size) it paints up front, best-effort. A canvas falls back to the generic
+  family silently when a face is not loaded AT THE WEIGHT ASKED FOR, so the picture
+  would otherwise be visibly a different document from the screen it was copied off.
+  Its body stack was the OS UI font until 2026-09-14, which was exactly that bug in
+  its other half.
+- **⚠ A lane name's colour is the CIRCUIT's, not the rail's.** The canvas keyed it on
+  `lane.below`, which is inverted: the picture lit RELEASES up in gold and greyed out
+  the one lane the chart is about. It reads `lane.group === "circuit"` now, matching
+  `.cal-tl-lane--circuit` on screen. Nothing tests the canvas, so compare the two by
+  eye whenever either side's colours move.
+- **The bar states a WINDOW, so it uses `calMonthLabelShort`** - "Sep 2026 - Aug
+  2027". The full form wrapped to three lines at 390px and out-weighed the chart
+  under it at every width. The EXPORT header keeps the long form: that is a
+  document, and a picture with the year abbreviated is one nobody can date.
+- The gutter went 104px -> 120px (96px on mobile) to hold a Cinzel "CHALLENGES";
+  the chart is 1240px against `.cal-view--wide`'s 1260px, so it still fits.
+
+### The filter row, and what it can now say (2026-09-14)
+
+The toolbar was one line holding the kind chips, a region `<select>` and the mode
+toggle. Row one now chooses the CHART; **row two (`.cal-filters2`) chooses what is
+on it** — search, regions, and the timeline's window length. Splitting them is what
+stopped a single row wrapping into a pile once the third and fourth control landed.
+
+- **⚠ `?cr=` holds a SET now, as a csv** — "how did Europe and North America
+  compare" is a question the timeline's lanes invite and a one-of-N picker cannot
+  ask. `calRegionSet` parses it; **a bare `na` and a bare `all` still parse exactly
+  as before**, so every stored pref and every link in the wild keeps working. The
+  `<select>` is gone: one control that can express the set, rather than a picker
+  that can only ever say one thing. `calNormRegionPref` sorts to canonical order,
+  or two identical filters produce two different URLs.
+- **`?cq=` is one search box across all three modes.** It reads what a person
+  searches BY — the name, the place, the note — and never the kind or the date,
+  which the chips and the window already answer. **Folded through `searchNorm`**,
+  because this season alone holds Düsseldorf, Malmö and Senigallia and nobody types
+  those with the diacritics. `useDeferredValue`d, same as the Cards browser.
+- **`?cspan=` is 6 / 12 / 24 months**, timeline only. 12 is one competitive season
+  and stays the default, so the param is omitted at 12 and the URL stays clean.
+- **`?cg=` is `packed` (default) or `region`**, timeline only - see above.
+- Counts on both chip rows are computed AFTER the search but BEFORE their own
+  dimension, so no chip ever claims rows the page is not showing and no option
+  reads (0) purely because you already narrowed by it.
+
+### Your local shops are LANES, and SCs near you are one more (2026-09-14)
+
+Zaven, correcting an earlier reading of "add local events": *"I dont mean own
+event / Just tieing in your local stores on rph / Be that sc s or otherwise /
+Mayve you wanna make just a timeline of sc s local to you."* So a personal event
+form is NOT what this is; the followed-store layer already had the data and was
+drawing it as an anonymous strip of ticks. Two halves:
+
+- **ONE LANE PER SHOP** (`CAL_TL_STORE_PREFIX` + the store id), named by the SHOP
+  — read off its own first entry's `subtitle`, the same rule the list rows follow.
+  A followed store is a place you drive to, so the whole reason to put it on a
+  season chart is to see WHICH shop runs what and when; "My stores" over a row of
+  unnamed ticks says only "somebody near me plays on Saturdays", which you knew.
+- **`?cn=1` — "SCs near me"**, a lane of Set Championships inside the event
+  finder's OWN saved ZIP and radius, at shops you have not followed.
+
+- **⚠ WHETHER AN ITEM GETS A LABEL IS A PER-ITEM QUESTION** (`calTimelineLabels`),
+  and that is the whole trick to putting a shop on a season chart. `ticks` used to
+  be a per-LANE boolean, which forces a choice between two wrong answers: label
+  every store event and the one Set Championship is buried under fifty league
+  nights; label none and the Set Championship is gone. The SC and the prerelease
+  are named, `rph_kind === "other"` stays a tick. The marker is still there and
+  still clickable — only the title is dropped, and a league night's exact date is
+  one click away in List, where an event with a time belongs.
+- **⚠ Past `CAL_TL_STORE_ROWS` (3) a label DEMOTES to a tick rather than growing
+  the lane.** SCs cluster: a whole season's worth lands inside one four-week
+  window, so an uncapped near-me lane is a twenty-row stack over one weekend and a
+  flat empty band either side of it — unreadable in both directions at once.
+  Region lanes are uncapped; a season is ~17 Challenges across five of them, so
+  they never come close, and capping one would silently drop a Challenge's name.
+- **⚠ Gap chips are REGION LANES ONLY.** "Days since this shop's last league
+  night" is 7, all year, on every lane — a true number answering nothing, printed
+  over the one chip that does mean something.
+- **⚠ A shop you FOLLOW wins over the same shop inside your radius**
+  (`calendarMergeStore`, keyed on the RPH event id, the only stable key either
+  side carries). Without it one SC draws in two lanes, which reads as a
+  duplicate-rows bug rather than as a merge that went wrong. The chip therefore
+  counts what the merge ADDED, never what the query returned — "4" beside a lane
+  holding 3 is the one thing a chart must never look like.
+- **⚠ The near query is bounded to SET CHAMPIONSHIPS on purpose.** It is the ONE
+  place the live RPH feed reaches the calendar without a follow, and the standing
+  rule is that ~17k upcoming events must never wash into a month grid. An SC
+  inside your own radius is a dozen a season, and "where is the season being
+  played near me" is a question the followed-store layer cannot answer, because
+  you have to already know a shop exists to follow it.
+- **It reuses the finder's saved `packsink:scZip` / `scRadius` / `scCountry`
+  rather than asking again.** A second postal-code box on a second screen is two
+  answers to one question that can then disagree. With no ZIP set, the chip says
+  so and opens the finder instead of toggling.
+- **A failed geo lookup SAYS so** (`.cal-warn--near`). Silently showing the
+  calendar without the shops you asked for is the same shape of lie as a filter
+  you cannot see — you would read the season as empty near you.
+- **⚠ Past `CAL_TL_MAX_STORE_LANES` (6) the tail rolls into one `Other shops`
+  lane.** Six named lanes is already ~300px of chart; somebody following twenty
+  shops wants the busiest named, not a wall. Lanes sort busiest-first, so the shop
+  you actually go to leads.
+- **⚠ A SHOP NAME IS NOT UPPERCASED, and that is width, not taste.** The gutter is
+  128px in the DOM and clips at 94px on the canvas: "GRIFFONEST GAMES" at 0.06em
+  tracking fits neither and ellipses mid-word into "GRIFFONE… GAMES", which reads
+  as a broken label rather than a shop. A region name is a category and keeps its
+  caps; a proper noun is set as it is written and gains the ~15% back. The rule
+  lives in BOTH renderers, or the picture disagrees with the screen it came from.
+  Same reason the near lane is called **"SCs near me"** — named for the chip that
+  switched it on, because "Set Champs near me" fits neither gutter.
+- **⚠ The DATE belongs in a marker's `aria-label`, not only its `title`.** A shop's
+  fourteen league nights carry one name between them, so without it a screen
+  reader reads the whole lane as the same control repeated.
+- **The near source is NOT a subscription** — nothing is written to
+  `calendar_subscriptions`, so there is no migration behind any of this. Following
+  a shop is still how you say "this one is mine".
+
+### Export image — drawn, not screenshotted
+
+`buildCalendarTimelineBlob(tl, opts)` paints the chart on a `<canvas>` and hands it
+to `deliverImage` (desktop = sync clipboard, touch = share sheet), the same path
+every card export takes. **Not html2canvas**, for the documented reason: it paints
+whatever `styles.css` the browser happens to hold and the service worker can hold a
+stale one, so a CSS fix stays invisible in the export until the SW updates.
+
+- **⚠ It consumes the SAME `calendarTimeline()` object the DOM does**, so the two
+  agree on every position by construction rather than by two sets of maths being
+  kept in step. That is `drawCardTileCanvas`'s standing contract and the only thing
+  that makes "the copied image is what was on screen" true.
+- **⚠ The DOM positions a label by its BOTTOM EDGE; canvas positions text by its
+  BASELINE.** Porting the DOM's offset straight across drops every label by its own
+  descender plus its second line — which printed the date through the dots it
+  labels, on every lane, and looked deliberate.
+- The picture carries the window's own months in its header and the active filters
+  as a subtitle (`filterCaption`), so a shared chart can never be read as the whole
+  season.
+
+### Prettier: the month bands are the load-bearing one
+
+Alternating month bands (`.cal-tl-band`, every other column) are the single biggest
+readability win on a year-wide axis — gridlines alone leave one undifferentiated
+grey field with nothing to track a row across. The today line gained a pip so it
+reads as a marker rather than another gridline, and a lane tints on hover.
+
+
+### ⚠ The season seed is short one Challenge, and five dates are disputed (2026-09-14)
+
+Checked against a published 2026-27 season schedule. Everything in 141 matched to
+the day except:
+
+- **DLC Nanjing, 21-22 Nov 2026 is MISSING** - the season's only mainland-China
+  Challenge, which is why a community page maintained by English-speaking players
+  does not carry it. Staged as `supabase/152_calendar_dlc_nanjing.sql` at
+  `confirmed = false`, so it sits in the admin editor to rule on and no visitor is
+  shown a date nobody has checked.
+- **Five Challenges disagree, and ours are kept.** Bangkok, Singapore, Hong Kong
+  and Taipei read Sat-Sun there against Fri-Sun here; Lyon reads Wed 5 - Fri 7 May
+  2027 against Fri 7 - Sun 9 May. **Every one of the twelve both sources agree on
+  runs Friday to Sunday**, so a Wednesday start is a shape no Challenge in either
+  source has and Lyon looks like an error there rather than here. The four Asian
+  ones are genuinely ambiguous - a two-day regional weekend is plausible - so they
+  stay as seeded. A wrong date on a calendar is worse than no date, and that cuts
+  against changing five on an unverifiable source as much as it cuts for it.
+- **Set 15/16/17 dates stay out.** That schedule marks Into the Inkdark, Cosmic
+  Quest and Set 17 "est." - estimates off the release cadence. `SET_RELEASE_DATES`
+  takes published dates only, for the reason already written there: the cadence has
+  moved before.
+- **⚠ The wiki cannot be re-checked from an agent sandbox** - `lorcana.fandom.com`
+  is egress-blocked to both curl and the fetch tool, so `api.php` answers only from
+  CI. `scripts/watch_calendar_sources.py` is what sees it daily; its `acks` were
+  still empty when this was found, i.e. nothing had been ruled on yet.
+
 ### On the home page
 
 - **Default position is the TOP of the LEFT rail, above the news feed** (Zaven,
@@ -4690,9 +5080,29 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ~~`supabase/152_calendar_dlc_nanjing.sql`~~ - **STAGED 2026-09-14, needs a paste.**
+  One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
+  until ruled on in the /calendar editor. Pure ASCII, short header, per the 142
+  lesson. **⚠ It was WRITTEN as 150 and renumbered before merge**: a concurrent
+  session landed `150_calendar_official_challenge_page.sql` on main while this
+  branch was open. Both are real, unrelated, and both want running - the number
+  was the only thing broken. A reference to "150" written before 2026-09-14 may
+  mean the Nanjing row; every one in this file now says 152.
+- **There is no 151.** A `151_calendar_custom_events.sql` was staged on 2026-09-14
+  for a personal add-your-own-event feature, and both were DELETED the same day:
+  Zaven's *"I dont mean own event"* corrected the reading the feature was built
+  from. Nothing of it shipped, so nothing to unwind — and the local-shops work
+  that replaced it needs no migration at all.
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- ⚠ **150 nearly became the third, and the near-miss is the lesson.** Two sessions each wrote a
+  `150_*` on 2026-09-14 - `150_calendar_official_challenge_page.sql` (merged to main) and the
+  Nanjing row (this branch) - and nothing anywhere errors when that happens: both files apply
+  fine, and it is the ledger and any "run 150" instruction that break. Caught before merge and
+  the branch's became **152**, so only one `150_*` exists. **Take the next number from
+  `ls supabase/*.sql | tail` at the moment you COMMIT, not when you start** - a branch open for
+  a few hours is long enough for the number you picked to be taken.
 - ⚠ **Granting someone the scouting feature is a PASTE, never a migration — this repo is
   PUBLIC.** `scout_members` is an EMAIL allowlist, so a seed file is fourteen real people's
   addresses in a git history that is permanent and world-readable. A session wrote exactly that
