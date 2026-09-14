@@ -4417,11 +4417,11 @@ row is one row tall whether the next thing is tomorrow or in June. A third mode
   in the window a week apart, and three lines that close together is a smear; the
   prerelease is skipped so the line lands on the LGS date, when the set is
   generally on sale.
-- **⚠ Store events are unlabelled TICKS in a lane of their own.** A followed shop
-  runs something most weekends, so labelling them buries a five-event region lane
-  under 50 league nights - the lane the view exists for. The texture is the true
-  shape of that data; the exact date is one click away in List, where an event with
-  a time belongs.
+- **Store events get one lane per SHOP, and only the SC and the prerelease in it
+  are labelled** - see "Your local shops are LANES" below, which is where that
+  rule and its failure modes live. (This originally read "unlabelled ticks in a
+  lane of their own", and that lane-level answer is the thing that section
+  replaced.)
 - **Sharing is the LINK, not a picture**, and that is principled rather than a
   shortcut: `?cv=timeline` + `?cm=` + `?ck=` + `?cr=` already reproduce exactly what
   the sender saw, and a live link picks up a corrected date where a rendered PNG
@@ -4449,11 +4449,6 @@ stopped a single row wrapping into a pile once the third and fourth control land
   `<select>` is gone: one control that can express the set, rather than a picker
   that can only ever say one thing. `calNormRegionPref` sorts to canonical order,
   or two identical filters produce two different URLs.
-- **⚠ Your own events BYPASS the region filter**, the way a chase rarity bypasses
-  the Screener's foil chips. Most carry no country — a pod at somebody's kitchen
-  table has no city — so `calRegionOf` files them under *Elsewhere*, and narrowing
-  to your own continent would hide your own Thursday night in the one lane nobody
-  would look in. The rule lives inside `calMatchesRegion`, not at a call site.
 - **`?cq=` is one search box across all three modes.** It reads what a person
   searches BY — the name, the place, the note — and never the kind or the date,
   which the chips and the window already answer. **Folded through `searchNorm`**,
@@ -4465,39 +4460,76 @@ stopped a single row wrapping into a pile once the third and fourth control land
   dimension, so no chip ever claims rows the page is not showing and no option
   reads (0) purely because you already narrowed by it.
 
-### Events you add yourself (migration 151)
+### Your local shops are LANES, and SCs near you are one more (2026-09-14)
 
-Not every Lorcana night is on Ravensburger Play: a pod, a shop that only posts to
-Discord, your group's monthly draft. **`+ Add event` in the header is open to
-everyone**, signed in or not.
+Zaven, correcting an earlier reading of "add local events": *"I dont mean own
+event / Just tieing in your local stores on rph / Be that sc s or otherwise /
+Mayve you wanna make just a timeline of sc s local to you."* So a personal event
+form is NOT what this is; the followed-store layer already had the data and was
+drawing it as an anonymous strip of ticks. Two halves:
 
-- **They ride `calendar_subscriptions` as a FIFTH kind (`custom`)**, exactly as
-  `hide` does — per-user, already RLS'd owner-only, already localStorage-first — so
-  nothing new has to be granted and a signed-out visitor keeps working. **Until 151
-  lands it works PER DEVICE**: the CHECK rejects the insert, the remote write fails
-  silently, localStorage keeps it. Same degradation 144 had, and the same
-  drop-the-constraint-BY-LOOKUP body.
-- **⚠ The subscription's `meta` IS the event.** Every other kind here points at a
-  row somewhere (a curated uuid, an RPH event id, a set name); this one has no feed
-  behind it, so the stored label is the only record that it exists at all. Never
-  "normalise" it into a lookup — the rule a scout note already carries.
-- **⚠ Adding one turns its own chip on.** `calReadKindPref` filters a stored pref
-  to KNOWN keys, so every browser that has ever loaded the site holds a five-key
-  string and would get `mine` **off** — you would add an event and it would not
-  appear. `onSaved` unions the key in. A later deliberate Hide still sticks.
-- **No country field, deliberately**, per the region bypass above. Asking somebody
-  to classify their own Thursday night into a continent is a worse form than the
-  one it would serve.
-- On the timeline they get a **labelled lane of their own** (`CAL_TL_MINE_LANE`),
-  not the store lane's unlabelled ticks: you add three of these, not fifty.
-- The rows are listed and EDITABLE in "My stores + saved events" — the one kind on
-  this calendar you can change, so the row opens the form rather than only offering
-  an ×. Delete is two-tap inside the form.
-- **An edit goes through `updateMeta`, never remove-then-add**: two async writes
-  racing on one key can land in either order, and the delete winning loses the
-  event outright.
-- The home panel's pool includes them too. A box called "what is coming up" that
-  omits the thing you put on it yourself is the one omission you would notice.
+- **ONE LANE PER SHOP** (`CAL_TL_STORE_PREFIX` + the store id), named by the SHOP
+  — read off its own first entry's `subtitle`, the same rule the list rows follow.
+  A followed store is a place you drive to, so the whole reason to put it on a
+  season chart is to see WHICH shop runs what and when; "My stores" over a row of
+  unnamed ticks says only "somebody near me plays on Saturdays", which you knew.
+- **`?cn=1` — "SCs near me"**, a lane of Set Championships inside the event
+  finder's OWN saved ZIP and radius, at shops you have not followed.
+
+- **⚠ WHETHER AN ITEM GETS A LABEL IS A PER-ITEM QUESTION** (`calTimelineLabels`),
+  and that is the whole trick to putting a shop on a season chart. `ticks` used to
+  be a per-LANE boolean, which forces a choice between two wrong answers: label
+  every store event and the one Set Championship is buried under fifty league
+  nights; label none and the Set Championship is gone. The SC and the prerelease
+  are named, `rph_kind === "other"` stays a tick. The marker is still there and
+  still clickable — only the title is dropped, and a league night's exact date is
+  one click away in List, where an event with a time belongs.
+- **⚠ Past `CAL_TL_STORE_ROWS` (3) a label DEMOTES to a tick rather than growing
+  the lane.** SCs cluster: a whole season's worth lands inside one four-week
+  window, so an uncapped near-me lane is a twenty-row stack over one weekend and a
+  flat empty band either side of it — unreadable in both directions at once.
+  Region lanes are uncapped; a season is ~17 Challenges across five of them, so
+  they never come close, and capping one would silently drop a Challenge's name.
+- **⚠ Gap chips are REGION LANES ONLY.** "Days since this shop's last league
+  night" is 7, all year, on every lane — a true number answering nothing, printed
+  over the one chip that does mean something.
+- **⚠ A shop you FOLLOW wins over the same shop inside your radius**
+  (`calendarMergeStore`, keyed on the RPH event id, the only stable key either
+  side carries). Without it one SC draws in two lanes, which reads as a
+  duplicate-rows bug rather than as a merge that went wrong. The chip therefore
+  counts what the merge ADDED, never what the query returned — "4" beside a lane
+  holding 3 is the one thing a chart must never look like.
+- **⚠ The near query is bounded to SET CHAMPIONSHIPS on purpose.** It is the ONE
+  place the live RPH feed reaches the calendar without a follow, and the standing
+  rule is that ~17k upcoming events must never wash into a month grid. An SC
+  inside your own radius is a dozen a season, and "where is the season being
+  played near me" is a question the followed-store layer cannot answer, because
+  you have to already know a shop exists to follow it.
+- **It reuses the finder's saved `packsink:scZip` / `scRadius` / `scCountry`
+  rather than asking again.** A second postal-code box on a second screen is two
+  answers to one question that can then disagree. With no ZIP set, the chip says
+  so and opens the finder instead of toggling.
+- **A failed geo lookup SAYS so** (`.cal-warn--near`). Silently showing the
+  calendar without the shops you asked for is the same shape of lie as a filter
+  you cannot see — you would read the season as empty near you.
+- **⚠ Past `CAL_TL_MAX_STORE_LANES` (6) the tail rolls into one `Other shops`
+  lane.** Six named lanes is already ~300px of chart; somebody following twenty
+  shops wants the busiest named, not a wall. Lanes sort busiest-first, so the shop
+  you actually go to leads.
+- **⚠ A SHOP NAME IS NOT UPPERCASED, and that is width, not taste.** The gutter is
+  128px in the DOM and clips at 94px on the canvas: "GRIFFONEST GAMES" at 0.06em
+  tracking fits neither and ellipses mid-word into "GRIFFONE… GAMES", which reads
+  as a broken label rather than a shop. A region name is a category and keeps its
+  caps; a proper noun is set as it is written and gains the ~15% back. The rule
+  lives in BOTH renderers, or the picture disagrees with the screen it came from.
+  Same reason the near lane is called **"SCs near me"** — named for the chip that
+  switched it on, because "Set Champs near me" fits neither gutter.
+- **⚠ The DATE belongs in a marker's `aria-label`, not only its `title`.** A shop's
+  fourteen league nights carry one name between them, so without it a screen
+  reader reads the whole lane as the same control repeated.
+- **The near source is NOT a subscription** — nothing is written to
+  `calendar_subscriptions`, so there is no migration behind any of this. Following
+  a shop is still how you say "this one is mine".
 
 ### Export image — drawn, not screenshotted
 
@@ -4765,10 +4797,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
   until ruled on in the /calendar editor. Numbered 150, not 149, for the reason
   the 149 entry below gives. Pure ASCII, short header, per the 142 lesson.
-- ~~`supabase/151_calendar_custom_events.sql`~~ - **STAGED 2026-09-14, needs a paste.**
-  Widens `calendar_subscriptions`' kind CHECK to allow `custom`, so an event you add
-  yourself follows you between devices. Until it runs, adding one works per device
-  and nothing errors. Pure ASCII, drops the old constraint by lookup (144's body).
+- **There is no 151.** A `151_calendar_custom_events.sql` was staged on 2026-09-14
+  for a personal add-your-own-event feature, and both were DELETED the same day:
+  Zaven's *"I dont mean own event"* corrected the reading the feature was built
+  from. Nothing of it shipped, so nothing to unwind — and the local-shops work
+  that replaced it needs no migration at all.
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".

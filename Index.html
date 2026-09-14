@@ -205,7 +205,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=406">
+<link rel="stylesheet" href="styles.css?v=407">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2427,7 +2427,6 @@ const CALENDAR_KINDS = [
   {key: "dlc",     label: "DLCs",      icon: "trophy",   hue: "#e0a33e"},
   {key: "ccq",     label: "CCQs",      icon: "medal",    hue: "#d06ba8"},
   {key: "store",   label: "My stores", icon: "store",    hue: "#5bb98c"},
-  {key: "mine",    label: "My events", icon: "pin",      hue: "#9b7fe8"},
 ];
 const CALENDAR_KIND_KEYS = CALENDAR_KINDS.map(k => k.key);
 const CALENDAR_KIND_BY_KEY = new Map(CALENDAR_KINDS.map(k => [k.key, k]));
@@ -2440,7 +2439,6 @@ const CALENDAR_KIND_LONG = {
   dlc: "Disney Lorcana Challenge — the official championship weekends, and the Continental & World Championships",
   ccq: "Challenge Championship Qualifier — how you earn an invite to a Challenge",
   store: "Events at the stores you follow, and anything you pinned",
-  mine: "Events you added yourself - a pod, a shop that posts nowhere else, your monthly draft",
 };
 
 // ── One icon per kind of thing that happens ─────────────────────────────────
@@ -2557,43 +2555,6 @@ const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filt
 // An unknown country falls into "other" rather than being dropped, so a row we
 // have not geocoded is still reachable instead of silently invisible.
 // ── Events you add yourself ────────────────────────────────────────────────
-// Not every Lorcana night is on Ravensburger Play: a kitchen-table pod, a shop
-// that posts to Facebook and nowhere else, the monthly draft your group runs.
-// Those ride `calendar_subscriptions` as a fifth kind, exactly as `hide` does --
-// per-user, RLS'd, localStorage-first -- rather than a table of their own, so a
-// signed-out visitor keeps working and nothing new has to be granted.
-//
-// ⚠ The subscription's `meta` IS the event, and there is nothing to resolve it
-// against. Every other kind here is a pointer at a row somewhere (a curated
-// uuid, an RPH event id, a set name); this one has no feed behind it, so the
-// stored label is the only record that it exists at all. Never "normalise"
-// these into a lookup -- the same rule a scout note carries.
-const calendarCustomEntries = (subs) => {
-  const txt = (v) => { const t = String(v == null ? "" : v).trim(); return t || null; };
-  const out = [];
-  for(const sub of subs || []){
-    if(!sub || sub.kind !== "custom") continue;
-    const m = sub.meta || {};
-    const start = CAL_D(m.starts_on);
-    if(!calYmdParts(start)) continue;
-    const rawEnd = CAL_D(m.ends_on);
-    out.push({
-      id: `mine:${sub.ref}`,
-      kind: "mine",
-      title: txt(m.title) || txt(sub.label) || "My event",
-      subtitle: txt(m.subtitle),
-      starts_on: start,
-      ends_on: (calYmdParts(rawEnd) && rawEnd > start) ? rawEnd : null,
-      location: txt(m.location),
-      url: txt(m.url),
-      notes: txt(m.notes),
-      country: (txt(m.country) || "").toUpperCase() || null,
-      custom_ref: String(sub.ref),
-    });
-  }
-  return out;
-};
-
 const CALENDAR_REGIONS = [
   {key: "na",    label: "North America", cc: ["US","CA","MX"]},
   {key: "eu",    label: "Europe", cc: ["GB","IE","FR","DE","IT","ES","PT","NL","BE","LU","CH","AT",
@@ -2625,12 +2586,6 @@ const calRegionSet = (region) => {
 const calMatchesRegion = (ev, region) => {
   const want = calRegionSet(region);
   if(!want) return true;
-  // ⚠ Your OWN events are never filtered out by region, the way a chase rarity
-  // bypasses the Screener's foil chips. Most carry no country -- a pod at
-  // somebody's kitchen table has no city -- so calRegionOf files them under
-  // "Elsewhere", and narrowing to your own continent would make your own
-  // Thursday night disappear. Nobody would look for it there.
-  if(ev && ev.kind === "mine") return true;
   return want.has(calRegionOf(ev && ev.country));
 };
 // One search box across all three modes. It reads what a person searches BY --
@@ -2782,6 +2737,14 @@ const calendarSort = (events) => (events || []).slice().sort((a, b) =>
 //
 // The CURATED row wins. It is the one with the hand-checked name, the venue, the
 // region and the map; the store row is the raw listing it was matched to.
+// ⚠ A shop you FOLLOW wins over the same shop turning up in your radius, so its
+// event lands in that shop's own named lane rather than in the anonymous "near
+// me" one — and never in both, which on a chart reads as a duplicate-rows bug.
+// The RPH event id is the only stable key either side carries.
+const calendarMergeStore = (followed, near) => {
+  const seen = new Set((followed || []).map(e => Number(e.event_id)));
+  return (followed || []).concat((near || []).filter(e => e && !seen.has(Number(e.event_id))));
+};
 const calendarCombine = (curated, store) => {
   const claimed = new Set();
   for(const e of curated || []) if(e && e.event_id != null) claimed.add(Number(e.event_id));
@@ -38369,6 +38332,76 @@ function useStoreCalendarEvents(subs){
   }, [rows, subs, eventIds]);
 }
 
+// ── Set Championships local to you ─────────────────────────────────────────
+// ⚠ This is the ONE place the live RPH feed reaches the calendar without a
+// follow, and it is bounded to SET CHAMPIONSHIPS on purpose. The standing rule
+// is that ~17k upcoming events must never wash into a month grid — but an SC
+// inside your own radius is a dozen a season, and "where is the season being
+// played near me" is a question the followed-store layer cannot answer, because
+// you have to already know a shop exists to follow it.
+//
+// It reuses the event finder's OWN saved ZIP and radius rather than asking
+// again. Those are already set for anybody who has used the finder once, and a
+// second postal-code box on a second screen is two answers to one question that
+// can then disagree.
+const CAL_NEAR_LS_ZIP = "packsink:scZip";
+const CAL_NEAR_LS_RADIUS = "packsink:scRadius";
+const CAL_NEAR_LS_COUNTRY = "packsink:scCountry";
+const CAL_NEAR_ON_LS = "packsink:cal:near";
+const calNearOrigin = () => {
+  try {
+    return {
+      zip: localStorage.getItem(CAL_NEAR_LS_ZIP) || "",
+      radius: Math.max(1, Math.min(500, parseInt(localStorage.getItem(CAL_NEAR_LS_RADIUS), 10) || 50)),
+      country: (localStorage.getItem(CAL_NEAR_LS_COUNTRY) || "US").toUpperCase(),
+    };
+  } catch { return {zip: "", radius: 50, country: "US"}; }
+};
+// Module-scope, so flipping the chip off and on again inside one session costs
+// nothing — the RPC walks every upcoming event in the table and is the most
+// expensive read on this screen by a wide margin.
+const _calNearCache = new Map();
+function useNearbyScEvents(on){
+  const [rows, setRows] = useState(null);
+  const [err, setErr] = useState(null);
+  const origin = useMemo(calNearOrigin, [on]);
+  const ready = scZipReady(origin.zip, origin.country);
+  const key = `${origin.country}|${origin.zip}|${origin.radius}`;
+  useEffect(() => {
+    if(!on || !ready){ setRows(null); setErr(null); return; }
+    if(_calNearCache.has(key)){ setRows(_calNearCache.get(key)); setErr(null); return; }
+    let cancelled = false;
+    setErr(null);
+    (async () => {
+      try {
+        const o = await geocodeZip(origin.zip, origin.country);
+        const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
+          p_lat: o.lat, p_lng: o.lng, p_radius_mi: origin.radius, p_kind: "sc",
+        });
+        if(error) throw error;
+        // The RPC returns SERIES; an SC is a one-off, but a shop that runs two
+        // of them in a season lands as one series with two dates, so the
+        // occurrences are what actually go on the chart.
+        const out = [];
+        for(const sr of data || []){
+          for(const oc of (sr.occurrences || [])){
+            const entry = calendarStoreEntry({...sr, ...oc, event_id: oc.event_id,
+              name: oc.name || sr.name, start_datetime: oc.start_datetime,
+              end_datetime: oc.end_datetime}, {near: true, distance_mi: sr.distance_mi});
+            if(entry) out.push(entry);
+          }
+        }
+        _calNearCache.set(key, out);
+        if(!cancelled) setRows(out);
+      } catch(e){
+        if(!cancelled){ setRows(null); setErr(String(e && e.message || e)); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [on, ready, key]);
+  return {rows: rows || [], err, ready, ...origin};
+}
+
 // A plain <a download>. An installed PWA on iOS can still refuse it, so every
 // surface offering the download offers the Google Calendar link beside it — one
 // of the two always works, and neither needs a server.
@@ -38529,24 +38562,42 @@ const CAL_TL_GAP_PX = 46;          // room a "119d" chip needs between two marke
 // once, so it gets its own rail under the lanes — which is also what makes the
 // lanes readable as "where you would travel to".
 const CAL_TL_RELEASE_LANE = "release";
-const CAL_TL_STORE_LANE = "store";
-// ⚠ Your own events get a LABELLED lane rather than joining the region lanes.
-// Most carry no country (a pod at somebody's kitchen table has no city), so
-// calRegionOf files them under "Elsewhere" -- the one lane nobody would think
-// to look in, which is exactly the trap the release rail exists to avoid.
-const CAL_TL_MINE_LANE = "mine";
-// ⚠ A followed shop runs something most weekends, so labelling store events
-// would bury a 5-event region lane under 50 weekly league nights. They render
-// as unlabelled ticks in a lane of their own instead: the texture is the true
-// shape of that data ("my shops run most Saturdays"), and the exact date is one
-// click away in List — where a store event belongs, because it has a time.
+// ⚠ ONE LANE PER SHOP, not one lane for "my stores". A followed store is a
+// place you drive to, so the whole reason to put it on a season chart is to see
+// WHICH shop is running what and when — an anonymous strip of ticks says only
+// "somebody near me plays on Saturdays", which you already knew.
+const CAL_TL_STORE_PREFIX = "store:";
+// SCs local to you, from the event finder's own saved ZIP and radius, at shops
+// you have NOT followed. Its own lane because it is a different question from
+// "my shops": not where do I play, but where is the season being played.
+const CAL_TL_NEAR_LANE = "near";
+// Past this many shops the tail is rolled into one lane — six named lanes is
+// already 300px of chart, and somebody following twenty shops wants the busiest
+// named, not a wall.
+const CAL_TL_MAX_STORE_LANES = 6;
+const CAL_TL_STORE_REST = "store:~rest";
+// A personal lane stacks at most this many rows before the rest demote to
+// ticks. Region lanes are uncapped: a season is ~17 Challenges across five
+// of them, so they never come close.
+const CAL_TL_STORE_ROWS = 3;
 const calTimelineLane = (ev) => {
   if(!ev) return CAL_TL_RELEASE_LANE;
   if(ev.kind === "set" || ev.kind === "product") return CAL_TL_RELEASE_LANE;
-  if(ev.kind === "store") return CAL_TL_STORE_LANE;
-  if(ev.kind === "mine") return CAL_TL_MINE_LANE;
-  return calRegionOf(ev.country);
+  if(ev.kind !== "store") return calRegionOf(ev.country);
+  if(ev.near) return CAL_TL_NEAR_LANE;
+  return CAL_TL_STORE_PREFIX + (ev.store_id == null ? "" : ev.store_id);
 };
+// ⚠ Whether an item gets a LABEL is a per-ITEM question, not a per-lane one,
+// and that is the whole trick to putting a shop on a season chart. A followed
+// store runs something most weekends, so labelling all of it buries the one
+// Set Championship under fifty league nights; labelling none of it loses the
+// Set Championship entirely. So the SC and the prerelease are named and the
+// weeklies stay as unlabelled ticks — the texture is the true shape of that
+// data, and the exact date of a league night is one click away in List, where
+// an event with a time belongs.
+const CAL_TL_LABELLED_RPH = new Set(["sc", "prerelease"]);
+const calTimelineLabels = (ev) =>
+  !ev || ev.kind !== "store" || CAL_TL_LABELLED_RPH.has(ev.rph_kind);
 const _calTlEnd = (ev) => {
   const s = CAL_D(ev && ev.starts_on);
   const e = CAL_D(ev && ev.ends_on);
@@ -38556,9 +38607,11 @@ const _calTlEnd = (ev) => {
 // already ended. labelW is a constant fraction because the fractions map onto
 // CAL_TL_MIN_PX — so the packing is computed for the NARROWEST the chart can
 // ever be, and every wider viewport inherits a layout with room to spare.
-const _calTlStack = (items, labelW) => {
+const _calTlStack = (items, labelW, maxRows) => {
+  const cap = maxRows > 0 ? maxRows : Infinity;
   const ends = [];
   for(const it of items){
+    if(!it.label){ it.row = null; continue; }
     // Anchor right at the end of the window, or the last label of the year
     // overflows the chart and is clipped with nothing on screen to say it was
     // there — the .scanner-qa-rowinfo lesson, on a horizontal axis.
@@ -38569,7 +38622,15 @@ const _calTlStack = (items, labelW) => {
     // drawn into — and the two are drawn on top of each other.
     const left = Math.max(0, it.anchor === "right" ? it.x - labelW : it.x);
     let row = ends.findIndex(e => e <= left + 1e-9);
-    if(row < 0){ row = ends.length; ends.push(0); }
+    if(row < 0){
+      // ⚠ Past the cap a label DEMOTES to a tick rather than growing the lane.
+      // SCs cluster — a whole season's worth lands inside one four-week window
+      // — so an uncapped "near me" lane is a twenty-row stack on one weekend
+      // and a flat empty band either side of it, which is unreadable in both
+      // directions at once. The marker stays, and it is still clickable.
+      if(ends.length >= cap){ it.label = false; it.row = null; continue; }
+      row = ends.length; ends.push(0);
+    }
     ends[row] = left + labelW;
     it.row = row;
   }
@@ -38611,6 +38672,7 @@ const calendarTimeline = (events, opts) => {
     if(!laneItems.has(lane)) laneItems.set(lane, []);
     laneItems.get(lane).push({
       ev, start: s, end: e,
+      label: calTimelineLabels(ev),
       x: pos(s),
       // +1 day so a single-day event still has a hair of width to draw, and a
       // three-day Challenge reads as three days rather than as a point.
@@ -38619,21 +38681,46 @@ const calendarTimeline = (events, opts) => {
   }
   for(const list of laneItems.values()) list.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
 
-  const laneOrder = [...CALENDAR_REGIONS.map(r => r.key), CAL_TL_MINE_LANE, CAL_TL_STORE_LANE];
-  const laneLabel = (key) => key === CAL_TL_STORE_LANE ? "My stores"
-    : key === CAL_TL_MINE_LANE ? "My events"
-    : (CALENDAR_REGIONS.find(r => r.key === key) || {}).label || key;
+  // Busiest shop first — the one you actually go to leads, and the tail rolls
+  // into a single lane rather than growing the chart without limit.
+  let storeKeys = [...laneItems.keys()].filter(k => k.startsWith(CAL_TL_STORE_PREFIX));
+  storeKeys.sort((a, b) => laneItems.get(b).length - laneItems.get(a).length || (a < b ? -1 : 1));
+  if(storeKeys.length > CAL_TL_MAX_STORE_LANES){
+    const rest = storeKeys.slice(CAL_TL_MAX_STORE_LANES);
+    const merged = [];
+    for(const k of rest){ merged.push(...laneItems.get(k)); laneItems.delete(k); }
+    merged.sort((a, b) => a.start < b.start ? -1 : a.start > b.start ? 1 : 0);
+    laneItems.set(CAL_TL_STORE_REST, merged);
+    storeKeys = storeKeys.slice(0, CAL_TL_MAX_STORE_LANES).concat([CAL_TL_STORE_REST]);
+  }
+  const laneOrder = [...CALENDAR_REGIONS.map(r => r.key), CAL_TL_NEAR_LANE, ...storeKeys];
+  // A shop's lane is named by the SHOP, read off its own first entry — the same
+  // rule the list rows follow, where the store is the half that answers "which
+  // of these is mine" and the event's own name is the muted second line.
+  const laneLabel = (key, items) => {
+    if(key === CAL_TL_NEAR_LANE) return "SCs near me";
+    if(key === CAL_TL_STORE_REST) return "Other shops";
+    if(key.startsWith(CAL_TL_STORE_PREFIX)){
+      const ev = (items[0] || {}).ev || {};
+      return ev.subtitle || ev.location || "My stores";
+    }
+    return (CALENDAR_REGIONS.find(r => r.key === key) || {}).label || key;
+  };
   const lanes = [];
   for(const key of laneOrder){
     const items = laneItems.get(key) || [];
     if(!items.length) continue;
-    const ticks = key === CAL_TL_STORE_LANE;
-    const rows = ticks ? 1 : _calTlStack(items, labelW);
+    const store = key === CAL_TL_NEAR_LANE || key.startsWith(CAL_TL_STORE_PREFIX);
+    const rows = _calTlStack(items, labelW, store ? CAL_TL_STORE_ROWS : 0);
     // The gap between one event and the NEXT in the same lane — the number a
     // list cannot show you, and the reason to draw this at all. Measured end to
     // start, so a three-day Challenge's own length is not counted as a wait.
+    //
+    // ⚠ Region lanes only. "Days since this shop's last league night" is 7, all
+    // year, on every lane — a true number answering nothing, printed over the
+    // one chip that does mean something.
     const gaps = [];
-    if(!ticks){
+    if(!store){
       for(let i = 0; i + 1 < items.length; i++){
         const a = items[i], b = items[i + 1];
         const days = calDayDiff(a.end, b.start);
@@ -38643,12 +38730,12 @@ const calendarTimeline = (events, opts) => {
         }
       }
     }
-    lanes.push({key, label: laneLabel(key), ticks, rows, items, gaps, count: items.length,
-      region: key !== CAL_TL_STORE_LANE && key !== CAL_TL_MINE_LANE});
+    lanes.push({key, label: laneLabel(key, items), rows, items, gaps, count: items.length,
+      region: !store, store});
   }
 
   const release = laneItems.get(CAL_TL_RELEASE_LANE) || [];
-  const releaseRows = release.length ? _calTlStack(release, labelW) : 0;
+  const releaseRows = release.length ? _calTlStack(release, labelW, 0) : 0;
   // A set release projected UP through every lane, so a Challenge can be read
   // as "that one is in the Hyperia City season". Without it the release rail is
   // a second list that happens to sit underneath, rather than the context for
@@ -39033,12 +39120,15 @@ const CAL_TL_RAIL_H = 16;          // the marker rail under the labels
 const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Fragment}>
   ${lane.gaps.map(g => html`<span key=${g.key} class="cal-tl-gap" style=${{left: g.x * 100 + "%"}}>${g.days}d</span>`)}
   ${lane.items.map(it => html`<button key=${it.ev.id} type="button"
-    class=${"cal-tl-mark" + (lane.ticks ? " cal-tl-mark--tick" : "") + (it.w > 0.004 ? " cal-tl-mark--span" : "")}
-    style=${{left: it.x * 100 + "%", width: lane.ticks ? null : `max(9px, ${it.w * 100}%)`}}
+    class=${"cal-tl-mark" + (it.label ? "" : " cal-tl-mark--tick") + (it.label && it.w > 0.004 ? " cal-tl-mark--span" : "")}
+    style=${{left: it.x * 100 + "%", width: it.label ? `max(9px, ${it.w * 100}%)` : null}}
     title=${calEventFullLabel(it.ev) + " — " + calTlRange(it.start, it.end)}
-    aria-label=${calEventFullLabel(it.ev)}
+    ${/* ⚠ The DATE belongs in the aria-label, not only the title. A shop's
+          fourteen league nights carry one name between them, so without it a
+          screen reader reads the whole lane as the same control repeated. */""}
+    aria-label=${calEventFullLabel(it.ev) + ", " + calTlRange(it.start, it.end)}
     onClick=${() => onOpen(it.ev)}><span class="cal-tl-dot" style=${{background: calendarEventIcon(it.ev, art).hue}}/></button>`)}
-  ${!lane.ticks && lane.items.map(it => html`<button key=${"l" + it.ev.id} type="button"
+  ${lane.items.filter(it => it.label).map(it => html`<button key=${"l" + it.ev.id} type="button"
     class=${"cal-tl-label cal-tl-label--" + it.anchor}
     style=${{
       [it.anchor]: (it.anchor === "left" ? it.x : 1 - it.x) * 100 + "%",
@@ -39067,7 +39157,7 @@ const CAL_TL_IMG = {
   pad: 30, gutter: 128, head: 84, axis: 30, foot: 40,
   rowH: CAL_TL_ROW_H, railH: CAL_TL_RAIL_H, lanePad: 12, label: CAL_TL_LABEL_PX,
 };
-const _calTlLaneH = (lane) => (lane.ticks ? 1 : lane.rows) * CAL_TL_IMG.rowH
+const _calTlLaneH = (lane) => lane.rows * CAL_TL_IMG.rowH
   + CAL_TL_IMG.railH + CAL_TL_IMG.lanePad;
 
 const buildCalendarTimelineBlob = async (tl, opts = {}) => {
@@ -39076,7 +39166,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   const W = G.pad * 2 + G.gutter + track;
   const rail = tl.release;
   const laneList = tl.lanes.concat(rail.items.length
-    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [], ticks: false, below: true}]
+    ? [{key: "__rel", label: "Releases", rows: rail.rows, items: rail.items, gaps: [], below: true}]
     : []);
   const bodyH = laneList.reduce((h, l) => h + _calTlLaneH(l), 0);
   const H = G.head + G.axis + bodyH + G.foot + G.pad;
@@ -39150,9 +39240,13 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     ctx.beginPath(); ctx.moveTo(G.pad, Math.round(y) + 0.5); ctx.lineTo(W - G.pad, Math.round(y) + 0.5); ctx.stroke();
     ctx.globalAlpha = 1;
 
-    font(800, 11);
-    ctx.fillStyle = lane.below ? P.accent : P.muted;
-    ctx.fillText(clip(lane.label.toUpperCase(), G.gutter - 34), G.pad, y + h / 2 + 4);
+    // ⚠ A shop name is NOT uppercased here either — the gutter is the same 128px
+    // the DOM has, and "GRIFFONEST GAMES" does not fit it. The picture has to
+    // agree with the screen it was copied from, so the rule lives in both.
+    font(lane.store ? 700 : 800, lane.store ? 11 : 11);
+    ctx.fillStyle = lane.store ? "#5bb98c" : lane.below ? P.accent : P.muted;
+    ctx.fillText(clip(lane.store ? lane.label : lane.label.toUpperCase(), G.gutter - 34),
+      G.pad, y + h / 2 + 4);
     font(600, 10);
     ctx.fillStyle = P.muted;
     ctx.fillText(String(lane.items.length), G.pad + G.gutter - 24, y + h / 2 + 4);
@@ -39183,7 +39277,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
       const col = hue.startsWith("var(") ? P.accent : hue;
       const mx = at(it.x), mw = Math.max(9, it.w * track);
       ctx.fillStyle = col;
-      if(lane.ticks){ ctx.fillRect(mx, railY - 5, 3, 10); continue; }
+      if(!it.label){ ctx.fillRect(mx, railY - 5, 3, 10); continue; }
       roundRectPath(ctx, mx, railY - 4.5, mw, 9, 4.5); ctx.fill();
 
       const anchorRight = it.anchor === "right";
@@ -39285,7 +39379,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
               </div>
             </div>
 
-            ${tl.lanes.map(lane => html`<div key=${lane.key} class=${"cal-tl-lane" + (lane.ticks ? " cal-tl-lane--ticks" : "")}>
+            ${tl.lanes.map(lane => html`<div key=${lane.key} class=${"cal-tl-lane" + (lane.store ? " cal-tl-lane--store" : "")}>
               ${lane.region && onLane
                 ? html`<button type="button" class="cal-tl-name cal-tl-name--btn"
                     title=${`Show only ${lane.label}`} onClick=${() => onLane(lane.key)}>
@@ -39307,7 +39401,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
               <div class="cal-tl-name"><span>Releases</span><span class="cal-tl-name-n">${rail.items.length}</span></div>
               <div class="cal-tl-track" style=${{height: (rail.rows * CAL_TL_ROW_H + CAL_TL_RAIL_H) + "px"}}>
                 <span class="cal-tl-rail" aria-hidden="true"/>
-                <${CalendarTimelineMarks} lane=${{...rail, ticks: false, gaps: []}} below=${true} onOpen=${onOpen} art=${art}/>
+                <${CalendarTimelineMarks} lane=${{...rail, gaps: []}} below=${true} onOpen=${onOpen} art=${art}/>
               </div>
             </div>`}
           </div>
@@ -39323,90 +39417,6 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
   </div>`;
 };
 
-
-// ── Adding an event of your own ────────────────────────────────────────────
-// Open to everyone, signed in or not: it writes through `useCalendarSubs`, so a
-// signed-out visitor keeps it on the device and a signed-in one carries it to
-// their phone -- the same deal a followed store already gets.
-//
-// ⚠ There is no country field, deliberately. A pod at somebody's kitchen table
-// has no city, and `calMatchesRegion` exempts `mine` rows outright rather than
-// asking people to classify their own Thursday night into a continent.
-const CalendarMineModal = ({row, subs, onClose, onSaved}) => {
-  const editing = !!(row && row.custom_ref);
-  const [f, setF] = useState(() => ({
-    title:     (row && row.title && row.title !== "My event" ? row.title : "") || "",
-    subtitle:  (row && row.subtitle) || "",
-    starts_on: CAL_D(row && row.starts_on) || calTodayYmd(),
-    ends_on:   CAL_D(row && row.ends_on) || "",
-    location:  (row && row.location) || "",
-    url:       (row && row.url) || "",
-    notes:     (row && row.notes) || "",
-  }));
-  const [armed, setArmed] = useState(false);
-  const set = (k) => (e) => setF(p => ({...p, [k]: e.target.value}));
-  useEscToClose(onClose);
-
-  const save = () => {
-    const title = f.title.trim();
-    if(!title || !calYmdParts(f.starts_on)){ flashToast("A name and a date are required"); return; }
-    const end = calYmdParts(f.ends_on) && f.ends_on > f.starts_on ? f.ends_on : null;
-    const meta = {
-      title, subtitle: f.subtitle.trim() || null, starts_on: f.starts_on, ends_on: end,
-      location: f.location.trim() || null, url: f.url.trim() || null, notes: f.notes.trim() || null,
-    };
-    if(editing) subs.updateMeta("custom", row.custom_ref, meta);
-    else subs.add({kind: "custom", ref: genTradeToken(), label: title, meta});
-    flashToast(editing ? "Event updated" : "Event added to your calendar");
-    onSaved && onSaved();
-    onClose();
-  };
-
-  return html`<div class="cal-modal-overlay" onClick=${onClose}>
-    <div class="cal-modal cal-admin" role="dialog" aria-modal="true" onClick=${e => e.stopPropagation()}>
-      <button class="cal-modal-close" aria-label="Close" onClick=${onClose}>×</button>
-      <h3 class="cal-modal-title">${editing ? "Edit your event" : "Add your own event"}</h3>
-      <p class="cal-mine-lede muted">
-        Anything that isn't on Ravensburger Play — a pod, a shop that only posts to Discord,
-        your monthly draft. It shows up under <strong>My events</strong> alongside everything else.
-      </p>
-      <div class="cal-form">
-        <label class="cal-field cal-field--wide"><span>What is it</span>
-          <input type="text" value=${f.title} onInput=${set("title")} autoFocus
-            placeholder="Thursday locals"/></label>
-        <label class="cal-field"><span>Date</span>
-          <input type="date" value=${f.starts_on} onInput=${set("starts_on")}/></label>
-        <label class="cal-field"><span>Ends <em>(multi-day only)</em></span>
-          <input type="date" value=${f.ends_on} onInput=${set("ends_on")}/></label>
-        <label class="cal-field"><span>Where <em>(optional)</em></span>
-          <input type="text" value=${f.location} onInput=${set("location")}
-            placeholder="Dice Dojo, Chicago"/></label>
-        <label class="cal-field"><span>Note <em>(optional)</em></span>
-          <input type="text" value=${f.subtitle} onInput=${set("subtitle")}
-            placeholder="Core Constructed, 7pm"/></label>
-        <label class="cal-field cal-field--wide"><span>Link <em>(optional)</em></span>
-          <input type="url" value=${f.url} onInput=${set("url")} placeholder="https://…"/></label>
-        <label class="cal-field cal-field--wide"><span>Details <em>(optional)</em></span>
-          <textarea rows="2" value=${f.notes} onInput=${set("notes")}
-            placeholder="$5 entry, packs for prizes"></textarea></label>
-      </div>
-      <div class="cal-modal-actions">
-        ${editing && html`<button type="button"
-          class=${"cal-act cal-act--danger" + (armed ? " armed" : "")}
-          onClick=${() => {
-            if(!armed){ setArmed(true); setTimeout(() => setArmed(false), 3000); return; }
-            subs.remove("custom", row.custom_ref);
-            flashToast("Event removed");
-            onClose();
-          }}>${uiIcon("trash", 13)} ${armed ? "Tap again to delete" : "Delete"}</button>`}
-        <span class="cal-modal-spacer"/>
-        <button type="button" class="cal-act" onClick=${onClose}>Cancel</button>
-        <button type="button" class="cal-act cal-act--primary" onClick=${save}>
-          ${editing ? "Save" : "Add to calendar"}</button>
-      </div>
-    </div>
-  </div>`;
-};
 
 // The admin editor. Gated on GradedAdminContext at the call site; the table's
 // RLS is the real gate, so a hidden button is convenience, not security.
@@ -39457,7 +39467,7 @@ const CalendarAdminModal = ({row, onClose, onSaved}) => {
       <div class="cal-form">
         <label class="cal-field"><span>Type</span>
           <select value=${f.kind} onChange=${set("kind")}>
-            ${CALENDAR_KINDS.filter(k => k.key !== "store" && k.key !== "mine").map(k =>
+            ${CALENDAR_KINDS.filter(k => k.key !== "store").map(k =>
               html`<option key=${k.key} value=${k.key}>${k.label}</option>`)}
           </select></label>
         <label class="cal-field"><span>Title</span>
@@ -39601,10 +39611,8 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_PANEL_VIEW_LS, mode); } catch {} }, [mode]);
 
-  // Your own events belong here too: a box called "what is coming up" that
-  // omits the thing you put on it yourself is the one omission you would notice.
   const pool = useMemo(() => calendarApplyHidden(
-      calendarCombine(events.concat(calendarCustomEntries(subs.subs)), storeEvents),
+      calendarCombine(events, storeEvents),
       calendarHiddenSet(subs.subs),
       new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))))
     .filter(e => kinds.includes(e.kind) && calMatchesRegion(e, region)),
@@ -39723,7 +39731,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const seed = useMemo(() => {
     try { const q = new URLSearchParams(location.search);
       return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm"), cr: q.get("cr"),
-              cq: q.get("cq"), cspan: q.get("cspan")}; }
+              cq: q.get("cq"), cspan: q.get("cspan"), cn: q.get("cn")}; }
     catch { return {}; }
   }, []);
   const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
@@ -39741,14 +39749,21 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     /^\d{4}-\d{2}$/.test(seed.cm || "") ? seed.cm : calMonthOf(calTodayYmd()));
   const [sel, setSel] = useState(null);
   const [editing, setEditing] = useState(null);     // {} = new row, {id,…} = edit
-  const [mineEdit, setMineEdit] = useState(null);   // {} = new personal event
   const [showStores, setShowStores] = useState(false);
+  // Off by default: it is an extra geo query, and most of what it finds is at
+  // shops you do not go to. The chip is how you ask.
+  const [near, setNear] = useState(() => {
+    try { return seed.cn != null ? seed.cn === "1" : localStorage.getItem(CAL_NEAR_ON_LS) === "1"; }
+    catch { return false; }
+  });
+  const nearby = useNearbyScEvents(near);
   const today = calTodayYmd();
 
   useEffect(() => { try { localStorage.setItem(CAL_KINDS_LS, kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem(CAL_REGION_LS, region); } catch {} }, [region]);
   useEffect(() => { try { localStorage.setItem(CAL_VIEW_LS, mode); } catch {} }, [mode]);
   useEffect(() => { try { localStorage.setItem(CAL_SPAN_LS, String(span)); } catch {} }, [span]);
+  useEffect(() => { try { localStorage.setItem(CAL_NEAR_ON_LS, near ? "1" : "0"); } catch {} }, [near]);
   // replaceState, never push: a filter is not a page, and pushing would make Back
   // walk backwards through every chip the user toggled.
   useEffect(() => {
@@ -39761,17 +39776,23 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       query.trim() ? url.searchParams.set("cq", query.trim()) : url.searchParams.delete("cq");
       (mode !== "timeline" || span === CAL_TL_MONTHS) ? url.searchParams.delete("cspan") : url.searchParams.set("cspan", String(span));
       (mode === "list" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
+      near ? url.searchParams.set("cn", "1") : url.searchParams.delete("cn");
       if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
     } catch {}
-  }, [kinds, mode, month, region, today, query, span]);
+  }, [kinds, mode, month, region, today, query, span, near]);
 
   const hidden = useMemo(() => calendarHiddenSet(subs.subs), [subs.subs]);
   const savedIds = useMemo(() => new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))),
     [subs.subs]);
-  const mineEvents = useMemo(() => calendarCustomEntries(subs.subs), [subs.subs]);
+  // ⚠ The chip counts what the merge ADDED, never what the query returned. A
+  // shop you already follow is deduped out, so "4" beside a lane holding 3
+  // reads as a dropped event — the one thing a chart must never look like.
+  const storeAll = useMemo(() => calendarMergeStore(storeEvents, nearby.rows),
+    [storeEvents, nearby.rows]);
+  const nearAdded = storeAll.length - storeEvents.length;
   const all = useMemo(() => calendarApplyHidden(
-    calendarCombine(events.concat(mineEvents), storeEvents), hidden, savedIds),
-    [events, mineEvents, storeEvents, hidden, savedIds]);
+    calendarCombine(events, storeAll), hidden, savedIds),
+    [events, storeAll, hidden, savedIds]);
   // Built once over the names actually on the calendar rather than per row:
   // the sealed catalog is ~600 products and the walk is a substring match.
   const art = useMemo(() => calendarArtIndex(sealedPrices,
@@ -39824,8 +39845,11 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     const regionSet = calRegionSet(region);
     if(regionSet) bits.push(CALENDAR_REGIONS.filter(r => regionSet.has(r.key)).map(r => r.label).join(" \u00b7 "));
     if(dQuery.trim()) bits.push(`\u201c${dQuery.trim()}\u201d`);
+    // A shared picture must say it is carrying somebody's local shops, or the
+    // reader takes a Chicagoland SC for part of the published season.
+    if(near && nearby.ready) bits.push(`+ SCs within ${nearby.radius} mi of ${nearby.zip}`);
     return bits.join("  \u2014  ");
-  }, [kinds, region, dQuery]);
+  }, [kinds, region, dQuery, near, nearby.ready, nearby.radius, nearby.zip]);
 
   const followedStores = subs.subs.filter(s => s.kind === "store");
   const followedSeries = subs.subs.filter(s => s.kind === "series");
@@ -39835,7 +39859,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   // somewhere you can find it without knowing what you are looking for.
   const hiddenEvents = subs.subs.filter(s => s.kind === "hide");
   const followCount = followedStores.length + followedSeries.length + savedEvents.length
-    + hiddenEvents.length + mineEvents.length;
+    + hiddenEvents.length;
 
   const exportAll = () => {
     const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana calendar");
@@ -39855,9 +39879,6 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${onFindEvents && html`<button type="button" class="cal-act cal-act--find"
           title="Search Ravensburger Play for events near you, and follow the shops you play at"
           onClick=${() => onFindEvents()}>${uiIcon("store", 14)} Near me</button>`}
-        <button type="button" class="cal-act cal-act--mine" onClick=${() => setMineEdit({})}
-          title="Add an event that isn't on Ravensburger Play">
-          ${uiIcon("calendarPlus", 14)} Add event</button>
         <button type="button" class="cal-act" onClick=${exportAll} title="Download everything shown as an .ics file">
           ${uiIcon("save", 14)} Export .ics</button>
         ${isAdmin && html`<button type="button" class="cal-act cal-act--admin"
@@ -39900,6 +39921,25 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           onClick=${() => setQuery("")}>${uiIcon("close", 11)}</button>`}
       </label>
       <${CalendarRegionChips} region=${region} counts=${regionCounts} onChange=${setRegion}/>
+      ${/* The "SCs local to you" half of the ask. It reuses the finder's saved
+            ZIP, so for anyone who has used the finder once this is a single
+            click; for anyone who has not, the chip says where to set one. */""}
+      <button type="button" class=${"cal-near-chip" + (near ? " on" : "")}
+        aria-pressed=${near ? "true" : "false"}
+        title=${nearby.ready
+          ? `Set Championships within ${nearby.radius} miles of ${nearby.zip}`
+          : "Set a postal code in the event finder first"}
+        onClick=${() => {
+          if(!nearby.ready){
+            flashToast("Set a postal code in the event finder first");
+            if(onFindEvents) onFindEvents("sc");
+            return;
+          }
+          setNear(v => !v);
+        }}>
+        ${uiIcon("trophy", 12)}<span>SCs near me</span>
+        ${near && nearAdded > 0 && html`<em>${nearAdded}</em>`}
+      </button>
       <div class="cal-filters2-end">
         ${mode === "timeline" && html`<div class="seg-toggle cal-spans" role="group" aria-label="Window length">
           ${CAL_TL_SPANS.map(m => html`<button key=${m} type="button" class=${span === m ? "active" : ""}
@@ -39908,9 +39948,9 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${mode === "list" && html`<label class="cal-past">
           <input type="checkbox" checked=${showPast} onChange=${e => setShowPast(e.target.checked)}/>
           <span>Show past</span></label>`}
-        ${(query.trim() || region !== "all" || kinds.length < CALENDAR_KIND_KEYS.length) && html`<button
+        ${(query.trim() || region !== "all" || near || kinds.length < CALENDAR_KIND_KEYS.length) && html`<button
           type="button" class="cal-linkish cal-filters-reset"
-          onClick=${() => { setQuery(""); setRegion("all"); setKinds(CALENDAR_KIND_KEYS.slice()); }}>
+          onClick=${() => { setQuery(""); setRegion("all"); setNear(false); setKinds(CALENDAR_KIND_KEYS.slice()); }}>
           Reset filters</button>`}
       </div>
     </div>
@@ -39928,9 +39968,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
               Nothing followed yet. <button type="button" class="cal-linkish"
                 onClick=${() => onFindEvents && onFindEvents()}>Find events near you</button> —
               every result has a ${uiIcon("calendarPlus", 12)} button, and a
-              <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.
-              Running something that isn't listed at all?
-              <button type="button" class="cal-linkish" onClick=${() => setMineEdit({})}>Add it yourself</button>.</p>`
+              <strong>Follow store</strong> option that keeps adding that shop's events as they're listed.</p>`
           : html`<ul class="cal-follow-list">
               ${followedStores.map(st => {
                 const on = calStoreKindsOf(st);
@@ -39973,13 +40011,6 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
                 ${uiIcon("calendarPlus", 12)} <span>${s.label || "Saved event"}</span>
                 <em>one date</em>
                 <button type="button" aria-label="Remove" onClick=${() => subs.remove("event", s.ref)}>×</button></li>`)}
-              ${mineEvents.map(ev => html`<li key=${"mine" + ev.custom_ref} class="cal-follow-mine">
-                ${uiIcon("pin", 12)}
-                <button type="button" class="cal-follow-edit" title="Edit this event"
-                  onClick=${() => setMineEdit(ev)}>${ev.title}</button>
-                <em>${calTlRange(ev.starts_on, ev.ends_on)}</em>
-                <button type="button" aria-label="Delete" title="Delete this event"
-                  onClick=${() => { subs.remove("custom", ev.custom_ref); flashToast("Event removed"); }}>×</button></li>`)}
               ${hiddenEvents.map(s => html`<li key=${"hd" + s.ref} class="cal-follow-hidden">
                 ${uiIcon("eye", 12)} <span>${s.label || "Hidden event"}</span>
                 <em>hidden</em>
@@ -39991,6 +40022,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           and they follow you to your phone.</p>`}
       </div>`}
     </div>
+
+    ${/* A geo query that failed has to SAY so. Silently showing the calendar
+          without the shops you asked for is the same shape of lie as a filter
+          you cannot see — you would read the season as empty near you. */""}
+    ${near && nearby.err && html`<div class="cal-warn cal-warn--near">
+      ${uiIcon("warn", 14)} Couldn't look up events near ${nearby.zip || "you"} — ${nearby.err}
+      <button type="button" class="cal-linkish" onClick=${() => setNear(false)}>Turn it off</button>
+    </div>`}
 
     ${mode === "timeline"
       ? html`<${CalendarTimelineView} fromMonth=${month} months=${span} events=${shown}
@@ -40040,9 +40079,6 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       onClose=${() => setSel(null)}/>`}
     ${editing && html`<${CalendarAdminModal} row=${editing} onClose=${() => setEditing(null)}
       onSaved=${() => { setEditing(null); reload(true); }}/>`}
-    ${mineEdit && html`<${CalendarMineModal} row=${mineEdit} subs=${subs}
-      onClose=${() => setMineEdit(null)}
-      onSaved=${() => setKinds(p => p.includes("mine") ? p : CALENDAR_KIND_KEYS.filter(x => p.includes(x) || x === "mine"))}/>`}
 
     <p class="cal-foot muted">
       Set release dates come from the catalog; everything else is curated by hand. Spotted something
@@ -49313,7 +49349,7 @@ function App(){
                            "s","f","m","c","card","panel","v",
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
-                           "ck","cv","cm","cr","cq","cspan",
+                           "ck","cv","cm","cr","cq","cspan","cn",
                            ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
@@ -49338,8 +49374,9 @@ function App(){
         home:       new Set(["panel"]),
         // ?ck= the type chips, ?cv= list/month/timeline, ?cm= the window anchor,
         // ?cr= which regions (a csv), ?cq= the search box, ?cspan= how many
-        // months the timeline draws.
-        calendar:   new Set(["ck","cv","cm","cr","cq","cspan"]),
+        // months the timeline draws, ?cn= pull in the Set Championships inside
+        // the event finder's saved radius.
+        calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));

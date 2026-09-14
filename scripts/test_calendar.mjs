@@ -54,7 +54,6 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calMatchesRegion = (ev, region) => {", NL + "};"),
   grab('const searchNorm = (s) => (s||"")', '/g, "");'),
   grab("const calMatchesQuery = (ev, q) => {", NL + "};"),
-  grab("const calendarCustomEntries = (subs) => {", NL + "};"),
   grabLine("const OSM_TILE_PX = "),
   grab("const osmTileLayout = (lat, lng, zoom, w, h) => {", NL + "};"),
   grabLine("const osmTileUrl = "),
@@ -66,6 +65,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const _calKindRank = "),
   grab("const _calPhaseRank = (e) => {", NL + "};"),
   grab("const calendarSort = (events) =>", "|| _calPhaseRank(a) - _calPhaseRank(b));"),
+  grab("const calendarMergeStore = (followed, near) => {", NL + "};"),
   grab("const calendarCombine = (curated, store) => {", NL + "};"),
   grabLine("const CAL_ART_PREF = "),
   grab("const calendarArtIndex = (sealedRows, names) => {", NL + "};"),
@@ -107,23 +107,29 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_LABEL_PX = "),
   grabLine("const CAL_TL_GAP_PX = "),
   grabLine("const CAL_TL_RELEASE_LANE = "),
-  grabLine("const CAL_TL_STORE_LANE = "),
-  grabLine("const CAL_TL_MINE_LANE = "),
+  grabLine("const CAL_TL_STORE_PREFIX = "),
+  grabLine("const CAL_TL_NEAR_LANE = "),
+  grabLine("const CAL_TL_MAX_STORE_LANES = "),
+  grabLine("const CAL_TL_STORE_REST = "),
+  grabLine("const CAL_TL_STORE_ROWS = "),
   grab("const calTimelineLane = (ev) => {", NL + "};"),
+  grabLine("const CAL_TL_LABELLED_RPH = "),
+  grab("const calTimelineLabels = (ev) =>", "CAL_TL_LABELLED_RPH.has(ev.rph_kind);"),
   grab("const _calTlEnd = (ev) => {", NL + "};"),
-  grab("const _calTlStack = (items, labelW) => {", NL + "};"),
+  grab("const _calTlStack = (items, labelW, maxRows) => {", NL + "};"),
   grab("const calendarTimeline = (events, opts) => {", NL + "};"),
   "export {calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon,",
   " LORCANA_MARKS,",
   " calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
-  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarCustomEntries,",
+  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore,",
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
-  " calendarTimeline, calTimelineLane, CAL_TL_MONTHS, CAL_TL_MIN_PX, CAL_TL_LABEL_PX};",
+  " calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,",
+  " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST};",
 ].join(NL)));
 
 const {
@@ -131,13 +137,14 @@ const {
   calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
-  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarCustomEntries,
+  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore,
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
-  calendarTimeline, calTimelineLane, CAL_TL_MONTHS, CAL_TL_MIN_PX, CAL_TL_LABEL_PX,
+  calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,
+  CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,
 } = mod;
 
 let failed = 0;
@@ -803,8 +810,8 @@ ok("google timed range is stamped",
 ok("an undated event yields no google url", googleCalUrl({title: "x"}) === null);
 
 // ── The kind table is the contract ──────────────────────────────────────────
-ok("the four curated kinds, stores, and your own are offered",
-  CALENDAR_KIND_KEYS.join(",") === "set,product,dlc,ccq,store,mine", CALENDAR_KIND_KEYS.join(","));
+ok("the four curated kinds plus stores are offered",
+  CALENDAR_KIND_KEYS.join(",") === "set,product,dlc,ccq,store", CALENDAR_KIND_KEYS.join(","));
 ok("every kind has an icon key and a hue",
   CALENDAR_KINDS.every(k => k.icon && k.hue));
 // A chip saying "CCQ" with no explanation anywhere is the reason this exists.
@@ -924,8 +931,13 @@ const season = [
   tlEv("raleigh", "ccq", "2026-09-26", {ends_on: "2026-09-27", country: "US"}),
   tlEv("hyperia", "set", "2026-10-23", {subtitle: "Retail release"}),
   tlEv("quest", "product", "2026-10-02"),
-  tlEv("league", "store", "2026-10-08", {country: "US"}),
-  tlEv("league2", "store", "2026-10-15", {country: "US"}),
+  // Two shops: one you follow that runs an SC AND weeklies, and a second shop.
+  tlEv("league", "store", "2026-10-08", {country: "US", store_id: "7", subtitle: "Dice Dojo", rph_kind: "other"}),
+  tlEv("league2", "store", "2026-10-15", {country: "US", store_id: "7", subtitle: "Dice Dojo", rph_kind: "other"}),
+  tlEv("dojo-sc", "store", "2026-11-07", {country: "US", store_id: "7", subtitle: "Dice Dojo", rph_kind: "sc"}),
+  tlEv("gng-pre", "store", "2026-10-16", {country: "US", store_id: "9", subtitle: "Griffonest", rph_kind: "prerelease"}),
+  // Not followed — found inside the finder's radius, so its own lane.
+  tlEv("far-sc", "store", "2026-11-14", {country: "US", store_id: "22", subtitle: "Far Shop", rph_kind: "sc", near: true}),
 ];
 const tl = calendarTimeline(season, TL_OPTS);
 const lane = (k) => tl.lanes.find(l => l.key === k);
@@ -975,15 +987,52 @@ ok("every event in the window is placed exactly once",
   `${allItems.length} vs ${season.length}`);
 ok("total counts what was placed", tl.total === season.length);
 
-// ⚠ Store events are ticks with no label. A followed shop runs something most
-// weekends, so labelling them buries a five-event region lane under 50 league
-// nights — and the lane they would bury is the one the view exists for.
-ok("store events get a lane of their own", lane("store") && lane("store").count === 2);
-ok("that lane is ticks, one row, and never a region filter",
-  lane("store").ticks === true && lane("store").rows === 1 && lane("store").region === false);
-ok("a tick lane draws no gap chips", lane("store").gaps.length === 0);
+// ⚠ ONE LANE PER SHOP. A followed store is a place you drive to, so the reason
+// to put it on a season chart at all is to see WHICH shop runs what and when —
+// an anonymous strip of ticks says only "somebody near me plays on Saturdays".
+const dojo = lane("store:7"), gng = lane("store:9");
+ok("each followed shop gets its own lane", dojo && gng && dojo.count === 3 && gng.count === 1,
+  tl.lanes.map(l => `${l.key}=${l.count}`).join(" "));
+ok("a shop's lane is named by the SHOP, off its own first entry",
+  dojo.label === "Dice Dojo" && gng.label === "Griffonest", `${dojo.label} / ${gng.label}`);
+ok("a shop lane is never a region filter", dojo.region === false && dojo.store === true);
+ok("a shop lane draws no gap chips — 7 days, all year, answering nothing",
+  dojo.gaps.length === 0 && gng.gaps.length === 0);
 ok("store events stay out of their country's region lane",
   !lane("na").items.some(i => i.ev.kind === "store"));
+
+// ⚠ THE LABEL IS A PER-ITEM QUESTION. Labelling every store event buries the
+// one Set Championship under fifty league nights; labelling none of them loses
+// the Set Championship entirely. Both directions are the whole feature.
+ok("the shop's Set Championship is labelled",
+  dojo.items.find(i => i.ev.id === "dojo-sc").label === true);
+ok("its league nights are ticks", dojo.items.filter(i => i.ev.id.startsWith("league"))
+  .every(i => i.label === false && i.row === null));
+ok("a prerelease is labelled too", gng.items[0].label === true);
+ok("calTimelineLabels is the one rule, and it only ever demotes store events",
+  calTimelineLabels({kind: "store", rph_kind: "sc"}) === true
+  && calTimelineLabels({kind: "store", rph_kind: "other"}) === false
+  && calTimelineLabels({kind: "dlc"}) === true
+  && calTimelineLabels({kind: "set"}) === true
+  && calTimelineLabels(null) === true);
+
+// ⚠ "SCs near me" is a DIFFERENT question from "my shops" — not where do I
+// play, but where is the season being played — so it never joins a shop lane.
+ok("a nearby SC gets the near lane, not a store lane",
+  lane("near") && lane("near").count === 1 && lane("near").items[0].ev.id === "far-sc");
+// ⚠ Named for the CHIP that produced it, not for the concept. The gutter is
+// 128px in the DOM and clips at 94px on the canvas: "Set Champs near me"
+// does not fit either, and a lane reading "Set Champs ne…" in a shared
+// picture names nothing.
+ok("the near lane is named for the chip that switched it on",
+  lane("near").label === "SCs near me");
+ok("a near SC is labelled and is treated as personal, not regional",
+  lane("near").items[0].label === true && lane("near").store === true);
+ok("calTimelineLane keys a followed shop by its store id",
+  calTimelineLane({kind: "store", store_id: "7"}) === "store:7"
+  && calTimelineLane({kind: "store", store_id: "7", near: true}) === "near");
+ok("a store event with no store id still lands in one bucket",
+  calTimelineLane({kind: "store"}) === "store:");
 
 // ⚠ The gap is measured END to START. Measuring start to start counts a
 // three-day Challenge's own length as part of the wait for the next one.
@@ -1098,9 +1147,13 @@ ok("the default window is one competitive season", CAL_TL_MONTHS === 12);
 
 // Lanes come out in the region picker's own order, so the chart and the filter
 // can never describe two different worlds.
-ok("lanes follow CALENDAR_REGIONS order, with stores last",
-  JSON.stringify(tl.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "store"]),
+ok("lanes follow CALENDAR_REGIONS order, then near-me, then the shops",
+  JSON.stringify(tl.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "near", "store:7", "store:9"]),
   tl.lanes.map(l => l.key).join(","));
+// Busiest shop first: the one you actually go to leads, rather than whichever
+// store id sorts lowest.
+ok("shop lanes are ordered busiest first",
+  tl.lanes.filter(l => /^store:/.test(l.key)).map(l => l.count).join(",") === "3,1");
 ok("only region lanes offer themselves as a filter",
   tl.lanes.filter(l => l.region).every(l => CALENDAR_REGIONS.some(r => r.key === l.key)));
 ok("every region lane key resolves to a label the picker also shows",
@@ -1122,12 +1175,6 @@ ok("junk in the csv is dropped, not honoured",
   calRegionSet("na,nonsense").size === 1 && calRegionSet("nonsense") === null);
 ok("an ungeocoded row falls into Elsewhere rather than out of the list",
   calMatchesRegion({country: null}, "other") && !calMatchesRegion({country: null}, "na"));
-// ⚠ Your own events bypass the region filter, the way a chase rarity bypasses
-// the Screener's foil chips: most carry no country, so narrowing to your own
-// continent would hide your own Thursday night in the one lane nobody checks.
-ok("your own events are never filtered out by region",
-  calMatchesRegion({kind: "mine", country: null}, "eu")
-  && calMatchesRegion({kind: "mine", country: "US"}, "eu"));
 
 ok("an empty query matches everything",
   ["", "   ", null].every(q => calMatchesQuery({title: "x"}, q)));
@@ -1142,50 +1189,71 @@ ok("it does not match the kind or the date",
   !calMatchesQuery({kind: "dlc", title: "Turin", starts_on: "2027-03-05"}, "dlc")
   && !calMatchesQuery({kind: "dlc", title: "Turin", starts_on: "2027-03-05"}, "2027"));
 
-// ── Events you add yourself ─────────────────────────────────────────────────
-// ⚠ The subscription's meta IS the event: there is no feed to resolve it
-// against, so anything the builder drops is gone rather than degraded.
-const mineSubs = [
-  {kind: "custom", ref: "abc", label: "old label",
-   meta: {title: "Thursday locals", starts_on: "2026-10-08", location: "Dice Dojo", subtitle: "7pm"}},
-  {kind: "custom", ref: "two", meta: {title: "Team weekend", starts_on: "2026-11-21", ends_on: "2026-11-22"}},
-  {kind: "custom", ref: "bad", meta: {title: "No date"}},
-  {kind: "custom", ref: "junk", meta: {title: "Junk date", starts_on: "soon"}},
-  {kind: "store", ref: "77", label: "Not mine"},
+// ── Following a shop vs finding one near you ────────────────────────────────
+// ⚠ A shop you FOLLOW wins over the same shop turning up in your radius, so the
+// event lands in that shop's own named lane and never in both — which on a
+// chart reads as a duplicate-rows bug rather than as a merge that went wrong.
+const followedRows = [
+  {id: "ev:1", kind: "store", event_id: 1, subtitle: "Dice Dojo"},
+  {id: "ev:2", kind: "store", event_id: 2, subtitle: "Dice Dojo"},
 ];
-const mine = calendarCustomEntries(mineSubs);
-ok("one row per custom subscription with a usable date", mine.length === 2,
-  JSON.stringify(mine.map(m => m.title)));
-ok("meta.title wins over the stored label", mine[0].title === "Thursday locals");
-ok("the id is namespaced by ref", mine[0].id === "mine:abc" && mine[0].custom_ref === "abc");
-ok("they are their own kind", mine.every(m => m.kind === "mine"));
-ok("a real end date survives and a same-day one does not",
-  mine[1].ends_on === "2026-11-22" && mine[0].ends_on === null);
-ok("blank optional fields normalise to null",
-  mine[1].location === null && mine[1].url === null && mine[1].notes === null);
-ok("a subscription of another kind is never one", !mine.some(m => /Not mine/.test(m.title)));
-ok("no subs at all is empty, not a throw",
-  calendarCustomEntries(null).length === 0 && calendarCustomEntries([]).length === 0);
-ok("a custom row with no title at all still has one",
-  calendarCustomEntries([{kind: "custom", ref: "r", meta: {starts_on: "2026-10-08"}}])[0].title === "My event");
+const nearRows = [
+  {id: "ev:2", kind: "store", event_id: 2, subtitle: "Dice Dojo", near: true},
+  {id: "ev:9", kind: "store", event_id: 9, subtitle: "Far Shop", near: true},
+];
+const mergedStore = calendarMergeStore(followedRows, nearRows);
+ok("a followed event is not duplicated by the same one found near you",
+  mergedStore.length === 3 && mergedStore.filter(e => e.event_id === 2).length === 1,
+  mergedStore.map(e => e.id).join(","));
+ok("and the FOLLOWED copy is the one that survives",
+  !mergedStore.find(e => e.event_id === 2).near);
+ok("an event only found near you comes through",
+  mergedStore.some(e => e.event_id === 9 && e.near === true));
+ok("either side missing is empty, not a throw",
+  calendarMergeStore(null, null).length === 0
+  && calendarMergeStore(followedRows, null).length === 2
+  && calendarMergeStore(null, nearRows).length === 2);
 
-// They join the same pipeline as everything else, so search and the timeline
-// work on them without a second path.
-ok("a custom event is searchable like any other",
-  calMatchesQuery(mine[0], "dice dojo") && calMatchesQuery(mine[0], "thursday"));
-const mineTl = calendarTimeline(mine.concat([
-  tlEv("dlc", "dlc", "2026-11-13", {country: "GB"}),
-]), TL_OPTS);
-const mineLane = mineTl.lanes.find(l => l.key === "mine");
-ok("your own events get a lane of their own", mineLane && mineLane.count === 2);
-// ⚠ LABELLED, unlike the store lane: you add three of these, not fifty, and a
-// row of unnamed ticks would answer nothing.
-ok("and it is labelled, not ticks", mineLane.ticks === false && mineLane.label === "My events");
-ok("it is not offered as a region filter", mineLane.region === false);
-ok("it sits between the regions and the stores",
-  mineTl.lanes.map(l => l.key).indexOf("mine") === mineTl.lanes.length - 1);
-ok("a custom event never lands in a region lane",
-  !mineTl.lanes.some(l => l.key !== "mine" && l.items.some(i => i.ev.kind === "mine")));
+// ⚠ Past the cap a label DEMOTES to a tick rather than growing the lane. SCs
+// cluster — a whole season lands inside one four-week window — so an uncapped
+// near-me lane is a twenty-row stack over one weekend and a flat empty band
+// either side of it, unreadable in both directions at once.
+const crowd = [];
+for(let i = 0; i < 9; i++)
+  crowd.push(tlEv("sc" + i, "store", `2026-11-0${i + 1}`,
+    {store_id: "3", subtitle: "Busy Shop", rph_kind: "sc"}));
+const crowdTl = calendarTimeline(crowd, TL_OPTS);
+const crowdLane = crowdTl.lanes.find(l => l.key === "store:3");
+ok("a crowded personal lane caps its rows", crowdLane.rows === CAL_TL_STORE_ROWS,
+  `${crowdLane.rows} vs ${CAL_TL_STORE_ROWS}`);
+ok("the overflow becomes ticks rather than more rows",
+  crowdLane.items.filter(i => i.label).length < crowd.length
+  && crowdLane.items.every(i => !i.label || i.row < CAL_TL_STORE_ROWS));
+ok("every crowded event is still PLACED — only its title is dropped",
+  crowdLane.count === crowd.length && crowdLane.items.every(i => i.x >= 0 && i.x <= 1));
+// A region lane is uncapped: a season is ~17 Challenges across five of them, so
+// it never comes close, and capping one would silently drop a Challenge's name.
+const wide = crowd.map((e, i) => ({...e, kind: "dlc", country: "US", store_id: undefined,
+  rph_kind: undefined, id: "d" + i}));
+ok("a region lane is not capped",
+  calendarTimeline(wide, TL_OPTS).lanes.find(l => l.key === "na").rows > CAL_TL_STORE_ROWS);
+
+// ⚠ Past the shop cap the tail rolls into ONE lane rather than growing the
+// chart without limit — six named lanes is already 300px of chart.
+const manyShops = [];
+for(let i = 0; i < CAL_TL_MAX_STORE_LANES + 3; i++)
+  manyShops.push(tlEv("s" + i, "store", "2026-11-0" + ((i % 8) + 1),
+    {store_id: String(100 + i), subtitle: "Shop " + i, rph_kind: "sc"}));
+const manyTl = calendarTimeline(manyShops, TL_OPTS);
+const shopLanes = manyTl.lanes.filter(l => l.store);
+ok("the shop lanes are capped", shopLanes.length === CAL_TL_MAX_STORE_LANES + 1,
+  shopLanes.map(l => l.key).join(","));
+ok("the tail rolls into one named lane",
+  shopLanes[shopLanes.length - 1].key === CAL_TL_STORE_REST
+  && shopLanes[shopLanes.length - 1].label === "Other shops");
+ok("and nothing is lost to the roll-up",
+  manyTl.total === manyShops.length
+  && new Set(manyTl.lanes.flatMap(l => l.items.map(i => i.ev.id))).size === manyShops.length);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);
