@@ -2,12 +2,15 @@
 upload_collectible_photos.py — publish the pin / lore-counter photos to the
 public `card-art` Supabase Storage bucket.
 
-The photos are Lorcana Player's, re-hosted here with their permission (granted
-2026-08-24). Re-hosted rather than hotlinked for the usual two reasons — their
+Re-hosted rather than hotlinked for the usual two reasons — someone else's
 bandwidth isn't ours to spend, and a URL we don't control can move — plus one
-specific to this job: what ships is not their file. `cut_collectible_bg.py`
-takes the studio-white background off so a pin can sit on any of the seven
-themes, which means the bytes have to live somewhere we control anyway.
+specific to this job: what ships is not the source file. `cut_collectible_bg.py`
+takes the background off so a pin can sit on any of the seven themes, which
+means the bytes have to live somewhere we control anyway.
+
+⚠ Do NOT name a photo source in user-facing copy. The site used to carry a
+credit in the Help credits and in privacy.html; both were removed 2026-09-13 at
+Zaven's request. privacy.html's takedown route is what covers this, and it stays.
 
 Pins and lore counters are NOT rows in `sealed_products`. They're the static
 LORCANA_PINS / LORCANA_LORE_COUNTERS consts in Index.html, rendered as

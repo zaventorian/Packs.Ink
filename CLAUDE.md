@@ -391,7 +391,13 @@ extracts the real pure functions out of Index.html.
 44 pins and 23 lore counters render on their own Collection tab (Pins & Counters — see the next
 section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from the static
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
-**Lorcana Player's, re-hosted with their permission**, cut out and served from our own storage.
+cut out and served from our own storage.
+
+**⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
+`privacy.html`'s takedown line both named one until 2026-09-13, when Zaven asked for it gone
+("PLEASE remove this from any mention on the site"). The takedown route in `privacy.html` is what
+covers this and it stays. Internal notes about where a photo was *found* are fine — a credit
+printed to users is not.
 
 - **`collectibleArtUrl(folder, n)`** derives the URL from `n`:
   `card-art/collectibles/{pins|counters}/NN.png`. That makes **`n` the stable id twice over** —
@@ -430,21 +436,28 @@ the source is a fan site with gaps.
   the add drawer, the checklist row, the drag ghost), sized per context in styles.css because every
   sizing rule there is `img`-scoped. The aspect probe skips photoless pins, and they are excluded
   from `aspectsReady` — a pin that can never report an aspect must not hold the
-  first-arrangement gate open. Lifting a photo from Pin & Pop or eBay is not an option (the
-  permission we have is Lorcana Player's).
-- **Two of the five landed 2026-09-13; the other three are not obtainable and the hunt is
-  finished — don't re-run it.** `n:43` / `n:44`, the card-backed 2022 pins, were on
-  lorcanaplayer.com all along as **gallery shots on the `n:1` / `n:2` product pages**
-  (`/product/mickey-mouse-brave-little-tailor-pin/`, `/product/purple-maleficent-logo-pin/`),
-  not as products of their own — which is exactly why a scrape of the LIST pages missed them.
-  Take `-Pin-1`, not `-Pin-2` (that one is the card still sealed in its baggie) and not
-  `-Pin-Back` (the reverse of the pin, not a backer card). **Both product sitemaps were then
-  walked end to end for the rest**: `product-sitemap.xml` is a redirect stub — the real ones are
-  `product-sitemap1.xml` + `product-sitemap2.xml`, listed in `sitemap_index.xml`, and a
-  single-file fetch silently reads only part of the catalogue. They hold no Steel ink pin (all
-  five other inks are there), no Wilds Unknown trove counter (every other set's is, under
-  `<set>-trove-lore-counter`), and no China-exclusive Elsa. The Wilds Unknown trove's own product
-  page photographs the closed box, so it can't stand in.
+  first-arrangement gate open.
+- **All five landed 2026-09-13 — every catalogued pin and counter now has a photo, and `noArt`
+  currently marks nothing.** Keep the flag and `COLLECTIBLE_GLYPHS`: the next entry will need them.
+  - `n:43` / `n:44`, the card-backed 2022 pins, were **gallery shots on the `n:1` / `n:2` product
+    pages** of the site the list was scraped from, not products of their own — which is exactly why
+    a scrape of the LIST pages missed them. Take `-Pin-1`, not `-Pin-2` (the card still sealed in
+    its baggie) and not `-Pin-Back` (the reverse of the pin, not a backer card). **Read a product
+    page's GALLERY, not just its main image.**
+  - `n:42` (Steel), `n:22` (Wilds Unknown trove) and `n:23` (Elsa) came from Zaven, after a walk of
+    both product sitemaps found none of them. That walk is still worth knowing:
+    `product-sitemap.xml` is a partial view — the real ones are `product-sitemap1.xml` +
+    `product-sitemap2.xml`, listed in `sitemap_index.xml` — and a single-file fetch makes a product
+    that exists look absent.
+- **⚠ The Wilds Unknown TROVE counter is the Woody-and-Buzz one**, confirmed against the product
+  coverage, so the Merida dial photographed beside it is a different counter and is NOT `n:22`.
+  Getting that pair the wrong way round would put the wrong art on a tile permanently.
+- **Two counters are known to exist and are deliberately NOT catalogued yet**, because an entry
+  mints a permanent `n` and a permanent photo path: the **Wilds Unknown Merida** dial (organized
+  play) and the **Attack of the Vine!** dial given to players at their first event. `n:11`
+  ("Tiana - Warm and Happy", *Weekly Play - Winterspell (first event)*) is the precedent for how a
+  first-event counter is named, and the naming convention is the card/art name, so both need their
+  card name confirmed rather than guessed.
 - Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
 - **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
   valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
@@ -471,6 +484,25 @@ the source is a fan site with gaps.
   it is an override rather than a fifth rung because the four were measured over all 62 shipped
   photos and re-measuring needs sources we no longer have. It is safe because a prepended rung is
   walked and leak-gated like any other: if it leaks, the standard ladder takes over.
+- **`scripts/cut_hex_collectible.py` is the OTHER cutter, for a photo with no plain background at
+  all** — a counter shot on set art, on a mat, or grabbed out of a carousel. `cut_collectible_bg.py`
+  has no answer there: its whole design is "near-white AND connected to the frame edge", and there
+  is no background colour to fill. So this one does not look for background; it knows a lore counter
+  is a **regular hexagon**, fits one to the subject, and masks to it.
+  - **⚠ Fit against the subject mask's CONVEX HULL, not the raw mask.** GrabCut's silhouette has
+    bites out of it wherever the dial's own art goes dark at the rim, and fitting to the bitten
+    shape drags the hexagon inward and twists it to cover the damage. Measured on the Elsa dial:
+    **IoU 0.76 with two corners sliced off, against 0.94 on the hull.**
+  - **⚠ Its failure mode is not a hole or a fringe** — the mask is a clean polygon by construction —
+    **it is a hexagon in the wrong PLACE**, which crops the dial and keeps a wedge of background,
+    and at thumbnail size that reads as a real photo. Hence `--debug` overlays, an IoU floor, and a
+    fill check. **⚠ Measure fill against the POLYGON's own bbox, never the frame's**: a hexagon is
+    always 0.6495 of its own bbox but can occupy any fraction of the photo it was cropped from —
+    getting that wrong fires the warning on every correct cut.
+  - Two counters in one frame is fine: the subject mask keeps only the component touching the
+    centre, so crop roughly around each and run it twice.
+  - **A counter shot at a hard 3/4 angle is not recoverable** — the fit allows a mild aspect and
+    rotation, and past that the honest answer is a better source photo.
 - **A card-backed pin is a RECTANGLE, so ~89% opaque is the right answer, not a failed cut.** The
   transparent tenth is the 2% pad ring plus the rounded corners. Check it by measuring — corner
   alpha, and whether any near-white opaque pixel still touches the frame edge — rather than by
