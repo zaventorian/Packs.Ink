@@ -23,7 +23,13 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const repo = dirname(dirname(fileURLToPath(import.meta.url)));
-const html = readFileSync(join(repo, "swiss.html"), "utf8");
+// ⚠ Normalise the line endings. git here runs core.autocrlf=true, so the blob
+// is LF in the index and the working tree is CRLF — and grab()'s markers below
+// span lines. Without this the test throws "missing end marker" on every
+// Windows checkout while passing on Linux CI, which reads as a broken test
+// rather than as the environment difference it is. Same fix as the
+// scan-editor search test, which hit this first.
+const html = readFileSync(join(repo, "swiss.html"), "utf8").replace(/\r\n/g, "\n");
 
 function grab(startMarker, endMarker) {
   const a = html.indexOf(startMarker);
