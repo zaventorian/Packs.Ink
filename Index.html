@@ -28565,17 +28565,21 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
     return () => { cancelled = true; };
   }, [canViewStore]);
 
+  // Shares the finder's universal resolver, so this takes a postal code from
+  // anywhere, or a town name. It was hardcoded to geocodeZip(z, "US") behind a
+  // digit-stripping 5-char input, which meant a tracked store outside the US
+  // could never be given a distance origin at all.
   const runGeo = useCallback(async (z) => {
     z = String(z||"").trim();
-    if(!/^\d{5}$/.test(z)){ setGeoErr("Enter a 5-digit US ZIP."); setOrigin(null); return; }
+    if(!scZipReady(z)){ setGeoErr("Enter a postal code or town."); setOrigin(null); return; }
     setGeoErr(null);
     try {
-      const o = await geocodeZip(z, "US");
+      const o = await scResolveOrigin(z);
       setOrigin({...o, zip: z});
-      try { localStorage.setItem("packsink:scZip", z); } catch {}
+      try { localStorage.setItem("packsink:scZip", z); if(o.country) localStorage.setItem("packsink:scCountry", o.country); } catch {}
     } catch(e){ setGeoErr(String(e && e.message || e)); setOrigin(null); }
   }, []);
-  useEffect(() => { if(!didGeo.current && /^\d{5}$/.test(zip)){ didGeo.current = true; runGeo(zip); } }, [zip, runGeo]);
+  useEffect(() => { if(!didGeo.current && scZipReady(zip)){ didGeo.current = true; runGeo(zip); } }, [zip, runGeo]);
   useEffect(() => { try { localStorage.setItem("packsink:scEloSort", sortByDist?"dist":"date"); } catch {} }, [sortByDist]);
   useEffect(() => { try { localStorage.setItem("packsink:scEloRadius", radius); } catch {} }, [radius]);
 
@@ -28609,11 +28613,11 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
     <p class="elo-upcoming-sub">${working.length} upcoming Set Championship${working.length===1?"":"s"} across ${storeCount} stores we track for Elo.${canViewStore?" ⌀ = avg Elo of the last 4 events.":""}</p>
     <div class="elo-up-controls">
       <form class="sc-search-row elo-up-zip" onSubmit=${e=>{ e.preventDefault(); runGeo(zip); }}>
-        <input class="sc-zip-input" type="text" inputmode="numeric" maxLength=${5} placeholder="ZIP for distance"
-          value=${zip} aria-label="ZIP code" onInput=${e=>setZip(e.target.value.replace(/[^0-9]/g,"").slice(0,5))}/>
+        <input class="sc-zip-input" type="text" maxLength=${40} placeholder="Postal code or town"
+          value=${zip} aria-label="Postal code or town" onInput=${e=>setZip(e.target.value.slice(0,40))}/>
         <button class="sc-search-btn" type="submit">Go</button>
       </form>
-      <div class="sc-zip-note">Your ZIP is sent to zippopotam.us to find nearby events; it isn't stored with your account.</div>
+      <div class="sc-zip-note">A postal code goes to zippopotam.us to become a map location; a town name is matched against our own event list. Neither is stored with your account.</div>
       ${origin && html`<div class="elo-up-distopts">
         <div class="seg-toggle elo-up-seg">
           <button class=${sortByDist?"":"active"} onClick=${()=>setSortByDist(false)}>By date</button>
@@ -40250,32 +40254,280 @@ const fmtSCDate = (iso, tz) => { try { return new Date(iso).toLocaleDateString("
 const fmtSCTime = (iso, tz) => { try { return new Date(iso).toLocaleTimeString("en-US", {timeZone: tz||undefined, hour:"numeric", minute:"2-digit", timeZoneName:"short"}); } catch { return ""; } };
 const fmtSCMiles = (m) => m < 1 ? "<1 mi" : Math.round(m) + " mi";
 const fmtSCCost = (c, cur) => c == null ? null : (c === 0 ? "Free" : "$" + (c/100).toFixed(2) + (cur && cur !== "USD" ? " " + cur : ""));
-// Countries with postal→lat/lng support on zippopotam.us (free, CORS-open),
-// covering the markets our event data spans. Value = ISO country path.
+// ── Universal place search: a postal code OR a town, with no country picker ──
+// This box used to make you choose a country before you could type, because
+// zippopotam's URL is /{country}/{code}. Two things retire the picker:
+//
+//  1. The country can be INFERRED. Someone typing a postal code is almost
+//     always standing in the country it belongs to, and the browser already
+//     knows where that is — no request, no permission prompt, no IP-geolocation
+//     third party. A wrong guess is VISIBLE, because the results head names the
+//     town it resolved to, and one tap re-runs against another country.
+//  2. A postal code is not the only thing a person can type. Falling back to
+//     our OWN event table (3,023 distinct towns across 41 countries, measured
+//     2026-09-14) covers every market zippopotam cannot.
+//
+// ⚠ The load-bearing half is scNormalizePostal, NOT the inference. zippopotam
+// wants a TRUNCATED code for several countries — Canada's 3-char FSA, the UK's
+// outward code, the Dutch digits — so a Canadian typing their real postal code
+// ("M5V 3L9") got "Postal code not found" for as long as this box has shipped,
+// with the picker set correctly. That was ~12% of the event market failing
+// silently, and it is why a universal box WITHOUT the normalization would have
+// been a regression: no country label left to hint at the format, and twenty
+// wasted requests before the same failure.
+//
+// Probe order is richest market first, so when the inferred country misses, the
+// next guess is the one most likely to be a real answer (a bare 4-digit code is
+// a valid postal code in six of these).
+// ⚠ IE is deliberately absent: zippopotam has NO Irish data in any form —
+// Eircode, routing key and town name all 404 (checked 2026-09-14) — and a
+// candidate that can never return a result only costs a request. Ireland is
+// served by the place-name fallback. BR stays because it partly works
+// ("70000-000" resolves, "01001-000" does not) and a hit is free.
 const SC_GEO_COUNTRIES = [
-  ["US","United States"],["CA","Canada"],["GB","United Kingdom"],["AU","Australia"],
-  ["NZ","New Zealand"],["DE","Germany"],["FR","France"],["ES","Spain"],["IT","Italy"],
-  ["NL","Netherlands"],["BE","Belgium"],["CH","Switzerland"],["AT","Austria"],
-  ["PT","Portugal"],["PL","Poland"],["SE","Sweden"],["DK","Denmark"],["FI","Finland"],
-  ["IE","Ireland"],["MX","Mexico"],["BR","Brazil"],
+  "US","CA","GB","FR","DE","ES","AU","BR","IT","BE",
+  "PL","NL","MX","NZ","CH","PT","SE","AT","FI","DK",
 ];
-// Geocode a postal code via zippopotam.us. Returns {lat,lng,city,state} or throws.
-const geocodeZip = async (zip, country = "US") => {
-  const c = (country || "US").toUpperCase();
-  const z = String(zip || "").trim();
-  if(!z) throw new Error("Enter a postal code.");
-  const r = await fetch(`https://api.zippopotam.us/${c.toLowerCase()}/${encodeURIComponent(z)}`);
-  if(!r.ok) throw new Error("Postal code not found.");
-  const j = await r.json();
-  const pl = (j.places || [])[0];
-  if(!pl) throw new Error("Postal code not found.");
-  return { lat: parseFloat(pl.latitude), lng: parseFloat(pl.longitude),
-           city: pl["place name"], state: pl["state abbreviation"] || pl["state"] || "" };
+const scCountryName = (cc) => {
+  try { return new Intl.DisplayNames([navigator.language || "en"], {type: "region"}).of(cc) || cc; }
+  catch { return cc; }
 };
-// Loose validity gate: US needs the 5-digit ZIP; other countries' postal codes
-// vary widely, so just require a couple chars and let geocodeZip reject bad ones.
-const scZipReady = (zip, country) => (country||"US")==="US"
-  ? /^\d{5}$/.test(String(zip||"")) : String(zip||"").trim().length >= 2;
+
+// What a typed code could be, and what zippopotam wants instead. `cc` is the
+// candidate list — an empty one means "postal-shaped, but nothing we can look
+// up", which routes straight to the place fallback instead of probing twenty
+// countries for a guaranteed miss. First match wins, so the specific patterns
+// sit above the loose ones.
+const SC_POSTAL_FORMATS = [
+  // Canada: zippopotam holds only the 3-char Forward Sortation Area.
+  {re: /^[A-Z]\d[A-Z]\s*\d[A-Z]\d$/, cc: ["CA"], norm: (s) => s.replace(/\s+/g, "").slice(0, 3)},
+  // UK full postcode: the inward half is ALWAYS the last 3 characters, so the
+  // outward code zippopotam wants is everything before them.
+  {re: /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/, cc: ["GB"], norm: (s) => s.replace(/\s+/g, "").slice(0, -3)},
+  // Irish Eircode — nothing to probe, see the note above.
+  {re: /^[A-Z]\d{2}\s*[A-Z\d]{4}$/, cc: []},
+  // Already-bare outward / FSA forms.
+  {re: /^[A-Z]\d[A-Z]$/, cc: ["CA", "GB"]},
+  {re: /^[A-Z]{1,2}\d[A-Z\d]?$/, cc: ["GB"]},
+  // Dutch "1012 AB" — the letters are not in zippopotam's key.
+  {re: /^\d{4}\s*[A-Z]{2}$/, cc: ["NL"], norm: (s) => s.slice(0, 4)},
+  // Brazil wants the hyphen; 8 bare digits get it back.
+  {re: /^\d{5}-?\d{3}$/, cc: ["BR"], norm: (s) => s.length === 8 ? s.slice(0, 5) + "-" + s.slice(5) : s},
+  // Poland and Portugal are the opposite of Brazil: the hyphen IS the key and
+  // the bare digits 404 ("00001", "1000"), so neither joins the plain lists.
+  {re: /^\d{2}-\d{3}$/, cc: ["PL"]},
+  {re: /^\d{4}-\d{3}$/, cc: ["PT"]},
+  // Sweden prints "111 20" and stores "11120", so it belongs to both digit
+  // shapes — dropping it from the 5-digit list would strand anyone who types
+  // their own postal code without the space.
+  {re: /^\d{3}\s\d{2}$/, cc: ["SE"], norm: (s) => s.replace(/\s+/g, "")},
+  {re: /^\d{5}$/, cc: ["US", "DE", "FR", "ES", "IT", "MX", "FI", "SE"]},
+  {re: /^\d{4}$/, cc: ["AU", "NL", "BE", "CH", "AT", "DK", "NZ"]},
+];
+const scPostalShape = (raw) => {
+  const s = String(raw || "").trim().toUpperCase().replace(/\s+/g, " ");
+  if(!s) return null;
+  for(const f of SC_POSTAL_FORMATS) if(f.re.test(s)) return {...f, s};
+  return null;
+};
+// Candidate countries for a typed code, inferred country first. Returns [] for
+// a postal-shaped code nothing can look up, and null when it is not a postal
+// code at all — two cases the caller treats differently.
+// ⚠ Below the inferred one the order is SC_GEO_COUNTRIES' market order, not the
+// order the format table happens to list them in. A fall-through should spend
+// its next request on the likeliest real answer, and leaving that to however a
+// pattern was typed out makes it drift the moment anyone edits the table.
+const scPostalCandidates = (raw, home) => {
+  const f = scPostalShape(raw);
+  if(!f) return null;
+  const h = String(home || "").toUpperCase();
+  return f.cc.slice().sort((a, b) => (b === h) - (a === h)
+    || SC_GEO_COUNTRIES.indexOf(a) - SC_GEO_COUNTRIES.indexOf(b));
+};
+const scNormalizePostal = (raw, cc) => {
+  const f = scPostalShape(raw);
+  if(!f || !f.cc.includes(cc)) return null;
+  return (f.norm ? f.norm(f.s) : f.s).trim();
+};
+
+// Where is this browser? Costs nothing and leaks nothing.
+// ⚠ The zone table is built at RUNTIME from the candidate list rather than
+// hardcoded — Intl already knows which zones belong to which country, and a
+// hand-kept copy of 114 zone names is a thing that silently rots.
+let _scTzIndex;
+const scTzCountry = () => {
+  try {
+    if(_scTzIndex === undefined){
+      _scTzIndex = null;
+      // getTimeZones() is recent (Chrome 130+ / Safari 17+); where it is
+      // missing we simply fall through to the language region below.
+      if(typeof new Intl.Locale("und-US").getTimeZones === "function"){
+        _scTzIndex = new Map();
+        for(const cc of SC_GEO_COUNTRIES)
+          for(const z of (new Intl.Locale("und-" + cc).getTimeZones() || []))
+            if(!_scTzIndex.has(z)) _scTzIndex.set(z, cc);
+      }
+    }
+    if(!_scTzIndex) return null;
+    return _scTzIndex.get(Intl.DateTimeFormat().resolvedOptions().timeZone) || null;
+  } catch { return null; }
+};
+// Strongest signal first: the country that actually worked for this person last
+// time (which is also how the old picker's stored choice keeps paying out),
+// then where the browser says it is, then what language it speaks, then the
+// statistical prior — 57% of upcoming events are US.
+const scDetectCountry = () => {
+  try {
+    const saved = (localStorage.getItem("packsink:scCountry") || "").toUpperCase();
+    if(SC_GEO_COUNTRIES.includes(saved)) return saved;
+  } catch {}
+  const tz = scTzCountry();
+  if(tz) return tz;
+  try {
+    const r = new Intl.Locale(navigator.language || "en-US").region;
+    if(r && SC_GEO_COUNTRIES.includes(String(r).toUpperCase())) return String(r).toUpperCase();
+  } catch {}
+  return "US";
+};
+
+const SC_GEO_TIMEOUT_MS = 6000;
+// ⚠ zippopotam names a Canadian FSA by listing every neighbourhood in it —
+// "Downtown Toronto (CN Tower / King and Spadina / Railway Lands / Harbourfront
+// West / Bathurst Quay / South Niagara / YTZ)" is one real answer. Printed
+// whole it wraps the results heading onto three lines and swamps the "Not X?"
+// label beside it. Trim at the SOURCE so every surface gets the short form and
+// none of them has to remember to.
+const SC_PLACE_LABEL_MAX = 34;
+const scPlaceLabel = (name) => {
+  let s = String(name || "").replace(/\s*\([^)]*\)/g, " ").split("/")[0];
+  s = s.replace(/\s+/g, " ").replace(/[,;\s]+$/, "").trim();
+  if(s.length > SC_PLACE_LABEL_MAX){
+    const cut = s.slice(0, SC_PLACE_LABEL_MAX);
+    const sp = cut.lastIndexOf(" ");
+    s = (sp > 12 ? cut.slice(0, sp) : cut).replace(/[,;\s]+$/, "") + "…";
+  }
+  return s;
+};
+// One zippopotam lookup. Resolves to a place or null — a miss is the ordinary
+// case here (we walk candidates until one hits), not an error.
+const scZippo = async (cc, code) => {
+  const ctl = typeof AbortController === "function" ? new AbortController() : null;
+  const t = ctl ? setTimeout(() => ctl.abort(), SC_GEO_TIMEOUT_MS) : null;
+  try {
+    const r = await fetch(`https://api.zippopotam.us/${cc.toLowerCase()}/${encodeURIComponent(code)}`,
+      ctl ? {signal: ctl.signal} : undefined);
+    if(!r.ok) return null;
+    const pl = ((await r.json()).places || [])[0];
+    if(!pl) return null;
+    return {lat: parseFloat(pl.latitude), lng: parseFloat(pl.longitude),
+            city: scPlaceLabel(pl["place name"]),
+            state: pl["state abbreviation"] || pl["state"] || "",
+            country: cc};
+  } catch { return null; }
+  finally { if(t) clearTimeout(t); }
+};
+
+// Collapse raw event rows into distinct places, best first.
+// ⚠ Two rows 3km apart are ONE place as far as a 10-mile radius is concerned,
+// and the table holds plenty of them — "Dublin" beside "Dublin 8", "Bangkok"
+// beside "Bangkok, Thailand" and the same name in Thai script. Offering those
+// as separate choices is a menu of one answer written three ways. Genuinely
+// different places (Dublin OH against Dublin IE) survive, which is the point.
+const SC_PLACE_MERGE_MI = 15;
+const scRankPlaces = (rows, term, home) => {
+  const want = searchNorm(String(term || "").trim().toLowerCase());
+  const hc = String(home || "").toUpperCase();
+  const seen = new Set(), cand = [];
+  for(const r of (rows || [])){
+    const city = String(r.city || "").trim();
+    const lat = r.latitude == null ? NaN : +r.latitude;
+    const lng = r.longitude == null ? NaN : +r.longitude;
+    if(!city || !isFinite(lat) || !isFinite(lng)) continue;
+    const norm = searchNorm(city.toLowerCase());
+    const k = `${norm}|${r.state || ""}|${r.country || ""}`;
+    if(seen.has(k)) continue;
+    seen.add(k);
+    cand.push({lat, lng, city, state: r.state || "", country: r.country || "", _norm: norm});
+  }
+  // Exact name first, then the browser's own country, then the shortest name.
+  // ⚠ The country tiebreak is not cosmetic: "Dublin" matches Ohio, California
+  // and Ireland equally well on the name alone, and without it the winner is
+  // whatever order the rows came back in — an Irish visitor landing on Dublin,
+  // California. Exact-match still outranks it, so "Dublin" from Ireland beats
+  // "Dublin 8" at home rather than losing to a bare "Dublin" abroad.
+  cand.sort((a, b) => (b._norm === want) - (a._norm === want)
+    || (hc ? (b.country === hc) - (a.country === hc) : 0)
+    || a._norm.length - b._norm.length
+    || a._norm.localeCompare(b._norm));
+  const out = [];
+  for(const c of cand){
+    if(out.some(o => haversineMi(o.lat, o.lng, c.lat, c.lng) < SC_PLACE_MERGE_MI)) continue;
+    // Label for display only — the raw name is what ranked and matched above.
+    out.push({lat: c.lat, lng: c.lng, city: scPlaceLabel(c.city), state: c.state, country: c.country});
+    if(out.length >= 8) break;
+  }
+  return out;
+};
+// Towns we actually have events in. No migration and no new third party:
+// lorcana_events is anon-readable and already carries city + coordinates.
+const scLookupPlaces = async (term, home) => {
+  const q = String(term || "").trim();
+  if(q.length < 2) return [];
+  const run = async (pattern) => {
+    const {data, error} = await sbClient.from("lorcana_events")
+      .select("city,state,country,latitude,longitude")
+      .ilike("city", pattern).not("latitude", "is", null)
+      .order("city").limit(400);
+    if(error) throw error;
+    return data || [];
+  };
+  let rows = await run(q + "%");
+  const fold = (v) => searchNorm(String(v || "").toLowerCase());
+  // ⚠ ilike does not fold diacritics, and the table says "Zürich" while people
+  // type "Zurich". Widening to the first letter and folding client-side is
+  // bounded and only happens on a miss, so the common case still costs one
+  // narrow query.
+  if(!rows.length && /^[a-z]/i.test(q)){
+    const want = fold(q);
+    rows = (await run(q[0] + "%")).filter(r => fold(r.city).startsWith(want));
+  }
+  return scRankPlaces(rows, q, home);
+};
+
+// The one resolver behind both search boxes. Returns
+// {lat,lng,city,state,country,altCountries,altPlaces} or throws.
+// altCountries are format-compatible countries we did NOT probe — the walk
+// stops at the first hit, so a correction stays one tap away without every
+// search paying for it. altPlaces are the other towns a name matched.
+const scResolveOrigin = async (query, forceCountry) => {
+  const raw = String(query || "").trim();
+  if(!raw) throw new Error("Enter a postal code or town.");
+  const forced = String(forceCountry || "").toUpperCase();
+  const home = forced || scDetectCountry();
+  const cands = scPostalCandidates(raw, home);
+  if(cands && cands.length){
+    const order = forced && cands.includes(forced) ? [forced] : cands;
+    for(const cc of order){
+      const code = scNormalizePostal(raw, cc);
+      if(!code) continue;
+      const hit = await scZippo(cc, code);
+      if(hit) return {...hit, altCountries: cands.filter(c => c !== cc), altPlaces: []};
+    }
+  }
+  const places = await scLookupPlaces(raw, home);
+  if(places.length) return {...places[0], altCountries: [], altPlaces: places.slice(1)};
+  // ⚠ The test is `cands !== null`, NOT `cands.length`. An Eircode has an empty
+  // candidate list — postal-shaped, with nobody who can look it up — and telling
+  // someone who just typed a postal code to "try a postal code" is the least
+  // useful thing this box could say. Both no-candidates and every-candidate-
+  // missed mean the same thing to the person: that code did not work, use a town.
+  throw new Error(cands !== null
+    ? `We couldn't place "${raw}" — try the town name instead.`
+    : `Nothing matching "${raw}". Try a postal code, or check the spelling.`);
+};
+// Loose gate on whether there is anything worth searching for yet. The resolver
+// decides what is real; this only stops a search firing on one keystroke.
+const scZipReady = (q) => String(q || "").trim().length >= 2;
 
 const SC_DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 // "18:00" (the series' local start time, computed server-side in the event's own
@@ -40471,9 +40723,20 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const [pinned, setPinned] = useState(() => { try { const p = JSON.parse(localStorage.getItem("packsink:scPinned") || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } });
   const [dateOn, setDateOn] = useState(() => { try { return pDate ? true : localStorage.getItem("packsink:scDateOn") === "1"; } catch { return !!pDate; } });
   const [dateFrom, setDateFrom] = useState(() => { try { return pDate || localStorage.getItem("packsink:scDateFrom") || ""; } catch { return pDate || ""; } });
-  const [country, setCountry] = useState(() => { try { return (pCtry || localStorage.getItem("packsink:scCountry") || "US").toUpperCase(); } catch { return "US"; } });
+  // What the last search RESOLVED to, not a choice anyone made. It seeds the
+  // next guess through packsink:scCountry (the strongest signal there is: the
+  // country that actually worked for this person) and rides the share link so a
+  // recipient does not have to re-infer it.
+  const [country, setCountry] = useState(() => { try { return (pCtry || localStorage.getItem("packsink:scCountry") || "").toUpperCase(); } catch { return ""; } });
+  // Corrections offered when the inferred country picked the wrong continent,
+  // or a town name matched more than one real place.
+  const [altCountries, setAltCountries] = useState([]);
+  const [altPlaces, setAltPlaces] = useState([]);
   const didAuto = useRef(false);
-  useEffect(() => { try { localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
+  // ⚠ Only persist a country a lookup actually confirmed. Writing the empty
+  // initial value would erase the stored preference of everyone who had picked
+  // one, on mount, before they had searched for anything.
+  useEffect(() => { try { if(country) localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
   useEffect(() => { try { localStorage.setItem("packsink:scMode", mode); } catch {} }, [mode]);
   useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
@@ -40490,47 +40753,72 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   }, [expanded]);
   const todayStr = new Date().toLocaleDateString("en-CA");
 
-  const runSearch = useCallback(async (z, r, ctry) => {
+  // One RPC does the bounding box, the haversine refine AND the collapse into
+  // series. Grouping server-side matters at this scale: with every RPH event in
+  // the table and no date ceiling, a dense metro is ~1.8k raw rows but only ~58
+  // real weekly series (measured LA @ 50mi, 2026-07-30), so this returns a few
+  // dozen rows instead of a half-megabyte of near-duplicates.
+  const fetchNear = useCallback(async (lat, lng, r) => {
+    const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
+      p_lat: lat, p_lng: lng,
+      p_radius_mi: Math.max(1, Math.min(500, parseInt(r, 10) || 50)),
+      p_kind: mode === "all" ? null : mode,
+    });
+    if(error) throw error;
+    return data || [];
+  }, [mode]);
+  // `forceCc` is only ever set by the "did you mean" row and by a ?scc= deep
+  // link — a plain search infers the country instead of asking for it.
+  const runSearch = useCallback(async (z, r, forceCc) => {
     z = String(z || "").trim();
-    ctry = (ctry || "US").toUpperCase();
-    const okZip = ctry === "US" ? /^\d{5}$/.test(z) : z.length >= 2;
-    if(!okZip){ setErr(ctry === "US" ? "Enter a 5-digit US ZIP code." : "Enter a postal code."); return; }
+    if(!scZipReady(z)){ setErr("Enter a postal code or town."); return; }
     r = Math.max(1, Math.min(500, parseInt(r, 10) || 50));
     setLoading(true); setErr(null);
     try {
-      const o = await geocodeZip(z, ctry);
-      const lat = o.lat, lng = o.lng;
-      setOrigin({lat, lng, city: o.city, state: o.state, zip: z, country: ctry});
-      // One RPC does the bounding box, the haversine refine AND the collapse into
-      // series. Grouping server-side matters at this scale: with every RPH event
-      // in the table and no date ceiling, a dense metro is ~1.8k raw rows but only
-      // ~58 real weekly series (measured LA @ 50mi, 2026-07-30), so this returns
-      // a few dozen rows instead of a half-megabyte of near-duplicates.
-      const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
-        p_lat: lat, p_lng: lng, p_radius_mi: r,
-        p_kind: mode === "all" ? null : mode,
-      });
-      if(error) throw error;
-      setResults(data || []);
+      const o = await scResolveOrigin(z, forceCc);
+      setOrigin({lat: o.lat, lng: o.lng, city: o.city, state: o.state, zip: z, country: o.country});
+      setCountry(o.country || "");
+      setAltCountries(o.altCountries || []);
+      setAltPlaces(o.altPlaces || []);
+      setResults(await fetchNear(o.lat, o.lng, r));
       try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
-    } catch(e){ setErr(String(e && e.message || e)); setResults(null); }
+    } catch(e){ setErr(String(e && e.message || e)); setResults(null); setAltCountries([]); setAltPlaces([]); }
     finally { setLoading(false); }
-  }, [mode]);
+  }, [mode, fetchNear]);
+  // Re-run the same query against a country the first pass skipped.
+  const useAltCountry = useCallback((cc) => runSearch(zip, radius, cc), [zip, radius, runSearch]);
+  // A town name matched several real places. Swapping between them needs no
+  // geocode — scLookupPlaces already returned their coordinates — only the
+  // event query re-run from the new origin.
+  // ⚠ It must NOT go through runSearch: that would re-resolve the typed name
+  // and land straight back on the place the user just rejected.
+  const useAltPlace = useCallback(async (p) => {
+    const prev = origin;
+    setAltPlaces(ps => ps.filter(x => x !== p).concat(
+      prev ? [{lat: prev.lat, lng: prev.lng, city: prev.city, state: prev.state, country: prev.country}] : []));
+    setCountry(p.country || "");
+    setOrigin({lat: p.lat, lng: p.lng, city: p.city, state: p.state, zip: zip, country: p.country});
+    setLoading(true); setErr(null); setSel(null);
+    try { setResults(await fetchNear(p.lat, p.lng, radius)); }
+    catch(e){ setErr(String(e && e.message || e)); setResults(null); }
+    finally { setLoading(false); }
+  }, [zip, radius, origin, fetchNear]);
 
-  // Auto-run once on mount when a ZIP is already saved.
+  // Auto-run once on mount when a search is already saved. A ?scc= deep link
+  // pins the country for that first run so a shared view reproduces exactly.
   useEffect(() => {
-    if(!didAuto.current && scZipReady(zip, country)){ didAuto.current = true; runSearch(zip, radius, country); }
+    if(!didAuto.current && scZipReady(zip)){ didAuto.current = true; runSearch(zip, radius, pCtry || undefined); }
   }, [zip, radius, runSearch]);
 
   // Switching Set Championships <-> Prereleases re-queries the other table.
   useEffect(() => {
     if(!didAuto.current) return;          // nothing searched yet
     setSel(null); setResults(null); setErr(null);
-    if(scZipReady(zip, country)) runSearch(zip, radius, country);
+    if(scZipReady(zip)) runSearch(zip, radius);
   }, [mode]);
 
   const pickMode = (m) => { if(m !== mode){ setSel(null); setResults(null); setErr(null); setMode(m); } };
-  const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip, country)) runSearch(zip, r, country); };
+  const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip)) runSearch(zip, r, country || undefined); };
 
   // Decorate each series with its per-occurrence local days, then apply the
   // optional date filter. A series survives the filter if ANY of its dates lands
@@ -40564,7 +40852,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const buildShareUrl = () => {
     const u = new URL(IS_NATIVE_APP ? (SITE_ORIGIN + "/") : (window.location.origin + window.location.pathname));
     if(zip) u.searchParams.set("sczip", zip);
-    u.searchParams.set("scc", country);
+    if(country) u.searchParams.set("scc", country);
     u.searchParams.set("scdist", String(radius));
     if(mode !== "all") u.searchParams.set("scmode", mode);
     if(dateActive) u.searchParams.set("scdate", dateFrom);
@@ -40598,8 +40886,8 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       </button>
       <div class="sc-box-head-actions">
         ${!inTile && html`<button class="sc-copy-link" type="button" onClick=${copyLink}
-          disabled=${!scZipReady(zip, country)}
-          title="Copy a link that reopens this view (ZIP, distance, date)">
+          disabled=${!scZipReady(zip)}
+          title="Copy a link that reopens this view (place, distance, date)">
           ${copied ? html`${uiIcon("check")} Copied` : html`${uiIcon("link")} Copy link`}
         </button>`}
         ${expanded
@@ -40620,17 +40908,21 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
         <button type="button" class=${"sc-mode-btn"+(mode==="prerelease"?" active":"")}
           aria-pressed=${mode==="prerelease"} onClick=${()=>pickMode("prerelease")}>Prereleases</button>
       </div>
-      <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius, country); }}>
-        <select class="sc-country-select" value=${country} aria-label="Country"
-          onChange=${e=>{ setCountry(e.target.value); setZip(""); setOrigin(null); setResults(null); setErr(null); }}>
-          ${SC_GEO_COUNTRIES.map(([code,name]) => html`<option key=${code} value=${code} title=${name}>${code}</option>`)}
-        </select>
-        <input class="sc-zip-input" type="text" inputmode=${country==="US"?"numeric":"text"} maxLength=${10}
-          placeholder=${country==="US"?"ZIP code":"Postal code"} value=${zip} aria-label="Postal code"
-          onInput=${e=>setZip(country==="US" ? e.target.value.replace(/[^0-9]/g,"").slice(0,5) : e.target.value.slice(0,10))}/>
+      <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
+        <input class="sc-zip-input" type="text" maxLength=${40}
+          placeholder="Postal code or town" value=${zip} aria-label="Postal code or town"
+          onInput=${e=>setZip(e.target.value.slice(0,40))}/>
         <button class="sc-search-btn" type="submit">Search</button>
       </form>
-      <div class="sc-zip-note">Your postal code is sent to zippopotam.us to find nearby events; it isn't stored with your account.</div>
+      <div class="sc-zip-note">A postal code goes to zippopotam.us to become a map location; a town name is matched against our own event list. Neither is stored with your account.</div>
+      ${origin && (altPlaces.length > 0 || altCountries.length > 0) && html`<div class="sc-alt-row">
+        <span class="sc-alt-lbl">Not ${origin.city}?</span>
+        ${altPlaces.map(p => html`<button key=${`${p.lat},${p.lng}`} type="button" class="sc-alt-btn"
+          onClick=${()=>useAltPlace(p)}>${p.city}${p.state?`, ${p.state}`:""}${p.country?` · ${p.country}`:""}</button>`)}
+        ${altCountries.map(cc => html`<button key=${cc} type="button" class="sc-alt-btn"
+          title=${`Look "${zip}" up in ${scCountryName(cc)}`}
+          onClick=${()=>useAltCountry(cc)}>${scCountryName(cc)}</button>`)}
+      </div>`}
       <div class="sc-radius-row" role="group" aria-label="Distance">
         ${SC_RADII.map(r => html`<button key=${r} type="button"
           class=${"sc-radius-btn"+(radius===r && !customOpen?" active":"")}
@@ -40642,8 +40934,8 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
             placeholder="mi" value=${(Number.isFinite(radius) && !SC_RADII.includes(radius)) ? String(radius) : ""}
             aria-label="Custom radius in miles"
             onInput=${e=>setRadius(parseInt(e.target.value.replace(/[^0-9]/g,"").slice(0,3),10)||0)}
-            onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(scZipReady(zip, country)) runSearch(zip, radius, country); } }}/>
-          <button type="button" class="sc-custom-go" onClick=${()=>{ if(scZipReady(zip, country)) runSearch(zip, radius, country); }}>Go</button>
+            onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(scZipReady(zip)) runSearch(zip, radius, country || undefined); } }}/>
+          <button type="button" class="sc-custom-go" onClick=${()=>{ if(scZipReady(zip)) runSearch(zip, radius, country || undefined); }}>Go</button>
         </span>`}
       </div>
       <div class="sc-date-row">

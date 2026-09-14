@@ -3991,6 +3991,83 @@ see that pinned list and the calendar if you want."* Its own ▾ folds it away
   full-screen finder when the embed is folded away, and `CalendarDetailModal`'s
   "Find a prerelease near you" still needs `onFindEvents` regardless.
 
+### One box, no country picker — postal code OR town (2026-09-14)
+
+The box used to make you pick a country from a 21-entry `<select>` before you could type,
+because zippopotam's URL is `/{country}/{code}`. It is one field now. `scResolveOrigin` is
+the single resolver behind BOTH search boxes (this one and the Elo Upcoming SCs distance
+box), guarded by `node scripts/test_event_search.mjs`.
+
+**⚠ The picker was never what stood in people's way — the geocoder was, and it failed
+silently.** zippopotam wants a TRUNCATED key for several countries, so a Canadian typing
+their own postal code got "Postal code not found" with the picker set correctly, for as
+long as this box has shipped:
+
+| typed | zippopotam wants | share of events |
+|---|---|---|
+| `M5V 3L9` | `M5V` — the 3-char FSA | CA 5.9%, the #2 market |
+| `SW1A 1AA` | `SW1A` — outward code only | GB 5.1%, #3 |
+| `1012 AB` | `1012` | NL 1.1% |
+| `D02 AF30` | **nothing works, in any form** | IE 0.2% |
+| `01001-000` | **mostly 404s** (`70000-000` hits, São Paulo and Rio do not) | BR 2.5% |
+
+So a universal box WITHOUT `scNormalizePostal` would have been a regression: no country
+label left to hint at the format, and twenty wasted requests before the same failure.
+Measured the day it landed — 57% of the 35,576 upcoming events are US, **43% are not**, so
+"just default to US" was never good enough either.
+
+**The ladder**, in order; the common case stops at step 4 after ONE request:
+
+1. **Infer the country offline** — `packsink:scCountry` (the country that actually worked
+   for this person last time) → the browser's timezone → `navigator.language` → US (the
+   57% prior). ⚠ The timezone index is built at RUNTIME from `Intl.Locale("und-XX")
+   .getTimeZones()` over the country list; a hand-kept copy of 114 zone names is a thing
+   that silently rots.
+2. **Sniff the format** (`SC_POSTAL_FORMATS`) to narrow candidates. ⚠ Sniffing alone can
+   never disambiguate — a 5-digit code is real in 8 of these countries and a 4-digit one in
+   7 (`2000` is Sydney, Haarlem, Antwerpen, Neuchâtel, Hausleiten AND Frederiksberg).
+   Inference is what picks; the visible answer is what corrects it.
+3. **Normalize per candidate** — the truncations above. This is the load-bearing half.
+4. **Probe zippopotam in order**, stopping at the first hit. Below the inferred country the
+   order is `SC_GEO_COUNTRIES`' market order, **not** however the format table lists them.
+5. **Fall back to our OWN place index** — `lorcana_events?city=ilike.<q>%`, 90–240ms, no
+   migration and no new third party (the table is anon-readable and already carries city +
+   coordinates). This is what makes Ireland, Brazil and the **20 countries that were never
+   in the picker at all** work — Thailand, Taiwan, Norway, Czechia, Hong Kong and the rest,
+   1,734 upcoming events between them.
+
+- **⚠ Nothing is silent: the results head names the town it chose** (`near ${origin.city}`)
+  and a `.sc-alt-row` offers the corrections. That row is what makes dropping the picker
+  safe, so do not "tidy" it away. Two shapes: `altCountries` for a code that could belong
+  elsewhere (format-compatible countries the walk did NOT reach — the correction stays one
+  tap away without every search paying for it) and `altPlaces` for a name that matched
+  several real towns.
+- **⚠ `useAltPlace` must NOT go through `runSearch`** — that would re-resolve the typed name
+  and land straight back on the place the user just rejected. It reuses the coordinates
+  `scLookupPlaces` already returned and calls `fetchNear` directly. An earlier cut watched
+  the origin in an effect instead, which made every ordinary search hit the RPC twice.
+- **⚠ An empty candidate list is NOT the same as `null`.** `[]` means postal-shaped with
+  nobody who can look it up (an Eircode); `null` means not a postal code at all. The
+  failure message branches on `cands !== null` — with `.length` it told someone who had
+  just typed a postal code to try a postal code.
+- **⚠ Trim place names at the SOURCE (`scPlaceLabel`).** zippopotam names a Canadian FSA by
+  listing every neighbourhood in it — "Downtown Toronto (CN Tower / King and Spadina /
+  Railway Lands / Harbourfront West / Bathurst Quay / South Niagara / YTZ)" is one real
+  answer — which wrapped the heading onto three lines the first time a Canadian code worked.
+- **⚠ `scRankPlaces` breaks a name tie on the browser's country.** "Dublin" matches Ohio,
+  California and Ireland equally well, and without it the winner is whatever order the rows
+  arrived in: an Irish visitor landed on Dublin, California. An exact name still outranks it.
+- **⚠ `ilike` does not fold diacritics.** The table says "Zürich" and people type "Zurich",
+  so a miss retries on the first letter and folds with `searchNorm` client-side — bounded,
+  and only on a miss.
+- **`?scc=` still works both ways**: read as a forced country so a shared link reproduces
+  exactly, and written from what the search RESOLVED to. `packsink:scCountry` is now "what
+  worked", not "what you picked" — and is only written after a lookup confirms it, or an
+  empty initial value would erase the stored preference of everyone who had picked one.
+- The **Elo Upcoming SCs** box was hardcoded to `geocodeZip(z, "US")` behind a
+  digit-stripping 5-char input, so a tracked store outside the US could never be given a
+  distance origin. It shares the resolver now and got this for free.
+
 ### How the finder itself works
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.
@@ -4414,12 +4491,47 @@ deck quick-add thumbnails, and the same trap the offline-testing note describes.
 
 - **`scripts/watch_calendar_sources.py`** is the calendar's catalog-watch: a daily
   sweep (in `catalog-watch.yml`, `if: always()`) that is red ONLY when an event
-  has been announced that the calendar does not have. Two sources, because
-  neither sees everything — the community season page (the only place a whole
-  season is listed at once) and RPH itself for qualifier-shaped store titles.
-  Rulings live in `scripts/calendar_watch.json`; an ack may carry `until` so it
-  expires and re-alerts. **It never writes to the calendar** — publishing stays a
-  person's decision, the same rule as `confirmed`.
+  has been announced that the calendar does not have. Three sources, because none
+  sees everything — **Ravensburger's own Challenge page** (the authority on which
+  events are sanctioned, added 2026-09-14), the community season page (the only
+  place a whole season is listed at once) and RPH itself for qualifier-shaped
+  store titles. Rulings live in `scripts/calendar_watch.json`; an ack may carry
+  `until` so it expires and re-alerts. **It never writes to the calendar** —
+  publishing stays a person's decision, the same rule as `confirmed`.
+
+### ⚠ disneylorcana.com's qualifier list is SPLIT ACROSS LOCALES (2026-09-14)
+
+`/<locale>/play/lorcana-challenge` heads its list **"North America Challenge
+Championship Qualifiers"** on en-US and carries a SECOND list, **"EU & UK
+Challenge Championship Qualifiers"**, only on en-GB / de-DE / fr-FR. Neither page
+hints the other exists, so reading one locale loses half the season silently —
+which is how **CCQ Sevilla** was absent from the calendar entirely. Always read
+both. (it-IT is STALE — it still lists June 2026 — so it is not a third locale to
+add, it is a trap.) The watcher fetches both and merges.
+
+- **⚠ Dedupe on the REGISTRATION URL, not the name.** The same qualifier is named
+  differently on each locale, differently again by the community wiki, and
+  differently again by RPH's store listing — "White Rabbit CCQ" / "CCQ Essen
+  2026" / "Disney Lorcana: CCQ Essen 2026" are one event whose names share no
+  words. The URL is the only key that survives translation. The name fallback is
+  **date-guarded** (`already_have`), because a loose name test alone would
+  suppress next season's "CCQ Sevilla" while this season's is still in the table.
+- **⚠ A scan-derived `location` is the STORE's registered address, not the
+  VENUE.** `Charlie's Collectible Show` was on the calendar at **Stone Mountain,
+  GA** — its RPH home store — for an event at 3801 Sumner Blvd, **Raleigh NC**. A
+  travelling show is wrong by construction, and nothing errors: the row looks
+  complete. Check a promoted candidate's city against the organiser's own page.
+- **⚠ A wiki stub and a scan candidate for one event both exist, and the PUBLIC
+  SEES THE WRONG ONE.** 141 seeded the season by name; `scan_ccq_candidates.py`
+  separately proposed the same events off RPH at `confirmed=false`. Unreconciled,
+  three qualifiers existed twice — the confirmed stub with no venue and no
+  registration link rendering publicly, the unconfirmed row carrying both
+  invisible. Migration 150 merged them; when draining the candidate queue, look
+  for a same-date stub to delete rather than confirming alongside it.
+- **Geocode anything you add** (`country`/`latitude`/`longitude`). 143's pass only
+  saw rows that existed then, and an ungeocoded row falls into the region
+  filter's **"Elsewhere"** bucket — visible, but not to someone filtering to their
+  own region. A set or product release correctly has no country: it is worldwide.
 - **⚠ `lorcana.fandom.com` 403s a page fetch but `api.php` answers 200.** Read it
   as `api.php?action=parse&page=<Page>&prop=wikitext&format=json`.
 - **⚠ Do NOT send a custom User-Agent to Supabase.** `Mozilla/5.0 (packs.ink
