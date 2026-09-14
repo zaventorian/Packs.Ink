@@ -9420,6 +9420,9 @@ body:has(.deck-quickadd) .offline-pill{
    on a 390px phone leaves ~48px per day, which fits a dot and nothing else —
    fine for "when", useless for "what". */
 .cal-view{max-width:1000px;margin:0 auto;}
+/* Timeline mode only: a year-wide axis needs the room, and 1224px of chart fits
+   the 1300px body's content box, so a desktop sees the whole season at once. */
+.cal-view--wide{max-width:1260px;}
 .cal-header{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap;}
 .cal-h1{font-family:'Cinzel',serif;font-size:20px;font-weight:700;color:var(--accent);
   margin:0 0 4px;display:flex;align-items:center;gap:8px;}
@@ -9709,6 +9712,116 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-linkish{border:none;background:none;padding:0;font:inherit;color:var(--accent);
   font-weight:600;text-decoration:underline;cursor:pointer;}
 .cal-panel-note{font-size:10px;padding:2px 2px 5px;letter-spacing:0.02em;}
+
+
+/* ── Calendar: timeline mode ───────────────────────────────────────────────
+   The whole season on one axis. Everything here is positioned as a percentage
+   of .cal-tl-track, because calendarTimeline() emits fractions — the layout has
+   to hold at the 1120px floor and at 2400px alike.
+
+   ⚠ The track's minimum width comes from JS (--cal-tl-track, inline-styled from
+   CAL_TL_MIN_PX). The label de-collision is computed against that number, so a
+   second copy of it here is how the packing and the thing being packed quietly
+   stop agreeing. Don't hard-code a width. */
+.cal-tl{margin-top:4px;}
+.cal-tl-bar{display:flex;align-items:center;gap:8px;padding:2px 0 10px;}
+/* Horizontal scroll IS the gesture here — you scroll through time. Below the
+   track's floor the chart scrolls rather than compressing a month to 30px. */
+.cal-tl-scroll{overflow-x:auto;overflow-y:hidden;overscroll-behavior-x:contain;
+  border:1px solid var(--border);border-radius:12px;background:var(--bg-card);}
+.cal-tl-chart{position:relative;min-width:calc(var(--cal-tl-gutter) + var(--cal-tl-track));
+  --cal-tl-gutter:104px;padding:0 0 6px;}
+/* Month rules + the today line, drawn once behind every lane. Inset by the
+   gutter so they line up with the tracks and not with the lane names. */
+.cal-tl-grid{position:absolute;left:var(--cal-tl-gutter);right:0;top:22px;bottom:0;pointer-events:none;}
+.cal-tl-gridline{position:absolute;top:0;bottom:0;width:1px;background:var(--border);opacity:0.55;}
+/* Where a set arrives, drawn up through every lane. Dimmer than the today line
+   and than the release rail it rises from — it is context behind the events,
+   not a thing to read. */
+.cal-tl-season{position:absolute;top:0;bottom:0;width:1px;background:var(--accent);opacity:0.28;}
+.cal-tl-now{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--accent);
+  opacity:0.75;border-radius:1px;}
+
+.cal-tl-lane{display:flex;align-items:stretch;position:relative;z-index:1;
+  border-top:1px solid var(--border);}
+.cal-tl-axis{border-top:none;}
+/* Sticky, and therefore OPAQUE: --bg-card is translucent in the dark themes and
+   --btn-bg is transparent in every one of them, so either lets the scrolling
+   months show straight through the pinned name. Same rule as the Screener's
+   sticky NAME column and the Stores tab's store column. */
+.cal-tl-name{position:sticky;left:0;z-index:3;flex:0 0 var(--cal-tl-gutter);width:var(--cal-tl-gutter);
+  display:flex;align-items:center;justify-content:space-between;gap:6px;
+  padding:6px 10px 6px 12px;background:var(--bg-modal);
+  border-right:1px solid var(--border);
+  font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;
+  color:var(--text-muted);text-align:left;}
+.cal-tl-name > span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;}
+.cal-tl-name--btn{border:none;border-right:1px solid var(--border);border-radius:0;cursor:pointer;font:inherit;
+  font-size:10px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;}
+.cal-tl-name--btn:hover{color:var(--accent);}
+.cal-tl-name-n{flex:0 0 auto;font-size:9px;opacity:0.7;font-variant-numeric:tabular-nums;}
+.cal-tl-track{position:relative;flex:1;min-width:0;}
+
+/* The month axis. */
+.cal-tl-axis .cal-tl-track{height:22px;}
+.cal-tl-mon{position:absolute;top:0;display:block;height:22px;line-height:22px;
+  padding-left:7px;font-size:10px;font-weight:700;letter-spacing:0.07em;
+  text-transform:uppercase;color:var(--text-muted);white-space:nowrap;overflow:hidden;}
+
+/* The line a lane's markers sit on. */
+.cal-tl-rail{position:absolute;left:0;right:0;bottom:8px;height:1px;background:var(--border);}
+.cal-tl-mark{position:absolute;bottom:3px;height:11px;padding:0;border:none;border-radius:6px;
+  background:none;display:flex;align-items:center;cursor:pointer;}
+.cal-tl-mark--span .cal-tl-dot{width:100%;border-radius:5px;}
+.cal-tl-dot{width:9px;height:9px;border-radius:50%;display:block;
+  box-shadow:0 0 0 2px var(--bg-card);}
+.cal-tl-mark:hover .cal-tl-dot,.cal-tl-mark:focus-visible .cal-tl-dot{
+  box-shadow:0 0 0 2px var(--bg-card),0 0 0 4px var(--accent);}
+/* Store events are ticks with no label: a followed shop runs something most
+   weekends, and 50 labelled league nights would bury a 5-event region lane. */
+.cal-tl-lane--ticks .cal-tl-track{height:24px;}
+.cal-tl-mark--tick{width:3px;height:9px;bottom:4px;}
+.cal-tl-mark--tick .cal-tl-dot{width:3px;height:9px;border-radius:1px;box-shadow:none;opacity:0.75;}
+
+.cal-tl-label{position:absolute;width:126px;max-width:126px;padding:0 6px 0 0;border:none;
+  background:none;text-align:left;cursor:pointer;display:block;line-height:1.25;
+  font:inherit;color:inherit;}
+.cal-tl-label--right{text-align:right;padding:0 0 0 6px;}
+.cal-tl-label-t{display:flex;align-items:center;gap:4px;font-size:11px;font-weight:700;
+  color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.cal-tl-label--right .cal-tl-label-t{flex-direction:row-reverse;}
+.cal-tl-label-d{display:block;font-size:10px;color:var(--text-muted);white-space:nowrap;
+  overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums;}
+.cal-tl-label:hover .cal-tl-label-t{color:var(--accent);}
+
+/* The gap to the next event in this lane — end to start, so a three-day
+   Challenge's own length is not counted as a wait. The number a list cannot
+   show you, and the reason to draw any of this. */
+.cal-tl-gap{position:absolute;bottom:1px;transform:translateX(-50%);
+  padding:1px 6px;border-radius:9px;border:1px solid var(--border);
+  background:var(--bg-modal);font-size:9px;font-weight:700;color:var(--text-muted);
+  font-variant-numeric:tabular-nums;pointer-events:none;white-space:nowrap;}
+
+/* Releases happen everywhere at once, so they get a rail of their own under the
+   lanes — which is what lets the lanes above read as "places you would go". */
+.cal-tl-lane--release{border-top:1px solid var(--border);}
+.cal-tl-lane--release .cal-tl-rail{height:2px;background:var(--accent);opacity:0.45;}
+.cal-tl-lane--release .cal-tl-rail{top:8px;bottom:auto;}
+.cal-tl-lane--release .cal-tl-mark{top:3px;bottom:auto;}
+.cal-tl-lane--release .cal-tl-dot{box-shadow:0 0 0 2px var(--bg-card);}
+
+.cal-tl-empty{padding:28px 18px;text-align:center;border:1px solid var(--border);
+  border-radius:12px;background:var(--bg-card);}
+.cal-tl-empty p{margin:0 0 6px;}
+.cal-tl-more{display:flex;align-items:center;gap:8px;justify-content:flex-end;
+  font-size:11px;padding:8px 2px 0;margin:0;}
+.cal-tl-more-sep{opacity:0.5;}
+@media (max-width:700px){
+  /* "RELEASES" is the longest lane name with no break point in it, and it is
+     what sets this floor — below 82px it ellipses to "RELEA…". */
+  .cal-tl-chart{--cal-tl-gutter:82px;}
+  .cal-tl-name{padding:6px 5px 6px 8px;font-size:9px;letter-spacing:0.03em;}
+}
 
 /* ── Calendar: region filter, home-panel controls, mini map, products ─────── */
 .cal-region{display:inline-flex;align-items:center;gap:5px;}

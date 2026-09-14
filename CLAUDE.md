@@ -4371,6 +4371,97 @@ deck quick-add thumbnails, and the same trap the offline-testing note describes.
   modal, so it says "Announced for the 2026-27 season. Confirm … with the
   organiser" instead.
 
+
+### Timeline mode - the season on one axis (2026-09-14)
+
+List and Month both answer "what is on this date". Neither answers the question a
+competitive season actually raises - **how far apart the Challenges are, and which
+regions have a run of them against a four-month drought** - because in a list every
+row is one row tall whether the next thing is tomorrow or in June. A third mode
+(`?cv=timeline`) draws distance as time. `calendarTimeline()` is the pure core,
+`CalendarTimelineView` the render; guarded by `node scripts/test_calendar.mjs`.
+
+- **Lanes are `CALENDAR_REGIONS`**, the site's one region taxonomy, already in `?cr=`
+  - so the chart and the region picker can never describe different worlds, and a
+  lane heading is the same filter its chip is. A second, finer taxonomy (Japan and
+  China as their own rows, the way a hand-drawn infographic would split them) was
+  deliberately not introduced.
+- **Positions are FRACTIONS of the window (0..1), never pixels**, the same rule the
+  pin board's placements follow - the layout has to hold at the 1120px floor and at
+  2400px, and the component only ever multiplies by 100 and writes a `%`.
+- **⚠ `CAL_TL_MIN_PX` is inline-styled onto the chart from JS, not set in
+  styles.css.** The label de-collision is measured against it, so a second copy of
+  the number in the stylesheet is how the packing and the thing being packed
+  quietly stop agreeing. Same for `CAL_TL_LABEL_PX` and `.cal-tl-label`'s width.
+- **⚠ A right-anchored label is drawn BACKWARDS from its marker**, so `_calTlStack`
+  has to reserve *that* span. Reserving forwards for both leaves a label-wide hole
+  to the left of every right-anchored label that an earlier title is then free to
+  be drawn into - two names on top of each other, at the one end of the chart with
+  no room to notice. Anchoring at all is the `.scanner-qa-rowinfo` lesson on a
+  horizontal axis: a label past the right edge is simply gone.
+- **⚠ The label stack starts ABOVE the rail** (`CAL_TL_RAIL_H`). Offsetting row 0
+  from zero puts the titles on top of the dots, the span bars and the gap chips
+  they describe, and it looks deliberate.
+- **The gap chip is measured END to START** - the number a list cannot show you,
+  and the reason to draw any of this. Start to start would count a three-day
+  Challenge's own length as part of the wait for the next one.
+- **⚠ Sets and products are not in a PLACE**, so they get a release rail of their
+  own under the lanes - which is also what lets the lanes read as "where you would
+  travel to". Their `country` is null, so a lane assignment that only asks
+  `calRegionOf` files every release under **Elsewhere**, which is both wrong and
+  the one lane nobody would think to look in.
+- **A set release is projected UP through every lane** (`seasons`), so a Challenge
+  can be read as "that one is in the Hyperia City season". Without it the release
+  rail is a second list that happens to sit underneath rather than the context for
+  the first. **One line per SET, never per phase** - a set puts two or three dates
+  in the window a week apart, and three lines that close together is a smear; the
+  prerelease is skipped so the line lands on the LGS date, when the set is
+  generally on sale.
+- **⚠ Store events are unlabelled TICKS in a lane of their own.** A followed shop
+  runs something most weekends, so labelling them buries a five-event region lane
+  under 50 league nights - the lane the view exists for. The texture is the true
+  shape of that data; the exact date is one click away in List, where an event with
+  a time belongs.
+- **Sharing is the LINK, not a picture**, and that is principled rather than a
+  shortcut: `?cv=timeline` + `?cm=` + `?ck=` + `?cr=` already reproduce exactly what
+  the sender saw, and a live link picks up a corrected date where a rendered PNG
+  freezes the sender's copy - the same reasoning `?g=` carries for being identity
+  only. **⚠ `cm` had to start being written for timeline as well as month**, or a
+  shared link silently snaps back to today.
+- **`.cal-view--wide` (1260px) applies in timeline mode only.** 1224px of chart
+  (104 gutter + 1120 track) fits the 1300px body's content box, so a desktop sees
+  the whole season at once and anything narrower scrolls sideways - which is the
+  natural gesture here, with the lane names `position:sticky` and opaque
+  (`--bg-modal`, per the Screener's sticky-NAME rule; `--bg-card` is translucent in
+  the dark themes and would let the months show through).
+
+### ⚠ The season seed is short one Challenge, and five dates are disputed (2026-09-14)
+
+Checked against a published 2026-27 season schedule. Everything in 141 matched to
+the day except:
+
+- **DLC Nanjing, 21-22 Nov 2026 is MISSING** - the season's only mainland-China
+  Challenge, which is why a community page maintained by English-speaking players
+  does not carry it. Staged as `supabase/150_calendar_dlc_nanjing.sql` at
+  `confirmed = false`, so it sits in the admin editor to rule on and no visitor is
+  shown a date nobody has checked.
+- **Five Challenges disagree, and ours are kept.** Bangkok, Singapore, Hong Kong
+  and Taipei read Sat-Sun there against Fri-Sun here; Lyon reads Wed 5 - Fri 7 May
+  2027 against Fri 7 - Sun 9 May. **Every one of the twelve both sources agree on
+  runs Friday to Sunday**, so a Wednesday start is a shape no Challenge in either
+  source has and Lyon looks like an error there rather than here. The four Asian
+  ones are genuinely ambiguous - a two-day regional weekend is plausible - so they
+  stay as seeded. A wrong date on a calendar is worse than no date, and that cuts
+  against changing five on an unverifiable source as much as it cuts for it.
+- **Set 15/16/17 dates stay out.** That schedule marks Into the Inkdark, Cosmic
+  Quest and Set 17 "est." - estimates off the release cadence. `SET_RELEASE_DATES`
+  takes published dates only, for the reason already written there: the cadence has
+  moved before.
+- **⚠ The wiki cannot be re-checked from an agent sandbox** - `lorcana.fandom.com`
+  is egress-blocked to both curl and the fetch tool, so `api.php` answers only from
+  CI. `scripts/watch_calendar_sources.py` is what sees it daily; its `acks` were
+  still empty when this was found, i.e. nothing had been ruled on yet.
+
 ### On the home page
 
 - **Default position is the TOP of the LEFT rail, above the news feed** (Zaven,
@@ -4578,6 +4669,10 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ~~`supabase/150_calendar_dlc_nanjing.sql`~~ - **STAGED 2026-09-14, needs a paste.**
+  One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
+  until ruled on in the /calendar editor. Numbered 150, not 149, for the reason
+  the 149 entry below gives. Pure ASCII, short header, per the 142 lesson.
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".

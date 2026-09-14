@@ -96,6 +96,18 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const icsEventLines = (ev, nowMs) => {", NL + "};"),
   grab("const buildIcs = (events, opts) => {", NL + "};"),
   grab("const googleCalUrl = (ev) => {", NL + "};"),
+  grabLine("const calMonthOf = "),
+  grab("const calShiftMonth = (ym, n) => {", NL + "};"),
+  grabLine("const CAL_TL_MONTHS = "),
+  grabLine("const CAL_TL_MIN_PX = "),
+  grabLine("const CAL_TL_LABEL_PX = "),
+  grabLine("const CAL_TL_GAP_PX = "),
+  grabLine("const CAL_TL_RELEASE_LANE = "),
+  grabLine("const CAL_TL_STORE_LANE = "),
+  grab("const calTimelineLane = (ev) => {", NL + "};"),
+  grab("const _calTlEnd = (ev) => {", NL + "};"),
+  grab("const _calTlStack = (items, labelW) => {", NL + "};"),
+  grab("const calendarTimeline = (events, opts) => {", NL + "};"),
   "export {calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon,",
   " LORCANA_MARKS,",
   " calendarMergeEvents, calendarStoreEntry,",
@@ -104,7 +116,8 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calRegionOf, calMatchesRegion, osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
-  " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS};",
+  " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
+  " calendarTimeline, calTimelineLane, CAL_TL_MONTHS, CAL_TL_MIN_PX, CAL_TL_LABEL_PX};",
 ].join(NL)));
 
 const {
@@ -117,6 +130,7 @@ const {
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
+  calendarTimeline, calTimelineLane, CAL_TL_MONTHS, CAL_TL_MIN_PX, CAL_TL_LABEL_PX,
 } = mod;
 
 let failed = 0;
@@ -886,6 +900,205 @@ ok("and the surviving one is the curated row",
   supersede.find(e => /Beast Gift Box/.test(e.title)).starts_on === "2026-12-04");
 ok("a derived product with no curated twin survives",
   supersede.some(e => /Hunny Rescue/.test(e.title)));
+
+
+// ── Timeline mode ───────────────────────────────────────────────────────────
+// On a timeline distance IS time, which is the whole reason to draw one — so
+// every failure here is a chart that looks completely normal and is lying about
+// when something happens. None of them throw.
+const TL_OPTS = {fromMonth: "2026-09", months: 12, today: "2026-09-14"};
+const tlEv = (id, kind, starts_on, extra) =>
+  ({id, kind, title: id, starts_on, ...(extra || {})});
+const season = [
+  tlEv("kobe", "dlc", "2026-09-06", {country: "JP"}),
+  tlEv("bangkok", "dlc", "2026-10-30", {ends_on: "2026-11-01", country: "TH"}),
+  tlEv("london", "dlc", "2026-11-13", {ends_on: "2026-11-15", country: "GB"}),
+  tlEv("tampa", "dlc", "2026-12-18", {ends_on: "2026-12-20", country: "US"}),
+  tlEv("raleigh", "ccq", "2026-09-26", {ends_on: "2026-09-27", country: "US"}),
+  tlEv("hyperia", "set", "2026-10-23", {subtitle: "Retail release"}),
+  tlEv("quest", "product", "2026-10-02"),
+  tlEv("league", "store", "2026-10-08", {country: "US"}),
+  tlEv("league2", "store", "2026-10-15", {country: "US"}),
+];
+const tl = calendarTimeline(season, TL_OPTS);
+const lane = (k) => tl.lanes.find(l => l.key === k);
+
+ok("the window is exactly the months asked for",
+  tl.from === "2026-09-01" && tl.to === "2027-08-31", `${tl.from}..${tl.to}`);
+ok("one month column per month, in order",
+  tl.months_.length === 12 && tl.months_[0].ym === "2026-09" && tl.months_[11].ym === "2027-08");
+ok("month widths tile the window exactly",
+  Math.abs(tl.months_.reduce((a, m) => a + m.w, 0) - 1) < 1e-9,
+  tl.months_.reduce((a, m) => a + m.w, 0));
+// Months are not equal thirty-day blocks. A chart that spaces them evenly puts
+// every event in a long month up to a day and a half off its true position.
+ok("February is drawn narrower than January",
+  tl.months_.find(m => m.ym === "2027-02").w < tl.months_.find(m => m.ym === "2027-01").w);
+ok("the year is stamped on January and on the first column only",
+  /'26$/.test(tl.months_[0].label) && /'27$/.test(tl.months_.find(m => m.ym === "2027-01").label)
+  && !/'/.test(tl.months_[1].label), tl.months_.map(m => m.label).join(" "));
+
+// ⚠ Positions are FRACTIONS, never pixels — the same layout has to hold at the
+// 1120px floor and at 2400px.
+const allItems = [...tl.lanes.flatMap(l => l.items), ...tl.release.items];
+ok("every position is a fraction inside the window",
+  allItems.every(i => i.x >= 0 && i.x <= 1 && i.w >= 0 && i.x + i.w <= 1 + 1e-9));
+ok("a later event sits further right",
+  lane("apac").items[0].x < lane("eu").items[0].x);
+ok("a three-day event is drawn wider than a one-day one",
+  lane("eu").items[0].w > lane("apac").items.find(i => i.ev.id === "kobe").w);
+
+// ⚠ A set release is not in a PLACE. Its country is null, so a lane assignment
+// that just asks calRegionOf files every release under "Elsewhere" — which is
+// both wrong and the one lane nobody would think to look in.
+ok("a set release goes on the release rail, not into a region lane",
+  calTimelineLane({kind: "set"}) === "release" && calTimelineLane({kind: "product"}) === "release");
+ok("and the rail holds both releases", tl.release.items.length === 2,
+  tl.release.items.map(i => i.ev.id).join(","));
+ok("no release leaks into a region lane",
+  !tl.lanes.some(l => l.items.some(i => i.ev.kind === "set" || i.ev.kind === "product")));
+ok("a Challenge is filed by its country",
+  calTimelineLane({kind: "dlc", country: "GB"}) === "eu"
+  && calTimelineLane({kind: "ccq", country: "JP"}) === "apac");
+
+// ⚠ Nothing may be silently dropped or drawn twice — the failure a chart cannot
+// show you, because an absent marker looks exactly like a quiet month.
+ok("every event in the window is placed exactly once",
+  allItems.length === season.length && new Set(allItems.map(i => i.ev.id)).size === season.length,
+  `${allItems.length} vs ${season.length}`);
+ok("total counts what was placed", tl.total === season.length);
+
+// ⚠ Store events are ticks with no label. A followed shop runs something most
+// weekends, so labelling them buries a five-event region lane under 50 league
+// nights — and the lane they would bury is the one the view exists for.
+ok("store events get a lane of their own", lane("store") && lane("store").count === 2);
+ok("that lane is ticks, one row, and never a region filter",
+  lane("store").ticks === true && lane("store").rows === 1 && lane("store").region === false);
+ok("a tick lane draws no gap chips", lane("store").gaps.length === 0);
+ok("store events stay out of their country's region lane",
+  !lane("na").items.some(i => i.ev.kind === "store"));
+
+// ⚠ The gap is measured END to START. Measuring start to start counts a
+// three-day Challenge's own length as part of the wait for the next one.
+const naGaps = lane("na").gaps;
+ok("the gap to the next event is measured end to start",
+  naGaps.length === 1 && naGaps[0].days === 82, JSON.stringify(naGaps));
+ok("a gap chip sits between the two markers it describes",
+  naGaps[0].x > lane("na").items[0].x && naGaps[0].x < lane("na").items[1].x);
+
+// Label de-collision. Two markers closer than a label's width cannot share a
+// row, or the later title is drawn on top of the earlier one.
+const labelW = CAL_TL_LABEL_PX / CAL_TL_MIN_PX;
+const tight = calendarTimeline([
+  tlEv("a", "dlc", "2026-09-05", {country: "US"}),
+  tlEv("b", "dlc", "2026-09-08", {country: "US"}),
+  tlEv("c", "dlc", "2027-06-05", {country: "US"}),
+], TL_OPTS);
+const tightNa = tight.lanes.find(l => l.key === "na");
+ok("two events three days apart stack onto different rows",
+  tightNa.items[0].row !== tightNa.items[1].row, JSON.stringify(tightNa.items.map(i => i.row)));
+ok("an event nine months later reuses the first row",
+  tightNa.items[2].row === 0, tightNa.items[2].row);
+ok("the lane is as tall as its deepest stack", tightNa.rows === 2, tightNa.rows);
+ok("no two labels on one row overlap", tightNa.items.every(i =>
+  tightNa.items.every(j => i === j || j.row !== i.row
+    || Math.abs(i.x - j.x) >= labelW - 1e-9)));
+
+// ⚠ A label at the right-hand end must anchor RIGHT, or the last event of the
+// season is drawn past the edge of the chart and clipped with nothing on screen
+// to say it was ever there.
+const edge = calendarTimeline([tlEv("last", "dlc", "2027-08-28", {country: "US"})], TL_OPTS);
+ok("a label at the end of the window anchors right",
+  edge.lanes[0].items[0].anchor === "right", edge.lanes[0].items[0].anchor);
+ok("and one at the start anchors left", lane("apac").items[0].anchor === "left");
+
+// ⚠ A right-anchored label is drawn BACKWARDS from its marker, so the row it is
+// packed into has to reserve that span and not the one in front of it. Getting
+// this wrong leaves a label-wide hole to its left that the previous title is
+// free to be drawn into — two names on top of each other, at the one end of the
+// chart where there is no room to notice.
+const back = calendarTimeline([
+  tlEv("early", "dlc", "2027-07-20", {country: "US"}),
+  tlEv("late", "dlc", "2027-08-29", {country: "US"}),
+], TL_OPTS);
+const backItems = back.lanes[0].items;
+ok("the label at the end anchors backwards from its marker",
+  backItems[1].anchor === "right" && backItems[0].anchor === "left");
+ok("and the one it would have been drawn over is pushed to another row",
+  backItems[0].row !== backItems[1].row,
+  JSON.stringify(backItems.map(i => [i.ev.id, i.x.toFixed(3), i.anchor, i.row])));
+// The same pair, far enough apart that the backwards label clears it, must NOT
+// stack — over-reserving is just as wrong, and costs a row on every lane.
+const backOk = calendarTimeline([
+  tlEv("early", "dlc", "2027-04-01", {country: "US"}),
+  tlEv("late", "dlc", "2027-08-29", {country: "US"}),
+], TL_OPTS).lanes[0].items;
+ok("a backwards label that clears its predecessor shares the row",
+  backOk[0].row === 0 && backOk[1].row === 0);
+
+// ⚠ One season line per SET, never per phase. A set puts two or three dates in
+// the window a week apart; three lines that close together is a smear, and the
+// one drawn has to be the LGS date — when the set is generally on sale — not the
+// prerelease weekend that happens to sort first.
+const seasonTl = calendarTimeline([
+  tlEv("pre", "set", "2026-10-16", {ends_on: "2026-10-18", subtitle: "Prerelease", set_name: "Hyperia City"}),
+  tlEv("lgs", "set", "2026-10-16", {subtitle: "LGS release", set_name: "Hyperia City"}),
+  tlEv("ret", "set", "2026-10-23", {subtitle: "Retail release", set_name: "Hyperia City"}),
+  tlEv("next", "set", "2027-01-29", {subtitle: "LGS release", set_name: "Into the Inkdark"}),
+  tlEv("gift", "product", "2026-11-13", {title: "Beast Gift Box"}),
+], TL_OPTS);
+ok("one season line per set", seasonTl.seasons.length === 2,
+  JSON.stringify(seasonTl.seasons.map(x => x.label)));
+ok("the line lands on the LGS date, not the prerelease",
+  Math.abs(seasonTl.seasons[0].x - seasonTl.release.items.find(i => i.ev.id === "lgs").x) < 1e-9);
+ok("a product draws no season line", !seasonTl.seasons.some(x => /Gift/.test(x.label)));
+// Retail-only is the normal shape for a set whose LGS date is out of the window.
+ok("retail stands in when there is no LGS date in the window",
+  calendarTimeline([tlEv("r", "set", "2027-03-01", {subtitle: "Retail release", set_name: "X"})],
+    TL_OPTS).seasons.length === 1);
+ok("a calendar with no set releases draws no season lines",
+  calendarTimeline([tlEv("d", "dlc", "2026-10-01", {country: "US"})], TL_OPTS).seasons.length === 0);
+
+// The window boundary, both sides. Off by one here hides an event entirely.
+const edges = calendarTimeline([
+  tlEv("in", "dlc", "2027-08-31", {country: "US"}),
+  tlEv("out", "dlc", "2027-09-01", {country: "US"}),
+  tlEv("was", "dlc", "2026-08-31", {country: "US"}),
+  tlEv("straddles", "dlc", "2026-08-30", {ends_on: "2026-09-02", country: "GB"}),
+], TL_OPTS);
+ok("the last day of the window is inside it",
+  edges.lanes.find(l => l.key === "na").items.some(i => i.ev.id === "in"));
+ok("the day after it is counted as later", edges.after === 1, edges.after);
+ok("the day before it is counted as earlier", edges.before === 1, edges.before);
+// An event that started before the window but is still running belongs ON the
+// chart — it is the one thing a reader might be standing in.
+ok("an event straddling the start is drawn, not counted as past",
+  edges.lanes.some(l => l.key === "eu" && l.items.length === 1), JSON.stringify(edges.before));
+
+ok("today is a fraction when it is in the window",
+  tl.today > 0.03 && tl.today < 0.06, tl.today);
+ok("and null when it is not",
+  calendarTimeline(season, {...TL_OPTS, today: "2029-01-01"}).today === null);
+
+ok("an empty calendar lays out without throwing",
+  calendarTimeline([], TL_OPTS).total === 0 && calendarTimeline(null, TL_OPTS).lanes.length === 0);
+ok("a row with no usable date is skipped rather than placed at day zero",
+  calendarTimeline([tlEv("bad", "dlc", null, {country: "US"}),
+                    tlEv("bad2", "dlc", "soon", {country: "US"})], TL_OPTS).total === 0);
+ok("a junk window falls back to this month rather than NaN",
+  /^\d{4}-\d{2}$/.test(calendarTimeline(season, {fromMonth: "nope"}).fromMonth));
+ok("the default window is one competitive season", CAL_TL_MONTHS === 12);
+
+// Lanes come out in the region picker's own order, so the chart and the filter
+// can never describe two different worlds.
+ok("lanes follow CALENDAR_REGIONS order, with stores last",
+  JSON.stringify(tl.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "store"]),
+  tl.lanes.map(l => l.key).join(","));
+ok("only region lanes offer themselves as a filter",
+  tl.lanes.filter(l => l.region).every(l => CALENDAR_REGIONS.some(r => r.key === l.key)));
+ok("every region lane key resolves to a label the picker also shows",
+  tl.lanes.filter(l => l.region).every(l =>
+    l.label === CALENDAR_REGIONS.find(r => r.key === l.key).label));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);
