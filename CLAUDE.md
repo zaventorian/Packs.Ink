@@ -430,9 +430,25 @@ the source is a fan site with gaps.
   the add drawer, the checklist row, the drag ghost), sized per context in styles.css because every
   sizing rule there is `img`-scoped. The aspect probe skips photoless pins, and they are excluded
   from `aspectsReady` — a pin that can never report an aspect must not hold the
-  first-arrangement gate open. **Photos for the five new entries are still wanted**; lifting them
-  from Pin & Pop or eBay is not an option (the permission we have is Lorcana Player's).
+  first-arrangement gate open. Lifting a photo from Pin & Pop or eBay is not an option (the
+  permission we have is Lorcana Player's).
+- **Two of the five landed 2026-09-13; the other three are not obtainable and the hunt is
+  finished — don't re-run it.** `n:43` / `n:44`, the card-backed 2022 pins, were on
+  lorcanaplayer.com all along as **gallery shots on the `n:1` / `n:2` product pages**
+  (`/product/mickey-mouse-brave-little-tailor-pin/`, `/product/purple-maleficent-logo-pin/`),
+  not as products of their own — which is exactly why a scrape of the LIST pages missed them.
+  Take `-Pin-1`, not `-Pin-2` (that one is the card still sealed in its baggie) and not
+  `-Pin-Back` (the reverse of the pin, not a backer card). **Both product sitemaps were then
+  walked end to end for the rest**: `product-sitemap.xml` is a redirect stub — the real ones are
+  `product-sitemap1.xml` + `product-sitemap2.xml`, listed in `sitemap_index.xml`, and a
+  single-file fetch silently reads only part of the catalogue. They hold no Steel ink pin (all
+  five other inks are there), no Wilds Unknown trove counter (every other set's is, under
+  `<set>-trove-lore-counter`), and no China-exclusive Elsa. The Wilds Unknown trove's own product
+  page photographs the closed box, so it can't stand in.
 - Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
+- **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
+  valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
+  the list length (44 / 23) even while three entries have no photo to upload.
 - **`scripts/cut_collectible_bg.py`** removes the white studio background. Two things make it
   work: the background is found by **flood fill from the border**, not by "white → transparent"
   (which punches straight through Baymax, every logo pin and every ink symbol's highlight); and
@@ -445,6 +461,20 @@ the source is a fan site with gaps.
   ≤ 1.65 and that one leak measured **4.40**, so the 1.8 cutoff sits in empty space. Enclosed-hole
   detection alone does NOT catch it: the fill usually stays connected to the outside and eats a
   bay rather than an island. Exactly one image escalates today.
+- **⚠ A source the ladder cannot see AT ALL comes back uncut, not wrong — and only the `CHECK`
+  flag says so.** The 2023 card-backed pin shots are that case: their studio surface measures
+  **159–220** on the darkest channel with saturation to **36**, and the loosest rung is
+  `(226, 22)`, so no rung ever classified it as background. The cut returned the photograph
+  untouched — 0 transparent pixels, studio grey still in all four corners — and on the contact
+  sheet at thumbnail size that grey rectangle reads as the card. Believe `opaque 100.0%` over
+  your eyes. `--white-min` (with `--sat-max`, default 40) **prepends** a looser rung for one run;
+  it is an override rather than a fifth rung because the four were measured over all 62 shipped
+  photos and re-measuring needs sources we no longer have. It is safe because a prepended rung is
+  walked and leak-gated like any other: if it leaks, the standard ladder takes over.
+- **A card-backed pin is a RECTANGLE, so ~89% opaque is the right answer, not a failed cut.** The
+  transparent tenth is the 2% pad ring plus the rounded corners. Check it by measuring — corner
+  alpha, and whether any near-white opaque pixel still touches the frame edge — rather than by
+  eye.
 - Output is 400px, palette-quantized (FASTOCTREE is the one Pillow quantizer that keeps alpha) —
   ~40 KB each, 2.4 MB for all 62, against ~15 MB unquantized at 600px.
 - **`--contact` writes a split light/dark sheet. Look at it.** Background removal fails per-image
@@ -453,8 +483,12 @@ the source is a fan site with gaps.
 - **lorcanaplayer.com 403s both curl and a headless browser**, and waiting out the challenge does
   not work. Use a fetch tool for the page text; pull the image bytes from the Jetpack mirror at
   `i0.wp.com/lorcanaplayer.com/wp-content/uploads/...`, which serves the same files. The Weekly
-  Play counters are not in the counters page's HTML at all — `product-sitemap.xml` enumerates
-  them and each `/product/` page carries its photo path.
+  Play counters are not in the counters page's HTML at all — the product sitemaps enumerate them
+  and each `/product/` page carries its photo path. **Read `product-sitemap1.xml` AND
+  `product-sitemap2.xml`** (they are what `sitemap_index.xml` lists); bare `product-sitemap.xml`
+  answers with a partial view and makes a product that exists look absent. And a product page's
+  GALLERY is worth reading, not just its main image — two of our missing pins were only ever
+  gallery shots on another pin's page.
 
 ## Pins & Counters — a Collection tab of its own (2026-09-11)
 
@@ -494,6 +528,23 @@ the Graded collection in Index.html), with three views: **Pin board · Counter b
   `pan-y` so the page still scrolls past it. Drop a counter on another to swap them; drag anything
   off the board to send it back to the tray. Keyboard: arrows move, `[` `]` turn a pin, Delete
   takes it down.
+- **⚠ "Take off board" and Delete do NOT un-own anything — deliberate, and it left the boards
+  one-way until 2026-09-13.** The add drawer only lists what you DON'T own, so an owned pin is not
+  in it, and the only route back to qty 0 was the Checklist tab or the detail modal's stepper —
+  neither on screen while you are looking at a board. Reported from the pin board, which is where
+  it bites. The mirror of the drawer's "I have it" now sits on both surfaces that can hold
+  something you own: **"I don't have it"** on the selection bar, and a **corner ×** on a tray
+  thumbnail (`.cb-tray-rm`).
+  - **Two-tap** (`armedRemove`, 3s), the graded slot-remove contract — both boards are drag
+    surfaces, so a one-tap destructive control is one mis-drop from deleting an owned mark.
+  - **⚠ The armed key is `"<kind>|<n>"`, never a bare `n`.** Pin 7 and counter 7 are different
+    things: the two lists number from 1 independently.
+  - **⚠ The tray's × is a SIBLING of the draggable button, never a child** — a button inside a
+    button is invalid markup, and nesting hands its pointerdown straight to `beginDrag`.
+    Hover-only on desktop, always there on touch, per the `.tile-magnify-btn` rule.
+  - **The board PLACEMENT is left alone**, per `normalizeCollectibleBoard`'s standing contract: it
+    keeps a placement for something you no longer own and never draws it, so re-owning puts the pin
+    back exactly where it sat.
 - **The first look at a never-saved board lays out what you own** (`tidyPins` / `tidyCounters`),
   but only once the store has actually been read. After that, newly owned items wait in the TRAY
   so they never disturb an arranged board — except "I have it" in the add drawer, which is you
