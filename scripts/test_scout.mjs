@@ -41,10 +41,11 @@ function grab(start, end) {
 
 const moduleSrc = [
   grab("const scoutErrText = (e) => {", NL + "};"),
+  grab("const edgeErrText = async (e) => {", NL + "};"),
   grab("const scoutShortDate = (iso, tz) => {", NL + "};"),
   grab("const SCOUT_LIVE_HOURS = 24;",
        "return `Started ${Math.floor(mins / 60)}h ago`;" + NL + "};"),
-  "export {scoutErrText, scoutShortDate, SCOUT_LIVE_HOURS, scoutStartedAgo};",
+  "export {scoutErrText, edgeErrText, scoutShortDate, SCOUT_LIVE_HOURS, scoutStartedAgo};",
 ].join(NL);
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
 
@@ -78,6 +79,122 @@ ok("an out-of-scope event names the way out",
 ok("an unresolvable event says there is nothing to scout",
   /nothing to scout/i.test(m.scoutErrText({message: "we have no event 12345 on file"})));
 ok("a plain string error survives", m.scoutErrText("boom") === "boom");
+
+// ── the roster refresh's own failures ─────────────────────────────────────
+// Reported from the floor: "Couldn't refresh the roster: Edge Function returned
+// a non-2xx status code" — supabase-js's FIXED message, identical for every one
+// of the five ways that call can fail. The reason is in the response body, which
+// invoke() leaves unread on error.context, so each of these must come back
+// naming a different thing to go and do.
+const edgeErr = (status, body) => ({
+  message: "Edge Function returned a non-2xx status code",
+  context: {status, text: async () => body},
+});
+// ⚠ A 403 here is NOT "you aren't on the team" — this panel only renders after
+// can_scout() already said yes in the database, so the function refusing means
+// the DEPLOYED copy predates 143 and still gates on can_view_store_report().
+// Saying "team-only" would send the reader to check the one thing known fine.
+{
+  const t = await m.edgeErrText(edgeErr(403, '{"ok":false,"error":"not authorized"}'));
+  ok("an edge 403 names the redeploy", /redeploy refresh-elo-rosters/.test(t));
+  ok("an edge 403 does NOT read as team-only", !/team-only/i.test(t));
+}
+ok("an untracked store names the way out",
+  /Add this event to scouting/i.test(
+    await m.edgeErrText(edgeErr(403, '{"ok":false,"error":"that event is not at a store we track"}'))));
+ok("an unknown event says RPH has no such event",
+  /no event on file/i.test(await m.edgeErrText(edgeErr(404, '{"ok":false,"error":"unknown event"}'))));
+// A 404 with no body of ours is the PLATFORM saying the function isn't there —
+// a different missing thing from an event RPH never heard of.
+ok("a missing deployment is named as one",
+  /isn.t deployed/i.test(await m.edgeErrText(edgeErr(404, '{"code":"NOT_FOUND"}'))));
+// The pre-143 deployment ignores {event_id} and scrapes every tracked upcoming
+// SC instead, which is how one event's refresh runs long enough to be killed.
+{
+  const t = await m.edgeErrText(edgeErr(504, ""));
+  ok("a timeout says so", /timed out|504/.test(t));
+  ok("a timeout points at the redeploy too", /redeploy/i.test(t));
+}
+// Whatever happens, never fall back to the string that started this.
+for (const e of [edgeErr(500, "upstream boom"), edgeErr(403, "not json at all"), edgeErr(418, "")]) {
+  ok("no failure re-emits supabase's fixed message",
+    !/non-2xx status code/.test(await m.edgeErrText(e)));
+}
+// ⚠ A gateway can answer with an HTML error page; half of one in a toast is
+// worse than the bare status.
+{
+  const t = await m.edgeErrText(edgeErr(502, "<!DOCTYPE html><html><body>Bad gateway</body></html>"));
+  ok("an HTML error page never reaches the toast", !/<|DOCTYPE/i.test(t));
+  ok("and the status survives it", /502/.test(t));
+}
+// An error that is not an edge-function error at all still reads as before.
+check("a plain error falls back to scoutErrText",
+  await m.edgeErrText({message: "not authorized"}), m.scoutErrText({message: "not authorized"}));
+
+// ⚠ The ELO CELL: the rating is DATA, the click is an AFFORDANCE. Tested in one
+// branch (`p.matched && onPlayerClick`), every rated player renders "NR" on the
+// two surfaces that mount this panel without a callback — the calendar and the
+// Near-me finder — while the header's Avg/Top Elo, aggregated server-side over
+// the same rows, prints real numbers. Nothing errors; the sheet is just wrong
+// about the one column it exists for.
+{
+  const cell = grab('<td class="ss-elo">', "</td>");
+  ok("NR is decided by the rating, not by the callback",
+    /p\.current_rating == null\s*\n?\s*\? html`<span class="muted">NR<\/span>`/.test(cell));
+  ok("a rating still renders with no onPlayerClick",
+    /:\s*html`<span>\$\{Math\.round\(p\.current_rating\)\}<\/span>`/.test(cell));
+}
+// ── a sheet for an event that already happened ────────────────────────────
+// Reported by a scout 2026-09-13: "when I try to open a previous tournament it
+// just shows the tournament results". Nothing server-side ever refused — the
+// Scout tab's slate stops 24h after an event starts (147), so the only way IN
+// expired with it while the sheet itself stayed perfectly willing.
+//
+// ⚠ That willingness is the whole feature, and it is one `and` away from being
+// deleted by somebody "tidying up" a window. `get_roster_scout` is the ONLY
+// scouting function allowed a date filter.
+{
+  const windowish = /start_datetime\s*[<>]|now\(\)\s*-\s*interval/;
+  const body = (sql, name) => {
+    const a = sql.indexOf("function public." + name);
+    if (a < 0) throw new Error("missing " + name);
+    const b = sql.indexOf("\n$$;", a);
+    return sql.slice(a, b);
+  };
+  ok("get_scout_event has no date window",
+    !windowish.test(body(sql148, "get_scout_event")));
+  ok("save_scout_note has no date window",
+    !windowish.test(body(sql, "save_scout_note")));
+  ok("scout_event_add has no date window",
+    !windowish.test(body(sql148, "scout_event_add")));
+  // …and the check is doing work: the slate's own function DOES carry one.
+  ok("the slate is the one that does", windowish.test(sql147));
+  // A past event resolves only because scout_event_meta reads the ARCHIVE.
+  ok("scout_event_meta resolves a past event from the archive",
+    /from public\.lorcana_events_history/.test(body(sql148, "scout_event_meta")));
+}
+// So the fix is a DOOR, not a gate change: the past-event view (Elo » Tournament
+// Results → an event) opens the same sheet.
+{
+  const detail = grab("function EloEventDetail(", '<h3 class="elo-event-h3">Final Standings</h3>');
+  ok("the past-event view offers the scouting sheet",
+    /elo-scout-link/.test(detail) && /onOpenScout\(\{event_id: ev\.event_id/.test(detail));
+  // ⚠ canScout, never canViewStore — the documented access-widening trap.
+  ok("it is gated on canScout",
+    /canScout && onOpenScout && html/.test(detail));
+  ok("and not on the store-report allowlist",
+    !/canViewStore[^\n]*elo-scout-link/.test(detail));
+  // The button vanishes silently if the props stop arriving, so pin the wiring.
+  ok("EloEventDetail accepts both props",
+    /function EloEventDetail\(\{[^}]*canScout[^}]*onOpenScout[^}]*\}\)/.test(src));
+  ok("EloView passes both to it",
+    /<\$\{EloEventDetail\}[^`]*canScout=\$\{canScout\}[^`]*onOpenScout=\$\{onScoutEvent\}/.test(src));
+}
+
+// The two mounts that have nowhere to navigate to are the reason the split
+// matters — if one of them ever gains a callback, this still has to hold.
+ok("the finder overlay mounts the panel without a player callback",
+  /<\$\{ScoutEventModal\} eventId=\$\{scoutEv\.event_id\}[\s\S]{0,160}onClose=\$\{\(\)=>setScoutEv\(null\)\}\/>/.test(src));
 
 // The reminder shape Zaven asked for is "9/12 <store> <deck>", so the date has
 // to render month/day, not an ISO prefix.
