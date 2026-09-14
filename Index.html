@@ -205,7 +205,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Nunito+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=407">
+<link rel="stylesheet" href="styles.css?v=408">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -38426,6 +38426,13 @@ const calMonthLabel = (ym) => {
   const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ""));
   return m ? `${CAL_MONTHS[+m[2] - 1]} ${m[1]}` : "";
 };
+// "Sep 2026" — the timeline's bar states a WINDOW, which is context rather than
+// a title, and the full form ("September 2026 – August 2027") wrapped to three
+// lines at 390px and out-weighed the chart under it at every width.
+const calMonthLabelShort = (ym) => {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ""));
+  return m ? `${CAL_MONTHS[+m[2] - 1].slice(0, 3)} ${m[1]}` : "";
+};
 const calMonthOf = (ymd) => CAL_D(ymd).slice(0, 7);
 const calShiftMonth = (ym, n) => {
   const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ""));
@@ -38556,12 +38563,33 @@ const CAL_TL_MONTHS = 12;          // one competitive season
 // below is measured against it — two copies of this number in two files is how
 // the layout and the thing being laid out quietly stop agreeing.
 const CAL_TL_MIN_PX = 1120;
-const CAL_TL_LABEL_PX = 126;       // .cal-tl-label's width — keep the two in step
-const CAL_TL_GAP_PX = 46;          // room a "119d" chip needs between two markers
+const CAL_TL_LABEL_PX = 140;       // .cal-tl-label's width — keep the two in step
+// Room a "119d" chip needs between two markers. Measured generously on
+// purpose: at 46 the chip fitted its own box and still sat on the dots
+// either side of it, and a 47-day gap is not the number anybody opened a
+// season chart to read. Only a real drought earns a chip.
+const CAL_TL_GAP_PX = 64;
 // Sets and products are not in a PLACE. A set release happens everywhere at
 // once, so it gets its own rail under the lanes — which is also what makes the
 // lanes readable as "where you would travel to".
 const CAL_TL_RELEASE_LANE = "release";
+// ⚠ THE DEFAULT IS ONE PACKED TRACK, NOT ONE ROW PER REGION. Five fixed
+// swimlanes is the shape a global announcement graphic uses, because it is
+// addressing five continents at once and none of its readers are known to it.
+// This site knows where you are: the region CHIPS in the filter row already ask
+// that question, with counts, so lanes asking it again is the same control
+// drawn twice — and two of the five are near-empty all season, which spends a
+// third of the chart's height saying nothing.
+//
+// Packed instead: the circuit sorts by date and stacks into as many rows as it
+// needs, so the row COUNT is density and an empty vertical band is the drought.
+// That reads the gaps better than five lanes you have to scan in parallel, and
+// filtering to one region re-packs it for that region.
+const CAL_TL_CIRCUIT_LANE = "circuit";
+// Region swimlanes stay REACHABLE, as a deliberate pick rather than the
+// default — comparing two regions' runs against each other is a real question,
+// it is just not the one most readers arrive with.
+const CAL_TL_GROUP_MODES = ["packed", "region"];
 // ⚠ ONE LANE PER SHOP, not one lane for "my stores". A followed store is a
 // place you drive to, so the whole reason to put it on a season chart is to see
 // WHICH shop is running what and when — an anonymous strip of ticks says only
@@ -38580,13 +38608,20 @@ const CAL_TL_STORE_REST = "store:~rest";
 // ticks. Region lanes are uncapped: a season is ~17 Challenges across five
 // of them, so they never come close.
 const CAL_TL_STORE_ROWS = 3;
-const calTimelineLane = (ev) => {
+const calTimelineLane = (ev, group) => {
   if(!ev) return CAL_TL_RELEASE_LANE;
   if(ev.kind === "set" || ev.kind === "product") return CAL_TL_RELEASE_LANE;
-  if(ev.kind !== "store") return calRegionOf(ev.country);
+  if(ev.kind !== "store") return group === "region" ? calRegionOf(ev.country) : CAL_TL_CIRCUIT_LANE;
   if(ev.near) return CAL_TL_NEAR_LANE;
   return CAL_TL_STORE_PREFIX + (ev.store_id == null ? "" : ev.store_id);
 };
+// Three blocks, read top to bottom as general -> personal -> context. A lane
+// carries its group so the render can rule between them; without that the
+// chart is one undifferentiated stack of rows again.
+const CAL_TL_GROUP_OF = (key) =>
+  key === CAL_TL_RELEASE_LANE ? "release"
+  : (key === CAL_TL_NEAR_LANE || key.startsWith(CAL_TL_STORE_PREFIX)) ? "yours"
+  : "circuit";
 // ⚠ Whether an item gets a LABEL is a per-ITEM question, not a per-lane one,
 // and that is the whole trick to putting a shop on a season chart. A followed
 // store runs something most weekends, so labelling all of it buries the one
@@ -38645,6 +38680,7 @@ const calendarTimeline = (events, opts) => {
   const span = calDayDiff(from, to) + 1;
   const pos = (ymd) => Math.max(0, Math.min(1, calDayDiff(from, ymd) / span));
   const labelW = CAL_TL_LABEL_PX / CAL_TL_MIN_PX;
+  const group = CAL_TL_GROUP_MODES.includes(o.group) ? o.group : "packed";
 
   const monthCols = [];
   for(let i = 0; i < months; i++){
@@ -38655,6 +38691,9 @@ const calendarTimeline = (events, opts) => {
       // "Jan '27" only where the year turns, so the axis says which year it is
       // without repeating it twelve times.
       label: CAL_MONTHS[p.m - 1].slice(0, 3) + (p.m === 1 || i === 0 ? ` '${String(p.y).slice(2)}` : ""),
+      // The year turning is the one real event on the axis; without weight it
+      // is the twelfth identical grey word in a row.
+      year: p.m === 1 && i > 0,
       x: pos(`${ym}-01`),
       w: (calDayDiff(`${ym}-01`, `${calShiftMonth(ym, 1)}-01`)) / span,
     });
@@ -38668,7 +38707,7 @@ const calendarTimeline = (events, opts) => {
     const e = _calTlEnd(ev);
     if(e < from){ before++; continue; }
     if(s > to){ after++; continue; }
-    const lane = calTimelineLane(ev);
+    const lane = calTimelineLane(ev, group);
     if(!laneItems.has(lane)) laneItems.set(lane, []);
     laneItems.get(lane).push({
       ev, start: s, end: e,
@@ -38693,11 +38732,15 @@ const calendarTimeline = (events, opts) => {
     laneItems.set(CAL_TL_STORE_REST, merged);
     storeKeys = storeKeys.slice(0, CAL_TL_MAX_STORE_LANES).concat([CAL_TL_STORE_REST]);
   }
-  const laneOrder = [...CALENDAR_REGIONS.map(r => r.key), CAL_TL_NEAR_LANE, ...storeKeys];
+  const laneOrder = [
+    ...(group === "region" ? CALENDAR_REGIONS.map(r => r.key) : [CAL_TL_CIRCUIT_LANE]),
+    CAL_TL_NEAR_LANE, ...storeKeys,
+  ];
   // A shop's lane is named by the SHOP, read off its own first entry — the same
   // rule the list rows follow, where the store is the half that answers "which
   // of these is mine" and the event's own name is the muted second line.
   const laneLabel = (key, items) => {
+    if(key === CAL_TL_CIRCUIT_LANE) return "Challenges";
     if(key === CAL_TL_NEAR_LANE) return "SCs near me";
     if(key === CAL_TL_STORE_REST) return "Other shops";
     if(key.startsWith(CAL_TL_STORE_PREFIX)){
@@ -38711,6 +38754,10 @@ const calendarTimeline = (events, opts) => {
     const items = laneItems.get(key) || [];
     if(!items.length) continue;
     const store = key === CAL_TL_NEAR_LANE || key.startsWith(CAL_TL_STORE_PREFIX);
+    // ⚠ The circuit is UNCAPPED. It is the content, not an annotation: capping
+    // it would demote the back half of a busy month to unlabelled dots, which
+    // is exactly the information the chart exists to carry. Its row count IS
+    // the density read.
     const rows = _calTlStack(items, labelW, store ? CAL_TL_STORE_ROWS : 0);
     // The gap between one event and the NEXT in the same lane — the number a
     // list cannot show you, and the reason to draw this at all. Measured end to
@@ -38730,8 +38777,13 @@ const calendarTimeline = (events, opts) => {
         }
       }
     }
+    const grp = CAL_TL_GROUP_OF(key);
     lanes.push({key, label: laneLabel(key, items), rows, items, gaps, count: items.length,
-      region: !store, store});
+      group: grp, first: grp !== (lanes.length ? lanes[lanes.length - 1].group : null),
+      // Only a real region lane offers itself as a filter — "Challenges" is
+      // every region at once, so clicking it could only mean "all", which is
+      // where you already are.
+      region: !store && group === "region", store});
   }
 
   const release = laneItems.get(CAL_TL_RELEASE_LANE) || [];
@@ -38758,7 +38810,7 @@ const calendarTimeline = (events, opts) => {
   const todayYmd = CAL_D(o.today) || calTodayYmd();
 
   return {
-    fromMonth, months, from, to, span, labelW,
+    fromMonth, months, from, to, span, labelW, group,
     months_: monthCols, lanes, seasons,
     release: {items: release, rows: releaseRows},
     today: (todayYmd >= from && todayYmd <= to) ? pos(todayYmd) : null,
@@ -39114,7 +39166,20 @@ const calTlRange = (a, b) => {
   if(!pa || !pb) return s;
   return pa.m === pb.m && pa.y === pb.y ? `${s}–${pb.d}` : `${s} – ${calShortDay(b)}`;
 };
-const CAL_TL_ROW_H = 30;           // one stacked label
+// ⚠ On the RELEASE rail the phase moves to the second line, and that is the
+// difference between reading the rail and not. `calEventTitle` joins set and
+// phase into "Hyperia City LGS release" — 24 characters into a 140px label, so
+// a set with three dates rendered as "Hyperia City LGS rel", "Hyperia City
+// Retail r" and "Hyperia City Beast G", three near-identical clipped strings
+// where the clipped-off half was the only thing telling them apart. Splitting
+// puts the set name whole on the title line and the phase, which is short,
+// where it survives.
+const calTlLabelParts = (ev, range, below) => {
+  if(below && ev && ev.kind === "set" && ev.subtitle)
+    return {title: ev.set_name || ev.title, sub: `${ev.subtitle} \u00b7 ${range}`};
+  return {title: calEventTitle(ev), sub: range};
+};
+const CAL_TL_ROW_H = 32;           // one stacked label (title 11.5 + date 9.5 + air)
 const CAL_TL_RAIL_H = 16;          // the marker rail under the labels
 
 const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Fragment}>
@@ -39128,16 +39193,17 @@ const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Frag
           screen reader reads the whole lane as the same control repeated. */""}
     aria-label=${calEventFullLabel(it.ev) + ", " + calTlRange(it.start, it.end)}
     onClick=${() => onOpen(it.ev)}><span class="cal-tl-dot" style=${{background: calendarEventIcon(it.ev, art).hue}}/></button>`)}
-  ${lane.items.filter(it => it.label).map(it => html`<button key=${"l" + it.ev.id} type="button"
+  ${lane.items.filter(it => it.label).map(it => { const lp = calTlLabelParts(it.ev, calTlRange(it.start, it.end), below);
+    return html`<button key=${"l" + it.ev.id} type="button"
     class=${"cal-tl-label cal-tl-label--" + it.anchor}
     style=${{
       [it.anchor]: (it.anchor === "left" ? it.x : 1 - it.x) * 100 + "%",
       [below ? "top" : "bottom"]: (CAL_TL_RAIL_H + it.row * CAL_TL_ROW_H) + "px",
     }}
     onClick=${() => onOpen(it.ev)}>
-    <span class="cal-tl-label-t"><${CalendarKindDot} kind=${it.ev.kind} ev=${it.ev} art=${art}/>${calEventTitle(it.ev)}</span>
-    <span class="cal-tl-label-d">${calTlRange(it.start, it.end)}</span>
-  </button>`)}
+    <span class="cal-tl-label-t"><${CalendarKindDot} kind=${it.ev.kind} ev=${it.ev} art=${art}/>${lp.title}</span>
+    <span class="cal-tl-label-d">${lp.sub}</span>
+  </button>`; })}
 <//>`;
 
 
@@ -39178,7 +39244,16 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   ctx.scale(dpr, dpr);
   ctx.textBaseline = "alphabetic";
   const FONT = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+  // ⚠ The DOM sets the page title and the structural row names in Cinzel, so
+  // the picture has to as well or the export is visibly a different document
+  // from the screen it was copied off. A canvas will silently fall back to the
+  // generic serif if the face is not loaded AT THE WEIGHT ASKED FOR, so both
+  // are requested explicitly first and the whole thing is best-effort.
+  const TITLE_FONT = '"Cinzel", Georgia, serif';
+  try { await Promise.all([document.fonts.load('700 25px "Cinzel"'),
+                           document.fonts.load('600 11px "Cinzel"')]); } catch {}
   const font = (w, sz) => { ctx.font = `${w} ${sz}px ${FONT}`; };
+  const titleFont = (w, sz) => { ctx.font = `${w} ${sz}px ${TITLE_FONT}`; };
   const clip = (text, maxW) => {
     let t = String(text == null ? "" : text);
     if(ctx.measureText(t).width <= maxW) return t;
@@ -39192,7 +39267,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
 
   // Header: what this is, and the exact window it covers -- a picture that
   // leaves the year out is a picture nobody can date six months from now.
-  font(800, 25);
+  titleFont(700, 25);
   ctx.fillStyle = P.accent;
   ctx.fillText(opts.title || "Lorcana calendar", G.pad, G.pad + 24);
   font(600, 13);
@@ -39243,8 +39318,10 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     // ⚠ A shop name is NOT uppercased here either — the gutter is the same 128px
     // the DOM has, and "GRIFFONEST GAMES" does not fit it. The picture has to
     // agree with the screen it was copied from, so the rule lives in both.
-    font(lane.store ? 700 : 800, lane.store ? 11 : 11);
-    ctx.fillStyle = lane.store ? "#5bb98c" : lane.below ? P.accent : P.muted;
+    // A shop's name is a proper noun in the body face; a category the chart
+    // invented is Cinzel — the same split the gutter makes on screen.
+    if(lane.store){ font(700, 11); ctx.fillStyle = "#5bb98c"; }
+    else { titleFont(600, 11); ctx.fillStyle = lane.below ? P.accent : P.muted; }
     ctx.fillText(clip(lane.store ? lane.label : lane.label.toUpperCase(), G.gutter - 34),
       G.pad, y + h / 2 + 4);
     font(600, 10);
@@ -39287,12 +39364,14 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
         : railY - G.railH - 8 - it.row * G.rowH;
       ctx.textAlign = anchorRight ? "right" : "left";
       const tx = anchorRight ? lx + G.label : lx;
-      font(700, 12);
+      // Same split the DOM does — the picture has to agree with the screen.
+      const lp = calTlLabelParts(it.ev, calTlRange(it.start, it.end), lane.below);
+      font(800, 12);
       ctx.fillStyle = P.text;
-      ctx.fillText(clip(calEventTitle(it.ev), G.label - 4), tx, ly);
-      font(500, 10.5);
+      ctx.fillText(clip(lp.title, G.label - 4), tx, ly);
+      font(600, 10);
       ctx.fillStyle = P.muted;
-      ctx.fillText(clip(calTlRange(it.start, it.end), G.label - 4), tx, ly + 13);
+      ctx.fillText(clip(lp.sub, G.label - 4), tx, ly + 13);
       ctx.textAlign = "left";
     }
     y += h;
@@ -39317,9 +39396,9 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     cv.toBlob(b => b ? res(b) : rej(new Error("toBlob failed")), "image/png"));
 };
 
-const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth, art, onLane, caption}) => {
-  const tl = useMemo(() => calendarTimeline(events, {fromMonth, months, today}),
-    [events, fromMonth, months, today]);
+const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth, art, onLane, caption, group, onGroup}) => {
+  const tl = useMemo(() => calendarTimeline(events, {fromMonth, months, today, group}),
+    [events, fromMonth, months, today, group]);
   const exportImage = () => {
     flashToast(isTouchDevice() ? "Preparing image\u2026" : "Copying image\u2026", 9000);
     const blob = buildCalendarTimelineBlob(tl, {subtitle: caption});
@@ -39341,9 +39420,18 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
   return html`<div class="cal-tl">
     <div class="cal-tl-bar">
       <button type="button" class="cal-month-nav" aria-label="Earlier" onClick=${() => step(-3)}>‹</button>
-      <div class="cal-month-label">${calMonthLabel(tl.fromMonth)} – ${calMonthLabel(calShiftMonth(tl.fromMonth, months - 1))}</div>
+      <div class="cal-month-label">${calMonthLabelShort(tl.fromMonth)} – ${calMonthLabelShort(calShiftMonth(tl.fromMonth, months - 1))}</div>
       <button type="button" class="cal-month-nav" aria-label="Later" onClick=${() => step(3)}>›</button>
       <button type="button" class="cal-month-today" onClick=${() => onMonth(calMonthOf(calTodayYmd()))}>Today</button>
+      ${/* Region rows are a pick, not the default — see CAL_TL_CIRCUIT_LANE. */""}
+      ${onGroup && html`<div class="seg-toggle cal-tl-group" role="group" aria-label="Group Challenges by">
+        <button type="button" class=${tl.group === "packed" ? "active" : ""}
+          title="One packed track, densest months tallest"
+          onClick=${() => onGroup("packed")}>Packed</button>
+        <button type="button" class=${tl.group === "region" ? "active" : ""}
+          title="One row per region, to compare their runs"
+          onClick=${() => onGroup("region")}>By region</button>
+      </div>`}
       ${tl.total > 0 && html`<button type="button" class="cal-tl-export" onClick=${exportImage}
         title="Copy this chart as an image">${uiIcon("camera", 13)}<span>Image</span></button>`}
     </div>
@@ -39374,12 +39462,15 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
             <div class="cal-tl-lane cal-tl-axis">
               <div class="cal-tl-name"/>
               <div class="cal-tl-track">
-                ${tl.months_.map(m => html`<span key=${m.ym} class="cal-tl-mon"
+                ${tl.months_.map(m => html`<span key=${m.ym}
+                  class=${"cal-tl-mon" + (m.year ? " cal-tl-mon--year" : "")}
                   style=${{left: m.x * 100 + "%", width: m.w * 100 + "%"}}>${m.label}</span>`)}
               </div>
             </div>
 
-            ${tl.lanes.map(lane => html`<div key=${lane.key} class=${"cal-tl-lane" + (lane.store ? " cal-tl-lane--store" : "")}>
+            ${tl.lanes.map(lane => html`<div key=${lane.key}
+              class=${"cal-tl-lane cal-tl-lane--" + lane.group + (lane.store ? " cal-tl-lane--store" : "")
+                + (lane.first ? " cal-tl-lane--first" : "")}>
               ${lane.region && onLane
                 ? html`<button type="button" class="cal-tl-name cal-tl-name--btn"
                     title=${`Show only ${lane.label}`} onClick=${() => onLane(lane.key)}>
@@ -39514,6 +39605,12 @@ const CAL_VIEW_MODES = ["list", "month", "timeline"];
 // season; 6 is a quarter-by-quarter read and 24 spans a rotation.
 const CAL_TL_SPANS = [6, 12, 24];
 const CAL_SPAN_LS = "packsink:cal:span";
+const CAL_GROUP_LS = "packsink:cal:group";
+const calReadGroupPref = (seed) => {
+  const ok = (v) => CAL_TL_GROUP_MODES.includes(v) ? v : null;
+  try { return ok(seed) || ok(localStorage.getItem(CAL_GROUP_LS)) || "packed"; }
+  catch { return ok(seed) || "packed"; }
+};
 const calReadSpanPref = (seed) => {
   const ok = (v) => CAL_TL_SPANS.includes(Number(v)) ? Number(v) : null;
   return ok(seed) || (() => { try { return ok(localStorage.getItem(CAL_SPAN_LS)); } catch { return null; } })()
@@ -39731,13 +39828,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const seed = useMemo(() => {
     try { const q = new URLSearchParams(location.search);
       return {ck: q.get("ck"), cv: q.get("cv"), cm: q.get("cm"), cr: q.get("cr"),
-              cq: q.get("cq"), cspan: q.get("cspan"), cn: q.get("cn")}; }
+              cq: q.get("cq"), cspan: q.get("cspan"), cn: q.get("cn"), cg: q.get("cg")}; }
     catch { return {}; }
   }, []);
   const [kinds, setKinds] = useState(() => calReadKindPref(seed.ck));
   const [region, setRegion] = useState(() => calReadRegionPref(seed.cr));
   const [query, setQuery] = useState(() => seed.cq || "");
   const [span, setSpan] = useState(() => calReadSpanPref(seed.cspan));
+  const [group, setGroup] = useState(() => calReadGroupPref(seed.cg));
   // Same treatment the Cards browser gives its filter: a keystroke paints at
   // once and the (whole-calendar) re-filter lands a frame later.
   const dQuery = React.useDeferredValue(query);
@@ -39764,6 +39862,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   useEffect(() => { try { localStorage.setItem(CAL_VIEW_LS, mode); } catch {} }, [mode]);
   useEffect(() => { try { localStorage.setItem(CAL_SPAN_LS, String(span)); } catch {} }, [span]);
   useEffect(() => { try { localStorage.setItem(CAL_NEAR_ON_LS, near ? "1" : "0"); } catch {} }, [near]);
+  useEffect(() => { try { localStorage.setItem(CAL_GROUP_LS, group); } catch {} }, [group]);
   // replaceState, never push: a filter is not a page, and pushing would make Back
   // walk backwards through every chip the user toggled.
   useEffect(() => {
@@ -39777,9 +39876,10 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       (mode !== "timeline" || span === CAL_TL_MONTHS) ? url.searchParams.delete("cspan") : url.searchParams.set("cspan", String(span));
       (mode === "list" || month === calMonthOf(today)) ? url.searchParams.delete("cm") : url.searchParams.set("cm", month);
       near ? url.searchParams.set("cn", "1") : url.searchParams.delete("cn");
+      (mode !== "timeline" || group === "packed") ? url.searchParams.delete("cg") : url.searchParams.set("cg", group);
       if(url.toString() !== location.href) history.replaceState(history.state, "", url.toString());
     } catch {}
-  }, [kinds, mode, month, region, today, query, span, near]);
+  }, [kinds, mode, month, region, today, query, span, near, group]);
 
   const hidden = useMemo(() => calendarHiddenSet(subs.subs), [subs.subs]);
   const savedIds = useMemo(() => new Set(subs.subs.filter(x => x.kind === "event").map(x => String(x.ref))),
@@ -40034,6 +40134,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     ${mode === "timeline"
       ? html`<${CalendarTimelineView} fromMonth=${month} months=${span} events=${shown}
           today=${today} onOpen=${setSel} onMonth=${setMonth} art=${art} caption=${filterCaption}
+          group=${group} onGroup=${setGroup}
           onLane=${(k) => setRegion(r => calToggleRegion(r, k))}/>`
       : mode === "month"
       ? html`<${CalendarMonthView} month=${month} events=${shown} today=${today}
@@ -49349,7 +49450,7 @@ function App(){
                            "s","f","m","c","card","panel","v",
                            "g","hm","hr","hs",
                            "q","ink","rarity","cost","type","inkable","legal","owned",
-                           "ck","cv","cm","cr","cq","cspan","cn",
+                           "ck","cv","cm","cr","cq","cspan","cn","cg",
                            ...ELO_URL_PARAMS, ...SC_DEEP_PARAMS];
       // Each view "owns" the deep-link params it actually consumes — those
       // survive a same-view strip so /decks?tourney=<id> deep-links + ctrl-
@@ -49376,7 +49477,7 @@ function App(){
         // ?cr= which regions (a csv), ?cq= the search box, ?cspan= how many
         // months the timeline draws, ?cn= pull in the Set Championships inside
         // the event finder's saved radius.
-        calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn"]),
+        calendar:   new Set(["ck","cv","cm","cr","cq","cspan","cn","cg"]),
       };
       const owned = VIEW_OWNED[view] || new Set();
       const stripList = dirtyParams.filter(p => !owned.has(p));

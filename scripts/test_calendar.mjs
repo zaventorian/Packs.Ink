@@ -101,6 +101,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const buildIcs = (events, opts) => {", NL + "};"),
   grab("const googleCalUrl = (ev) => {", NL + "};"),
   grabLine("const calMonthOf = "),
+  grab("const calMonthLabelShort = (ym) => {", NL + "};"),
   grab("const calShiftMonth = (ym, n) => {", NL + "};"),
   grabLine("const CAL_TL_MONTHS = "),
   grabLine("const CAL_TL_MIN_PX = "),
@@ -108,11 +109,14 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_GAP_PX = "),
   grabLine("const CAL_TL_RELEASE_LANE = "),
   grabLine("const CAL_TL_STORE_PREFIX = "),
+  grabLine("const CAL_TL_CIRCUIT_LANE = "),
+  grabLine("const CAL_TL_GROUP_MODES = "),
   grabLine("const CAL_TL_NEAR_LANE = "),
   grabLine("const CAL_TL_MAX_STORE_LANES = "),
   grabLine("const CAL_TL_STORE_REST = "),
   grabLine("const CAL_TL_STORE_ROWS = "),
-  grab("const calTimelineLane = (ev) => {", NL + "};"),
+  grab("const calTimelineLane = (ev, group) => {", NL + "};"),
+  grab("const CAL_TL_GROUP_OF = (key) =>", '  : "circuit";'),
   grabLine("const CAL_TL_LABELLED_RPH = "),
   grab("const calTimelineLabels = (ev) =>", "CAL_TL_LABELLED_RPH.has(ev.rph_kind);"),
   grab("const _calTlEnd = (ev) => {", NL + "};"),
@@ -129,6 +133,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
   " calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,",
+  " CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_LANE, calMonthLabelShort,",
   " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST};",
 ].join(NL)));
 
@@ -144,6 +149,7 @@ const {
   calendarArtIndex, calendarEventArt,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
   calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,
+  CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_LANE, calMonthLabelShort,
   CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,
 } = mod;
 
@@ -941,6 +947,12 @@ const season = [
 ];
 const tl = calendarTimeline(season, TL_OPTS);
 const lane = (k) => tl.lanes.find(l => l.key === k);
+// ⚠ THE DEFAULT IS ONE PACKED TRACK, not one row per region — the swimlane
+// shape is a global announcement graphic's, drawn for readers it knows nothing
+// about, and it spends a third of the chart on two lanes that are near-empty
+// all season while asking the same question the region CHIPS already ask.
+const tlR = calendarTimeline(season, {...TL_OPTS, group: "region"});
+const laneR = (k) => tlR.lanes.find(l => l.key === k);
 
 ok("the window is exactly the months asked for",
   tl.from === "2026-09-01" && tl.to === "2027-08-31", `${tl.from}..${tl.to}`);
@@ -963,9 +975,9 @@ const allItems = [...tl.lanes.flatMap(l => l.items), ...tl.release.items];
 ok("every position is a fraction inside the window",
   allItems.every(i => i.x >= 0 && i.x <= 1 && i.w >= 0 && i.x + i.w <= 1 + 1e-9));
 ok("a later event sits further right",
-  lane("apac").items[0].x < lane("eu").items[0].x);
+  laneR("apac").items[0].x < laneR("eu").items[0].x);
 ok("a three-day event is drawn wider than a one-day one",
-  lane("eu").items[0].w > lane("apac").items.find(i => i.ev.id === "kobe").w);
+  laneR("eu").items[0].w > laneR("apac").items.find(i => i.ev.id === "kobe").w);
 
 // ⚠ A set release is not in a PLACE. Its country is null, so a lane assignment
 // that just asks calRegionOf files every release under "Elsewhere" — which is
@@ -976,9 +988,19 @@ ok("and the rail holds both releases", tl.release.items.length === 2,
   tl.release.items.map(i => i.ev.id).join(","));
 ok("no release leaks into a region lane",
   !tl.lanes.some(l => l.items.some(i => i.ev.kind === "set" || i.ev.kind === "product")));
-ok("a Challenge is filed by its country",
-  calTimelineLane({kind: "dlc", country: "GB"}) === "eu"
-  && calTimelineLane({kind: "ccq", country: "JP"}) === "apac");
+ok("a Challenge joins the one circuit track by default",
+  calTimelineLane({kind: "dlc", country: "GB"}) === "circuit"
+  && calTimelineLane({kind: "ccq", country: "JP"}) === "circuit");
+ok("and is filed by its country only when asked",
+  calTimelineLane({kind: "dlc", country: "GB"}, "region") === "eu"
+  && calTimelineLane({kind: "ccq", country: "JP"}, "region") === "apac");
+// ⚠ The grouping never reaches the personal lanes or the release rail: a shop
+// is a subject, not a category, and a release is in no place at all.
+ok("grouping never moves a shop, a near-me SC or a release",
+  ["packed", "region"].every(g =>
+    calTimelineLane({kind: "store", store_id: "7"}, g) === "store:7"
+    && calTimelineLane({kind: "store", near: true}, g) === "near"
+    && calTimelineLane({kind: "set"}, g) === "release"));
 
 // ⚠ Nothing may be silently dropped or drawn twice — the failure a chart cannot
 // show you, because an absent marker looks exactly like a quiet month.
@@ -999,7 +1021,7 @@ ok("a shop lane is never a region filter", dojo.region === false && dojo.store =
 ok("a shop lane draws no gap chips — 7 days, all year, answering nothing",
   dojo.gaps.length === 0 && gng.gaps.length === 0);
 ok("store events stay out of their country's region lane",
-  !lane("na").items.some(i => i.ev.kind === "store"));
+  !laneR("na").items.some(i => i.ev.kind === "store"));
 
 // ⚠ THE LABEL IS A PER-ITEM QUESTION. Labelling every store event buries the
 // one Set Championship under fifty league nights; labelling none of them loses
@@ -1036,11 +1058,11 @@ ok("a store event with no store id still lands in one bucket",
 
 // ⚠ The gap is measured END to START. Measuring start to start counts a
 // three-day Challenge's own length as part of the wait for the next one.
-const naGaps = lane("na").gaps;
+const naGaps = laneR("na").gaps;
 ok("the gap to the next event is measured end to start",
   naGaps.length === 1 && naGaps[0].days === 82, JSON.stringify(naGaps));
 ok("a gap chip sits between the two markers it describes",
-  naGaps[0].x > lane("na").items[0].x && naGaps[0].x < lane("na").items[1].x);
+  naGaps[0].x > laneR("na").items[0].x && naGaps[0].x < laneR("na").items[1].x);
 
 // Label de-collision. Two markers closer than a label's width cannot share a
 // row, or the later title is drawn on top of the earlier one.
@@ -1050,7 +1072,7 @@ const tight = calendarTimeline([
   tlEv("b", "dlc", "2026-09-08", {country: "US"}),
   tlEv("c", "dlc", "2027-06-05", {country: "US"}),
 ], TL_OPTS);
-const tightNa = tight.lanes.find(l => l.key === "na");
+const tightNa = tight.lanes.find(l => l.key === "circuit");
 ok("two events three days apart stack onto different rows",
   tightNa.items[0].row !== tightNa.items[1].row, JSON.stringify(tightNa.items.map(i => i.row)));
 ok("an event nine months later reuses the first row",
@@ -1066,15 +1088,19 @@ ok("no two labels on one row overlap", tightNa.items.every(i =>
 const edge = calendarTimeline([tlEv("last", "dlc", "2027-08-28", {country: "US"})], TL_OPTS);
 ok("a label at the end of the window anchors right",
   edge.lanes[0].items[0].anchor === "right", edge.lanes[0].items[0].anchor);
-ok("and one at the start anchors left", lane("apac").items[0].anchor === "left");
+ok("and one at the start anchors left", lane("circuit").items[0].anchor === "left");
 
 // ⚠ A right-anchored label is drawn BACKWARDS from its marker, so the row it is
 // packed into has to reserve that span and not the one in front of it. Getting
 // this wrong leaves a label-wide hole to its left that the previous title is
 // free to be drawn into — two names on top of each other, at the one end of the
 // chart where there is no room to notice.
+// ⚠ "early" has to sit far enough from the right edge to anchor LEFT at the
+// current label width, or the pair tests nothing — both would anchor right and
+// the overlap being checked would be the trivial one. It moved in when the
+// label grew from 126px to 140px.
 const back = calendarTimeline([
-  tlEv("early", "dlc", "2027-07-20", {country: "US"}),
+  tlEv("early", "dlc", "2027-06-20", {country: "US"}),
   tlEv("late", "dlc", "2027-08-29", {country: "US"}),
 ], TL_OPTS);
 const backItems = back.lanes[0].items;
@@ -1123,13 +1149,14 @@ const edges = calendarTimeline([
   tlEv("straddles", "dlc", "2026-08-30", {ends_on: "2026-09-02", country: "GB"}),
 ], TL_OPTS);
 ok("the last day of the window is inside it",
-  edges.lanes.find(l => l.key === "na").items.some(i => i.ev.id === "in"));
+  edges.lanes.find(l => l.key === "circuit").items.some(i => i.ev.id === "in"));
 ok("the day after it is counted as later", edges.after === 1, edges.after);
 ok("the day before it is counted as earlier", edges.before === 1, edges.before);
 // An event that started before the window but is still running belongs ON the
 // chart — it is the one thing a reader might be standing in.
 ok("an event straddling the start is drawn, not counted as past",
-  edges.lanes.some(l => l.key === "eu" && l.items.length === 1), JSON.stringify(edges.before));
+  edges.lanes.find(l => l.key === "circuit").items.some(i => i.ev.id === "straddles"),
+  JSON.stringify(edges.before));
 
 ok("today is a fraction when it is in the window",
   tl.today > 0.03 && tl.today < 0.06, tl.today);
@@ -1147,9 +1174,37 @@ ok("the default window is one competitive season", CAL_TL_MONTHS === 12);
 
 // Lanes come out in the region picker's own order, so the chart and the filter
 // can never describe two different worlds.
-ok("lanes follow CALENDAR_REGIONS order, then near-me, then the shops",
-  JSON.stringify(tl.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "near", "store:7", "store:9"]),
+ok("packed is the default, and it is ONE circuit track",
+  tl.group === "packed" && lane("circuit") && lane("circuit").count === 5
+  && !tl.lanes.some(l => CALENDAR_REGIONS.some(r => r.key === l.key)),
   tl.lanes.map(l => l.key).join(","));
+ok("the circuit track packs into as many rows as it needs",
+  lane("circuit").rows >= 1 && lane("circuit").items.every(i => i.label && i.row < lane("circuit").rows));
+// Its row count IS the density read, so it is the one lane that must never cap.
+ok("and it is never capped", (() => {
+  const many = [];
+  for(let i = 0; i < 12; i++) many.push(tlEv("d" + i, "dlc", `2026-11-${String(i + 1).padStart(2, "0")}`, {country: "US"}));
+  return calendarTimeline(many, TL_OPTS).lanes.find(l => l.key === "circuit").rows > CAL_TL_STORE_ROWS;
+})());
+ok("a circuit lane is not offered as a region filter", lane("circuit").region === false);
+// Region rows stay REACHABLE — comparing two regions' runs is a real question,
+// just not the one most readers arrive with.
+ok("region mode still lays out one row per region, in the picker's order",
+  JSON.stringify(tlR.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "near", "store:7", "store:9"]),
+  tlR.lanes.map(l => l.key).join(","));
+ok("only region mode offers a lane as a filter",
+  laneR("na").region === true && tl.lanes.every(l => !l.region));
+ok("both modes are declared, and junk falls back to packed",
+  JSON.stringify(CAL_TL_GROUP_MODES) === JSON.stringify(["packed", "region"])
+  && calendarTimeline(season, {...TL_OPTS, group: "nonsense"}).group === "packed");
+// ⚠ Nothing may be lost or gained by the grouping — it is a re-arrangement.
+ok("the two modes place exactly the same events",
+  tl.total === tlR.total && tl.total === season.length);
+// Three blocks, ruled apart: general, then yours, then the release context.
+ok("lanes carry their group, and the first of each is marked",
+  lane("circuit").group === "circuit" && lane("near").group === "yours"
+  && lane("circuit").first === true && lane("near").first === true
+  && lane("store:9").first === false);
 // Busiest shop first: the one you actually go to leads, rather than whichever
 // store id sorts lowest.
 ok("shop lanes are ordered busiest first",
@@ -1231,12 +1286,14 @@ ok("the overflow becomes ticks rather than more rows",
   && crowdLane.items.every(i => !i.label || i.row < CAL_TL_STORE_ROWS));
 ok("every crowded event is still PLACED — only its title is dropped",
   crowdLane.count === crowd.length && crowdLane.items.every(i => i.x >= 0 && i.x <= 1));
-// A region lane is uncapped: a season is ~17 Challenges across five of them, so
-// it never comes close, and capping one would silently drop a Challenge's name.
+// The Challenge track is uncapped in BOTH modes: capping it would demote the
+// back half of a busy month to unlabelled dots, which is the one thing the
+// chart exists to carry.
 const wide = crowd.map((e, i) => ({...e, kind: "dlc", country: "US", store_id: undefined,
   rph_kind: undefined, id: "d" + i}));
-ok("a region lane is not capped",
-  calendarTimeline(wide, TL_OPTS).lanes.find(l => l.key === "na").rows > CAL_TL_STORE_ROWS);
+ok("a Challenge lane is not capped, packed or by region",
+  calendarTimeline(wide, TL_OPTS).lanes.find(l => l.key === "circuit").rows > CAL_TL_STORE_ROWS
+  && calendarTimeline(wide, {...TL_OPTS, group: "region"}).lanes.find(l => l.key === "na").rows > CAL_TL_STORE_ROWS);
 
 // ⚠ Past the shop cap the tail rolls into ONE lane rather than growing the
 // chart without limit — six named lanes is already 300px of chart.

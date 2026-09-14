@@ -4381,11 +4381,10 @@ row is one row tall whether the next thing is tomorrow or in June. A third mode
 (`?cv=timeline`) draws distance as time. `calendarTimeline()` is the pure core,
 `CalendarTimelineView` the render; guarded by `node scripts/test_calendar.mjs`.
 
-- **Lanes are `CALENDAR_REGIONS`**, the site's one region taxonomy, already in `?cr=`
-  - so the chart and the region picker can never describe different worlds, and a
-  lane heading is the same filter its chip is. A second, finer taxonomy (Japan and
-  China as their own rows, the way a hand-drawn infographic would split them) was
-  deliberately not introduced.
+- **The default is ONE PACKED TRACK, not one row per region** - see "Region rows
+  are a PICK, not the layout" below, which is where that decision and its
+  failure modes live. (This originally read "lanes are `CALENDAR_REGIONS`", and
+  that swimlane default is exactly what the section replaced.)
 - **Positions are FRACTIONS of the window (0..1), never pixels**, the same rule the
   pin board's placements follow - the layout has to hold at the 1120px floor and at
   2400px, and the component only ever multiplies by 100 and writes a `%`.
@@ -4435,6 +4434,90 @@ row is one row tall whether the next thing is tomorrow or in June. A third mode
   (`--bg-modal`, per the Screener's sticky-NAME rule; `--bg-card` is translucent in
   the dark themes and would let the months show through).
 
+### Region rows are a PICK, not the layout (2026-09-14)
+
+Zaven, on the first cut: *"the region rows, I dont want to just copy the layout
+from that tweet we saw."* Correct, and the reason is structural rather than a
+matter of taste. **Five fixed swimlanes is the shape a global announcement
+graphic uses, because it is addressing five continents at once and knows nothing
+about any of its readers.** This site knows where you are: the region CHIPS in
+the filter row already ask that question, with live counts, so lanes asking it
+again is the same control drawn twice - and two of the five (Latin America,
+Elsewhere) are near-empty all season, spending a third of the chart's height
+saying nothing.
+
+- **`CAL_TL_CIRCUIT_LANE` is the default**: DLCs and CCQs sort by date and pack
+  into as many rows as they need, so **the row COUNT is the density** and an
+  empty vertical band across the whole track is the drought. That reads the gaps
+  BETTER than five lanes you have to scan in parallel, and narrowing to one
+  region re-packs the track for that region.
+- **⚠ The circuit is the one lane that is NEVER row-capped.** `CAL_TL_STORE_ROWS`
+  caps the personal lanes because an SC cluster would stack twenty rows deep on
+  one weekend; the circuit is the content, and capping it would demote the back
+  half of a busy month to unlabelled dots - exactly the information the chart
+  exists to carry. Pinned in both modes by the test.
+- **Region rows stay REACHABLE** as `?cg=region` (a Packed / By region control in
+  the timeline bar, `packsink:cal:group`). Comparing two regions' runs against
+  each other is a real question; it is just not the one most readers arrive with,
+  and an empty region lane is not rendered at all, so even that mode is not the
+  graphic's fixed five.
+- **⚠ Only a real region lane offers itself as a filter.** "Challenges" is every
+  region at once, so clicking it could only mean "all", which is where you
+  already are.
+- **The grouping NEVER reaches the personal lanes or the release rail** - a shop
+  is a subject rather than a category, and a release is in no place at all. The
+  test pins that for both modes.
+- **Three blocks, ruled apart: Challenges -> yours -> Releases** (`lane.group`,
+  `lane.first`). They separate by SPACE (`margin-top`), not by a heavier border:
+  a 2px grey line across the chart read as a scar. The month bands run
+  continuously through the gap because the grid is one absolute overlay.
+
+### The chart's typography (2026-09-14)
+
+Same day, same ask: *"work on the formatting and font."* Everything in the chart
+was within a pixel of everything else - 10px grey caps for the row names, 10px
+grey caps for the months, 11px for the titles - so nothing said which was
+structure and which was content.
+
+- **⚠ A STRUCTURAL row name is set in Cinzel**, the site's own display face, used
+  nowhere else in this chart. That is what separates "Challenges" and "Releases"
+  (categories the chart invented) from a shop's name, which is a proper noun
+  somebody chose and stays in the body face and the store green. The counts
+  beside them stay body-face and tabular - a Cinzel numeral beside a Cinzel word
+  reads as part of the title rather than as a tally.
+- **Three tiers now, and they are meant to be unequal**: the title is CONTENT and
+  leads (11.5px/800), the date is DATA and recedes (9.5px/600, tabular), the axis
+  and row names are STRUCTURE and are quieter than both.
+- **The year turn is the one real event on the axis** and was the twelfth
+  identical grey word in the row; `.cal-tl-mon--year` gives it the text colour.
+- **A three-day Challenge draws as a BAR and a one-day CCQ as a dot**, so the
+  shape says how long it runs before the label does. The bar is deliberately
+  flatter than the dot is round - a fat lozenge just reads as a bigger dot.
+- **⚠ On the RELEASE rail the phase moves to the SECOND line** (`calTlLabelParts`),
+  and that is the difference between reading the rail and not. `calEventTitle`
+  joins set and phase into "Hyperia City LGS release" - 24 characters into a
+  140px label, so a set with three dates rendered as "Hyperia City LGS rel",
+  "Hyperia City Retail r" and "Hyperia City Beast G": three near-identical
+  clipped strings whose clipped-off half was the only thing telling them apart.
+- **⚠ `CAL_TL_LABEL_PX` (140) and `.cal-tl-label`'s width are ONE number in two
+  files** - the packing is measured against it. It grew from 126 with this pass,
+  which also moved a test fixture: a date chosen to anchor LEFT at 126px anchors
+  right at 140px, and the pair then tests nothing.
+- **⚠ `CAL_TL_GAP_PX` is 64, not 46.** At 46 the chip fitted its own box and
+  still sat on the dots either side of it, and a 47-day gap is not the number
+  anybody opened a season chart to read. Only a real drought earns a chip.
+- **The canvas export asks for Cinzel explicitly** (`document.fonts.load` at both
+  weights, best-effort) and uses it for the title and the structural row names. A
+  canvas falls back to the generic serif silently when a face is not loaded AT
+  THE WEIGHT ASKED FOR, so the picture would otherwise be visibly a different
+  document from the screen it was copied off.
+- **The bar states a WINDOW, so it uses `calMonthLabelShort`** - "Sep 2026 - Aug
+  2027". The full form wrapped to three lines at 390px and out-weighed the chart
+  under it at every width. The EXPORT header keeps the long form: that is a
+  document, and a picture with the year abbreviated is one nobody can date.
+- The gutter went 104px -> 120px (96px on mobile) to hold a Cinzel "CHALLENGES";
+  the chart is 1240px against `.cal-view--wide`'s 1260px, so it still fits.
+
 ### The filter row, and what it can now say (2026-09-14)
 
 The toolbar was one line holding the kind chips, a region `<select>` and the mode
@@ -4456,6 +4539,7 @@ stopped a single row wrapping into a pile once the third and fourth control land
   those with the diacritics. `useDeferredValue`d, same as the Cards browser.
 - **`?cspan=` is 6 / 12 / 24 months**, timeline only. 12 is one competitive season
   and stays the default, so the param is omitted at 12 and the URL stays clean.
+- **`?cg=` is `packed` (default) or `region`**, timeline only - see above.
 - Counts on both chip rows are computed AFTER the search but BEFORE their own
   dimension, so no chip ever claims rows the page is not showing and no option
   reads (0) purely because you already narrowed by it.
