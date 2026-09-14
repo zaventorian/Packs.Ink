@@ -452,12 +452,18 @@ the source is a fan site with gaps.
 - **⚠ The Wilds Unknown TROVE counter is the Woody-and-Buzz one**, confirmed against the product
   coverage, so the Merida dial photographed beside it is a different counter and is NOT `n:22`.
   Getting that pair the wrong way round would put the wrong art on a tile permanently.
-- **Two counters are known to exist and are deliberately NOT catalogued yet**, because an entry
-  mints a permanent `n` and a permanent photo path: the **Wilds Unknown Merida** dial (organized
-  play) and the **Attack of the Vine!** dial given to players at their first event. `n:11`
-  ("Tiana - Warm and Happy", *Weekly Play - Winterspell (first event)*) is the precedent for how a
-  first-event counter is named, and the naming convention is the card/art name, so both need their
-  card name confirmed rather than guessed.
+- **The two missing Weekly Play counters landed 2026-09-13: `n:24` Merida (Wilds Unknown) and
+  `n:25` Winnie the Pooh - Hunny Archmage (Attack of the Vine!, first event).** That closes the gap
+  this file used to describe as "lorcanaplayer says every Weekly Play season has had one but
+  documents neither" — it documents the Trove dials on its list page and the Weekly Play ones only
+  as separate `/product/` pages, and it has neither of these.
+  - **⚠ Both are named for their ART, not their set, and that is load-bearing.** `n:22` is already
+    "Wilds Unknown" and `n:21` "Attack of the Vine!" — the Trove dials — so a set name here would
+    give one season two identically-named counters and leave the source line as the only thing
+    telling them apart.
+  - **⚠ "Hunny Archmage" (Attack of the Vine! 40/207) is NOT "Hunny Wizard"** (Rise of the Floodborn
+    59/204, which is the pin at `LORCANA_PINS` n:8). Two different Pooh-as-wizard cards two sets
+    apart; the counter art was checked against Lorcast to pick the right one.
 - Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
 - **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
   valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
@@ -501,8 +507,19 @@ the source is a fan site with gaps.
     getting that wrong fires the warning on every correct cut.
   - Two counters in one frame is fine: the subject mask keeps only the component touching the
     centre, so crop roughly around each and run it twice.
-  - **A counter shot at a hard 3/4 angle is not recoverable** — the fit allows a mild aspect and
-    rotation, and past that the honest answer is a better source photo.
+  - **⚠ A DROP SHADOW is the fit's other blind spot, and widening the aspect search does not fix
+    it** (tried, on the Attack of the Vine promo — it changed the answer by 0.03). GrabCut takes
+    the shadow for part of the dial, the hull inherits it, and the best-covering hexagon of that
+    shape sits low and tall: it crops the dial's top and lets a wedge of background in at both
+    bottom corners, **scoring IoU 0.95 while doing it**. The score cannot see this; `--debug` can.
+  - **`--hex` and `--poly` are the escape hatches, and `--poly` is the one that usually works.** A
+    dial photographed off-square is a hexagon in PERSPECTIVE — the AotV promo is 1.19x wider than
+    tall AND taller than a regular hexagon of that width, so no scaled regular hexagon fits it at
+    all and `--hex` only trades one error for another. Six hand-placed vertices, read off a
+    coordinate grid over the crop, take about two minutes and are exact.
+  - **Verify a cut by measuring, not by looking**: distance-transform the alpha and count pixels
+    near the background colour within ~3px of the edge. The art's own foliage will read as
+    "background-coloured" deep inside the shape and means nothing.
 - **A card-backed pin is a RECTANGLE, so ~89% opaque is the right answer, not a failed cut.** The
   transparent tenth is the 2% pad ring plus the rounded corners. Check it by measuring — corner
   alpha, and whether any near-white opaque pixel still touches the frame edge — rather than by

@@ -15,7 +15,7 @@ hexagon goes, whatever colour it was.
 
     python scripts/cut_hex_collectible.py --in src --out out --contact sheet.png
     python scripts/cut_hex_collectible.py --in src --out out \
-        --hex ctr-23=122,120,104,8      # cx,cy,r,deg — override the auto fit
+        --hex ctr-25=157,157,135,0,1.19   # cx,cy,r,deg[,aspect] — skip the fit
 
 ⚠ ALWAYS look at --contact, and look at --debug too when a fit is doubtful. The
 failure here is not a hole or a fringe (the mask is a clean polygon by
@@ -108,33 +108,66 @@ def fit_hex(m: np.ndarray):
         return None
     cx0, cy0 = float(xs.mean()), float(ys.mean())
     r0 = math.sqrt(m.sum() / (1.5 * math.sqrt(3)))       # area of a regular hexagon
-    h, w = m.shape
+
+    def score(cx, cy, r, deg, asp):
+        poly = np.array(hex_points(cx, cy, r, deg, asp), np.int32)
+        cand = np.zeros_like(m)
+        cv2.fillPoly(cand, [poly], 1)
+        union = int(np.logical_or(cand, m).sum())
+        return (int(np.logical_and(cand, m).sum()) / union) if union else 0.0
+
+    # Aspect ranges wide because a dial shot even slightly off-square is a
+    # hexagon in perspective and comes out WIDER THAN TALL — the Attack of the
+    # Vine promo measures ~1.19 against the 1.0 of a face-on dial.
+    #
+    # ⚠ But a wide aspect does NOT rescue a DROP SHADOW, and that is the failure
+    # to watch for. GrabCut takes a counter's shadow for part of the counter, the
+    # hull inherits it, and the best-covering hexagon of THAT shape is a taller
+    # one sitting low — which crops the dial's top and lets a wedge of background
+    # in at both bottom corners. It scored IoU 0.95 doing it, so the number says
+    # nothing; only --debug does. A shadowed source is what `--hex` is for.
+    #
+    # Coarse then fine, because the full grid at a useful step is ~10^5 fills.
+    ASPECTS = (0.86, 0.92, 0.98, 1.04, 1.10, 1.16, 1.22)
     best = None
-    for deg in range(0, 60, 2):                          # 6-fold symmetric
-        for asp in (0.94, 1.0, 1.06):
-            for rs in (0.92, 0.96, 1.0, 1.04, 1.08):
+    for deg in range(0, 60, 4):                          # 6-fold symmetric
+        for asp in ASPECTS:
+            for rs in (0.86, 0.92, 1.0, 1.08, 1.16):
+                for dx in (-6, 0, 6):
+                    for dy in (-6, 0, 6):
+                        s = score(cx0 + dx, cy0 + dy, r0 * rs, deg, asp)
+                        if best is None or s > best[0]:
+                            best = (s, cx0 + dx, cy0 + dy, r0 * rs, deg, asp)
+    _, bx, by, br, bdeg, basp = best
+    for ddeg in (-3, -2, -1, 0, 1, 2, 3):
+        for dasp in (-0.04, -0.02, 0, 0.02, 0.04):
+            for drs in (0.96, 0.98, 1.0, 1.02, 1.04):
                 for dx in (-4, -2, 0, 2, 4):
                     for dy in (-4, -2, 0, 2, 4):
-                        cx, cy, r = cx0 + dx, cy0 + dy, r0 * rs
-                        poly = np.array(hex_points(cx, cy, r, deg, asp), np.int32)
-                        cand = np.zeros_like(m)
-                        cv2.fillPoly(cand, [poly], 1)
-                        inter = int(np.logical_and(cand, m).sum())
-                        union = int(np.logical_or(cand, m).sum())
-                        iou = inter / union if union else 0.0
-                        if best is None or iou > best[0]:
-                            best = (iou, cx, cy, r, deg, asp)
+                        cand = (bx + dx, by + dy, br * drs, bdeg + ddeg, basp + dasp)
+                        s = score(*cand)
+                        if s > best[0]:
+                            best = (s,) + cand
     return best
 
 
-def cut(path: str, size: int, override=None, debug_dir=None):
+def cut(path: str, size: int, override=None, debug_dir=None, poly_override=None):
     src = Image.open(path).convert("RGB")
     bgr = cv2.cvtColor(np.array(src), cv2.COLOR_RGB2BGR)
     w, h = src.size
 
-    if override:
-        cx, cy, r, deg = override
-        asp, iou, how = 1.0, float("nan"), "manual"
+    if poly_override:
+        pts = [tuple(p) for p in poly_override]
+        iou, how = float("nan"), "poly"
+        cx = sum(p[0] for p in pts) / 6.0
+        cy = sum(p[1] for p in pts) / 6.0
+        r = deg = 0.0
+        asp = 1.0
+    elif override:
+        cx, cy, r, deg = override[:4]
+        asp = override[4] if len(override) > 4 else 1.0
+        iou, how = float("nan"), "manual"
+        pts = hex_points(cx, cy, r, deg, asp)
     else:
         m = subject_mask(bgr)
         fit = fit_hex(m)
@@ -142,6 +175,7 @@ def cut(path: str, size: int, override=None, debug_dir=None):
             raise ValueError("no subject found")
         iou, cx, cy, r, deg, asp = fit
         how = "auto"
+        pts = hex_points(cx, cy, r, deg, asp)
         if debug_dir:
             d = np.array(src).copy()
             d[m.astype(bool)] = (0.5 * d[m.astype(bool)] + np.array([0, 128, 0])).astype(np.uint8)
@@ -149,7 +183,6 @@ def cut(path: str, size: int, override=None, debug_dir=None):
             ImageDraw.Draw(im).polygon(hex_points(cx, cy, r, deg, asp), outline=(255, 0, 0))
             im.save(os.path.join(debug_dir, os.path.basename(path) + ".debug.png"))
 
-    pts = hex_points(cx, cy, r, deg, asp)
     alpha = Image.new("L", (w, h), 0)
     ImageDraw.Draw(alpha).polygon(pts, fill=255)
     # Fill is measured against the POLYGON's own bounding box, never the frame's:
@@ -182,7 +215,9 @@ def cut(path: str, size: int, override=None, debug_dir=None):
         elif not (FILL_LO <= bbox_fill <= FILL_HI):
             note = "  <-- fill %.2f outside hexagon range, check --debug" % bbox_fill
     out.info["note"] = note
-    out.info["fit"] = "%s cx=%.0f cy=%.0f r=%.0f deg=%.0f iou=%.2f" % (how, cx, cy, r, deg, iou)
+    out.info["fit"] = ("poly (6 hand-placed vertices)" if how == "poly" else
+                       "%s cx=%.0f cy=%.0f r=%.0f deg=%.0f asp=%.2f iou=%.2f"
+                       % (how, cx, cy, r, deg, asp, iou))
     return out
 
 
@@ -206,7 +241,12 @@ def main() -> int:
     ap.add_argument("--out", dest="dst", required=True)
     ap.add_argument("--size", type=int, default=400)
     ap.add_argument("--hex", action="append", default=[],
-                    help="stem=cx,cy,r,deg — skip the fit for this one image")
+                    help="stem=cx,cy,r,deg[,aspect] — skip the fit for this one image. "
+                         "aspect>1 is wider than tall, which is what a tilted dial is.")
+    ap.add_argument("--poly", action="append", default=[],
+                    help="stem=x1,y1,...,x6,y6 — six explicit vertices, clockwise from "
+                         "the top. The escape hatch for a dial shot in PERSPECTIVE, whose "
+                         "outline is a general hexagon that no scaled regular one fits.")
     ap.add_argument("--contact")
     ap.add_argument("--debug", help="directory for fit overlays")
     args = ap.parse_args()
@@ -215,6 +255,13 @@ def main() -> int:
     for o in args.hex:
         stem, _, nums = o.partition("=")
         overrides[stem] = tuple(float(v) for v in nums.split(","))
+    polys = {}
+    for o in args.poly:
+        stem, _, nums = o.partition("=")
+        v = [float(x) for x in nums.split(",")]
+        if len(v) != 12:
+            ap.error("--poly %s needs 12 numbers (six x,y pairs), got %d" % (stem, len(v)))
+        polys[stem] = [(v[i], v[i + 1]) for i in range(0, 12, 2)]
 
     os.makedirs(args.dst, exist_ok=True)
     if args.debug:
@@ -226,7 +273,7 @@ def main() -> int:
             continue
         stem = os.path.splitext(f)[0]
         try:
-            im = cut(p, args.size, overrides.get(stem), args.debug)
+            im = cut(p, args.size, overrides.get(stem), args.debug, polys.get(stem))
         except Exception as e:                                   # noqa: BLE001
             print("SKIP %-18s %s" % (f, e))
             continue

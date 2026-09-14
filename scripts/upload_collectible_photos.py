@@ -49,7 +49,7 @@ PREFIX_COUNTERS = "collectibles/counters"
 # "unexpected number" check, and an entry flagged noArt has no photo to upload.
 # Both lists happen to run 1..max with no gaps today.
 EXPECTED_PINS = 44
-EXPECTED_COUNTERS = 24
+EXPECTED_COUNTERS = 25
 MAX_BYTES = 400 * 1024   # a tile photo past this means the cut script was skipped
 
 
