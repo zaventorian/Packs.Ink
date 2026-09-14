@@ -1,4 +1,4 @@
--- 150_calendar_dlc_nanjing.sql - the DLC the season seed missed (2026-09-14).
+-- 152_calendar_dlc_nanjing.sql - the DLC the season seed missed (2026-09-14).
 --
 -- 141 seeded 17 Challenges for 2026-27. A published season schedule carries an
 -- 18th: Nanjing, 21-22 Nov 2026, the season's only mainland-China Challenge -
@@ -9,8 +9,13 @@
 -- to rule on and no visitor sees a date we cannot stand behind yet. Confirm it
 -- in the /calendar admin editor; never flip confirmed from a script.
 --
--- Numbered 150 because 149 was burned on a withdrawn migration that is still
--- fetchable from its closed PR ref - see CLAUDE.md's migration ledger.
+-- Numbered 152, not 149 (burned on a withdrawn migration still fetchable from
+-- its closed PR ref), not 151 (staged and deleted the same day - see the
+-- ledger), and NOT 150: this was WRITTEN as 150, but a concurrent session
+-- landed its own 150_calendar_official_challenge_page.sql on main while this
+-- branch was open, so the number was already taken by the time the two met.
+-- Renumbered rather than shipping a third duplicated number - see CLAUDE.md's
+-- migration ledger, which carries the same warning for 143 and 144.
 --
 -- Five dates that source disagrees with 141 on are deliberately NOT changed
 -- here; the reasoning is in CLAUDE.md under the calendar section.

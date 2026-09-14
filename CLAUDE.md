@@ -4741,7 +4741,7 @@ the day except:
 
 - **DLC Nanjing, 21-22 Nov 2026 is MISSING** - the season's only mainland-China
   Challenge, which is why a community page maintained by English-speaking players
-  does not carry it. Staged as `supabase/150_calendar_dlc_nanjing.sql` at
+  does not carry it. Staged as `supabase/152_calendar_dlc_nanjing.sql` at
   `confirmed = false`, so it sits in the admin editor to rule on and no visitor is
   shown a date nobody has checked.
 - **Five Challenges disagree, and ours are kept.** Bangkok, Singapore, Hong Kong
@@ -4968,10 +4968,14 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
-- ~~`supabase/150_calendar_dlc_nanjing.sql`~~ - **STAGED 2026-09-14, needs a paste.**
+- ~~`supabase/152_calendar_dlc_nanjing.sql`~~ - **STAGED 2026-09-14, needs a paste.**
   One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
-  until ruled on in the /calendar editor. Numbered 150, not 149, for the reason
-  the 149 entry below gives. Pure ASCII, short header, per the 142 lesson.
+  until ruled on in the /calendar editor. Pure ASCII, short header, per the 142
+  lesson. **⚠ It was WRITTEN as 150 and renumbered before merge**: a concurrent
+  session landed `150_calendar_official_challenge_page.sql` on main while this
+  branch was open. Both are real, unrelated, and both want running - the number
+  was the only thing broken. A reference to "150" written before 2026-09-14 may
+  mean the Nanjing row; every one in this file now says 152.
 - **There is no 151.** A `151_calendar_custom_events.sql` was staged on 2026-09-14
   for a personal add-your-own-event feature, and both were DELETED the same day:
   Zaven's *"I dont mean own event"* corrected the reading the feature was built
@@ -4980,6 +4984,13 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - ⚠ **Numbers 143 and 144 each have TWO files** — the scouting pair below and the calendar's
   `143_calendar_geo.sql` / `144_calendar_hide.sql`, written by a concurrent session the same day
   (as 139 already had two). **Always say the FULL FILENAME**, never "run 144".
+- ⚠ **150 nearly became the third, and the near-miss is the lesson.** Two sessions each wrote a
+  `150_*` on 2026-09-14 - `150_calendar_official_challenge_page.sql` (merged to main) and the
+  Nanjing row (this branch) - and nothing anywhere errors when that happens: both files apply
+  fine, and it is the ledger and any "run 150" instruction that break. Caught before merge and
+  the branch's became **152**, so only one `150_*` exists. **Take the next number from
+  `ls supabase/*.sql | tail` at the moment you COMMIT, not when you start** - a branch open for
+  a few hours is long enough for the number you picked to be taken.
 - ⚠ **Granting someone the scouting feature is a PASTE, never a migration — this repo is
   PUBLIC.** `scout_members` is an EMAIL allowlist, so a seed file is fourteen real people's
   addresses in a git history that is permanent and world-readable. A session wrote exactly that
