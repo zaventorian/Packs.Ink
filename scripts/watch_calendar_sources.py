@@ -12,7 +12,20 @@ if a person happens to notice. That is exactly the failure catalog-watch was
 built to stop, so this is the same shape: a daily sweep that goes red ONLY when
 something is new, with every ruling recorded in a committed file.
 
-TWO SOURCES, because neither sees the whole picture:
+THREE SOURCES, because none sees the whole picture:
+
+  * Ravensburger's own Challenge page, which is the AUTHORITY on which events
+    are sanctioned qualifiers. Added 2026-09-14 after the calendar was found
+    three qualifiers short of it with two more misnamed and unlinked — it had
+    never been read, so nothing could notice.
+    ⚠ ITS QUALIFIER LIST IS SPLIT ACROSS LOCALES AND EACH CARRIES HALF. en-US
+    heads its list "North America Challenge Championship Qualifiers"; en-GB
+    carries a second, "EU & UK ...", that appears on no US page. Reading one
+    locale silently loses half the season — that is exactly how CCQ Sevilla was
+    missing. Both are fetched and merged. (it-IT is stale, still listing June
+    2026, so it is not a third locale to add — it is a trap.)
+    It lists only the qualifiers and the season's Challenges; a store-run event
+    reaches us through the other two.
 
   * The community competitive-season page. It is the only place a whole season
     is listed at once — Ravensburger announces Challenges piecemeal — and it is
@@ -38,6 +51,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html
 import json
 import os
 import re
@@ -71,6 +85,14 @@ SEASON_PAGES = ["Disney_Lorcana_2026-2027_Competitive_Season"]
 # their own headers and there is no shared default.
 WIKI_HEADERS = {"User-Agent": "Mozilla/5.0 (packs.ink calendar watch)", "Accept": "application/json"}
 
+# ⚠ BOTH locales, always — each carries a qualifier list the other does not.
+OFFICIAL_PAGES = (
+    "https://www.disneylorcana.com/en-US/play/lorcana-challenge",
+    "https://www.disneylorcana.com/en-GB/play/lorcana-challenge",
+)
+OFFICIAL_HEADERS = {"User-Agent": "Mozilla/5.0 (packs.ink calendar watch)",
+                    "Accept": "text/html"}
+
 # Qualifier-shaped titles at stores, the same net scan_ccq_candidates.py casts.
 RPH_NET = ("ccq", "championship qualifier", "challenge qualifier")
 
@@ -98,6 +120,38 @@ def norm(s: str) -> str:
     n = unicodedata.normalize("NFKD", s or "")
     n = "".join(c for c in n if not unicodedata.combining(c)).lower()
     return re.sub(r"[^a-z0-9]+", " ", n).strip()
+
+
+def _stem(s: str) -> str:
+    """norm() minus the noise words every source spells differently — the page
+    calls it 'Utopica Fantasy Festival', we title it '... CCQ'."""
+    drop = {"ccq", "the", "disney", "lorcana", "tcg", "official", "qualifier",
+            "championship", "challenge"}
+    return " ".join(w for w in norm(s).split() if w not in drop)
+
+
+def already_have(name, start, url, have):
+    """Is this announcement already on the calendar?
+
+    ⚠ The registration URL is the only key that survives translation: the same
+    qualifier is named differently on each locale and differently again in our
+    own title. Name matching is the fallback, and it is DATE-GUARDED — a loose
+    name test alone would suppress next season's 'CCQ Sevilla' because this
+    season's is still in the table."""
+    if url and url.rstrip("/") in {(r.get("url") or "").rstrip("/") for r in have if r.get("url")}:
+        return True
+    n, stem = norm(name), _stem(name)
+    for r in have:
+        if norm(r["title"]) == n:
+            return True
+        if start is None or r.get("starts_on") != start.isoformat():
+            continue
+        other = _stem(r["title"])
+        if stem and other and (stem == other
+                               or (len(stem) >= 8 and stem in other)
+                               or (len(other) >= 8 and other in stem)):
+            return True
+    return False
 
 
 # ── the season page ─────────────────────────────────────────────────────────
@@ -178,6 +232,56 @@ def fetch_season_events():
     return out
 
 
+# ── Ravensburger's own Challenge page ───────────────────────────────────────
+# Each qualifier is one <p>: "<strong>DATE:</strong>" then "City, Country –
+# Event Name – Venue", usually wrapped in the registration <a href>. The name is
+# the MIDDLE dash-segment; with only two, the venue is absent and it is the last.
+_P_RE = re.compile(r"(?is)<p[^>]*>(.*?)</p>")
+_STRONG_RE = re.compile(r"(?is)<strong[^>]*>(.*?)</strong>")
+_HREF_RE = re.compile(r"""(?is)<a[^>]+href=["']([^"']+)["']""")
+
+
+def _detag(s):
+    return re.sub(r"\s+", " ", html.unescape(re.sub(r"(?s)<[^>]+>", " ", s or ""))).strip()
+
+
+def fetch_official_ccqs():
+    """(kind, name, start, end, url) for every qualifier Ravensburger lists.
+
+    Returns [] on any failure — this source going quiet must not take the whole
+    sweep down, since the other two still answer."""
+    out, seen = [], set()
+    for page in OFFICIAL_PAGES:
+        try:
+            req = urllib.request.Request(page, headers=OFFICIAL_HEADERS)
+            with urllib.request.urlopen(req, timeout=60) as r:
+                doc = r.read().decode("utf-8", "ignore")
+        except Exception as e:
+            print(f"  ::warning:: could not read {page} ({e})")
+            continue
+        for m in re.finditer(r"Challenge Championship Qualifiers", doc):
+            for para in _P_RE.findall(doc[m.end():m.end() + 4000]):
+                sm = _STRONG_RE.search(para)
+                if not sm:
+                    continue
+                start, end = parse_date(_detag(sm.group(1)))
+                if not start:
+                    continue
+                rest = _detag(_STRONG_RE.sub(" ", para)).lstrip(": ").strip()
+                parts = [p.strip() for p in re.split(r"[–—-]", rest) if p.strip()]
+                if not parts:
+                    continue
+                name = parts[1] if len(parts) >= 3 else parts[-1]
+                hm = _HREF_RE.search(para)
+                url = hm.group(1) if hm else None
+                key = url or norm(name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(("ccq", name, start, end, url))
+    return out
+
+
 def fetch_rph_qualifiers():
     ors = ",".join(f"name.ilike.*{urllib.parse.quote(t)}*" for t in RPH_NET)
     rows = sb("lorcana_events?select=event_id,name,start_datetime,store_name,country"
@@ -227,21 +331,28 @@ def main():
     state = load_state()
     acks = state.get("acks", {})
 
-    have = sb("calendar_events?select=kind,title,starts_on,event_id&limit=2000")
-    have_names = {norm(r["title"]) for r in have}
+    have = sb("calendar_events?select=kind,title,starts_on,event_id,url&limit=2000")
     have_ids = {r.get("event_id") for r in have if r.get("event_id")}
     print(f"calendar holds {len(have)} curated events")
 
     findings = []
+    for kind, name, start, end, url in fetch_official_ccqs():
+        if start < today:
+            continue
+        if already_have(name, start, url, have):
+            continue
+        findings.append({"key": f"official:{(url or norm(name)).rstrip('/')}",
+                         "kind": kind, "name": name,
+                         "date": start.isoformat(), "where": "official page"})
     for kind, name, start, end in fetch_season_events():
         if start < today:
             continue
-        if norm(name) in have_names:
+        if already_have(name, start, None, have):
             continue
         findings.append({"key": f"season:{norm(name)}", "kind": kind, "name": name,
                          "date": start.isoformat(), "where": "season page"})
     for kind, name, start, end, eid in fetch_rph_qualifiers():
-        if eid in have_ids or norm(name) in have_names:
+        if eid in have_ids or already_have(name, start, None, have):
             continue
         findings.append({"key": f"rph:{eid}", "kind": kind, "name": name,
                          "date": start.isoformat(), "where": "Ravensburger Play"})

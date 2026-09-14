@@ -4353,12 +4353,47 @@ deck quick-add thumbnails, and the same trap the offline-testing note describes.
 
 - **`scripts/watch_calendar_sources.py`** is the calendar's catalog-watch: a daily
   sweep (in `catalog-watch.yml`, `if: always()`) that is red ONLY when an event
-  has been announced that the calendar does not have. Two sources, because
-  neither sees everything — the community season page (the only place a whole
-  season is listed at once) and RPH itself for qualifier-shaped store titles.
-  Rulings live in `scripts/calendar_watch.json`; an ack may carry `until` so it
-  expires and re-alerts. **It never writes to the calendar** — publishing stays a
-  person's decision, the same rule as `confirmed`.
+  has been announced that the calendar does not have. Three sources, because none
+  sees everything — **Ravensburger's own Challenge page** (the authority on which
+  events are sanctioned, added 2026-09-14), the community season page (the only
+  place a whole season is listed at once) and RPH itself for qualifier-shaped
+  store titles. Rulings live in `scripts/calendar_watch.json`; an ack may carry
+  `until` so it expires and re-alerts. **It never writes to the calendar** —
+  publishing stays a person's decision, the same rule as `confirmed`.
+
+### ⚠ disneylorcana.com's qualifier list is SPLIT ACROSS LOCALES (2026-09-14)
+
+`/<locale>/play/lorcana-challenge` heads its list **"North America Challenge
+Championship Qualifiers"** on en-US and carries a SECOND list, **"EU & UK
+Challenge Championship Qualifiers"**, only on en-GB / de-DE / fr-FR. Neither page
+hints the other exists, so reading one locale loses half the season silently —
+which is how **CCQ Sevilla** was absent from the calendar entirely. Always read
+both. (it-IT is STALE — it still lists June 2026 — so it is not a third locale to
+add, it is a trap.) The watcher fetches both and merges.
+
+- **⚠ Dedupe on the REGISTRATION URL, not the name.** The same qualifier is named
+  differently on each locale, differently again by the community wiki, and
+  differently again by RPH's store listing — "White Rabbit CCQ" / "CCQ Essen
+  2026" / "Disney Lorcana: CCQ Essen 2026" are one event whose names share no
+  words. The URL is the only key that survives translation. The name fallback is
+  **date-guarded** (`already_have`), because a loose name test alone would
+  suppress next season's "CCQ Sevilla" while this season's is still in the table.
+- **⚠ A scan-derived `location` is the STORE's registered address, not the
+  VENUE.** `Charlie's Collectible Show` was on the calendar at **Stone Mountain,
+  GA** — its RPH home store — for an event at 3801 Sumner Blvd, **Raleigh NC**. A
+  travelling show is wrong by construction, and nothing errors: the row looks
+  complete. Check a promoted candidate's city against the organiser's own page.
+- **⚠ A wiki stub and a scan candidate for one event both exist, and the PUBLIC
+  SEES THE WRONG ONE.** 141 seeded the season by name; `scan_ccq_candidates.py`
+  separately proposed the same events off RPH at `confirmed=false`. Unreconciled,
+  three qualifiers existed twice — the confirmed stub with no venue and no
+  registration link rendering publicly, the unconfirmed row carrying both
+  invisible. Migration 150 merged them; when draining the candidate queue, look
+  for a same-date stub to delete rather than confirming alongside it.
+- **Geocode anything you add** (`country`/`latitude`/`longitude`). 143's pass only
+  saw rows that existed then, and an ungeocoded row falls into the region
+  filter's **"Elsewhere"** bucket — visible, but not to someone filtering to their
+  own region. A set or product release correctly has no country: it is worldwide.
 - **⚠ `lorcana.fandom.com` 403s a page fetch but `api.php` answers 200.** Read it
   as `api.php?action=parse&page=<Page>&prop=wikitext&format=json`.
 - **⚠ Do NOT send a custom User-Agent to Supabase.** `Mozilla/5.0 (packs.ink
