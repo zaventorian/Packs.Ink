@@ -793,6 +793,34 @@ The `resolvedTheme` (aliased `theme` for back-compat) is what gets written to `<
 
 **`showTopBarTheme`** pref (`packsink:showTopBarTheme`): toggle to hide the quick theme bubble in the top-nav right cluster. Default ON.
 
+### ⚠ `color-scheme` is declared at the DOCUMENT level — don't scope it off again (2026-09-13)
+
+`<meta name="color-scheme" content="dark light">` in the head, plus
+`html[data-mode="dark"]{color-scheme:dark}` / `[data-mode="light"]{…light}` in styles.css.
+It is the **only** signal a browser has that this page already handles dark mode. Without
+it, Chrome's "Darken websites", Samsung Internet's dark mode and Android WebView's
+algorithmic darkening treat the app as un-themed and paint their **own** darkening filter
+over our already-dark palette.
+
+- **Reported from a freshly installed copy of the PWA**, sitting beside an older install of
+  the same build that looked correct — so it reads as "the app changed", and nothing in the
+  app had. Both were standalone, same theme, same commit.
+- **How to tell this apart from a theme bug in one step: it darkens IMAGES.** The logo PNG
+  and the profile avatar came back dimmed, and no stylesheet can do that. Measured on the
+  two screenshots: layout pixel-identical, and the good one rendered Aurora's own gradient
+  stop `#2a1450` to the byte while the bad one crushed it to `#0f0134`. Whites (the OS
+  status bar, nav labels) were untouched — a shadow-crushing dark filter, not a dim setting.
+- **It was scoped to form controls once before**, because Samsung Internet answered the dark
+  signal by painting a tan/cream UA widget background on `<button>` (the profile button and
+  its avatar tile). That is guarded at source now: the global `button` rule sets
+  `appearance:none`, so no button can fall back to a UA-painted widget in any engine. Don't
+  remove that `appearance:none` and don't re-scope `color-scheme` — fix the widget, not the
+  signal.
+- **Declare BOTH modes.** A light theme left undeclared is the case those filters treat most
+  aggressively.
+- The root declaration also covers what the old form-control-scoped rule was for: native
+  `<select>` option panels, scrollbars and focus rings stay readable in dark themes.
+
 ## price_movers matview gotcha
 
 Computes Δ% across 6 windows (1D / 1W / 1M / 3M / 6M / 1Y) for both low and market. **`low_prev` is "most recent non-null low BEFORE low_today's own date"** — migration 26 fixes the original bug that collapsed pct_1d to 0 for sparse-listing chase cards.
