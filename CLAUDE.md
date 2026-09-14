@@ -2482,6 +2482,13 @@ Letting both panels scroll naturally with the page sidesteps the conflict on bot
 - "<$1 → $0" toggle: cards under $1 count as 0 **before** averaging (mirrors `avg_low_nc` / `avg_market_nc`).
 - Earliest price data: 2024-02-08. Sets released before show `*` asterisk.
 - Time display: `relativeTime(iso)` for compact, `absoluteLocalTime(iso)` for hover tooltip. Both use browser local TZ.
+- **⚠ A calendar date for a QUERY comes from `localYmd()`, never
+  `new Date().toISOString().slice(0,10)`.** That form is the UTC day, so west of UTC it names
+  TOMORROW from early evening onward (19:00 CDT on). Every date column we filter on
+  (`sold_date`, `price_date`, `start_datetime`) is a calendar date, so the skew doesn't widen a
+  window — it asks for a day no row can carry yet. Invisible at 30 days and TOTAL at one: the
+  graded movers row's 1D window read "no graded sales match this filter" every evening until
+  2026-09-13. `localYmdDaysAgo(n)` is the N-days-back form.
 
 ## Browser back/history pattern
 

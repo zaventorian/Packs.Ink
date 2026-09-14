@@ -18718,6 +18718,20 @@ const absoluteLocalTime = (iso) => {
     return d.toString();
   }
 };
+// ⚠ The viewer's LOCAL calendar day as YYYY-MM-DD — never
+// `new Date().toISOString().slice(0,10)`, which is the UTC day. Every date
+// column we query (`sold_date`, `price_date`, `start_datetime`) is a calendar
+// date, so west of UTC the plain ISO form names TOMORROW for the whole evening
+// (19:00 CDT onward). That is invisible on a 30-day window and total on a
+// 1-day one: it silently asks for a day no row can carry yet.
+const localYmd = (d = new Date()) =>
+  new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+// N calendar days back from today, in the viewer's own timezone.
+const localYmdDaysAgo = (days) => {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return localYmd(d);
+};
 const setDataPartial = (setKey) => {
   const lgs = SET_RELEASE_DATES[setKey]?.lgs;
   return !!lgs && Date.parse(lgs) < Date.parse(EARLIEST_DATA_DATE);
@@ -30416,11 +30430,6 @@ const SOLD_FILTER_OFF = {mode: "any", days: "7", from: "", to: ""};
 // The modes the Custom popover owns; the rest are one-tap chips.
 const SOLD_CUSTOM_MODES = new Set(["on", "before", "after", "between"]);
 
-function screenerTodayISO(){
-  const n = new Date();
-  return new Date(n.getTime() - n.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-}
-
 function soldFilterPasses(dateStr, f){
   if(!f || !f.mode || f.mode === "any") return true;
   // An incomplete range is inert, not exclusive. Clearing the date input should
@@ -30430,7 +30439,7 @@ function soldFilterPasses(dateStr, f){
   if(f.mode === "days" && !(parseInt(f.days, 10) > 0)) return true;
   const d = dateStr ? String(dateStr).slice(0, 10) : "";
   if(!d) return false;
-  if(f.mode === "today")  return d === screenerTodayISO();
+  if(f.mode === "today")  return d === localYmd();
   if(f.mode === "days")   { const a = screenerSoldAge(d); return a != null && a.days <= parseInt(f.days, 10); }
   if(f.mode === "on")     return d === f.from;
   if(f.mode === "before") return d <  f.from;
@@ -32121,7 +32130,7 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
   // popover means something the moment it appears instead of sitting inert.
   const toggleSoldMenu = () => {
     if(!soldMenuOpen && !SOLD_CUSTOM_MODES.has(soldFilter.mode)){
-      const t = screenerTodayISO();
+      const t = localYmd();
       setSoldFilter(f => ({...f, mode:"on", from: f.from || t, to: f.to || t}));
     }
     setSoldMenuOpen(o => !o);
@@ -32941,12 +32950,12 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
             </label>
             <label class="price-db-soldrow">
               <span>${soldFilter.mode === "between" ? "From" : "Date"}</span>
-              <input type="date" value=${soldFilter.from || ""} max=${screenerTodayISO()}
+              <input type="date" value=${soldFilter.from || ""} max=${localYmd()}
                 onChange=${e=>setSoldFilter(f=>({...f, from:e.target.value}))}/>
             </label>
             ${soldFilter.mode === "between" && html`<label class="price-db-soldrow">
               <span>To</span>
-              <input type="date" value=${soldFilter.to || ""} max=${screenerTodayISO()}
+              <input type="date" value=${soldFilter.to || ""} max=${localYmd()}
                 onChange=${e=>setSoldFilter(f=>({...f, to:e.target.value}))}/>
             </label>`}
             <div class="price-db-soldhint muted">Matches each row's most recent recorded eBay sale. Rows with no recorded sale are hidden.</div>
@@ -39930,8 +39939,11 @@ const GradedMoversHomeBanner = ({raw, onCard, onTitleClick}) => {
     if(tab !== "sales"){ return; }
     let cancelled = false;
     setSales(null);
-    const d = new Date(); d.setDate(d.getDate() - days);
-    const since = d.toISOString().slice(0, 10);
+    // ⚠ localYmd, not toISOString — `sold_date` is a calendar date and this is
+    // the app's only ONE-day window, so the UTC skew doesn't widen it, it
+    // empties it: after 19:00 CDT the 1D cutoff landed on TOMORROW and the row
+    // read "no graded sales match this filter / window yet" every evening.
+    const since = localYmdDaysAgo(days);
     let q = sbClient.from("graded_sales")
       .select("item_id,card_id,grader,grade,printing,sale_price,sold_date")
       .not("card_id", "is", null).not("grade", "is", null).not("sale_price", "is", null)
