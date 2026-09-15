@@ -213,7 +213,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=412">
+<link rel="stylesheet" href="styles.css?v=413">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1204,7 +1204,8 @@ const SCREENER_MODE_LABELS = {raw: "Raw prices", graded: "Graded", sealed: "Seal
 const MARKET_SUB_LABELS = {
   overview: "Overview", ev: "Expected Value", trade: "Trade Compare",
   avg: "Set Breakdown", setval: "Playset Cost", sim: "Simulator",
-  swiss: "Swiss Odds", lore: "Lore Tracker", dice: "Dice Tray", elo: "Elo",
+  swiss: "Swiss Odds", lore: "Lore Tracker", dice: "Dice Tray",
+  ticker: "Stream Ticker", elo: "Elo",
 };
 const collectionSectionHref = (key, viewerContext) => {
   const q = new URLSearchParams();
@@ -10847,7 +10848,7 @@ const COACH_TOURS = {
     {sel:".history-picker-searchrow input", title:"Compare up to 18", body:"Search and add items to overlay them on one chart. \"+ variants\" pulls in a card's other printings and rarities."},
   ]},
   market: { title: "Analytics", steps: [
-    {sel:".market-subtabs", title:"The toolbox", body:"Expected Value, Trade Compare, Set Breakdown, Playset Cost, the pack/box Simulator, Swiss tournament odds and a Dice Tray for turn order. Overview lists what each one does — and every tab keeps its own URL, so any tool is shareable and bookmarkable."},
+    {sel:".market-subtabs", title:"The toolbox", body:"Every calculator on the site: what a box is worth, what a trade is worth, what a set costs to finish — plus a pack simulator, Swiss odds, at-the-table score and dice, and a movers ticker for your stream. Overview lists what each one does — and every tab keeps its own URL, so any tool is shareable and bookmarkable."},
   ]},
   collection: { title: "Collection", requiresUser: true, steps: [
     {sel:".collection-section-tabs", title:"Cards · Sealed · Graded · Pins", body:"Each kind of collectible gets its own section, its own value tracking and its own completion math — and your pins and lore counters get a board to arrange them on."},
@@ -30519,6 +30520,9 @@ const MARKET_SUBS = [
   ["swiss",  "Swiss Odds"],
   ["lore",   "Lore Tracker"],
   ["dice",   "Dice Tray"],
+  // Last of the visible tabs on purpose: the row scrolls horizontally on a
+  // phone, and an OBS overlay is the most niche thing under this tab.
+  ["ticker", "Stream Ticker"],
   // Elo is always a valid sub-key so /analytics?a=elo deep-links work even
   // when the user hasn't pinned it. The Analytics tab BAR hides it unless
   // eloPinned is true (see MarketView's subsList).
@@ -33925,6 +33929,8 @@ const MARKET_TOOL_INFO = {
            pts:["Up to 8 dice, one per player, held in place","d4 through d100, plus coins and rock-paper-scissors","Highest roll called out, ties rerolled on their own"]},
   lore:   {blurb:"Keep score at the table.",
            pts:["One to four players, face-to-face on a phone","Every change logged, with one-tap undo","Knows the cards that move the 20-lore goal"]},
+  ticker: {blurb:"Put the market on your stream.",
+           pts:["A scrolling bar of the biggest movers","Pick the time frames and rarities it cycles","One URL to paste into an OBS browser source"]},
   elo:    {blurb:"Ratings for the Chicagoland scene.",
            pts:["Player leaderboard and event history","Store activity against the RPH tiers","Scout an upcoming event's field"]},
 };
@@ -34874,7 +34880,12 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     ${sub==="swiss" && html`<${React.Fragment}>
       <${MarketHeader} title="Swiss Odds"
         sub="Monte Carlo odds for Swiss events — what record makes the cut, where the bubble sits, and whether to take the draw."/>
-      <iframe class="market-swiss-frame" src="/swiss?embed=1" title="Swiss Simulator"></iframe>
+      <iframe class="market-embed-frame" src="/swiss?embed=1" title="Swiss Simulator"></iframe>
+    <//>`}
+    ${sub==="ticker" && html`<${React.Fragment}>
+      <${MarketHeader} title="Stream Ticker"
+        sub="A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source."/>
+      <iframe class="market-embed-frame" src="/ticker?embed=1" title="Stream Ticker"></iframe>
     <//>`}
   </div>`;
 }
@@ -41800,6 +41811,17 @@ const HOME_TOOL_ICONS = {
     <path d="M3 20h18"/>
     <path d="M4 15l5-5 4 4 6-7"/>
     <path d="M15 7h4v4"/>`),
+  // Stream Ticker — a screen with the overlay bar across its foot, which is
+  // exactly what the tool puts on a stream. The band is FILLED, not a stroke
+  // with content drawn inside it: rasterised at 17px the stroked version's
+  // divider, inner line and the frame's own bottom edge sat 0.5px apart and
+  // smeared into one blob. A solid band has no sub-pixel gap to lose. The fill
+  // is the dice glyph's trick — the icon set is stroke-only by default, so the
+  // band has to opt in with fill="currentColor" stroke="none".
+  ticker: _navSvg(html`
+    <rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/>
+    <path d="M3.4 14.4h17.2v2.7a2.4 2.4 0 0 1-2.4 2.4H5.8a2.4 2.4 0 0 1-2.4-2.4z"
+      fill="currentColor" stroke="none"/>`),
   // Swiss Odds — trophy
   swiss: _navSvg(html`
     <path d="M7 4h10v5a5 5 0 0 1-10 0V4z"/>
@@ -42094,10 +42116,11 @@ const HOME_TOOLS = [
   // Analytics tab bar and in the Overview. The toolbox is a shortcut strip on
   // the home page, not a mirror of the tab bar, so it holds the tools you open
   // cold; a pack sim is somewhere you arrive from an EV row's "Sim" chip.
-  // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven). /ticker
-  // still works and is still the thing you paste into OBS — it just isn't a
-  // toolbox entry, because the toolbox is the calculators an ordinary visitor
-  // uses and the ticker is a tool for the handful of people who stream.
+  // The Stream Ticker chip was here and was removed 2026-08-24 (Zaven), and it
+  // stays removed now that the ticker is an Analytics TAB (2026-09-15): the
+  // toolbox is the calculators an ordinary visitor opens cold, and an OBS
+  // overlay is a tool for the handful of people who stream. Same rule that
+  // keeps Simulator out — a tab entry is not a toolbox entry.
 ];
 const HomeToolboxPanel = ({onOpenTool, panelNav}) => {
   const [collapsed, setCollapsed] = useState(() => {
@@ -49649,6 +49672,7 @@ const MARKET_SUB_TITLES = {
   swiss:  "Lorcana Swiss Odds — Packs.Ink",
   lore:   "Lorcana Lore Tracker — Packs.Ink",
   dice:   "Dice Tray — Packs.Ink",
+  ticker: "Lorcana Stream Ticker for OBS — Packs.Ink",
   elo:    "Chicagoland Lorcana Elo — Packs.Ink",
 };
 const PATH_TO_VIEW = (() => {

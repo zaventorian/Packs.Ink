@@ -46,6 +46,9 @@ const FILES = [
   // same-origin.
   "swiss.html",
   // Stream ticker overlay at /ticker (Workers Assets pretty-URL serves it;
+  // the Analytics "Stream Ticker" tab embeds it as /ticker?embed=1, which is
+  // why _headers carries a /ticker rule relaxing X-Frame-Options and
+  // frame-ancestors to SAMEORIGIN/'self' — see the /swiss note above;
   // no worker route so ?bar=1 survives) — OBS Browser Source bar + configurator.
   "ticker.html",
   // Unlisted affiliate link page at /picks — noindex + robots-disallowed and
