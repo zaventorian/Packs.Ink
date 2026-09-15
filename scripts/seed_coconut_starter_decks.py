@@ -72,8 +72,11 @@ LEADERS = {
     "nick-wilde-wily-fox":               ("Sapphire", "Nick Wilde - Wily Fox", {"Pawpsicle": 4}),
     "john-silver-greedy-treasure-seeker":("Steel",    "John Silver - Greedy Treasure Seeker", {}),
     "scar-finally-king":                 ("Steel",    "Scar - Finally King", {}),
+    "the-vine-towering-stalk":           ("Steel",    "The Vine - Towering Stalk", {}),
     "tinker-bell-giant-fairy":           ("Steel",    "Tinker Bell - Giant Fairy", {}),
 }
+# NOTE: 19 leaders, 18 starter decks — the Beta 2 leader (The Vine) has no list
+# yet. Nothing breaks; this dict is only consulted for slugs a deck file names.
 INK_LIMIT = 3   # Coconut's one concession: a third ink, one of which is the leader's
 MIN_CARDS = 60
 
