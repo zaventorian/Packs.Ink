@@ -32,9 +32,16 @@ informational, and the upload is an upsert at the same path.
 
 Ravensburger rebalances a leader by RE-RENDERING it in place: same collector
 number, footer stamp goes "[Format Coconut] • Beta" -> "• Beta 1.1". After
-re-uploading one, bump that cn in `COCONUT_ART_REV` (Index.html) — the offline
-image cache `packsink-img-v1` survives deploys and is keyed by URL, so without a
-new query string existing visitors keep the old wording forever.
+re-uploading one, bump that cn in `COCONUT_ART_REV` (Index.html).
+
+⚠ Two things that bump does NOT do, both easy to over-trust. It reaches the
+THUMB only — coconutThumbUrl appends ?v=, coconutArtUrl does not — and it is
+not the difference between fresh and stale-forever: sw.js serves IMG_CACHE
+stale-while-revalidate, so an un-bumped URL costs one more stale paint and then
+self-corrects. What the bump actually buys is an IMMEDIATE swap. So after a
+re-render the full card keeps the old wording for one more load, and the
+revalidation is a dangling promise rather than an event.waitUntil, so a service
+worker killed early can stretch that to several.
 """
 from __future__ import annotations
 
