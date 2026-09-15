@@ -125,12 +125,19 @@ console.log("\n── CSP ──");
 
 const policies = headers.split("\n").filter(l => /^\s+Content-Security-Policy:/.test(l));
 const full = policies.filter(l => /img-src/.test(l));
-ok("both full policies allow the thumbnail host in img-src",
-   full.length === 2 && full.every(l => /img-src[^;]*i\.ytimg\.com/.test(l)));
+// ⚠ Count the copies rather than hardcoding a number. _headers carries one full
+// policy per framed standalone page (/*, /swiss, /ticker as of PR #66) and
+// test_csp_headers.mjs asserts they stay IDENTICAL apart from frame-ancestors —
+// so a host added to some-but-not-all fails there with "one copy was edited
+// without the other". Asserting `every` here catches the same defect from this
+// side, and does not need editing when a fourth page appears.
+ok("there is more than one full policy to keep in step", full.length >= 2);
+ok("EVERY full policy allows the thumbnail host in img-src",
+   full.every(l => /img-src[^;]*i\.ytimg\.com/.test(l)));
 // The SW re-fetches images through fetch(), which is connect-src, so an
 // img-src-only entry works on a first load and goes blank on every reload.
-ok("both full policies allow it in connect-src too",
-   full.length === 2 && full.every(l => /connect-src[^;]*i\.ytimg\.com/.test(l)));
+ok("EVERY full policy allows it in connect-src too",
+   full.every(l => /connect-src[^;]*i\.ytimg\.com/.test(l)));
 ok("script-src is NOT widened for it (no widgets.js)",
    full.every(l => !/script-src[^;]*(ytimg|platform\.x\.com|platform\.twitter\.com)/.test(l)));
 
