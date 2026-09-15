@@ -137,23 +137,27 @@ html[data-embed="1"] .tk-app{max-width:none;}
 .tk-count{font-size:11px;color:var(--text-muted);margin-top:6px;}
 
 /* ───────── The bar (shared by preview + OBS mode) ───────── */
-/* --tkt is the TOTAL bar height (what the OBS source sets); the movers row
-   gets --tkh = 78% of it and the required powered-by strip the rest. Every
-   inner dimension keys off those, so the 72px preview and a 100vh OBS source
-   render identically. */
+/* --tkt is the TOTAL bar height (what the OBS source sets) and --tkh is now
+   the SAME number: the movers row is the whole bar. The credit used to take a
+   22% strip along the bottom and now rides the section header instead, so the
+   same OBS height buys ~28% bigger cards — see .tk-sec-pow for why that moved.
+   Every inner dimension keys off --tkh, so the 72px preview and a 100vh OBS
+   source render identically. */
 .tk-barwrap{border-radius:10px;overflow:hidden;border:1px solid var(--border);}
-.tk-bar{--tkt:72px;--tkh:calc(var(--tkt)*0.78);height:var(--tkt);position:relative;overflow:hidden;
+.tk-bar{--tkt:72px;--tkh:var(--tkt);height:var(--tkt);position:relative;overflow:hidden;
   display:flex;flex-direction:column;
   font-family:'Nunito Sans',sans-serif;background:var(--tk-bg,#171226);color:var(--tk-fg,#f2eefc);}
 .tk-main{flex:1;min-height:0;display:flex;align-items:stretch;}
-/* Left cap: PACKS.INK with the logo stacked under it. */
-.tk-cap{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:calc(var(--tkh)*0.07);padding:0 calc(var(--tkh)*0.26);position:relative;z-index:2;
+/* Left cap: the logo ALONE, sized to own its slot. The "packs.ink" wordmark
+   stacked under it went 2026-09-15 (Zaven) — at cap size it read as a second,
+   smaller title competing with the section headers, and the mark carries the
+   brand without it. Still optional (brand=0); the section-header credit is the
+   one that always ships. */
+.tk-cap{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  padding:0 calc(var(--tkh)*0.20);position:relative;z-index:2;
   background:var(--tk-bg,#171226);border-right:1px solid rgba(255,255,255,0.12);}
 .tk-bar[data-transparent="1"] .tk-cap{background:rgba(13,10,26,0.82);}
-.tk-cap img{height:calc(var(--tkh)*0.42);width:auto;display:block;}
-.tk-cap-name{font-family:'Cinzel',serif;font-weight:700;font-size:calc(var(--tkh)*0.195);
-  letter-spacing:0.08em;color:#d9b96c;line-height:1;white-space:nowrap;}
+.tk-cap img{height:calc(var(--tkh)*0.62);width:auto;display:block;}
 .tk-scroll{flex:1;min-width:0;overflow:hidden;display:flex;align-items:stretch;}
 .tk-rail{display:flex;align-items:center;height:100%;width:max-content;
   animation:tkscroll var(--tk-dur,80s) linear infinite;}
@@ -178,8 +182,24 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
   color:#d9b96c;letter-spacing:0.08em;text-transform:uppercase;line-height:1.05;white-space:nowrap;}
 .tk-sec-sub{font-size:calc(var(--tkh)*0.16);font-weight:700;letter-spacing:0.14em;
   text-transform:uppercase;opacity:0.68;line-height:1.05;white-space:nowrap;}
+/* The required credit, riding the SECTION HEADER instead of a row of its own.
+   A bottom strip cost 22% of the bar's height and was the first thing a real
+   streamer cropped away (observed 2026-09-15) — not to strip attribution, but
+   because vertical space is the scarcest thing in a stream layout and that row
+   was the cheapest thing to cut. We were making them choose between a thin bar
+   and our name. In the header it costs NO extra height (the header stack is
+   shorter than the item row beside it) and cannot be cropped without also
+   cropping the cards, which is the thing they actually want. */
+.tk-sec-pow{display:inline-flex;align-items:center;gap:calc(var(--tkh)*0.05);
+  font-size:calc(var(--tkh)*0.10);font-weight:700;letter-spacing:0.12em;
+  text-transform:uppercase;opacity:0.72;white-space:nowrap;line-height:1;}
+.tk-sec-pow b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.08em;font-weight:700;}
+.tk-sec-pow img{height:calc(var(--tkh)*0.125);width:auto;display:block;}
+/* No separator glyph between cards — Zaven, 2026-09-15: the ◆ read as too
+   spacy. The padding IS the separation now, and it is deliberately smaller
+   than the old padding-plus-dot (0.13+0.13 against 0.22+◆+0.22). */
 .tk-item{display:flex;align-items:center;gap:calc(var(--tkh)*0.14);flex:0 0 auto;
-  padding:0 calc(var(--tkh)*0.22);}
+  padding:0 calc(var(--tkh)*0.13);}
 .tk-art{height:calc(var(--tkh)*0.72);aspect-ratio:5/7;width:auto;object-fit:cover;
   border-radius:calc(var(--tkh)*0.07);display:block;background:rgba(255,255,255,0.06);}
 .tk-stack{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
@@ -199,19 +219,6 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
 .tk-pct{font-weight:700;font-size:calc(var(--tkh)*0.21);white-space:nowrap;line-height:1;}
 .tk-pct.up{color:#3fd68c;}
 .tk-pct.down{color:#ff5f6e;}
-.tk-dot{flex:0 0 auto;font-size:calc(var(--tkh)*0.14);opacity:0.28;line-height:1;}
-/* Bottom attribution row, flush on the bar (no band — deliberate) and pinned
-   bottom-right. ALWAYS rendered — no param, no checkbox: the left cap is
-   optional, this credit is the required one. */
-.tk-powrow{flex:0 0 calc(var(--tkt)*0.22);display:flex;align-items:center;justify-content:flex-end;
-  padding:0 min(24px, calc(var(--tkt)*0.30));position:relative;z-index:2;}
-.tk-pow-inner{display:inline-flex;align-items:center;gap:max(4px,calc(var(--tkt)*0.05));
-  font-size:max(8px,calc(var(--tkt)*0.105));font-weight:700;letter-spacing:0.16em;
-  text-transform:uppercase;opacity:0.9;white-space:nowrap;line-height:1;}
-.tk-pow-inner b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.10em;font-weight:700;}
-.tk-pow-inner img{height:max(11px,calc(var(--tkt)*0.15));width:auto;display:block;}
-.tk-bar[data-transparent="1"] .tk-pow-inner{background:rgba(13,10,26,0.82);border-radius:999px;
-  padding:calc(var(--tkt)*0.025) calc(var(--tkt)*0.10);}
 .tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:calc(var(--tkh)*0.24);opacity:0.55;z-index:1;}
 
@@ -247,13 +254,9 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
   <div class="tk-bar" id="bar">
     <div class="tk-main">
       <div class="tk-cap" id="cap">
-        <span class="tk-cap-name">packs.ink</span>
-        <img src="Logos/logo%20transparent.png" alt="">
+        <img src="Logos/logo%20transparent.png" alt="Packs.Ink">
       </div>
       <div class="tk-scroll"><div class="tk-rail" id="rail"></div></div>
-    </div>
-    <div class="tk-powrow" title="Live Lorcana prices — packs.ink">
-      <span class="tk-pow-inner"><span>powered by</span><b>packs.ink</b><img src="Logos/logo%20transparent.png" alt=""></span>
     </div>
     <div class="tk-msg" id="msg">loading movers…</div>
   </div>
@@ -477,6 +480,27 @@ function buildTickerPlan(cfg){
         group: group.key, sub: group.label, detail: group.detail, requests});
     }
   }
+  return markTickerBrand(sections);
+}
+
+/* Which section headers carry the packs.ink credit. Zaven's call: not every
+   one — once per TIME FRAME, so it reads as part of the reel's structure
+   rather than a repeated ad.
+   ⚠ TK_BRAND_MAX_GAP is the backstop that keeps that honest, and it is not
+   decoration: "first of each window" alone degrades badly when the reel has
+   ONE time frame and many rarity groups. 1 window x 6 groups x 15 cards would
+   put 90 cards between credits — long enough that a viewer can watch a whole
+   loop and never see one, which defeats the entire reason the credit moved
+   into the content. So: first of each window, and never more than two
+   sections without one. */
+const TK_BRAND_MAX_GAP = 2;
+function markTickerBrand(sections){
+  let since = TK_BRAND_MAX_GAP, prevWin = null;
+  for(const sec of sections){
+    sec.brand = sec.win !== prevWin || since >= TK_BRAND_MAX_GAP;
+    since = sec.brand ? 0 : since + 1;
+    prevWin = sec.win;
+  }
   return sections;
 }
 
@@ -646,10 +670,6 @@ function itemEl(r){
   pc.textContent = (r.pct >= 0 ? "▲ " : "▼ ") + fmtPct(r.pct).replace(/^[+-]/, "");
   val.appendChild(pc);
   item.appendChild(val);
-  const dot = document.createElement("span");
-  dot.className = "tk-dot";
-  dot.textContent = "◆";
-  item.appendChild(dot);
   return item;
 }
 
@@ -665,7 +685,25 @@ function sectionHeaderEl(sec){
   s.className = "tk-sec-sub";
   s.textContent = sec.sub;
   h.appendChild(s);
+  if(sec.brand) h.appendChild(sectionPowEl());
   return h;
+}
+
+/* "powered by packs.ink" + the mark, as the header's third line. Built with
+   textContent rather than innerHTML for the same reason every other node here
+   is: card names are DB text and this file never learns the habit. */
+function sectionPowEl(){
+  const p = document.createElement("span");
+  p.className = "tk-sec-pow";
+  const lead = document.createElement("span");
+  lead.textContent = "powered by";
+  const nm = document.createElement("b");
+  nm.textContent = "packs.ink";
+  const im = document.createElement("img");
+  im.src = "Logos/logo%20transparent.png";
+  im.alt = "";
+  p.append(lead, nm, im);
+  return p;
 }
 
 function renderStrip(){

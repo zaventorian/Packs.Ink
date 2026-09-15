@@ -16,8 +16,9 @@ if (start < 0 || end < 0) {
   process.exit(1);
 }
 const src = html.slice(start, end);
-const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine } = new Function(
-  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine};"
+const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine,
+        TK_BRAND_MAX_GAP } = new Function(
+  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP};"
 )();
 
 let failures = 0;
@@ -144,6 +145,45 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   const CANON = ["Common","Uncommon","Rare","Super Rare","Legendary","Enchanted","Epic","Iconic","Promo"];
   check("group rarities are canonical",
     TK_GROUPS.every(g => !g.rarities || g.rarities.every(r => CANON.includes(r))), true);
+}
+
+// Which section headers carry the packs.ink credit. Both failure directions
+// are silent: brand nothing and the bar ships with no attribution at all, brand
+// everything and it reads as an ad on every header. The bar is also the ONE
+// surface we cannot inspect in the wild — it renders inside somebody else's
+// OBS — so nothing downstream would ever report either.
+{
+  const brands = (q) => buildTickerPlan(parseTickerCfg(q)).map(s => !!s.brand);
+  check("defaults: credit on the first section of each time frame",
+    brands(""), [true, false, true, false]);
+  check("one time frame, four groups: the max-gap backstop fires",
+    brands("?w=1d&g=chase,rareleg,promo,all"), [true, false, false, true]);
+  check("a one-section reel still carries it",
+    brands("?w=1d&g=chase"), [true]);
+
+  // The two invariants, over every window x group combination the UI can build.
+  const WINS = ["1d", "1w", "1m", "3m", "6m", "1y"];
+  const GRPS = TK_GROUPS.map(g => g.key);
+  let everyWindowStarts = true, gapOk = true, sawUnbranded = false;
+  for (let nw = 1; nw <= WINS.length; nw++) {
+    for (let ng = 1; ng <= GRPS.length; ng++) {
+      const plan = buildTickerPlan(parseTickerCfg(
+        "?w=" + WINS.slice(0, nw).join(",") + "&g=" + GRPS.slice(0, ng).join(",")));
+      let run = 0, prevWin = null;
+      for (const sec of plan) {
+        if (sec.win !== prevWin && !sec.brand) everyWindowStarts = false;
+        run = sec.brand ? 0 : run + 1;
+        if (!sec.brand) sawUnbranded = true;
+        if (run > TK_BRAND_MAX_GAP) gapOk = false;
+        prevWin = sec.win;
+      }
+    }
+  }
+  check("every time frame's first section is branded", everyWindowStarts, true);
+  check("never more than TK_BRAND_MAX_GAP sections without a credit", gapOk, true);
+  // Guards the test itself: if brand were simply always true, the two checks
+  // above would pass while asserting nothing.
+  check("...and it is not merely branding everything", sawUnbranded, true);
 }
 
 if (failures) {
