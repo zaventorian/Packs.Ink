@@ -92,9 +92,13 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         if url_path in ("/swiss", "/lab/swiss"):
             self.path = "/swiss.html"
             return super().do_GET()
-        # Stream ticker overlay (?bar=1 = OBS form) + its configurator. Prod
-        # serves /ticker via Workers Assets pretty-URL handling — no worker
-        # route, so the query string survives (it IS the overlay config).
+        # Stream ticker overlay (?bar=1 = OBS form) + its configurator, also
+        # embedded by the Analytics "Stream Ticker" tab as /ticker?embed=1.
+        # Prod serves /ticker via Workers Assets pretty-URL handling — no
+        # worker route, so the query string survives (it IS the overlay config
+        # and the embed flag). Rewriting self.path here drops the query only
+        # for the on-disk lookup; the browser's URL, which is what the page's
+        # own JS reads, is untouched.
         if url_path == "/ticker":
             self.path = "/ticker.html"
             return super().do_GET()

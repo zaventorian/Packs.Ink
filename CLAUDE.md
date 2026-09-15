@@ -761,7 +761,7 @@ Icons live in `NAV_ICONS` (Index.html) — hand-coded inline SVG (Tabler/Lucide-
 
 - **Screener** = sortable financial-database table (price_movers + filters + signals). Top-level since cards-as-instruments is the north-star surface. Has a prominent **Raw Prices / Graded mode toggle** (segmented buttons) above the preset chips — flips the table between TCGCSV raw + graded data.
 - **Price Graphing** = per-card history + multi-card Compare (handoff from Screener batch action).
-- **Analytics** = umbrella for calculator-y tools — **5 sub-tabs since the 2026-08-20 consolidation**: Expected Value · Trade Compare · Set Breakdown · Playset Cost · Simulator (+ hidden pinnable Elo). Sub-tab is reflected in the URL (`?a=<sub>`) — see "Trade Comparison tool" and "Analytics tab" below.
+- **Analytics** = umbrella for calculator-y tools. The 2026-08-20 consolidation took it from 8 tabs to 5; it has grown since, and `MARKET_SUBS` is the list, not this line: Overview · Expected Value · Trade Compare · Set Breakdown · Playset Cost · Simulator · Swiss Odds · Lore Tracker · Dice Tray · Stream Ticker (+ hidden pinnable Elo). Sub-tab is reflected in the URL (`?a=<sub>`) — see "Trade Comparison tool" and "Analytics tab" below.
 
 ### Mobile top-nav structure (do NOT regress)
 
@@ -1589,9 +1589,33 @@ The FAQ ("Tracking your collection" section, Help bubble `?`) explains this user
 
 ## Analytics tab (reorganized 2026-08-20: 8 tabs → 5)
 
-`MARKET_SUBS` = ev / trade / avg ("Set Breakdown") / setval / sim / swiss (+ elo, hidden unless pinned). The consolidation:
+`MARKET_SUBS` = overview / ev / trade / avg ("Set Breakdown") / setval / sim / swiss / lore / dice / ticker (+ elo, hidden unless pinned). The consolidation:
 
 - **Swiss Odds (`swiss`, added 2026-08-20)** embeds the standalone `swiss.html` page as `<iframe src="/swiss?embed=1">` (canonical path is `/swiss` — Workers Assets pretty-URL handling 307s `/swiss.html` and the worker's legacy `/lab/swiss` route to it, DROPPING the query, so never point the iframe at `/lab/swiss`) — the sim stays a separate file on purpose (its Monte Carlo engine is a hot loop ordinary visitors shouldn't download inside Index.html; see the commit that added it). `?embed=1` sets `data-embed` on the page root pre-paint, hiding its own brand/flag/theme chrome, then strips the param via replaceState so the page's Copy-link never leaks `embed=1`. The header's "Open full page ↗" escape hatch was removed 2026-08-21 (user call — redundant once the embed worked; `/swiss` stays reachable by URL and the embed's own Copy-link shares it). swiss.html links `/styles.css` UNVERSIONED (network-first SW keeps it fresh; a `?v=` there would drift from the bump-cache lockstep, which doesn't know about this file).
+
+- **Stream Ticker (`ticker`, added 2026-09-15)** embeds `ticker.html` the same way —
+  `<iframe class="market-embed-frame" src="/ticker?embed=1">` — and for the same reason: the
+  configurator is a page you set up once and then paste into OBS, not a calculator worth
+  carrying inside Index.html. `?embed=1` is swiss's mechanism copied: the pre-paint boot sets
+  `data-embed` on the root, which hides `.tk-top` (brand, title, and the one `<a>` on the page,
+  a link to packs.ink that would otherwise navigate the iframe out of the tool), then strips
+  the param via replaceState. The overlay URL the tool copies is built from
+  `location.origin + location.pathname`, so it is the `?bar=1` OBS form either way and an
+  embed flag can never leak into it.
+  - **⚠ Both embeds need a `_headers` carve-out or the tab renders the browser's gray
+    broken-page icon.** The site-wide `X-Frame-Options: DENY` + `frame-ancestors 'none'`
+    refuse framing even from packs.ink itself. `/swiss` and `/ticker` each detach-and-replace
+    both, to SAMEORIGIN / `'self'`; the CSP is otherwise the `/*` policy VERBATIM, so an origin
+    added to one must be added to all three. `node scripts/test_csp_headers.mjs` pins that.
+    Invisible in local dev, which does not apply `_headers` — verify with `npx wrangler@4 dev`.
+  - **⚠ `/ticker` must keep having NO worker route.** Workers Assets' pretty-URL handling serves
+    it with the query intact; a route that fetches `/ticker.html` gets 307'd to `/ticker` and
+    the redirect DROPS the query — which is both the OBS config and `embed=1`.
+  - **It is a tab, NOT a home-Toolbox chip.** `HOME_TOOLS` deliberately omits it, same rule that
+    omits Simulator: the toolbox is the calculators an ordinary visitor opens cold, and an OBS
+    overlay is for the handful of people who stream.
+  - `.market-embed-frame` (was `.market-swiss-frame`) is the one CSS rule both embeds use, so
+    the two frames can't drift.
 
 - **Set Breakdown (`avg`) = Card Averages + Heatmap merged.** One rarity×set table with a metric toggle (`packsink:market:avgMetric`): `$ per card` averages, or `% of box EV` with the old heatmap's cell shading. **The share lens uses per-set `getPull(set)` — the deleted `HeatmapView` used the flat v1 `PULL` for every set, which was simply wrong for Wilds Unknown onward** (6 Legendaries not 4, 2.5 Epics not 1.5, 0.333 Enchanted not 0.25). Default selection = 4 newest sets (all-sets was a 1,655px-wide table); the `All` chip restores everything; exactly 2 selected still reveals the Diff column (pp units in share mode). The per-rarity "Pull rate" column is gone — rates differ per set now, so each cell's `title` tooltip carries its set's exact rate.
 - **Simulator (`sim`) = Pack + Box + Monte Carlo merged.** Mode lives in `packsink:market:simkind` (`pack | box | bulk`); "Odds" (bulk) is the old `MonteCarloView`, mounted as a mode. The `sim-kind-bar` `<select>` is gone — a `.market-sim-kind` segmented control sits in the shared header.
@@ -3271,7 +3295,7 @@ Every external ping (cron-job.org) arrives as a `workflow_dispatch` event, so th
 
 ### PWA + caches
 
-- **`sw.js CACHE_VERSION`** (current `packsink-v403`; `styles.css?v=403`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
+- **`sw.js CACHE_VERSION`** (current `packsink-v413`; `styles.css?v=413`, `logo.js` held at `?v=348` — content unchanged, so the lockstep is deliberately split. Historical note follows from the 2026-06-27 audit at v254 — 2026-06-27 audit: core libs react/react-dom/htm/supabase **+ html2canvas VENDORED same-origin under `/vendor/`** (was unpkg) to kill the CDN-outage blank-page crash ("ReactDOM is not defined" / "window.supabase.createClient" undefined in Sentry); precached in `sw.js` CORE_ASSETS at `?v=254`; `styles.css?v=254` bumped, `logo.js`/`scanner*.js` intentionally held at `?v=253` (content unchanged, so the lockstep is split — that's fine, the SW caches per exact URL). Earlier 2026-06-27: scanner OCR swap Tesseract.js → PP-OCRv3 (det+rec) via onnxruntime-web in a dedicated `scanner-ocr-worker.js` (WASM single-thread+SIMD, NO WebGPU); the 2 onnx models + `ppocr_keys_v1.txt` ship in `scanner/` and are runtime-cached (NOT precached — admin-gated/lazy); styles.css/logo.js/scanner*.js at `?v=251`, catalog cache `v45`): bump on ANY meaningful Index.html / styles.css / logo.js change. Activate handler purges old caches (`skipWaiting` + `clients.claim`) — EXCEPT `packsink-img-v1` (the deploy-surviving image cache; see "Offline support"). HTML requests are **network-first**. **Gotcha (2026-05-27):** bumping once at the start of a session does NOT invalidate later edits — the SW only re-caches when the version string changes. Bump again (or use an incognito window — the SW is registered on localhost too) when iterating heavily. The three things that must stay in lockstep: `sw.js CACHE_VERSION`, `styles.css?v=N` in Index.html `<link>` + sw.js CORE_ASSETS, `logo.js?v=N` in Index.html `<script>` + sw.js CORE_ASSETS.
 - **App-shell is network-first (styles.css + logo.js), fixed 2026-05-28.** Previously these were cache-first while HTML was network-first → after a deploy that changed CSS, a returning visitor got the **fresh Index.html paired with the STALE cached stylesheet** → home-page mover tiles rendered at giant natural-image size until they hard-refreshed. Now `sw.js` serves `styles.css`/`logo.js` network-first (cache fallback only when offline), matching the HTML, so the app shell can't split across versions. **Belt-and-suspenders: the asset URLs are versioned** (`styles.css?v=N`, `logo.js?v=N` in Index.html `<link>`/`<script>` AND in the SW `CORE_ASSETS` precache list, kept in sync with `CACHE_VERSION` — currently **v181**). The `?v=N` closes the one-time transition gap on the deploy that carries an SW change: the *old* (still cache-first) SW cache-misses on the new URL and fetches fresh. Going forward the network-first behavior handles freshness, so you don't strictly need to keep bumping `?v=N`, but keeping it == `CACHE_VERSION` is the convention.
 - **Catalog cache version**: `packsink:catalog:vN` (current **v45**). Bump when row shape changes, OR when forcing all users to cold-fetch. Note: `text` is STRIPPED from the cache on write to keep the 5MB quota free for aux caches — the in-memory backfill in `loadFromSupabase` (see "Smart search" — Card body text in the haystack) restores body-text search on cache-replay sessions without growing the cache. `keywords` IS in the cached rows, so bumping this version is the way to force the new keyword derivation onto existing users.
 - **PWA icon refresh**: icon URLs include `?v=N` query (current **v=5**; v=4 was the 2026-05-26 full-booster-pack rebake, v=3 the bare-wordmark dark-blue rebake earlier the same day). Bump the version in both `Index.html` <link rel="icon"> entries AND in `manifest.json` whenever the icon bytes change. Also bump `sw.js CACHE_VERSION` since the SW precaches icon paths sans query string.
@@ -5310,8 +5334,11 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   header text, window/metric → real matview column names, group rarity filters, foil-toggle
   bypass shapes, the rarity-line foil rule, both-mode split, min=0 not-null guard, clamps. Run it
   after touching the config layer.
+- **It is an Analytics tab as of 2026-09-15** — `/analytics?a=ticker`, embedding this page at
+  `/ticker?embed=1`. See "Analytics tab" for the embed mechanism and the `_headers` carve-out it
+  needs. `/ticker` stays the canonical page and `?bar=1` is still what goes into OBS.
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
-  the bar, a nav/Toolbox entry (needs an Index.html touch — do it with a regular cache-bump batch).
+  the bar, a home-Toolbox chip (deliberate — see the tab's note under "Analytics tab").
 
 ## Brand assets
 
