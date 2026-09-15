@@ -52,6 +52,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const CALENDAR_REGIONS = [", NL + "];"),
   grab("const _CAL_REGION_BY_CC = (() => {", NL + "})();"),
   grabLine("const calRegionOf = "),
+  grabLine("const calRegionless = "),
   grab("const calRegionSet = (region) => {", NL + "};"),
   grab("const calMatchesRegion = (ev, region) => {", NL + "};"),
   grab('const searchNorm = (s) => (s||"")', '/g, "");'),
@@ -141,7 +142,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
-  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
+  " calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
@@ -158,7 +159,7 @@ const {
   calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
-  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,
+  calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
@@ -497,17 +498,43 @@ ok("no store name still reports the event name",
 // ── Regions ─────────────────────────────────────────────────────────────────
 ok("US is North America", calRegionOf("US") === "na");
 ok("lowercase still resolves", calRegionOf("gb") === "eu");
-// ⚠ Oceania is its own circuit — Melbourne, Sydney, Brisbane and Auckland are a
-// four-event run with their own Continental Championship, and inside
-// "Asia-Pacific" they were invisible as a group to the readers most likely to
-// want them. The KEY `apac` is deliberately reused rather than renamed, so every
-// `?cr=apac` link already in the wild keeps resolving to something.
-ok("Asia and Oceania are separate circuits",
-  calRegionOf("JP") === "apac" && calRegionOf("AU") === "ocea"
-  && calRegionOf("NZ") === "ocea" && calRegionOf("SG") === "apac");
-ok("and `apac` still parses, so old links do not silently widen to everywhere",
-  calRegionSet("apac") instanceof Set && calRegionSet("apac").has("apac"));
-ok("Brazil is Latin America", calRegionOf("BR") === "latam");
+// ⚠ These are the CIRCUIT's regions, not a continent map: each runs its own
+// Challenge season and feeds its own Continental Championship. Japan and China
+// are not corners of Asia here, and Brazil is not a corner of Latin America —
+// folded in, each of those runs was invisible as a group to exactly the readers
+// most likely to want it.
+ok("the championship regions are separate circuits, not a continent map",
+  calRegionOf("SG") === "apac" && calRegionOf("JP") === "jp" && calRegionOf("CN") === "cn"
+  && calRegionOf("AU") === "ocea" && calRegionOf("NZ") === "ocea"
+  && calRegionOf("BR") === "br" && calRegionOf("AR") === "latam",
+  ["SG","JP","CN","AU","NZ","BR","AR"].map(calRegionOf).join(","));
+// ⚠ A finer taxonomy loses nothing BECAUSE the chips are a multi-select: these
+// four reproduce the old "Asia-Pacific" exactly, where a coarse bucket could
+// never be taken apart. That is why there is no combine/split toggle.
+ok("the old Asia-Pacific is still expressible as a multi-select",
+  ["SG","JP","CN","AU"].every(cc => calMatchesRegion({country: cc}, "apac,jp,cn,ocea"))
+  && !calMatchesRegion({country: "US"}, "apac,jp,cn,ocea"));
+// ⚠ Keys are NARROWED, never renamed. A renamed key parses to nothing and
+// calRegionSet hands back "everywhere" — so a shared link would silently widen
+// to the whole world rather than fail, which is the worse of the two lies.
+ok("`apac` and `latam` still parse, so old links narrow rather than widening",
+  calRegionSet("apac") instanceof Set && calRegionSet("apac").has("apac")
+  && calRegionSet("latam") instanceof Set && calRegionSet("latam").has("latam"));
+ok("an unknown key still falls back to everywhere, not to nothing",
+  calRegionSet("gone") === null && calMatchesRegion({country: "US"}, "gone"));
+// ⚠ A RELEASE IS IN NO PLACE. A set comes out worldwide, so narrowing to Europe
+// and losing the Hyperia City dates is the page disagreeing with itself —
+// reading the Challenges against the rotation is most of what the region axis is
+// for. It also keeps "Elsewhere" meaning "not placed yet" rather than filling up
+// with eleven rows that were never anywhere.
+ok("a set or product release matches every region",
+  calMatchesRegion({kind: "set", country: null}, "eu")
+  && calMatchesRegion({kind: "product"}, "jp,br")
+  && calMatchesRegion({kind: "set"}, "other"));
+ok("but a real event with no country is still only Elsewhere",
+  calMatchesRegion({kind: "ccq", country: null}, "other")
+  && !calMatchesRegion({kind: "ccq", country: null}, "eu")
+  && !calMatchesRegion({kind: "dlc", country: "GB"}, "na"));
 // ⚠ An ungeocoded row must stay REACHABLE. Dropping unknowns would make a row
 // we simply have not placed yet invisible under every region, including "all".
 ok("an unknown country falls into Elsewhere", calRegionOf("ZZ") === "other");
@@ -1058,9 +1085,14 @@ const allItems = [...tl.lanes.flatMap(l => l.items), ...tl.release.items];
 ok("every position is a fraction inside the window",
   allItems.every(i => i.x >= 0 && i.x <= 1 && i.w >= 0 && i.x + i.w <= 1 + 1e-9));
 ok("a later event sits further right",
-  laneR("apac").items[0].x < laneR("eu").items[0].x);
+  laneR("jp").items[0].x < laneR("eu").items[0].x);
 ok("a three-day event is drawn wider than a one-day one",
-  laneR("eu").items[0].w > laneR("apac").items.find(i => i.ev.id === "kobe").w);
+  laneR("eu").items[0].w > laneR("jp").items.find(i => i.ev.id === "kobe").w);
+// Kobe is Japan's own circuit, not Asia's — the fixture's one JP event moving
+// lane is the region split doing its job.
+ok("Japan's event is in Japan's lane, and Asia keeps Bangkok",
+  laneR("jp").count === 1 && laneR("jp").items[0].ev.id === "kobe"
+  && laneR("apac").count === 1 && laneR("apac").items[0].ev.id === "bangkok");
 
 // ⚠ A set release is not in a PLACE. Its country is null, so a lane assignment
 // that just asks calRegionOf files every release under "Elsewhere" — which is
@@ -1083,7 +1115,7 @@ ok("both are still the circuit block, so they stay above your shops",
   && CAL_TL_KIND_LANES.dlc === "Challenges" && CAL_TL_KIND_LANES.ccq === "Qualifiers");
 ok("and is filed by its country only when asked",
   calTimelineLane({kind: "dlc", country: "GB"}, "region") === "eu"
-  && calTimelineLane({kind: "ccq", country: "JP"}, "region") === "apac");
+  && calTimelineLane({kind: "ccq", country: "JP"}, "region") === "jp");
 // ⚠ The grouping never reaches the personal lanes or the release rail: a shop
 // is a subject, not a category, and a release is in no place at all.
 ok("grouping never moves a shop, a near-me SC or a release",
@@ -1355,7 +1387,14 @@ ok("a circuit lane is not offered as a region filter", lane("dlc").region === fa
 // Region rows stay REACHABLE — comparing two regions' runs is a real question,
 // just not the one most readers arrive with.
 ok("region mode still lays out one row per region, in the picker's order",
-  JSON.stringify(tlR.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "near", "store:7", "store:9"]),
+  JSON.stringify(tlR.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "jp", "near", "store:7", "store:9"]),
+  tlR.lanes.map(l => l.key).join(","));
+// ⚠ An EMPTY championship region is not rendered at all. That is what makes a
+// nine-region taxonomy safe on a chart: Brazil and China have no events this
+// season, and a lane of empty track for each would be the very complaint the
+// packed default exists to answer.
+ok("a region with no events gets no lane",
+  !tlR.lanes.some(l => ["br", "cn", "latam", "ocea"].includes(l.key)),
   tlR.lanes.map(l => l.key).join(","));
 ok("only region mode offers a lane as a filter",
   laneR("na").region === true && tl.lanes.every(l => !l.region));

@@ -2572,24 +2572,47 @@ const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filt
 // An unknown country falls into "other" rather than being dropped, so a row we
 // have not geocoded is still reachable instead of silently invisible.
 // ── Events you add yourself ────────────────────────────────────────────────
+// ⚠ These are the CIRCUIT's regions, not a continent map, and the difference is
+// the whole point: each one runs its own Challenge season and feeds its own
+// Continental Championship, so "which region is this event in" is a competitive
+// fact about where its winner goes next — not geography (Zaven, 2026-09-14:
+// *"those 7 are the actual regions of events, each feed into their own
+// championship"*). Japan and China are NOT corners of Asia here and Brazil is
+// not a corner of Latin America; each runs its own season, which is exactly why
+// folding them in made those runs invisible as a group to the readers most
+// likely to want them.
+//
+// ⚠ A finer taxonomy loses nothing, and that is what makes this safe. The chips
+// are a MULTI-SELECT, so Asia + Japan + China + Oceania reproduces the old
+// "Asia-Pacific" exactly — while a coarse bucket can never be taken apart. So
+// there is no combine/split toggle: the chips are it, and a second control
+// answering the same question is the thing this page just had removed from it.
+//
+// ⚠ KEYS are never renamed, only narrowed — `apac` still parses (it means Asia
+// without Japan, China or Oceania now) and so does `latam` (Latin America
+// without Brazil). A renamed key resolves to nothing and `calRegionSet` hands
+// back "everywhere" on an empty parse, so a shared link would silently WIDEN to
+// the whole world rather than fail. Narrowing is the lesser lie, and this
+// shipped the same week, so there is close to nothing in the wild to narrow.
+//
+// Order is circuit prominence, and the lanes come out in it — so a split-off
+// region sits next to the one it split from (Asia · Japan · China, then Brazil ·
+// Latin America) rather than wherever the alphabet puts it.
 const CALENDAR_REGIONS = [
   {key: "na",    label: "North America", cc: ["US","CA","MX"]},
   {key: "eu",    label: "Europe", cc: ["GB","IE","FR","DE","IT","ES","PT","NL","BE","LU","CH","AT",
                                        "SE","NO","DK","FI","IS","PL","CZ","SK","HU","RO","BG","GR",
                                        "HR","SI","EE","LV","LT","UA","RS","TR","MT","CY"]},
-  {key: "apac",  label: "Asia", cc: ["JP","CN","HK","TW","KR","SG","MY","TH","PH","ID",
-                                     "VN","IN"]},
-  // ⚠ Oceania is its own circuit, not a corner of Asia. Melbourne, Sydney,
-  // Brisbane and Auckland are a four-event run with its own Continental
-  // Championship, and folded into "Asia-Pacific" they were invisible as a group
-  // to the one reader most likely to want them.
-  //
-  // ⚠ The KEY `apac` is kept rather than renamed, so every `?cr=apac` link and
-  // every stored preference already in the wild keeps resolving. It means Asia
-  // without Oceania now; a renamed key would silently resolve to nothing and
-  // `calRegionSet` would hand back "everywhere", which is the worst of both.
+  {key: "apac",  label: "Asia", cc: ["HK","TW","KR","SG","MY","TH","PH","ID","VN","IN"]},
+  {key: "jp",    label: "Japan", cc: ["JP"]},
+  {key: "cn",    label: "China", cc: ["CN"]},
   {key: "ocea",  label: "Oceania", cc: ["AU","NZ","FJ","PG"]},
-  {key: "latam", label: "Latin America", cc: ["BR","AR","CL","CO","PE","UY","PY","BO","EC","VE",
+  {key: "br",    label: "Brazil", cc: ["BR"]},
+  // ⚠ Kept even though this season's published schedule shows only Brazil. A
+  // chip reading "Latin America 0" states that the season has nothing there,
+  // which is information; dropping it would quietly file a Buenos Aires event
+  // under "Elsewhere", which is the bucket for a row we have not PLACED.
+  {key: "latam", label: "Latin America", cc: ["AR","CL","CO","PE","UY","PY","BO","EC","VE",
                                               "CR","PA","GT","DO","PR"]},
   {key: "other", label: "Elsewhere", cc: []},
 ];
@@ -2610,9 +2633,20 @@ const calRegionSet = (region) => {
   const keys = raw.split(",").map(x => x.trim()).filter(k => CALENDAR_REGIONS.some(r => r.key === k));
   return keys.length ? new Set(keys) : null;
 };
+// ⚠ A RELEASE IS IN NO PLACE, so it matches every region. A set comes out
+// worldwide; narrowing to Europe and losing the Hyperia City dates is the chart
+// disagreeing with itself, because reading the Challenges AGAINST the rotation is
+// most of what the region axis is for. It also empties "Elsewhere" of the eleven
+// rows that had nothing to do with being unplaced — which is what that bucket
+// means, and what it has to keep meaning for a row we simply have not geocoded.
+//
+// The timeline never needed this (a release goes on its own rail whatever the
+// grouping); the list, the month grid and the home panel did.
+const calRegionless = (ev) => !!ev && (ev.kind === "set" || ev.kind === "product");
 const calMatchesRegion = (ev, region) => {
   const want = calRegionSet(region);
   if(!want) return true;
+  if(calRegionless(ev)) return true;
   return want.has(calRegionOf(ev && ev.country));
 };
 // One search box across all three modes. It reads what a person searches BY --
@@ -40285,8 +40319,14 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const regionCounts = useMemo(() => {
     const c = {};
     for(const r of CALENDAR_REGIONS) c[r.key] = 0;
-    for(const e of calendarUpcoming(all.filter(e => kinds.includes(e.kind) && calMatchesQuery(e, dQuery)), today, 0))
+    for(const e of calendarUpcoming(all.filter(e => kinds.includes(e.kind) && calMatchesQuery(e, dQuery)), today, 0)){
+      // ⚠ A worldwide release is in every region, so it belongs in no COUNT. The
+      // chip has to say how many events that region actually holds; adding the
+      // releases to all nine would make every chip nine bigger and none of them
+      // comparable, which is the only thing a count on a chip is for.
+      if(calRegionless(e)) continue;
       c[calRegionOf(e.country)]++;
+    }
     return c;
   }, [all, kinds, today, dQuery]);
   const shown = useMemo(() => all.filter(e =>

@@ -4116,7 +4116,7 @@ the plain name says what the page is to somebody who has never seen it.
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
 month grid, timeline, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (350 checks).
+Guarded by `node scripts/test_calendar.mjs` (355 checks).
 
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
@@ -4692,15 +4692,40 @@ saying nothing.
 - **⚠ Only a real region lane offers itself as a filter.** "Challenges" is every
   region at once, so clicking it could only mean "all", which is where you
   already are.
-- **⚠ Oceania is its own region** (2026-09-14). Melbourne, Sydney, Brisbane and
-  Auckland are a four-event run with their own Continental Championship, and
-  folded into "Asia-Pacific" they were invisible as a group to exactly the readers
-  most likely to want them. **The KEY `apac` is reused rather than renamed** — it
-  means Asia without Oceania now — because every `?cr=apac` link and stored
-  preference in the wild would otherwise resolve to nothing, and `calRegionSet`
-  hands back "everywhere" on an empty parse, which is the worst of both. Japan and
-  China stay inside Asia: they run their own competitive seasons, but that is a
-  circuit fact the geography axis cannot carry without lying about where they are.
+- **⚠ `CALENDAR_REGIONS` is the CIRCUIT's regions, not a continent map**
+  (2026-09-14, Zaven: *"those 7 are the actual regions of events, each feed into
+  their own championship"*). North America · Europe · Asia · Japan · China ·
+  Oceania · Brazil · Latin America · Elsewhere. Each runs its own Challenge season
+  and feeds its own Continental Championship, so "which region" is a competitive
+  fact about where a winner goes next — not geography. Folded in, Japan's,
+  China's, Oceania's and Brazil's runs were each invisible as a group to exactly
+  the readers most likely to want them.
+  - **⚠ A finer taxonomy loses nothing, and that is what makes it safe — so there
+    is NO combine/split toggle.** The chips are a multi-select, so Asia + Japan +
+    China + Oceania reproduces the old "Asia-Pacific" exactly, while a coarse
+    bucket could never be taken apart. A second control answering the question the
+    chips already answer is the thing this page just had removed from it.
+  - **⚠ Keys are NARROWED, never renamed.** `apac` still parses (Asia without
+    Japan, China or Oceania) and so does `latam` (without Brazil). A renamed key
+    parses to nothing, and `calRegionSet` hands back "everywhere" on an empty
+    parse — so a shared link would silently WIDEN to the whole world rather than
+    fail. Narrowing is the lesser lie, and this shipped the same week.
+  - **An empty region gets no lane and a dimmed `(0)` chip.** That is what makes
+    nine regions safe on a chart: Brazil and China have no events this season, and
+    a lane of empty track each is the very complaint the packed default answers.
+    "Latin America 0" is kept deliberately — it says the season has nothing there,
+    where dropping it would file a Buenos Aires event under "Elsewhere", which is
+    the bucket for a row we have not PLACED.
+- **⚠ A RELEASE IS IN NO PLACE, so `calRegionless` makes it match every region.**
+  A set comes out worldwide; narrowing to Europe and losing the Hyperia City dates
+  is the page disagreeing with itself, because reading the Challenges AGAINST the
+  rotation is most of what the region axis is for. It also keeps "Elsewhere"
+  meaning "not placed yet" instead of filling with eleven rows that were never
+  anywhere (it read 11 before this, 0 after). **They are excluded from the region
+  COUNTS for the same reason**: adding them to all nine makes every chip nine
+  bigger and none of them comparable, which is the only thing a count is for. The
+  timeline never needed either half — a release goes on its own rail whatever the
+  grouping.
 - **The grouping NEVER reaches the personal lanes or the release rail** - a shop
   is a subject rather than a category, and a release is in no place at all. The
   test pins that for both modes.
