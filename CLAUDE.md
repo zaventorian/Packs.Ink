@@ -2448,7 +2448,7 @@ the stylesheet declares 700 or 800 in **~450 places**. CSS font matching resolve
 missing 700 down to the nearest loaded face, which was 600, and Chrome only synthesises
 bold when the matched face is *below* 600 — so it did not synthesise either. Every
 "bold" on the site rendered as **SemiBold**, identical to the 600 beside it, and nothing
-anywhere errored. Found chasing *"font isn't cool"* on the Almanac's timeline, where the
+anywhere errored. Found chasing *"font isn't cool"* on the calendar's timeline, where the
 label title (800) and its date (600) were supposed to be two tiers and were the same
 pixels.
 
@@ -4090,33 +4090,33 @@ Measured the day it landed — 57% of the 35,576 upcoming events are US, **43% a
 - **Pruning.** Every upsert stamps `last_seen_at`; after the pull, upcoming rows RPH hasn't listed for `PRUNE_GRACE_HOURS` (36h) are deleted, plus rows older than 30 days. Guarded by `MIN_PULL_ABSOLUTE` (4000) **and** `MIN_PULL_RATIO` (70% of the upcoming rows on file) — a partial pull from a network flake must never mass-delete live events. `--no-prune` skips it entirely. The two subset tables never pruned, which is why stale SCs accumulated.
 - **⚠ Even a COMPLETE pull misses live events, so one miss must never delete one** (2026-09-10). The scan pages by offset through ~21k rows that move while it reads; the three orderings and the name net narrow the gap but don't close it. That night's pull came back without 10 of the 508 upcoming events at tracked stores, and the old prune (delete whatever this run didn't see) had deleted Gemini Games' 9/20 Set Championship, so it never reached Upcoming SCs although RPH listed it. Two fixes, both in `discover_events.py`: the 36h grace (two daily misses in a row, with room for cron to run late), and **`add_tracked_store_feeds()`**, which folds each tracked store's own upcoming feed into the scan before anything is classified, upserted or pruned. It reads both store-filter spellings and re-checks `store.id`, through `scrape_store_history.fetch_store_feed`. The feeds are a supplement, never a gate: an unreadable store list or feed leaves the scan's rows as they were, with a `::warning::` once more than half the feeds fail. Guarded by `python scripts/elo/test_events_archive.py`.
 
-## Almanac (`/calendar` + home panel) — 2026-09-12, renamed 2026-09-14
+## Lorcana Calendar (`/calendar` + home panel) — 2026-09-12
 
-**It is the "Almanac" everywhere a user reads it** — the h1, the home panel, the
-layout editor. Zaven, 2026-09-14: *"'Lorcana calendar' sounds bad."* An almanac is
-literally a calendar of coming events organised by a year, which is what the timeline
-view made it, and it sits in the site's flavour-name register beside Lore Tracker,
-Dice Tray and Artist Alley. Two rules keep the rename from spreading too far:
+**It is the "Lorcana Calendar" everywhere a user reads it** — the h1, the home panel,
+the layout editor, the `.ics` name and the exported picture. It shipped as that,
+was renamed "Almanac" on 2026-09-14, and was renamed BACK the same day (Zaven: *"I
+dont like almanac, lets call it Lorcana Calendar again, but keep the font nice"*).
+The Cinzel setting is what the flavour was actually buying — Cinzel renders lowercase
+as small capitals, so "Lorcana Calendar" reads as a carved masthead either way, and
+the plain name says what the page is to somebody who has never seen it.
 
-- **The word "Lorcana" comes BACK wherever the name LEAVES the app** — the `.ics`
-  `X-WR-CALNAME` and filename, the `PRODID`, and the exported picture's title all say
-  **"Lorcana Almanac"**. Inside the app the game is implied; in a file that lands in
-  somebody's calendar next to "Work" and "Family", a bare "Almanac" names nothing.
-- **"calendar" stays the generic noun.** "Add to my calendar", "Back on your
-  calendar", "Google Calendar ↗", "Add a calendar event" are all untouched — the
-  personal saved list IS a calendar, and the ✚ popover's muted line ("Add to your
-  Packs.Ink calendar") is doing disambiguation work against the Google link beside it.
-- **The `/calendar` URL does NOT move.** It is in `VIEW_PATHS` and `sitemap.xml`, and
-  links exist in the wild. `VIEW_TITLES.calendar` also keeps its keyword-shaped SEO
-  title ("Lorcana Release & Event Calendar"), the same way `market` reads "Lorcana
-  Analytics & Tools" while the tab says Analytics.
+- **The word "Lorcana" is part of the name, not decoration**, and it is load-bearing
+  in the `.ics` `X-WR-CALNAME`, the filename, the `PRODID` and the exported picture's
+  title: a file that lands in somebody's calendar next to "Work" and "Family" has to
+  say which game it is about.
+- **"calendar" is also the generic noun**, and that is fine. "Add to my calendar",
+  "Back on your calendar", "Google Calendar ↗" all read correctly, and the personal
+  drawer is literally called **My calendar** for that reason.
+- **The `/calendar` URL never moved** through either rename. It is in `VIEW_PATHS` and
+  `sitemap.xml`, and links exist in the wild. `VIEW_TITLES.calendar` keeps its
+  keyword-shaped SEO title ("Lorcana Release & Event Calendar").
 
 
 "What's coming for the GAME", the sibling of the geo box above: set releases,
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
-month grid, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (321 checks).
+month grid, timeline, five filter chips, `.ics` + Google Calendar export.
+Guarded by `node scripts/test_calendar.mjs` (350 checks).
 
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
@@ -4135,6 +4135,48 @@ Guarded by `node scripts/test_calendar.mjs` (321 checks).
   title would silently swallow two genuinely different events sharing a name —
   two stores both running a "Lorcana 2K CCQ" is the ordinary case, and losing one
   reads as the scan having missed it.
+
+### Sets that are announced but not dated (2026-09-14)
+
+Zaven: *"we only have hyperia city, but we should have the future sets too, if even
+just estimates on release date now, as they should line up with dlcs a lot."* He is
+right about why: the competitive calendar is read AGAINST the rotation — a Challenge
+in March is a Cosmic Quest event or it is not — so a season chart that stops at the
+one set with a published date answers half the question it exists for.
+
+- **⚠ `UPCOMING_SET_NAMES` is a SEPARATE const from `SET_RELEASE_DATES`, and must
+  stay separate.** That map is read by `inferEventSet` (which stamps a set name onto
+  every tournament and every graded-sales window), `setDataPartial`, the Set EV
+  chart's markers and the Screener's set ordering — every one of which would then be
+  quietly attributing REAL rows to a guessed date. Nothing but the calendar reads
+  the estimates. This does not weaken the standing "published dates only" rule on
+  `SET_RELEASE_DATES`; it is what lets that rule stand.
+- **⚠ Every estimated row is LABELLED an estimate wherever it renders**, and that is
+  the entire licence for it to exist — a wrong date on a calendar is worse than no
+  date, so what makes a guess admissible is saying out loud that it is one.
+  `calEstimated(ev)` is the one predicate. `calEventFullLabel` appends
+  `" (estimated)"`, which is what carries the word into the **.ics SUMMARY and the
+  Google Calendar handoff** — a guess landing in somebody's real calendar arrives
+  labelled. A row draws a `.cal-est` chip, the timeline prefixes the DATE with
+  "est." (never the title — the title is what an ellipsis eats first) and draws the
+  dot HOLLOW, in the DOM and in the canvas export alike.
+- **The dates are DERIVED, not typed** (`calendarSetEstimates`), so they re-derive
+  the moment a real date is published and a name that already HAS one is skipped
+  rather than shadowed. The rule is measured: LGS-to-LGS gaps over the last five
+  sets are 98 / 84 / 70 / 91 days, and **every Lorcana set without exception has
+  landed on a Friday with wide retail exactly seven days behind**. So it is a
+  quarter past the last known LGS date, snapped forward to Friday — an estimate on
+  a Tuesday is wrong in a way a reader can see, which would discredit the ones that
+  are right. Each anchors on the PREVIOUS estimate, or the whole remaining season
+  clusters on one weekend.
+- **No prerelease phase.** Guessing the weekend somebody might book travel for is a
+  different order of claim from guessing when a box reaches a shelf.
+- **`calSetOrdinal` / `calSetOrdinalLabel` give "Set 14"**, derived from position in
+  the two consts, so it can never disagree with the order they are already in. It
+  answers the one thing a set's NAME does not — whether the Challenge you are
+  looking at falls before or after it. `calSetOrdinalLabel` returns **null** when the
+  name IS the ordinal: a set whose name has not been announced is carried as
+  "Set 17", and "Set 17 · Set 17" was the first cut.
 - **⚠ Every date is a plain `"YYYY-MM-DD"` string, never parsed into a local
   `Date`.** `new Date("2026-03-07")` is midnight UTC, i.e. March 6 everywhere west
   of Greenwich — a set release read a day early, invisible on a US dev machine.
@@ -4619,11 +4661,24 @@ again is the same control drawn twice - and two of the five (Latin America,
 Elsewhere) are near-empty all season, spending a third of the chart's height
 saying nothing.
 
-- **`CAL_TL_CIRCUIT_LANE` is the default**: DLCs and CCQs sort by date and pack
-  into as many rows as they need, so **the row COUNT is the density** and an
-  empty vertical band across the whole track is the drought. That reads the gaps
-  BETTER than five lanes you have to scan in parallel, and narrowing to one
-  region re-packs the track for that region.
+- **Packing is the default**: events sort by date and stack into as many rows as
+  they need, so **the row COUNT is the density** and an empty vertical band across
+  the whole track is the drought. That reads the gaps BETTER than five lanes you
+  have to scan in parallel, and narrowing to one region re-packs for that region.
+- **⚠ But a DLC and a CCQ are NOT one track** (2026-09-14, Zaven: *"break up DLC
+  and CCQ sections, not all in challenges"*). `CAL_TL_CIRCUIT_KINDS` makes packed
+  mode one lane PER KIND, keyed on the event's own `kind`, labelled from
+  `CAL_TL_KIND_LANES` (**Challenges** / **Qualifiers** — the full word, because a
+  lane name is structural where a chip is an abbreviation you say out loud). A
+  championship weekend you travel to and the qualifier that earns the invite are
+  different decisions, and the number that matters — *how long until the next
+  Challenge* — is hidden by a CCQ three weeks earlier when the two share a lane.
+  It also made the chart SHORTER: one mixed lane stacked to the depth of the
+  worst cluster in either, where two lanes each stack to their own.
+- **An unrecognised kind gets a lane of its own** rather than being folded into
+  the Challenges, and `CAL_TL_GROUP_OF` still files it in the circuit block by
+  elimination — so a kind added later lands in the right place with nobody
+  remembering to list it.
 - **⚠ The circuit is the one lane that is NEVER row-capped.** `CAL_TL_STORE_ROWS`
   caps the personal lanes because an SC cluster would stack twenty rows deep on
   one weekend; the circuit is the content, and capping it would demote the back
@@ -4637,13 +4692,37 @@ saying nothing.
 - **⚠ Only a real region lane offers itself as a filter.** "Challenges" is every
   region at once, so clicking it could only mean "all", which is where you
   already are.
+- **⚠ Oceania is its own region** (2026-09-14). Melbourne, Sydney, Brisbane and
+  Auckland are a four-event run with their own Continental Championship, and
+  folded into "Asia-Pacific" they were invisible as a group to exactly the readers
+  most likely to want them. **The KEY `apac` is reused rather than renamed** — it
+  means Asia without Oceania now — because every `?cr=apac` link and stored
+  preference in the wild would otherwise resolve to nothing, and `calRegionSet`
+  hands back "everywhere" on an empty parse, which is the worst of both. Japan and
+  China stay inside Asia: they run their own competitive seasons, but that is a
+  circuit fact the geography axis cannot carry without lying about where they are.
 - **The grouping NEVER reaches the personal lanes or the release rail** - a shop
   is a subject rather than a category, and a release is in no place at all. The
   test pins that for both modes.
-- **Three blocks, ruled apart: Challenges -> yours -> Releases** (`lane.group`,
+- **Three blocks, ruled apart: the circuit -> yours -> Releases** (`lane.group`,
   `lane.first`). They separate by SPACE (`margin-top`), not by a heavier border:
   a 2px grey line across the chart read as a scar. The month bands run
   continuously through the gap because the grid is one absolute overlay.
+- **⚠ A set's PRERELEASE never reaches the timeline** (`calTimelineSkip`,
+  2026-09-14 — Zaven, on Hyperia City: *"we dont need 3 dots, just lgs and
+  retail"*). Every recent set opens its prerelease weekend on the SAME Friday its
+  LGS release lands, so the rail drew three labels for one set with two of them on
+  the identical date — a stack of near-duplicates exactly where the chart is trying
+  to say "the set arrives here". It still renders in List, Month, the detail modal
+  and the .ics, where sharing a day with another row costs nothing. A STORE
+  prerelease is a different thing and is untouched.
+- **A season boundary carries a DIAMOND in the axis row** (`.cal-tl-season > i`,
+  and the same shape in the canvas painter). The line itself stays faint — it is
+  context behind the events, not an event — but a 1px hairline whose only
+  affordance was a `title` was a marker nobody could find. **⚠ The fade lives on a
+  `::before`, never on the span**: `opacity` on the parent multiplies down, so the
+  diamond could never be brighter than the hairline it marks. Its tooltip names
+  the set AND its ordinal ("Set 14 · Hyperia City").
 
 ### The chart's typography (2026-09-14)
 
@@ -4718,8 +4797,15 @@ structure and which was content.
   2027". The full form wrapped to three lines at 390px and out-weighed the chart
   under it at every width. The EXPORT header keeps the long form: that is a
   document, and a picture with the year abbreviated is one nobody can date.
+  **⚠ Even short, it takes its OWN LINE below 700px.** It is the one thing in the
+  bar that cannot shrink further, and squeezed between the steppers and three
+  controls flex crushed it to 37px and wrapped it into a 100px three-line stack.
+  `.cal-tl-bar` wraps and the label is `order:-1; flex:1 0 100%` there.
 - The gutter went 104px -> 120px (96px on mobile) to hold a Cinzel "CHALLENGES";
   the chart is 1240px against `.cal-view--wide`'s 1260px, so it still fits.
+  **⚠ At 96px that word has exactly 65px and wants 65** — measured at 390px it
+  ellipsed to "CHALLENG…" one pixel short, and the mobile `gap:4px` is what gives
+  it back. Don't restore the 6px gap without re-measuring.
 
 ### The filter row, and what it can now say (2026-09-14)
 
@@ -4746,6 +4832,74 @@ stopped a single row wrapping into a pile once the third and fourth control land
 - Counts on both chip rows are computed AFTER the search but BEFORE their own
   dimension, so no chip ever claims rows the page is not showing and no option
   reads (0) purely because you already narrowed by it.
+
+### One chip system, one casing rule (2026-09-14)
+
+Zaven: *"all the text, i dont like the [casing] of it and the stuff like 'My stores +
+saved events' — the lack of consistancy in cases. make it more visually astetic."*
+
+- **The page asks three multi-select questions and drew each at its own size.** Kind
+  chips were 12px/600/16px-radius, region chips 11px/700/999px, the near chip a
+  third — three controls doing one job reading as three unrelated widgets.
+  `.cal-chip-filter`, `.cal-region-chip` and `.cal-near-chip` now share one metric
+  (5px 10px, 11.5px, 700, 999px), and so do the three segmented groups
+  (`.cal-modes`, `.cal-spans`, `.cal-tl-group`). What still DIFFERS is the ON
+  state, and that difference is information: a kind chip lights its own hue because
+  the hue is the legend for the icon beside it; a region fills solid because
+  "where" has no colour of its own.
+- **The rule, written down so it stops drifting: a CONTROL is sentence case** (it
+  is a phrase addressed to you — "Show past", "By region", "North America"), **and
+  a STRUCTURAL label is uppercase with tracking** (it names a part of the chart,
+  not a thing you press — a lane, a column head, a day-of-week). Initialisms keep
+  their capitals on both sides (DLCs, CCQs, SCs, .ics).
+- **"My stores + saved events" is now "My calendar"**, and it moved from a line of
+  its own into the END of the filter row. It named two of the four things in the
+  drawer (a pinned series and a hidden event are in there too), it was the longest
+  label on the page, and a "+" in a control label is punctuation doing a word's
+  job. It is also the phrase the ✚ menu already uses, so the two halves of one idea
+  share one word. Stranded on its own row it was the only control on the page with
+  nothing beside it; its BODY still opens below the whole row, and the wrapper is
+  only rendered when open (an empty one kept its 14px margin).
+- **⚠ The lane label is "Near me", not "SCs near me"** — a lane name renders
+  uppercase, and "SCS NEAR ME" is an initialism the rule turns into a stutter. The
+  chip that switches the lane on still says "SCs near me", and the exported
+  picture's caption names the radius.
+- **The home panel's title is two lines in a 240px rail, on purpose.** "LORCANA
+  CALENDAR" does not fit one line beside four tool buttons, and both alternatives
+  are worse: wrapping the TOOLS costs more height than the second line, and
+  shortening the title here would have the home page and the page it links to
+  calling one thing two names. `line-height:1.1` is what keeps the masthead from
+  towering over its siblings' one-line titles.
+
+### Hover tells you the whole event (2026-09-14)
+
+Zaven: *"on home screen calendar, if you hover over event, give the info — same if on
+month view."* A month-grid chip is ~130px wide and a home-rail row ~200px, so both
+truncate the one thing they exist to say, and the answer was a `title=` — one
+unstyled line, after a ~1s delay, that cannot show a countdown, a venue, or the note
+saying a date is a guess. `useCalHoverCard` / `CalendarHoverCard` replace it with
+what the detail modal opens with, minus the map and the buttons.
+
+- **⚠ MOUSE ONLY.** It fires on `pointerenter` and only for `pointerType === "mouse"`:
+  on a touch screen the tap already opens the modal, and a card summoned by a finger
+  would flash over the row you just tapped. `@media (hover:none)` hides it as belt
+  and braces. Keyboard FOCUS opens it too, instantly — a focus is deliberate where a
+  pointer crossing a row is not.
+- **⚠ `pointer-events:none` on the card.** It is positioned over a grid of click
+  targets, and a tooltip that can swallow the click on the thing it describes is
+  worse than no tooltip.
+- **⚠ The native `title=` had to GO from the month chip**, or both fire and one of
+  them is the single grey line this replaced. `aria-label` carries the name for a
+  screen reader, which is what the attribute was really doing.
+- Positioned SIDEWAYS first (a rail row and a month cell are both narrow, so the room
+  is left or right; a card directly below covers the next week), measured in
+  `useLayoutEffect` so it never flashes at its fallback spot, and any scroll closes
+  it — it is fixed against coordinates read once, and a mouse move dismisses it
+  anyway.
+- One hook per LIST, not per row, so only one card can ever be open.
+- **⚠ In `CalendarMonthView` the hook sits ABOVE the early return** (hook order), and
+  in `CalendarPanelList` the card is a SIBLING of the `<ul>` — a `<ul>` may only
+  contain `<li>`.
 
 ### Your local shops are LANES, and SCs near you are one more (2026-09-14)
 

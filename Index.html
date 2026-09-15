@@ -213,7 +213,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=409">
+<link rel="stylesheet" href="styles.css?v=410">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2327,7 +2327,7 @@ const uiIcon = (key, size) => {
   return f ? f(size) : null;
 };
 
-// ── Almanac ─────────────────────────────────────────────────────────────────
+// ── Lorcana Calendar ────────────────────────────────────────────────────────
 // What is coming for the GAME (set releases, product drops, championship
 // weekends, qualifiers) plus what is coming at YOUR stores. Two data sources
 // that never mix: public.calendar_events is curated by hand, lorcana_events is
@@ -2549,10 +2549,19 @@ const calEventSubtitle = (ev) => !ev ? null
   : ev.kind === "set" ? null
   : ev.kind === "store" ? calStoreEventName(ev)
   : (ev.subtitle || null);
+// ⚠ An ESTIMATED date (see calendarSetEstimates) says so in every surface that
+// shows it. `calEstimated` is the one predicate; a renderer that can draw a chip
+// draws one, and every one-LINE naming site gets the word through the label
+// helper below — including the .ics SUMMARY and the Google Calendar handoff, so
+// a guess landing in somebody's real calendar arrives labelled as a guess.
+const calEstimated = (ev) => !!(ev && ev.estimated);
+const CAL_EST_SUFFIX = " (estimated)";
+
 // Where ONE line has to name an event completely: an .ics SUMMARY, a month
 // cell's tooltip, the standing list of what you have hidden. One helper so the
 // four of them cannot drift into naming the same event differently.
-const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filter(Boolean).join(" — ");
+const calEventFullLabel = (ev) => [calEventTitle(ev), calEventSubtitle(ev)].filter(Boolean).join(" — ")
+  + (calEstimated(ev) ? CAL_EST_SUFFIX : "");
 
 // ── Regions ─────────────────────────────────────────────────────────────────
 // The competitive calendar is worldwide — 17 Challenges across four continents —
@@ -2568,8 +2577,18 @@ const CALENDAR_REGIONS = [
   {key: "eu",    label: "Europe", cc: ["GB","IE","FR","DE","IT","ES","PT","NL","BE","LU","CH","AT",
                                        "SE","NO","DK","FI","IS","PL","CZ","SK","HU","RO","BG","GR",
                                        "HR","SI","EE","LV","LT","UA","RS","TR","MT","CY"]},
-  {key: "apac",  label: "Asia-Pacific", cc: ["JP","CN","HK","TW","KR","SG","MY","TH","PH","ID",
-                                             "VN","IN","AU","NZ"]},
+  {key: "apac",  label: "Asia", cc: ["JP","CN","HK","TW","KR","SG","MY","TH","PH","ID",
+                                     "VN","IN"]},
+  // ⚠ Oceania is its own circuit, not a corner of Asia. Melbourne, Sydney,
+  // Brisbane and Auckland are a four-event run with its own Continental
+  // Championship, and folded into "Asia-Pacific" they were invisible as a group
+  // to the one reader most likely to want them.
+  //
+  // ⚠ The KEY `apac` is kept rather than renamed, so every `?cr=apac` link and
+  // every stored preference already in the wild keeps resolving. It means Asia
+  // without Oceania now; a renamed key would silently resolve to nothing and
+  // `calRegionSet` would hand back "everywhere", which is the worst of both.
+  {key: "ocea",  label: "Oceania", cc: ["AU","NZ","FJ","PG"]},
   {key: "latam", label: "Latin America", cc: ["BR","AR","CL","CO","PE","UY","PY","BO","EC","VE",
                                               "CR","PA","GT","DO","PR"]},
   {key: "other", label: "Elsewhere", cc: []},
@@ -2660,6 +2679,95 @@ const calendarSetEntries = (releaseDates) => {
         starts_on: day,
         set_name: setName,
         derived: true,
+      });
+    }
+  }
+  return out;
+};
+
+// ⚠ ESTIMATED set dates, DERIVED rather than typed — so every one of them
+// re-derives the moment a real date is published, and a name that already HAS a
+// published date is skipped rather than shadowed by a guess.
+//
+// The rule is measured, not invented. Over the last five sets the LGS-to-LGS
+// gaps are 98 / 84 / 70 / 91 days (mean 86, i.e. a quarter), and every Lorcana
+// set without exception has landed on a FRIDAY with wide retail exactly seven
+// days behind it. So: a quarter past the last known LGS date, snapped forward to
+// the next Friday. An estimate that lands on a Tuesday is wrong in a way a
+// reader can see at a glance, which would discredit the ones that are right.
+//
+// Each estimate anchors on the PREVIOUS estimate, so they walk forward at the
+// cadence instead of all clustering a quarter past the last real date.
+const SET_CADENCE_DAYS = 91;
+const SET_LGS_WEEKDAY = 5;          // Friday, in getUTCDay()'s 0 = Sunday frame
+const SET_RETAIL_LAG_DAYS = 7;
+// "Set 14". Derived from position in the published list, then the announced-but-
+// undated ones after it, so it never needs maintaining and can never disagree
+// with the order the two consts are already in. It answers the one question a
+// season chart raises that a set's NAME does not: which one of the run is this,
+// and is the Challenge I am looking at before or after it.
+const calSetOrdinal = (name, releaseDates, upcoming) => {
+  const key = String(name || "").toLowerCase().trim();
+  if(!key) return null;
+  const order = Object.keys(releaseDates || {}).concat(upcoming || []);
+  const i = order.findIndex(n => String(n).toLowerCase().trim() === key);
+  return i < 0 ? null : i + 1;
+};
+// ⚠ "Set 17 · Set 17" was the first cut. A set whose NAME has not been
+// announced is carried as "Set 17", so the ordinal is already the whole name and
+// printing both is a stutter. Returns null there, and every caller falls back to
+// what it would have shown anyway.
+const calSetOrdinalLabel = (name, releaseDates, upcoming) => {
+  const n = calSetOrdinal(name, releaseDates, upcoming);
+  if(!n) return null;
+  // A plain compare rather than a built regex: escaping a backslash class
+  // through a template literal is exactly the kind of quiet no-op that ships.
+  const bare = String(name || "").toLowerCase().replace(/\s+/g, "");
+  return bare === "set" + n ? null : `Set ${n}`;
+};
+
+const calendarSetEstimates = (releaseDates, names) => {
+  const known = releaseDates || {};
+  let anchor = "";
+  for(const d of Object.values(known)) if(d && d.lgs && CAL_D(d.lgs) > anchor) anchor = CAL_D(d.lgs);
+  if(!calYmdParts(anchor)) return [];
+  const out = [];
+  for(const name of names || []){
+    if(known[name]) continue;                 // published — so it is not an estimate
+    let lgs = calAddDays(anchor, SET_CADENCE_DAYS);
+    for(let i = 0; i < 7 && new Date(calYmdToUTC(lgs)).getUTCDay() !== SET_LGS_WEEKDAY; i++)
+      lgs = calAddDays(lgs, 1);
+    out.push({title: name, lgs, retail: calAddDays(lgs, SET_RETAIL_LAG_DAYS)});
+    anchor = lgs;
+  }
+  return out;
+};
+
+// Those estimates as calendar rows. `estimated: true` rides on every one, and is
+// what every renderer keys its "est." mark off — the flag is the row's whole
+// licence to exist, so it is stamped here rather than at any call site.
+//
+// ⚠ NO prerelease phase. A prerelease weekend is a thing you sign up and travel
+// for, and guessing the weekend somebody might book is a different order of
+// claim from guessing when a box reaches a shelf.
+//
+// The id is `calendarSetEntries`' own shape, so a published date arriving later
+// replaces the estimate rather than sitting beside it.
+const calendarEstimatedSetEntries = (estimates) => {
+  const out = [];
+  for(const e of estimates || []){
+    for(const phase of ["lgs", "retail"]){
+      const day = CAL_D(e && e[phase]);
+      if(!calYmdParts(day)) continue;
+      out.push({
+        id: `set:${e.title}:${phase}`,
+        kind: "set",
+        title: e.title,
+        subtitle: SET_RELEASE_LABELS[phase],
+        starts_on: day,
+        set_name: e.title,
+        derived: true,
+        estimated: true,
       });
     }
   }
@@ -2772,7 +2880,7 @@ const calendarCombine = (curated, store) => {
 // after the user acted in a way that clearly meant they wanted it. Three
 // defences, and none of them is optional:
 //   1. a STRUCTURAL bypass — see calendarApplyHidden;
-//   2. hidden events are LISTED in "My stores + saved events" with an un-hide,
+//   2. hidden events are LISTED in "My calendar" with an un-hide,
 //      so the state is never invisible;
 //   3. hiding lives behind the ✚ popover and offers an undo toast, so it is not
 //      a stray click on a row.
@@ -2939,9 +3047,9 @@ const buildIcs = (events, opts) => {
   const o = opts || {};
   const nowMs = o.nowMs != null ? o.nowMs : Date.now();
   const lines = [
-    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Packs.Ink//Almanac//EN",
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Packs.Ink//Lorcana Calendar//EN",
     "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
-    `X-WR-CALNAME:${icsEscape(o.name || "Lorcana Almanac")}`,
+    `X-WR-CALNAME:${icsEscape(o.name || "Lorcana Calendar")}`,
   ];
   for(const ev of events || []) if(ev && calYmdParts(CAL_D(ev.starts_on))) lines.push(...icsEventLines(ev, nowMs));
   lines.push("END:VCALENDAR");
@@ -18816,6 +18924,27 @@ const SET_RELEASE_DATES = {
   // starts attributing post-Oct-16 events to Hyperia City, both correct.
   "Hyperia City":          {lgs:"2026-10-16", retail:"2026-10-23"},
 };
+
+// ── Sets that are announced but not dated ───────────────────────────────────
+// The competitive calendar is read AGAINST the set rotation — a Challenge in
+// March is a Cosmic Quest event or it is not — so a season chart that stops at
+// the one set with a published date answers half the question it exists for.
+//
+// ⚠ A SEPARATE const from SET_RELEASE_DATES, and it must stay separate. That
+// map is read by `inferEventSet` (which stamps a set name onto every tournament
+// and every graded-sales window), `setDataPartial`, the Set EV chart's markers
+// and the Screener's set ordering — all of which would then be quietly
+// attributing REAL rows to a guessed date. Nothing but the calendar reads this.
+//
+// ⚠ And every row it produces is LABELLED an estimate wherever it renders. The
+// standing rule here is that a wrong date on a calendar is worse than no date;
+// what makes a guess admissible is saying out loud that it is one.
+//
+// The NAMES are published (Ravensburger's 2026-27 rotation, via the wiki's
+// "Sets Legal" column — see the `set-spoilers` calendar review); only the DATES
+// are inferred. A set whose name is not out yet is carried as "Set N", because
+// where the season ends is itself information.
+const UPCOMING_SET_NAMES = ["Into the Inkdark", "Cosmic Quest", "Set 17"];
 
 // ── Products that are not a set ─────────────────────────────────────────────
 // Quests, gift boxes, starter sets: dated things a player would put in a diary,
@@ -36251,7 +36380,7 @@ const HOME_PANELS = [
   // layout (defaultHomeLayout keeps this order); an existing browser is hoisted
   // once by HOME_LAYOUT_CALENDAR_KEY, since normalizeHomeLayout APPENDS new
   // keys and would otherwise bury it at the foot of the column.
-  {key:"calendar",    label:"Almanac",              col:"left"},
+  {key:"calendar",    label:"Lorcana Calendar",     col:"left"},
   {key:"news",        label:"News feed",            col:"left"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
@@ -38033,7 +38162,7 @@ const EVENT_TILES = [
   },
 ];
 
-// ── Almanac: data + personal layer ─────────────────────────────────────────
+// ── Lorcana Calendar: data + personal layer ─────────────────────────────────
 // Two sources that never mix. public.calendar_events is curated by hand (sets,
 // products, DLCs, CCQs — migration 139 says why a table rather than a const).
 // lorcana_events is the live Ravensburger Play feed and contributes ONLY the
@@ -38101,6 +38230,8 @@ function useCalendarEvents(){
   useEffect(() => { reload(false); }, [reload]);
   const events = useMemo(
     () => calendarMergeEvents([...calendarSetEntries(SET_RELEASE_DATES),
+                               ...calendarEstimatedSetEntries(
+                                    calendarSetEstimates(SET_RELEASE_DATES, UPCOMING_SET_NAMES)),
                                ...calendarProductEntries(PRODUCT_RELEASE_DATES)], state.rows),
     [state.rows]);
   return {events, rows: state.rows, unavailable: state.unavailable, reload};
@@ -38601,7 +38732,18 @@ const CAL_TL_RELEASE_LANE = "release";
 // needs, so the row COUNT is density and an empty vertical band is the drought.
 // That reads the gaps better than five lanes you have to scan in parallel, and
 // filtering to one region re-packs it for that region.
-const CAL_TL_CIRCUIT_LANE = "circuit";
+//
+// ⚠ But a Challenge and a Qualifier are NOT one track. A DLC is the championship
+// weekend you travel to; a CCQ is how you earn the invite to one — different
+// events, different size, different decision, and the gap that matters is
+// "how long until the next DLC", which a single mixed lane cannot show because
+// a CCQ three weeks earlier hides it. So packed mode is one lane PER KIND, keyed
+// on the event's own kind, and the gap chips become per-circuit waits.
+const CAL_TL_CIRCUIT_KINDS = ["dlc", "ccq"];
+// A lane NAME is structural — the chart's own word for a row — so it is the full
+// word, not the chip's abbreviation. "DLCs" is what you say; "Challenges" is
+// what the row is.
+const CAL_TL_KIND_LANES = {dlc: "Challenges", ccq: "Qualifiers"};
 // Region swimlanes stay REACHABLE, as a deliberate pick rather than the
 // default — comparing two regions' runs against each other is a real question,
 // it is just not the one most readers arrive with.
@@ -38627,13 +38769,26 @@ const CAL_TL_STORE_ROWS = 3;
 const calTimelineLane = (ev, group) => {
   if(!ev) return CAL_TL_RELEASE_LANE;
   if(ev.kind === "set" || ev.kind === "product") return CAL_TL_RELEASE_LANE;
-  if(ev.kind !== "store") return group === "region" ? calRegionOf(ev.country) : CAL_TL_CIRCUIT_LANE;
+  // An unknown future kind still gets a lane of its own rather than being
+  // silently folded into the Challenges — the same reason `kind='other'` exists
+  // in the RPH feed.
+  if(ev.kind !== "store") return group === "region" ? calRegionOf(ev.country) : String(ev.kind || "");
   if(ev.near) return CAL_TL_NEAR_LANE;
   return CAL_TL_STORE_PREFIX + (ev.store_id == null ? "" : ev.store_id);
 };
+// ⚠ A set's PRERELEASE never reaches the timeline. Every recent set opens its
+// prerelease weekend on the SAME Friday the LGS release lands, so the rail drew
+// three labels for one set with two of them on the identical date — a stack of
+// near-duplicates where the chart is trying to say "the set arrives here". The
+// prerelease is still a real event and still renders in List, Month, the detail
+// modal and the .ics, where a date it shares with another event costs nothing.
+const calTimelineSkip = (ev) => !!ev && ev.kind === "set" && _calSetPhase(ev) === "prerelease";
 // Three blocks, read top to bottom as general -> personal -> context. A lane
 // carries its group so the render can rule between them; without that the
 // chart is one undifferentiated stack of rows again.
+// Everything left over is the circuit block: the two kind lanes in packed mode,
+// the region lanes in region mode. By elimination on purpose — a kind added
+// later lands in the right block without anyone remembering to list it.
 const CAL_TL_GROUP_OF = (key) =>
   key === CAL_TL_RELEASE_LANE ? "release"
   : (key === CAL_TL_NEAR_LANE || key.startsWith(CAL_TL_STORE_PREFIX)) ? "yours"
@@ -38720,6 +38875,7 @@ const calendarTimeline = (events, opts) => {
   for(const ev of (events || [])){
     const s = CAL_D(ev && ev.starts_on);
     if(!calYmdParts(s)) continue;
+    if(calTimelineSkip(ev)) continue;
     const e = _calTlEnd(ev);
     if(e < from){ before++; continue; }
     if(s > to){ after++; continue; }
@@ -38749,21 +38905,29 @@ const calendarTimeline = (events, opts) => {
     storeKeys = storeKeys.slice(0, CAL_TL_MAX_STORE_LANES).concat([CAL_TL_STORE_REST]);
   }
   const laneOrder = [
-    ...(group === "region" ? CALENDAR_REGIONS.map(r => r.key) : [CAL_TL_CIRCUIT_LANE]),
+    ...(group === "region" ? CALENDAR_REGIONS.map(r => r.key) : CAL_TL_CIRCUIT_KINDS),
     CAL_TL_NEAR_LANE, ...storeKeys,
   ];
+  // Anything the order above does not name — a kind added later, in packed mode
+  // — still gets drawn, after the ones we know about.
+  for(const k of laneItems.keys())
+    if(!laneOrder.includes(k) && k !== CAL_TL_RELEASE_LANE) laneOrder.push(k);
   // A shop's lane is named by the SHOP, read off its own first entry — the same
   // rule the list rows follow, where the store is the half that answers "which
   // of these is mine" and the event's own name is the muted second line.
   const laneLabel = (key, items) => {
-    if(key === CAL_TL_CIRCUIT_LANE) return "Challenges";
-    if(key === CAL_TL_NEAR_LANE) return "SCs near me";
+    if(CAL_TL_KIND_LANES[key]) return CAL_TL_KIND_LANES[key];
+    // ⚠ "Near me", not "SCs near me" — a lane NAME renders uppercase, and
+    // "SCS NEAR ME" is an initialism the rule turns into a stutter. The chip
+    // that switches this lane on says "SCs near me", and the exported picture's
+    // caption names the radius, so nothing is lost by the shorter word here.
+    if(key === CAL_TL_NEAR_LANE) return "Near me";
     if(key === CAL_TL_STORE_REST) return "Other shops";
     if(key.startsWith(CAL_TL_STORE_PREFIX)){
       const ev = (items[0] || {}).ev || {};
       return ev.subtitle || ev.location || "My stores";
     }
-    return (CALENDAR_REGIONS.find(r => r.key === key) || {}).label || key;
+    return (CALENDAR_REGIONS.find(r => r.key === key) || CALENDAR_KIND_BY_KEY.get(key) || {}).label || key;
   };
   const lanes = [];
   for(const key of laneOrder){
@@ -38821,7 +38985,9 @@ const calendarTimeline = (events, opts) => {
     const name = it.ev.set_name || it.ev.title;
     if(seenSet.has(name)) continue;
     seenSet.add(name);
-    seasons.push({key: name, label: name, x: it.x});
+    const n = calSetOrdinalLabel(name, SET_RELEASE_DATES, UPCOMING_SET_NAMES);
+    seasons.push({key: name, label: name, x: it.x, ordinal: n,
+      title: (n ? `${n} · ` : "") + name + (calEstimated(it.ev) ? " (estimated)" : "")});
   }
   const todayYmd = CAL_D(o.today) || calTodayYmd();
 
@@ -38835,7 +39001,7 @@ const calendarTimeline = (events, opts) => {
   };
 };
 
-// ── Almanac: UI ─────────────────────────────────────────────────────────────
+// ── Lorcana Calendar: UI ────────────────────────────────────────────────────
 
 // ⚠ The glyph is drawn UNDER the <img>, not instead of it — same pattern /gear
 // uses. hideBrokenImg hides a failed photo by style, so a product TCGplayer has
@@ -38848,6 +39014,115 @@ const CalendarKindDot = ({kind, ev, art}) => {
     ${img && html`<img class="cal-ico-img" src=${img} alt="" onError=${hideBrokenImg}/>`}
   </span>`;
 };
+
+// The badge every surface that can draw one puts beside an estimated date. Tiny
+// and outlined rather than filled: it is a caveat on the row, not a category of
+// row, and a solid chip would out-shout the event's own name.
+const calEstBadge = (ev) => calEstimated(ev)
+  ? html`<span class="cal-est" title="Estimated from the release cadence — not an announced date">est.</span>`
+  : null;
+
+// One "when" string. The detail modal built this inline; the hover card needs
+// exactly the same sentence, and two spellings of one date is how a tooltip and
+// the thing it describes end up disagreeing about a multi-day event.
+const calWhenLabel = (ev) => {
+  if(!ev) return "";
+  const start = CAL_D(ev.starts_on);
+  const end = calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) > start ? CAL_D(ev.ends_on) : null;
+  const t = calTimeLabel(ev);
+  return (end ? `${calDayLabel(start)} – ${calDayLabel(end)}` : calDayLabel(start)) + (t ? ` · ${t}` : "");
+};
+
+// ── Hover: the whole event, without a click ────────────────────────────────
+// A month-grid chip is ~130px wide and a home-rail row ~200px, so both truncate
+// the one thing they exist to say. `title=` answers that with a single unstyled
+// line after a ~1s delay and cannot show a countdown, a venue, or the note that
+// says a date is a guess. So the tooltip is a real card — what the detail modal
+// opens with, minus the map and the buttons.
+//
+// ⚠ MOUSE ONLY. It fires on pointerenter and only for pointerType "mouse": on a
+// touch screen the tap already opens the modal, and a card summoned by a finger
+// would flash over the very row you just tapped. Keyboard FOCUS opens it too
+// (instantly, since a focus is deliberate where a pointer crossing a row is
+// not), so it is reachable without a mouse.
+//
+// ⚠ pointer-events:none on the card itself. It is positioned over a grid of
+// click targets, and a tooltip that can swallow the click on the thing it is
+// describing is worse than no tooltip.
+const CAL_HOVER_W = 268;
+const CAL_HOVER_DELAY = 120;       // long enough that dragging across a row of cells does not strobe
+const CalendarHoverCard = ({ev, rect, art}) => {
+  const ref = useRef(null);
+  const [pos, setPos] = useState(null);
+  // useLayoutEffect, not useEffect: the card has to be measured and placed
+  // before paint or it flashes at its fallback position for a frame — the same
+  // rule useCalPopAnchor follows.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if(!el || !rect) return;
+    const h = el.offsetHeight, w = CAL_HOVER_W, M = 8;
+    // Sideways first: a rail row and a month cell are both narrow, so the room
+    // is to the left or right, and a card directly below would cover the next
+    // row down — which on a month grid is the next week.
+    let left = rect.right + 10;
+    if(left + w + M > window.innerWidth) left = rect.left - w - 10;
+    if(left < M) left = Math.max(M, Math.min(rect.left, window.innerWidth - w - M));
+    let top = Math.max(M, rect.top - 6);
+    if(top + h + M > window.innerHeight) top = Math.max(M, window.innerHeight - h - M);
+    setPos({left: Math.round(left), top: Math.round(top)});
+  }, [rect, ev && ev.id]);
+  if(!ev) return null;
+  const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
+  const sub = calEventSubtitle(ev);
+  const count = calCountdown(ev, calTodayYmd());
+  const n = ev.kind === "set" ? calSetOrdinalLabel(ev.set_name || ev.title, SET_RELEASE_DATES, UPCOMING_SET_NAMES) : null;
+  return html`<div class="cal-hover" ref=${ref} role="tooltip"
+    style=${{width: CAL_HOVER_W + "px", left: (pos ? pos.left : -9999) + "px", top: (pos ? pos.top : 0) + "px",
+             visibility: pos ? "visible" : "hidden"}}>
+    <div class="cal-hover-kind"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/>${n || (k && k.label) || "Event"}</div>
+    <div class="cal-hover-title">${calEventTitle(ev)}${calEstBadge(ev)}</div>
+    ${sub && html`<div class="cal-hover-sub">${sub}</div>`}
+    <div class="cal-hover-when">${calWhenLabel(ev)}${count && html`<em>${count}</em>`}</div>
+    ${ev.location && html`<div class="cal-hover-where">${uiIcon("pin", 11)}<span>${ev.location}</span></div>`}
+    ${ev.notes && html`<p class="cal-hover-note">${ev.notes}</p>`}
+    <div class="cal-hover-hint">Click for details</div>
+  </div>`;
+};
+
+// Returns the card to render and a `bind(ev)` that hands a trigger its handlers.
+// One hook per LIST rather than per row, so only one card can ever be open.
+function useCalHoverCard(art){
+  const [hov, setHov] = useState(null);
+  const timer = useRef(null);
+  const stop = useCallback(() => { if(timer.current){ clearTimeout(timer.current); timer.current = null; } }, []);
+  const close = useCallback(() => { stop(); setHov(null); }, [stop]);
+  useEffect(() => () => stop(), [stop]);
+  // Any scroll closes it. The card is position:fixed against coordinates read
+  // once, so a scroll leaves it hanging in space over unrelated content —
+  // exactly the bug useCalPopAnchor's capturing listener exists to fix, and
+  // re-anchoring is not worth it for something a mouse move already dismisses.
+  useEffect(() => {
+    if(!hov) return;
+    window.addEventListener("scroll", close, true);
+    return () => window.removeEventListener("scroll", close, true);
+  }, [hov, close]);
+  const open = useCallback((ev, el, now) => {
+    if(!ev || !el) return;
+    stop();
+    const r = el.getBoundingClientRect();
+    const rect = {top: r.top, bottom: r.bottom, left: r.left, right: r.right};
+    if(now) setHov({ev, rect});
+    else timer.current = setTimeout(() => setHov({ev, rect}), CAL_HOVER_DELAY);
+  }, [stop]);
+  const bind = useCallback((ev) => ({
+    onPointerEnter: (e) => { if(e.pointerType === "mouse") open(ev, e.currentTarget); },
+    onPointerLeave: close,
+    onFocus: (e) => open(ev, e.currentTarget, true),
+    onBlur: close,
+  }), [open, close]);
+  return {bind, close,
+    card: hov ? html`<${CalendarHoverCard} ev=${hov.ev} rect=${hov.rect} art=${art}/>` : null};
+}
 
 // ⚠ The ✚ popover is position:FIXED, anchored by measurement — never absolute.
 // It opens inside the Upcoming-events box, whose `.sc-tile` is overflow:hidden
@@ -38938,7 +39213,7 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
         const id = String(ev.id);
         if(hidden){ subs.remove("hide", id); flashToast("Back on your calendar"); return; }
         subs.add({kind: "hide", ref: id, label});
-        flashToast(`Hidden — undo it under "My stores + saved events"`);
+        flashToast(`Hidden — undo it under "My calendar"`);
       }}>${uiIcon(hidden ? "eye" : "close", 13)} ${hidden ? "Un-hide this event" : "Hide this event"}</button>`}
     </div>`}
   </div>`;
@@ -38963,7 +39238,7 @@ const CalendarRow = ({ev, today, subs, onOpen, art}) => {
         <span class="cal-row-count">${calCountdown(ev, today)}</span>
       </div>
       <div class="cal-row-body">
-        <div class="cal-row-title"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calEventTitle(ev)}</span></div>
+        <div class="cal-row-title"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calEventTitle(ev)}</span>${calEstBadge(ev)}</div>
         ${meta && html`<div class="cal-row-sub">${meta}</div>`}
       </div>
     </div>
@@ -39053,8 +39328,7 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
   if(!ev) return null;
   const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
   const end = calYmdParts(CAL_D(ev.ends_on)) && CAL_D(ev.ends_on) > CAL_D(ev.starts_on) ? CAL_D(ev.ends_on) : null;
-  const when = (end ? `${calDayLabel(ev.starts_on)} – ${calDayLabel(end)}` : calDayLabel(ev.starts_on))
-    + (calTimeLabel(ev) ? ` · ${calTimeLabel(ev)}` : "");
+  const when = calWhenLabel(ev);
   const link = safeHttpUrl(ev.url);
   const region = CALENDAR_REGIONS.find(r => r.key === calRegionOf(ev.country));
   const isPrerelease = isSet && /prerelease/i.test(ev.subtitle || "");
@@ -39073,13 +39347,21 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
         : (ev.kind === "product" && calendarEventArt(ev, art)) ? html`<img class="cal-modal-art"
             src=${calendarEventArt(ev, art)} alt="" aria-hidden="true" loading="lazy"
             onError=${hideBrokenImg}/>` : null}
-      <div class="cal-modal-kind"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/>${(k && k.label) || "Event"}</div>
+      ${/* A set row names its place in the run — "Set 14" — because that is the
+            one thing the set's own name does not say, and it is what tells you
+            whether a Challenge falls before or after it. */""}
+      <div class="cal-modal-kind"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/>${
+        (isSet && calSetOrdinalLabel(ev.set_name || ev.title, SET_RELEASE_DATES, UPCOMING_SET_NAMES))
+        || (k && k.label) || "Event"}</div>
       <h3 class="cal-modal-title">${title}</h3>
       ${/* The title is the STORE on a store row, so this line is what the shop
             actually calls the event. It is also the first place a curated row's
             "Disney Lorcana Challenge" is spelled out rather than abbreviated. */
         calEventSubtitle(ev) && html`<div class="cal-modal-sub">${calEventSubtitle(ev)}</div>`}
-      <div class="cal-modal-when">${when}</div>
+      <div class="cal-modal-when">${when}${calEstBadge(ev)}</div>
+      ${calEstimated(ev) && html`<p class="cal-modal-est">
+        Estimated from the release cadence — a quarter after the last announced set, on a Friday.
+        Ravensburger has not published this one yet, so treat it as roughly when, not exactly when.</p>`}
       ${scoutable && html`<nav class="cal-modal-tabs">
         <button class=${tab==="details"?"active":""} onClick=${()=>setTab("details")}>Details</button>
         <button class=${"elo-tab-scout"+(tab==="scout"?" active":"")} onClick=${()=>setTab("scout")}>Scout</button>
@@ -39141,6 +39423,9 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
 const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}) => {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
   const weeks = useMemo(() => m ? calendarMonthGrid(+m[1], +m[2], events) : [], [month, events]);
+  // ⚠ Above the early return — hook order. Nothing bails before this today, and
+  // anything added that does has to go below it.
+  const hover = useCalHoverCard(art);
   if(!m) return null;
   return html`<div class=${"cal-month" + (compact ? " cal-month--compact" : "")}>
     <div class="cal-month-bar">
@@ -39160,8 +39445,13 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
         class=${"cal-cell" + (day.inMonth ? "" : " out") + (day.date === today ? " today" : "")}>
         <div class="cal-cell-num">${day.day}</div>
         <div class="cal-cell-events">
-          ${day.events.slice(0, 3).map(ev => html`<button key=${ev.id} type="button" class="cal-chip"
-            title=${calEventFullLabel(ev)}
+          ${/* ⚠ No `title=` any more. A native tooltip and the hover card fire
+                together — two boxes, one of them the unstyled single line this
+                replaced. The name stays reachable without a mouse through
+                aria-label, which is what it was really there for. */""}
+          ${day.events.slice(0, 3).map(ev => html`<button key=${ev.id} type="button"
+            class=${"cal-chip" + (calEstimated(ev) ? " cal-chip--est" : "")}
+            aria-label=${calEventFullLabel(ev)} ...${hover.bind(ev)}
             onClick=${() => onOpen(ev)}>
             <${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calChipLabel(ev)}</span>
           </button>`)}
@@ -39169,6 +39459,7 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
         </div>
       </div>`))}
     </div>
+    ${hover.card}
   </div>`;
 };
 
@@ -39191,6 +39482,11 @@ const calTlRange = (a, b) => {
 // puts the set name whole on the title line and the phase, which is short,
 // where it survives.
 const calTlLabelParts = (ev, range, below) => {
+  // ⚠ "est." rides on the DATE, not the title. It is a claim about the date and
+  // nothing else, and the date is the half that is pinned against truncation —
+  // in the title it would be the first thing an ellipsis ate. Prefixed here so
+  // the canvas export inherits it from the same helper the DOM reads.
+  if(calEstimated(ev)) range = "est. " + range;
   const two = (title, qual) => ({title, qual, range});
   if(below && ev){
     if(ev.kind === "set" && ev.subtitle) return two(ev.set_name || ev.title, ev.subtitle);
@@ -39212,7 +39508,8 @@ const CAL_TL_RAIL_H = 16;          // the marker rail under the labels
 const CalendarTimelineMarks = ({lane, below, onOpen, art}) => html`<${React.Fragment}>
   ${lane.gaps.map(g => html`<span key=${g.key} class="cal-tl-gap" style=${{left: g.x * 100 + "%"}}>${g.days}d</span>`)}
   ${lane.items.map(it => html`<button key=${it.ev.id} type="button"
-    class=${"cal-tl-mark" + (it.label ? "" : " cal-tl-mark--tick") + (it.label && it.w > 0.004 ? " cal-tl-mark--span" : "")}
+    class=${"cal-tl-mark" + (it.label ? "" : " cal-tl-mark--tick") + (it.label && it.w > 0.004 ? " cal-tl-mark--span" : "")
+      + (calEstimated(it.ev) ? " cal-tl-mark--est" : "")}
     style=${{left: it.x * 100 + "%", width: it.label ? `max(9px, ${it.w * 100}%)` : null}}
     title=${calEventFullLabel(it.ev) + " — " + calTlRange(it.start, it.end)}
     ${/* ⚠ The DATE belongs in the aria-label, not only the title. A shop's
@@ -39310,7 +39607,7 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
   // leaves the year out is a picture nobody can date six months from now.
   titleFont(700, 25);
   ctx.fillStyle = P.accent;
-  ctx.fillText(opts.title || "Lorcana Almanac", G.pad, G.pad + 24);
+  ctx.fillText(opts.title || "Lorcana Calendar", G.pad, G.pad + 24);
   font(600, 13);
   ctx.fillStyle = P.dim;
   ctx.fillText(`${calMonthLabel(tl.fromMonth)} – ${calMonthLabel(calShiftMonth(tl.fromMonth, tl.months - 1))}`,
@@ -39339,8 +39636,16 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
     ctx.fillText(clip(m.label.toUpperCase(), Math.max(10, bw - 10)), bx + 7, G.head + 20);
   }
   for(const sn of tl.seasons){
+    const sx = Math.round(at(sn.x)) + 0.5;
     ctx.strokeStyle = P.accent; ctx.globalAlpha = 0.3;
-    ctx.beginPath(); ctx.moveTo(Math.round(at(sn.x)) + 0.5, G.head); ctx.lineTo(Math.round(at(sn.x)) + 0.5, bodyBot); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(sx, G.head); ctx.lineTo(sx, bodyBot); ctx.stroke();
+    ctx.globalAlpha = 1;
+    // The same diamond .cal-tl-season draws, for the same reason: a set boundary
+    // held as a faint hairline is a marker nobody can find, and the axis band is
+    // the one strip of the chart with nothing else in it.
+    ctx.fillStyle = P.accent; ctx.globalAlpha = 0.85;
+    ctx.save(); ctx.translate(sx, G.head + 9); ctx.rotate(Math.PI / 4);
+    ctx.fillRect(-3.5, -3.5, 7, 7); ctx.restore();
     ctx.globalAlpha = 1;
   }
   if(tl.today != null){
@@ -39401,7 +39706,13 @@ const buildCalendarTimelineBlob = async (tl, opts = {}) => {
       const mx = at(it.x), mw = Math.max(9, it.w * track);
       ctx.fillStyle = col;
       if(!it.label){ ctx.fillRect(mx, railY - 5, 3, 10); continue; }
-      roundRectPath(ctx, mx, railY - 4.5, mw, 9, 4.5); ctx.fill();
+      roundRectPath(ctx, mx, railY - 4.5, mw, 9, 4.5);
+      // ⚠ An estimated date is drawn HOLLOW, matching .cal-tl-mark--est. A solid
+      // dot beside a solid dot says the two are known equally well, and this one
+      // is a guess — the picture is the surface most likely to be read with no
+      // legend beside it.
+      if(calEstimated(it.ev)){ ctx.strokeStyle = col; ctx.stroke(); }
+      else ctx.fill();
 
       const anchorRight = it.anchor === "right";
       const lx = anchorRight ? mx + mw - G.label : mx;
@@ -39459,7 +39770,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       copiedMsg: "Timeline image copied to clipboard"});
   };
   const step = (n) => onMonth(calShiftMonth(fromMonth, n));
-  // Jump to where the events actually are. The Almanac is empty for
+  // Jump to where the events actually are. The calendar is empty for
   // weeks at a time, so a 12-month window landing on nothing is NORMAL — and a
   // blank chart that does not say which way to go reads as broken.
   const jump = (dir) => {
@@ -39475,7 +39786,7 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
       <div class="cal-month-label">${calMonthLabelShort(tl.fromMonth)} – ${calMonthLabelShort(calShiftMonth(tl.fromMonth, months - 1))}</div>
       <button type="button" class="cal-month-nav" aria-label="Later" onClick=${() => step(3)}>›</button>
       <button type="button" class="cal-month-today" onClick=${() => onMonth(calMonthOf(calTodayYmd()))}>Today</button>
-      ${/* Region rows are a pick, not the default — see CAL_TL_CIRCUIT_LANE. */""}
+      ${/* Region rows are a pick, not the default — see CAL_TL_CIRCUIT_KINDS. */""}
       ${onGroup && html`<div class="seg-toggle cal-tl-group" role="group" aria-label="Group Challenges by">
         <button type="button" class=${tl.group === "packed" ? "active" : ""}
           title="One packed track, densest months tallest"
@@ -39506,8 +39817,13 @@ const CalendarTimelineView = ({fromMonth, months, events, today, onOpen, onMonth
               ${tl.months_.map((m, i) => i % 2 === 1 && html`<span key=${"b" + m.ym} class="cal-tl-band"
                 style=${{left: m.x * 100 + "%", width: m.w * 100 + "%"}}/>`)}
               ${tl.months_.map(m => html`<span key=${m.ym} class="cal-tl-gridline" style=${{left: m.x * 100 + "%"}}/>`)}
+              ${/* A season boundary was a 1px hairline with a title on it — a
+                    marker nobody can see is not a marker. The diamond sits in
+                    the axis row where there is nothing else, so "which set was
+                    legal here" is readable across the whole chart rather than
+                    only where the release rail happens to have a label. */""}
               ${tl.seasons.map(sn => html`<span key=${sn.key} class="cal-tl-season" style=${{left: sn.x * 100 + "%"}}
-                title=${sn.label}/>`)}
+                title=${sn.title || sn.label}><i/></span>`)}
               ${tl.today != null && html`<span class="cal-tl-now" style=${{left: tl.today * 100 + "%"}}><i/></span>`}
             </div>
 
@@ -39785,8 +40101,8 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
 
   return html`<aside class="home-feed home-feed--calendar">
     <div class="cal-panel-head">
-      ${homePanelTitle({cls: "home-feed-title home-cal-title", label: "Almanac", panelKey: "calendar", panelNav})
-        || html`<div class="home-feed-title home-cal-title">Almanac</div>`}
+      ${homePanelTitle({cls: "home-feed-title home-cal-title", label: "Lorcana Calendar", panelKey: "calendar", panelNav})
+        || html`<div class="home-feed-title home-cal-title">Lorcana Calendar</div>`}
       <div class="cal-panel-tools">
         <button type="button" class=${"cal-panel-tool" + (openFilters || nFilters ? " on" : "")}
           aria-expanded=${openFilters ? "true" : "false"}
@@ -39861,16 +40177,23 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
 // all. Date, countdown and subtitle share one muted line; the title gets the
 // full width on its own — which on a store row is the STORE, so the shop you
 // followed is the one thing in the row that can never ellipse away.
-const CalendarPanelList = ({rows, today, onOpen, art}) => html`<ul class="cal-panel-list">
-  ${rows.map(ev => html`<li key=${ev.id}>
-    <button type="button" class="cal-panel-row" onClick=${() => onOpen(ev)}>
-      <span class="cal-panel-meta">
-        ${[calDayLabel(ev.starts_on), calCountdown(ev, today), calEventSubtitle(ev)].filter(Boolean).join(" · ")}
-      </span>
-      <span class="cal-panel-title"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calEventTitle(ev)}</span></span>
-    </button>
-  </li>`)}
-</ul>`;
+const CalendarPanelList = ({rows, today, onOpen, art}) => {
+  const hover = useCalHoverCard(art);
+  // ⚠ The card is a SIBLING of the <ul>, not a child: a <ul> may only contain
+  // <li>, and invalid markup here is the same class of mistake as a button
+  // inside a button. It is position:fixed, so the wrapper costs no layout.
+  return html`<${React.Fragment}><ul class="cal-panel-list">
+    ${rows.map(ev => html`<li key=${ev.id}>
+      <button type="button" class="cal-panel-row" ...${hover.bind(ev)}
+        aria-label=${calEventFullLabel(ev)} onClick=${() => onOpen(ev)}>
+        <span class="cal-panel-meta">
+          ${[calDayLabel(ev.starts_on), calCountdown(ev, today), calEventSubtitle(ev)].filter(Boolean).join(" · ")}
+        </span>
+        <span class="cal-panel-title"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calEventTitle(ev)}</span>${calEstBadge(ev)}</span>
+      </button>
+    </li>`)}
+  </ul>${hover.card}<//>`;
+};
 
 function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
   const isAdmin = useContext(GradedAdminContext);
@@ -39970,7 +40293,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     kinds.includes(e.kind) && calMatchesRegion(e, region) && calMatchesQuery(e, dQuery)),
     [all, kinds, region, dQuery]);
   const upcoming = useMemo(() => calendarUpcoming(shown, today, 0), [shown, today]);
-  // ⚠ The Almanac is EMPTY for weeks at a time and that is normal, not a
+  // ⚠ The calendar is EMPTY for weeks at a time and that is normal, not a
   // bug: sets ship roughly quarterly, so between a retail release and the next
   // set's announcement there is genuinely nothing ahead. A page that says only
   // "nothing coming up" in that window reads as broken, so past events stay one
@@ -40014,17 +40337,17 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
     + hiddenEvents.length;
 
   const exportAll = () => {
-    const done = downloadIcs(upcoming, "packsink-lorcana-almanac.ics", "Lorcana Almanac");
+    const done = downloadIcs(upcoming, "packsink-lorcana-calendar.ics", "Lorcana Calendar");
     flashToast(done ? `Exported ${upcoming.length} events` : "Couldn't download the calendar file");
   };
 
   return html`<div class=${"cal-view" + (mode === "timeline" ? " cal-view--wide" : "")}>
     <header class="ev-header mkt-header cal-header">
       <div>
-        <h2 class="cal-h1">${uiIcon("calendar", 20)} Almanac</h2>
+        <h2 class="cal-h1">${uiIcon("calendar", 20)} Lorcana Calendar</h2>
         <p class="cal-lede">
-          Set releases, product drops, Disney Lorcana Challenge weekends and Challenge Championship
-          Qualifiers — plus every event at the stores you follow.
+          Set releases, product drops, Challenges and Qualifiers — plus every event at the
+          stores you follow.
         </p>
       </div>
       <div class="cal-header-actions">
@@ -40055,7 +40378,7 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
           <button type="button" class=${mode === "month" ? "active" : ""} onClick=${() => setMode("month")}>
             ${uiIcon("calendar", 13)} Month</button>
           <button type="button" class=${mode === "timeline" ? "active" : ""} onClick=${() => setMode("timeline")}
-            title="The whole season on one axis, by region">
+            title="The whole season on one axis — Challenges, Qualifiers, your shops and the releases">
             ${uiIcon("timeline", 13)} Timeline</button>
         </div>
       </div>
@@ -40093,6 +40416,20 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${near && nearAdded > 0 && html`<em>${nearAdded}</em>`}
       </button>
       <div class="cal-filters2-end">
+        ${/* The personal drawer lives at the END of this row rather than on a
+              line of its own below it. Stranded on its own row it was the only
+              control on the page with nothing beside it, which read as an
+              afterthought; here it sits with the other things that are about
+              YOUR view of the calendar rather than about the game's. Its BODY
+              still opens below the whole row — see .cal-follow. */""}
+        <button type="button" class=${"cal-follow-toggle" + (showStores ? " on" : "")}
+          aria-expanded=${showStores ? "true" : "false"}
+          title="The stores you follow, the events you saved, and anything you hid"
+          onClick=${() => setShowStores(v => !v)}>
+          ${uiIcon("store", 12)} My calendar
+          ${followCount > 0 && html`<span class="cal-follow-n">${followCount}</span>`}
+          <span class="cal-follow-caret">${showStores ? "⌃" : "⌄"}</span>
+        </button>
         ${mode === "timeline" && html`<div class="seg-toggle cal-spans" role="group" aria-label="Window length">
           ${CAL_TL_SPANS.map(m => html`<button key=${m} type="button" class=${span === m ? "active" : ""}
             title=${`Draw ${m} months at a time`} onClick=${() => setSpan(m)}>${m} mo</button>`)}
@@ -40107,14 +40444,15 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
       </div>
     </div>
 
-    <div class="cal-follow">
-      <button type="button" class="cal-follow-toggle" aria-expanded=${showStores ? "true" : "false"}
-        onClick=${() => setShowStores(v => !v)}>
-        ${uiIcon("store", 13)} My stores + saved events
-        <span class="cal-follow-n">${followCount}</span>
-        <span class="cal-follow-caret">${showStores ? "⌃" : "⌄"}</span>
-      </button>
-      ${showStores && html`<div class="cal-follow-body">
+    ${/* ⚠ "My stores + saved events" until 2026-09-14. It named two of the four
+          things in the drawer (a pinned series and a hidden event are in here
+          too), it was the longest label on the page, and a "+" in a control
+          label is punctuation doing a job a word should do. Everything below is
+          exactly what you have personally added to, or taken off, this
+          calendar — which is what "my calendar" means, and is the phrase the ✚
+          menu already uses, so the two halves of one idea share one word. */""}
+    ${showStores && html`<div class="cal-follow">
+      <div class="cal-follow-body">
         ${followCount === 0
           ? html`<p class="muted cal-follow-empty">
               Nothing followed yet. <button type="button" class="cal-linkish"
@@ -40172,8 +40510,8 @@ function CalendarView({user, onSignIn, onFindEvents, sealedPrices}){
         ${!user && followCount > 0 && html`<p class="muted cal-follow-signin">
           Saved on this device only. <button type="button" class="cal-linkish" onClick=${onSignIn}>Sign in</button>
           and they follow you to your phone.</p>`}
-      </div>`}
-    </div>
+      </div>
+    </div>`}
 
     ${/* A geo query that failed has to SAY so. Silently showing the calendar
           without the shops you asked for is the same shape of lie as a filter
@@ -40873,7 +41211,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Embedded as a section of the calendar tile: the tile already carries a
   // border and a background, so a second one reads as a box in a box. The title
   // also has to survive a ~220px rail — "Upcoming Lorcana Events Near Me" under a
-  // heading that already says "Almanac" is both too long and saying it
+  // heading that already says "Lorcana Calendar" is both too long and saying
   // twice, and the mode chips directly below name the kind anyway. Copy link
   // goes with it: sharing a view is something you do from the full-screen one,
   // and at that width the button pushes the ▾ off the row.
