@@ -138,7 +138,10 @@ export default {
     // The stream ticker lives at /ticker with NO explicit route: Workers
     // Assets' pretty-URL handling serves ticker.html for it via the asset
     // fall-through below, with the query intact. Do not add a route that
-    // fetches "/ticker.html" — the assets layer 307s that to /ticker.
+    // fetches "/ticker.html" — the assets layer 307s that to /ticker, and the
+    // redirect DROPS the query, which is both the OBS overlay's whole config
+    // (?bar=1&...) and the Analytics tab's ?embed=1. Same 307 that moved the
+    // Swiss sim off /lab/swiss.
 
     const asset = await env.ASSETS.fetch(request);
     if (asset.status !== 404) return asset;

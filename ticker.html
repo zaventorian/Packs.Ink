@@ -28,6 +28,22 @@
       document.documentElement.setAttribute("data-bar","1");
     }
   }catch(e){}
+  /* Embed mode — the Analytics "Stream Ticker" tab renders this page in an
+     iframe at /ticker?embed=1. The host app already shows nav + theme + its
+     own header, so flag the root to hide the duplicate chrome (which is also
+     what removes the one anchor on the page, a link to packs.ink that would
+     otherwise navigate the iframe out of the tool). Then strip the param, so
+     the embedded copy's own address stays the plain /ticker the overlay URL
+     is built from. Same shape as swiss.html. */
+  try{
+    var eq=new URLSearchParams(location.search);
+    if(eq.get("embed")==="1"){
+      document.documentElement.setAttribute("data-embed","1");
+      eq.delete("embed");
+      var erest=eq.toString();
+      history.replaceState(null,"",location.pathname+(erest?"?"+erest:""));
+    }
+  }catch(e){}
 })();
 </script>
 <meta charset="utf-8">
@@ -54,6 +70,12 @@
    matter whose browser profile loads it. */
 .tk-app{max-width:1100px;margin:0 auto;}
 .tk-top{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:16px;}
+/* Embedded in the Analytics » Stream Ticker tab: the host already shows the
+   nav, the theme control and a MarketHeader naming the tool, so hide the
+   duplicate chrome and tighten the page padding to fit the iframe. */
+html[data-embed="1"] .tk-top{display:none;}
+html[data-embed="1"] body{padding:8px 14px 18px;}
+html[data-embed="1"] .tk-app{max-width:none;}
 .tk-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
 .tk-brand img{height:34px;width:auto;display:block;}
 .tk-spacer{flex:1;min-width:0;}

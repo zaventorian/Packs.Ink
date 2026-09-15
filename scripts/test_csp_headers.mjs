@@ -3,6 +3,8 @@
 // because sw.js re-fetches every cross-origin request via fetch() and a fetch()
 // from the service-worker context is classified as connect-src, NOT as the
 // resource's own directive. _headers says this in prose; nothing checked it.
+// It also pins that the page policies — /*, plus one per page the Analytics tab
+// iframes (/swiss, /ticker) — stay byte-identical apart from frame-ancestors.
 //
 // It shipped broken exactly once, with the calendar's OpenStreetMap mini map:
 // tile.openstreetmap.org went into img-src only, so the SW's fetch was blocked
@@ -40,7 +42,11 @@ const hosts = (list) => (list || []).filter((v) => v.startsWith("https://") || v
 // A page policy is one that loads images. The /scanner-worker.js block is
 // default-src 'none' with no img-src — a different context that renders nothing.
 const pagePolicies = policies.filter((p) => directive(p, "img-src"));
-check(pagePolicies.length === 2, `two page policies carry an img-src (/* and /swiss), got ${pagePolicies.length}`);
+check(
+  pagePolicies.length === 3,
+  `three page policies carry an img-src (/*, /swiss, /ticker), got ${pagePolicies.length}`,
+  "a page block was added or lost — if it was added, its body must match /* apart from frame-ancestors."
+);
 
 // ── the rule ──────────────────────────────────────────────────────────────
 // script-src is deliberately NOT checked: cdnjs.cloudflare.com sits there and
@@ -53,7 +59,7 @@ for (const [i, policy] of pagePolicies.entries()) {
       check(
         connect.includes(host),
         `policy ${i + 1}: ${name} host ${host} is also in connect-src`,
-        `sw.js re-fetches it, and a SW fetch() is connect-src. Add ${host} to connect-src in BOTH page policies in _headers.`
+        `sw.js re-fetches it, and a SW fetch() is connect-src. Add ${host} to connect-src in EVERY page policy in _headers.`
       );
     }
   }
@@ -67,18 +73,27 @@ for (const [i, policy] of pagePolicies.entries()) {
   check(connect.includes("https://tile.openstreetmap.org"), `policy ${i + 1}: the calendar map's tile host is in connect-src`);
 }
 
-// ── the two page policies must not drift ──────────────────────────────────
-// _headers tells a reader to "add the origin to BOTH copies"; they differ only
-// by frame-ancestors ('none' on /*, 'self' on /swiss so the Analytics tab can
-// iframe it). Anything else diverging means one copy was edited alone.
+// ── the page policies must not drift ──────────────────────────────────────
+// _headers tells a reader to "add the origin to every copy"; they differ only
+// by frame-ancestors ('none' on /*, 'self' on /swiss and /ticker so the
+// Analytics tab can iframe them). Anything else diverging means one copy was
+// edited alone — which is silent: the embedded page just loses that origin.
 const strip = (p) => p.replace(/frame-ancestors\s+[^;]*;?\s*/, "");
-check(
-  strip(pagePolicies[0]) === strip(pagePolicies[1]),
-  "the /* and /swiss policies are identical apart from frame-ancestors",
-  "one copy was edited without the other."
-);
+const EMBEDS = ["/swiss (Swiss Odds)", "/ticker (Stream Ticker)"];
+const embedName = (i) => EMBEDS[i - 1] || `page policy ${i + 1}`;
+for (let i = 1; i < pagePolicies.length; i++) {
+  check(
+    strip(pagePolicies[0]) === strip(pagePolicies[i]),
+    `the /* and ${embedName(i)} policies are identical apart from frame-ancestors`,
+    "one copy was edited without the other."
+  );
+  check(
+    /frame-ancestors\s+'self'/.test(pagePolicies[i]),
+    `${embedName(i)} keeps frame-ancestors 'self' (the Analytics embed)`,
+    "without it the tab renders the browser's gray broken-page icon."
+  );
+}
 check(/frame-ancestors\s+'none'/.test(pagePolicies[0]), "/* keeps frame-ancestors 'none'");
-check(/frame-ancestors\s+'self'/.test(pagePolicies[1]), "/swiss keeps frame-ancestors 'self' (the Swiss Odds embed)");
 
 console.log("");
 if (fail.length) {
