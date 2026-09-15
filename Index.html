@@ -213,7 +213,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=411">
+<link rel="stylesheet" href="styles.css?v=412">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -42855,8 +42855,13 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // card can be seen: ⚠ a `?card=` style open is NOT available here, because
   // the Cards view's incoming-open effect requires `tcgplayer_product_id` and
   // every Coconut row has none — it would land on the tab with nothing open.
-  // ⚠ Text only, like every other news tile: `.home-news-feed`'s edge fade is
-  // a `mask-image`, which softens child `<img>`s (see the CSS pitfalls note).
+  // ⚠ This is the ONE tile in this feed that carries art, and the exception is
+  // deliberate: a reveal is about what the card LOOKS like. The feed's edge fade
+  // is a `mask-image`, which softens child `<img>`s (the CSS pitfalls note), so
+  // it was measured rather than assumed — see `.home-news-thumbs` in styles.css
+  // for the numbers. It holds for a chip-sized THUMB and was not tested larger.
+  // ⚠ Thumbs, not the full render: a whole grayscale beta card shrunk to chip
+  // size reads as a broken-image glyph, which is why coconutThumbUrl exists.
   if(freshCoconut.length) newsTiles.push(html`<a key="coconut-new" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
@@ -42869,6 +42874,14 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             ${freshCoconut.length === 1
               ? freshCoconut[0].ink + " leader"
               : freshCoconut.map(coconutDisplayName).join(" · ")} →
+          </div>
+          <div class="home-news-thumbs">
+            ${freshCoconut.slice(0, COCONUT_REVEAL_MAX_THUMBS).map(c => html`<img key=${c.slug}
+              class="home-news-thumb" src=${coconutThumbUrl(c.cn)} crossOrigin="anonymous"
+              alt="" aria-hidden="true"
+              onError=${(e)=>{ const t=e.target;
+                if(!t.dataset.fb){ t.dataset.fb="1"; t.src=coconutArtUrl(c.cn); return; }
+                t.hidden = true; }}/>`)}
           </div>
         </a>`);
   if(showCoconutNews) newsTiles.push(html`<a key="coconut" class="home-news-tile home-news-clickable"
@@ -43509,6 +43522,11 @@ const COCONUT_NEWS_UNTIL = Date.parse("2026-10-31T23:59:59Z");
 // off one PDF and there is no day to date them to — which is the point of
 // keying on an explicit date rather than on `cn`, whose order is ours.
 const COCONUT_REVEAL_NEWS_DAYS = 14;
+// How many of the fresh cards the reveal tile pictures. Reveals are weekly and
+// the window is a fortnight, so two is routine and three is reachable; past
+// that the thumbs would outweigh the words in a 150px column, and the sub-line
+// already names every card whether or not it drew one.
+const COCONUT_REVEAL_MAX_THUMBS = 3;
 const COCONUT_CARDS = [
   {slug:"ariel-spectacular-singer", cn:2, name:"Ariel", version:"Spectacular Singer",
    ink:"Amber", artist:"Alice Pisoni", associated:"Ariel - Spectacular Singer",

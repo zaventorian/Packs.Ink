@@ -35,11 +35,13 @@ const parts = [
 const mod = new Function(parts.join("\n\n") + `
   return {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
           COCONUT_INK_LIMIT, computeCoreSets, getDeckLimit,
-          coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS};
+          coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS,
+          COCONUT_REVEAL_MAX_THUMBS};
 `)();
 
 const {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
-       coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS} = mod;
+       coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS,
+       COCONUT_REVEAL_MAX_THUMBS} = mod;
 
 // ── fixtures ──────────────────────────────────────────────────────────
 // Minimal catalog rows keyed the way checkDeckLegality reads them.
@@ -240,6 +242,39 @@ check("no leader -> coconut is null", r.coconut, null);
 // Core/Infinity keep collapsing to "invalid" — warn-only is scoped to the
 // declared format, where the leader gives the deck an identity to preserve.
 check("no leader -> broken deck still 'invalid'", r.format, "invalid");
+
+// ── the reveal tile's card art ────────────────────────────────────────
+// The tile pictures the card it announces. Every failure here is SILENT —
+// a broken-image icon in the feed, or art that loads on screen and then
+// comes back blank on a canvas — so each one is pinned.
+console.log("\n== reveal tile art ==");
+const CSS = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
+const tile = SRC.slice(SRC.indexOf('key="coconut-new"'), SRC.indexOf('key="coconut"'));
+check("the reveal tile renders thumbs", /class="home-news-thumbs"/.test(tile), true);
+// Thumbs, not the full render: a whole grayscale beta card at chip size reads
+// as a broken-image glyph, which is the reason coconutThumbUrl exists.
+check("it uses the thumb, not the full card", /src=\$\{coconutThumbUrl\(/.test(tile), true);
+check("it caps how many it pictures",
+  /slice\(0,\s*COCONUT_REVEAL_MAX_THUMBS\)/.test(tile), true);
+check("the cap is a small number", COCONUT_REVEAL_MAX_THUMBS >= 1 && COCONUT_REVEAL_MAX_THUMBS <= 4, true);
+// ⚠ The documented Chrome trap: a no-cors response for this URL is cached
+// separately, and a later canvas-bound request for the SAME url reuses it and
+// fails with naturalWidth 0. Every <img> on coconut art carries this, even the
+// ones that never touch a canvas.
+check("thumbs are requested with CORS", /crossOrigin="anonymous"/.test(tile), true);
+// Art is uploaded separately from the card entry, so "no photo yet" is a real
+// steady state that recurs with every weekly Beta card. Thumb -> full art ->
+// hide; the last step is what keeps a broken icon out of the feed.
+check("a failed thumb falls back to the full art",
+  /dataset\.fb[\s\S]*?coconutArtUrl\(c\.cn\)/.test(tile), true);
+check("a failed fallback hides the image", /t\.hidden\s*=\s*true/.test(tile), true);
+// ⚠ .home-news-thumb sets display:block, which out-specifies the UA's
+// [hidden]{display:none} — without this rule the hidden thumb still paints an
+// empty bordered box and the row can never collapse.
+check("[hidden] beats the thumb's own display:block",
+  /\.home-news-thumb\[hidden\]\{display:none;?\}/.test(CSS), true);
+check("the row collapses when every thumb failed",
+  /\.home-news-thumbs:not\(:has\(img:not\(\[hidden\]\)\)\)\{display:none;?\}/.test(CSS), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
