@@ -34,10 +34,12 @@ const parts = [
 
 const mod = new Function(parts.join("\n\n") + `
   return {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
-          COCONUT_INK_LIMIT, computeCoreSets, getDeckLimit};
+          COCONUT_INK_LIMIT, computeCoreSets, getDeckLimit,
+          coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS};
 `)();
 
-const {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard} = mod;
+const {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
+       coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS} = mod;
 
 // ── fixtures ──────────────────────────────────────────────────────────
 // Minimal catalog rows keyed the way checkDeckLegality reads them.
@@ -84,6 +86,52 @@ check("collector numbers 1..19", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
   Array.from({length:19},(_,i)=>i+1));
 check("every associated name is '<name> - <version>'",
   COCONUT_CARDS.every(c => c.associated === `${c.name} - ${c.version}`), true);
+
+// ── home news tile ────────────────────────────────────────────────────
+// A reveal is announced on the home news feed for COCONUT_REVEAL_NEWS_DAYS.
+// Every way this breaks is SILENT — the tile just stops appearing, or starts
+// announcing a card nobody has seen — so both directions are pinned.
+console.log("\n== reveal news window ==");
+const DAY = 864e5;
+const dated = COCONUT_CARDS.filter(c => c.revealed);
+check("at least one card carries a reveal date", dated.length > 0, true);
+check("every reveal date is a real ISO day",
+  dated.every(c => /^\d{4}-\d{2}-\d{2}$/.test(c.revealed)
+                && Number.isFinite(Date.parse(c.revealed + "T00:00:00Z"))), true);
+
+const vine = getCoconutCard("the-vine-towering-stalk");
+const vineAt = (offsetDays) =>
+  coconutFreshCards(Date.parse(vine.revealed + "T00:00:00Z") + offsetDays * DAY)
+    .map(c => c.slug);
+check("fresh on its reveal day", vineAt(0).includes("the-vine-towering-stalk"), true);
+check("still fresh just inside the window",
+  vineAt(COCONUT_REVEAL_NEWS_DAYS - 1).includes("the-vine-towering-stalk"), true);
+check("stale once the window passes",
+  vineAt(COCONUT_REVEAL_NEWS_DAYS + 1).includes("the-vine-towering-stalk"), false);
+// The guard against a typo'd year announcing a card nobody has seen.
+check("a reveal in the future is not announced", vineAt(-1).includes("the-vine-towering-stalk"), false);
+// Beta 1 shipped as one PDF with no reveal day, so it must never fire this.
+check("undated Beta 1 cards never announce",
+  coconutFreshCards(Date.parse("2026-01-01T00:00:00Z")).length, 0);
+check("newest first",
+  coconutFreshCards(Date.now()).every((c, i, a) => i === 0 || a[i-1].revealed >= c.revealed), true);
+
+// The home tile checks the row reached `raw` by this id, and transformSupabaseData
+// mints it. A drifted prefix fails silently, so one accessor builds both.
+check("coconutRowId matches the documented shape",
+  coconutRowId("the-vine-towering-stalk"), "coconut::the-vine-towering-stalk");
+check("the catalog transform mints the id through it",
+  /"card_id":\s*coconutRowId\(cc\.slug\)/.test(SRC), true);
+// Exactly one occurrence: the accessor's own body. A second is a call site
+// that went around it, which is the drift this guards.
+check("nothing else builds the prefix by hand",
+  (SRC.match(/`coconut::\$\{/g) || []).length, 1);
+// "Dated things first": the reveal is news with an end date, the format notice
+// is the standing one. Ordering is just push order, so nothing else catches a
+// swap.
+check("the reveal tile is pushed above the standing Format tile",
+  SRC.indexOf('key="coconut-new"') < SRC.indexOf('key="coconut"')
+  && SRC.indexOf('key="coconut-new"') > 0, true);
 
 console.log("\n== copy limits ==");
 const nick = getCoconutCard("nick-wilde-wily-fox");

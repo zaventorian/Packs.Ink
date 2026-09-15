@@ -3783,7 +3783,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     rows.push({
       "Set":              COCONUT_SET_NAME,
       "set_id":           null,
-      "card_id":          `coconut::${cc.slug}`,
+      "card_id":          coconutRowId(cc.slug),
       "tcgplayer_product_id": null,
       "Product Name":     displayName,
       // No rarity — RarityTag/normalizeRarity both short-circuit on falsy, so
@@ -42798,17 +42798,27 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // note in the coconut build) hides the tile instead of linking to an empty
   // filtered page. Ravensburger adds beta cards weekly, so the count is derived,
   // never hardcoded.
-  const coconutCount = useMemo(() => {
+  const coconutIds = useMemo(() => {
     const ids = new Set();
     for(const r of (raw || [])){ if(r.isCoconut && r.card_id) ids.add(r.card_id); }
-    return ids.size;
+    return ids;
   }, [raw]);
+  const coconutCount = coconutIds.size;
   const showCoconutNews = coconutCount > 0 && Date.now() < COCONUT_NEWS_UNTIL;
+  // Cards revealed in the last fortnight, gated on the row actually being in
+  // `raw` for exactly the reason the count is derived from `raw` and not from
+  // COCONUT_CARDS.length: a client replaying an older cache has no row for a
+  // card added since, and a tile announcing a card whose own Cards tab cannot
+  // show it is worse than no tile. Cheap enough to run per render (19 entries
+  // and a Set lookup), like the `Date.now()` gate above it.
+  const freshCoconut = coconutFreshCards(Date.now())
+    .filter(c => coconutIds.has(coconutRowId(c.slug)));
 
   // News-feed tiles — the pre-release "News" card, any live convention tile
-  // (Artist Alley), and the Format Coconut card, in that order (announcements
-  // with a hard end-date read top-down; Coconut is the standing one, so it
-  // sits at the bottom). Rendered as a single pinned `.home-news-feed` column
+  // (Artist Alley), any Coconut card revealed in the last fortnight, and the
+  // standing Format Coconut card, in that order (announcements with a hard
+  // end-date read top-down; the format notice is the standing one, so it sits
+  // at the bottom, under the reveal that is actually news). Rendered as a single pinned `.home-news-feed` column
   // beside the Rare–Legendary movers banner — NOT as full-width announce
   // tiles, which ate half a phone screen when two conventions ran at once.
   const newsTiles = [];
@@ -42840,6 +42850,27 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             </li>`)}
           </ul>
         </div>`);
+  // A reveal is DATED, so it sits above the standing New Format notice below
+  // it. Both land on the same filtered Cards page, which is the only place the
+  // card can be seen: ⚠ a `?card=` style open is NOT available here, because
+  // the Cards view's incoming-open effect requires `tcgplayer_product_id` and
+  // every Coconut row has none — it would land on the tab with nothing open.
+  // ⚠ Text only, like every other news tile: `.home-news-feed`'s edge fade is
+  // a `mask-image`, which softens child `<img>`s (see the CSS pitfalls note).
+  if(freshCoconut.length) newsTiles.push(html`<a key="coconut-new" class="home-news-tile home-news-clickable"
+          href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
+          onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
+          style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
+          <div class="home-news-kicker">${uiIcon("coconut", 13)} New Coconut card${freshCoconut.length===1?"":"s"}</div>
+          <div class="home-news-title">${freshCoconut.length === 1
+            ? coconutDisplayName(freshCoconut[0])
+            : freshCoconut.length + " new leaders revealed"}</div>
+          <div class="home-news-sub">
+            ${freshCoconut.length === 1
+              ? freshCoconut[0].ink + " leader"
+              : freshCoconut.map(coconutDisplayName).join(" · ")} →
+          </div>
+        </a>`);
   if(showCoconutNews) newsTiles.push(html`<a key="coconut" class="home-news-tile home-news-clickable"
           href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
           onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
@@ -43472,6 +43503,12 @@ const COCONUT_INK_LIMIT = 3;
 // the tile in HomeView) whenever the beta stops being news. Open beta began
 // 2026-07-28.
 const COCONUT_NEWS_UNTIL = Date.parse("2026-10-31T23:59:59Z");
+// How long a newly revealed beta card stays NEWS. Reveals land weekly, so a
+// fortnight means at most two or three ride the feed at once. ⚠ The 18 Beta 1
+// cards carry no `revealed` and so can never fire this: they all landed together
+// off one PDF and there is no day to date them to — which is the point of
+// keying on an explicit date rather than on `cn`, whose order is ours.
+const COCONUT_REVEAL_NEWS_DAYS = 14;
 const COCONUT_CARDS = [
   {slug:"ariel-spectacular-singer", cn:2, name:"Ariel", version:"Spectacular Singer",
    ink:"Amber", artist:"Alice Pisoni", associated:"Ariel - Spectacular Singer",
@@ -43542,11 +43579,26 @@ const COCONUT_CARDS = [
   // else.
   {slug:"the-vine-towering-stalk", cn:19, name:"The Vine", version:"Towering Stalk",
    ink:"Steel", artist:"Nicholas Kole", associated:"The Vine - Towering Stalk",
+   revealed:"2026-09-15",
    ability:"Once during your turn, for each Floodborn character you have in play, you may pay 1 {I} less for the next Floodborn character you play this turn."},
   {slug:"tinker-bell-giant-fairy", cn:15, name:"Tinker Bell", version:"Giant Fairy",
    ink:"Steel", associated:"Tinker Bell - Giant Fairy",
    ability:"Whenever one of your other abilities or actions deals damage to an opposing character, deal 1 damage to that character."},
 ];
+// Cards revealed inside the news window, newest first. Dates are parsed as UTC
+// midnight, matching COCONUT_NEWS_UNTIL: this is a window, never a calendar day
+// being named, so the few hours' skew west of UTC costs nothing.
+// ⚠ A reveal date in the FUTURE is ignored rather than trusted — a typo'd year
+// would otherwise announce a card nobody has seen, on every home page.
+const coconutFreshCards = (nowMs) => {
+  const cutoff = nowMs - COCONUT_REVEAL_NEWS_DAYS * 864e5;
+  return (COCONUT_CARDS || [])
+    .filter(c => {
+      const t = c.revealed ? Date.parse(c.revealed + "T00:00:00Z") : NaN;
+      return Number.isFinite(t) && t <= nowMs && t >= cutoff;
+    })
+    .sort((a, b) => (a.revealed === b.revealed ? a.cn - b.cn : (a.revealed < b.revealed ? 1 : -1)));
+};
 // Ravensburger rebalances a leader by re-rendering it IN PLACE — the art keeps
 // its collector number and the footer stamp goes "[Format Coconut] • Beta" ->
 // "• Beta 1.1". Our bucket object is overwritten at the same path, and
@@ -43563,6 +43615,11 @@ const COCONUT_ART_REV = {4:2, 7:2, 10:2, 14:2};  // Beta 1.1 re-renders, 2026-08
 // and a later canvas-bound request for the SAME url reuses it and fails with
 // naturalWidth 0. That is exactly how the deck poster's leader silently came
 // out blank whenever you opened the deck (non-CORS showcase) first.
+// The synthetic catalog row's id. Two call sites read this prefix — the
+// transform that mints the row and the home news tile that checks the card
+// actually reached `raw` — and a drifted prefix there fails SILENTLY: the
+// tile simply stops appearing. One accessor, so it cannot.
+const coconutRowId = (slug) => `coconut::${slug}`;
 const coconutArtUrl = (cn) =>
   `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`
 // Square character-crop of the art box (160×160, same bucket under thumbs/).
