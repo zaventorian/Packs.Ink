@@ -1,4 +1,4 @@
-// test_calendar.mjs — guards the Almanac's pure core.
+// test_calendar.mjs — guards the Lorcana Calendar's pure core.
 //
 //     node scripts/test_calendar.mjs
 //
@@ -46,10 +46,13 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calEventTitle = (ev) => !ev ? \"\"", ": (ev.title || \"\");"),
   grab("const calStoreEventName = (ev) => {", NL + "};"),
   grab("const calEventSubtitle = (ev) => !ev ? null", ": (ev.subtitle || null);"),
-  grabLine("const calEventFullLabel = "),
+  grabLine("const calEstimated = "),
+  grabLine("const CAL_EST_SUFFIX = "),
+  grab("const calEventFullLabel = ", 'CAL_EST_SUFFIX : "");'),
   grab("const CALENDAR_REGIONS = [", NL + "];"),
   grab("const _CAL_REGION_BY_CC = (() => {", NL + "})();"),
   grabLine("const calRegionOf = "),
+  grabLine("const calRegionless = "),
   grab("const calRegionSet = (region) => {", NL + "};"),
   grab("const calMatchesRegion = (ev, region) => {", NL + "};"),
   grab('const searchNorm = (s) => (s||"")', '/g, "");'),
@@ -59,6 +62,15 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const osmTileUrl = "),
   grabLine("const osmViewUrl = "),
   grab("const calendarSetEntries = (releaseDates) => {", NL + "};"),
+  grab("const SET_RELEASE_DATES = {", NL + "};"),
+  grabLine("const UPCOMING_SET_NAMES = "),
+  grab("const calSetOrdinal = (name, releaseDates, upcoming) => {", NL + "};"),
+  grab("const calSetOrdinalLabel = (name, releaseDates, upcoming) => {", NL + "};"),
+  grabLine("const SET_CADENCE_DAYS = "),
+  grabLine("const SET_LGS_WEEKDAY = "),
+  grabLine("const SET_RETAIL_LAG_DAYS = "),
+  grab("const calendarSetEstimates = (releaseDates, names) => {", NL + "};"),
+  grab("const calendarEstimatedSetEntries = (estimates) => {", NL + "};"),
   grab("const calendarProductEntries = (products) => {", NL + "};"),
   grabLine("const _calSetKey = "),
   grab("const calendarMergeEvents = (derived, rows) => {", NL + "};"),
@@ -109,13 +121,15 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_TL_GAP_PX = "),
   grabLine("const CAL_TL_RELEASE_LANE = "),
   grabLine("const CAL_TL_STORE_PREFIX = "),
-  grabLine("const CAL_TL_CIRCUIT_LANE = "),
+  grabLine("const CAL_TL_CIRCUIT_KINDS = "),
+  grabLine("const CAL_TL_KIND_LANES = "),
   grabLine("const CAL_TL_GROUP_MODES = "),
   grabLine("const CAL_TL_NEAR_LANE = "),
   grabLine("const CAL_TL_MAX_STORE_LANES = "),
   grabLine("const CAL_TL_STORE_REST = "),
   grabLine("const CAL_TL_STORE_ROWS = "),
   grab("const calTimelineLane = (ev, group) => {", NL + "};"),
+  grabLine("const calTimelineSkip = "),
   grab("const CAL_TL_GROUP_OF = (key) =>", '  : "circuit";'),
   grabLine("const CAL_TL_LABELLED_RPH = "),
   grab("const calTimelineLabels = (ev) =>", "CAL_TL_LABELLED_RPH.has(ev.rph_kind);"),
@@ -123,34 +137,38 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calTlLabelParts = (ev, range, below) => {", NL + "};"),
   grab("const _calTlStack = (items, labelW, maxRows) => {", NL + "};"),
   grab("const calendarTimeline = (events, opts) => {", NL + "};"),
-  "export {calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon,",
+  "export {calAddDays, calDayDiff, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon,",
   " LORCANA_MARKS,",
   " calendarMergeEvents, calendarStoreEntry,",
   " calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,",
   " googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,",
-  " calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
+  " calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
   " calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,",
-  " CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_LANE, calMonthLabelShort,",
+  " CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,",
+  " calendarSetEstimates, calendarEstimatedSetEntries, calEstimated, calTimelineSkip,",
+  " UPCOMING_SET_NAMES, SET_CADENCE_DAYS, SET_RELEASE_DATES, calSetOrdinal, calSetOrdinalLabel,",
   " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST};",
 ].join(NL)));
 
 const {
-  calAddDays, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon, LORCANA_MARKS,
+  calAddDays, calDayDiff, calTzYmd, calendarSetEntries, calendarProductEntries, calendarEventIcon, LORCANA_MARKS,
   calendarMergeEvents, calendarStoreEntry,
   calendarEventDays, calendarMonthGrid, calendarUpcoming, icsEscape, icsFold, buildIcs,
   googleCalUrl, calCountdown, calChipLabel, calEventTitle, calEventSubtitle, calEventFullLabel,
-  calRegionOf, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,
+  calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
   calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,
-  CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_LANE, calMonthLabelShort,
+  CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,
+ calendarSetEstimates, calendarEstimatedSetEntries, calEstimated, calTimelineSkip,
+  UPCOMING_SET_NAMES, SET_CADENCE_DAYS, SET_RELEASE_DATES, calSetOrdinal, calSetOrdinalLabel,
   CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,
 } = mod;
 
@@ -208,6 +226,63 @@ ok("a prerelease date is carried when present",
 ok("a set with no dates at all is skipped", calendarSetEntries({"Ghost Set": {}}).length === 0);
 ok("garbage dates are skipped, not rendered",
   calendarSetEntries({"Bad": {lgs: "soon", retail: null}}).length === 0);
+
+// ── Estimated set dates ─────────────────────────────────────────────────────
+// ⚠ Every failure here is the same shape: a GUESS presented as a published
+// date. That is the one thing this calendar is not allowed to do — its own
+// footer says a wrong date is worse than no date — and nothing about a wrong
+// estimate looks wrong on screen.
+const est = calendarSetEstimates(FIXTURE, ["Winterspell", "Into the Inkdark", "Cosmic Quest"]);
+ok("a name that already HAS published dates is not estimated",
+  !est.some(e => e.title === "Winterspell"), est.map(e => e.title).join(","));
+ok("the rest are estimated, in order", est.map(e => e.title).join(",") === "Into the Inkdark,Cosmic Quest");
+// ⚠ Every Lorcana set to date has landed on a FRIDAY. An estimate on a Tuesday
+// is wrong in a way a reader can see at a glance, which discredits the ones
+// that are right.
+const dow = (d) => new Date(Date.UTC(+d.slice(0, 4), +d.slice(5, 7) - 1, +d.slice(8, 10))).getUTCDay();
+ok("every estimated LGS date is a Friday", est.every(e => dow(e.lgs) === 5),
+  est.map(e => `${e.lgs}:${dow(e.lgs)}`).join(","));
+ok("retail is exactly a week behind LGS",
+  est.every(e => calAddDays(e.lgs, 7) === e.retail));
+// ⚠ Each anchors on the PREVIOUS estimate. Anchoring all of them on the last
+// real date would stack the whole remaining season on one weekend a quarter out.
+ok("estimates walk forward at the cadence rather than clustering",
+  calDayDiff(est[0].lgs, est[1].lgs) >= SET_CADENCE_DAYS
+  && calDayDiff(est[0].lgs, est[1].lgs) < SET_CADENCE_DAYS + 7,
+  calDayDiff(est[0].lgs, est[1].lgs));
+ok("the first estimate is a cadence past the LAST known set, not the first",
+  calDayDiff("2026-07-17", est[0].lgs) >= SET_CADENCE_DAYS, est[0].lgs);
+ok("no known dates at all means no estimates", calendarSetEstimates({}, ["X"]).length === 0
+  && calendarSetEstimates(null, ["X"]).length === 0);
+ok("no names means no estimates", calendarSetEstimates(FIXTURE, null).length === 0);
+
+const estRows = calendarEstimatedSetEntries(est);
+ok("every estimated row carries the flag", estRows.length === 4 && estRows.every(calEstimated),
+  estRows.length);
+// ⚠ NO prerelease phase. Guessing the weekend somebody might book travel for is
+// a different order of claim from guessing when a box reaches a shelf.
+ok("an estimate has LGS and retail only — never a prerelease",
+  !estRows.some(e => /prerelease/i.test(e.subtitle)));
+ok("estimated rows use the same id shape, so a published date replaces them",
+  estRows[0].id === `set:${est[0].title}:lgs`);
+// ⚠ The word travels on every ONE-LINE naming site through this helper — which
+// is what puts it in the .ics SUMMARY and the Google Calendar handoff, so a
+// guess landing in somebody's real calendar arrives labelled as a guess.
+ok("a one-line label says the date is estimated",
+  calEventFullLabel(estRows[0]).endsWith(" (estimated)"), calEventFullLabel(estRows[0]));
+ok("and a real row says nothing of the kind",
+  !/estimated/.test(calEventFullLabel(derived[0])), calEventFullLabel(derived[0]));
+ok("calEstimated is false for everything else",
+  !calEstimated(derived[0]) && !calEstimated({}) && !calEstimated(null));
+// The whole point of deriving rather than typing: the day a real date lands,
+// the estimate is gone rather than sitting beside it.
+const estMerged = calendarMergeEvents(estRows, [{
+  id: "real", kind: "set", title: est[0].title, subtitle: "LGS release",
+  starts_on: "2027-02-05", set_name: est[0].title,
+}]);
+const inkLgs = estMerged.filter(e => e.set_name === est[0].title && /lgs/i.test(e.subtitle));
+ok("a published date replaces the estimate rather than doubling it",
+  inkLgs.length === 1 && inkLgs[0].starts_on === "2027-02-05" && !calEstimated(inkLgs[0]));
 
 // ── The override is an override, not a duplicate ────────────────────────────
 // The silent failure: a slipped date is typed in, the merge key does not match,
@@ -423,9 +498,43 @@ ok("no store name still reports the event name",
 // ── Regions ─────────────────────────────────────────────────────────────────
 ok("US is North America", calRegionOf("US") === "na");
 ok("lowercase still resolves", calRegionOf("gb") === "eu");
-ok("Japan and Australia share Asia-Pacific",
-  calRegionOf("JP") === "apac" && calRegionOf("AU") === "apac");
-ok("Brazil is Latin America", calRegionOf("BR") === "latam");
+// ⚠ These are the CIRCUIT's regions, not a continent map: each runs its own
+// Challenge season and feeds its own Continental Championship. Japan and China
+// are not corners of Asia here, and Brazil is not a corner of Latin America —
+// folded in, each of those runs was invisible as a group to exactly the readers
+// most likely to want it.
+ok("the championship regions are separate circuits, not a continent map",
+  calRegionOf("SG") === "apac" && calRegionOf("JP") === "jp" && calRegionOf("CN") === "cn"
+  && calRegionOf("AU") === "ocea" && calRegionOf("NZ") === "ocea"
+  && calRegionOf("BR") === "br" && calRegionOf("AR") === "latam",
+  ["SG","JP","CN","AU","NZ","BR","AR"].map(calRegionOf).join(","));
+// ⚠ A finer taxonomy loses nothing BECAUSE the chips are a multi-select: these
+// four reproduce the old "Asia-Pacific" exactly, where a coarse bucket could
+// never be taken apart. That is why there is no combine/split toggle.
+ok("the old Asia-Pacific is still expressible as a multi-select",
+  ["SG","JP","CN","AU"].every(cc => calMatchesRegion({country: cc}, "apac,jp,cn,ocea"))
+  && !calMatchesRegion({country: "US"}, "apac,jp,cn,ocea"));
+// ⚠ Keys are NARROWED, never renamed. A renamed key parses to nothing and
+// calRegionSet hands back "everywhere" — so a shared link would silently widen
+// to the whole world rather than fail, which is the worse of the two lies.
+ok("`apac` and `latam` still parse, so old links narrow rather than widening",
+  calRegionSet("apac") instanceof Set && calRegionSet("apac").has("apac")
+  && calRegionSet("latam") instanceof Set && calRegionSet("latam").has("latam"));
+ok("an unknown key still falls back to everywhere, not to nothing",
+  calRegionSet("gone") === null && calMatchesRegion({country: "US"}, "gone"));
+// ⚠ A RELEASE IS IN NO PLACE. A set comes out worldwide, so narrowing to Europe
+// and losing the Hyperia City dates is the page disagreeing with itself —
+// reading the Challenges against the rotation is most of what the region axis is
+// for. It also keeps "Elsewhere" meaning "not placed yet" rather than filling up
+// with eleven rows that were never anywhere.
+ok("a set or product release matches every region",
+  calMatchesRegion({kind: "set", country: null}, "eu")
+  && calMatchesRegion({kind: "product"}, "jp,br")
+  && calMatchesRegion({kind: "set"}, "other"));
+ok("but a real event with no country is still only Elsewhere",
+  calMatchesRegion({kind: "ccq", country: null}, "other")
+  && !calMatchesRegion({kind: "ccq", country: null}, "eu")
+  && !calMatchesRegion({kind: "dlc", country: "GB"}, "na"));
 // ⚠ An ungeocoded row must stay REACHABLE. Dropping unknowns would make a row
 // we simply have not placed yet invisible under every region, including "all".
 ok("an unknown country falls into Elsewhere", calRegionOf("ZZ") === "other");
@@ -717,7 +826,7 @@ const ics = buildIcs([
    starts_on: "2026-08-28", ends_on: "2026-08-30", location: "Disneyland Hotel, Anaheim, CA",
    url: "https://example.test/na"},
   storeEv,
-], {nowMs: NOW, name: "Lorcana Almanac"});
+], {nowMs: NOW, name: "Lorcana Calendar"});
 
 ok("the file uses CRLF line endings", ics.includes("\r\n") && !/[^\r]\n/.test(ics));
 ok("it opens and closes a VCALENDAR",
@@ -976,9 +1085,14 @@ const allItems = [...tl.lanes.flatMap(l => l.items), ...tl.release.items];
 ok("every position is a fraction inside the window",
   allItems.every(i => i.x >= 0 && i.x <= 1 && i.w >= 0 && i.x + i.w <= 1 + 1e-9));
 ok("a later event sits further right",
-  laneR("apac").items[0].x < laneR("eu").items[0].x);
+  laneR("jp").items[0].x < laneR("eu").items[0].x);
 ok("a three-day event is drawn wider than a one-day one",
-  laneR("eu").items[0].w > laneR("apac").items.find(i => i.ev.id === "kobe").w);
+  laneR("eu").items[0].w > laneR("jp").items.find(i => i.ev.id === "kobe").w);
+// Kobe is Japan's own circuit, not Asia's — the fixture's one JP event moving
+// lane is the region split doing its job.
+ok("Japan's event is in Japan's lane, and Asia keeps Bangkok",
+  laneR("jp").count === 1 && laneR("jp").items[0].ev.id === "kobe"
+  && laneR("apac").count === 1 && laneR("apac").items[0].ev.id === "bangkok");
 
 // ⚠ A set release is not in a PLACE. Its country is null, so a lane assignment
 // that just asks calRegionOf files every release under "Elsewhere" — which is
@@ -989,12 +1103,19 @@ ok("and the rail holds both releases", tl.release.items.length === 2,
   tl.release.items.map(i => i.ev.id).join(","));
 ok("no release leaks into a region lane",
   !tl.lanes.some(l => l.items.some(i => i.ev.kind === "set" || i.ev.kind === "product")));
-ok("a Challenge joins the one circuit track by default",
-  calTimelineLane({kind: "dlc", country: "GB"}) === "circuit"
-  && calTimelineLane({kind: "ccq", country: "JP"}) === "circuit");
+// ⚠ A DLC and a CCQ are NOT one track. The championship weekend you travel to
+// and the qualifier that earns the invite are different events with different
+// waits, and the number that matters — "how long until the next Challenge" — is
+// hidden by a CCQ three weeks earlier if the two share a lane.
+ok("a Challenge and a Qualifier get a lane each, keyed on their own kind",
+  calTimelineLane({kind: "dlc", country: "GB"}) === "dlc"
+  && calTimelineLane({kind: "ccq", country: "JP"}) === "ccq");
+ok("both are still the circuit block, so they stay above your shops",
+  CAL_TL_CIRCUIT_KINDS.join(",") === "dlc,ccq"
+  && CAL_TL_KIND_LANES.dlc === "Challenges" && CAL_TL_KIND_LANES.ccq === "Qualifiers");
 ok("and is filed by its country only when asked",
   calTimelineLane({kind: "dlc", country: "GB"}, "region") === "eu"
-  && calTimelineLane({kind: "ccq", country: "JP"}, "region") === "apac");
+  && calTimelineLane({kind: "ccq", country: "JP"}, "region") === "jp");
 // ⚠ The grouping never reaches the personal lanes or the release rail: a shop
 // is a subject, not a category, and a release is in no place at all.
 ok("grouping never moves a shop, a near-me SC or a release",
@@ -1047,8 +1168,12 @@ ok("a nearby SC gets the near lane, not a store lane",
 // 128px in the DOM and clips at 94px on the canvas: "Set Champs near me"
 // does not fit either, and a lane reading "Set Champs ne…" in a shared
 // picture names nothing.
-ok("the near lane is named for the chip that switched it on",
-  lane("near").label === "SCs near me");
+// ⚠ A lane name renders UPPERCASE, and "SCs near me" becomes "SCS NEAR ME" —
+// an initialism the rule turns into a stutter. The chip that switches the lane
+// on still says "SCs near me", and the exported picture's caption names the
+// radius, so the shorter word here loses nothing.
+ok("the near lane is named so it survives being uppercased",
+  lane("near").label === "Near me");
 ok("a near SC is labelled and is treated as personal, not regional",
   lane("near").items[0].label === true && lane("near").store === true);
 ok("calTimelineLane keys a followed shop by its store id",
@@ -1073,7 +1198,7 @@ const tight = calendarTimeline([
   tlEv("b", "dlc", "2026-09-08", {country: "US"}),
   tlEv("c", "dlc", "2027-06-05", {country: "US"}),
 ], TL_OPTS);
-const tightNa = tight.lanes.find(l => l.key === "circuit");
+const tightNa = tight.lanes.find(l => l.key === "dlc");
 ok("two events three days apart stack onto different rows",
   tightNa.items[0].row !== tightNa.items[1].row, JSON.stringify(tightNa.items.map(i => i.row)));
 ok("an event nine months later reuses the first row",
@@ -1089,7 +1214,7 @@ ok("no two labels on one row overlap", tightNa.items.every(i =>
 const edge = calendarTimeline([tlEv("last", "dlc", "2027-08-28", {country: "US"})], TL_OPTS);
 ok("a label at the end of the window anchors right",
   edge.lanes[0].items[0].anchor === "right", edge.lanes[0].items[0].anchor);
-ok("and one at the start anchors left", lane("circuit").items[0].anchor === "left");
+ok("and one at the start anchors left", lane("dlc").items[0].anchor === "left");
 
 // ⚠ A right-anchored label is drawn BACKWARDS from its marker, so the row it is
 // packed into has to reserve that span and not the one in front of it. Getting
@@ -1150,19 +1275,83 @@ const edges = calendarTimeline([
   tlEv("straddles", "dlc", "2026-08-30", {ends_on: "2026-09-02", country: "GB"}),
 ], TL_OPTS);
 ok("the last day of the window is inside it",
-  edges.lanes.find(l => l.key === "circuit").items.some(i => i.ev.id === "in"));
+  edges.lanes.find(l => l.key === "dlc").items.some(i => i.ev.id === "in"));
 ok("the day after it is counted as later", edges.after === 1, edges.after);
 ok("the day before it is counted as earlier", edges.before === 1, edges.before);
 // An event that started before the window but is still running belongs ON the
 // chart — it is the one thing a reader might be standing in.
 ok("an event straddling the start is drawn, not counted as past",
-  edges.lanes.find(l => l.key === "circuit").items.some(i => i.ev.id === "straddles"),
+  edges.lanes.find(l => l.key === "dlc").items.some(i => i.ev.id === "straddles"),
   JSON.stringify(edges.before));
 
 ok("today is a fraction when it is in the window",
   tl.today > 0.03 && tl.today < 0.06, tl.today);
 ok("and null when it is not",
   calendarTimeline(season, {...TL_OPTS, today: "2029-01-01"}).today === null);
+
+// ⚠ A set's PRERELEASE never reaches the timeline. Every recent set opens its
+// prerelease weekend on the SAME Friday the LGS release lands, so the rail drew
+// three labels for one set with two of them on the identical date — a stack of
+// near-duplicates where the chart is trying to say "the set arrives here". It
+// still renders in List, Month, the modal and the .ics, where sharing a day
+// with another row costs nothing.
+ok("a set's prerelease is skipped on the timeline",
+  calTimelineSkip({kind: "set", subtitle: "Prerelease"}) === true
+  && calTimelineSkip({kind: "set", subtitle: "LGS release"}) === false
+  && calTimelineSkip({kind: "set", subtitle: "Retail release"}) === false);
+// ⚠ A STORE prerelease is a different thing — an event at a shop you follow,
+// which is exactly what that lane is for.
+ok("a store's prerelease is NOT skipped",
+  calTimelineSkip({kind: "store", rph_kind: "prerelease"}) === false
+  && calTimelineSkip({kind: "ccq", subtitle: "Prerelease party"}) === false
+  && calTimelineSkip(null) === false);
+const threeDates = calendarTimeline([
+  tlEv("pre", "set", "2026-10-16", {subtitle: "Prerelease", ends_on: "2026-10-18", set_name: "Hyperia City"}),
+  tlEv("lgs", "set", "2026-10-16", {subtitle: "LGS release", set_name: "Hyperia City"}),
+  tlEv("ret", "set", "2026-10-23", {subtitle: "Retail release", set_name: "Hyperia City"}),
+], TL_OPTS);
+ok("so one set puts TWO marks on the release rail, not three",
+  threeDates.release.items.length === 2
+  && threeDates.release.items.map(i => i.ev.id).join(",") === "lgs,ret",
+  threeDates.release.items.map(i => i.ev.id).join(","));
+ok("and a skipped row is not counted as out of the window either",
+  threeDates.before === 0 && threeDates.after === 0 && threeDates.total === 2);
+ok("the season line still lands on the LGS date",
+  threeDates.seasons.length === 1
+  && Math.abs(threeDates.seasons[0].x - threeDates.release.items[0].x) < 1e-9);
+
+// "est." rides on the DATE, not the title: it is a claim about the date, and the
+// date is the half that is pinned against truncation — in the title an ellipsis
+// would eat it first.
+const estLabel = calTlLabelParts(
+  {kind: "set", title: "Cosmic Quest", set_name: "Cosmic Quest", subtitle: "LGS release", estimated: true},
+  "Apr 16", true);
+ok("an estimated timeline label marks the date, not the name",
+  estLabel.range === "est. Apr 16" && estLabel.title === "Cosmic Quest", JSON.stringify(estLabel));
+ok("a published one is unmarked",
+  calTlLabelParts({kind: "set", title: "Hyperia City", subtitle: "LGS release"}, "Oct 16", true).range === "Oct 16");
+
+// "Set 14" — derived from position, so it can never disagree with the order the
+// two consts are already in, and an announced-but-undated set keeps counting.
+ok("the ordinal counts published sets then announced ones",
+  calSetOrdinal("The First Chapter", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === 1
+  && calSetOrdinal("Hyperia City", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === 14
+  && calSetOrdinal("Into the Inkdark", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === 15,
+  [1, 14, 15].map((_, i) => calSetOrdinal(["The First Chapter", "Hyperia City", "Into the Inkdark"][i],
+    SET_RELEASE_DATES, UPCOMING_SET_NAMES)).join(","));
+ok("it is case- and space-tolerant, and null for anything else",
+  calSetOrdinal("  hyperia city ", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === 14
+  && calSetOrdinal("Not A Set", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === null
+  && calSetOrdinal("", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === null
+  && calSetOrdinal(null, null, null) === null);
+// ⚠ "Set 17 · Set 17" was the first cut: a set whose name has not been
+// announced IS carried as "Set 17", so the ordinal is already the whole name.
+ok("an unnamed set does not repeat its own number",
+  calSetOrdinalLabel("Set 17", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === null
+  && calSetOrdinalLabel("Hyperia City", SET_RELEASE_DATES, UPCOMING_SET_NAMES) === "Set 14",
+  String(calSetOrdinalLabel("Set 17", SET_RELEASE_DATES, UPCOMING_SET_NAMES)));
+ok("the season marker names the set AND its place in the run",
+  threeDates.seasons[0].title === "Set 14 · Hyperia City", threeDates.seasons[0].title);
 
 ok("an empty calendar lays out without throwing",
   calendarTimeline([], TL_OPTS).total === 0 && calendarTimeline(null, TL_OPTS).lanes.length === 0);
@@ -1175,23 +1364,37 @@ ok("the default window is one competitive season", CAL_TL_MONTHS === 12);
 
 // Lanes come out in the region picker's own order, so the chart and the filter
 // can never describe two different worlds.
-ok("packed is the default, and it is ONE circuit track",
-  tl.group === "packed" && lane("circuit") && lane("circuit").count === 5
+ok("packed is the default, and it splits the circuit by kind — never by region",
+  tl.group === "packed" && lane("dlc") && lane("dlc").count === 4
+  && lane("ccq") && lane("ccq").count === 1
   && !tl.lanes.some(l => CALENDAR_REGIONS.some(r => r.key === l.key)),
+  tl.lanes.map(l => `${l.key}:${l.count}`).join(","));
+// Challenges lead: a Qualifier is how you reach one, so the thing you are
+// qualifying FOR is the row you read first.
+ok("Challenges come before Qualifiers, and both before your shops",
+  tl.lanes.findIndex(l => l.key === "dlc") < tl.lanes.findIndex(l => l.key === "ccq")
+  && tl.lanes.findIndex(l => l.key === "ccq") < tl.lanes.findIndex(l => l.store),
   tl.lanes.map(l => l.key).join(","));
 ok("the circuit track packs into as many rows as it needs",
-  lane("circuit").rows >= 1 && lane("circuit").items.every(i => i.label && i.row < lane("circuit").rows));
+  lane("dlc").rows >= 1 && lane("dlc").items.every(i => i.label && i.row < lane("dlc").rows));
 // Its row count IS the density read, so it is the one lane that must never cap.
 ok("and it is never capped", (() => {
   const many = [];
   for(let i = 0; i < 12; i++) many.push(tlEv("d" + i, "dlc", `2026-11-${String(i + 1).padStart(2, "0")}`, {country: "US"}));
-  return calendarTimeline(many, TL_OPTS).lanes.find(l => l.key === "circuit").rows > CAL_TL_STORE_ROWS;
+  return calendarTimeline(many, TL_OPTS).lanes.find(l => l.key === "dlc").rows > CAL_TL_STORE_ROWS;
 })());
-ok("a circuit lane is not offered as a region filter", lane("circuit").region === false);
+ok("a circuit lane is not offered as a region filter", lane("dlc").region === false);
 // Region rows stay REACHABLE — comparing two regions' runs is a real question,
 // just not the one most readers arrive with.
 ok("region mode still lays out one row per region, in the picker's order",
-  JSON.stringify(tlR.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "near", "store:7", "store:9"]),
+  JSON.stringify(tlR.lanes.map(l => l.key)) === JSON.stringify(["na", "eu", "apac", "jp", "near", "store:7", "store:9"]),
+  tlR.lanes.map(l => l.key).join(","));
+// ⚠ An EMPTY championship region is not rendered at all. That is what makes a
+// nine-region taxonomy safe on a chart: Brazil and China have no events this
+// season, and a lane of empty track for each would be the very complaint the
+// packed default exists to answer.
+ok("a region with no events gets no lane",
+  !tlR.lanes.some(l => ["br", "cn", "latam", "ocea"].includes(l.key)),
   tlR.lanes.map(l => l.key).join(","));
 ok("only region mode offers a lane as a filter",
   laneR("na").region === true && tl.lanes.every(l => !l.region));
@@ -1203,8 +1406,8 @@ ok("the two modes place exactly the same events",
   tl.total === tlR.total && tl.total === season.length);
 // Three blocks, ruled apart: general, then yours, then the release context.
 ok("lanes carry their group, and the first of each is marked",
-  lane("circuit").group === "circuit" && lane("near").group === "yours"
-  && lane("circuit").first === true && lane("near").first === true
+  lane("dlc").group === "circuit" && lane("near").group === "yours"
+  && lane("dlc").first === true && lane("near").first === true
   && lane("store:9").first === false);
 // Busiest shop first: the one you actually go to leads, rather than whichever
 // store id sorts lowest.
@@ -1293,7 +1496,7 @@ ok("every crowded event is still PLACED — only its title is dropped",
 const wide = crowd.map((e, i) => ({...e, kind: "dlc", country: "US", store_id: undefined,
   rph_kind: undefined, id: "d" + i}));
 ok("a Challenge lane is not capped, packed or by region",
-  calendarTimeline(wide, TL_OPTS).lanes.find(l => l.key === "circuit").rows > CAL_TL_STORE_ROWS
+  calendarTimeline(wide, TL_OPTS).lanes.find(l => l.key === "dlc").rows > CAL_TL_STORE_ROWS
   && calendarTimeline(wide, {...TL_OPTS, group: "region"}).lanes.find(l => l.key === "na").rows > CAL_TL_STORE_ROWS);
 
 // ⚠ Past the shop cap the tail rolls into ONE lane rather than growing the

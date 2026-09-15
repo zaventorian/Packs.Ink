@@ -9448,16 +9448,34 @@ body:has(.deck-quickadd) .offline-pill{
 
 .cal-toolbar{display:flex;justify-content:space-between;align-items:center;gap:12px;
   flex-wrap:wrap;margin:14px 0 10px;}
-.cal-chips{display:flex;gap:6px;flex-wrap:wrap;}
-.cal-chip-filter{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;font-size:12px;
-  font-weight:600;border:1px solid var(--btn-border);border-radius:16px;
+/* ── One chip, three dimensions ────────────────────────────────────────────
+   The page asks three multi-select questions (which types, which regions, and
+   whether to pull in the SCs near you) and each was drawn at its own size,
+   weight and corner radius — 12px/600/16px against 11px/700/999px against a
+   third — so three controls doing one job read as three unrelated widgets.
+   One metric for all of them; what still differs between them is the ON state,
+   and that difference is information: a kind chip lights its own hue because
+   the hue is the legend for the icon beside it, while a region fills solid
+   because "where" has no colour of its own.
+
+   The casing rule the whole surface follows: a CONTROL is sentence case (it is
+   a phrase addressed to you — "Show past", "By region", "North America"), and a
+   STRUCTURAL label is uppercase with tracking (it names a part of the chart, not
+   a thing you press — a lane, a column head, a day-of-week). Initialisms keep
+   their capitals in both. */
+.cal-chips{display:flex;gap:5px;flex-wrap:wrap;}
+.cal-chip-filter,.cal-region-chip,.cal-near-chip{display:inline-flex;align-items:center;gap:5px;
+  padding:5px 10px;font-size:11.5px;font-weight:700;letter-spacing:0.01em;white-space:nowrap;
+  border:1px solid var(--border);border-radius:999px;
   background:var(--btn-bg);color:var(--text-muted);cursor:pointer;}
 .cal-chip-filter.on{background:var(--bg-surface);}
 .cal-chip-filter:not(.on){filter:grayscale(0.5);opacity:0.62;}
 .cal-chip-filter:hover{filter:none;opacity:1;}
-.cal-chip-n{font-size:10px;font-weight:700;opacity:0.65;}
+.cal-chip-n,.cal-region-n,.cal-near-chip em{font-size:9.5px;font-weight:700;opacity:0.7;
+  font-style:normal;font-variant-numeric:tabular-nums;letter-spacing:0;}
 .cal-modes{align-self:center;}
-.cal-modes button{display:inline-flex;align-items:center;gap:5px;}
+.cal-modes button,.cal-spans button,.cal-tl-group button{display:inline-flex;align-items:center;
+  gap:5px;font-size:11.5px;font-weight:700;padding:4px 11px;}
 
 /* ── list ── */
 .cal-month-group{margin-bottom:18px;}
@@ -9471,7 +9489,8 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-row-main:hover{background:var(--bg-surface-hover);}
 .cal-row-when{flex:0 0 92px;display:flex;flex-direction:column;gap:1px;}
 .cal-row-date{font-size:12px;font-weight:700;color:var(--text);}
-.cal-row-count{font-size:10px;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;}
+.cal-row-count{font-size:10px;font-weight:700;color:var(--text-muted);
+  text-transform:uppercase;letter-spacing:0.09em;}
 .cal-row-body{flex:1;min-width:0;}
 .cal-row-title{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:600;
   color:var(--text);}
@@ -9504,12 +9523,17 @@ body:has(.deck-quickadd) .offline-pill{
 
 /* ── followed stores ── */
 .cal-follow{margin:0 0 14px;}
-.cal-follow-toggle{display:inline-flex;align-items:center;gap:7px;padding:6px 11px;
-  font-size:12px;font-weight:600;border:1px solid var(--btn-border);border-radius:8px;
-  background:var(--btn-bg);color:var(--btn-text);cursor:pointer;}
-.cal-follow-n{font-size:10px;font-weight:700;padding:1px 6px;border-radius:9px;
-  background:var(--accent);color:#fff;}
-.cal-follow-caret{font-size:10px;opacity:0.6;}
+/* It sits at the end of the filter row now, so it takes the row's chip metric —
+   it was the only control on the page stranded on a line of its own. */
+.cal-follow-toggle{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;
+  font-size:11.5px;font-weight:700;letter-spacing:0.01em;white-space:nowrap;
+  border:1px solid var(--border);border-radius:999px;
+  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;}
+.cal-follow-toggle:hover{color:var(--text);border-color:var(--text-muted);}
+.cal-follow-toggle.on{color:var(--accent);border-color:var(--border-accent);background:var(--accent-glow);}
+.cal-follow-n{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:9px;
+  background:var(--accent);color:#fff;font-variant-numeric:tabular-nums;}
+.cal-follow-caret{font-size:9px;opacity:0.6;}
 .cal-follow-body{margin-top:8px;padding:10px 12px;border:1px solid var(--border);
   border-radius:8px;background:var(--bg-surface);}
 .cal-follow-empty,.cal-follow-signin{font-size:12px;margin:0;line-height:1.55;}
@@ -9536,7 +9560,7 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-month-today{padding:5px 11px;font-size:11px;font-weight:600;border-radius:8px;
   border:1px solid var(--btn-border);background:var(--btn-bg);color:var(--btn-text);cursor:pointer;}
 .cal-grid-head,.cal-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;}
-.cal-grid-dow{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;
+.cal-grid-dow{font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.09em;
   color:var(--text-muted);text-align:center;padding-bottom:4px;}
 .cal-cell{min-height:86px;border:1px solid var(--border);border-radius:6px;padding:3px 4px;
   background:var(--bg-surface);display:flex;flex-direction:column;gap:2px;overflow:hidden;}
@@ -9551,6 +9575,54 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cal-chip:hover{background:var(--accent-glow);color:var(--accent);}
 .cal-cell-more{font-size:9px;color:var(--text-muted);padding-left:4px;}
+
+/* ── The hover card ────────────────────────────────────────────────────────
+   ⚠ pointer-events:none. It is positioned over a grid of click targets, and a
+   tooltip that can swallow the click on the thing it describes is worse than no
+   tooltip at all. z-index sits under the modals (120) and the Lore board (60)
+   but over the sticky header, because it can open from a row near the top of
+   the page. */
+.cal-hover{position:fixed;z-index:55;pointer-events:none;
+  padding:10px 12px;border:1px solid var(--border-accent);border-radius:10px;
+  background:var(--bg-modal);box-shadow:0 10px 30px rgba(0,0,0,0.35);
+  font-size:12px;line-height:1.45;color:var(--text);}
+.cal-hover-kind{display:flex;align-items:center;gap:6px;
+  font-size:9.5px;font-weight:700;letter-spacing:0.09em;text-transform:uppercase;
+  color:var(--text-muted);margin-bottom:4px;}
+.cal-hover-title{display:flex;align-items:center;gap:6px;flex-wrap:wrap;
+  font-size:13.5px;font-weight:700;line-height:1.3;}
+.cal-hover-sub{font-size:11.5px;color:var(--text-dim);margin-top:1px;}
+.cal-hover-when{display:flex;align-items:baseline;gap:7px;flex-wrap:wrap;
+  margin-top:6px;font-size:11.5px;font-weight:600;color:var(--accent);}
+.cal-hover-when em{font-style:normal;font-size:9.5px;font-weight:700;
+  letter-spacing:0.08em;text-transform:uppercase;color:var(--text-muted);}
+.cal-hover-where{display:flex;align-items:flex-start;gap:5px;margin-top:5px;
+  font-size:11.5px;color:var(--text-dim);}
+.cal-hover-where svg{margin-top:2px;}
+.cal-hover-note{margin:6px 0 0;font-size:11px;color:var(--text-muted);line-height:1.5;
+  display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
+.cal-hover-hint{margin-top:7px;padding-top:6px;border-top:1px solid var(--border);
+  font-size:9.5px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;
+  color:var(--text-muted);opacity:0.75;}
+/* No hover card on a touch screen — the tap opens the modal, which is the whole
+   thing rather than a summary of it. Belt and braces: the hook only fires on
+   pointerType "mouse", and this makes a stray one invisible rather than
+   flashing over the row you just tapped. */
+@media (hover:none){ .cal-hover{display:none;} }
+
+/* ── "est." ───────────────────────────────────────────────────────────────
+   Outlined, not filled: it is a caveat ON a row, not a category OF row, and a
+   solid chip out-shouts the event's own name. */
+.cal-est{flex:0 0 auto;font-size:8.5px;font-weight:800;letter-spacing:0.08em;
+  text-transform:uppercase;padding:0 4px;border-radius:4px;line-height:14px;
+  border:1px solid var(--border-accent);color:var(--accent);background:none;}
+/* A month chip is 10px tall and has no room for the badge, so the estimate
+   reads as a dashed left edge instead. The hover card and the modal carry the
+   word. */
+.cal-chip--est{border-left:2px dashed var(--border-accent);border-radius:2px 4px 4px 2px;}
+.cal-modal-est{margin:8px 0 0;font-size:11px;line-height:1.55;color:var(--text-muted);
+  padding:7px 9px;border:1px dashed var(--border-accent);border-radius:8px;
+  background:var(--accent-glow);}
 
 /* ── detail + admin modal ── */
 .cal-modal-overlay{position:fixed;inset:0;z-index:120;background:rgba(0,0,0,0.55);
@@ -9746,7 +9818,17 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 /* Where a set arrives, drawn up through every lane. Dimmer than the today line
    and than the release rail it rises from — it is context behind the events,
    not a thing to read. */
-.cal-tl-season{position:absolute;top:0;bottom:0;width:1px;background:var(--accent);opacity:0.28;}
+/* A set boundary. The LINE is faint on purpose — it is context behind the
+   events, not an event — but a 1px hairline with only a title on it is a marker
+   nobody can find, so it carries a diamond up in the axis row, which is the one
+   band with nothing else in it. */
+/* ⚠ The line's fade lives on a ::before, NOT on the span. `opacity` on the span
+   multiplies down into the diamond, so the marker could never be brighter than
+   the hairline it marks — which is the whole point of having one. */
+.cal-tl-season{position:absolute;top:0;bottom:0;width:1px;}
+.cal-tl-season::before{content:"";position:absolute;inset:0;background:var(--accent);opacity:0.28;}
+.cal-tl-season > i{position:absolute;top:5px;left:-3.5px;width:7px;height:7px;
+  background:var(--accent);opacity:0.85;transform:rotate(45deg);border-radius:1px;}
 .cal-tl-now{position:absolute;top:0;bottom:0;width:2px;margin-left:-1px;background:var(--accent);
   opacity:0.75;border-radius:1px;}
 
@@ -9818,6 +9900,7 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-tl-mark--tick{width:3px;height:9px;bottom:4px;}
 .cal-tl-mark--tick .cal-tl-dot{width:3px;height:9px;border-radius:1px;box-shadow:none;opacity:0.75;}
 
+
 .cal-tl-label{position:absolute;width:140px;max-width:140px;padding:0 7px 0 0;border:none;
   background:none;text-align:left;cursor:pointer;display:block;line-height:1.25;
   font:inherit;color:inherit;}
@@ -9876,6 +9959,21 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-tl-lane--release .cal-tl-rail{top:8px;bottom:auto;}
 .cal-tl-lane--release .cal-tl-mark{top:3px;bottom:auto;}
 .cal-tl-lane--release .cal-tl-dot{box-shadow:0 0 0 2px var(--bg-card);}
+/* ⚠ An ESTIMATED date draws HOLLOW. A solid dot beside a solid dot claims the
+   two are known equally well, and this one is a guess — the timeline is the
+   surface most likely to be read, exported and shared with no legend beside it,
+   so the shape has to carry the caveat on its own. The canvas painter strokes
+   instead of filling for the same reason; keep the two in step.
+
+   ⚠ Declared AFTER .cal-tl-lane--release and scoped through .cal-tl-track, or
+   the release rail's own dot rule (same specificity, later in the file) wins
+   and every estimate silently renders solid — which is the one way this can
+   fail, in the one lane an estimate can ever appear in. */
+.cal-tl-track .cal-tl-mark--est .cal-tl-dot{background:var(--bg-solid) !important;
+  box-shadow:inset 0 0 0 2px var(--accent),0 0 0 2px var(--bg-card);}
+.cal-tl-track .cal-tl-mark--est:hover .cal-tl-dot,
+.cal-tl-track .cal-tl-mark--est:focus-visible .cal-tl-dot{
+  box-shadow:inset 0 0 0 2px var(--accent),0 0 0 2px var(--bg-card),0 0 0 4px var(--accent);}
 
 .cal-tl-empty{padding:28px 18px;text-align:center;border:1px solid var(--border);
   border-radius:12px;background:var(--bg-card);}
@@ -9884,10 +9982,21 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
   font-size:11px;padding:8px 2px 0;margin:0;}
 .cal-tl-more-sep{opacity:0.5;}
 @media (max-width:700px){
-  /* "RELEASES" is the longest lane name with no break point in it, and it is
-     what sets this floor — below 82px it ellipses to "RELEA…". */
+  /* ⚠ "CHALLENGES" is the longest lane name with no break point in it, and it
+     is what sets this floor. Measured at 390px: the name had 64.2px and wanted
+     65, so it ellipsed to "CHALLENG…" — one pixel short. The gap is what gives
+     it back; don't put it back to 6px without re-measuring. */
   .cal-tl-chart{--cal-tl-gutter:96px;}
-  .cal-tl-name{padding:6px 5px 6px 8px;font-size:9px;letter-spacing:0.03em;}
+  .cal-tl-name{padding:6px 4px 6px 8px;gap:4px;font-size:9px;letter-spacing:0.03em;}
+  .cal-tl-name--btn{padding:6px 4px 6px 8px;font-size:9px;letter-spacing:0.03em;}
+  /* ⚠ The window label takes its own LINE here. It is the one thing in this bar
+     that cannot shrink — "Sep 2026 – Aug 2027" has no shorter form left — and at
+     390px, squeezed between the steppers and three controls, flex crushed it to
+     37px and it wrapped into a 100px-tall three-line stack. Full width above,
+     controls below. */
+  .cal-tl-bar{flex-wrap:wrap;row-gap:6px;}
+  .cal-tl-bar .cal-month-label{order:-1;flex:1 0 100%;text-align:left;}
+  .cal-tl-export{margin-left:auto;}
 }
 
 
@@ -9912,30 +10021,18 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-search-x:hover{color:var(--accent);}
 
 .cal-regions{display:flex;align-items:center;gap:5px;flex-wrap:wrap;}
-.cal-region-chip{display:inline-flex;align-items:center;gap:4px;
-  padding:4px 9px;border:1px solid var(--border);border-radius:999px;
-  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;
-  font-size:11px;font-weight:700;letter-spacing:0.02em;white-space:nowrap;}
 .cal-region-chip:hover{color:var(--text);border-color:var(--text-muted);}
 .cal-region-chip.on{background:var(--accent);border-color:var(--accent);color:var(--bg);}
 .cal-region-chip.empty:not(.on){opacity:0.45;}
-.cal-region-n{font-size:9px;opacity:0.75;font-variant-numeric:tabular-nums;}
-.cal-regions--compact .cal-region-chip{padding:3px 7px;font-size:10px;}
+.cal-regions--compact .cal-region-chip{padding:3px 8px;font-size:10px;}
 /* "SCs near me" — the one chip that pulls the live RPH feed in without a
    follow. It lights the STORE green rather than the accent, because what it
    adds is the same personal layer a followed shop is, not another curated
    type — and the region chips beside it already own the accent. */
-.cal-near-chip{display:inline-flex;align-items:center;gap:5px;
-  padding:4px 10px;border:1px solid var(--border);border-radius:999px;
-  background:var(--btn-bg);color:var(--text-muted);cursor:pointer;
-  font-size:11px;font-weight:700;letter-spacing:0.02em;white-space:nowrap;}
 .cal-near-chip:hover{color:var(--text);border-color:var(--text-muted);}
 .cal-near-chip.on{background:#5bb98c;border-color:#5bb98c;color:#06130d;}
-.cal-near-chip em{font-style:normal;font-size:9px;opacity:0.8;
-  font-variant-numeric:tabular-nums;}
 .cal-spans button{font-variant-numeric:tabular-nums;}
-.cal-tl-group button{font-size:11px;padding:3px 9px;}
-.cal-filters-reset{font-size:11px;white-space:nowrap;}
+.cal-filters-reset{font-size:11.5px;font-weight:700;white-space:nowrap;}
 @media (max-width:640px){
   .cal-filters2{padding:9px;gap:8px;}
   .cal-search{max-width:none;flex-basis:100%;}
@@ -9966,7 +10063,13 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 
 /* home panel head: title left, the three little controls right */
 .cal-panel-head{display:flex;align-items:center;gap:6px;justify-content:space-between;}
-.cal-panel-head .home-feed-title{margin-bottom:0;}
+/* ⚠ Two lines in a 240px rail, on purpose. "LORCANA CALENDAR" does not fit one
+   line beside four tool buttons, and the alternatives are both worse: wrapping
+   the TOOLS to their own row costs more height than the second line does, and
+   shortening the title here would leave the home page and the page it links to
+   calling the same thing two different names. Tight leading is what keeps the
+   masthead from towering over its sibling panels' one-line titles. */
+.cal-panel-head .home-feed-title{margin-bottom:0;line-height:1.1;}
 .cal-panel-tools{display:flex;gap:3px;flex:0 0 auto;}
 .cal-panel-tool{display:inline-flex;align-items:center;gap:3px;padding:3px 5px;
   border:1px solid transparent;border-radius:6px;background:none;

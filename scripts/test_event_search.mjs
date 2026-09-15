@@ -267,6 +267,66 @@ eq((SRC.match(/placeholder="Postal code or town"/g) || []).length, 2,
 eq(/onInput=\$\{e=>setZip\(e\.target\.value\.replace\(\/\[\^0-9\]/.test(SRC), false,
    "neither box strips non-digits from what you type");
 
+// ── 12. a search must never fire while you are still typing ────────────────
+// ⚠ This is the regression that shipped with the box itself. Both search boxes
+// carry an effect meaning "auto-run once on mount when a search is already
+// saved", and both listed `zip` in their deps. That was only ever safe because
+// scZipReady was `/^\d{5}$/` for US — true at a complete ZIP and nowhere before
+// it. Loosening it to `length >= 2` so it could accept town names and non-US
+// postal formats turned those effects into search-as-you-type: for anyone with
+// no saved search, "60" on the way to "60625" ran a real geocode, and because
+// nothing ordered the two requests its failure landed on top of the good one's
+// results — `Nothing matching "60"` sitting over 94 correct events.
+//
+// Nothing throws, nothing logs, and the search that matters still works if you
+// try again, so only a test can keep this from coming back.
+section("12. the mount auto-run cannot re-fire as you type");
+
+// The finder's effect, and the Elo box's.
+const mountEffects = [
+  ["finder", slice("  useEffect(() => {\n    if(!didSearch.current && scZipReady(zip))",
+                   "}, []);", "the finder's mount auto-run")],
+  ["Elo box", slice("  useEffect(() => { if(scZipReady(zip)) runGeo(zip); }, []);",
+                    "}, []);", "the Elo box's mount geocode")],
+];
+for (const [who, src] of mountEffects) {
+  ok(/\}, \[\]\);\s*$/.test(src.trim()),
+     `${who}: the mount effect has EMPTY deps, so typing cannot re-fire it`);
+  eq(/\}, \[[^\]]*\bzip\b/.test(src), false,
+     `${who}: \`zip\` is not in its deps`);
+}
+
+// ⚠ Empty deps alone are not enough: two searches can still overlap (Search
+// pressed twice, a radius chip tapped mid-search, a "did you mean" button), and
+// the loser must not write its answer over the winner's. Every async path that
+// commits state carries a sequence guard.
+section("13. the loser of two overlapping searches writes nothing");
+const guarded = [
+  ["runSearch", slice("  const runSearch = useCallback(async (z, r, forceCc) => {",
+                      "}, [mode, fetchNear]);", "runSearch")],
+  ["useAltPlace", slice("  const useAltPlace = useCallback(async (p) => {",
+                        "}, [zip, radius, origin, fetchNear]);", "useAltPlace")],
+  ["searchAtRadius", slice("  const searchAtRadius = useCallback(async (r) => {",
+                           "}, [zip, origin, country, runSearch, fetchNear]);", "searchAtRadius")],
+  ["runGeo", slice("  const runGeo = useCallback(async (z) => {",
+                   "  }, []);", "runGeo")],
+];
+for (const [who, src] of guarded) {
+  ok(/\+\+(searchSeq|geoSeq)\.current/.test(src),
+     `${who}: takes a sequence number before it awaits`);
+  // Every branch that writes state has to be behind the check, the catch most
+  // of all — a stale FAILURE overwriting a good result is the reported bug.
+  ok(/catch\s*\([^)]*\)\s*\{\s*if\s*\(/.test(src),
+     `${who}: its catch only writes when it is still the live search`);
+}
+
+// ⚠ Changing only the DISTANCE must not re-resolve the typed text: that throws
+// away a place picked off the "Not Dublin?" row and silently moves you to the
+// other Dublin, and spends a geocode round trip to do it.
+eq((SRC.match(/searchAtRadius\(/g) || []).length, 3,
+   "all three radius controls re-query from the origin already resolved");
+eq(/onClick=\$\{\(\)=>pickRadius\(r\)\}/.test(SRC), true, "the radius chips still call pickRadius");
+
 // ── report ──────────────────────────────────────────────────────────────────
 console.log(`\n${"-".repeat(60)}`);
 if (fails.length) {
