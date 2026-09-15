@@ -1980,7 +1980,9 @@ Every view and sub-tab mirrors itself into the URL, so the address bar is always
 
 **`DISCOVER_FORMATS`** is now the single source for Discover's sub-tabs — `core` / `infinity` / `coconut`, keyed on exactly what `checkDeckLegality()` stamps as `format`. Before it existed the tab list was a hardcoded pair, so a published Coconut deck classified as neither and **was invisible in Discover** from migration 110 until this shipped. The empty-state copy and the one-shot auto-fallback both read the list, so a fourth format needs no other edits.
 
-**18 house starter decks, one per leader**, published by `scripts/seed_coconut_starter_decks.py` from the plain-text lists in `scripts/coconut_starter_decks/`. Edit a `.txt`, re-run with `--commit`, done.
+**18 house starter decks**, published by `scripts/seed_coconut_starter_decks.py` from the plain-text lists in `scripts/coconut_starter_decks/`. Edit a `.txt`, re-run with `--commit`, done.
+
+They were one per leader until Beta 2 — **The Vine - Towering Stalk (Steel, cn 19, added 2026-09-15) has no list yet**, and each new wave will open the same gap. Nothing breaks: the seeder's `LEADERS` mirror carries every leader, and it only consults a slug a `.txt` actually names. Writing one is a design job, not a chore — it has to pass every rule `checkDeckLegality` enforces, and the names are thematic (Sherwood Volley, Everything the Ink Touches), never "<leader> starter".
 
 - **Ownerless** (`user_id = null`), like tournament decks — so they stay out of everyone's Your Decks, and (same rule) are stored **plaintext**: the deck-obfuscation codec only covers user-authored decks.
 - **Deck ids are a UUIDv5 of the leader slug**, so a re-run REPLACES a deck instead of publishing a second copy. `deck_cards` is deleted before re-insert, otherwise a card cut from the list would linger. Never change the `NS` namespace — that orphans all 18 and republishes them as duplicates.

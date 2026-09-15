@@ -18,7 +18,7 @@ Usage:
     python scripts/upload_coconut_art.py --folder <dir-of-NNN-images>
     # add --commit to actually upload (default is a dry run)
 
-Input files are named by Coconut collector number: 001.webp … 018.webp
+Input files are named by Coconut collector number: 001.webp … 019.webp
 (they're served with a .webp extension but are actually JPEG). Passing a folder
 with only the numbers you're replacing is fine — the missing-number warning is
 informational, and the upload is an upsert at the same path.
@@ -70,6 +70,11 @@ COCONUT_SLUGS = {
     16: "sisu-emboldened-warrior",
     17: "pocahontas-peacekeeper",
     18: "dumbo-ninth-wonder-of-the-universe",
+    # Beta 2 wave. Not in that PDF — Ravensburger has published no Beta 2 list
+    # and the renders print no collector number, so 19 is ours, continuing 1-18.
+    # It must match the card's `cn` in Index.html: that is what names this object
+    # AND what the site displays as the card's number.
+    19: "the-vine-towering-stalk",
 }
 
 
