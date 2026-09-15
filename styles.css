@@ -3245,6 +3245,30 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-news-sub{font-size:11px;color:var(--text-muted);margin-top:4px;line-height:1.45;}
 .home-news-title{font-family:'Cinzel',serif;font-size:12px;font-weight:600;
   letter-spacing:0.3px;color:var(--accent);margin:0 2px 4px;}
+/* A reveal tile pictures the card it announces. ⚠ Every OTHER tile in this feed
+   is text-only because the edge fade is a mask-image, which forces offscreen
+   compositing and softens child <img>s — the standing CSS-pitfalls rule. It is
+   safe at THIS size only, and that was measured rather than assumed: probe
+   thumb mid-list (fully-opaque mask band, so the intended fade is not being
+   mistaken for softening), masked vs unmasked, Chromium at DPR 1/2/3 — mean
+   channel diff <=0.302/255 and EXACTLY 0 at DPR 2 and 3, which is the phone.
+   Anything larger, or a full card render, must be re-measured before it ships.
+   The thumbs sit UNDER the text, never beside it: at 2 cards (two consecutive
+   weekly reveals inside the 14-day window, so the common case, not an edge one)
+   a left-hand thumb column squeezed the title into three wrapped lines. */
+.home-news-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}
+/* Card art is uploaded to the bucket separately from the card's code entry, so
+   a just-revealed card can legitimately have no photo yet — and a weekly Beta
+   cadence reopens that window every week. When every thumb has failed, collapse
+   the row so the tile is exactly the text-only tile it was before, rather than
+   a row of broken-image icons in the one place we are announcing the card. */
+.home-news-thumbs:not(:has(img:not([hidden]))){display:none;}
+.home-news-thumb{width:52px;height:52px;border-radius:7px;object-fit:cover;
+  display:block;border:1px solid var(--border);background:var(--bg-card);}
+/* ⚠ Load-bearing: the display:block above out-specifies the UA stylesheet's
+   [hidden]{display:none}, so without this a failed thumb still paints its empty
+   bordered box AND keeps :has() above from ever collapsing the row. */
+.home-news-thumb[hidden]{display:none;}
 /* Date + event-page link under the tile title. Single anchor: the date text
    is what visually labels the link; the ↗ glyph signals the external page. */
 .home-news-event-link{display:inline-flex;align-items:center;gap:5px;
