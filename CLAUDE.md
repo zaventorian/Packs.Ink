@@ -5340,6 +5340,52 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
   the bar, a home-Toolbox chip (deliberate — see the tab's note under "Analytics tab").
 
+### Promo videos — 16:9 and 9:16 (2026-09-15)
+
+`scripts/promo_ticker/` renders two 30-second cuts into `promo/` for social:
+`stream-ticker-desktop.mp4` (1920x1080) and `stream-ticker-mobile.mp4` (1080x1920). Run
+`node scripts/promo_ticker/record_promo.mjs`; see that folder's README. **Nothing here
+ships** — `build_dist.mjs` is an include-list, so `promo/` and `scripts/` never reach the Worker, and
+`promo/` is gitignored besides (it holds the tour kit's live demo password) — so the two
+.mp4s are a REGENERATED artifact, never a committed one.
+
+- **⚠ This is NOT `scripts/promo_*.py`, the site tour kit.** That one records segments of the
+  real signed-in app (`promo_video.py`) and `promo/build/assemble.mjs` cuts them into
+  `tour_main.mp4` / `tour_mobile.mp4` plus feature shorts. **Its `SEGMENTS` list has never
+  included the ticker**, and its whole non-script half — `assemble.mjs`, the overlay caption
+  plates, `kit_template.html` — lives under the gitignored `promo/`, so a fresh clone cannot
+  run or extend it. Hence a standalone pair here. Folding the ticker in as `seg_ticker` /
+  `seg_m_ticker` later is a straight port of the copy and timing.
+- **⚠ The bar in both videos IS `ticker.html`, in an iframe sized like an OBS source** —
+  same CSS, same marquee, same `tickerRarityLine`. A re-mocked bar drifts from the product
+  the first time the product changes; this one can't. The configurator screenshots in the
+  "three steps" beat are `locator.screenshot()` over the live `/ticker` page for the same
+  reason.
+- **⚠ Every frame is a SEEK, never a capture.** `promo_scene.html` holds no CSS transition
+  and no `@keyframes`: `__seek(t)` is a pure function of time and the recorder steps it
+  frame by frame. So output is deterministic and drops nothing regardless of how fast the
+  machine is. The marquee — the one real CSS animation — is driven through the Web
+  Animations API, and **re-queried every frame**, because `layoutStrip()` tears that
+  animation down and rebuilds it (`animation:none` → reflow → `""`) whenever the bar
+  re-measures, so a cached `Animation` object goes stale the moment fonts land.
+- **⚠ `--live` is the version worth publishing, and the default is NOT it.** Without the
+  flag the run answers the Supabase query from `sample_data.mjs` and turns thumbnails off
+  — the only thing an agent sandbox can do, having no egress to `supabase.co` or to the
+  card-art CDN. Card names/versions/rarities are real (out of `scanner/index.json`), the
+  **prices and percentages are invented**, and nothing on screen dates them. Thumbnails are
+  off rather than faked. Re-run with `--live` from a normal machine before posting either
+  file anywhere.
+- **⚠ The captured URL card is rewritten to say `https://packs.ink/ticker`.** The
+  configurator builds its output URL from `location.origin`, which during a record is a
+  throwaway localhost port — i.e. the one string in the whole video a viewer might type.
+- `--stills 4,12,20,27` writes PNG frames instead of encoding: seconds rather than minutes,
+  and how to pull a poster frame. `--fonts <dir>` (with `fetch_fonts.sh`) is the other
+  sandbox-only flag — see the Fonts note above for why a missing Cinzel/Nunito silently
+  flattens every weight.
+- `scripts/dev_server.py` binds through `ThreadingTCPServer` with no `allow_reuse_address`,
+  so a re-run on the same port dies on TIME_WAIT. The recorder picks a random high port per
+  run and proves the server answers before continuing.
+
 ## Brand assets
 
 - `Logos/` ships at runtime.
