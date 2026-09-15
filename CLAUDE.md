@@ -4068,6 +4068,35 @@ Measured the day it landed — 57% of the 35,576 upcoming events are US, **43% a
   digit-stripping 5-char input, so a tracked store outside the US could never be given a
   distance origin. It shares the resolver now and got this for free.
 
+#### ⚠ Loosening `scZipReady` turned a mount effect into search-as-you-type — fixed 2026-09-14
+
+Both boxes carry an effect meaning *"auto-run once on mount when a search is already
+saved"*, and both listed `zip` in their deps. That was only ever safe because `scZipReady`
+was `/^\d{5}$/` for US — **true at a complete ZIP and nowhere before it**. Widening it to
+`length >= 2` so it could take town names and non-US formats silently changed what those
+effects DO: for anyone with no saved search, the first time the gate turns true is the
+**second character they type**. Typing `60625` ran a real search on `60`.
+
+- **The visible symptom was a stale error over correct results** —
+  `Nothing matching "60". Try a postal code, or check the spelling.` sitting above *94 near
+  Chicago, IL* — because nothing ordered the two requests. Reproduced both ways: with the
+  partial landing last it also called `setResults(null)` and **deleted the 94 good rows**.
+- **The deps are EMPTY now**, and `didSearch` (the "has anything been searched yet" flag the
+  mode-switch effect reads) is set by `runSearch` itself. ⚠ Leaving it in the effect instead
+  looks equivalent and is not: a first-time visitor's *manual* search would then never arm
+  it, and the Set Champs / Prereleases chips would clear the results and re-query nothing.
+- **Empty deps alone are not enough.** Two searches can still overlap — Search pressed twice,
+  a radius chip tapped mid-search, a "did you mean" button — so `searchSeq` / `geoSeq` gate
+  every commit, **the `catch` most of all**: a stale FAILURE overwriting a good result is the
+  reported bug. Both awaits now land before anything is committed, so the header can never
+  name a new city over the previous search's rows either.
+- **Changing only the DISTANCE no longer re-resolves the typed text** (`searchAtRadius`). It
+  cost a geocode round trip on every chip tap and — worse — threw away a place picked off the
+  "Not Dublin?" row, silently putting you back in the wrong Dublin.
+- Sections 12 + 13 of `test_event_search.mjs` pin all of it, and both halves were checked
+  against the real bug rather than assumed: re-adding `zip` to the deps, or dropping the
+  guard from one `catch`, each fails the run.
+
 ### How the finder itself works
 
 `UpcomingSCsBox` (Index.html). ZIP/postal + radius + optional date, three modes: **All / Set Champs / Prereleases**. Reworked 2026-07-30 so **All means literally every Lorcana event RPH lists** — locals, league nights, draft nights — not just the two classified subsets.

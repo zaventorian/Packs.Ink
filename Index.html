@@ -28702,7 +28702,7 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
   const [geoErr, setGeoErr] = useState(null);
   const [sortByDist, setSortByDist] = useState(() => { try { return localStorage.getItem("packsink:scEloSort") === "dist"; } catch { return false; } });
   const [radius, setRadius] = useState(() => { try { return localStorage.getItem("packsink:scEloRadius") || "all"; } catch { return "all"; } });
-  const didGeo = useRef(false);
+  const geoSeq = useRef(0);
 
   useEffect(() => {
     (async () => {
@@ -28735,14 +28735,19 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
   const runGeo = useCallback(async (z) => {
     z = String(z||"").trim();
     if(!scZipReady(z)){ setGeoErr("Enter a postal code or town."); setOrigin(null); return; }
+    const seq = ++geoSeq.current;                 // the loser of two overlapping lookups writes nothing
     setGeoErr(null);
     try {
       const o = await scResolveOrigin(z);
+      if(seq !== geoSeq.current) return;
       setOrigin({...o, zip: z});
       try { localStorage.setItem("packsink:scZip", z); if(o.country) localStorage.setItem("packsink:scCountry", o.country); } catch {}
-    } catch(e){ setGeoErr(String(e && e.message || e)); setOrigin(null); }
+    } catch(e){ if(seq === geoSeq.current){ setGeoErr(String(e && e.message || e)); setOrigin(null); } }
   }, []);
-  useEffect(() => { if(!didGeo.current && scZipReady(zip)){ didGeo.current = true; runGeo(zip); } }, [zip, runGeo]);
+  // ⚠ Empty deps, for the reason spelled out on the finder's own mount effect:
+  // with `zip` in them this fired on the second character typed, geocoding a
+  // half-typed postal code and stamping its failure over the real one.
+  useEffect(() => { if(scZipReady(zip)) runGeo(zip); }, []);
   useEffect(() => { try { localStorage.setItem("packsink:scEloSort", sortByDist?"dist":"date"); } catch {} }, [sortByDist]);
   useEffect(() => { try { localStorage.setItem("packsink:scEloRadius", radius); } catch {} }, [radius]);
 
@@ -41114,7 +41119,14 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // or a town name matched more than one real place.
   const [altCountries, setAltCountries] = useState([]);
   const [altPlaces, setAltPlaces] = useState([]);
-  const didAuto = useRef(false);
+  // "Has anything been searched yet" — set by runSearch itself, so a manual
+  // first search arms the mode-switch effect exactly as the mount auto-run does.
+  const didSearch = useRef(false);
+  // ⚠ Two searches can be in flight at once — Search pressed twice, a radius
+  // chip tapped mid-search, a "did you mean" button — and the loser must never
+  // write its answer over the winner's. A sequence ref is the shape that works
+  // in a callback: there is no effect cleanup to hang a `cancelled` flag on.
+  const searchSeq = useRef(0);
   // ⚠ Only persist a country a lookup actually confirmed. Writing the empty
   // initial value would erase the stored preference of everyone who had picked
   // one, on mount, before they had searched for anything.
@@ -41155,17 +41167,24 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     z = String(z || "").trim();
     if(!scZipReady(z)){ setErr("Enter a postal code or town."); return; }
     r = Math.max(1, Math.min(500, parseInt(r, 10) || 50));
+    const seq = ++searchSeq.current;
+    const live = () => seq === searchSeq.current;
+    didSearch.current = true;
     setLoading(true); setErr(null);
     try {
       const o = await scResolveOrigin(z, forceCc);
+      // Both awaits land before anything is committed, so the header can never
+      // name a new city over the previous search's results either.
+      const rows = await fetchNear(o.lat, o.lng, r);
+      if(!live()) return;
       setOrigin({lat: o.lat, lng: o.lng, city: o.city, state: o.state, zip: z, country: o.country});
       setCountry(o.country || "");
       setAltCountries(o.altCountries || []);
       setAltPlaces(o.altPlaces || []);
-      setResults(await fetchNear(o.lat, o.lng, r));
+      setResults(rows);
       try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
-    } catch(e){ setErr(String(e && e.message || e)); setResults(null); setAltCountries([]); setAltPlaces([]); }
-    finally { setLoading(false); }
+    } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); setAltCountries([]); setAltPlaces([]); } }
+    finally { if(live()) setLoading(false); }
   }, [mode, fetchNear]);
   // Re-run the same query against a country the first pass skipped.
   const useAltCountry = useCallback((cc) => runSearch(zip, radius, cc), [zip, radius, runSearch]);
@@ -41180,27 +41199,59 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       prev ? [{lat: prev.lat, lng: prev.lng, city: prev.city, state: prev.state, country: prev.country}] : []));
     setCountry(p.country || "");
     setOrigin({lat: p.lat, lng: p.lng, city: p.city, state: p.state, zip: zip, country: p.country});
+    // Shares runSearch's sequence: picking a place supersedes a search still in
+    // flight, and a search started after this supersedes it.
+    const seq = ++searchSeq.current;
+    const live = () => seq === searchSeq.current;
     setLoading(true); setErr(null); setSel(null);
-    try { setResults(await fetchNear(p.lat, p.lng, radius)); }
-    catch(e){ setErr(String(e && e.message || e)); setResults(null); }
-    finally { setLoading(false); }
+    try { const rows = await fetchNear(p.lat, p.lng, radius); if(live()) setResults(rows); }
+    catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); } }
+    finally { if(live()) setLoading(false); }
   }, [zip, radius, origin, fetchNear]);
+
+  // Changing only the DISTANCE re-queries from the origin we already have. Going
+  // back through runSearch would re-resolve the typed text, which costs a
+  // geocode round trip on every chip tap and — worse — silently throws away a
+  // place picked off the "Not Dublin?" row, putting you back in the wrong
+  // Dublin. Falls back to a full search when the text has been edited since.
+  const searchAtRadius = useCallback(async (r) => {
+    r = Math.max(1, Math.min(500, parseInt(r, 10) || 50));
+    if(!origin || origin.zip !== String(zip || "").trim()) return runSearch(zip, r, country || undefined);
+    const seq = ++searchSeq.current;
+    const live = () => seq === searchSeq.current;
+    setLoading(true); setErr(null);
+    try {
+      const rows = await fetchNear(origin.lat, origin.lng, r);
+      if(!live()) return;
+      setResults(rows);
+      try { localStorage.setItem("packsink:scRadius", String(r)); } catch {}
+    } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); } }
+    finally { if(live()) setLoading(false); }
+  }, [zip, origin, country, runSearch, fetchNear]);
 
   // Auto-run once on mount when a search is already saved. A ?scc= deep link
   // pins the country for that first run so a shared view reproduces exactly.
+  // ⚠ The deps are EMPTY on purpose. With `zip` in them, this "once on mount"
+  // effect fired the first time scZipReady(zip) turned true — which, for anyone
+  // with no saved search, is the SECOND CHARACTER they type. "60" ran a real
+  // search on its way to 60625, and because nothing ordered the two, its
+  // failure landed on top of the good one's results. It was only ever safe
+  // because scZipReady used to be /^\d{5}$/ for US, i.e. true at a complete ZIP
+  // and nowhere before it; loosening that gate to accept town names and non-US
+  // postal formats quietly turned this into a search-as-you-type.
   useEffect(() => {
-    if(!didAuto.current && scZipReady(zip)){ didAuto.current = true; runSearch(zip, radius, pCtry || undefined); }
-  }, [zip, radius, runSearch]);
+    if(!didSearch.current && scZipReady(zip)) runSearch(zip, radius, pCtry || undefined);
+  }, []);
 
   // Switching Set Championships <-> Prereleases re-queries the other table.
   useEffect(() => {
-    if(!didAuto.current) return;          // nothing searched yet
+    if(!didSearch.current) return;        // nothing searched yet
     setSel(null); setResults(null); setErr(null);
     if(scZipReady(zip)) runSearch(zip, radius);
   }, [mode]);
 
   const pickMode = (m) => { if(m !== mode){ setSel(null); setResults(null); setErr(null); setMode(m); } };
-  const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip)) runSearch(zip, r, country || undefined); };
+  const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip)) searchAtRadius(r); };
 
   // Decorate each series with its per-occurrence local days, then apply the
   // optional date filter. A series survives the filter if ANY of its dates lands
@@ -41316,8 +41367,8 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
             placeholder="mi" value=${(Number.isFinite(radius) && !SC_RADII.includes(radius)) ? String(radius) : ""}
             aria-label="Custom radius in miles"
             onInput=${e=>setRadius(parseInt(e.target.value.replace(/[^0-9]/g,"").slice(0,3),10)||0)}
-            onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(scZipReady(zip)) runSearch(zip, radius, country || undefined); } }}/>
-          <button type="button" class="sc-custom-go" onClick=${()=>{ if(scZipReady(zip)) runSearch(zip, radius, country || undefined); }}>Go</button>
+            onKeyDown=${e=>{ if(e.key==="Enter"){ e.preventDefault(); if(scZipReady(zip)) searchAtRadius(radius); } }}/>
+          <button type="button" class="sc-custom-go" onClick=${()=>{ if(scZipReady(zip)) searchAtRadius(radius); }}>Go</button>
         </span>`}
       </div>
       <div class="sc-date-row">
