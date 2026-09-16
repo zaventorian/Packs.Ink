@@ -285,6 +285,11 @@ def main() -> None:
     #   (base_pid, set_id, collector_number, new_id, promo_pid)
     AVP_SET = "set_aotv_promos"        # Attack of the Vine! Promos (folds under Set 13)
     CC1_SET = "set_curators_cc1"       # Curator's Collection: Heroines
+    # PD1 is Lorcast's own rolling promo set (#1-#8 today). A promo that ships
+    # inside a product hangs off PD1 by its PRINTED number - the product is the
+    # packaging, not a set. That is why Illumineer's Quest Q3 gets no set row of
+    # its own: its foils are PD1 cards (Zaven, 2026-09-16).
+    PD1_SET = "set_b55bc6fc08484b40841f6956ba416fb2"
     REPRINT_PROMOS = [
         (702677, AVP_SET, "9",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo
         (702660, AVP_SET, "10", "crd_avp_10_tigger_hunny_barbarian",  705083),  # buy-a-box promo
@@ -300,6 +305,14 @@ def main() -> None:
         (544494, CC1_SET, "4",  "crd_cc1_4_mulan_elite_archer",       702520),
         (631455, CC1_SET, "5",  "crd_cc1_5_anna_trusting_sister",     702521),
         (503357, CC1_SET, "6",  "crd_cc1_6_tinker_bell_giant_fairy",  702603),
+        # Printed 16/PD1, the foil packed in Illumineer's Quest: The Great Hunny
+        # Rescue. Base is Attack of the Vine! #65 (pid 704583); the promo is pid
+        # 709896, which prices_daily had already been collecting for 33 days with
+        # no cards row to join against, so card_prices_latest could never show it.
+        # NOT cn "16" inside Attack of the Vine! - AotV has a real #16 and runs to
+        # #245, so that collides. Q1/Q2 quest cards dodge this only because they
+        # are numbered above their booster range (223-225); Q3 renumbers from 1.
+        (704583, PD1_SET, "16", "crd_pd1_16_with_a_few_good_friends",  709896),
     ]
     print("\nBuilding promo-reprint rows (clone base, carry promo pid + set/cn)...")
     try:
