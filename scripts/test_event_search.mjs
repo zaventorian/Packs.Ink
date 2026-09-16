@@ -39,19 +39,32 @@ const source = [
         "const scZipReady = (q) => String(q || \"\").trim().length >= 2;", "the resolver block"),
 ].join("\n\n");
 
-// scZippo / scLookupPlaces / scResolveOrigin are defined but never called here
-// (they need the network); the stubs only have to exist for the block to load.
+// scLookupPlaces / scResolveOrigin are defined but never called here (they need
+// Supabase); that stub only has to exist for the block to load.
+//
+// `fetch` is a different matter: scCountryOptions IS exercised, so it gets a
+// tiny zippopotam driven by globalThis.__ZIPDB. Anything not in the fixture
+// answers 404, which is exactly what the real API does for the candidates that
+// never held the code — the whole point of probing.
 const stub = `
 const localStorage = { getItem: () => null, setItem: () => {} };
 const navigator = { language: "en-US" };
 const sbClient = { from: () => { throw new Error("no network in this test"); } };
-const fetch = () => { throw new Error("no network in this test"); };
+const fetch = async (url) => {
+  globalThis.__ZIPHITS = (globalThis.__ZIPHITS || 0) + 1;
+  const m = /zippopotam\\.us\\/([a-z]{2})\\/(.+)$/.exec(String(url));
+  const hit = m && (globalThis.__ZIPDB || {})[m[1] + "/" + decodeURIComponent(m[2])];
+  if (!hit) return { ok: false };
+  return { ok: true, json: async () => ({ places: [{ "place name": hit[0],
+    "state abbreviation": hit[1], latitude: "41.9", longitude: "-87.6" }] }) };
+};
 `;
 
 const api = new Function(`${stub}\n${source}\nreturn {
   SC_GEO_COUNTRIES, SC_POSTAL_FORMATS, scPostalShape, scPostalCandidates,
   scNormalizePostal, scRankPlaces, scZipReady, scDetectCountry, scTzCountry,
-  scPlaceLabel, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, haversineMi };`)();
+  scPlaceLabel, SC_PLACE_LABEL_MAX, SC_PLACE_MERGE_MI, haversineMi,
+  scCountryOptions, scZippo };`)();
 
 // ── harness ─────────────────────────────────────────────────────────────────
 let pass = 0;
@@ -326,6 +339,92 @@ for (const [who, src] of guarded) {
 eq((SRC.match(/searchAtRadius\(/g) || []).length, 3,
    "all three radius controls re-query from the origin already resolved");
 eq(/onClick=\$\{\(\)=>pickRadius\(r\)\}/.test(SRC), true, "the radius chips still call pickRadius");
+
+// ── 14. the country control is built from what RESOLVES, not what could ────
+// The old correction offered the FORMAT's candidates: eight countries for any
+// bare 5-digit code, whether or not the code meant anything in them. Measured
+// over 40 real US ZIPs, 72% collide with at least one other country and 28%
+// collide with NONE — and nothing on screen separated those two cases, so a
+// correct answer still carried seven guesses under it.
+//
+// Every failure here is silent. Offer too much and the control is back to
+// guessing; offer too little and someone whose code really is ambiguous has no
+// way to say so.
+section("14. scCountryOptions — only countries that really hold the code");
+
+// 60640 is Chicago, and genuinely also a postal code in France, Mexico and
+// Finland. It is NOT one in Germany, Spain, Italy or Sweden, which share the
+// same five-digit shape and are therefore candidates.
+globalThis.__ZIPDB = {
+  "us/60640": ["Chicago", "IL"],
+  "fr/60640": ["Muirancourt", "B6"],
+  "mx/60640": ["Aviacion", "MIC"],
+  "fi/60640": ["Isokoski", ""],
+};
+const FOUND_US = { country: "US", city: "Chicago", state: "IL" };
+const CANDS = ["DE", "FR", "ES", "IT", "MX", "FI", "SE"];
+
+globalThis.__ZIPHITS = 0;
+const opts = await api.scCountryOptions("60640", CANDS, FOUND_US);
+eq(opts.map((o) => o.cc), ["US", "FR", "MX", "FI"],
+   "only the countries that answered are offered");
+eq(opts.map((o) => o.city), ["Chicago", "Muirancourt", "Aviacion", "Isokoski"],
+   "each option names the town it would land in");
+// ⚠ Market order (SC_GEO_COUNTRIES), NOT the resolved country first. A <select>
+// already marks which is active, and a list that reshuffles under the click
+// that used it is the one thing a picker must not do.
+// ⚠ Asserting "already sorted" against THIS fixture proves nothing: resolving
+// US first happens to yield market order anyway. The sort only shows up when
+// the resolved country is not the market-first one, on a code the cache has
+// never seen.
+globalThis.__ZIPDB = { "fi/12345": ["Tampere", ""], "us/12345": ["Schenectady", "NY"] };
+const fiFirst = await api.scCountryOptions("12345", ["US"],
+  { country: "FI", city: "Tampere", state: "" });
+eq(fiFirst.map((o) => o.cc), ["US", "FI"],
+   "market order wins over the order they were resolved in");
+eq(fiFirst.map((o) => o.city), ["Schenectady", "Tampere"],
+   "and each option keeps its own town through the sort");
+
+// Switching country must reuse the cached set, not re-probe six countries to
+// rebuild the identical list. Same code, different country resolved first.
+const before = globalThis.__ZIPHITS;
+const asFr = await api.scCountryOptions(
+  "60640", ["DE", "US", "ES", "IT", "MX", "FI", "SE"],
+  { country: "FR", city: "Muirancourt", state: "B6" });
+eq(globalThis.__ZIPHITS, before, "switching country costs no new lookups");
+eq(asFr.map((o) => o.cc), opts.map((o) => o.cc),
+   "and the list is identical whichever country was resolved first");
+
+// ⚠ 28% of real US ZIPs are unique to the US. One option means the caller
+// renders nothing at all — no control, no question, no row.
+globalThis.__ZIPDB = { "us/80202": ["Denver", "CO"] };
+const lone = await api.scCountryOptions("80202", CANDS,
+  { country: "US", city: "Denver", state: "CO" });
+eq(lone.length, 1, "a code unique to one country yields a single option");
+ok(/countryOpts\.length > 1 &&/.test(SRC),
+   "and the render site is gated on there being more than one");
+
+// A shape with no candidates at all (an Eircode) probes nothing.
+globalThis.__ZIPDB = {};
+eq((await api.scCountryOptions("D02 AF30", [], { country: "IE", city: "Dublin", state: "" })).length, 1,
+   "no candidates means nothing to probe");
+// ...and a resolver result with no country cannot produce a control.
+eq((await api.scCountryOptions("60640", CANDS, null)).length, 0,
+   "no origin means no options");
+
+// ⚠ The probe must never gate the SEARCH. It is fired from runSearch without
+// being awaited, so results are on screen before the countries are known.
+ok(/scCountryOptions\([^)]*\)\s*\n?\s*\.then\(/.test(SRC),
+   "the probe is fired and not awaited");
+// ⚠ And it must only clear on a NEW code — clearing on every search makes the
+// dropdown vanish for the second the event query takes, under the click that
+// just used it.
+ok(/probedZip\.current !== z/.test(SRC),
+   "the control is only cleared when the typed code changed");
+
+// The pre-search country picker stays gone: this control appears AFTER a
+// search and only on real ambiguity, which is a different thing entirely.
+eq(SRC.includes("sc-country-select"), false, "the old pre-search picker is still gone");
 
 // ── report ──────────────────────────────────────────────────────────────────
 console.log(`\n${"-".repeat(60)}`);

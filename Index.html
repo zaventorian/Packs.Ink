@@ -41003,9 +41003,12 @@ const scLookupPlaces = async (term, home) => {
 
 // The one resolver behind both search boxes. Returns
 // {lat,lng,city,state,country,altCountries,altPlaces} or throws.
-// altCountries are format-compatible countries we did NOT probe — the walk
-// stops at the first hit, so a correction stays one tap away without every
-// search paying for it. altPlaces are the other towns a name matched.
+// altCountries are format-compatible CANDIDATES we did not probe — the walk
+// stops at the first hit, so an ordinary search never pays for the rest. They
+// are not offerable as they stand (8 countries share the bare 5-digit shape and
+// most of them will not hold the code at all); scCountryOptions turns them into
+// the countries it really resolves in, after the results are already up.
+// altPlaces are the other towns a name matched.
 const scResolveOrigin = async (query, forceCountry) => {
   const raw = String(query || "").trim();
   if(!raw) throw new Error("Enter a postal code or town.");
@@ -41031,6 +41034,43 @@ const scResolveOrigin = async (query, forceCountry) => {
   throw new Error(cands !== null
     ? `We couldn't place "${raw}" — try the town name instead.`
     : `Nothing matching "${raw}". Try a postal code, or check the spelling.`);
+};
+// Which countries does this code ACTUALLY resolve in?
+//
+// scResolveOrigin stops at the first hit on purpose, so what it hands back is
+// the FORMAT's candidate list — 8 countries for any bare 5-digit code, whether
+// or not the code means anything in them. Offering those as a correction was
+// offering seven guesses: measured over 40 real US ZIPs, 72% collide with at
+// least one other country and 28% collide with NONE, and nothing on screen
+// separated the two.
+//
+// ⚠ This runs AFTER the search has returned, never before it. The results are
+// never delayed by it; the country control simply appears a moment later, and
+// only when the probe proves there was a choice to make. Cached because
+// re-running the same code is how you change the radius or the mode.
+const _scCountryOpts = new Map();
+const SC_COUNTRY_CACHE_MAX = 60;
+const scCountryOptions = async (raw, others, found) => {
+  if(!found || !found.country) return [];
+  // ⚠ Keyed on the CODE alone, not on which country we happened to resolve
+  // first. The answer is a set, not a walk: switching country re-runs the search
+  // forced to it, and without this every switch re-probes the same six countries
+  // to rebuild the identical list.
+  const key = String(raw || "").trim().toUpperCase();
+  if(_scCountryOpts.has(key)) return _scCountryOpts.get(key);
+  const hits = await Promise.all((others || []).map(async cc => {
+    const code = scNormalizePostal(raw, cc);
+    return code ? scZippo(cc, code) : null;
+  }));
+  // ⚠ Sorted by market order, NOT with the current country first. A <select>
+  // already marks which one is active, and a list that reshuffles under the
+  // click that used it is the one thing a picker must not do.
+  const opts = [{cc: found.country, city: found.city, state: found.state}].concat(
+    hits.filter(Boolean).map(h => ({cc: h.country, city: h.city, state: h.state})));
+  opts.sort((a, b) => SC_GEO_COUNTRIES.indexOf(a.cc) - SC_GEO_COUNTRIES.indexOf(b.cc));
+  if(_scCountryOpts.size > SC_COUNTRY_CACHE_MAX) _scCountryOpts.clear();
+  _scCountryOpts.set(key, opts);
+  return opts;
 };
 // Loose gate on whether there is anything worth searching for yet. The resolver
 // decides what is real; this only stops a search firing on one keystroke.
@@ -41237,14 +41277,22 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const [country, setCountry] = useState(() => { try { return (pCtry || localStorage.getItem("packsink:scCountry") || "").toUpperCase(); } catch { return ""; } });
   // Corrections offered when the inferred country picked the wrong continent,
   // or a town name matched more than one real place.
-  const [altCountries, setAltCountries] = useState([]);
+  // Every country this code really resolves in, the one we used first. Empty
+  // until the background probe lands, and left empty when there is only one —
+  // so the control exists exactly when the country is a real question.
+  const [countryOpts, setCountryOpts] = useState([]);
+  // The other TOWNS a typed name matched. A different axis from the country and
+  // mutually exclusive with it: scResolveOrigin fills one or the other, never
+  // both, because a postal code and a place name go down different paths.
   const [altPlaces, setAltPlaces] = useState([]);
-  // ⚠ Collapsed by default. A US 5-digit code is format-compatible with seven
-  // other countries, so a correct answer still drew four wrapped rows of chips
-  // under it — and the answer is almost always correct. The QUESTION stays
-  // visible, because that is what makes dropping the country picker safe; only
-  // the list of answers to it is one tap away.
+  // ⚠ Collapsed by default — a name can match a lot of towns and the first is
+  // usually right. The QUESTION stays visible; only the answers fold away.
   const [altOpen, setAltOpen] = useState(false);
+  // ⚠ Only clear the country control when the TYPED CODE changed. Picking a
+  // country re-runs the search, and clearing there makes the dropdown vanish for
+  // the second the event query takes and then come back — which reads as the
+  // control breaking under the click that just used it.
+  const probedZip = useRef("");
   // "Has anything been searched yet" — set by runSearch itself, so a manual
   // first search arms the mode-switch effect exactly as the mount auto-run does.
   const didSearch = useRef(false);
@@ -41296,6 +41344,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     const seq = ++searchSeq.current;
     const live = () => seq === searchSeq.current;
     didSearch.current = true;
+    if(probedZip.current !== z){ setCountryOpts([]); probedZip.current = z; }
     setLoading(true); setErr(null);
     try {
       const o = await scResolveOrigin(z, forceCc);
@@ -41305,12 +41354,15 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       if(!live()) return;
       setOrigin({lat: o.lat, lng: o.lng, city: o.city, state: o.state, zip: z, country: o.country});
       setCountry(o.country || "");
-      setAltCountries(o.altCountries || []);
       setAltPlaces(o.altPlaces || []);
       setAltOpen(false);
       setResults(rows);
       try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
-    } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); setAltCountries([]); setAltPlaces([]); } }
+      // Deliberately not awaited — the answer is already on screen.
+      scCountryOptions(z, o.altCountries || [], o)
+        .then(opts => { if(live()) setCountryOpts(opts.length > 1 ? opts : []); })
+        .catch(() => {});
+    } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); setCountryOpts([]); setAltPlaces([]); } }
     finally { if(live()) setLoading(false); }
   }, [mode, fetchNear]);
   // Re-run the same query against a country the first pass skipped.
@@ -41469,20 +41521,23 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
           aria-pressed=${mode==="prerelease"} onClick=${()=>pickMode("prerelease")}>Prereleases</button>
       </div>
       <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
+        ${countryOpts.length > 1 && html`<select class="sc-origin-country" value=${country}
+          aria-label=${`Country for ${zip} — it is a postal code in ${countryOpts.length}`}
+          title=${`"${zip}" is a postal code in ${countryOpts.length} countries`}
+          onChange=${e=>useAltCountry(e.target.value)}>
+          ${countryOpts.map(o => html`<option key=${o.cc} value=${o.cc}>${o.cc} · ${o.city}</option>`)}
+        </select>`}
         <input class="sc-zip-input" type="text" maxLength=${40} title=${SC_ZIP_TITLE}
           placeholder="Postal code or town" value=${zip} aria-label="Postal code or town"
           onInput=${e=>setZip(e.target.value.slice(0,40))}/>
         <button class="sc-search-btn" type="submit">Search</button>
       </form>
-      ${origin && (altPlaces.length > 0 || altCountries.length > 0) && html`<div class="sc-alt-row">
+      ${origin && altPlaces.length > 0 && html`<div class="sc-alt-row">
         <button type="button" class="sc-alt-toggle" aria-expanded=${altOpen}
-          title="Landed in the wrong place? Pick another match."
+          title="Landed in the wrong town? Pick another match."
           onClick=${()=>setAltOpen(o=>!o)}>Not ${origin.city}?<span class="sc-alt-caret">${altOpen?"▴":"▾"}</span></button>
         ${altOpen && altPlaces.map(p => html`<button key=${`${p.lat},${p.lng}`} type="button" class="sc-alt-btn"
           onClick=${()=>useAltPlace(p)}>${p.city}${p.state?`, ${p.state}`:""}${p.country?` · ${p.country}`:""}</button>`)}
-        ${altOpen && altCountries.map(cc => html`<button key=${cc} type="button" class="sc-alt-btn"
-          title=${`Look "${zip}" up in ${scCountryName(cc)}`}
-          onClick=${()=>useAltCountry(cc)}>${scCountryName(cc)}</button>`)}
       </div>`}
       <div class="sc-radius-row" role="group" aria-label="Distance">
         ${SC_RADII.map(r => html`<button key=${r} type="button"
