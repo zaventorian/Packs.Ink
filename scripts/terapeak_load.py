@@ -68,10 +68,28 @@ CHALLENGE_CTX_RE = re.compile(r"\bc[12]\b|/\s*c[12]\b|challenge|continentals", r
 TOP_PRIZE_RE = re.compile(r"\btop\s*(?:prize|4|8|16|32|64)\b|\bcontinentals\b", re.I)
 PRIZE_WALL_RE = re.compile(r"\bprize\s*wall\b|\bside\s*event\b", re.I)
 
+# ⚠ A missed "non-foil" does not produce a NULL — it falls through to the bare
+# `"foil" in t` test below and is stored as FOIL, i.e. the exact opposite. On a
+# Challenge card that is not cosmetic: the Top Prize foil and the Prize Wall
+# non-foil share ONE card_id and their markets are ~50x apart. A Whole New World
+# (C1 #10) is the case that exposed it — two real foil sales at $17,500/$14,100
+# against non-foils at $175-$400, three of which were stored as "Foil" purely
+# because the old `non[\s-]?foil` could not read their titles.
+#
+# Two gaps, both found in live data: the separator must allow MORE THAN ONE
+# character ("NON - Foil", "NON- Foil") and the negator must cover what sellers
+# actually type ("No Foil", "No. Foil", "Not Foil", "N/Foil").
+#
+# ⚠ Digits are deliberately NOT in the separator class. "No. 42 Foil" is a card
+# NUMBER followed by a genuine foil and must stay Foil — that is the one false
+# positive this pattern has to avoid, and it is why the class is [\s\-./] and not
+# a bare \W*.
+NON_FOIL_RE = re.compile(r"\b(?:non?|not|n/)[\s\-./]*foil")
+
 
 def printing_of(title: str):
     t = (title or "").lower()
-    if re.search(r"non[\s-]?foil", t):
+    if NON_FOIL_RE.search(t):
         return "Non-Foil"
     if "cold foil" in t:
         return "Cold Foil"
