@@ -5415,6 +5415,55 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
 - Not built: sealed products (client-computed in the SPA, no matview), per-card deep links from
   the bar, a home-Toolbox chip (deliberate — see the tab's note under "Analytics tab").
 
+### Promo videos — 16:9 and 9:16 (2026-09-15)
+
+`scripts/promo_ticker/` renders two 36-second cuts into `promo/` for social:
+`stream-ticker-desktop.mp4` (1920x1080) and `stream-ticker-mobile.mp4` (1080x1920). Run
+`node scripts/promo_ticker/record_promo.mjs`; see that folder's README. **Nothing here
+ships** — `build_dist.mjs` is an include-list, so `promo/` and `scripts/` never reach the
+Worker, and `promo/` is gitignored besides (it holds the tour kit's live demo password) — so
+the two .mp4s are a REGENERATED artifact, never a committed one.
+
+- **⚠ This is NOT `scripts/promo_*.py`, the site tour kit.** That one records segments of the
+  real signed-in app (`promo_video.py`) and `promo/build/assemble.mjs` cuts them into
+  `tour_main.mp4` / `tour_mobile.mp4`. **Its `SEGMENTS` list has never included the ticker**,
+  and its whole non-script half lives under the gitignored `promo/`, so a fresh clone cannot
+  run or extend it. Hence a standalone pair here.
+- **⚠ The bar in both videos IS `ticker.html`, in an iframe sized like an OBS source** — same
+  CSS, same marquee, same `tickerRarityLine`. A re-mocked bar drifts from the product the
+  first time the product changes; this one can't.
+- **⚠ Every frame is a SEEK, never a capture.** `promo_scene.html` holds no CSS transition and
+  no `@keyframes`: `__seek(t)` is a pure function of time and the recorder steps it frame by
+  frame, so output is deterministic whatever the machine's speed. The marquee — the one real
+  CSS animation — rides the Web Animations API and is **re-queried every frame**, because
+  `layoutStrip()` tears that animation down and rebuilds it whenever the bar re-measures.
+- **⚠ Each beat cues the marquee to its OWN offset into the same reel.** The advertised config
+  is nine sections, and at 60 px/s that loop runs over nine minutes — so a 36-second video
+  plays ~5% of it and would otherwise never reach a second section header. Sections are picked
+  **by what they say, never by index** (the list is a product of the ticker's own config), and
+  the cue position is **the cap width plus one beat's travel**, not a fraction of the frame: a
+  header that drifts under the fixed packs.ink cap is sliced in half for a couple of seconds,
+  which reads as a rendering fault rather than as a marquee.
+- **⚠ The "make it yours" beat shoots the SPA tab, because `/ticker` is two pages behind one
+  path** — `?bar=`/`?embed=` is the raw overlay, bare is Analytics » Stream Ticker, and bare is
+  what someone told to visit packs.ink/ticker lands on. It is captured at **900 CSS px wide on
+  purpose**: the configurator goes single-column under 900px, which makes every settings card
+  ~824px and readable when panned. At desktop width those cards are a 340px column and the
+  labels turn to mush on video. The pan's end point is computed in the SCENE, since only it
+  knows the frame height and scale needed to land the last card on the bottom edge.
+- **⚠ LIVE is the default; `--sample` is the no-egress path** and its prices are invented, so
+  it is for checking layout and never for publishing. The advertised config uses **NM Market**
+  rather than the page's default Low basis: over 1D/1W, Low is a published aggregate that can
+  sit frozen and throws multi-thousand-percent phantoms — real, derived, and indistinguishable
+  from a bug on screen.
+- **⚠ Playwright's bundled ffmpeg cannot encode these.** It is a stripped build (libvpx/webm
+  only, no libx264, no mp4 muxer), so it is deliberately excluded from the binary search; the
+  detector looks for a real gyan.dev build instead. Chromium, ffmpeg and python are all
+  resolved rather than assumed (`PROMO_CHROME` / `PROMO_FFMPEG` / `PROMO_PYTHON`).
+- **⚠ The dev server's stdio is DROPPED, not piped.** `dev_server.py` logs every request, and a
+  piped stderr nobody drains fills its buffer and blocks the server mid-response — which
+  surfaces as `ERR_EMPTY_RESPONSE` in the browser, not as an error in the recorder.
+
 ## Brand assets
 
 - `Logos/` ships at runtime.

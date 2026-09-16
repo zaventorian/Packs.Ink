@@ -9,7 +9,7 @@
 > no app state to drive. If the ticker should instead become `seg_ticker` /
 > `seg_m_ticker` in that pipeline, the copy and timing here port over directly.
 
-Two cuts of the same 30-second script, both recorded from the **real**
+Two cuts of the same 36-second script, both recorded from the **real**
 `/ticker?bar=1` page running in an iframe sized like an OBS browser source:
 
 | file | size | for |
@@ -23,9 +23,30 @@ node scripts/promo_ticker/record_promo.mjs --only mobile   # one format
 node scripts/promo_ticker/record_promo.mjs --stills 4,12,20,27   # PNG frames, no encode
 ```
 
-Needs `playwright-core` (a devDependency — `npm install`), a Chromium, and an
-`ffmpeg` with libx264 on `PATH`. Override either with `PROMO_CHROME` /
-`PROMO_FFMPEG`.
+Needs `playwright-core` (a devDependency — `npm install`), a Chromium and an
+`ffmpeg` **with libx264**. Both are auto-detected; override with `PROMO_CHROME`
+/ `PROMO_FFMPEG` / `PROMO_PYTHON`.
+
+> ⚠ **Playwright's bundled ffmpeg cannot be used.** It is a stripped build —
+> libvpx/webm only, no libx264 and no mp4 muxer — so it is deliberately absent
+> from the search list. On Windows the detector looks for a real gyan.dev
+> build; if none is found, install one and point `PROMO_FFMPEG` at it.
+
+## The script
+
+Five beats, identical in both formats so the two cuts say the same thing at the
+same moment. `BEATS` in `promo_scene.html` holds the windows in seconds;
+`FEATURES` / `GRADED` / `CUSTOM` / `CTASTEPS` hold the copy. Changing a beat's
+timing needs nothing else touched — `__seek` derives every fade and stagger
+from those numbers.
+
+| beat | what it says |
+|---|---|
+| head | what it is: a free scrolling overlay for OBS |
+| reel | what is in it — windows, rarity groups, direction, price floor |
+| graded | graded slabs: graders, grades, movers vs top sales |
+| custom | the real page, panned through every setting it offers |
+| cta | 1-2-3 to OBS, and `packs.ink/ticker` |
 
 ## The bar in the video is the shipping bar
 
@@ -33,8 +54,7 @@ Needs `playwright-core` (a devDependency — `npm install`), a Chromium, and an
 inside it is `ticker.html` served by `scripts/dev_server.py` — same CSS, same
 marquee, same `tickerRarityLine` rule that decides which cards say "· Foil". A
 re-mocked bar would drift from the product the first time the product changed;
-this one cannot. The configurator screenshots in the "three steps" beat are
-likewise real: `locator.screenshot()` over the live `/ticker` page.
+this one cannot.
 
 ## Every frame is a seek, not a capture
 
@@ -47,39 +67,66 @@ ticker's own marquee, is driven through the Web Animations API (`pause()` then
 `currentTime`), re-queried every frame because `layoutStrip()` tears the
 animation down and rebuilds it whenever the bar re-measures.
 
-## ⚠ `--live` vs the sample rows
+## ⚠ Each beat cues the marquee to its own part of the reel
 
-By default the run **intercepts the Supabase query and answers it from
-`sample_data.mjs`**, and turns card-art thumbnails off.
+The reel is a marquee. The advertised config is nine sections long, and at
+60 px/s that loop runs **over nine minutes** — so a 36-second video plays about
+5% of it and would never reach a second section header. Each beat therefore
+starts at its own offset into the *same* reel, chosen so the section that beat
+is talking about is on screen. Within a beat the bar advances 1:1 with real
+time, at exactly its configured speed; only the cut between beats moves it.
 
-That is not the preferred output — it is the only possible one from an agent
-sandbox, which has no egress to `supabase.co` or to the card-art CDN. The card
-names, versions and rarities are real (read out of `scanner/index.json`, which
-already ships in this repo) but **the prices and percentages are invented**, so
-the bar renders real shapes without the video claiming a market day it cannot
-know. Nothing on screen dates the numbers. Thumbnails are off rather than
-faked, because inventing card art would misrepresent what the product shows.
+- Sections are picked **by what they say**, never by index — the section list
+  is a product of the ticker's own config (windows × rarity groups, then
+  graded), so an index would quietly point at a different section the moment
+  that config changed.
+- The cue position is **derived from the cap width plus one beat's travel**,
+  not a fraction of the frame. The bar has a fixed packs.ink cap on its left,
+  and a header that drifts under it is sliced in half for a couple of seconds —
+  which reads as a rendering fault rather than as a marquee.
 
-**From a machine with normal network access, run `--live`** — real prices, real
-art, no interception at all:
+## ⚠ `/ticker` is two pages behind one path
 
-```
-node scripts/promo_ticker/record_promo.mjs --live
-```
+With `?bar=` or `?embed=` it is the raw overlay page (`ticker.html`). **Bare, it
+is the SPA's Analytics » Stream Ticker tab** — which is what someone told to
+"go to packs.ink/ticker" actually lands on, and therefore what the "make it
+yours" beat shoots.
 
-That is the version worth publishing. Check the result before posting: `--live`
-takes whatever that day's movers happen to be, and a slow news day makes a
-thinner reel than the sample set does.
+That page shot is taken at **900 CSS px wide on purpose**: the configurator's
+own layout goes single-column under 900px, which makes every settings card
+~824px wide and genuinely readable when panned inside a frame. At desktop width
+the same cards are a 340px column and the labels turn to mush on video.
 
-`--fonts <dir>` is the other sandbox-only flag: it serves Google Fonts from a
-local cache (`sh scripts/promo_ticker/fetch_fonts.sh <dir>`) for a browser that cannot
-reach `fonts.googleapis.com`. Without the real Cinzel and Nunito Sans every
-weight collapses to a fallback face and the bar measures itself against type it
-will never ship with. On an ordinary machine, omit it.
+The pan's end point is computed in the *scene*, not here: only the scene knows
+the frame's height and scale, so only it can land the last card on the bottom
+edge instead of sailing past it into the footer.
 
-## Editing the script
+## ⚠ `--sample` is for a machine with no network
 
-`BEATS` in `promo_scene.html` holds the four beat windows in seconds; `FEATURES`
-and `STEPS` hold the copy. Changing a beat's timing needs nothing else touched —
-`__seek` derives every fade and stagger from those numbers. Re-render with
-`--stills` first; it is seconds rather than minutes.
+By default the run hits the **real Supabase feed and shows real card art**.
+That is the version worth publishing, and it is the default.
+
+`--sample` intercepts the Supabase query and answers it from `sample_data.mjs`,
+and turns thumbnails off. The card names, versions and rarities are real (read
+out of `scanner/index.json`, which already ships in this repo) but **the prices
+and percentages are invented**. It exists for a sandbox with no egress to
+`supabase.co` or the card-art CDN; use it to check layout, never to publish.
+
+`--fonts <dir>` is the other no-network flag: it serves Google Fonts from a
+local cache (`sh scripts/promo_ticker/fetch_fonts.sh <dir>`) for a browser that
+cannot reach `fonts.googleapis.com`. Without the real Cinzel and Nunito Sans
+every weight collapses to a fallback face and the bar measures itself against
+type it will never ship with. On an ordinary machine, omit it.
+
+## Before publishing
+
+`--live` takes whatever that day's movers happen to be, so **look at the
+result**. A slow news day makes a thinner reel; a graded section needs a long
+enough window to have sales in it at all (1D and 1W are far thinner than 1M).
+`--stills` is seconds rather than minutes and is the fast way to check.
+
+The advertised config uses **NM Market** rather than the page's default Low
+basis. Over a 1D/1W window Low is a published aggregate that can sit frozen and
+throws multi-thousand-percent phantoms — real, derived, and indistinguishable
+from a bug on screen. Every setting in the config is one the page offers, so
+the bar in the video is a bar a viewer can actually build.

@@ -2,26 +2,30 @@
  * for phones. Both frame the REAL /ticker?bar=1 page in an iframe sized like an
  * OBS browser source; nothing about the bar is re-implemented here.
  *
- *   node scripts/promo_ticker/record_promo.mjs [--live] [--fonts <dir>] [--out <dir>]
- *                                       [--only desktop|mobile] [--fps 30]
+ *   node scripts/promo_ticker/record_promo.mjs [--sample] [--fonts <dir>]
+ *        [--out <dir>] [--only desktop|mobile] [--fps 30] [--dur 36]
  *
  * Every frame is produced by seeking the scene to an exact time and taking a
  * screenshot, so output is deterministic and drops no frames — unlike
  * real-time capture. The ticker's own marquee is seeked through the Web
  * Animations API by the scene's __seek().
  *
- * --live       hit the real Supabase feed and show real card art. Needs egress
- *              to supabase.co AND to the card-art CDN; without it the run uses
- *              the sample rows in sample_data.mjs and turns thumbnails off,
- *              because inventing card art for a promo would misrepresent it.
+ * --sample     answer the Supabase query from sample_data.mjs and turn card-art
+ *              thumbnails off. ONLY for a machine with no egress to
+ *              supabase.co / the card-art CDN; the prices are invented, so the
+ *              result is for checking layout, never for publishing.
  * --fonts DIR  serve Google Fonts from a local cache (see fetch_fonts.sh) for
  *              machines with no egress to fonts.googleapis.com.
+ *
+ * ⚠ LIVE IS THE DEFAULT. This used to be the other way round because the run
+ * that wrote it had no network; on any ordinary machine the sample path gives
+ * a video whose numbers are fiction, which is not the thing to publish.
  */
-import { chromium } from "playwright-core";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { chromium } from "playwright-core";
 import { loadCardPool, sampleRows } from "./sample_data.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -31,12 +35,12 @@ const ROOT = path.resolve(HERE, "..", "..");
 const argv = process.argv.slice(2);
 const flag = (n) => argv.includes("--" + n);
 const opt = (n, d) => { const i = argv.indexOf("--" + n); return i >= 0 ? argv[i + 1] : d; };
-const LIVE = flag("live");
+const LIVE = !flag("sample");
 const FONT_DIR = opt("fonts", "");
 const OUT_DIR = path.resolve(opt("out", path.join(ROOT, "promo")));
 const ONLY = opt("only", "");
 const FPS = parseInt(opt("fps", "30"), 10);
-const DURATION = parseFloat(opt("dur", "30"));
+const DURATION = parseFloat(opt("dur", "36"));
 /* A fresh random port per run: scripts/dev_server.py uses ThreadingTCPServer
  * without allow_reuse_address, so re-binding the same port right after a
  * previous run dies on the socket's TIME_WAIT. */
@@ -46,19 +50,27 @@ let PORT = parseInt(opt("port", "0"), 10) || 8800 + Math.floor(Math.random() * 9
  * poster frame / thumbnail out of a finished cut. */
 const STILLS = (opt("stills", "") || "").split(",").map((s) => parseFloat(s)).filter(Number.isFinite);
 let ORIGIN = `http://localhost:${PORT}`;
-/* The sandbox ships Chromium at a fixed path; anywhere else, let playwright
- * resolve its own download rather than pointing at a path that doesn't exist. */
-const CHROME = process.env.PROMO_CHROME || "/opt/pw-browsers/chromium";
-const FFMPEG = process.env.PROMO_FFMPEG || "ffmpeg";
 
 const SB_HOST = "umwqowkiatjjltologrd.supabase.co";
-/* The ticker config the videos advertise: two windows × two rarity groups,
- * risers, NM Market basis. Matches what packs.ink/ticker hands you by default
- * apart from the count, which is tuned so the loop reads well on video. */
+
+/* ── the ticker config the videos advertise ───────────────────────────────
+ * Three windows × two rarity groups, PLUS a graded section per window — so the
+ * reel the video shows off covers both halves of the product. NM Market basis
+ * rather than the page's default Low: over a 1D/1W window Low is a published
+ * aggregate that can sit frozen, and it throws multi-thousand-percent phantoms
+ * that read as a bug on screen. Every one of these is a setting the page
+ * offers, so the bar in the video is a bar a viewer can actually build. */
 const TICKER_PARAMS = new URLSearchParams({
-  bar: "1", w: "1d,1w", g: "chase,rareleg", n: "12", min: "5", speed: "62",
+  bar: "1", w: "1d,1w,1m", g: "chase,rareleg", gk: "movers", gr: "PSA", gg: "10",
+  m: "mkt", n: "10", min: "5", gmin: "100", speed: "60",
 });
 if (!LIVE) TICKER_PARAMS.set("img", "0");
+/* The same settings without bar=1 — i.e. the page a viewer would land on.
+ * ⚠ /ticker is TWO pages behind one path: with ?bar= or ?embed= it is the raw
+ * overlay, and bare it is the SPA's Analytics » Stream Ticker tab. The tab is
+ * what "go to packs.ink/ticker" actually shows, so that is what gets shot. */
+const PAGE_PARAMS = new URLSearchParams(TICKER_PARAMS);
+PAGE_PARAMS.delete("bar");
 
 const FORMATS = [
   { key: "desktop", w: 1920, h: 1080, file: "stream-ticker-desktop.mp4" },
@@ -68,28 +80,52 @@ const FORMATS = [
 const log = (...a) => console.log("[promo]", ...a);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+/* ── binaries ─────────────────────────────────────────────────────────────
+ * Resolved rather than assumed: this runs on a sandbox with Chromium at a
+ * fixed path, and on Windows where neither ffmpeg nor a playwright-managed
+ * Chromium is necessarily present. */
+const WIN = process.platform === "win32";
+const PY = process.env.PROMO_PYTHON || (WIN ? "python" : "python3");
+function firstExisting(list) {
+  for (const p of list) { try { if (p && fs.existsSync(p)) return p; } catch { /* ignore */ } }
+  return "";
+}
+const LOCAL = process.env.LOCALAPPDATA || "";
+const CHROME = process.env.PROMO_CHROME || firstExisting([
+  "/opt/pw-browsers/chromium",
+  "C:/Program Files/Google/Chrome/Application/chrome.exe",
+  "C:/Program Files (x86)/Google/Chrome/Application/chrome.exe",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+  "/usr/bin/google-chrome",
+]);
+/* ⚠ Playwright ships an ffmpeg, and it CANNOT be used here: it is a stripped
+ * build with libvpx/webm only — no libx264, no mp4 muxer. Anything found under
+ * ms-playwright is deliberately not in this list. */
+const FFMPEG = process.env.PROMO_FFMPEG || firstExisting([
+  LOCAL && path.join(LOCAL, "Migaku", "MigakuShared", "ffmpeg.exe"),
+  "C:/ffmpeg/bin/ffmpeg.exe",
+  "C:/Program Files/ffmpeg/bin/ffmpeg.exe",
+]) || "ffmpeg";
+
 /* ── the dev server (serves /ticker, styles.css, Logos/…) ── */
 function spawnServer(port) {
-  const proc = spawn("python3", [path.join(ROOT, "scripts", "dev_server.py"), String(port)], {
-    cwd: ROOT, stdio: ["ignore", "ignore", "pipe"],
+  /* stdio is dropped, not piped: dev_server logs every request, and a piped
+   * stderr nobody drains fills its buffer and BLOCKS the server mid-response —
+   * which shows up as ERR_EMPTY_RESPONSE in the browser, not as an error here. */
+  const proc = spawn(PY, [path.join(ROOT, "scripts", "dev_server.py"), String(port)], {
+    cwd: ROOT, stdio: "ignore",
   });
-  let err = "";
-  proc.stderr.on("data", (d) => { err += d.toString(); });
   proc.on("error", () => {});
-  return { proc, err: () => err };
+  return proc;
 }
 async function reachable(origin) {
-  try {
-    const r = await fetch(`${origin}/ticker`);
-    return r.ok;
-  } catch { return false; }
+  try { return (await fetch(`${origin}/ticker`)).ok; } catch { return false; }
 }
 /* Returns the live child process, having proved it actually answers. */
 async function startDevServer() {
-  let lastErr = "";
   for (let attempt = 0; attempt < 5; attempt++) {
     const port = attempt === 0 ? PORT : 8800 + Math.floor(Math.random() * 900);
-    const { proc, err } = spawnServer(port);
+    const proc = spawnServer(port);
     for (let i = 0; i < 40; i++) {
       if (proc.exitCode !== null) break;
       if (await reachable(`http://localhost:${port}`)) {
@@ -99,17 +135,14 @@ async function startDevServer() {
       }
       await sleep(200);
     }
-    lastErr = err();
     proc.kill("SIGKILL");
   }
-  throw new Error(`dev server never came up.\n${lastErr}`);
+  throw new Error(`dev server never came up (tried ${PY} scripts/dev_server.py)`);
 }
 
 /* ── sample-data route ─────────────────────────────────────────────────────
  * Answers the exact PostgREST query buildTickerPlan() emits, so the page's own
- * fetch/parse/render path runs untouched. Parsing the query (rather than
- * returning one canned list) keeps the rows consistent with the filters the
- * bar asked for — the reel's four sections really are four different sets. */
+ * fetch/parse/render path runs untouched. */
 const POOL = LIVE ? null : loadCardPool(ROOT);
 const seedOf = (s) => { let h = 2166136261; for (const c of s) { h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); } return h >>> 0; };
 
@@ -147,6 +180,27 @@ const CORS = {
   "access-control-allow-methods": "GET,OPTIONS",
 };
 
+/* Suppress the SPA's first-run chrome — the onboarding tour, the install
+ * nudge, the graded ToS gate — so the page shot is the page, not a modal.
+ * Same keys promo_capture.py's boot_script() sets, for the same reason. */
+const SPA_VIEWS = ["home", "screener", "history", "market", "cards", "collection",
+                   "decks", "faq", "gear", "calendar", "elo"];
+function bootScript() {
+  const keys = {
+    "packsink:tourSeen": "1",
+    "packsink:installDismissed": "1",
+    "packsink:installVisits": "99",
+    "packsink:avatarPromptShown": "1",
+    "packsink:gradedTos": "2026-06-23",
+    "packsink:feedback:noticeDismissed": "2099-01-01T00:00:00.000Z",
+    "packsink:themeMode": "dark",
+  };
+  for (const v of SPA_VIEWS) keys["packsink:sectionTourSeen:" + v] = "1";
+  return `try{const k=${JSON.stringify(keys)};` +
+    "for(const [a,b] of Object.entries(k))localStorage.setItem(a,b);" +
+    "sessionStorage.setItem('packsink:autoTourFired','1');}catch(e){}";
+}
+
 /* ── shared browser wiring ── */
 async function wireContext(ctx, sceneHtml, shots) {
   if (FONT_DIR) {
@@ -182,35 +236,73 @@ async function wireContext(ctx, sceneHtml, shots) {
   }
 }
 
-/* ── step 1: real screenshots of the real configurator ── */
-async function captureConfigurator(browser) {
-  const ctx = await browser.newContext({ viewport: { width: 1360, height: 1200 }, deviceScaleFactor: 2 });
+/* ── step 1: a real screenshot of the real page ───────────────────────────
+ * Shot at 900 CSS px wide on purpose. The configurator's own layout goes
+ * single-column under 900px, which makes every settings card ~824px wide and
+ * genuinely readable when it is panned inside a frame — at desktop width the
+ * same cards are a 340px column and the labels turn to mush on video. */
+async function capturePage(browser) {
+  const ctx = await browser.newContext({ viewport: { width: 900, height: 1000 }, deviceScaleFactor: 2 });
   await wireContext(ctx, null, null);
+  await ctx.addInitScript(bootScript());
   const page = await ctx.newPage();
-  await page.goto(`${ORIGIN}/ticker`, { waitUntil: "networkidle" });
-  await page.evaluate(() => document.fonts && document.fonts.ready);
+  await page.goto(`${ORIGIN}/ticker?${PAGE_PARAMS.toString()}`, { waitUntil: "networkidle", timeout: 120000 });
+  await page.evaluate(() => document.fonts && document.fonts.ready).catch(() => {});
+  await page.waitForTimeout(6000);
   // The configurator builds its output URL from location.origin, which here is
   // a throwaway localhost port. Rewrite it to the address the video is telling
   // people to visit — it is the one string a viewer might actually type.
   await page.evaluate(() => {
-    const f = document.getElementById("urlOut");
-    if (f) f.value = f.value.replace(/^https?:\/\/[^/]+\/ticker/, "https://packs.ink/ticker");
+    const frames = [document, ...[...document.querySelectorAll("iframe")]
+      .map((f) => { try { return f.contentDocument; } catch (e) { return null; } })];
+    for (const d of frames) {
+      const f = d && d.getElementById && d.getElementById("urlOut");
+      if (f) f.value = f.value.replace(/^https?:\/\/[^/]+\/ticker/, "https://packs.ink/ticker");
+    }
+  }).catch(() => {});
+  /* Pan bounds, measured off the real cards rather than guessed: start just
+   * above the settings and end at the bottom of the OBS instructions, so the
+   * sweep covers every option the page offers plus how to install it. */
+  const meta = await page.evaluate(() => {
+    const idoc = (() => {
+      for (const f of document.querySelectorAll("iframe")) {
+        try { if (f.contentDocument && f.contentDocument.querySelector(".tk-card")) return f.contentDocument; }
+        catch (e) { /* cross-origin, ignore */ }
+      }
+      return null;
+    })();
+    const frameTop = (() => {
+      for (const f of document.querySelectorAll("iframe")) {
+        try { if (f.contentDocument && f.contentDocument.querySelector(".tk-card")) return f.getBoundingClientRect().top + window.scrollY; }
+        catch (e) { /* ignore */ }
+      }
+      return 0;
+    })();
+    const d = idoc || document;
+    const cards = [...d.querySelectorAll(".tk-card")];
+    const byTitle = (re) => cards.find((c) => { const h = c.querySelector("h2"); return h && re.test(h.textContent); });
+    const first = byTitle(/what's in the reel/i) || cards[0];
+    const last = byTitle(/add it to obs/i) || byTitle(/your overlay url/i) || cards[cards.length - 1];
+    const off = idoc ? frameTop : 0;
+    const top = first ? first.getBoundingClientRect().top + (idoc ? idoc.defaultView.scrollY : window.scrollY) + off : 0;
+    const bot = last ? last.getBoundingClientRect().bottom + (idoc ? idoc.defaultView.scrollY : window.scrollY) + off : top;
+    return {
+      w: document.documentElement.clientWidth,
+      h: document.documentElement.scrollHeight,
+      top: Math.round(top), bot: Math.round(bot), frameTop: Math.round(frameTop),
+      inIframe: !!idoc,
+      cards: cards.map((c) => (c.querySelector("h2") || {}).textContent || ""),
+    };
   });
-  await page.waitForTimeout(900);
-  const shots = {};
-  const grab = async (hasText, name) => {
-    const card = page.locator(".tk-card", { hasText }).first();
-    if (await card.count()) shots[name] = await card.screenshot({ type: "png" });
-  };
-  await grab("What's in the reel", "reel");
-  await grab("Your overlay URL", "url");
+  const buf = await page.screenshot({ type: "png", fullPage: true });
   await ctx.close();
-  log(`configurator shots: ${Object.keys(shots).join(", ") || "none"}`);
-  return shots;
+  log(`page shot: ${meta.w}x${meta.h} css · iframe=${meta.inIframe} frameTop=${meta.frameTop} pan ${meta.top}->${meta.bot}`);
+  log(`  cards: ${meta.cards.map((s) => s.trim()).join(" | ")}`);
+  return { buf, meta };
 }
 
 /* ── step 2: render one format ── */
-async function record(browser, fmt, sceneHtml, shots) {
+async function record(browser, fmt, sceneHtml, shots, pageMeta) {
   const total = Math.round(DURATION * FPS);
   const outFile = path.join(OUT_DIR, fmt.file);
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -225,27 +317,54 @@ async function record(browser, fmt, sceneHtml, shots) {
   const sceneUrl = `${ORIGIN}/__promo_scene?fmt=${fmt.key}&dur=${DURATION}` +
     `&ticker=${encodeURIComponent("/ticker?" + TICKER_PARAMS.toString())}`;
   await page.goto(sceneUrl, { waitUntil: "load" });
-  await page.evaluate(([r, u]) => window.__setShots(r, u),
-    [shots.reel ? "/__promo_reel.png" : "", shots.url ? "/__promo_url.png" : ""]);
 
   // Wait for the bar to actually hold rows AND to have measured itself, or the
   // first seconds record an empty rail that snaps into place mid-shot.
   await page.waitForFunction(() => window.__tickerReady && window.__tickerReady(), null,
-    { timeout: 30000 });
+    { timeout: 60000 });
   await page.waitForFunction(() => {
     const f = document.querySelector(".tkslot iframe");
     const rail = f && f.contentDocument && f.contentDocument.getElementById("rail");
     return !!(rail && rail.style.getPropertyValue("--tk-dur"));
-  }, null, { timeout: 30000 });
-  await page.evaluate(() => document.fonts && document.fonts.ready);
-  await page.evaluate(() => window.__layout && window.__layout());
-  await page.waitForTimeout(700);
+  }, null, { timeout: 60000 });
+  await page.evaluate(() => document.fonts && document.fonts.ready).catch(() => {});
+  await page.waitForTimeout(900);
   // Fonts landing re-runs layoutStrip; re-assert the measurement afterwards.
   await page.evaluate(() => {
     const f = document.querySelector(".tkslot iframe");
     if (f && f.contentWindow && f.contentWindow.layoutStrip) f.contentWindow.layoutStrip();
   }).catch(() => {});
-  await page.waitForTimeout(400);
+  await page.waitForTimeout(600);
+
+  // The page shot, and the pan bounds measured off it.
+  if (shots.page && pageMeta) {
+    /* `to` is the page y the sweep should FINISH on, and it is deliberately
+     * left to the scene: only the scene knows the frame's height and scale, so
+     * only it can land the last card on the bottom edge instead of sailing
+     * past it into the footer. */
+    await page.evaluate(([url, m]) => window.__setPage(url, m), ["/__promo_page.png", {
+      w: pageMeta.w, h: pageMeta.h,
+      from: Math.max(0, pageMeta.top - 18),
+      bot: pageMeta.bot,
+    }]);
+    // The shot is a big PNG; let it decode before the first frame is taken.
+    await page.waitForFunction(() => {
+      const i = document.getElementById("shotPage");
+      return !!(i && i.complete && i.naturalWidth > 0);
+    }, null, { timeout: 30000 }).catch(() => log("  ! page shot never decoded"));
+  }
+
+  /* Cue the marquee: measured inside the iframe, handed to the scene. Without
+   * this the 36-second video would never leave the first of nine sections. */
+  const cues = await page.evaluate(() => {
+    const c = window.__measureCues && window.__measureCues();
+    if (c) window.__setCues(c);
+    return c && { dur: c.dur, seqW: Math.round(c.seqW), n: c.secs.length,
+                  secs: c.secs.map((s) => s.title + (s.sub ? " · " + s.sub : "")) };
+  });
+  if (!cues) log("  ! no cue table — the bar will run from zero");
+  else log(`  cues: ${cues.n} sections, loop ${Math.round(cues.dur)}s / ${cues.seqW}px`);
+  if (cues && fmt.key === FORMATS[0].key) cues.secs.forEach((s, i) => log(`    ${i}. ${s}`));
 
   if (STILLS.length) {
     for (const t of STILLS) {
@@ -269,11 +388,11 @@ async function record(browser, fmt, sceneHtml, shots) {
   ff.stderr.on("data", (d) => { ffErr += d.toString(); });
   const done = new Promise((res, rej) => {
     ff.on("close", (code) => code === 0 ? res() : rej(new Error(`ffmpeg exit ${code}\n${ffErr}`)));
-    ff.on("error", rej);
+    ff.on("error", (e) => rej(new Error(`ffmpeg (${FFMPEG}) failed to start: ${e.message}`)));
   });
   ff.stdin.on("error", () => {});
 
-  log(`${fmt.key}: ${fmt.w}×${fmt.h}, ${total} frames @ ${FPS}fps`);
+  log(`${fmt.key}: ${fmt.w}x${fmt.h}, ${total} frames @ ${FPS}fps`);
   const t0 = Date.now();
   for (let i = 0; i < total; i++) {
     await page.evaluate((t) => window.__seek(t), i / FPS);
@@ -288,7 +407,7 @@ async function record(browser, fmt, sceneHtml, shots) {
   await done;
   await ctx.close();
   const mb = (fs.statSync(outFile).size / 1048576).toFixed(2);
-  log(`${fmt.key} → ${path.relative(ROOT, outFile)} (${mb} MB)`);
+  log(`${fmt.key} -> ${path.relative(ROOT, outFile)} (${mb} MB)`);
   return outFile;
 }
 
@@ -296,15 +415,17 @@ async function record(browser, fmt, sceneHtml, shots) {
 let browser;
 const server = await startDevServer();
 try {
-  log(`dev server up on ${ORIGIN}${LIVE ? " · LIVE data" : " · sample data (no egress)"}`);
+  log(`dev server up on ${ORIGIN}${LIVE ? " · LIVE data" : " · SAMPLE data (invented prices)"}`);
+  if (!LIVE) log("  ! --sample: prices are fiction and thumbnails are off. Do not publish.");
   const sceneHtml = fs.readFileSync(path.join(HERE, "promo_scene.html"), "utf8");
   browser = await chromium.launch({
-    executablePath: fs.existsSync(CHROME) ? CHROME : undefined,
+    executablePath: CHROME || undefined,
     args: ["--force-device-scale-factor=1", "--hide-scrollbars", "--font-render-hinting=none",
            "--disable-lcd-text", "--autoplay-policy=no-user-gesture-required"],
   });
-  const shots = await captureConfigurator(browser);
-  for (const fmt of FORMATS) await record(browser, fmt, sceneHtml, shots);
+  const page = await capturePage(browser);
+  const shots = { page: page.buf };
+  for (const fmt of FORMATS) await record(browser, fmt, sceneHtml, shots, page.meta);
   log("done");
 } finally {
   if (browser) await browser.close().catch(() => {});
