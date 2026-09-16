@@ -159,10 +159,14 @@ html[data-embed="1"] .tk-app{max-width:none;}
    brand without it. Still optional (brand=0); the section-header credit is the
    one that always ships. */
 .tk-cap{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
-  padding:0 calc(var(--tkh)*0.20);position:relative;z-index:2;
+  padding:0 calc(var(--tkh)*0.15);position:relative;z-index:2;
   background:var(--tk-bg,#171226);border-right:1px solid rgba(255,255,255,0.12);}
 .tk-bar[data-transparent="1"] .tk-cap{background:rgba(13,10,26,0.82);}
-.tk-cap img{height:calc(var(--tkh)*0.62);width:auto;display:block;}
+/* 0.86 of the bar, not 0.62 — the mark has "packs.ink" written across its
+   middle and at 0.62 that word was a smudge on an 80px OBS source. The bar's
+   own height is untouched: this eats the cap's vertical slack, and the trimmed
+   side padding keeps the cap from taking much more width for it. */
+.tk-cap img{height:calc(var(--tkh)*0.86);width:auto;display:block;}
 .tk-scroll{flex:1;min-width:0;overflow:hidden;display:flex;align-items:stretch;}
 .tk-rail{display:flex;align-items:center;height:100%;width:max-content;
   animation:tkscroll var(--tk-dur,80s) linear infinite;}
@@ -513,14 +517,16 @@ const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"low",
 /* A window's length in days, read off the matview column suffix so the two
    cannot drift (TK_WINDOWS' col IS "_30d"). Graded top sales has no percent
    column to rank by, so it filters on sold_date instead. */
-/* One embed for both graded tables — the card's own name/version/art, and its
-   SET, which is not decoration: three different cards are called
-   "Cinderella - Stouthearted" and their PSA 10 prices are $3,972, $215 and
-   $58. Name plus version cannot tell them apart; the set can. */
-const TK_GRADED_EMBED = "cards(name,version,image_small,sets(name))";
+/* One embed for both graded tables. It carries rarity + collector number +
+   the set CODE rather than the set name: the set name was noise on every
+   ordinary row, and the thing it was really there to fix is promos — three
+   different cards are called "Cinderella - Stouthearted" and their PSA 10
+   prices are $3,972, $215 and $58. A promo's own "C1 #42" separates them in a
+   fraction of the width. */
+const TK_GRADED_EMBED = "cards(name,version,image_small,rarity,collector_number,sets(code))";
 // The same embed as an INNER join, so a rarity filter on it narrows the parent
 // rows instead of just blanking the embedded object.
-const TK_GRADED_EMBED_INNER = "cards!inner(name,version,image_small,sets(name))";
+const TK_GRADED_EMBED_INNER = "cards!inner(name,version,image_small,rarity,collector_number,sets(code))";
 const TK_GRADED_ROLLUP_SELECT =
   "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count," + TK_GRADED_EMBED;
 const TK_GRADED_SALE_SELECT =
@@ -770,6 +776,18 @@ function tickerSoldAgo(soldDate, now){
   return "sold " + Math.round(days / 30) + "mo ago";
 }
 
+/* A promo's own identifier — "C1 #42", "P1 #3". Shown ONLY for promos: an
+   ordinary card's name and version already identify it, and the set name was
+   noise on every row that didn't need it.
+   ⚠ The Challenge Promo set's code is stored lowercase "cp"; the whole site
+   calls that set C1 (SET_DISPLAY_NAMES maps it to "Lorcana Challenge Promo
+   (C1)"), and "cp #42" would name a set nobody would recognise. */
+const TK_SET_CODE_LABEL = {cp: "C1"};
+function tickerPromoRef(rarity, code, cn){
+  if(rarity !== "Promo" || !code || cn == null || cn === "") return "";
+  return (TK_SET_CODE_LABEL[code] || String(code).toUpperCase()) + " #" + cn;
+}
+
 /* The graded item's pill: grader + grade, plus the PRINTING when the card has
    one worth naming. ⚠ The printing is the difference between two markets on a
    Challenge card (8.7x on Cinderella - Stouthearted PSA 10), so it is never
@@ -865,7 +883,7 @@ function tickerMapRow(row, r){
   const base = {
     graded: true,
     name: c.name, version: c.version,
-    set: (c.sets && c.sets.name) || "",
+    promoRef: tickerPromoRef(c.rarity, c.sets && c.sets.code, c.collector_number),
     img: lorcastToProxy(c.image_small),
     slab: tickerSlabLine(row.grader, row.grade, row.printing),
   };
@@ -944,11 +962,10 @@ function itemEl(r){
   nm.className = "tk-name";
   nm.textContent = r.name || "";
   stack.appendChild(nm);
-  // A graded row puts its SET on the dim second line. Width is cheap in a
-  // marquee and height is not, and the set is what separates three different
-  // cards called "Cinderella - Stouthearted" whose PSA 10 prices are $3,972,
-  // $215 and $58.
-  const subLine = r.graded ? [r.version, r.set].filter(Boolean).join(" · ") : r.version;
+  // A graded PROMO adds its own reference to the dim second line ("C1 #42").
+  // Nothing else does: every other card is identified by its name and version
+  // already, and the set name that used to sit here was noise on those rows.
+  const subLine = r.graded ? [r.version, r.promoRef].filter(Boolean).join(" · ") : r.version;
   if(subLine){
     const v = document.createElement("span");
     v.className = "tk-ver";

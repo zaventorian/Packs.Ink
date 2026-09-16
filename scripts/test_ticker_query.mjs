@@ -18,10 +18,10 @@ if (start < 0 || end < 0) {
 const src = html.slice(start, end);
 const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine,
         TK_BRAND_MAX_GAP, tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo,
-        TK_GRADED_MIN_SALES, TK_GRADED_GROUPS } = new Function(
+        TK_GRADED_MIN_SALES, TK_GRADED_GROUPS, tickerPromoRef } = new Function(
   src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP," +
         " tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo, TK_GRADED_MIN_SALES," +
-        " TK_GRADED_GROUPS};"
+        " TK_GRADED_GROUPS, tickerPromoRef};"
 )();
 
 let failures = 0;
@@ -265,7 +265,11 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("movers: the unclassified printing is excluded", mv.printing, "neq.Unknown");
   // A percent built on two sales is noise wearing a percent sign.
   check("movers: sale-count floor is applied", mv.sale_count, "gte." + TK_GRADED_MIN_SALES);
-  check("movers: embeds the card AND its set", /cards\(name,version,image_small,sets\(name\)\)/.test(mv.select), true);
+  // The embed carries what IDENTIFIES a promo, not the set name — see the
+  // promo-reference block below for why the set name left.
+  check("movers: embeds rarity + collector number + set code",
+    /cards\(name,version,image_small,rarity,collector_number,sets\(code\)\)/.test(mv.select), true);
+  check("movers: no longer asks for the set name", /sets\(name\)/.test(mv.select), false);
 
   const sl = qs(plan[2].requests[0]);
   check("sales: ranks by price, not a percent", sl.order, "sale_price.desc");
@@ -411,6 +415,26 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("label stays short when nothing is narrowed", lbl("?gk=sales"), "PSA · 10");
   check("label names a narrowed type", lbl("?gk=sales&gcat=chase"), "PSA · 10 · Chase");
   check("label joins two types", lbl("?gk=sales&gcat=normal,promo"), "PSA · 10 · Normal/Promos");
+}
+
+// A graded promo names itself; everything else does not (Zaven, 2026-09-15).
+// The set name used to sit on every graded row and was noise on all of them
+// except promos — and for those the useful thing is the card's own reference,
+// which is a fraction of the width. Three different cards are called
+// "Cinderella - Stouthearted" (PSA 10: $3,972 / $215 / $58) and the promo ref
+// is what tells them apart.
+{
+  check("a promo names itself", tickerPromoRef("Promo", "P1", 3), "P1 #3");
+  // ⚠ The Challenge Promo set's code is stored lowercase "cp". The whole site
+  // calls that set C1, and "cp #42" names a set nobody would recognise.
+  check("Challenge Promo reads C1, not cp", tickerPromoRef("Promo", "cp", 42), "C1 #42");
+  check("Challenge Year 3 keeps its own code", tickerPromoRef("Promo", "C2", 2), "C2 #2");
+  // Everything else stays quiet — its name and version already identify it.
+  check("an Enchanted says nothing", tickerPromoRef("Enchanted", "10", 232), "");
+  check("a Rare says nothing", tickerPromoRef("Rare", "6", 12), "");
+  check("a promo with no number says nothing", tickerPromoRef("Promo", "P1", null), "");
+  check("a promo with no set code says nothing", tickerPromoRef("Promo", null, 3), "");
+  check("collector number 0 is still a number", tickerPromoRef("Promo", "P1", 0), "P1 #0");
 }
 
 if (failures) {
