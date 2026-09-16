@@ -213,7 +213,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=415">
+<link rel="stylesheet" href="styles.css?v=416">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -28783,10 +28783,9 @@ function EloUpcomingSCs({canViewStore, canScout, onStoreClick, onPlayerClick, on
     <div class="elo-up-controls">
       <form class="sc-search-row elo-up-zip" onSubmit=${e=>{ e.preventDefault(); runGeo(zip); }}>
         <input class="sc-zip-input" type="text" maxLength=${40} placeholder="Postal code or town"
-          value=${zip} aria-label="Postal code or town" onInput=${e=>setZip(e.target.value.slice(0,40))}/>
+          title=${SC_ZIP_TITLE} value=${zip} aria-label="Postal code or town" onInput=${e=>setZip(e.target.value.slice(0,40))}/>
         <button class="sc-search-btn" type="submit">Go</button>
       </form>
-      <div class="sc-zip-note">A postal code goes to zippopotam.us to become a map location; a town name is matched against our own event list. Neither is stored with your account.</div>
       ${origin && html`<div class="elo-up-distopts">
         <div class="seg-toggle elo-up-seg">
           <button class=${sortByDist?"":"active"} onClick=${()=>setSortByDist(false)}>By date</button>
@@ -40701,6 +40700,11 @@ const haversineMi = (la1, lo1, la2, lo2) => {
   return 2*R*Math.asin(Math.min(1, Math.sqrt(a)));
 };
 const SC_RADII = [10, 50, 100];
+// Rides the postal-code input's tooltip rather than a paragraph under it. The
+// binding disclosure is privacy.html, which names api.zippopotam.us for this
+// box; three lines of type above a one-line input was the worst ink-to-answer
+// ratio in the panel, on the surface with the least room for it.
+const SC_ZIP_TITLE = "Postal codes go to zippopotam.us to become a map location; a town name is matched against our own event list. Neither is stored with your account.";
 const scLocalDay = (iso, tz) => { try { return new Date(iso).toLocaleDateString("en-CA", {timeZone: tz||undefined}); } catch { return (iso||"").slice(0,10); } }; // YYYY-MM-DD in the event's local tz, sortable + matches the displayed day
 const fmtSCDate = (iso, tz) => { try { return new Date(iso).toLocaleDateString("en-US", {timeZone: tz||undefined, weekday:"short", month:"short", day:"numeric"}); } catch { return (iso||"").slice(0,10); } };
 const fmtSCTime = (iso, tz) => { try { return new Date(iso).toLocaleTimeString("en-US", {timeZone: tz||undefined, hour:"numeric", minute:"2-digit", timeZoneName:"short"}); } catch { return ""; } };
@@ -41184,6 +41188,12 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // or a town name matched more than one real place.
   const [altCountries, setAltCountries] = useState([]);
   const [altPlaces, setAltPlaces] = useState([]);
+  // ⚠ Collapsed by default. A US 5-digit code is format-compatible with seven
+  // other countries, so a correct answer still drew four wrapped rows of chips
+  // under it — and the answer is almost always correct. The QUESTION stays
+  // visible, because that is what makes dropping the country picker safe; only
+  // the list of answers to it is one tap away.
+  const [altOpen, setAltOpen] = useState(false);
   // "Has anything been searched yet" — set by runSearch itself, so a manual
   // first search arms the mode-switch effect exactly as the mount auto-run does.
   const didSearch = useRef(false);
@@ -41246,6 +41256,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       setCountry(o.country || "");
       setAltCountries(o.altCountries || []);
       setAltPlaces(o.altPlaces || []);
+      setAltOpen(false);
       setResults(rows);
       try { localStorage.setItem("packsink:scZip", z); localStorage.setItem("packsink:scRadius", String(r)); } catch {}
     } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); setAltCountries([]); setAltPlaces([]); } }
@@ -41407,17 +41418,18 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
           aria-pressed=${mode==="prerelease"} onClick=${()=>pickMode("prerelease")}>Prereleases</button>
       </div>
       <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
-        <input class="sc-zip-input" type="text" maxLength=${40}
+        <input class="sc-zip-input" type="text" maxLength=${40} title=${SC_ZIP_TITLE}
           placeholder="Postal code or town" value=${zip} aria-label="Postal code or town"
           onInput=${e=>setZip(e.target.value.slice(0,40))}/>
         <button class="sc-search-btn" type="submit">Search</button>
       </form>
-      <div class="sc-zip-note">A postal code goes to zippopotam.us to become a map location; a town name is matched against our own event list. Neither is stored with your account.</div>
       ${origin && (altPlaces.length > 0 || altCountries.length > 0) && html`<div class="sc-alt-row">
-        <span class="sc-alt-lbl">Not ${origin.city}?</span>
-        ${altPlaces.map(p => html`<button key=${`${p.lat},${p.lng}`} type="button" class="sc-alt-btn"
+        <button type="button" class="sc-alt-toggle" aria-expanded=${altOpen}
+          title="Landed in the wrong place? Pick another match."
+          onClick=${()=>setAltOpen(o=>!o)}>Not ${origin.city}?<span class="sc-alt-caret">${altOpen?"▴":"▾"}</span></button>
+        ${altOpen && altPlaces.map(p => html`<button key=${`${p.lat},${p.lng}`} type="button" class="sc-alt-btn"
           onClick=${()=>useAltPlace(p)}>${p.city}${p.state?`, ${p.state}`:""}${p.country?` · ${p.country}`:""}</button>`)}
-        ${altCountries.map(cc => html`<button key=${cc} type="button" class="sc-alt-btn"
+        ${altOpen && altCountries.map(cc => html`<button key=${cc} type="button" class="sc-alt-btn"
           title=${`Look "${zip}" up in ${scCountryName(cc)}`}
           onClick=${()=>useAltCountry(cc)}>${scCountryName(cc)}</button>`)}
       </div>`}
