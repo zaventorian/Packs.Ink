@@ -186,6 +186,39 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("...and it is not merely branding everything", sawUnbranded, true);
 }
 
+// /ticker serves TWO different pages off one path, and the split is spread
+// across three files that must agree. The dangerous direction is silent and
+// severe: if the raw-overlay branch ever stops matching ?bar=, every OBS
+// browser source already in the wild starts loading the whole SPA into a
+// 1920x80 box mid-stream. Nothing on our side errors — we would hear about it
+// from viewers.
+{
+  const worker = readFileSync(join(root, "worker", "index.js"), "utf8");
+  const dev = readFileSync(join(root, "scripts", "dev_server.py"), "utf8");
+  const index = readFileSync(join(root, "Index.html"), "utf8");
+
+  check("worker: /ticker falls through to the SPA only without bar/embed",
+    /tickerIsSpa\s*=\s*url\.pathname === "\/ticker" &&[\s\S]{0,160}?!url\.searchParams\.has\("bar"\)[\s\S]{0,80}?!url\.searchParams\.has\("embed"\)/.test(worker), true);
+  check("worker: the asset lookup is skipped for the SPA case",
+    /const asset = tickerIsSpa \? null : await env\.ASSETS\.fetch\(request\)/.test(worker), true);
+  check("dev server: same bar/embed gate",
+    /if url_path == "\/ticker":[\s\S]{0,200}?if "bar" in q or "embed" in q:[\s\S]{0,80}?ticker\.html/.test(dev), true);
+  check("Index.html: /ticker is the Stream Ticker tab's canonical path",
+    /const MARKET_SUB_PATHS = \{ ticker: "\/ticker" \}/.test(index), true);
+  check("Index.html: a tab with its own path does not also write ?a=",
+    /MARKET_SUB_PATHS\[marketSub\]\) \? null : marketSub/.test(index), true);
+  check("Index.html: the ticker tab uses the auto-height frame",
+    /<\$\{AutoHeightFrame\} src="\/ticker\?embed=1"/.test(index), true);
+  // The embed reporter must measure CONTENT, not the document: body carries
+  // min-height:100vh from styles.css, and inside an auto-height frame 100vh is
+  // the frame itself, so scrollHeight feeds a growth loop (measured: 6210px
+  // for a ~950px document).
+  check("ticker: embed mode zeroes the viewport-height floor",
+    /html\[data-embed="1"\] body\{[^}]*min-height:0/.test(html), true);
+  check("ticker: the reporter measures content, not scrollHeight",
+    /const contentHeight = \(\) =>/.test(html) && !/reportHeight[\s\S]{0,200}documentElement\.scrollHeight/.test(html), true);
+}
+
 if (failures) {
   console.error("\n" + failures + " failure(s)");
   process.exit(1);

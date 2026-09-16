@@ -74,7 +74,12 @@
    nav, the theme control and a MarketHeader naming the tool, so hide the
    duplicate chrome and tighten the page padding to fit the iframe. */
 html[data-embed="1"] .tk-top{display:none;}
-html[data-embed="1"] body{padding:8px 14px 18px;}
+/* ⚠ min-height:0 is load-bearing, not tidying. styles.css gives body a
+   min-height of 100vh, and inside an AUTO-HEIGHT iframe 100vh *is* the frame's
+   own height — so the height this page reports sets the frame, the frame sets
+   the viewport, and the viewport sets this page's height again. Measured
+   before the fix: the frame settled at 6210px for a ~1200px document. */
+html[data-embed="1"] body{padding:8px 14px 18px;min-height:0;}
 html[data-embed="1"] .tk-app{max-width:none;}
 .tk-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
 .tk-brand img{height:34px;width:auto;display:block;}
@@ -891,6 +896,48 @@ if(!BAR_MODE){
 
 applyBarLook();
 loadData();
+
+/* ───────── embed height reporter ─────────
+   Embedded in the Analytics » Stream Ticker tab, this page is a CONFIGURATOR,
+   i.e. a document — and a document in a fixed-height frame with its own
+   scrollbar reads as a window cut into the page rather than part of it. So it
+   reports its own height and the host grows the frame to fit
+   (AutoHeightFrame in Index.html).
+   ⚠ One report on load is not enough: the bar re-measures when the fonts land
+   and again on every data refresh, and the card art arrives after that — a
+   one-shot would freeze the frame at the pre-data height and clip the bottom
+   card. Hence the ResizeObserver on BOTH document elements. */
+if(document.documentElement.getAttribute("data-embed") === "1"){
+  let lastH = 0;
+  /* Measure the CONTENT, not the document. scrollHeight includes whatever the
+     viewport forces onto body, which is exactly the feedback path above — so
+     even with min-height fixed, measuring the children keeps a future
+     viewport-relative rule from re-opening it. */
+  const contentHeight = () => {
+    let bottom = 0;
+    for(const el of document.body.children){
+      const r = el.getBoundingClientRect();
+      if(r.width || r.height) bottom = Math.max(bottom, r.bottom + window.scrollY);
+    }
+    const pad = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
+    return bottom + pad;
+  };
+  const reportHeight = () => {
+    const h = Math.ceil(contentHeight());
+    // Ignore sub-pixel churn, or a ResizeObserver feedback loop is possible.
+    if(!h || Math.abs(h - lastH) < 2) return;
+    lastH = h;
+    try { parent.postMessage({type: "packsink:embed-height", height: h}, location.origin); }
+    catch { /* cross-origin host, or no parent — nothing to do */ }
+  };
+  try {
+    const ro = new ResizeObserver(reportHeight);
+    ro.observe(document.documentElement);
+    if(document.body) ro.observe(document.body);
+  } catch { /* no ResizeObserver — the load handler still fires once */ }
+  window.addEventListener("load", reportHeight);
+  reportHeight();
+}
 </script>
 </body>
 </html>

@@ -143,8 +143,21 @@ export default {
     // (?bar=1&...) and the Analytics tab's ?embed=1. Same 307 that moved the
     // Swiss sim off /lab/swiss.
 
-    const asset = await env.ASSETS.fetch(request);
-    if (asset.status !== 404) return asset;
+    // /ticker is TWO pages behind one path. With ?bar= or ?embed= it is the
+    // raw overlay page (ticker.html, which the assets layer's pretty-URL
+    // handling serves, query intact); without them it is the SPA's
+    // Analytics >> Stream Ticker tab, because /ticker is the URL we advertise
+    // to streamers and it has to read as part of the site rather than as a
+    // detached page.
+    // WARNING: every OBS browser source already in the wild points at
+    // /ticker?bar=1&..., so they keep getting byte-identical behaviour. Never
+    // make the SPA the answer for ?bar= — that breaks live overlays silently,
+    // and we would hear about it from viewers, not from an error.
+    const tickerIsSpa = url.pathname === "/ticker" &&
+      !url.searchParams.has("bar") && !url.searchParams.has("embed");
+
+    const asset = tickerIsSpa ? null : await env.ASSETS.fetch(request);
+    if (asset && asset.status !== 404) return asset;
 
     // A missing FILE gets a real 404. Serving the SPA shell for
     // /Logos/typo.png or /scanner/old.onnx returns 200 text/html under an
