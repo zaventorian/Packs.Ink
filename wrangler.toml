@@ -50,3 +50,17 @@ binding = "ASSETS"
 # rewrite itself. Cloudflare's built-in SPA mode looks for a lowercase
 # index.html and would not find this site's capital-I Index.html.
 not_found_handling = "none"
+
+# WARNING: by default a request that MATCHES a static asset is answered by the
+# asset layer and worker/index.js never runs at all. That is right for every
+# other path here, and it is exactly why /ticker needed this line: the pretty
+# URL /ticker matches dist/ticker.html, so the worker's own "with ?bar= or
+# ?embed= serve the overlay, otherwise fall through to the SPA" branch was
+# dead code in production while working perfectly on the dev server (which is
+# our own Python and always runs the logic). Shipped that way once - /ticker
+# served the bare configurator instead of the Analytics tab.
+#
+# Scoped to the one path rather than set to `true`: true routes EVERY asset
+# request through the worker, which is a cost and latency change for every
+# image, script and font on the site to fix one URL.
+run_worker_first = ["/ticker"]
