@@ -302,6 +302,30 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("sales window uses the LOCAL day at every hour", allLocal, true);
 }
 
+// A graded-only reel. Reported 2026-09-15: the rarity-group chips refused to
+// let you switch the last one off, so a graded-only bar was unreachable — the
+// "can't empty" rule was written when rarity groups were the only thing in the
+// reel, and it outlived that. The invariant is that the REEL must not be
+// empty, not that any one group survives.
+{
+  const groupsOf = (q) => buildTickerPlan(parseTickerCfg(q)).map(s => s.group);
+  check("raw can be switched off entirely when graded carries the reel",
+    groupsOf("?gk=sales&g=&w=1m"), ["graded:sales"]);
+  check("...and with both graded kinds",
+    groupsOf("?gk=movers,sales&g=&w=1m"), ["graded:movers", "graded:sales"]);
+  check("parsed cfg really holds no raw groups", parseTickerCfg("?gk=sales&g=").groups, []);
+  // ⚠ ABSENT vs EMPTY. Dropping this distinction is how "?g=mythic" would
+  // start emptying the reel instead of falling back.
+  check("an unrecognised group token still falls back to the defaults",
+    parseTickerCfg("?gk=sales&g=mythic").groups, ["chase", "rareleg"]);
+  check("no ?g= at all is untouched", parseTickerCfg("?gk=sales").groups, ["chase", "rareleg"]);
+  // The chips cannot reach this, but a hand-edited URL can, and it would put a
+  // blank bar on somebody's stream.
+  check("both sides empty falls back rather than shipping an empty bar",
+    parseTickerCfg("?g=&gk=").groups, ["chase", "rareleg"]);
+  check("graded-only reel is never empty", groupsOf("?g=&gk=").length > 0, true);
+}
+
 if (failures) {
   console.error("\n" + failures + " failure(s)");
   process.exit(1);

@@ -290,6 +290,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <div class="tk-field">
         <label>Rarity groups — one section each</label>
         <div class="tk-chips" id="chipsGrp"></div>
+        <div class="tk-hint" id="rawOffNote" style="display:none;">Raw cards are off — this reel is graded only.</div>
       </div>
 
       <div class="tk-field">
@@ -393,8 +394,23 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:0;">
         Same data as the Packs.Ink Screener: TCGplayer prices for every Lorcana card, updated daily.
         The reel cycles through your selected time frames, and within each, your rarity groups —
-        every section ranked biggest % move first. "NM Market" is TCGplayer's Near-Mint market
-        price; "Low" is TCGplayer's published Low Price.
+        ranked biggest % move first. "Low" is TCGplayer's published Low Price; "NM Market" is their
+        Near-Mint market price, a smoothed average of recent sales.
+      </p>
+      <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:8px 0 0;">
+        Graded sections come from our own record of completed eBay sales, not TCGplayer — a slab is
+        a different asset from the card. <b>Graded movers</b> ranks by % move; <b>Top Sales</b> ranks
+        by the biggest individual sales in the window, because one sale is a price rather than a move.
+      </p>
+    </div>
+
+    <div class="tk-card">
+      <h2>Feedback?</h2>
+      <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:0;">
+        If you have any questions, ideas, or requests, please reach out —
+        <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style="color:var(--accent);">@HighScoreZAP</a>
+        or <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style="color:var(--accent);">@packs_ink</a>
+        on X. I'd be happy to help make this something that benefits your stream.
       </p>
     </div>
   </main>
@@ -505,9 +521,17 @@ function parseTickerCfg(search){
   const wins = csv("w");
   const wsel = TK_WINDOWS.map(w => w.key).filter(k => wins.includes(k));
   if(wsel.length) cfg.wins = wsel;
-  const groups = csv("g");
-  const gsel = TK_GROUPS.map(g => g.key).filter(k => groups.includes(k));
-  if(gsel.length) cfg.groups = gsel;
+  // ⚠ ABSENT and EMPTY are different here, and that is what makes a
+  // graded-only reel expressible. No ?g= at all means "use the defaults";
+  // ?g= with nothing after it means "no raw sections", which is what the UI
+  // writes once you switch every rarity group off. An UNRECOGNISED token still
+  // falls back to the defaults rather than silently emptying the reel.
+  const rawGroups = q.get("g");
+  if(rawGroups !== null){
+    const gsel = TK_GROUPS.map(g => g.key).filter(k => csv("g").includes(k));
+    if(gsel.length) cfg.groups = gsel;
+    else if(!rawGroups.trim()) cfg.groups = [];
+  }
   const m = (q.get("m") || "").toLowerCase();
   if(m === "low" || m === "mkt") cfg.metric = m;
   const dir = (q.get("dir") || "").toLowerCase();
@@ -537,6 +561,11 @@ function parseTickerCfg(search){
   if(TK_GRADES.includes(gg)) cfg.grade = gg;
   const gmin = parseFloat(q.get("gmin"));
   if(Number.isFinite(gmin)) cfg.gmin = Math.max(0, Math.min(100000, gmin));
+  // ⚠ The one state the reel must never be in. The chips cannot reach it (each
+  // side refuses to empty while the other already is), but a hand-edited
+  // "?g=&gk=" can — and it renders a blank bar on somebody's stream. Restoring
+  // the raw defaults is the same shape as the foil/non-foil guard above.
+  if(!cfg.groups.length && !cfg.gkinds.length) cfg.groups = TK_DEFAULTS.groups.slice();
   return cfg;
 }
 
@@ -1017,8 +1046,12 @@ function initConfigUI(){
       host.appendChild(b);
     });
   };
-  const toggleKey = (arr, key, canon) => {
-    if(arr.includes(key)) return arr.length > 1 ? arr.filter(k => k !== key) : arr;
+  // The real invariant is that the REEL must not be empty — it was written as
+  // "this group can't be the last one" back when rarity groups were the only
+  // thing in it. With graded sections available you can now switch every
+  // rarity group off, as long as graded is carrying the reel (and vice versa).
+  const toggleKey = (arr, key, canon, allowEmpty) => {
+    if(arr.includes(key)) return (arr.length > 1 || allowEmpty) ? arr.filter(k => k !== key) : arr;
     return canon.filter(k => arr.includes(k) || k === key);
   };
   const seg = (host, options, get, set) => {
@@ -1035,9 +1068,13 @@ function initConfigUI(){
     chipGroup($("chipsWin"), TK_WINDOWS.map(w => ({label: w.label, value: w.key})),
       v => cfg.wins.includes(v),
       v => cfg.wins = toggleKey(cfg.wins, v, TK_WINDOWS.map(w => w.key)));
-    chipGroup($("chipsGrp"), TK_GROUPS.map(g => ({label: g.label, value: g.key, title: g.detail})),
+    const gradedCarries = cfg.gkinds.length > 0;
+    chipGroup($("chipsGrp"), TK_GROUPS.map(g => ({label: g.label, value: g.key,
+        title: g.detail + (!gradedCarries && cfg.groups.length === 1 && cfg.groups[0] === g.key
+          ? " — the reel needs at least one section; turn on a graded section to switch all of these off" : "")})),
       v => cfg.groups.includes(v),
-      v => cfg.groups = toggleKey(cfg.groups, v, TK_GROUPS.map(g => g.key)));
+      v => cfg.groups = toggleKey(cfg.groups, v, TK_GROUPS.map(g => g.key), gradedCarries));
+    $("rawOffNote").style.display = cfg.groups.length ? "none" : "";
     chipGroup($("chipsFoil"), [{label:"Non-Foil",value:"nonfoil"},{label:"Cold Foil",value:"foil"}],
       v => cfg[v],
       v => { const other = v === "foil" ? "nonfoil" : "foil";
@@ -1046,12 +1083,10 @@ function initConfigUI(){
     seg($("segMetric"), [{label:"NM Market",value:"mkt"},{label:"Low",value:"low"}], () => cfg.metric, v => cfg.metric = v);
     chipGroup($("chipsGraded"), TK_GRADED_KINDS.map(k => ({label: k.label === "Graded Risers" ? "Graded movers" : k.label, value: k.key, title: k.detail})),
       v => cfg.gkinds.includes(v),
-      // ⚠ Unlike every other chip group here, this one CAN empty: an empty
-      // selection is how you turn graded off, and the raw sections are still
-      // there. The last-chip-can't-close rule exists to stop an EMPTY REEL.
-      v => cfg.gkinds = cfg.gkinds.includes(v)
-        ? cfg.gkinds.filter(k => k !== v)
-        : TK_GRADED_KINDS.map(k => k.key).filter(k => cfg.gkinds.includes(k) || k === v));
+      // Emptying this is how you turn graded off — allowed exactly while the
+      // raw sections are still carrying the reel. With every rarity group off,
+      // the last graded chip is what the bar is made of and holds.
+      v => cfg.gkinds = toggleKey(cfg.gkinds, v, TK_GRADED_KINDS.map(k => k.key), cfg.groups.length > 0));
     const gradedOn = cfg.gkinds.length > 0;
     $("gradedOpts").style.display = gradedOn ? "" : "none";
     seg($("segGrader"), TK_GRADERS.map(g => ({label: g, value: g})), () => cfg.grader, v => cfg.grader = v);
