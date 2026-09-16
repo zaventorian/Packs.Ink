@@ -35,10 +35,9 @@ Needs `playwright-core` (a devDependency — `npm install`), a Chromium and an
 ## The script
 
 Five beats, identical in both formats so the two cuts say the same thing at the
-same moment. `BEATS` in `promo_scene.html` holds the windows in seconds;
-`FEATURES` / `GRADED` / `CUSTOM` / `CTASTEPS` hold the copy. Changing a beat's
-timing needs nothing else touched — `__seek` derives every fade and stagger
-from those numbers.
+same moment. `FEATURES` / `GRADED` / `CUSTOM` / `CTASTEPS` in
+`promo_scene.html` hold the copy; `__seek` derives every fade and stagger from
+`BEATS`, so re-timing needs nothing else touched.
 
 | beat | what it says |
 |---|---|
@@ -47,6 +46,36 @@ from those numbers.
 | graded | graded slabs: graders, grades, movers vs top sales |
 | custom | the real page, panned through every setting it offers |
 | cta | 1-2-3 to OBS, and `packs.ink/ticker` |
+
+The three middle beats each show the **real configurator beside the copy**,
+parked on the card that beat is describing — reel bullets next to "What's in
+the reel", graded bullets next to "Graded slabs", and so on. The recorder
+measures those card rectangles; the scene decides whether each one fits the
+frame whole (centre it and hold) or has to be swept.
+
+## ⚠ The cut is measured in BARS, not seconds
+
+The backing track is **139.675 BPM**, measured off the file (an FFT
+autocorrelation of its onset envelope), so a bar is 1.7184s. The video is 21
+bars — one of lead-in, then four per block — which is why it is 36.09s and not
+a round 36. Every block therefore appears on a downbeat.
+
+`BPM` appears in **both** `promo_scene.html` and `record_promo.mjs` and the two
+must agree: the scene derives the beat windows from it and the recorder derives
+the total duration. `AUDIO_START` (32.388s) is also a downbeat, chosen because
+it is where the chorus enters — energy jumps 0.34 → 0.77 there and the window
+still ends strong. **Move it to another downbeat or every cut drifts off the
+beat.**
+
+Audio lives at `promo/audio/ticker-promo.mp3` (gitignored, like everything else
+under `promo/`) and is muxed in the same ffmpeg pass that encodes the frames,
+so the video is never re-encoded to add sound. If the file is missing the run
+still works and just produces a silent cut.
+
+> ⚠ **The track is a commercial recording.** It is deliberately not committed,
+> and a Disney-owned song on a Disney-adjacent fan site's promo is the kind of
+> thing that gets muted or pulled by automated rights matching on YouTube,
+> Instagram and TikTok. Swap `--audio` for a licensed bed if that matters.
 
 ## The bar in the video is the shipping bar
 

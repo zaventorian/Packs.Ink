@@ -40,7 +40,24 @@ const FONT_DIR = opt("fonts", "");
 const OUT_DIR = path.resolve(opt("out", path.join(ROOT, "promo")));
 const ONLY = opt("only", "");
 const FPS = parseInt(opt("fps", "30"), 10);
-const DURATION = parseFloat(opt("dur", "36"));
+/* ── the music, and why the length is what it is ───────────────────────────
+ * The backing track is 139.675 BPM (measured off the file with an FFT
+ * autocorrelation of its onset envelope, not guessed), so a bar is 1.7184s.
+ * The cut is 21 bars: one bar of lead-in and four bars for each of the five
+ * blocks. promo_scene.html derives the same numbers from the same BPM, so the
+ * picture changes on downbeats.
+ *
+ * ⚠ AUDIO_START is a DOWNBEAT (32.388s), and it is also where the track's
+ * chorus enters — energy jumps from 0.34 to 0.77 there and the window ends
+ * strong at 0.84, which the neighbouring downbeats do not. Move it and it must
+ * land on another downbeat or every cut in the video drifts off the beat. */
+const BPM = 139.674831;
+const BARS = 21;
+const BAR = 4 * 60 / BPM;
+const DURATION = parseFloat(opt("dur", String(BARS * BAR)));
+const AUDIO = opt("audio", path.join(ROOT, "promo", "audio", "ticker-promo.mp3"));
+const AUDIO_START = parseFloat(opt("audio-start", "32.388"));
+const FADE_IN = 0.18, FADE_OUT = 1.5;
 /* A fresh random port per run: scripts/dev_server.py uses ThreadingTCPServer
  * without allow_reuse_address, so re-binding the same port right after a
  * previous run dies on the socket's TIME_WAIT. */
@@ -260,9 +277,10 @@ async function capturePage(browser) {
       if (f) f.value = f.value.replace(/^https?:\/\/[^/]+\/ticker/, "https://packs.ink/ticker");
     }
   }).catch(() => {});
-  /* Pan bounds, measured off the real cards rather than guessed: start just
-   * above the settings and end at the bottom of the OBS instructions, so the
-   * sweep covers every option the page offers plus how to install it. */
+  /* Per-beat pan bounds, measured off the real cards rather than guessed.
+   * Every bullet beat shows the page beside it, parked on the card that beat
+   * is actually talking about — so the copy and the demo agree instead of the
+   * settings turning up once at the end. */
   const meta = await page.evaluate(() => {
     const idoc = (() => {
       for (const f of document.querySelectorAll("iframe")) {
@@ -280,24 +298,31 @@ async function capturePage(browser) {
     })();
     const d = idoc || document;
     const cards = [...d.querySelectorAll(".tk-card")];
-    const byTitle = (re) => cards.find((c) => { const h = c.querySelector("h2"); return h && re.test(h.textContent); });
-    const first = byTitle(/what's in the reel/i) || cards[0];
-    const last = byTitle(/add it to obs/i) || byTitle(/your overlay url/i) || cards[cards.length - 1];
     const off = idoc ? frameTop : 0;
-    const top = first ? first.getBoundingClientRect().top + (idoc ? idoc.defaultView.scrollY : window.scrollY) + off : 0;
-    const bot = last ? last.getBoundingClientRect().bottom + (idoc ? idoc.defaultView.scrollY : window.scrollY) + off : top;
+    const sy = idoc ? idoc.defaultView.scrollY : window.scrollY;
+    const byTitle = (re) => cards.find((c) => { const h = c.querySelector("h2"); return h && re.test(h.textContent); });
+    const box = (c) => c && [Math.round(c.getBoundingClientRect().top + sy + off),
+                             Math.round(c.getBoundingClientRect().bottom + sy + off)];
+    const span = (a, b) => { const x = box(a), y = box(b); return x && y ? [x[0], y[1]] : (x || y); };
     return {
       w: document.documentElement.clientWidth,
       h: document.documentElement.scrollHeight,
-      top: Math.round(top), bot: Math.round(bot), frameTop: Math.round(frameTop),
-      inIframe: !!idoc,
+      frameTop: Math.round(frameTop), inIframe: !!idoc,
+      /* One entry per bullet beat, keyed the way the scene names its beats. */
+      rects: {
+        reel: box(byTitle(/what's in the reel/i) || cards[0]),
+        graded: box(byTitle(/graded slabs/i) || cards[1]),
+        custom: span(byTitle(/look & motion|look &amp; motion|look/i) || cards[2],
+                     byTitle(/add it to obs/i) || byTitle(/your overlay url/i) || cards[cards.length - 1]),
+      },
       cards: cards.map((c) => (c.querySelector("h2") || {}).textContent || ""),
     };
   });
   const buf = await page.screenshot({ type: "png", fullPage: true });
   await ctx.close();
-  log(`page shot: ${meta.w}x${meta.h} css · iframe=${meta.inIframe} frameTop=${meta.frameTop} pan ${meta.top}->${meta.bot}`);
+  log(`page shot: ${meta.w}x${meta.h} css · iframe=${meta.inIframe} frameTop=${meta.frameTop}`);
   log(`  cards: ${meta.cards.map((s) => s.trim()).join(" | ")}`);
+  for (const [k, r] of Object.entries(meta.rects)) log(`  pan/${k}: ${r ? r.join(" -> ") : "MISSING"}`);
   return { buf, meta };
 }
 
@@ -338,14 +363,11 @@ async function record(browser, fmt, sceneHtml, shots, pageMeta) {
 
   // The page shot, and the pan bounds measured off it.
   if (shots.page && pageMeta) {
-    /* `to` is the page y the sweep should FINISH on, and it is deliberately
-     * left to the scene: only the scene knows the frame's height and scale, so
-     * only it can land the last card on the bottom edge instead of sailing
-     * past it into the footer. */
+    /* Raw card rects only. Turning them into a pan is deliberately left to the
+     * scene: only the scene knows the frame's height and scale, so only it can
+     * decide whether a card fits whole or has to be swept. */
     await page.evaluate(([url, m]) => window.__setPage(url, m), ["/__promo_page.png", {
-      w: pageMeta.w, h: pageMeta.h,
-      from: Math.max(0, pageMeta.top - 18),
-      bot: pageMeta.bot,
+      w: pageMeta.w, h: pageMeta.h, rects: pageMeta.rects,
     }]);
     // The shot is a big PNG; let it decode before the first frame is taken.
     await page.waitForFunction(() => {
@@ -377,13 +399,24 @@ async function record(browser, fmt, sceneHtml, shots, pageMeta) {
     return null;
   }
 
-  const ff = spawn(FFMPEG, [
-    "-y", "-loglevel", "error",
-    "-f", "image2pipe", "-framerate", String(FPS), "-i", "-",
-    "-c:v", "libx264", "-preset", "slow", "-crf", "20",
-    "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-r", String(FPS),
-    outFile,
-  ], { stdio: ["pipe", "ignore", "pipe"] });
+  /* Video and audio in ONE pass: the frames arrive on stdin while the track is
+   * a second input seeked to its downbeat, so the video is never re-encoded to
+   * add sound. -shortest ends the file with the picture. */
+  const hasAudio = fs.existsSync(AUDIO);
+  const args = ["-y", "-loglevel", "error",
+    "-f", "image2pipe", "-framerate", String(FPS), "-i", "-"];
+  if (hasAudio) args.push("-ss", String(AUDIO_START), "-i", AUDIO);
+  args.push("-map", "0:v");
+  if (hasAudio) {
+    args.push("-map", "1:a", "-c:a", "aac", "-b:a", "192k", "-ac", "2",
+      "-af", `afade=t=in:st=0:d=${FADE_IN},` +
+             `afade=t=out:st=${(DURATION - FADE_OUT).toFixed(3)}:d=${FADE_OUT}`,
+      "-shortest");
+  }
+  args.push("-c:v", "libx264", "-preset", "slow", "-crf", "20",
+    "-pix_fmt", "yuv420p", "-movflags", "+faststart", "-r", String(FPS), outFile);
+  if (!hasAudio) log(`  ! no audio at ${path.relative(ROOT, AUDIO)} — silent cut`);
+  const ff = spawn(FFMPEG, args, { stdio: ["pipe", "ignore", "pipe"] });
   let ffErr = "";
   ff.stderr.on("data", (d) => { ffErr += d.toString(); });
   const done = new Promise((res, rej) => {

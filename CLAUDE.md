@@ -5459,6 +5459,32 @@ ships** — `build_dist.mjs` is an include-list, so `promo/` and `scripts/` neve
 Worker, and `promo/` is gitignored besides (it holds the tour kit's live demo password) — so
 the two .mp4s are a REGENERATED artifact, never a committed one.
 
+- **⚠ The cut is measured in BARS of the backing track, not in seconds.** The music is
+  139.675 BPM — measured off the file by FFT-autocorrelating its onset envelope, not guessed —
+  so a bar is 1.7184s and the video is 21 bars (one of lead-in, four per block), which is why
+  it is 36.09s and not a round 36. **`BPM` appears in both `promo_scene.html` and
+  `record_promo.mjs` and the two must agree**: the scene derives the beat windows, the recorder
+  the duration. `AUDIO_START` (32.388s) is likewise a downbeat, picked because the chorus
+  enters there (energy 0.34 → 0.77) and the window still ends strong — move it to another
+  downbeat or every cut drifts off the beat. Audio is muxed in the SAME ffmpeg pass that
+  encodes the frames, so the video is never re-encoded to add sound, and a missing file just
+  yields a silent cut. **⚠ The track is a commercial Disney recording**: it lives in the
+  gitignored `promo/audio/`, is never committed, and is the kind of thing automated rights
+  matching mutes or pulls — swap `--audio` for a licensed bed before any paid push.
+- **⚠ All three bullet beats show the configurator beside the copy**, each parked on the card
+  that beat describes. The recorder measures those card rects; the SCENE decides whether a card
+  fits the frame whole (centre and hold) or must be swept, because only it knows the frame
+  height and scale. A card that already fits is deliberately NOT panned — motion for its own
+  sake reads as drift at that size.
+- **⚠ There is no "your camera" placeholder.** It sat top-left at 246px tall, exactly where the
+  copy column starts (the bullet eyebrow is at 236px), so it ran into the text. The LIVE pill is
+  top-RIGHT where nothing else goes and survives. On MOBILE the "your stream" watermark now
+  stays up for the whole cut: the stream window is its own 16:9 box there and would otherwise be
+  an empty black rectangle, which reads as a failed render rather than as "your content here".
+- **Bullet headings are Cinzel uppercase** — the same face and treatment the ticker gives its own
+  `.tk-sec-title`, so the copy beside the bar is set like the bar. Sub-lines stay sentence-case
+  Nunito; a second line of tracked capitals at that size is a wall, not a clarification.
+
 - **⚠ This is NOT `scripts/promo_*.py`, the site tour kit.** That one records segments of the
   real signed-in app (`promo_video.py`) and `promo/build/assemble.mjs` cuts them into
   `tour_main.mp4` / `tour_mobile.mp4`. **Its `SEGMENTS` list has never included the ticker**,

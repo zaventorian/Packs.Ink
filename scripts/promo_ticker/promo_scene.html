@@ -46,13 +46,8 @@ body{font-family:'Nunito Sans',system-ui,sans-serif;color:var(--text);
 .scanline{position:absolute;inset:0;opacity:0.10;
   background:repeating-linear-gradient(0deg, rgba(255,255,255,0.12) 0 1px, transparent 1px 3px);}
 
-/* stream furniture — a camera placeholder + LIVE pill, so the frame reads as
-   a stream layout without pretending to be one. */
-.cambox{position:absolute;border:2px dashed rgba(217,185,108,0.34);border-radius:14px;
-  display:flex;align-items:center;justify-content:center;
-  background:rgba(12,7,22,0.34);}
-.cambox span{font-size:13px;letter-spacing:0.22em;text-transform:uppercase;
-  color:rgba(217,185,108,0.55);font-weight:700;}
+/* stream furniture — a LIVE pill, so the frame reads as a stream layout
+   without pretending to be one. */
 .livepill{position:absolute;display:inline-flex;align-items:center;gap:8px;
   padding:7px 14px;border-radius:999px;background:rgba(10,6,18,0.62);
   border:1px solid rgba(255,255,255,0.14);font-size:12px;font-weight:800;
@@ -82,14 +77,31 @@ h1{font-family:'Cinzel',serif;font-weight:700;margin:0;line-height:1.04;letter-s
 h1 em{font-style:normal;color:var(--gold);}
 .sub{color:var(--dim);margin:20px 0 0;line-height:1.45;font-weight:400;}
 .rule{height:3px;width:104px;background:var(--gold);border-radius:3px;margin:0 0 26px;}
+/* Brand lock on the TITLE card — mark plus wordmark, above the headline. */
+.brandlock{display:flex;align-items:center;gap:16px;margin:0 0 26px;}
+.brandlock img{display:block;}
+.brandlock b{font-family:'Cinzel',serif;font-weight:700;letter-spacing:0.17em;
+  text-transform:uppercase;color:var(--gold);}
+.headurl{font-family:'Cinzel',serif;font-weight:700;color:var(--gold);
+  letter-spacing:0.01em;margin-top:30px;line-height:1;}
 
+/* ── bullets ───────────────────────────────────────────────────────────────
+   The heading of every bullet is Cinzel, uppercase — the same face and the
+   same treatment the ticker gives its OWN section titles (`.tk-sec-title`), so
+   the copy beside the bar is set like the bar. The sub-line deliberately stays
+   sentence-case Nunito: it is the readable half, and a second line of tracked
+   capitals at 23px is a wall rather than a clarification. */
 .flist{list-style:none;margin:0;padding:0;}
 .flist li{display:flex;align-items:flex-start;gap:16px;margin-bottom:18px;
   will-change:transform,opacity;}
-.flist .tick{flex:0 0 auto;color:var(--gold);font-weight:800;line-height:1;}
+.flist .tick{flex:0 0 auto;color:var(--gold);font-weight:800;line-height:1;
+  margin-top:0.18em;}
 .flist.slab .tick{color:var(--slab);}
-.flist .ftxt{font-weight:600;line-height:1.28;}
-.flist .fsub{display:block;color:var(--faint);font-weight:400;margin-top:4px;}
+.flist .ftxt{font-family:'Cinzel',serif;font-weight:700;line-height:1.16;
+  text-transform:uppercase;letter-spacing:0.014em;}
+.flist .fsub{display:block;font-family:'Nunito Sans',system-ui,sans-serif;
+  font-weight:400;text-transform:none;letter-spacing:0;color:var(--faint);
+  margin-top:7px;line-height:1.34;}
 
 /* ── the real configurator page, panned ──────────────────────────────────
    One tall screenshot of /ticker in a window-shaped frame. The pan is a pure
@@ -113,8 +125,7 @@ h1 em{font-style:normal;color:var(--gold);}
 .cta .mark img{display:block;}
 .cta .url{font-family:'Cinzel',serif;font-weight:700;color:var(--gold);
   line-height:1;letter-spacing:0.01em;}
-.cta .tag{color:var(--dim);margin-top:18px;font-weight:600;letter-spacing:0.05em;}
-.cta .chips{display:flex;justify-content:center;gap:12px;margin-top:24px;flex-wrap:wrap;}
+.cta .chips{display:flex;justify-content:center;gap:12px;margin-top:34px;flex-wrap:wrap;}
 .cta .chips span{border:1px solid rgba(217,185,108,0.38);border-radius:999px;
   color:var(--gold);font-weight:700;letter-spacing:0.14em;text-transform:uppercase;}
 /* Compact 1-2-3 strip above the mark, so the closing card also answers "how". */
@@ -176,15 +187,25 @@ function env(t, at, out, rise, fall){
 }
 
 /* ─────────────────── the script ───────────────────
-   One entry per beat. Times are seconds. The ticker never leaves.
+   ⚠ Beats are measured in BARS of the backing track, not in round seconds.
+   The music is 139.675 BPM (measured off the file, not guessed), so a bar is
+   1.7184s; every block therefore appears exactly on a downbeat and each one
+   runs exactly four bars. Change BPM here and the whole cut re-times itself —
+   but the recorder's audio offset has to move with it, or the picture and the
+   music stop agreeing about where "bar 1" is.
+
    Both formats share ONE set of beats, so the two cuts say the same thing at
    the same moment — the brief was "same info in each". */
+const BPM = 139.674831;
+const BAR = 4 * 60 / BPM;
+const bars = (n) => n * BAR;
+/* One bar of lead-in, then four bars per block. 21 bars ≈ 36.09s. */
 const BEATS = {
-  head:   [1.8, 8.0],
-  reel:   [8.4, 15.2],
-  graded: [15.6, 22.2],
-  custom: [22.6, 29.6],
-  cta:    [30.0, DURATION],
+  head:   [bars(1),  bars(5)],
+  reel:   [bars(5),  bars(9)],
+  graded: [bars(9),  bars(13)],
+  custom: [bars(13), bars(17)],
+  cta:    [bars(17), bars(21)],
 };
 
 const FEATURES = [
@@ -241,15 +262,17 @@ scene.appendChild(gridTex);
 scene.appendChild(el("div", "scanline"));
 scene.appendChild(el("div", "vig"));
 
-/* Stream furniture. */
-const cambox = el("div", "cambox", "<span>your camera</span>");
+/* Stream furniture.
+   ⚠ There is no "your camera" box. It sat at the top-left of the frame, which
+   is exactly where the copy column starts — at 246px tall it ran straight into
+   the bullet beats' eyebrow at 236px. The LIVE pill is top-RIGHT, where nothing
+   else goes, so it survives and still sells "this is a stream". */
 const livepill = el("div", "livepill", "<i></i><span>Live</span>");
 const watermark = el("div", "watermark", "your stream");
 if(!MOBILE){
-  cambox.style.cssText += ";left:96px;top:74px;width:300px;height:172px;";
   livepill.style.cssText += ";right:96px;top:74px;";
   watermark.style.cssText += ";top:" + px(H * 0.58) + ";font-size:30px;";
-  scene.appendChild(cambox); scene.appendChild(livepill); scene.appendChild(watermark);
+  scene.appendChild(livepill); scene.appendChild(watermark);
 }
 
 /* The overlay: the real ticker page, in a box the size of an OBS source. */
@@ -274,11 +297,9 @@ if(MOBILE){
   inner.appendChild(gridTex);
   inner.appendChild(el("div", "scanline"));
   inner.appendChild(el("div", "vig"));
-  cambox.style.cssText += ";left:28px;top:26px;width:190px;height:108px;";
-  cambox.querySelector("span").style.fontSize = "10px";
   livepill.style.cssText += ";right:28px;top:26px;";
   watermark.style.cssText += ";top:216px;font-size:26px;";
-  inner.appendChild(cambox); inner.appendChild(livepill); inner.appendChild(watermark);
+  inner.appendChild(livepill); inner.appendChild(watermark);
   tkslot.style.cssText += ";left:0;bottom:0;width:" + px(W) + ";height:" + px(TK_H) + ";";
   mwindow.appendChild(tkslot);
   stage.appendChild(mwindow);
@@ -299,25 +320,39 @@ if(MOBILE){
 stage.appendChild(pointer);
 
 /* ── copy blocks ── */
+/* ⚠ The title card carries the brand. It used to open on a headline alone —
+   no mark, no name, no address — so the first six seconds never said whose
+   product this is, and a viewer who scrolled past before the end card learned
+   nothing. Logo + wordmark lead, and the address sits under the headline. */
 function mkHead(){
   const b = el("div", "block");
-  b.appendChild(el("div", "rule"));
+  const lock = el("div", "brandlock",
+    '<img src="/Logos/logo%20transparent.png" alt=""><b>Packs.Ink</b>');
   const sub = "A free scrolling overlay for OBS &amp; Streamlabs.<br>One browser source — nothing to install.";
+  const addr = el("div", "headurl", "packs.ink/ticker");
+  b.appendChild(lock);
   if(MOBILE){
     b.style.cssText += ";left:56px;right:56px;top:900px;";
+    lock.querySelector("img").style.height = "60px";
+    lock.querySelector("b").style.fontSize = "30px";
     b.appendChild(el("h1", null, 'Live Lorcana<br>prices on<br><em>your stream.</em>'));
-    b.querySelector("h1").style.fontSize = "84px";
+    b.querySelector("h1").style.fontSize = "78px";
     const s = el("p", "sub", sub);
-    s.style.fontSize = "30px";
+    s.style.fontSize = "28px";
     b.appendChild(s);
+    addr.style.fontSize = "40px";
   } else {
-    b.style.cssText += ";left:110px;top:300px;width:1120px;";
+    b.style.cssText += ";left:110px;top:250px;width:1120px;";
+    lock.querySelector("img").style.height = "72px";
+    lock.querySelector("b").style.fontSize = "34px";
     b.appendChild(el("h1", null, 'Live Lorcana prices,<br><em>across your stream.</em>'));
     b.querySelector("h1").style.fontSize = "84px";
     const s = el("p", "sub", sub);
     s.style.fontSize = "30px";
     b.appendChild(s);
+    addr.style.fontSize = "46px";
   }
+  b.appendChild(addr);
   return b;
 }
 /* One builder for all three bullet beats: they differ only in copy, accent and
@@ -334,18 +369,21 @@ function mkList(items, eyebrow, slab, opts){
     ul.appendChild(li);
   });
   const eb = el("p", "eyebrow" + (slab ? " slab" : ""), eyebrow);
+  /* Cinzel sets WIDER than Nunito at the same size and uppercase widens it
+     again, so these are a size down from the old sentence-case bullets — and
+     the column is narrower now that the page frame sits beside it. */
   if(MOBILE){
     b.style.cssText += ";left:56px;right:56px;top:900px;";
     eb.style.fontSize = "17px";
-    ul.querySelectorAll(".tick").forEach((n) => n.style.fontSize = "19px");
-    ul.querySelectorAll(".ftxt").forEach((n) => n.style.fontSize = o.mSize || "33px");
-    ul.querySelectorAll(".fsub").forEach((n) => n.style.fontSize = "22px");
-    ul.querySelectorAll("li").forEach((n) => n.style.marginBottom = o.mGap || "24px");
+    ul.querySelectorAll(".tick").forEach((n) => n.style.fontSize = "17px");
+    ul.querySelectorAll(".ftxt").forEach((n) => n.style.fontSize = o.mSize || "29px");
+    ul.querySelectorAll(".fsub").forEach((n) => n.style.fontSize = "21px");
+    ul.querySelectorAll("li").forEach((n) => n.style.marginBottom = o.mGap || "18px");
   } else {
-    b.style.cssText += ";left:110px;top:" + (o.top || "250px") + ";width:" + (o.w || "980px") + ";";
-    ul.querySelectorAll(".tick").forEach((n) => n.style.fontSize = "24px");
-    ul.querySelectorAll(".ftxt").forEach((n) => n.style.fontSize = "36px");
-    ul.querySelectorAll(".fsub").forEach((n) => n.style.fontSize = "23px");
+    b.style.cssText += ";left:110px;top:" + (o.top || "250px") + ";width:" + (o.w || "930px") + ";";
+    ul.querySelectorAll(".tick").forEach((n) => n.style.fontSize = "21px");
+    ul.querySelectorAll(".ftxt").forEach((n) => n.style.fontSize = o.size || "32px");
+    ul.querySelectorAll(".fsub").forEach((n) => n.style.fontSize = "22px");
     ul.querySelectorAll("li").forEach((n) => n.style.marginBottom = "26px");
   }
   b.appendChild(eb); b.appendChild(ul);
@@ -363,7 +401,9 @@ function mkCta(){
   });
   const mark = el("div", "mark", '<img src="/Logos/logo%20transparent.png" alt="">');
   const url = el("div", "url", "packs.ink/ticker");
-  const tag = el("div", "tag", "Free · no account · updates itself every day");
+  /* ⚠ No "Free · no account · updates itself every day" line — removed on
+     request. The chips below carry where it runs; the claims that line made
+     are already in the copy beats. */
   const chips = el("div", "chips",
     "<span>OBS</span><span>Streamlabs</span><span>Any browser source</span>");
   if(MOBILE){
@@ -375,7 +415,6 @@ function mkCta(){
     st.querySelectorAll(".cs").forEach((n) => n.style.gap = "10px");
     mark.querySelector("img").style.height = "96px";
     url.style.fontSize = "66px";
-    tag.style.fontSize = "26px";
     chips.querySelectorAll("span").forEach((n) => { n.style.cssText += ";font-size:17px;padding:9px 18px;"; });
   } else {
     b.style.cssText += ";top:300px;";
@@ -384,16 +423,18 @@ function mkCta(){
     st.querySelectorAll(".sep").forEach((n) => n.style.fontSize = "22px");
     mark.querySelector("img").style.height = "104px";
     url.style.fontSize = "92px";
-    tag.style.fontSize = "30px";
     chips.querySelectorAll("span").forEach((n) => { n.style.cssText += ";font-size:18px;padding:10px 20px;"; });
   }
   b.appendChild(st); b.appendChild(mark); b.appendChild(url);
-  b.appendChild(tag); b.appendChild(chips);
+  b.appendChild(chips);
   return b;
 }
 /* Height of the fake browser chrome on the page frame. Declared once because
    the pan maths has to subtract exactly what the CSS reserves. */
 const PAGE_BAR_H = 34;
+/* Mobile frame height. The band is 872px and the tallest bullet beat is the
+   4-item reel, so this is what is left after it — measured, not chosen. */
+const MPAGE_H = 392;
 /* The real configurator page, in a browser-ish frame, panned during the beat.
    Injected by the recorder as one tall PNG. */
 function mkPage(){
@@ -409,20 +450,24 @@ function mkPage(){
   sc.appendChild(img);
   f.appendChild(sc);
   if(MOBILE){
-    f.style.cssText += ";left:56px;width:968px;top:1180px;height:470px;";
+    f.style.cssText += ";left:56px;width:968px;top:1180px;height:" + px(MPAGE_H) + ";";
   } else {
     f.style.cssText += ";left:1120px;top:170px;width:710px;height:742px;";
   }
   return f;
 }
 
+/* ⚠ Every bullet beat shares the narrow column, because every bullet beat now
+   has the page frame beside it. A wide column here would run under the frame. */
 const blocks = {
   head:   mkHead(),
-  reel:   mkList(FEATURES, "What's in the reel", false, {top:"236px", w:"1150px"}),
-  graded: mkList(GRADED,   "Graded slabs, too",  true,  {top:"300px", w:"1150px", mGap:"28px"}),
-  custom: mkList(CUSTOM,   "Make it yours",      false, {top:"330px", w:"940px", mSize:"30px", mGap:"20px"}),
+  reel:   mkList(FEATURES, "What's in the reel", false, {top:"232px", mGap:"16px"}),
+  graded: mkList(GRADED,   "Graded slabs, too",  true,  {top:"296px"}),
+  custom: mkList(CUSTOM,   "Make it yours",      false, {top:"296px"}),
   cta:    mkCta(),
 };
+/* The beats that show the configurator, and which card each one parks on. */
+const PAGE_BEATS = ["reel", "graded", "custom"];
 const pageFrame = mkPage();
 Object.keys(blocks).forEach((k) => stage.appendChild(blocks[k]));
 stage.appendChild(pageFrame);
@@ -563,17 +608,26 @@ window.__layout = function(){
     b.style.visibility = prev;
     b.style.top = px(Math.round(MBAND.top + Math.max(0, (band - h) / 2)));
   });
-  /* The custom beat is the one that also carries the page shot: stack the
-     frame under its bullets inside the same band. */
-  const cb = blocks.custom;
-  const prev = cb.style.visibility;
-  cb.style.visibility = "hidden";
-  const ch = cb.getBoundingClientRect().height;
-  cb.style.visibility = prev;
-  const fh = 470, gap = 26;
-  const top = Math.round(MBAND.top + Math.max(0, (band - (ch + gap + fh)) / 2));
-  cb.style.top = px(top);
-  pageFrame.style.top = px(top + Math.round(ch) + gap);
+  /* Every page beat stacks bullets-then-frame inside the same band. The frame
+     does not move between them — only the pan inside it does — so its top is
+     the WORST case of the three, and each beat's bullets are pushed down to
+     meet it. Re-placing the frame per beat would make it jump at every cut. */
+  const fh = MPAGE_H, gap = 24;
+  const heights = {};
+  PAGE_BEATS.forEach((k) => {
+    const b = blocks[k];
+    const prev = b.style.visibility;
+    b.style.visibility = "hidden";
+    heights[k] = b.getBoundingClientRect().height;
+    b.style.visibility = prev;
+  });
+  const tallest = Math.max.apply(null, PAGE_BEATS.map((k) => heights[k]));
+  const top = Math.round(MBAND.top + Math.max(0, (band - (tallest + gap + fh)) / 2));
+  const frameTop = top + Math.round(tallest) + gap;
+  PAGE_BEATS.forEach((k) => {
+    blocks[k].style.top = px(frameTop - gap - Math.round(heights[k]));
+  });
+  pageFrame.style.top = px(frameTop);
 };
 
 /* The page shot pans down through the settings. Bounds come from the recorder,
@@ -585,6 +639,46 @@ window.__setPage = function(url, meta){
   PAGE = meta || null;
   window.__layout();
 };
+
+/* Which page beat owns time t. Before the first one, hold the first beat's
+   position so the frame fades IN already parked rather than sliding into
+   place; after the last, hold the last. */
+function pageBeatAt(t){
+  let key = PAGE_BEATS[0];
+  for(let i = 0; i < PAGE_BEATS.length; i++){
+    if(t >= BEATS[PAGE_BEATS[i]][0] - 0.5) key = PAGE_BEATS[i];
+  }
+  return key;
+}
+/* The scroll offset, in SCREEN px, for beat `key` at time t.
+   ⚠ A card that FITS the window is centred and held still — panning a card
+   that is already fully visible is motion for its own sake, and at this size
+   it reads as drift. Only a card taller than the window is swept, and then
+   only far enough to reach its bottom. */
+function panFor(key, t){
+  if(!PAGE || !PAGE.rects) return null;
+  const r = PAGE.rects[key];
+  if(!r) return null;
+  const box = pageFrame.getBoundingClientRect();
+  if(!box.width) return null;
+  const scale = box.width / PAGE.w;
+  const winH = (box.height - PAGE_BAR_H) / scale;   // visible page px
+  const maxY = Math.max(0, PAGE.h - winH);
+  const span = r[1] - r[0];
+  let from, to;
+  if(span <= winH){
+    from = to = r[0] - (winH - span) / 2;           // centre it, hold
+  } else {
+    from = r[0] - 10;
+    to = r[1] - winH + 10;
+  }
+  from = Math.min(Math.max(from, 0), maxY);
+  to = Math.min(Math.max(to, 0), maxY);
+  const b = BEATS[key];
+  const dur = Math.max(0.8, b[1] - b[0] - 1.1);
+  const k = easeInOut(clamp01((t - b[0] - 0.45) / dur));
+  return (from + (to - from) * k) * scale;
+}
 
 window.__seek = function(t){
   // Backdrop: slow, non-repeating drift so no two seconds look identical.
@@ -609,9 +703,15 @@ window.__seek = function(t){
   // Stream furniture fades in behind the bar, then the "your stream" watermark
   // retires once the viewer has read it.
   const furn = easeOut(clamp01((t - 0.9) / 0.9));
-  cambox.style.opacity = String(furn * 0.9);
   livepill.style.opacity = String(furn * 0.9);
-  watermark.style.opacity = String(furn * Math.max(0, 1 - clamp01((t - 1.5) / 0.8)));
+  /* ⚠ On MOBILE the watermark stays. The stream window is its own 16:9 box
+     there, and with the camera placeholder gone it is otherwise an empty black
+     rectangle for the whole cut — the label is what makes that read as "your
+     content goes here" rather than as a failed render. On desktop the copy
+     fills the frame, so it retires once it has been read. */
+  watermark.style.opacity = String(MOBILE
+    ? furn * 0.9
+    : furn * Math.max(0, 1 - clamp01((t - 1.5) / 0.8)));
 
   // Callout, only while the headline is up.
   const pE = env(t, 1.5, BEATS.head[1] + 0.2, 0.7, 0.45);
@@ -623,30 +723,22 @@ window.__seek = function(t){
   applyBlock(blocks.graded, t, BEATS.graded[0], BEATS.graded[1], MOBILE ? 30 : 36);
   applyBlock(blocks.custom, t, BEATS.custom[0], BEATS.custom[1], MOBILE ? 30 : 36);
   applyBlock(blocks.cta,    t, BEATS.cta[0],    BEATS.cta[1] + 1, MOBILE ? 30 : 36);
-  applyBlock(pageFrame,     t, BEATS.custom[0], BEATS.custom[1], 36);
+  /* The frame is up for ALL THREE bullet beats — it fades in with the first
+     and out with the last, so it never re-enters between cuts. */
+  applyBlock(pageFrame, t, BEATS[PAGE_BEATS[0]][0],
+             BEATS[PAGE_BEATS[PAGE_BEATS.length - 1]][1], 36);
 
   stagger(listItems.reel,   t, BEATS.reel[0],   0.30, 22);
   stagger(listItems.graded, t, BEATS.graded[0], 0.30, 22);
   stagger(listItems.custom, t, BEATS.custom[0], 0.30, 22);
   stagger(ctaBits,          t, BEATS.cta[0],    0.20, 20);
 
-  // Pan the configurator shot through its settings across the beat.
+  // Park the configurator shot on whichever card this beat is talking about.
   const img = document.getElementById("shotPage");
   if(img && PAGE && PAGE.w){
-    const box = pageFrame.getBoundingClientRect();
-    const scale = box.width / PAGE.w;
-    /* How much of the PAGE the window shows, in the page's own pixels. The
-       pan is clamped against it so the sweep can never run off the bottom of
-       the shot into empty frame — which it did when the end point was a
-       guessed constant instead of the frame's real height. */
-    const winH = (box.height - PAGE_BAR_H) / scale;
-    const maxY = Math.max(0, PAGE.h - winH);
-    const from = Math.min(PAGE.from, maxY);
-    const to = Math.min(Math.max(PAGE.bot - winH, from), maxY);
-    const span = Math.max(0.8, BEATS.custom[1] - BEATS.custom[0] - 1.2);
-    const k = easeInOut(clamp01((t - BEATS.custom[0] - 0.5) / span));
-    const y = (from + (to - from) * k) * scale;
-    img.style.transform = "translate3d(0," + (-y).toFixed(2) + "px,0)";
+    const key = pageBeatAt(t);
+    const p = panFor(key, t);
+    if(p != null) img.style.transform = "translate3d(0," + (-p).toFixed(2) + "px,0)";
   }
 
   if(MOBILE && mfoot){
