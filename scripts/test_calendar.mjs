@@ -80,6 +80,11 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calendarMergeStore = (followed, near) => {", NL + "};"),
   grab("const calendarCombine = (curated, store) => {", NL + "};"),
   grabLine("const CAL_ART_PREF = "),
+  grabLine("const CAL_ART_SKIP_TYPES = "),
+  // calendarArtIndex defers to the site's one sealed classifier rather than
+  // keeping a name test of its own, so the extraction has to carry it too.
+  grab("const SEALED_DISPLAY_TYPE_FOR = {", NL + "};"),
+  grab("function deriveSealedDisplayType(item){", NL + "}"),
   grab("const calendarArtIndex = (sealedRows, names) => {", NL + "};"),
   grab("const calendarEventArt = (ev, artIndex) => {", NL + "};"),
   grabLine("const CAL_SET_PHASE_ICONS = "),
@@ -149,6 +154,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
   " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
+  " CAL_ART_SKIP_TYPES, deriveSealedDisplayType,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
   " calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,",
   " CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,",
@@ -168,7 +174,7 @@ const {
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   calPanelRows, calDayLabel,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
-  calendarArtIndex, calendarEventArt,
+  calendarArtIndex, calendarEventArt, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
   calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,
   CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,
@@ -183,6 +189,24 @@ const ok = (name, cond, detail) => {
   console.log((cond ? "PASS  " : "FAIL  ") + name + (cond ? "" : "  → " + (detail ?? "")));
 };
 const enc = new TextEncoder();
+
+// ⚠ Not a calendar check but a whole-file one, living here because this is
+// the test that runs when the calendar's art matcher is touched and it already
+// holds every byte of Index.html. calendarArtIndex shipped a word-boundary
+// regex whose two escapes were literal BACKSPACE bytes: it matched no name
+// that can exist, skipped nothing, and looked entirely ordinary in an editor
+// for its whole life. Nothing in this file wants a control byte, and one
+// character is the whole distance between a rule and a rule that never runs.
+{
+  const bad = [];
+  for (let i = 0; i < src.length; i++) {
+    const c = src.charCodeAt(i);
+    if ((c < 32 && c !== 9 && c !== 10 && c !== 13) || c === 127)
+      bad.push(i + " (0x" + c.toString(16) + ")");
+  }
+  ok("Index.html carries no stray control bytes", bad.length === 0,
+    bad.length + " found: " + bad.slice(0, 6).join(", "));
+}
 
 // ── Calendar days never shift by timezone ───────────────────────────────────
 // The bug this guards: `new Date("2026-03-07")` is midnight UTC, which is
@@ -768,14 +792,37 @@ ok("a bad date has no label", calShortDay("nope") === "");
     {name: "Rapunzel Collector's Gift Set",                 image_url: "gift.jpg"},
     {name: "Disney Lorcana: Winterspell Booster Pack",      image_url: "winter.jpg"},
     {name: "Some Product With No Picture",                  image_url: null},
+    // A set whose only rows are cartons: nothing here can win on rank, so the
+    // skip is the only thing keeping a photo of cardboard off the calendar.
+    {name: "Disney Lorcana: Into the Inkdark Booster Box Case", image_url: "ink-case.jpg"},
+    {name: "Disney Lorcana: Cosmic Quest Starter Deck Display", image_url: "cq-display.jpg"},
   ];
   const idx = calendarArtIndex(sealed, ["Hyperia City", "Winterspell", "Rapunzel Collector's Gift Set",
-                                        "Some Product With No Picture", "Nothing At All"]);
+                                        "Some Product With No Picture", "Nothing At All",
+                                        "Into the Inkdark", "Cosmic Quest"]);
   // ⚠ The plain Booster Pack IS the set's art, and it is the one product every
   // set has. A Case is a distributor carton - a photo of cardboard.
   ok("a set resolves to its booster pack, not its box or case",
     idx.get("hyperia city") === "pack.jpg", idx.get("hyperia city"));
   ok("a case is never chosen", [...idx.values()].every(v => v !== "case.jpg"));
+  // ⚠ Everything above this line loses on RANK, not on the skip: a plain
+  // Booster Pack is rank 0 and beats a case whatever the skip does. So none of
+  // it can tell a live skip from a dead one — and the shipped skip WAS dead for
+  // its whole life (a word-boundary regex whose two escapes sat in the file as
+  // literal backspace bytes, matching no name that can exist) with every
+  // assertion above passing throughout. These two are the ones that notice.
+  ok("a set with only cartons resolves to nothing, not to the carton",
+    !idx.has("into the inkdark"), idx.get("into the inkdark"));
+  // ⚠ A Starter Deck Display is the same distributor carton and the word
+  // "case" appears nowhere in its name — 11 such rows are live in the catalog.
+  // This is what asking the shared classifier buys over any name test.
+  ok("a display is skipped too, though nothing about it says case",
+    !idx.has("cosmic quest"), idx.get("cosmic quest"));
+  ok("the skip set is exactly what the sealed classifier calls a carton",
+    CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType({name: "X Booster Box Case"}))
+    && CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType({name: "X Starter Deck Display"}))
+    && !CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType(
+         {name: "X Booster Pack", product_type: "Booster Pack"})));
   ok("a product resolves to its own photo",
     idx.get("rapunzel collector's gift set") === "gift.jpg");
   ok("a product with no image is absent rather than null",
