@@ -332,6 +332,11 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       </div>
       <div id="gradedOpts">
         <div class="tk-field">
+          <label>Card types — pick any combination</label>
+          <div class="tk-chips" id="chipsGcat"></div>
+          <div class="tk-hint"><b>Normal</b> is every booster rarity, Common through Legendary — people grade commons, so this is wider than the raw reel's "Rare – Legendary".</div>
+        </div>
+        <div class="tk-field">
           <label>Graders — pick any combination</label>
           <div class="tk-chips" id="chipsGrader"></div>
         </div>
@@ -343,7 +348,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
         <div class="tk-field">
           <label>Min price $</label>
           <input type="number" id="inGmin" min="0" max="100000" step="5">
-          <div class="tk-hint">Graded needs a longer window than raw does: a slab sells rarely, so <b>1D</b> and <b>1W</b> have far fewer cards to draw on than <b>1M</b> or <b>1Y</b>.</div>
+          <div class="tk-hint">Slabs sell for much more than raw cards, so this floor starts at $100. Graded also needs a longer window than raw does: a slab sells rarely, so <b>1D</b> and <b>1W</b> have far fewer cards to draw on than <b>1M</b> or <b>1Y</b>.</div>
         </div>
       </div>
     </div>
@@ -458,6 +463,22 @@ const TK_GRADED_KINDS = [
    detail:"Biggest individual sales in the window"},
 ];
 const TK_GRADERS = ["PSA","CGC","BGS","SGC"];
+/* ⚠ Graded gets its OWN rarity groups, not TK_GROUPS, and the difference is
+   measured rather than stylistic. Raw's middle tier is "Rare – Legendary",
+   which for graded would throw away every Common and Uncommon — and people
+   grade those: at a $100 floor on PSA 10 the pool is 13 Common, 27 Uncommon,
+   43 Rare, 28 Super Rare, 41 Legendary, so "Rare – Legendary" would drop 40 of
+   those 152 cards with nothing on screen to say so. Hence "Normal" = every
+   booster rarity. (Chase 259, Promos 118 at the same floor.) */
+const TK_GRADED_GROUPS = [
+  {key:"chase",  label:"Chase",  detail:"Enchanted · Epic · Iconic",
+   rarities:["Enchanted","Epic","Iconic"]},
+  {key:"normal", label:"Normal", detail:"Every booster rarity, Common through Legendary",
+   rarities:["Common","Uncommon","Rare","Super Rare","Legendary"]},
+  {key:"promo",  label:"Promos", detail:"Promo rarity",
+   rarities:["Promo"]},
+];
+const TK_GRADED_CAT_KEYS = TK_GRADED_GROUPS.map(g => g.key);
 const TK_GRADES = ["10","9.5","9","8.5","8"];
 /* ⚠ The rollup's unclassified-printing bucket. On a Challenge card the two
    printings are two different MARKETS — Cinderella - Stouthearted PSA 10 is
@@ -477,7 +498,8 @@ const TK_GRADED_UNKNOWN_PRINTING = "Unknown";
 const TK_GRADED_MIN_SALES = 5;
 const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"low", dir:"both", count:20,
   min:5, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
-  transparent:false, gkinds:[], graders:["PSA"], grades:["10"], gmin:25};
+  transparent:false, gkinds:[], graders:["PSA"], grades:["10"],
+  gcats:["chase","normal","promo"], gmin:100};
 /* ⚠ Changing a default RETARGETS EVERY OVERLAY ALREADY IN THE WILD that took
    it. cfgToParams writes only non-default params, so a streamer who accepted
    the defaults is running a bare ?bar=1 and picks these up on their next page
@@ -496,6 +518,9 @@ const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"low",
    "Cinderella - Stouthearted" and their PSA 10 prices are $3,972, $215 and
    $58. Name plus version cannot tell them apart; the set can. */
 const TK_GRADED_EMBED = "cards(name,version,image_small,sets(name))";
+// The same embed as an INNER join, so a rarity filter on it narrows the parent
+// rows instead of just blanking the embedded object.
+const TK_GRADED_EMBED_INNER = "cards!inner(name,version,image_small,sets(name))";
 const TK_GRADED_ROLLUP_SELECT =
   "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count," + TK_GRADED_EMBED;
 const TK_GRADED_SALE_SELECT =
@@ -510,9 +535,29 @@ const tickerInFilter = (arr) => arr.length === 1
 /* The graded section's sub-label. ⚠ "/" WITHIN a dimension and " · " BETWEEN
    them, so "PSA/CGC · 10/9.5" cannot be misread as four graders. Everything
    selected collapses to "Any", or the header grows longer than the cards. */
-function tickerGradedLabel(graders, grades){
+function tickerGradedLabel(graders, grades, cats){
   const part = (sel, all, word) => sel.length >= all.length ? "Any " + word : sel.join("/");
-  return part(graders, TK_GRADERS, "grader") + " · " + part(grades, TK_GRADES, "grade");
+  const head = part(graders, TK_GRADERS, "grader") + " · " + part(grades, TK_GRADES, "grade");
+  // Named only when it narrows — "Any grader · Any grade · Chase/Normal/Promos"
+  // is three ways of saying no filter, on a header that has to be read at a
+  // glance off a moving bar.
+  if(!cats || cats.length >= TK_GRADED_GROUPS.length) return head;
+  const names = cats.map(k => (TK_GRADED_GROUPS.find(g => g.key === k) || {}).label).filter(Boolean);
+  return names.length ? head + " · " + names.join("/") : head;
+}
+
+/* The rarity filter for the graded sections. Returns the query pairs, or null
+   when every category is on and there is nothing to ask for.
+   ⚠ It has to go through the EMBED: neither graded table carries a rarity of
+   its own, it lives on `cards`. And the embed must be `cards!inner(...)`, or
+   PostgREST filters the embedded object while returning every parent row —
+   which renders as a reel of items with no name. */
+function tickerGradedRarityFilter(cats){
+  if(!cats || cats.length >= TK_GRADED_GROUPS.length) return null;
+  const rarities = TK_GRADED_GROUPS.filter(g => cats.includes(g.key))
+    .reduce((acc, g) => acc.concat(g.rarities), []);
+  if(!rarities.length) return null;
+  return {key: "cards.rarity", val: "in.(" + rarities.map(r => '"' + r + '"').join(",") + ")"};
 }
 
 const tickerWindowDays = (win) => parseInt(String(win.col).replace(/[^0-9]/g, ""), 10) || 1;
@@ -580,6 +625,9 @@ function parseTickerCfg(search){
   const ggSel = (q.get("gg") || "").split(",").map(v => v.trim()).filter(Boolean);
   const grades = TK_GRADES.filter(g => ggSel.includes(g));
   if(grades.length) cfg.grades = grades;
+  const gcSel = (q.get("gcat") || "").split(",").map(v => v.trim().toLowerCase()).filter(Boolean);
+  const gcats = TK_GRADED_CAT_KEYS.filter(k => gcSel.includes(k));
+  if(gcats.length) cfg.gcats = gcats;
   const gmin = parseFloat(q.get("gmin"));
   if(Number.isFinite(gmin)) cfg.gmin = Math.max(0, Math.min(100000, gmin));
   // ⚠ The one state the reel must never be in. The chips cannot reach it (each
@@ -641,14 +689,18 @@ function buildTickerPlan(cfg, now){
     // still reads time-frame by time-frame.
     for(const gk of TK_GRADED_KINDS.filter(k => cfg.gkinds.includes(k.key))){
       const word = cfg.dir === "up" ? gk.label : cfg.dir === "down" ? gk.fallLabel : gk.bothLabel;
+      const rarity = tickerGradedRarityFilter(cfg.gcats);
+      const embed = rarity ? TK_GRADED_EMBED_INNER : TK_GRADED_EMBED;
       const head = {win: win.key, title: win.label + " " + word, group: "graded:" + gk.key,
-                    sub: tickerGradedLabel(cfg.graders, cfg.grades), detail: gk.detail, graded: gk.key};
+                    sub: tickerGradedLabel(cfg.graders, cfg.grades, cfg.gcats),
+                    detail: gk.detail, graded: gk.key};
       if(gk.key === "sales"){
         // ⚠ Top Sales has no percent to rank by — one sale is a PRICE, not a
         // move — so it ranks by sale_price inside a date window instead. That
         // is also why its item renders recency where a mover renders Δ%.
         const q = new URLSearchParams();
-        q.set("select", TK_GRADED_SALE_SELECT);
+        q.set("select", "card_id,printing,grader,grade,sale_price,sold_date," + embed);
+        if(rarity) q.set(rarity.key, rarity.val);
         q.set("excluded", "is.false");
         q.set("grader", tickerInFilter(cfg.graders));
         q.set("grade", tickerInFilter(cfg.grades));
@@ -661,7 +713,9 @@ function buildTickerPlan(cfg, now){
         const pctCol = "pct" + win.col;
         const requests = dirs.map(dir => {
           const q = new URLSearchParams();
-          q.set("select", TK_GRADED_ROLLUP_SELECT + "," + pctCol);
+          q.set("select", "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count,"
+            + embed + "," + pctCol);
+          if(rarity) q.set(rarity.key, rarity.val);
           q.set("grader", tickerInFilter(cfg.graders));
           q.set("grade", tickerInFilter(cfg.grades));
           q.set("printing", "neq." + TK_GRADED_UNKNOWN_PRINTING);
@@ -1047,6 +1101,7 @@ function cfgToParams(c){
     q.set("gk", c.gkinds.join(","));
     if(c.graders.join(",") !== TK_DEFAULTS.graders.join(",")) q.set("gr", c.graders.join(","));
     if(c.grades.join(",") !== TK_DEFAULTS.grades.join(",")) q.set("gg", c.grades.join(","));
+    if(c.gcats.join(",") !== TK_DEFAULTS.gcats.join(",")) q.set("gcat", c.gcats.join(","));
     if(c.gmin !== TK_DEFAULTS.gmin) q.set("gmin", String(c.gmin));
   }
   return q;
@@ -1113,6 +1168,9 @@ function initConfigUI(){
     // ⚠ Multi-select, and neither list may empty: a graded section with no
     // grader (or no grade) selected can only ever query nothing, which is the
     // empty-reel failure the chip rule exists to prevent.
+    chipGroup($("chipsGcat"), TK_GRADED_GROUPS.map(g => ({label: g.label, value: g.key, title: g.detail})),
+      v => cfg.gcats.includes(v),
+      v => cfg.gcats = toggleKey(cfg.gcats, v, TK_GRADED_CAT_KEYS, false));
     chipGroup($("chipsGrader"), TK_GRADERS.map(g => ({label: g, value: g})),
       v => cfg.graders.includes(v),
       v => cfg.graders = toggleKey(cfg.graders, v, TK_GRADERS, false));

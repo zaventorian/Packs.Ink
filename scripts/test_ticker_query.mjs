@@ -18,9 +18,10 @@ if (start < 0 || end < 0) {
 const src = html.slice(start, end);
 const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine,
         TK_BRAND_MAX_GAP, tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo,
-        TK_GRADED_MIN_SALES } = new Function(
+        TK_GRADED_MIN_SALES, TK_GRADED_GROUPS } = new Function(
   src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP," +
-        " tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo, TK_GRADED_MIN_SALES};"
+        " tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo, TK_GRADED_MIN_SALES," +
+        " TK_GRADED_GROUPS};"
 )();
 
 let failures = 0;
@@ -365,6 +366,51 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("both sides empty falls back rather than shipping an empty bar",
     parseTickerCfg("?g=&gk=").groups, ["chase", "rareleg"]);
   check("graded-only reel is never empty", groupsOf("?g=&gk=").length > 0, true);
+}
+
+// Graded card-type groups (Zaven, 2026-09-15) — and a $100 floor, because a
+// slab sells for far more than the raw card.
+{
+  const gq = (q) => qs(buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).requests[0]);
+  const lbl = (q) => buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).sub;
+
+  check("graded price floor defaults to $100", parseTickerCfg("").gmin, 100);
+  check("...and reaches the sales query", gq("?gk=sales").sale_price, "gte.100");
+  check("...and the movers query", gq("?gk=movers").last_sold_price, "gte.100");
+
+  // ⚠ Graded's "Normal" is EVERY booster rarity, not the raw reel's
+  // "Rare – Legendary". Measured at a $100 floor on PSA 10: 13 Common and 27
+  // Uncommon sit beside 43 Rare / 28 Super Rare / 41 Legendary, so the raw
+  // vocabulary would drop 40 of those 152 cards with nothing on screen saying so.
+  const normal = TK_GRADED_GROUPS.find(g => g.key === "normal").rarities;
+  check("Normal covers Common through Legendary", normal,
+    ["Common", "Uncommon", "Rare", "Super Rare", "Legendary"]);
+  check("Chase is the three chase rarities",
+    TK_GRADED_GROUPS.find(g => g.key === "chase").rarities, ["Enchanted", "Epic", "Iconic"]);
+
+  // ⚠ Neither graded table carries a rarity — it lives on `cards` — so the
+  // filter goes through the embed, and the embed MUST become an inner join or
+  // PostgREST narrows the embedded object while returning every parent row,
+  // which renders as a reel of nameless items.
+  check("no filter when every type is on", "cards.rarity" in gq("?gk=sales"), false);
+  check("...and the plain embed is used then",
+    /cards\(/.test(gq("?gk=sales").select) && !/cards!inner/.test(gq("?gk=sales").select), true);
+  check("a narrowed type list filters through the embed",
+    gq("?gk=sales&gcat=chase")["cards.rarity"], 'in.("Enchanted","Epic","Iconic")');
+  check("...and switches the embed to an inner join",
+    /cards!inner\(/.test(gq("?gk=sales&gcat=chase").select), true);
+  check("two types union their rarities",
+    gq("?gk=sales&gcat=normal,promo")["cards.rarity"],
+    'in.("Common","Uncommon","Rare","Super Rare","Legendary","Promo")');
+  check("canonical order regardless of param order",
+    parseTickerCfg("?gk=sales&gcat=promo,chase").gcats, ["chase", "promo"]);
+  check("an empty list keeps every type", parseTickerCfg("?gk=sales&gcat=").gcats,
+    ["chase", "normal", "promo"]);
+
+  // The label names the type only when it narrows.
+  check("label stays short when nothing is narrowed", lbl("?gk=sales"), "PSA · 10");
+  check("label names a narrowed type", lbl("?gk=sales&gcat=chase"), "PSA · 10 · Chase");
+  check("label joins two types", lbl("?gk=sales&gcat=normal,promo"), "PSA · 10 · Normal/Promos");
 }
 
 if (failures) {
