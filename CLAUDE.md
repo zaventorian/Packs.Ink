@@ -2035,37 +2035,58 @@ Beta cards land weekly, so each one announces itself and then stops, above the s
   count is derived from `raw` and not from `COCONUT_CARDS.length`: a client replaying an
   older catalog cache has no row for a card added since, and a tile announcing a card its
   own Cards tab cannot show is worse than no tile.
-- **⚠ It links to the Coconut SET, not to the card.** `openCardsWithSearch(_, openCardId)`
-  looks like the right call and silently does nothing here: the Cards view's incoming-open
-  effect requires `row.tcgplayer_product_id`, and every Coconut row has none, so it would
-  land on the tab with no modal open.
-- **It carries the card's art, and it is the ONLY tile in this feed that does** (2026-09-15,
-  Zaven: *"in the news add the photo of it"*). A reveal is about what the card looks like, so
-  this one earns the exception — every other tile here stays text-only.
-  - **⚠ The mask hazard was MEASURED, not waved through.** `.home-news-feed`'s edge fade is a
-    `mask-image`, which forces offscreen compositing and softens child `<img>`s (the
-    CSS-pitfalls note). Probe thumb placed mid-list, in the fully-opaque band — putting it in
-    the ramp measures the *intended* fade and tells you nothing — masked against unmasked, in
-    Chromium at DPR 1/2/3: **mean channel diff ≤0.302/255, and exactly 0 at DPR 2 and 3**,
-    which is the phone. It does not bite at chip size. **Anything bigger, or a full card
-    render, must be re-measured before it ships** — the rule stands, this is one sized hole
-    in it, and WebKit was not testable from the sandbox.
-  - **⚠ Thumbs (`coconutThumbUrl`), never the full render.** A whole grayscale beta card
-    shrunk to chip size reads as a broken-image glyph — that is the reason thumbs exist.
-  - **⚠ The thumbs sit UNDER the text, never beside it.** Two cards inside the 14-day window
-    is two consecutive weekly reveals, i.e. the COMMON case, and a left-hand thumb column
-    squeezed the title into three wrapped lines at rail width. Capped at
-    `COCONUT_REVEAL_MAX_THUMBS` (3); the sub-line names every fresh card whether or not it
-    drew one, so the cap never hides a reveal.
+- **It shows the WHOLE CARD, and it is the ONLY tile in this feed that carries art**
+  (2026-09-15, Zaven: *"have the full card image shown there"*; it was a 52px character crop
+  from the reveal tile's first cut the same day). A reveal is about what the card looks like,
+  so this one earns the exception — every other tile here stays text-only.
+- **Two click targets, because the card and its name answer different questions**: the ART
+  opens that card, the TITLE opens the Coconut set with that card already open. The `ink +
+  " leader"` sub-line is gone — the picture says it.
+  - **⚠ The button is nested inside the tile's `<a>`, so the anchor takes `navCapture`.** A
+    nested button's `stopPropagation` does NOT cancel the anchor's own default navigation.
+    (`navCapture` only fires when the closest interactive ancestor is a DIFFERENT element, so
+    a click on the title still reaches `navHandler` — the simplified version of it quoted in
+    the SPA-navigation section omits that check.)
+  - **⚠ A pid-less card CAN be opened now — this used to be impossible and the note saying so
+    was the blocker.** `groupFromSimCard` looks rows up BY `tcgplayer_product_id` and every
+    Coconut row has none, so the handoff silently landed on the tab with no modal. Those cards
+    have exactly one printing, so `groupCards([row])` is the whole job; the pid path is
+    untouched, because it is the one that finds BOTH printings of an ordinary card.
+  - **⚠ `openCardsFilteredBySet(setName, openCardId)` sets `card` AFTER its delete loop**,
+    which strips `card` along with every other leaf param.
+  - **⚠ The mask hazard, and what is NOT known about it now.** `.home-news-feed`'s edge fade
+    is a `mask-image`, which forces offscreen compositing and softens child `<img>`s (the
+    CSS-pitfalls note). At 52px it was measured properly: probe thumb mid-list in the
+    fully-opaque band (in the ramp you measure the *intended* fade and learn nothing), masked
+    vs unmasked, Chromium at DPR 1/2/3 — **mean channel diff ≤0.302/255, exactly 0 at DPR 2
+    and 3**. **That measurement was NOT repeatable for the full card**: the agent sandbox has
+    no DPR control and no way to read compositor pixels. A masked-vs-unmasked A/B at DPR 1.25
+    was visually indistinguishable, which is weaker evidence. The mask is also CONDITIONAL —
+    it is only on `.news-edge-*`, i.e. only when the list is actually clipped. **Re-measure
+    properly on real hardware if the card ever looks soft**; the mask itself cannot be traded
+    for a gradient overlay, because `--bg-surface` is translucent in all seven themes.
+  - **⚠ The cards sit UNDER the text, never beside it.** Two inside the 14-day window is two
+    consecutive weekly reveals, i.e. the COMMON case, and a left-hand column squeezed the
+    title into three wrapped lines at rail width. Capped at `COCONUT_REVEAL_MAX_THUMBS` (3).
+  - **⚠ `min-width:96px` is what keeps this honest.** Below about that, a grayscale beta
+    render stops reading as a card at all — the reason the 52px crops existed — so three
+    reveals in one window WRAP rather than shrinking to share a row. Measured live: 176px in
+    the desktop rail, 130px on a 390px phone.
   - **⚠ Art is uploaded to the bucket SEPARATELY from the card's code entry, so "revealed but
-    no photo yet" is a real state — and a weekly cadence reopens it every week.** The chain is
-    thumb → full art → `hidden`, and `.home-news-thumbs:not(:has(img:not([hidden])))` collapses
-    the row so the tile falls back to exactly the text-only tile it used to be. Without the
-    last step the one place announcing a card shows broken-image icons.
-  - **⚠ `.home-news-thumb` sets `display:block`, which out-specifies the UA's
-    `[hidden]{display:none}`** — so `.home-news-thumb[hidden]{display:none}` is load-bearing
-    twice: without it a failed thumb paints an empty bordered box AND the `:has()` collapse
+    no photo yet" is a real state — and a weekly cadence reopens it every week.** A failed
+    render hides its whole BUTTON (hiding the `<img>` alone leaves an empty bordered box that
+    is still a click target), and
+    `.home-news-cards:not(:has(.home-news-card:not([hidden])))` collapses the row so the tile
+    falls back to exactly the text-only tile it used to be.
+  - **⚠ `.home-news-card` sets `display:block`, which out-specifies the UA's
+    `[hidden]{display:none}`** — so `.home-news-card[hidden]{display:none}` is load-bearing
+    twice: without it a failed render paints an empty bordered box AND the `:has()` collapse
     above can never fire.
+- **⚠ `coconutArtUrl` carries `COCONUT_ART_REV` too** (fixed 2026-09-15). The rev was on
+  `coconutThumbUrl` ONLY — the character crop least likely to change — and missing from the
+  full card, which is the only thing that shows the rules text a Beta 1.1 re-render rewrites.
+  `packsink-img-v1` survives deploys, so all nine full-art call sites were serving
+  pre-rebalance wording to anyone who had loaded the card once.
 - **`coconutRowId(slug)` is the one accessor for the synthetic `coconut::<slug>` id**, read
   by the catalog transform that mints the row and by this tile's gate. A drifted prefix
   fails silently — the tile just stops appearing — so the test pins that exactly one place
@@ -4388,6 +4409,12 @@ one set with a published date answers half the question it exists for.
   toggle, and the home panel falls back to the last two things that happened
   ("Attack of the Vine! · retail release · 7 wk ago"). A box that blanks for a
   month reads as broken and earns a Hide.
+- **⚠ A month cell draws `CAL_CELL_MAX` (3) events, and ONE FEWER when it also has to
+  draw a "+N"** (2026-09-15). In the rail a cell is ~44px wide, which holds three dots OR two
+  dots and an overflow marker, never both — and a CSS grid row takes the height of its
+  tallest cell, so one busy day inflated its whole week. Sep 19 carries four events and was
+  doing exactly that. The dots also lay out ACROSS in compact mode, not down, for the same
+  reason. Every week measures 34px now.
 - **A month cell labels a set release by its PHASE, not its name** (`calChipLabel`).
   A set puts two or three dates in one month all carrying the same title, so
   "Attack of the Vine!" twice a week apart is two identical chips distinguishing
