@@ -4116,26 +4116,61 @@ Measured the day it landed — 57% of the 35,576 upcoming events are US, **43% a
    1,734 upcoming events between them.
 
 - **⚠ Nothing is silent: the results head names the town it chose** (`near ${origin.city}`)
-  and a `.sc-alt-row` offers the corrections. That row is what makes dropping the picker
-  safe, so do not "tidy" it away. Two shapes: `altCountries` for a code that could belong
-  elsewhere (format-compatible countries the walk did NOT reach — the correction stays one
-  tap away without every search paying for it) and `altPlaces` for a name that matched
-  several real towns.
-- **⚠ The QUESTION stays visible; the ANSWERS collapse behind it** (`altOpen`, 2026-09-15).
-  The safety property above is about being able to correct a wrong guess, and that survives
-  — but a US 5-digit code is format-compatible with seven other countries, so every
-  **correct** lookup drew seven chips under it, and `60640` in the home rail spent four
-  wrapped rows naming France, Germany, Spain, Italy, Mexico, Sweden and Finland. Measured
-  live at the 222px rail: **149px → 15px**. `.sc-alt-toggle` reads "Not Chicago? ▾" and is
-  the only thing rendered until tapped.
-  - **⚠ `runSearch` re-collapses it**, so a corrected guess asks its question afresh —
-    "Not Muirancourt? ▾" after picking France, not a stale open list. `useAltPlace`
-    deliberately does NOT, because flipping back between two towns of the same name is the
-    one case where you want the list to stay up.
+  and the search row offers the corrections. That is what makes dropping the picker safe, so
+  do not "tidy" it away. **Two shapes, two controls, and they are mutually exclusive by
+  construction** — `scResolveOrigin` fills `altCountries` OR `altPlaces`, never both, because
+  a postal code and a place name go down different paths.
+
+### The country control is built from what RESOLVES, not what could (2026-09-15)
+
+A `<select>` LEFT of the postal input, listing every country the typed code really resolves
+in, each labelled with the town it would land in — `US · Chicago` / `FR · Muirancourt` /
+`MX · Aviacion` / `FI · Isokoski`. Zaven's ask: *"a drop down on the left for country, pop up
+only if it's in question, and only populate the other possible options for said zip code."*
+
+- **⚠ `o.altCountries` is NOT offerable as it stands.** It is the FORMAT's candidate list —
+  eight countries share the bare 5-digit shape — and the walk stops at the first hit, so most
+  of them were never probed and usually do not hold the code at all. Offering them was
+  offering seven guesses under every correct answer. **`scCountryOptions` probes them** and
+  keeps only the ones that answer.
+- **Measured over 40 real US ZIPs: 72% collide with at least one other country, 28% collide
+  with NONE** (Sweden 15, Finland 13, Mexico 11, then France/Spain/Germany twice each). The
+  sharpest is **`75001` = Addison, Texas AND Paris 01 Louvre**. So the overlap is real and the
+  control cannot simply be deleted — but it is absent for a quarter of codes, and the old chip
+  row could not tell those two cases apart.
+- **⚠ The guess is only ever wrong when you search somewhere you are NOT.** The country comes
+  from your own timezone (the ladder in `scResolveOrigin`), so it is right whenever you are
+  searching near yourself, which is what the box is for. The failure it exists for is the
+  travel case: an American typing `75001` for Paris and silently getting Addison, Texas.
+- **⚠ It runs AFTER the search returns, and is never awaited.** Results are never delayed by
+  up to seven extra lookups; the control appears a moment later, and only when the probe
+  proves there was a choice. **`countryOpts.length > 1` gates the render**, so a code unique
+  to one country shows no control at all.
+- **⚠ Cached by CODE, not by which country resolved first, and sorted by market order.**
+  Picking a country re-runs the search forced to it; without the cache that re-probes six
+  countries to rebuild the identical list, and without the sort the list reshuffles under the
+  click that used it — the one thing a picker must not do.
+- **⚠ Only cleared when the TYPED CODE changed** (`probedZip` ref). Clearing on every search
+  makes the dropdown vanish for the second the event query takes and then come back, which
+  reads as the control breaking under the click that just used it.
+- **⚠ `.sc-zip-input` needs `flex:1 1 90px;min-width:0`** once a sibling shares its row: a
+  flex item's default `min-width` is `auto`, so the select would otherwise push the input past
+  the row's edge.
+- The pre-search country picker stays gone, and `sc-country-select` is still pinned as absent —
+  this control is post-search, conditional, and a different thing.
+
+### "Not Chicago?" is the TOWN axis only
+
+- A typed NAME that matched several real towns (`altPlaces`) — "Dublin" is Ohio, California
+  and Ireland. **⚠ The QUESTION stays visible; the ANSWERS collapse behind it** (`altOpen`),
+  because a name can match a lot of towns and the first one is usually right.
+  - **⚠ `runSearch` re-collapses it**, so a corrected guess asks its question afresh.
+    `useAltPlace` deliberately does NOT, because flipping back between two towns of the same
+    name is the one case where you want the list to stay up.
   - **⚠ The toggle must unset border, background, radius AND padding.** The global `button`
     rule paints all four, so without the reset the question renders as one more chip beside
     its own answers — which is most of what made the row read as clutter.
-  - **⚠ Its caret is a CHILD span, not a `::after` `content:"BE"`.** A CSS escape written
+  - **⚠ Its caret is a CHILD span, not a `::after` `content:"\25BE"`.** A CSS escape written
     through a shell heredoc came out as a literal 0x15 byte that nothing flags; the panel
     already spells its collapse arrows as literal `▸`/`▾` in the markup.
 - **The zippopotam note is GONE from both boxes** (2026-09-15, Zaven: *"I dont like the lots
