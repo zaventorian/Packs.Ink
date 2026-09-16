@@ -74,7 +74,12 @@
    nav, the theme control and a MarketHeader naming the tool, so hide the
    duplicate chrome and tighten the page padding to fit the iframe. */
 html[data-embed="1"] .tk-top{display:none;}
-html[data-embed="1"] body{padding:8px 14px 18px;}
+/* ⚠ min-height:0 is load-bearing, not tidying. styles.css gives body a
+   min-height of 100vh, and inside an AUTO-HEIGHT iframe 100vh *is* the frame's
+   own height — so the height this page reports sets the frame, the frame sets
+   the viewport, and the viewport sets this page's height again. Measured
+   before the fix: the frame settled at 6210px for a ~1200px document. */
+html[data-embed="1"] body{padding:8px 14px 18px;min-height:0;}
 html[data-embed="1"] .tk-app{max-width:none;}
 .tk-brand{display:flex;align-items:center;gap:10px;text-decoration:none;color:inherit;}
 .tk-brand img{height:34px;width:auto;display:block;}
@@ -137,23 +142,27 @@ html[data-embed="1"] .tk-app{max-width:none;}
 .tk-count{font-size:11px;color:var(--text-muted);margin-top:6px;}
 
 /* ───────── The bar (shared by preview + OBS mode) ───────── */
-/* --tkt is the TOTAL bar height (what the OBS source sets); the movers row
-   gets --tkh = 78% of it and the required powered-by strip the rest. Every
-   inner dimension keys off those, so the 72px preview and a 100vh OBS source
-   render identically. */
+/* --tkt is the TOTAL bar height (what the OBS source sets) and --tkh is now
+   the SAME number: the movers row is the whole bar. The credit used to take a
+   22% strip along the bottom and now rides the section header instead, so the
+   same OBS height buys ~28% bigger cards — see .tk-sec-pow for why that moved.
+   Every inner dimension keys off --tkh, so the 72px preview and a 100vh OBS
+   source render identically. */
 .tk-barwrap{border-radius:10px;overflow:hidden;border:1px solid var(--border);}
-.tk-bar{--tkt:72px;--tkh:calc(var(--tkt)*0.78);height:var(--tkt);position:relative;overflow:hidden;
+.tk-bar{--tkt:72px;--tkh:var(--tkt);height:var(--tkt);position:relative;overflow:hidden;
   display:flex;flex-direction:column;
   font-family:'Nunito Sans',sans-serif;background:var(--tk-bg,#171226);color:var(--tk-fg,#f2eefc);}
 .tk-main{flex:1;min-height:0;display:flex;align-items:stretch;}
-/* Left cap: PACKS.INK with the logo stacked under it. */
-.tk-cap{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;
-  gap:calc(var(--tkh)*0.07);padding:0 calc(var(--tkh)*0.26);position:relative;z-index:2;
+/* Left cap: the logo ALONE, sized to own its slot. The "packs.ink" wordmark
+   stacked under it went 2026-09-15 (Zaven) — at cap size it read as a second,
+   smaller title competing with the section headers, and the mark carries the
+   brand without it. Still optional (brand=0); the section-header credit is the
+   one that always ships. */
+.tk-cap{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+  padding:0 calc(var(--tkh)*0.20);position:relative;z-index:2;
   background:var(--tk-bg,#171226);border-right:1px solid rgba(255,255,255,0.12);}
 .tk-bar[data-transparent="1"] .tk-cap{background:rgba(13,10,26,0.82);}
-.tk-cap img{height:calc(var(--tkh)*0.42);width:auto;display:block;}
-.tk-cap-name{font-family:'Cinzel',serif;font-weight:700;font-size:calc(var(--tkh)*0.195);
-  letter-spacing:0.08em;color:#d9b96c;line-height:1;white-space:nowrap;}
+.tk-cap img{height:calc(var(--tkh)*0.62);width:auto;display:block;}
 .tk-scroll{flex:1;min-width:0;overflow:hidden;display:flex;align-items:stretch;}
 .tk-rail{display:flex;align-items:center;height:100%;width:max-content;
   animation:tkscroll var(--tk-dur,80s) linear infinite;}
@@ -178,8 +187,24 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
   color:#d9b96c;letter-spacing:0.08em;text-transform:uppercase;line-height:1.05;white-space:nowrap;}
 .tk-sec-sub{font-size:calc(var(--tkh)*0.16);font-weight:700;letter-spacing:0.14em;
   text-transform:uppercase;opacity:0.68;line-height:1.05;white-space:nowrap;}
+/* The required credit, riding the SECTION HEADER instead of a row of its own.
+   A bottom strip cost 22% of the bar's height and was the first thing a real
+   streamer cropped away (observed 2026-09-15) — not to strip attribution, but
+   because vertical space is the scarcest thing in a stream layout and that row
+   was the cheapest thing to cut. We were making them choose between a thin bar
+   and our name. In the header it costs NO extra height (the header stack is
+   shorter than the item row beside it) and cannot be cropped without also
+   cropping the cards, which is the thing they actually want. */
+.tk-sec-pow{display:inline-flex;align-items:center;gap:calc(var(--tkh)*0.05);
+  font-size:calc(var(--tkh)*0.10);font-weight:700;letter-spacing:0.12em;
+  text-transform:uppercase;opacity:0.72;white-space:nowrap;line-height:1;}
+.tk-sec-pow b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.08em;font-weight:700;}
+.tk-sec-pow img{height:calc(var(--tkh)*0.125);width:auto;display:block;}
+/* No separator glyph between cards — Zaven, 2026-09-15: the ◆ read as too
+   spacy. The padding IS the separation now, and it is deliberately smaller
+   than the old padding-plus-dot (0.13+0.13 against 0.22+◆+0.22). */
 .tk-item{display:flex;align-items:center;gap:calc(var(--tkh)*0.14);flex:0 0 auto;
-  padding:0 calc(var(--tkh)*0.22);}
+  padding:0 calc(var(--tkh)*0.13);}
 .tk-art{height:calc(var(--tkh)*0.72);aspect-ratio:5/7;width:auto;object-fit:cover;
   border-radius:calc(var(--tkh)*0.07);display:block;background:rgba(255,255,255,0.06);}
 .tk-stack{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
@@ -193,25 +218,19 @@ html:not([data-bar]) .tk-bar:hover .tk-rail{animation-play-state:paused;}
   color:#d9b96c;border:1px solid rgba(217,185,108,0.55);border-radius:999px;
   padding:calc(var(--tkh)*0.022) calc(var(--tkh)*0.10);white-space:nowrap;line-height:1.25;}
 /* Price with the Δ% stacked beneath it. */
+/* Graded rows are a DIFFERENT asset from the card, so they carry a different
+   colour: a gold pill beside a gold section header is how a slab price gets
+   read as a raw card price. */
+.tk-slab{color:#7fd4ff;border-color:rgba(127,212,255,0.55);}
+.tk-sec--graded{border-left-color:#7fd4ff;}
+.tk-sec--graded .tk-sec-title{color:#7fd4ff;}
+.tk-sold{font-size:calc(var(--tkh)*0.17);opacity:0.58;white-space:nowrap;line-height:1;}
 .tk-val{display:flex;flex-direction:column;align-items:flex-start;justify-content:center;
   gap:calc(var(--tkh)*0.07);}
 .tk-px{font-weight:700;font-size:calc(var(--tkh)*0.25);white-space:nowrap;line-height:1;opacity:0.94;}
 .tk-pct{font-weight:700;font-size:calc(var(--tkh)*0.21);white-space:nowrap;line-height:1;}
 .tk-pct.up{color:#3fd68c;}
 .tk-pct.down{color:#ff5f6e;}
-.tk-dot{flex:0 0 auto;font-size:calc(var(--tkh)*0.14);opacity:0.28;line-height:1;}
-/* Bottom attribution row, flush on the bar (no band — deliberate) and pinned
-   bottom-right. ALWAYS rendered — no param, no checkbox: the left cap is
-   optional, this credit is the required one. */
-.tk-powrow{flex:0 0 calc(var(--tkt)*0.22);display:flex;align-items:center;justify-content:flex-end;
-  padding:0 min(24px, calc(var(--tkt)*0.30));position:relative;z-index:2;}
-.tk-pow-inner{display:inline-flex;align-items:center;gap:max(4px,calc(var(--tkt)*0.05));
-  font-size:max(8px,calc(var(--tkt)*0.105));font-weight:700;letter-spacing:0.16em;
-  text-transform:uppercase;opacity:0.9;white-space:nowrap;line-height:1;}
-.tk-pow-inner b{color:#d9b96c;font-family:'Cinzel',serif;letter-spacing:0.10em;font-weight:700;}
-.tk-pow-inner img{height:max(11px,calc(var(--tkt)*0.15));width:auto;display:block;}
-.tk-bar[data-transparent="1"] .tk-pow-inner{background:rgba(13,10,26,0.82);border-radius:999px;
-  padding:calc(var(--tkt)*0.025) calc(var(--tkt)*0.10);}
 .tk-msg{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
   font-size:calc(var(--tkh)*0.24);opacity:0.55;z-index:1;}
 
@@ -247,13 +266,9 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
   <div class="tk-bar" id="bar">
     <div class="tk-main">
       <div class="tk-cap" id="cap">
-        <span class="tk-cap-name">packs.ink</span>
-        <img src="Logos/logo%20transparent.png" alt="">
+        <img src="Logos/logo%20transparent.png" alt="Packs.Ink">
       </div>
       <div class="tk-scroll"><div class="tk-rail" id="rail"></div></div>
-    </div>
-    <div class="tk-powrow" title="Live Lorcana prices — packs.ink">
-      <span class="tk-pow-inner"><span>powered by</span><b>packs.ink</b><img src="Logos/logo%20transparent.png" alt=""></span>
     </div>
     <div class="tk-msg" id="msg">loading movers…</div>
   </div>
@@ -275,6 +290,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <div class="tk-field">
         <label>Rarity groups — one section each</label>
         <div class="tk-chips" id="chipsGrp"></div>
+        <div class="tk-hint" id="rawOffNote" style="display:none;">Raw cards are off — this reel is graded only.</div>
       </div>
 
       <div class="tk-field">
@@ -291,7 +307,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <div class="tk-field">
         <label>Price basis</label>
         <div class="tk-seg" id="segMetric"></div>
-        <div class="tk-hint">NM Market is the honest read for short windows — Low is TCGplayer's published Low Price and can sit frozen for weeks.</div>
+        <div class="tk-hint">Low is TCGplayer's published Low Price — it tracks the cheap end of the market. NM Market is their Near-Mint market price, a smoothed average of recent sales.</div>
       </div>
 
       <div class="tk-row">
@@ -305,6 +321,36 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
         </div>
       </div>
       <div class="tk-hint" style="margin-top:-6px;margin-bottom:11px;">A price floor keeps 10¢ cards' +300% "moves" out of the bar.</div>
+    </div>
+
+    <div class="tk-card">
+      <h2>Graded slabs</h2>
+      <div class="tk-field">
+        <label>Add graded sections — off by default</label>
+        <div class="tk-chips" id="chipsGraded"></div>
+        <div class="tk-hint">From our own eBay sale record, not TCGplayer — a slab is a different asset from the card. <b>Graded movers</b> ranks by % move; <b>Top Sales</b> ranks by the biggest individual sales in the window.</div>
+      </div>
+      <div id="gradedOpts">
+        <div class="tk-field">
+          <label>Card types — pick any combination</label>
+          <div class="tk-chips" id="chipsGcat"></div>
+          <div class="tk-hint"><b>Normal</b> is every booster rarity, Common through Legendary — people grade commons, so this is wider than the raw reel's "Rare – Legendary".</div>
+        </div>
+        <div class="tk-field">
+          <label>Graders — pick any combination</label>
+          <div class="tk-chips" id="chipsGrader"></div>
+        </div>
+        <div class="tk-field">
+          <label>Grades — pick any combination</label>
+          <div class="tk-chips" id="chipsGrade"></div>
+          <div class="tk-hint">Every card still shows its own grader and grade, so a mixed section stays readable.</div>
+        </div>
+        <div class="tk-field">
+          <label>Min price $</label>
+          <input type="number" id="inGmin" min="0" max="100000" step="5">
+          <div class="tk-hint">Slabs sell for much more than raw cards, so this floor starts at $100. Graded also needs a longer window than raw does: a slab sells rarely, so <b>1D</b> and <b>1W</b> have far fewer cards to draw on than <b>1M</b> or <b>1Y</b>.</div>
+        </div>
+      </div>
     </div>
 
     <div class="tk-card">
@@ -354,8 +400,23 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:0;">
         Same data as the Packs.Ink Screener: TCGplayer prices for every Lorcana card, updated daily.
         The reel cycles through your selected time frames, and within each, your rarity groups —
-        every section ranked biggest % move first. "NM Market" is TCGplayer's Near-Mint market
-        price; "Low" is TCGplayer's published Low Price.
+        ranked biggest % move first. "Low" is TCGplayer's published Low Price; "NM Market" is their
+        Near-Mint market price, a smoothed average of recent sales.
+      </p>
+      <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:8px 0 0;">
+        Graded sections come from our own record of completed eBay sales, not TCGplayer — a slab is
+        a different asset from the card. <b>Graded movers</b> ranks by % move; <b>Top Sales</b> ranks
+        by the biggest individual sales in the window, because one sale is a price rather than a move.
+      </p>
+    </div>
+
+    <div class="tk-card">
+      <h2>Feedback?</h2>
+      <p style="font-size:12.5px;color:var(--text-dim);line-height:1.6;margin:0;">
+        If you have any questions, ideas, or requests, please reach out —
+        <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style="color:var(--accent);">@HighScoreZAP</a>
+        or <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style="color:var(--accent);">@packs_ink</a>
+        on Twitter. I'd be happy to help make this something that benefits your stream.
       </p>
     </div>
   </main>
@@ -391,9 +452,125 @@ const TK_NONFOIL_PRINTINGS = ["Normal","Non-Foil"];
 /* Single-printing rarities bypass the foil filter — same rule as the Screener,
    otherwise "non-foil only" silently empties every chase section. */
 const TK_FOIL_BYPASS = ["Enchanted","Epic","Iconic","Promo"];
-const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"mkt", dir:"up", count:15,
+/* Graded sections. These read our own eBay sale record (graded_sales) and its
+   rollup, NOT the TCGplayer feed — a slab is a different asset from the card.
+   Off by default: most streams want raw movers, and a graded reel needs a
+   grader and grade chosen before it means anything. */
+const TK_GRADED_KINDS = [
+  {key:"movers", label:"Graded Risers", fallLabel:"Graded Fallers", bothLabel:"Graded Movers",
+   detail:"Biggest % move on the graded market"},
+  {key:"sales",  label:"Top Sales",     fallLabel:"Top Sales",      bothLabel:"Top Sales",
+   detail:"Biggest individual sales in the window"},
+];
+const TK_GRADERS = ["PSA","CGC","BGS","SGC"];
+/* ⚠ Graded gets its OWN rarity groups, not TK_GROUPS, and the difference is
+   measured rather than stylistic. Raw's middle tier is "Rare – Legendary",
+   which for graded would throw away every Common and Uncommon — and people
+   grade those: at a $100 floor on PSA 10 the pool is 13 Common, 27 Uncommon,
+   43 Rare, 28 Super Rare, 41 Legendary, so "Rare – Legendary" would drop 40 of
+   those 152 cards with nothing on screen to say so. Hence "Normal" = every
+   booster rarity. (Chase 259, Promos 118 at the same floor.) */
+const TK_GRADED_GROUPS = [
+  {key:"chase",  label:"Chase",  detail:"Enchanted · Epic · Iconic",
+   rarities:["Enchanted","Epic","Iconic"]},
+  {key:"normal", label:"Normal", detail:"Every booster rarity, Common through Legendary",
+   rarities:["Common","Uncommon","Rare","Super Rare","Legendary"]},
+  {key:"promo",  label:"Promos", detail:"Promo rarity",
+   rarities:["Promo"]},
+];
+const TK_GRADED_CAT_KEYS = TK_GRADED_GROUPS.map(g => g.key);
+const TK_GRADES = ["10","9.5","9","8.5","8"];
+/* ⚠ The rollup's unclassified-printing bucket. On a Challenge card the two
+   printings are two different MARKETS — Cinderella - Stouthearted PSA 10 is
+   avg5 $3,972 as Top Prize foil against $454 as Prize Wall non-foil, 8.7x — so
+   a row whose printing we could not read is an average of both and describes
+   neither. 53 rows of 8,782, so dropping them costs nothing and removes the
+   one row that would confidently print a wrong number on someone's stream. */
+const TK_GRADED_UNKNOWN_PRINTING = "Unknown";
+/* ⚠ A percent computed from two sales is noise wearing a percent sign, and on
+   a stream it is indistinguishable from a real move. Measured on the live
+   rollup, the top PSA 10 movers on pct_30d include tiers resting on 2 and 4
+   sales (+514%, +558%) beside ones resting on 20 and 100. A floor of 5 keeps
+   ~73% of the tiers that have a 30-day percent at all (974 of 1,337) and drops
+   exactly the rows nobody should broadcast. Same reasoning as MIN_COMPONENTS
+   on the market indices. Not exposed as a control: it is a correctness floor,
+   not a preference. */
+const TK_GRADED_MIN_SALES = 5;
+const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"low", dir:"both", count:20,
   min:5, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
-  transparent:false};
+  transparent:false, gkinds:[], graders:["PSA"], grades:["10"],
+  gcats:["chase","normal","promo"], gmin:100};
+/* ⚠ Changing a default RETARGETS EVERY OVERLAY ALREADY IN THE WILD that took
+   it. cfgToParams writes only non-default params, so a streamer who accepted
+   the defaults is running a bare ?bar=1 and picks these up on their next page
+   load — which is the point (2026-09-15, Zaven: both / Low / 20), but it means
+   a default is not a free choice. Anyone who picked a value explicitly keeps
+   it, because their URL names it.
+   Measured before the switch, at the $5 floor: Low has 70 risers and 107
+   fallers on 1D against NM Market's 113/97, and "both" needs only 10 a side,
+   so the reel fills on either basis. */
+
+/* A window's length in days, read off the matview column suffix so the two
+   cannot drift (TK_WINDOWS' col IS "_30d"). Graded top sales has no percent
+   column to rank by, so it filters on sold_date instead. */
+/* One embed for both graded tables — the card's own name/version/art, and its
+   SET, which is not decoration: three different cards are called
+   "Cinderella - Stouthearted" and their PSA 10 prices are $3,972, $215 and
+   $58. Name plus version cannot tell them apart; the set can. */
+const TK_GRADED_EMBED = "cards(name,version,image_small,sets(name))";
+// The same embed as an INNER join, so a rarity filter on it narrows the parent
+// rows instead of just blanking the embedded object.
+const TK_GRADED_EMBED_INNER = "cards!inner(name,version,image_small,sets(name))";
+const TK_GRADED_ROLLUP_SELECT =
+  "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count," + TK_GRADED_EMBED;
+const TK_GRADED_SALE_SELECT =
+  "card_id,printing,grader,grade,sale_price,sold_date," + TK_GRADED_EMBED;
+
+/* One-or-many PostgREST filter. Stays on eq. for a single value so a
+   single-grader URL reads exactly as it did before multi-select. */
+const tickerInFilter = (arr) => arr.length === 1
+  ? "eq." + arr[0]
+  : "in.(" + arr.map(v => '"' + v + '"').join(",") + ")";
+
+/* The graded section's sub-label. ⚠ "/" WITHIN a dimension and " · " BETWEEN
+   them, so "PSA/CGC · 10/9.5" cannot be misread as four graders. Everything
+   selected collapses to "Any", or the header grows longer than the cards. */
+function tickerGradedLabel(graders, grades, cats){
+  const part = (sel, all, word) => sel.length >= all.length ? "Any " + word : sel.join("/");
+  const head = part(graders, TK_GRADERS, "grader") + " · " + part(grades, TK_GRADES, "grade");
+  // Named only when it narrows — "Any grader · Any grade · Chase/Normal/Promos"
+  // is three ways of saying no filter, on a header that has to be read at a
+  // glance off a moving bar.
+  if(!cats || cats.length >= TK_GRADED_GROUPS.length) return head;
+  const names = cats.map(k => (TK_GRADED_GROUPS.find(g => g.key === k) || {}).label).filter(Boolean);
+  return names.length ? head + " · " + names.join("/") : head;
+}
+
+/* The rarity filter for the graded sections. Returns the query pairs, or null
+   when every category is on and there is nothing to ask for.
+   ⚠ It has to go through the EMBED: neither graded table carries a rarity of
+   its own, it lives on `cards`. And the embed must be `cards!inner(...)`, or
+   PostgREST filters the embedded object while returning every parent row —
+   which renders as a reel of items with no name. */
+function tickerGradedRarityFilter(cats){
+  if(!cats || cats.length >= TK_GRADED_GROUPS.length) return null;
+  const rarities = TK_GRADED_GROUPS.filter(g => cats.includes(g.key))
+    .reduce((acc, g) => acc.concat(g.rarities), []);
+  if(!rarities.length) return null;
+  return {key: "cards.rarity", val: "in.(" + rarities.map(r => '"' + r + '"').join(",") + ")"};
+}
+
+const tickerWindowDays = (win) => parseInt(String(win.col).replace(/[^0-9]/g, ""), 10) || 1;
+/* ⚠ Local calendar date, never toISOString().slice(0,10) — that is the UTC
+   day, so from early evening in the Americas it names TOMORROW and a one-day
+   sales window asks for a day no sale can carry yet. Same trap the site's
+   localYmd() exists for. */
+function tickerYmdDaysAgo(days, now){
+  const d = new Date((now || new Date()).getTime());
+  d.setDate(d.getDate() - days);
+  const p = (n) => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+}
 
 function parseTickerCfg(search){
   const q = new URLSearchParams(search || "");
@@ -404,9 +581,17 @@ function parseTickerCfg(search){
   const wins = csv("w");
   const wsel = TK_WINDOWS.map(w => w.key).filter(k => wins.includes(k));
   if(wsel.length) cfg.wins = wsel;
-  const groups = csv("g");
-  const gsel = TK_GROUPS.map(g => g.key).filter(k => groups.includes(k));
-  if(gsel.length) cfg.groups = gsel;
+  // ⚠ ABSENT and EMPTY are different here, and that is what makes a
+  // graded-only reel expressible. No ?g= at all means "use the defaults";
+  // ?g= with nothing after it means "no raw sections", which is what the UI
+  // writes once you switch every rarity group off. An UNRECOGNISED token still
+  // falls back to the defaults rather than silently emptying the reel.
+  const rawGroups = q.get("g");
+  if(rawGroups !== null){
+    const gsel = TK_GROUPS.map(g => g.key).filter(k => csv("g").includes(k));
+    if(gsel.length) cfg.groups = gsel;
+    else if(!rawGroups.trim()) cfg.groups = [];
+  }
   const m = (q.get("m") || "").toLowerCase();
   if(m === "low" || m === "mkt") cfg.metric = m;
   const dir = (q.get("dir") || "").toLowerCase();
@@ -426,6 +611,30 @@ function parseTickerCfg(search){
   if(q.get("bg") === "transparent") cfg.transparent = true;
   else if(hex.test(q.get("bg") || "")) cfg.bg = "#" + q.get("bg").toLowerCase();
   if(hex.test(q.get("fg") || "")) cfg.fg = "#" + q.get("fg").toLowerCase();
+  // Graded. Canonical order again, so the reel cycle is predictable.
+  const gk = csv("gk");
+  const gksel = TK_GRADED_KINDS.map(k => k.key).filter(k => gk.includes(k));
+  cfg.gkinds = gksel;
+  // Any combination of graders and grades (Zaven, 2026-09-15). Canonical order
+  // again, so the label and the query are predictable whatever the param says.
+  // An empty or unrecognised list keeps the default rather than emptying it: a
+  // graded section with no grader selected can only query nothing.
+  const grSel = (q.get("gr") || "").split(",").map(v => v.trim().toUpperCase()).filter(Boolean);
+  const graders = TK_GRADERS.filter(g => grSel.includes(g));
+  if(graders.length) cfg.graders = graders;
+  const ggSel = (q.get("gg") || "").split(",").map(v => v.trim()).filter(Boolean);
+  const grades = TK_GRADES.filter(g => ggSel.includes(g));
+  if(grades.length) cfg.grades = grades;
+  const gcSel = (q.get("gcat") || "").split(",").map(v => v.trim().toLowerCase()).filter(Boolean);
+  const gcats = TK_GRADED_CAT_KEYS.filter(k => gcSel.includes(k));
+  if(gcats.length) cfg.gcats = gcats;
+  const gmin = parseFloat(q.get("gmin"));
+  if(Number.isFinite(gmin)) cfg.gmin = Math.max(0, Math.min(100000, gmin));
+  // ⚠ The one state the reel must never be in. The chips cannot reach it (each
+  // side refuses to empty while the other already is), but a hand-edited
+  // "?g=&gk=" can — and it renders a blank bar on somebody's stream. Restoring
+  // the raw defaults is the same shape as the foil/non-foil guard above.
+  if(!cfg.groups.length && !cfg.gkinds.length) cfg.groups = TK_DEFAULTS.groups.slice();
   return cfg;
 }
 
@@ -446,7 +655,7 @@ function tickerPrintingFilter(group, cfg){
 /* The reel plan: one section per (window × group), each with one PostgREST
    query per direction — sorted and limited server-side so the page never pulls
    the full 5.8k-row matview onto a stream machine. */
-function buildTickerPlan(cfg){
+function buildTickerPlan(cfg, now){
   const dirs = cfg.dir === "both" ? ["up", "down"] : [cfg.dir];
   const per = cfg.dir === "both" ? Math.max(3, Math.ceil(cfg.count / 2)) : cfg.count;
   const pcPrefix = cfg.metric === "low" ? "pct" : "mkt_pct";
@@ -471,13 +680,106 @@ function buildTickerPlan(cfg){
         if(pf) q.set(pf.key, pf.val);
         q.set("order", pctCol + (dir === "up" ? ".desc" : ".asc"));
         q.set("limit", String(per));
-        return {dir, pctCol, priceCol, qs: q.toString()};
+        return {source: "raw", dir, pctCol, priceCol, qs: q.toString()};
       });
       sections.push({win: win.key, title: win.label + " " + dirWord,
         group: group.key, sub: group.label, detail: group.detail, requests});
     }
+    // Graded sections for this window, after its raw groups — so the reel
+    // still reads time-frame by time-frame.
+    for(const gk of TK_GRADED_KINDS.filter(k => cfg.gkinds.includes(k.key))){
+      const word = cfg.dir === "up" ? gk.label : cfg.dir === "down" ? gk.fallLabel : gk.bothLabel;
+      const rarity = tickerGradedRarityFilter(cfg.gcats);
+      const embed = rarity ? TK_GRADED_EMBED_INNER : TK_GRADED_EMBED;
+      const head = {win: win.key, title: win.label + " " + word, group: "graded:" + gk.key,
+                    sub: tickerGradedLabel(cfg.graders, cfg.grades, cfg.gcats),
+                    detail: gk.detail, graded: gk.key};
+      if(gk.key === "sales"){
+        // ⚠ Top Sales has no percent to rank by — one sale is a PRICE, not a
+        // move — so it ranks by sale_price inside a date window instead. That
+        // is also why its item renders recency where a mover renders Δ%.
+        const q = new URLSearchParams();
+        q.set("select", "card_id,printing,grader,grade,sale_price,sold_date," + embed);
+        if(rarity) q.set(rarity.key, rarity.val);
+        q.set("excluded", "is.false");
+        q.set("grader", tickerInFilter(cfg.graders));
+        q.set("grade", tickerInFilter(cfg.grades));
+        q.set("sold_date", "gte." + tickerYmdDaysAgo(tickerWindowDays(win), now));
+        if(cfg.gmin > 0) q.set("sale_price", "gte." + cfg.gmin);
+        q.set("order", "sale_price.desc");
+        q.set("limit", String(cfg.count));
+        sections.push(Object.assign({}, head, {requests: [{source: "gsales", qs: q.toString()}]}));
+      }else{
+        const pctCol = "pct" + win.col;
+        const requests = dirs.map(dir => {
+          const q = new URLSearchParams();
+          q.set("select", "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count,"
+            + embed + "," + pctCol);
+          if(rarity) q.set(rarity.key, rarity.val);
+          q.set("grader", tickerInFilter(cfg.graders));
+          q.set("grade", tickerInFilter(cfg.grades));
+          q.set("printing", "neq." + TK_GRADED_UNKNOWN_PRINTING);
+          q.set("sale_count", "gte." + TK_GRADED_MIN_SALES);
+          q.set(pctCol, dir === "up" ? "gt.0" : "lt.0");
+          if(cfg.gmin > 0) q.set("last_sold_price", "gte." + cfg.gmin);
+          q.set("order", pctCol + (dir === "up" ? ".desc" : ".asc"));
+          q.set("limit", String(per));
+          return {source: "gmovers", dir, pctCol, qs: q.toString()};
+        });
+        sections.push(Object.assign({}, head, {requests}));
+      }
+    }
+  }
+  return markTickerBrand(sections);
+}
+
+/* Which section headers carry the packs.ink credit. Zaven's call: not every
+   one — once per TIME FRAME, so it reads as part of the reel's structure
+   rather than a repeated ad.
+   ⚠ TK_BRAND_MAX_GAP is the backstop that keeps that honest, and it is not
+   decoration: "first of each window" alone degrades badly when the reel has
+   ONE time frame and many rarity groups. 1 window x 6 groups x 15 cards would
+   put 90 cards between credits — long enough that a viewer can watch a whole
+   loop and never see one, which defeats the entire reason the credit moved
+   into the content. So: first of each window, and never more than two
+   sections without one. */
+const TK_BRAND_MAX_GAP = 2;
+function markTickerBrand(sections){
+  let since = TK_BRAND_MAX_GAP, prevWin = null;
+  for(const sec of sections){
+    sec.brand = sec.win !== prevWin || since >= TK_BRAND_MAX_GAP;
+    since = sec.brand ? 0 : since + 1;
+    prevWin = sec.win;
   }
   return sections;
+}
+
+/* How long ago a slab sold, for the Top Sales column that would otherwise
+   carry a Δ%. ⚠ Parsed at MIDDAY, not midnight: a bare "2026-09-14" is UTC
+   midnight, which is the previous day west of Greenwich, and a sale would read
+   "sold 1d ago" the moment it landed. */
+function tickerSoldAgo(soldDate, now){
+  if(!soldDate) return "";
+  const then = new Date(String(soldDate) + "T12:00:00Z");
+  if(Number.isNaN(then.getTime())) return "";
+  const days = Math.round(((now || new Date()).getTime() - then.getTime()) / 864e5);
+  if(days <= 0) return "sold today";
+  if(days === 1) return "sold yesterday";
+  if(days < 7) return "sold " + days + "d ago";
+  if(days < 60) return "sold " + Math.round(days / 7) + "w ago";
+  return "sold " + Math.round(days / 30) + "mo ago";
+}
+
+/* The graded item's pill: grader + grade, plus the PRINTING when the card has
+   one worth naming. ⚠ The printing is the difference between two markets on a
+   Challenge card (8.7x on Cinderella - Stouthearted PSA 10), so it is never
+   dropped for space. The rollup writes "" for a card with no split, which is
+   the common case and correctly says nothing. */
+function tickerSlabLine(grader, grade, printing){
+  const head = [grader, grade].filter(Boolean).join(" ");
+  const p = (printing || "").trim();
+  const sayPrinting = p && p !== TK_GRADED_UNKNOWN_PRINTING;
+  return head + (sayPrinting ? " · " + p : "");
 }
 
 /* The item's third line: rarity, with a "· Foil" suffix ONLY when a
@@ -545,21 +847,42 @@ let fetchSeq = 0;
 let loadedOnce = false;
 
 /* ───────── data ───────── */
+const TK_SOURCE_TABLE = {raw: "price_movers", gmovers: "graded_sales_rollup", gsales: "graded_sales"};
+
+/* A graded row carries its card through a PostgREST embed rather than as
+   columns of its own — the rollup keys on card_id and knows nothing about
+   names. The set rides along because three different cards are called
+   "Cinderella - Stouthearted". */
+function tickerMapRow(row, r){
+  if(r.source === "raw"){
+    return {
+      name: row.name, version: row.version, rarity: row.rarity, printing: row.printing,
+      img: lorcastToProxy(row.image_small),
+      px: row[r.priceCol], pct: row[r.pctCol],
+    };
+  }
+  const c = row.cards || {};
+  const base = {
+    graded: true,
+    name: c.name, version: c.version,
+    set: (c.sets && c.sets.name) || "",
+    img: lorcastToProxy(c.image_small),
+    slab: tickerSlabLine(row.grader, row.grade, row.printing),
+  };
+  if(r.source === "gsales"){
+    return Object.assign(base, {px: row.sale_price, sold: row.sold_date});
+  }
+  return Object.assign(base, {px: row.last_sold_price, pct: row[r.pctCol]});
+}
+
 function fetchRows(r){
-  return fetch(SB_URL + "/rest/v1/price_movers?" + r.qs, {
+  const table = TK_SOURCE_TABLE[r.source] || "price_movers";
+  return fetch(SB_URL + "/rest/v1/" + table + "?" + r.qs, {
     headers: {apikey: SB_KEY, Authorization: "Bearer " + SB_KEY},
   }).then(res => {
     if(!res.ok) throw new Error("HTTP " + res.status);
     return res.json();
-  }).then(list => list.map(row => ({
-    name: row.name,
-    version: row.version,
-    rarity: row.rarity,
-    printing: row.printing,
-    img: lorcastToProxy(row.image_small),
-    px: row[r.priceCol],
-    pct: row[r.pctCol],
-  })));
+  }).then(list => list.map(row => tickerMapRow(row, r)));
 }
 
 async function loadData(){
@@ -621,17 +944,22 @@ function itemEl(r){
   nm.className = "tk-name";
   nm.textContent = r.name || "";
   stack.appendChild(nm);
-  if(r.version){
+  // A graded row puts its SET on the dim second line. Width is cheap in a
+  // marquee and height is not, and the set is what separates three different
+  // cards called "Cinderella - Stouthearted" whose PSA 10 prices are $3,972,
+  // $215 and $58.
+  const subLine = r.graded ? [r.version, r.set].filter(Boolean).join(" · ") : r.version;
+  if(subLine){
     const v = document.createElement("span");
     v.className = "tk-ver";
-    v.textContent = r.version;
+    v.textContent = subLine;
     stack.appendChild(v);
   }
-  const rarLine = tickerRarityLine(r.rarity, r.printing);
-  if(rarLine){
+  const pillText = r.graded ? r.slab : tickerRarityLine(r.rarity, r.printing);
+  if(pillText){
     const f = document.createElement("span");
-    f.className = "tk-rar";
-    f.textContent = rarLine;
+    f.className = r.graded ? "tk-rar tk-slab" : "tk-rar";
+    f.textContent = pillText;
     stack.appendChild(f);
   }
   item.appendChild(stack);
@@ -641,21 +969,26 @@ function itemEl(r){
   px.className = "tk-px";
   px.textContent = fmtPx(r.px);
   val.appendChild(px);
-  const pc = document.createElement("span");
-  pc.className = "tk-pct " + (r.pct >= 0 ? "up" : "down");
-  pc.textContent = (r.pct >= 0 ? "▲ " : "▼ ") + fmtPct(r.pct).replace(/^[+-]/, "");
-  val.appendChild(pc);
+  // Top Sales has no Δ% — one sale is a price, not a move — so recency takes
+  // that slot instead. Everything else shows the move.
+  if(r.sold){
+    const sd = document.createElement("span");
+    sd.className = "tk-sold";
+    sd.textContent = tickerSoldAgo(r.sold, new Date());
+    val.appendChild(sd);
+  }else if(r.pct != null){
+    const pc = document.createElement("span");
+    pc.className = "tk-pct " + (r.pct >= 0 ? "up" : "down");
+    pc.textContent = (r.pct >= 0 ? "▲ " : "▼ ") + fmtPct(r.pct).replace(/^[+-]/, "");
+    val.appendChild(pc);
+  }
   item.appendChild(val);
-  const dot = document.createElement("span");
-  dot.className = "tk-dot";
-  dot.textContent = "◆";
-  item.appendChild(dot);
   return item;
 }
 
 function sectionHeaderEl(sec){
   const h = document.createElement("span");
-  h.className = "tk-sec";
+  h.className = "tk-sec" + (sec.graded ? " tk-sec--graded" : "");
   h.title = sec.detail;
   const t = document.createElement("span");
   t.className = "tk-sec-title";
@@ -665,7 +998,25 @@ function sectionHeaderEl(sec){
   s.className = "tk-sec-sub";
   s.textContent = sec.sub;
   h.appendChild(s);
+  if(sec.brand) h.appendChild(sectionPowEl());
   return h;
+}
+
+/* "powered by packs.ink" + the mark, as the header's third line. Built with
+   textContent rather than innerHTML for the same reason every other node here
+   is: card names are DB text and this file never learns the habit. */
+function sectionPowEl(){
+  const p = document.createElement("span");
+  p.className = "tk-sec-pow";
+  const lead = document.createElement("span");
+  lead.textContent = "powered by";
+  const nm = document.createElement("b");
+  nm.textContent = "packs.ink";
+  const im = document.createElement("img");
+  im.src = "Logos/logo%20transparent.png";
+  im.alt = "";
+  p.append(lead, nm, im);
+  return p;
 }
 
 function renderStrip(){
@@ -744,6 +1095,15 @@ function cfgToParams(c){
   if(c.transparent) q.set("bg", "transparent");
   else if(c.bg !== TK_DEFAULTS.bg) q.set("bg", c.bg.slice(1));
   if(c.fg !== TK_DEFAULTS.fg) q.set("fg", c.fg.slice(1));
+  // Graded. gk carries the whole feature — with no kinds selected the other
+  // three are inert, so they are only written when graded is actually on.
+  if(c.gkinds.length){
+    q.set("gk", c.gkinds.join(","));
+    if(c.graders.join(",") !== TK_DEFAULTS.graders.join(",")) q.set("gr", c.graders.join(","));
+    if(c.grades.join(",") !== TK_DEFAULTS.grades.join(",")) q.set("gg", c.grades.join(","));
+    if(c.gcats.join(",") !== TK_DEFAULTS.gcats.join(",")) q.set("gcat", c.gcats.join(","));
+    if(c.gmin !== TK_DEFAULTS.gmin) q.set("gmin", String(c.gmin));
+  }
   return q;
 }
 
@@ -762,8 +1122,12 @@ function initConfigUI(){
       host.appendChild(b);
     });
   };
-  const toggleKey = (arr, key, canon) => {
-    if(arr.includes(key)) return arr.length > 1 ? arr.filter(k => k !== key) : arr;
+  // The real invariant is that the REEL must not be empty — it was written as
+  // "this group can't be the last one" back when rarity groups were the only
+  // thing in it. With graded sections available you can now switch every
+  // rarity group off, as long as graded is carrying the reel (and vice versa).
+  const toggleKey = (arr, key, canon, allowEmpty) => {
+    if(arr.includes(key)) return (arr.length > 1 || allowEmpty) ? arr.filter(k => k !== key) : arr;
     return canon.filter(k => arr.includes(k) || k === key);
   };
   const seg = (host, options, get, set) => {
@@ -780,15 +1144,40 @@ function initConfigUI(){
     chipGroup($("chipsWin"), TK_WINDOWS.map(w => ({label: w.label, value: w.key})),
       v => cfg.wins.includes(v),
       v => cfg.wins = toggleKey(cfg.wins, v, TK_WINDOWS.map(w => w.key)));
-    chipGroup($("chipsGrp"), TK_GROUPS.map(g => ({label: g.label, value: g.key, title: g.detail})),
+    const gradedCarries = cfg.gkinds.length > 0;
+    chipGroup($("chipsGrp"), TK_GROUPS.map(g => ({label: g.label, value: g.key,
+        title: g.detail + (!gradedCarries && cfg.groups.length === 1 && cfg.groups[0] === g.key
+          ? " — the reel needs at least one section; turn on a graded section to switch all of these off" : "")})),
       v => cfg.groups.includes(v),
-      v => cfg.groups = toggleKey(cfg.groups, v, TK_GROUPS.map(g => g.key)));
+      v => cfg.groups = toggleKey(cfg.groups, v, TK_GROUPS.map(g => g.key), gradedCarries));
+    $("rawOffNote").style.display = cfg.groups.length ? "none" : "";
     chipGroup($("chipsFoil"), [{label:"Non-Foil",value:"nonfoil"},{label:"Cold Foil",value:"foil"}],
       v => cfg[v],
       v => { const other = v === "foil" ? "nonfoil" : "foil";
              if(cfg[v] && !cfg[other]) return; cfg[v] = !cfg[v]; });
     seg($("segDir"), [{label:"Risers",value:"up"},{label:"Fallers",value:"down"},{label:"Both",value:"both"}], () => cfg.dir, v => cfg.dir = v);
     seg($("segMetric"), [{label:"NM Market",value:"mkt"},{label:"Low",value:"low"}], () => cfg.metric, v => cfg.metric = v);
+    chipGroup($("chipsGraded"), TK_GRADED_KINDS.map(k => ({label: k.label === "Graded Risers" ? "Graded movers" : k.label, value: k.key, title: k.detail})),
+      v => cfg.gkinds.includes(v),
+      // Emptying this is how you turn graded off — allowed exactly while the
+      // raw sections are still carrying the reel. With every rarity group off,
+      // the last graded chip is what the bar is made of and holds.
+      v => cfg.gkinds = toggleKey(cfg.gkinds, v, TK_GRADED_KINDS.map(k => k.key), cfg.groups.length > 0));
+    const gradedOn = cfg.gkinds.length > 0;
+    $("gradedOpts").style.display = gradedOn ? "" : "none";
+    // ⚠ Multi-select, and neither list may empty: a graded section with no
+    // grader (or no grade) selected can only ever query nothing, which is the
+    // empty-reel failure the chip rule exists to prevent.
+    chipGroup($("chipsGcat"), TK_GRADED_GROUPS.map(g => ({label: g.label, value: g.key, title: g.detail})),
+      v => cfg.gcats.includes(v),
+      v => cfg.gcats = toggleKey(cfg.gcats, v, TK_GRADED_CAT_KEYS, false));
+    chipGroup($("chipsGrader"), TK_GRADERS.map(g => ({label: g, value: g})),
+      v => cfg.graders.includes(v),
+      v => cfg.graders = toggleKey(cfg.graders, v, TK_GRADERS, false));
+    chipGroup($("chipsGrade"), TK_GRADES.map(g => ({label: g, value: g})),
+      v => cfg.grades.includes(v),
+      v => cfg.grades = toggleKey(cfg.grades, v, TK_GRADES, false));
+    $("inGmin").value = cfg.gmin;
     $("inCount").value = cfg.count;
     $("inMin").value = cfg.min;
     $("inSpeed").value = cfg.speed;
@@ -806,6 +1195,10 @@ function initConfigUI(){
   });
   $("inMin").addEventListener("change", () => {
     cfg.min = Math.max(0, Math.min(500, parseFloat($("inMin").value) || 0));
+    syncUI(); onCfgChange(true);
+  });
+  $("inGmin").addEventListener("change", () => {
+    cfg.gmin = Math.max(0, Math.min(100000, parseFloat($("inGmin").value) || 0));
     syncUI(); onCfgChange(true);
   });
   $("inSpeed").addEventListener("input", () => {
@@ -853,6 +1246,48 @@ if(!BAR_MODE){
 
 applyBarLook();
 loadData();
+
+/* ───────── embed height reporter ─────────
+   Embedded in the Analytics » Stream Ticker tab, this page is a CONFIGURATOR,
+   i.e. a document — and a document in a fixed-height frame with its own
+   scrollbar reads as a window cut into the page rather than part of it. So it
+   reports its own height and the host grows the frame to fit
+   (AutoHeightFrame in Index.html).
+   ⚠ One report on load is not enough: the bar re-measures when the fonts land
+   and again on every data refresh, and the card art arrives after that — a
+   one-shot would freeze the frame at the pre-data height and clip the bottom
+   card. Hence the ResizeObserver on BOTH document elements. */
+if(document.documentElement.getAttribute("data-embed") === "1"){
+  let lastH = 0;
+  /* Measure the CONTENT, not the document. scrollHeight includes whatever the
+     viewport forces onto body, which is exactly the feedback path above — so
+     even with min-height fixed, measuring the children keeps a future
+     viewport-relative rule from re-opening it. */
+  const contentHeight = () => {
+    let bottom = 0;
+    for(const el of document.body.children){
+      const r = el.getBoundingClientRect();
+      if(r.width || r.height) bottom = Math.max(bottom, r.bottom + window.scrollY);
+    }
+    const pad = parseFloat(getComputedStyle(document.body).paddingBottom) || 0;
+    return bottom + pad;
+  };
+  const reportHeight = () => {
+    const h = Math.ceil(contentHeight());
+    // Ignore sub-pixel churn, or a ResizeObserver feedback loop is possible.
+    if(!h || Math.abs(h - lastH) < 2) return;
+    lastH = h;
+    try { parent.postMessage({type: "packsink:embed-height", height: h}, location.origin); }
+    catch { /* cross-origin host, or no parent — nothing to do */ }
+  };
+  try {
+    const ro = new ResizeObserver(reportHeight);
+    ro.observe(document.documentElement);
+    if(document.body) ro.observe(document.body);
+  } catch { /* no ResizeObserver — the load handler still fires once */ }
+  window.addEventListener("load", reportHeight);
+  reportHeight();
+}
 </script>
 </body>
 </html>

@@ -5283,12 +5283,23 @@ OBS source); without it the page is a configurator with live preview + "Copy ove
   browser profile never visits the SPA.
 - **The reel is SECTIONS, cycling (windows × rarity groups)** — reworked same day on Zaven's
   feedback. `buildTickerPlan(cfg)` emits one section per (time frame × group) in window-major
-  canonical order, each introduced by an IN-REEL header ("1D Risers" over the group name) — the
-  brand cap is just logo + "packs.ink", no window label. Groups mirror the home movers banners:
-  Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities. Defaults: 1D + 1W ×
-  Chase + Rare–Legendary, risers, **NM Market basis** (Low sits frozen for weeks and would lie on
-  short windows), 15 cards/section, **$5 floor** (user-settable; keeps 10-cent cards' +300% "moves"
-  out — matches the Screener's default).
+  canonical order, each introduced by an IN-REEL header ("1D Movers" over the group name) — the
+  brand cap is the logo alone (2026-09-15; the "packs.ink" wordmark under it read as a second,
+  smaller title beside the section headers). Groups mirror the home movers banners:
+  Chase (Enchanted/Epic/Iconic) · Rare – Legendary · Promos · All Rarities.
+  **Defaults (Zaven, 2026-09-15): 1D + 1W × Chase + Rare–Legendary, direction BOTH, LOW basis,
+  20 cards/section**, **$5 floor** (user-settable; keeps 10-cent cards' +300% "moves" out —
+  matches the Screener's default).
+  ⚠ **A default here is not a free choice: changing one RETARGETS every overlay already in the
+  wild that took it.** `cfgToParams` writes only non-default params, so a streamer who accepted
+  the defaults is running a bare `?bar=1` and picks up the new ones on their next load. Anyone who
+  chose a value explicitly keeps it, because their URL names it. Measured at the $5 floor before
+  the 2026-09-15 switch: Low has 70 risers / 107 fallers on 1D against NM Market's 113/97, and
+  `both` needs only 10 a side — verified live afterwards, all four sections filled 20/20 (40
+  risers, 40 fallers). The internal read on Low's stickiness is unchanged and lives in the TCGCSV
+  notes; it is no longer said in USER-FACING copy (Zaven, 2026-09-15 — "remove the can sit frozen
+  for weeks part"). `TIP_LOW` and the Help page were already clean; the ticker's own basis hint
+  was the only place that carried it.
 - **Data**: one PostgREST query per (section × direction) against `price_movers`, server-side
   `order={pct_col}.desc&limit=n` — never the full 5.8k-row matview on a stream machine. Params:
   `w`/`g` (csv, canonical-order sets), `foil=0`/`nf=0`, `m/dir/n/min/img/brand/speed/bg/fg` — the

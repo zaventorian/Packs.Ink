@@ -89,7 +89,23 @@ SEALED_RE = re.compile(
 ACC_RE = re.compile(
     r"\b(toploaders?|top loader|sleeves?|st[aä]nder|screw\s?down|"
     r"magnetic (?:holder|case)|card saver|deck box|binder|playmat|"
-    r"centering tool|slab case|graded card case|acrylic (?:case|stand|display))\b",
+    r"centering tool|slab case|graded card case|acrylic (?:case|stand|display)|"
+    # ⚠ Lorcana PINS share their names with cards BY DESIGN (the site catalogues 44
+    # of them), so a name search nets both. Invisible to the grader sweeps — a pin
+    # listing rarely says "PSA" — but a raw keyword sweep walks straight in: of the
+    # 39 rows a probe attributed to Promo Set 1 #1 (a ~$1,500 card), 25 were 2026
+    # D23 Expo pins at $7-$30, which would have published a $14.99 "raw price".
+    #
+    # ⚠ The pattern is NARROW on purpose. A bare \bpins?\b matches 30 currently
+    # active graded rows and nearly all of them are real card sales that merely
+    # THREW IN a pin — "Brave Little Tailor D23 Expo Promo PSA 10 #1 w/ pin"
+    # ($8,500) and "#1 ... PSA 10 and promo pin" ($2,600). Measured over all 88,035
+    # graded_sales titles: broad = 30 rows lost, this one = 1 row, and that one is
+    # a genuine "Promo Enamel Pin Badge".
+    # ⚠ "pins(?=\s*:)" not "pins:" — the group is wrapped in \b(...)\b, and a \b
+    # after a consumed ":" demands a word char next, which "Pins: Brave" has not.
+    # Look ahead at the colon instead so the boundary lands after the "s".
+    r"(?:enamel|lapel)\s+pins?|pin\s+(?:set|pair|bundle)|pins(?=\s*:))\b",
     re.I,
 )
 RAW_RE = re.compile(r"\b(gradeable|ungraded|un-graded|raw card|not graded|no grade)\b", re.I)

@@ -16,8 +16,12 @@ if (start < 0 || end < 0) {
   process.exit(1);
 }
 const src = html.slice(start, end);
-const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine } = new Function(
-  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine};"
+const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine,
+        TK_BRAND_MAX_GAP, tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo,
+        TK_GRADED_MIN_SALES, TK_GRADED_GROUPS } = new Function(
+  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP," +
+        " tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo, TK_GRADED_MIN_SALES," +
+        " TK_GRADED_GROUPS};"
 )();
 
 let failures = 0;
@@ -36,14 +40,19 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
     plan.map(s => s.win + "/" + s.group),
     ["1d/chase", "1d/rareleg", "1w/chase", "1w/rareleg"]);
   check("defaults: section headers", plan.map(s => s.title + " · " + s.sub).slice(0, 2),
-    ["1D Risers · Chase", "1D Risers · Rare – Legendary"]);
+    ["1D Movers · Chase", "1D Movers · Rare – Legendary"]);
   const q = qs(plan[0].requests[0]);
-  check("defaults: order", q.order, "mkt_pct_1d.desc");
-  check("defaults: gainers only", q.mkt_pct_1d, "gt.0");
-  check("defaults: price floor $5", q.market_today, "gte.5");
+  // Defaults are both / Low / 20 (2026-09-15). Pinned because changing one
+  // RETARGETS every overlay in the wild that took it: cfgToParams writes only
+  // non-default params, so an accepted-defaults URL is a bare ?bar=1.
+  check("defaults: direction is Both", plan[0].requests.map(r => r.dir), ["up", "down"]);
+  check("defaults: basis is Low", q.order, "pct_1d.desc");
+  check("defaults: risers request is gainers-only", q.pct_1d, "gt.0");
+  check("defaults: fallers request is losers-only", qs(plan[0].requests[1]).pct_1d, "lt.0");
+  check("defaults: price floor $5 on Low", q.low_today, "gte.5");
   check("custom floor respected",
-    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).market_today, "gte.1");
-  check("defaults: limit", q.limit, "15");
+    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).low_today, "gte.1");
+  check("defaults: 20 a section, 10 each way", q.limit, "10");
   check("defaults: chase rarity filter", q.rarity, 'in.("Enchanted","Epic","Iconic")');
   check("defaults: rareleg rarity filter", qs(plan[1].requests[0]).rarity,
     'in.("Rare","Super Rare","Legendary")');
@@ -64,7 +73,10 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
 
 // Direction: fallers flip sign + sort; both = two requests splitting the budget.
 {
-  const down = buildTickerPlan(parseTickerCfg("?dir=down&w=1w&g=all"))[0];
+  // ⚠ These name the basis explicitly (m=mkt). They used to inherit it from
+  // TK_DEFAULTS, so changing the default basis broke tests that are about
+  // DIRECTION and say nothing about the basis.
+  const down = buildTickerPlan(parseTickerCfg("?dir=down&w=1w&g=all&m=mkt"))[0];
   check("down: header word", down.title, "1W Fallers");
   check("down: order asc", qs(down.requests[0]).order, "mkt_pct_7d.asc");
   check("down: losers only", qs(down.requests[0]).mkt_pct_7d, "lt.0");
@@ -107,7 +119,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("fg hex accepted", c.fg, "#0ab1c2");
   check("transparent bg", parseTickerCfg("?bg=transparent").transparent, true);
   const q = qs(buildTickerPlan(parseTickerCfg("?w=1w&g=all&min=0"))[0].requests[0]);
-  check("min=0: not-null guard", q.market_today, "not.is.null");
+  check("min=0: not-null guard", q.low_today, "not.is.null");
 }
 
 // The rarity line says "· Foil" only for base-rarity foil variants — chase
@@ -144,6 +156,261 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   const CANON = ["Common","Uncommon","Rare","Super Rare","Legendary","Enchanted","Epic","Iconic","Promo"];
   check("group rarities are canonical",
     TK_GROUPS.every(g => !g.rarities || g.rarities.every(r => CANON.includes(r))), true);
+}
+
+// Which section headers carry the packs.ink credit. Both failure directions
+// are silent: brand nothing and the bar ships with no attribution at all, brand
+// everything and it reads as an ad on every header. The bar is also the ONE
+// surface we cannot inspect in the wild — it renders inside somebody else's
+// OBS — so nothing downstream would ever report either.
+{
+  const brands = (q) => buildTickerPlan(parseTickerCfg(q)).map(s => !!s.brand);
+  check("defaults: credit on the first section of each time frame",
+    brands(""), [true, false, true, false]);
+  check("one time frame, four groups: the max-gap backstop fires",
+    brands("?w=1d&g=chase,rareleg,promo,all"), [true, false, false, true]);
+  check("a one-section reel still carries it",
+    brands("?w=1d&g=chase"), [true]);
+
+  // The two invariants, over every window x group combination the UI can build.
+  const WINS = ["1d", "1w", "1m", "3m", "6m", "1y"];
+  const GRPS = TK_GROUPS.map(g => g.key);
+  let everyWindowStarts = true, gapOk = true, sawUnbranded = false;
+  for (let nw = 1; nw <= WINS.length; nw++) {
+    for (let ng = 1; ng <= GRPS.length; ng++) {
+      const plan = buildTickerPlan(parseTickerCfg(
+        "?w=" + WINS.slice(0, nw).join(",") + "&g=" + GRPS.slice(0, ng).join(",")));
+      let run = 0, prevWin = null;
+      for (const sec of plan) {
+        if (sec.win !== prevWin && !sec.brand) everyWindowStarts = false;
+        run = sec.brand ? 0 : run + 1;
+        if (!sec.brand) sawUnbranded = true;
+        if (run > TK_BRAND_MAX_GAP) gapOk = false;
+        prevWin = sec.win;
+      }
+    }
+  }
+  check("every time frame's first section is branded", everyWindowStarts, true);
+  check("never more than TK_BRAND_MAX_GAP sections without a credit", gapOk, true);
+  // Guards the test itself: if brand were simply always true, the two checks
+  // above would pass while asserting nothing.
+  check("...and it is not merely branding everything", sawUnbranded, true);
+}
+
+// /ticker serves TWO different pages off one path, and the split is spread
+// across three files that must agree. The dangerous direction is silent and
+// severe: if the raw-overlay branch ever stops matching ?bar=, every OBS
+// browser source already in the wild starts loading the whole SPA into a
+// 1920x80 box mid-stream. Nothing on our side errors — we would hear about it
+// from viewers.
+{
+  const worker = readFileSync(join(root, "worker", "index.js"), "utf8");
+  const dev = readFileSync(join(root, "scripts", "dev_server.py"), "utf8");
+  const index = readFileSync(join(root, "Index.html"), "utf8");
+
+  check("worker: /ticker falls through to the SPA only without bar/embed",
+    /tickerIsSpa\s*=\s*url\.pathname === "\/ticker" &&[\s\S]{0,160}?!url\.searchParams\.has\("bar"\)[\s\S]{0,80}?!url\.searchParams\.has\("embed"\)/.test(worker), true);
+  check("worker: the asset lookup is skipped for the SPA case",
+    /const asset = tickerIsSpa \? null : await env\.ASSETS\.fetch\(request\)/.test(worker), true);
+  check("dev server: same bar/embed gate",
+    /if url_path == "\/ticker":[\s\S]{0,200}?if "bar" in q or "embed" in q:[\s\S]{0,80}?ticker\.html/.test(dev), true);
+  check("Index.html: /ticker is the Stream Ticker tab's canonical path",
+    /const MARKET_SUB_PATHS = \{ ticker: "\/ticker" \}/.test(index), true);
+  check("Index.html: a tab with its own path does not also write ?a=",
+    /MARKET_SUB_PATHS\[marketSub\]\) \? null : marketSub/.test(index), true);
+  check("Index.html: the ticker tab uses the auto-height frame",
+    /<\$\{AutoHeightFrame\} src=\$\{"\/ticker\?embed=1"/.test(index), true);
+  // ⚠ A hand-written /ticker?gk=sales&g= must reach the configurator. Two
+  // things eat those params otherwise and the page still looks fine, just
+  // showing a default reel: the view-sync effect strips ?g= and ?m= (Price
+  // Graphing and the Screener own those letters), and the embed src used to be
+  // a fixed string that forwarded nothing. Captured at module load because the
+  // strip runs in an effect, and gated on the landing path so arriving from
+  // /price-graphing?g=c~123 can't feed that ?g= in as a rarity group.
+  check("Index.html: ticker config params are forwarded into the embed",
+    /const TICKER_EMBED_PARAMS = \(\(\) => \{/.test(index) &&
+    /\(TICKER_EMBED_PARAMS \? "&" \+ TICKER_EMBED_PARAMS : ""\)/.test(index), true);
+  check("Index.html: ...and only for a direct /ticker landing",
+    /TICKER_EMBED_PARAMS[\s\S]{0,600}?!== "\/ticker"\) return ""/.test(index), true);
+  // The embed reporter must measure CONTENT, not the document: body carries
+  // min-height:100vh from styles.css, and inside an auto-height frame 100vh is
+  // the frame itself, so scrollHeight feeds a growth loop (measured: 6210px
+  // for a ~950px document).
+  check("ticker: embed mode zeroes the viewport-height floor",
+    /html\[data-embed="1"\] body\{[^}]*min-height:0/.test(html), true);
+  check("ticker: the reporter measures content, not scrollHeight",
+    /const contentHeight = \(\) =>/.test(html) && !/reportHeight[\s\S]{0,200}documentElement\.scrollHeight/.test(html), true);
+}
+
+// ── Graded sections ─────────────────────────────────────────────────────
+// Graded reads our own eBay sale record, not TCGplayer. Two shapes: movers
+// rank by a percent column, Top Sales ranks by sale_price inside a date window
+// because ONE SALE IS A PRICE, NOT A MOVE and there is no percent to use.
+{
+  check("graded is off by default", buildTickerPlan(parseTickerCfg("")).some(s => s.graded), false);
+
+  const plan = buildTickerPlan(parseTickerCfg("?w=1m&g=chase&gk=movers,sales"), new Date("2026-09-15T18:00:00Z"));
+  check("graded sections follow the window's raw groups",
+    plan.map(s => s.group), ["chase", "graded:movers", "graded:sales"]);
+  check("graded section headers name the tier",
+    plan.slice(1).map(s => s.title + " · " + s.sub),
+    ["1M Graded Movers · PSA · 10", "1M Top Sales · PSA · 10"]);
+
+  const mv = qs(plan[1].requests[0]);
+  check("movers: ranks by the rollup's own percent column", mv.order, "pct_30d.desc");
+  check("movers: grader + grade are exact filters", [mv.grader, mv.grade], ["eq.PSA", "eq.10"]);
+  // The two printings of a Challenge card are two different markets (8.7x on
+  // Cinderella - Stouthearted PSA 10), so a row we could not classify is an
+  // average of both and describes neither.
+  check("movers: the unclassified printing is excluded", mv.printing, "neq.Unknown");
+  // A percent built on two sales is noise wearing a percent sign.
+  check("movers: sale-count floor is applied", mv.sale_count, "gte." + TK_GRADED_MIN_SALES);
+  check("movers: embeds the card AND its set", /cards\(name,version,image_small,sets\(name\)\)/.test(mv.select), true);
+
+  const sl = qs(plan[2].requests[0]);
+  check("sales: ranks by price, not a percent", sl.order, "sale_price.desc");
+  check("sales: excluded rows never ship", sl.excluded, "is.false");
+  check("sales: window becomes a sold_date floor", sl.sold_date, "gte.2026-08-16");
+  check("sales: carries no percent filter", Object.keys(sl).some(k => k.startsWith("pct")), false);
+  check("sales: one request even when direction is Both",
+    buildTickerPlan(parseTickerCfg("?w=1m&gk=sales&dir=both"))
+      .filter(s => s.graded)[0].requests.length, 1);
+
+  check("grader/grade round-trip", (() => { const c = parseTickerCfg("?gk=sales&gr=cgc&gg=9.5");
+    return [c.graders, c.grades]; })(), [["CGC"], ["9.5"]]);
+  check("a bogus grader falls back", parseTickerCfg("?gk=sales&gr=ACME").graders, ["PSA"]);
+  check("a bogus grade falls back", parseTickerCfg("?gk=sales&gg=11").grades, ["10"]);
+}
+
+// Grader and grade are ANY COMBINATION (Zaven, 2026-09-15) — they were
+// one-of-N segmented controls, which meant "PSA 10 and CGC 10" was unaskable.
+{
+  const gq = (q) => qs(buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).requests[0]);
+  const lbl = (q) => buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).sub;
+
+  // ⚠ A single value stays on eq., so every single-grader overlay URL already
+  // in the wild produces a byte-identical query to the one it produced before.
+  check("one grader still uses eq.", gq("?gk=sales&gr=psa").grader, "eq.PSA");
+  check("several graders use in.", gq("?gk=sales&gr=psa,cgc").grader, 'in.("PSA","CGC")');
+  check("several grades use in.", gq("?gk=sales&gg=10,9.5,9").grade, 'in.("10","9.5","9")');
+  check("canonical order regardless of param order",
+    parseTickerCfg("?gk=sales&gr=sgc,psa,bgs").graders, ["PSA", "BGS", "SGC"]);
+  check("order survives into the query",
+    gq("?gk=sales&gr=sgc,psa").grader, 'in.("PSA","SGC")');
+
+  // ⚠ Neither list may empty: a graded section with no grader selected can
+  // only query nothing, which is the empty-reel failure in another costume.
+  check("an empty grader list keeps the default", parseTickerCfg("?gk=sales&gr=").graders, ["PSA"]);
+  check("an empty grade list keeps the default", parseTickerCfg("?gk=sales&gg=").grades, ["10"]);
+
+  // The label has to survive being read at a glance on a moving bar: "/" binds
+  // within a dimension, " · " separates them.
+  check("label: one of each", lbl("?gk=sales"), "PSA · 10");
+  check("label: several graders", lbl("?gk=sales&gr=psa,cgc"), "PSA/CGC · 10");
+  check("label: everything collapses to Any",
+    lbl("?gk=sales&gr=psa,cgc,bgs,sgc&gg=10,9.5,9,8.5,8"), "Any grader · Any grade");
+}
+
+// The slab pill, and the recency that replaces Δ% on a single sale.
+{
+  check("slab names the printing when there is one", tickerSlabLine("PSA", "10", "Foil"), "PSA 10 · Foil");
+  check("no printing recorded: say nothing", tickerSlabLine("PSA", "10", ""), "PSA 10");
+  check("the unclassified bucket is never printed", tickerSlabLine("PSA", "10", "Unknown"), "PSA 10");
+  const now = new Date("2026-09-15T18:00:00Z");
+  check("sold today", tickerSoldAgo("2026-09-15", now), "sold today");
+  check("sold yesterday", tickerSoldAgo("2026-09-14", now), "sold yesterday");
+  check("sold days", tickerSoldAgo("2026-09-11", now), "sold 4d ago");
+  check("sold weeks", tickerSoldAgo("2026-08-18", now), "sold 4w ago");
+  check("sold months", tickerSoldAgo("2026-06-15", now), "sold 3mo ago");
+  check("no date, no claim", tickerSoldAgo(null, now), "");
+}
+
+// ⚠ The sales window must be a LOCAL calendar date. toISOString().slice(0,10)
+// is the UTC day, so from early evening in the Americas it names TOMORROW and
+// a 1-day window asks for a day no sale can carry yet — the exact trap
+// CLAUDE.md records for every other date-column query on the site. Asserted
+// against a locally-computed date, so this catches the regression on any
+// machine whose zone is not UTC.
+{
+  const localYmd = (d) => d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  let allLocal = true;
+  for (const hour of [0, 6, 12, 19, 23]) {
+    const now = new Date(2026, 8, 15, hour, 30, 0);       // local by construction
+    if (tickerYmdDaysAgo(0, now) !== localYmd(now)) allLocal = false;
+    const back = new Date(2026, 8, 15 - 7, hour, 30, 0);
+    if (tickerYmdDaysAgo(7, now) !== localYmd(back)) allLocal = false;
+  }
+  check("sales window uses the LOCAL day at every hour", allLocal, true);
+}
+
+// A graded-only reel. Reported 2026-09-15: the rarity-group chips refused to
+// let you switch the last one off, so a graded-only bar was unreachable — the
+// "can't empty" rule was written when rarity groups were the only thing in the
+// reel, and it outlived that. The invariant is that the REEL must not be
+// empty, not that any one group survives.
+{
+  const groupsOf = (q) => buildTickerPlan(parseTickerCfg(q)).map(s => s.group);
+  check("raw can be switched off entirely when graded carries the reel",
+    groupsOf("?gk=sales&g=&w=1m"), ["graded:sales"]);
+  check("...and with both graded kinds",
+    groupsOf("?gk=movers,sales&g=&w=1m"), ["graded:movers", "graded:sales"]);
+  check("parsed cfg really holds no raw groups", parseTickerCfg("?gk=sales&g=").groups, []);
+  // ⚠ ABSENT vs EMPTY. Dropping this distinction is how "?g=mythic" would
+  // start emptying the reel instead of falling back.
+  check("an unrecognised group token still falls back to the defaults",
+    parseTickerCfg("?gk=sales&g=mythic").groups, ["chase", "rareleg"]);
+  check("no ?g= at all is untouched", parseTickerCfg("?gk=sales").groups, ["chase", "rareleg"]);
+  // The chips cannot reach this, but a hand-edited URL can, and it would put a
+  // blank bar on somebody's stream.
+  check("both sides empty falls back rather than shipping an empty bar",
+    parseTickerCfg("?g=&gk=").groups, ["chase", "rareleg"]);
+  check("graded-only reel is never empty", groupsOf("?g=&gk=").length > 0, true);
+}
+
+// Graded card-type groups (Zaven, 2026-09-15) — and a $100 floor, because a
+// slab sells for far more than the raw card.
+{
+  const gq = (q) => qs(buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).requests[0]);
+  const lbl = (q) => buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).sub;
+
+  check("graded price floor defaults to $100", parseTickerCfg("").gmin, 100);
+  check("...and reaches the sales query", gq("?gk=sales").sale_price, "gte.100");
+  check("...and the movers query", gq("?gk=movers").last_sold_price, "gte.100");
+
+  // ⚠ Graded's "Normal" is EVERY booster rarity, not the raw reel's
+  // "Rare – Legendary". Measured at a $100 floor on PSA 10: 13 Common and 27
+  // Uncommon sit beside 43 Rare / 28 Super Rare / 41 Legendary, so the raw
+  // vocabulary would drop 40 of those 152 cards with nothing on screen saying so.
+  const normal = TK_GRADED_GROUPS.find(g => g.key === "normal").rarities;
+  check("Normal covers Common through Legendary", normal,
+    ["Common", "Uncommon", "Rare", "Super Rare", "Legendary"]);
+  check("Chase is the three chase rarities",
+    TK_GRADED_GROUPS.find(g => g.key === "chase").rarities, ["Enchanted", "Epic", "Iconic"]);
+
+  // ⚠ Neither graded table carries a rarity — it lives on `cards` — so the
+  // filter goes through the embed, and the embed MUST become an inner join or
+  // PostgREST narrows the embedded object while returning every parent row,
+  // which renders as a reel of nameless items.
+  check("no filter when every type is on", "cards.rarity" in gq("?gk=sales"), false);
+  check("...and the plain embed is used then",
+    /cards\(/.test(gq("?gk=sales").select) && !/cards!inner/.test(gq("?gk=sales").select), true);
+  check("a narrowed type list filters through the embed",
+    gq("?gk=sales&gcat=chase")["cards.rarity"], 'in.("Enchanted","Epic","Iconic")');
+  check("...and switches the embed to an inner join",
+    /cards!inner\(/.test(gq("?gk=sales&gcat=chase").select), true);
+  check("two types union their rarities",
+    gq("?gk=sales&gcat=normal,promo")["cards.rarity"],
+    'in.("Common","Uncommon","Rare","Super Rare","Legendary","Promo")');
+  check("canonical order regardless of param order",
+    parseTickerCfg("?gk=sales&gcat=promo,chase").gcats, ["chase", "promo"]);
+  check("an empty list keeps every type", parseTickerCfg("?gk=sales&gcat=").gcats,
+    ["chase", "normal", "promo"]);
+
+  // The label names the type only when it narrows.
+  check("label stays short when nothing is narrowed", lbl("?gk=sales"), "PSA · 10");
+  check("label names a narrowed type", lbl("?gk=sales&gcat=chase"), "PSA · 10 · Chase");
+  check("label joins two types", lbl("?gk=sales&gcat=normal,promo"), "PSA · 10 · Normal/Promos");
 }
 
 if (failures) {

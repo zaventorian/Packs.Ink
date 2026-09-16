@@ -15,10 +15,15 @@ sale that could value the wrong slab.
 missed. This backfills that.
 
 Only ever ADDS a printing where it was NULL — never overwrites an existing value,
-since those may have been hand-corrected via the admin review UI.
+since those may have been hand-corrected via the admin review UI. The ONE
+exception is --repair-inverted-foil, and it earns it by being provable from the
+title rather than inferred: a row stored as Foil whose listing says "Non Foil" is
+the old `non[\\s-]?foil` misreading it, not a human decision. See
+test_printing_of.py.
 
     python scripts/backfill_graded_printing.py            # dry run
     python scripts/backfill_graded_printing.py --commit
+    python scripts/backfill_graded_printing.py --commit --repair-inverted-foil
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from terapeak_load import printing_of, exclude_reason_for
+from terapeak_load import printing_of, exclude_reason_for, NON_FOIL_RE
 from terapeak_match import is_nonsingle
 
 try:
@@ -82,6 +87,13 @@ def main():
                          "label changes nothing a user sees, but hiding a sale does, "
                          "and the foreign-language rule can strand a regional-only "
                          "card (Mickey - True Friend #25ja) with no sales at all.")
+    ap.add_argument("--repair-inverted-foil", action="store_true",
+                    help="also OVERWRITE rows stored as Foil/Cold Foil whose title "
+                         "explicitly says non-foil. The only overwrite this script "
+                         "will ever do, and it is safe precisely because the class is "
+                         "provable from the title: nobody hand-corrects a row to Foil "
+                         "when the listing says 'Non Foil'. Off by default anyway — "
+                         "an overwrite is not a backfill.")
     args = ap.parse_args()
 
     print("Fetching graded_sales ...")
@@ -94,6 +106,14 @@ def main():
     # and newly-detected lots that predate the widened detector.
     add_reason = collections.defaultdict(list)
     new_lots = []
+    # The one OVERWRITE class: stored as a foil, but the title says non-foil in so
+    # many words. These are not hand-corrections, they are the old `non[\s-]?foil`
+    # failing to read "No. Foil" / "NON - Foil" / "Not Foil" and falling through to
+    # the bare `"foil" in t` test — which stores the OPPOSITE of what the listing
+    # said. Rows stored as "Normal" are deliberately NOT touched: printing_of never
+    # returns that value, so they came from some other path and their provenance is
+    # unknown.
+    fix_inverted = []
 
     for r in rows:
         t = r.get("title") or ""
@@ -101,6 +121,8 @@ def main():
             p = printing_of(t)
             if p:
                 add_printing[p].append(r["item_id"])
+        elif r["printing"] in ("Foil", "Cold Foil") and NON_FOIL_RE.search(t.lower()):
+            fix_inverted.append(r)
 
         reason = exclude_reason_for(t) or ("lot" if is_nonsingle(t) else None)
         if r.get("excluded"):
@@ -117,7 +139,19 @@ def main():
     for reason, ids in sorted(add_reason.items(), key=lambda kv: -len(kv[1])):
         print(f"  {len(ids):6}  exclude_reason (backfill label) -> {reason}")
     print(f"  {len(new_lots):6}  newly detected as lot/set -> excluded")
+    print(f"  {len(fix_inverted):6}  stored Foil but title says NON-foil -> Non-Foil"
+          + ("  [APPLYING]" if args.repair_inverted_foil
+             else "  [SKIPPED — pass --repair-inverted-foil]"))
     print("=" * 70)
+
+    if fix_inverted:
+        worst = sorted(fix_inverted, key=lambda r: -float(r.get("sale_price") or 0))
+        val = sum(float(r.get("sale_price") or 0) for r in fix_inverted)
+        print(f"\ninverted-foil repair: ${val:,.2f} of sale value on the wrong side "
+              f"of a foil split")
+        for r in worst[:12]:
+            print(f"  [{r['printing']:>9s}] ${float(r.get('sale_price') or 0):>10,.2f}  "
+                  f"{(r.get('title') or '')[:60]}")
 
     if new_lots:
         by_reason = collections.Counter(reason for _, reason in new_lots)
@@ -134,6 +168,9 @@ def main():
 
     for p, ids in add_printing.items():
         patch_group(ids, {"printing": p}, f"printing={p}")
+    if fix_inverted and args.repair_inverted_foil:
+        patch_group([r["item_id"] for r in fix_inverted],
+                    {"printing": "Non-Foil"}, "repair inverted foil")
     for reason, ids in add_reason.items():
         patch_group(ids, {"exclude_reason": reason}, f"reason={reason}")
     if new_lots and args.apply_exclusions:

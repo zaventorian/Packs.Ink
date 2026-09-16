@@ -213,7 +213,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=413">
+<link rel="stylesheet" href="styles.css?v=415">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -29808,7 +29808,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>The full, current policy lives at <a href="/privacy" style=${{color:"var(--accent)"}}>packs.ink/privacy</a> — what we store, the card-scanner photo notice, the graded-data terms of use, the general terms of use, and how to delete your account. In short: browsing needs no account; signing in stores your Google email and display name; only the features you actually use store anything; we never sell data.</p>
 
     <h2>About</h2>
-    <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on X for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
+    <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on Twitter for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
     <p>Logo by Valley Creatives.</p>
 
     <h2>Data & image credits</h2>
@@ -32862,8 +32862,8 @@ function PriceDatabase({raw, sets, theme, user, collection, updateQty, onSignIn,
       money("raw_market","Raw Mkt","raw_market","raw_market","Raw (ungraded) TCGplayer NM Market",true),
       ...winCols, ...(benchmarkReady && !showSealed ? [vsMktCol] : []), signalsCol];
     // Sticky-Low flag (migration 124's low_last_changed): TCGCSV's Low is a
-    // published price aggregate, and it sits frozen for weeks on most cards
-    // — not fresh signal. Rows whose Low hasn't moved in >3
+    // published price aggregate rather than a sale, so it often goes days
+    // without changing. Rows whose Low hasn't moved in >3
     // days get a dim ⏱ with the day count in the title. Rows without the
     // field (pre-migration, sealed synth, IDB cache from before) never flag.
     const lowStaleDays = (r) => {
@@ -34755,6 +34755,59 @@ const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragme
     ${" "}<a href="/screener" onClick=${navHandler(onOpenSealed)}>Screener's Sealed mode</a>.</p>`}
 <//>`;
 
+/* The Stream Ticker's own config params, captured at MODULE LOAD.
+   ⚠ Two separate things eat them otherwise, and the result looks like a
+   working page showing the wrong reel. The view-sync effect strips ?g= and ?m=
+   (Price Graphing and the Screener own those letters, and Analytics does not),
+   and the embed src is a fixed "/ticker?embed=1" that carried nothing across
+   regardless. So a hand-written /ticker?gk=sales&g= silently opened a default
+   raw reel — which it did NOT do before /ticker became an SPA route.
+   Captured at module load because the strip happens in an effect, i.e. after
+   first render; gated on the landing path so navigating in from
+   /price-graphing?g=c~123 cannot feed that ?g= to the ticker as a rarity
+   group. The overlay URL (?bar=1) never comes through here — the worker hands
+   those straight to ticker.html. */
+const TICKER_EMBED_PARAMS = (() => {
+  try {
+    if((window.location.pathname.replace(/\/$/, "") || "/") !== "/ticker") return "";
+    const q = new URLSearchParams(window.location.search);
+    const out = new URLSearchParams();
+    for(const k of ["w","g","m","dir","n","min","foil","nf","img","brand",
+                    "speed","bg","fg","gk","gr","gg","gcat","gmin"]){
+      if(q.has(k)) out.set(k, q.get(k));
+    }
+    return out.toString();
+  } catch { return ""; }
+})();
+
+// An embedded tool page that grows to its own content rather than scrolling
+// inside a fixed box. The child posts its height (see the embed reporter in
+// ticker.html) and this sets the frame to match, so the tool reads as part of
+// the page instead of a window cut into it.
+// The fixed-height version is still right for a tool that fills its own
+// viewport and scrolls internally by design (Swiss); it is wrong for a
+// configurator, which is a document.
+function AutoHeightFrame({src, title, minHeight = 420}){
+  const ref = React.useRef(null);
+  const [h, setH] = React.useState(minHeight);
+  React.useEffect(() => {
+    const onMsg = (e) => {
+      // Same-origin only, and only from OUR frame: any page can postMessage.
+      if(e.origin !== window.location.origin) return;
+      if(!e.data || e.data.type !== "packsink:embed-height") return;
+      if(ref.current && e.source !== ref.current.contentWindow) return;
+      const next = Math.ceil(Number(e.data.height));
+      if(Number.isFinite(next) && next > 0) setH(Math.max(minHeight, next));
+    };
+    window.addEventListener("message", onMsg);
+    return () => window.removeEventListener("message", onMsg);
+  }, [minHeight]);
+  // scrolling="no" is the legacy attribute, but it is the one that still
+  // suppresses a same-origin frame's own scrollbar in every engine we target.
+  return html`<iframe ref=${ref} class="market-embed-frame market-embed-frame--auto"
+    src=${src} title=${title} scrolling="no" style=${{height: h + "px"}}></iframe>`;
+}
+
 function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
                     excludeEnchanted, setExcludeEnchanted, excludeIconic, setExcludeIconic,
                     user, collection, updateQty, onSignIn, openSetHistory, sealedPrices,
@@ -34885,7 +34938,8 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     ${sub==="ticker" && html`<${React.Fragment}>
       <${MarketHeader} title="Stream Ticker"
         sub="A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source."/>
-      <iframe class="market-embed-frame" src="/ticker?embed=1" title="Stream Ticker"></iframe>
+      <${AutoHeightFrame} src=${"/ticker?embed=1" + (TICKER_EMBED_PARAMS ? "&" + TICKER_EMBED_PARAMS : "")}
+        title="Stream Ticker"/>
     <//>`}
   </div>`;
 }
@@ -49644,6 +49698,25 @@ const VIEW_PATHS = {
   calendar:   "/calendar",
   elo:        "/elo",   // hidden — Chicagoland Lorcana Elo leaderboard (no nav entry)
 };
+// Analytics sub-tabs normally live at /analytics?a=<sub>. These own a path
+// instead, because the path is the thing we advertise: /ticker goes on stream
+// overlays and in streamers' panels, and "/analytics?a=ticker" is not a URL
+// anyone is going to type or trust. The sub-tab bar still renders around it,
+// so it reads as a tab of the site rather than a detached page.
+// ⚠ The overlay itself is still ticker.html at /ticker?bar=1 — every OBS
+// source already in the wild points there, so the worker keeps serving the raw
+// page for ?bar= and ?embed= and only falls through to the SPA without them.
+const MARKET_SUB_PATHS = { ticker: "/ticker" };
+const _normPath = (p) => (p || "/").replace(/\/$/, "") || "/";
+const MARKET_SUB_BY_PATH = Object.fromEntries(
+  Object.entries(MARKET_SUB_PATHS).map(([sub, path]) => [_normPath(path), sub]));
+// The path a given (view, sub) pair should live at.
+const viewPathFor = (view, sub) =>
+  (view === "market" && MARKET_SUB_PATHS[sub]) || VIEW_PATHS[view] || "/";
+// Every path the Analytics view can sit at, so a tool switch can tell "same
+// view, different tool" from a real view change.
+const MARKET_PATHS = new Set(
+  [VIEW_PATHS.market, ...Object.values(MARKET_SUB_PATHS)].map(_normPath));
 // Per-view document.title (+ canonical) — set by the view-sync effect so
 // section pages index distinctly and shared/bookmarked tabs read as more
 // than a bare "Packs.Ink". Keep in sync with VIEW_PATHS.
@@ -49680,6 +49753,9 @@ const PATH_TO_VIEW = (() => {
   for(const [v, p] of Object.entries(VIEW_PATHS)){
     m[p.replace(/\/$/, "") || "/"] = v;
   }
+  // A sub-tab with its own path resolves to Analytics; which sub it is comes
+  // from MARKET_SUB_BY_PATH in the marketSub initializer.
+  for(const path of Object.keys(MARKET_SUB_BY_PATH)) m[path] = "market";
   // Aliases people actually type. The view-sync effect rewrites the URL to
   // the canonical VIEW_PATHS entry on arrival, so these never persist.
   m["/help"] = "faq";
@@ -50255,6 +50331,9 @@ function App(){
   const [marketSub, setMarketSub] = useState(() => {
     try {
       if(initialUrlParams.tradeToken || initialUrlParams.trade) return "trade";
+      // A sub-tab reached by its own path (/ticker) rather than by ?a=.
+      const byPath = MARKET_SUB_BY_PATH[_normPath(window.location.pathname)];
+      if(byPath) return byPath;
       const a = new URLSearchParams(window.location.search).get("a");
       if(a && MARKET_SUBS.some(([k]) => k === a)) return a;
       // Retired keys land on their successor, presetting the mode the old tab
@@ -50323,7 +50402,7 @@ function App(){
     // ordinary home page, not re-stage the shared event view.
     if(view !== "home") clearScSeed();
     try {
-      const target = VIEW_PATHS[view] || "/";
+      const target = viewPathFor(view, marketSub);
       const current = window.location.pathname.replace(/\/$/, "") || "/";
       const normalizedTarget = target.replace(/\/$/, "") || "/";
       const url = new URL(window.location.href);
@@ -50369,10 +50448,15 @@ function App(){
       // Same page, just a param cleanup → replace. Pushing would leave a
       // history entry whose only difference is the params we just consumed,
       // so Back would land on the dirty URL and appear to do nothing.
-      const method = current === normalizedTarget ? "replaceState" : "pushState";
+      // Switching between Analytics tools is ONE navigation, and the ?a= sync
+      // below is what pushes it. /ticker is an Analytics path too, so moving to
+      // or from it must not push a second entry here — Back would otherwise
+      // land on /analytics and look like it did nothing.
+      const withinMarket = view === "market" && MARKET_PATHS.has(current);
+      const method = (current === normalizedTarget || withinMarket) ? "replaceState" : "pushState";
       window.history[method]({view}, "", url.toString());
     } catch {/* SSR / blocked storage / no-op */}
-  }, [view]);
+  }, [view, marketSub]);
   // Per-view <title> + canonical. The static head tags carry the home values
   // for crawlers/scrapers that don't run JS; this keeps the live tab honest.
   useEffect(() => {
@@ -50380,7 +50464,7 @@ function App(){
       document.title = (view === "market" && MARKET_SUB_TITLES[marketSub]) || VIEW_TITLES[view] || VIEW_TITLES.home;
       let link = document.querySelector('link[rel="canonical"]');
       if(!link){ link = document.createElement("link"); link.rel = "canonical"; document.head.appendChild(link); }
-      link.href = "https://packs.ink" + (VIEW_PATHS[view] || "/");
+      link.href = "https://packs.ink" + viewPathFor(view, marketSub);
     } catch {/* no-op */}
   }, [view, marketSub]);
   // Mirror the Analytics sub-tab into ?a=<sub> while viewing Analytics.
@@ -50394,7 +50478,11 @@ function App(){
     try {
       const url = new URL(window.location.href);
       const cur = url.searchParams.get("a");
-      const want = marketSub === "ev" ? null : marketSub;
+      // A tool with its own path carries itself in the PATH, so it must not
+      // also write ?a= — /ticker?a=ticker says the same thing twice and is not
+      // the URL we hand to streamers. This is also what rewrites an incoming
+      // /analytics?a=ticker link to the canonical /ticker.
+      const want = (marketSub === "ev" || MARKET_SUB_PATHS[marketSub]) ? null : marketSub;
       // VIEW_OWNED keeps the Elo view's params alive across Analytics, so leaving
       // the Elo sub-tab for another tool is where they have to go.
       const staleElo = marketSub !== "elo" && ELO_URL_PARAMS.some(k => url.searchParams.has(k));

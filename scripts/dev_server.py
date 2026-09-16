@@ -99,9 +99,17 @@ class SPAHandler(http.server.SimpleHTTPRequestHandler):
         # and the embed flag). Rewriting self.path here drops the query only
         # for the on-disk lookup; the browser's URL, which is what the page's
         # own JS reads, is untouched.
+        # /ticker is TWO pages behind one path: with ?bar= or ?embed= it is
+        # the raw overlay page, without them it is the SPA's Analytics >>
+        # Stream Ticker tab (the URL we advertise to streamers). Mirrors the
+        # worker. Every OBS source in the wild carries ?bar=1, so the raw page
+        # stays exactly where it was; anything else falls through to the SPA
+        # shell at the bottom of this method.
         if url_path == "/ticker":
-            self.path = "/ticker.html"
-            return super().do_GET()
+            q = urllib.parse.parse_qs(parsed.query)
+            if "bar" in q or "embed" in q:
+                self.path = "/ticker.html"
+                return super().do_GET()
         # Unlisted affiliate link page. Same pretty-URL fall-through as
         # /ticker in prod, so no worker route is needed there either.
         if url_path == "/picks":
