@@ -145,5 +145,86 @@ store = { "packsink:homeLayout": layoutWith({ collection: { pair: "chase" } }) }
 check("a non-pairable panel cannot be paired",
   initHomeLayout().find((p) => p.key === "collection").pair, null);
 
+// -- the rail swap (2026-09-15) -------------------------------------------
+// The calendar moved to the 360px right rail; the Toolbox and Set EV dropped to
+// the foot of the 240px left one. Every failure here is silent — a stamp that
+// never fires just leaves the old arrangement in place, and one that fires too
+// eagerly silently relocates a panel the user positioned by hand.
+//
+// The layout as it stood BEFORE the swap: calendar top-of-left, the two compact
+// panels in the right rail.
+const preSwap = () => [
+  { key: "calendar", col: "left", on: true },
+  { key: "news", col: "left", on: true },
+  { key: "following", col: "left", on: true },
+  { key: "tournaments", col: "left", on: true },
+  { key: "tools", col: "right", on: true },
+  { key: "setEv", col: "right", on: true },
+  { key: "collection", col: "right", on: true },
+];
+const idxOf = (list, key) => list.findIndex((p) => p.key === key);
+
+store = { "packsink:homeLayout": JSON.stringify(preSwap()) };
+const swapped = initHomeLayout();
+check("calendar moves to the right rail", colOf(swapped, "calendar"), "right");
+check("toolbox moves to the left rail", colOf(swapped, "tools"), "left");
+check("set EV moves to the left rail", colOf(swapped, "setEv"), "left");
+check("rail-swap stamp written", store["packsink:homeLayoutRailSwap"], "1");
+// Position matters as much as column: the calendar is the scanning surface and
+// belongs ABOVE the collection chart, not under it.
+check("calendar leads the right rail",
+  swapped.filter((p) => p.col === "right")[0].key, "calendar");
+// ...and the two compact panels land at the FOOT of the left rail, in order,
+// below the three list boxes that were already there.
+check("toolbox sits below the list boxes",
+  idxOf(swapped, "tools") > idxOf(swapped, "tournaments"), true);
+check("left rail ends tools, setEv",
+  swapped.filter((p) => p.col === "left").slice(-2).map((p) => p.key).join(","), "tools,setEv");
+
+// Stamped, not coerced: run it again and nothing moves a second time.
+store["packsink:homeLayout"] = JSON.stringify(swapped);
+const twice = initHomeLayout();
+check("re-running the init is a no-op",
+  twice.map((p) => p.key + ":" + p.col).join("|"),
+  swapped.map((p) => p.key + ":" + p.col).join("|"));
+
+// A deliberate placement is left alone. Someone who dragged the calendar to the
+// centre column meant it; the swap must not reach in and undo that.
+store = {
+  "packsink:homeLayout": JSON.stringify(
+    preSwap().map((p) => (p.key === "calendar" ? { ...p, col: "main" } : p)),
+  ),
+};
+check("a hand-placed calendar is not moved", colOf(initHomeLayout(), "calendar"), "main");
+store = {
+  "packsink:homeLayout": JSON.stringify(
+    preSwap().map((p) => (p.key === "tools" ? { ...p, col: "main" } : p)),
+  ),
+};
+check("a hand-placed toolbox is not moved", colOf(initHomeLayout(), "tools"), "main");
+
+// The gap a column-ONLY move would have left: a browser that never saw the
+// calendar stamp had the panel APPENDED carrying today's default ("right"),
+// which is the right COLUMN but the bottom of it. Re-seating has to be by
+// position too, or it renders under the collection chart forever.
+store = {
+  "packsink:homeLayout": JSON.stringify([
+    { key: "news", col: "left", on: true },
+    { key: "collection", col: "right", on: true },
+    { key: "calendar", col: "right", on: true },
+  ]),
+};
+check("an appended calendar is re-seated to the top of its rail",
+  initHomeLayout().filter((p) => p.col === "right")[0].key, "calendar");
+
+// A fresh browser gets the new arrangement straight from HOME_PANELS.
+store = {};
+const fresh = initHomeLayout();
+check("fresh browser: calendar on the right", colOf(fresh, "calendar"), "right");
+check("fresh browser: toolbox on the left", colOf(fresh, "tools"), "left");
+check("fresh browser: set EV on the left", colOf(fresh, "setEv"), "left");
+check("fresh browser: calendar leads the right rail",
+  fresh.filter((p) => p.col === "right")[0].key, "calendar");
+
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
 process.exit(failed ? 1 : 0);

@@ -36476,25 +36476,31 @@ const HOME_COLUMNS = [
   {key:"right",    label:"Right rail"},
 ];
 const HOME_PANELS = [
-  // "What's coming for the game", and FIRST in the left rail on purpose — above
-  // the news feed, per Zaven. A dated list of what is about to happen is the
-  // thing you scan a home page for; news is what you read once you are there.
-  // Its position here is what puts it above news for a browser with no stored
-  // layout (defaultHomeLayout keeps this order); an existing browser is hoisted
-  // once by HOME_LAYOUT_CALENDAR_KEY, since normalizeHomeLayout APPENDS new
-  // keys and would otherwise bury it at the foot of the column.
-  {key:"calendar",    label:"Lorcana Calendar",     col:"left"},
   {key:"news",        label:"News feed",            col:"left"},
   {key:"following",   label:"Following feed",       col:"left"},
   {key:"tournaments", label:"Tournament results",   col:"left"},
-  {key:"tools",       label:"Analytics toolbox",    col:"right"},
+  // ⚠ THE TWO RAILS ARE NOT THE SAME WIDTH — left is 240px, right is 360px
+  // (.home-grid) — so "which rail" is really "does this panel need the extra
+  // 120px" (2026-09-15, Zaven). The Toolbox is a two-column chip grid and Set
+  // EV is a five-row table of short numbers: both read fine narrow, so they
+  // take the foot of the left rail. The calendar's rows carry a date, a
+  // countdown, a subtitle AND a title, and at 240px every one of them ellipsed.
+  {key:"tools",       label:"Analytics toolbox",    col:"left"},
+  {key:"setEv",       label:"Set EV",               col:"left"},
+  // "What's coming for the game", and FIRST in the right rail on purpose: a
+  // dated list of what is about to happen is the thing you scan a home page
+  // for. Its position here is what orders it for a browser with no stored
+  // layout (defaultHomeLayout keeps this order); an existing browser is moved
+  // once by HOME_LAYOUT_RAIL_SWAP_KEY, since normalizeHomeLayout keeps any
+  // stored column that is still a valid column name and the new default would
+  // otherwise never reach anyone who has loaded the site.
+  {key:"calendar",    label:"Lorcana Calendar",     col:"right"},
   // There was a "Gear" panel here, an accessories list in the right rail.
   // Removed 2026-09-12 (Zaven): once the "Lorcana on Amazon" row shipped it was
   // a second Amazon prompt on the same page, and the row already reaches the
   // same place — its title links to /gear, which is the whole catalogue.
   // normalizeHomeLayout DROPS a key it doesn't recognise, so every stored
   // layout holding "gear" repairs itself on the next load with no migration.
-  {key:"setEv",       label:"Set EV",               col:"right"},
   {key:"collection",  label:"Your Collection value",col:"right"},
   // Off by default: it is empty for anyone with no graded slabs, and the
   // people who do want it turn it on from the banner in the Graded collection.
@@ -36589,6 +36595,16 @@ const HOME_TABLE_SHORTCUT_KEYS = ["dice", "lore"];
 // It belongs above the news feed, so hoist it to the top of the left rail once.
 // Stamped rather than coerced, so moving it afterwards sticks.
 const HOME_LAYOUT_CALENDAR_KEY = "packsink:homeLayoutCalendarRail";
+// One-shot stamp for the rail swap (2026-09-15): the calendar moves to the
+// 360px right rail and the Toolbox + Set EV drop to the foot of the 240px left
+// one. A default-column change reaches NOBODY on its own — the layout is
+// persisted on every page load and normalizeHomeLayout keeps any stored column
+// that is still a valid name — so it needs a stamp like every one before it.
+// ⚠ Each move is guarded on the panel still being where the OLD default put
+// it, so a deliberate re-placement (calendar dragged to `main`, say) is left
+// alone. Stamped rather than coerced, so a re-pick afterwards sticks.
+const HOME_LAYOUT_RAIL_SWAP_KEY = "packsink:homeLayoutRailSwap";
+const HOME_RAIL_SWAP_TO_LEFT = ["tools", "setEv"];
 // Movers-banner ordering (edit mode ▲▼). null = the built-in order, where
 // the newest-set banner floats top during release week and bottom after; a
 // stored order is explicit and retires that heuristic.
@@ -40280,18 +40296,44 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
 // all. Date, countdown and subtitle share one muted line; the title gets the
 // full width on its own — which on a store row is the STORE, so the shop you
 // followed is the one thing in the row that can never ellipse away.
+// A row prints only what CHANGED from the row above it.
+//
+// ⚠ Sep 19 carries three CCQs, and the panel spent SIX lines saying three
+// things: every row repeated the date, the countdown and the category, and the
+// titles — the only part that differs — were the half being ellipsed
+// (Zaven, 2026-09-15). The date and countdown now lead a day and a repeated
+// subtitle is dropped, so that day is four lines. A day with one event is
+// byte-identical to before: the common case must not pay for the fix.
+//
+// ⚠ The comparison is against the PREVIOUS ROW, which is only sound because
+// `rows` is date-sorted (calendarPanelWindow slices an already-sorted pool).
+// Grouping into buckets would be equivalent and would also have to be re-keyed
+// every time a row is inserted; a running compare cannot fall out of step.
+const calPanelRows = (rows, today) => {
+  let prevDay = null, prevSub = null;
+  return (rows || []).map(ev => {
+    const day = ev.starts_on;
+    const sub = calEventSubtitle(ev);
+    const firstOfDay = day !== prevDay;
+    const meta = firstOfDay
+      ? [calDayLabel(day), calCountdown(ev, today), sub].filter(Boolean).join(" · ")
+      : (sub && sub !== prevSub ? sub : "");
+    prevDay = day; prevSub = sub;
+    return {ev, meta, firstOfDay};
+  });
+};
 const CalendarPanelList = ({rows, today, onOpen, art}) => {
   const hover = useCalHoverCard(art);
+  const items = useMemo(() => calPanelRows(rows, today), [rows, today]);
   // ⚠ The card is a SIBLING of the <ul>, not a child: a <ul> may only contain
   // <li>, and invalid markup here is the same class of mistake as a button
   // inside a button. It is position:fixed, so the wrapper costs no layout.
   return html`<${React.Fragment}><ul class="cal-panel-list">
-    ${rows.map(ev => html`<li key=${ev.id}>
-      <button type="button" class="cal-panel-row" ...${hover.bind(ev)}
-        aria-label=${calEventFullLabel(ev)} onClick=${() => onOpen(ev)}>
-        <span class="cal-panel-meta">
-          ${[calDayLabel(ev.starts_on), calCountdown(ev, today), calEventSubtitle(ev)].filter(Boolean).join(" · ")}
-        </span>
+    ${items.map(({ev, meta, firstOfDay}) => html`<li key=${ev.id} class=${firstOfDay ? "cal-panel-day" : ""}>
+      <button type="button" class=${"cal-panel-row" + (firstOfDay ? "" : " cal-panel-row--cont")} ...${hover.bind(ev)}
+        aria-label=${[calDayLabel(ev.starts_on), calEventFullLabel(ev)].filter(Boolean).join(" — ")}
+        onClick=${() => onOpen(ev)}>
+        ${meta && html`<span class="cal-panel-meta">${meta}</span>`}
         <span class="cal-panel-title"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calEventTitle(ev)}</span>${calEstBadge(ev)}</span>
       </button>
     </li>`)}
@@ -50979,7 +51021,7 @@ function App(){
   // any more, so move news to the rail once. Stamped rather than coerced, so a
   // deliberate re-pick of Top afterwards survives the next load.
   const [homeLayout, setHomeLayout] = useState(() => {
-    let fixNews = false, hoistTools = false, onShortcuts = false, hoistCal = false;
+    let fixNews = false, hoistTools = false, onShortcuts = false, hoistCal = false, swapRails = false;
     try {
       fixNews = !localStorage.getItem(HOME_LAYOUT_NEWS_FIX_KEY);
       if(fixNews) localStorage.setItem(HOME_LAYOUT_NEWS_FIX_KEY, "1");
@@ -50989,6 +51031,8 @@ function App(){
       if(onShortcuts) localStorage.setItem(HOME_LAYOUT_TABLE_SHORTCUTS_KEY, "1");
       hoistCal = !localStorage.getItem(HOME_LAYOUT_CALENDAR_KEY);
       if(hoistCal) localStorage.setItem(HOME_LAYOUT_CALENDAR_KEY, "1");
+      swapRails = !localStorage.getItem(HOME_LAYOUT_RAIL_SWAP_KEY);
+      if(swapRails) localStorage.setItem(HOME_LAYOUT_RAIL_SWAP_KEY, "1");
     } catch {}
     try {
       const stored = localStorage.getItem(HOME_LAYOUT_KEY);
@@ -51025,6 +51069,29 @@ function App(){
             list = list.filter(p => p.key !== "calendar");
             const i = list.findIndex(p => p.col === "left");
             if(i >= 0) list.splice(i, 0, cal); else list.push(cal);
+          }
+        }
+        // The rails swap: the calendar wants the wider column and the two
+        // compact panels do not. ⚠ Re-seating is by POSITION as well as column
+        // — a browser that never saw hoistCal had the calendar APPENDED with
+        // today's default ("right"), which is the right column but the bottom of
+        // it, so a column-only move would leave it under the collection chart.
+        if(swapRails){
+          const cal = list.find(p => p.key === "calendar");
+          if(cal && (cal.col === "left" || cal.col === "right")){
+            list = list.filter(p => p.key !== "calendar");
+            const moved = {...cal, col: "right"};
+            const i = list.findIndex(p => p.col === "right");
+            if(i >= 0) list.splice(i, 0, moved); else list.push(moved);
+          }
+          for(const key of HOME_RAIL_SWAP_TO_LEFT){
+            const panel = list.find(p => p.key === key);
+            if(!panel || panel.col !== "right") continue;
+            list = list.filter(p => p.key !== key);
+            const moved = {...panel, col: "left"};
+            let last = -1;
+            list.forEach((p, idx) => { if(p.col === "left") last = idx; });
+            if(last >= 0) list.splice(last + 1, 0, moved); else list.push(moved);
           }
         }
         return list;

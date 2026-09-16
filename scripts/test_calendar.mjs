@@ -102,6 +102,9 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const calendarPanelWindow = (pool, todayYmd, size, page) => {", NL + "};"),
   grab("const calChipLabel = (ev) => (ev && ev.kind === \"store\")", ": calEventTitle(ev);"),
   grab("const calCountdown = (ev, todayYmd) => {", NL + "};"),
+  grabLine("const CAL_DOW_SHORT = "),
+  grab("const calDayLabel = (ymd) => {", NL + "};"),
+  grab("const calPanelRows = (rows, today) => {", NL + "};"),
   grabLine("const _calEnc = "),
   grab("const icsEscape = (s) =>", ".replace(/\\r\\n|\\r|\\n/g, \"\\\\n\");"),
   grab("const icsFold = (line) => {", NL + "};"),
@@ -151,7 +154,8 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,",
   " calendarSetEstimates, calendarEstimatedSetEntries, calEstimated, calTimelineSkip,",
   " UPCOMING_SET_NAMES, SET_CADENCE_DAYS, SET_RELEASE_DATES, calSetOrdinal, calSetOrdinalLabel,",
-  " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST};",
+  " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,",
+  " calPanelRows, calDayLabel};",
 ].join(NL)));
 
 const {
@@ -162,6 +166,7 @@ const {
   calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
+  calPanelRows, calDayLabel,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
@@ -1560,6 +1565,63 @@ ok("above the rail the label stays one line",
 ok("the date is always its own field",
   [lpSet, lpProdSub, lpProdColon, lpProdPlain, lpAbove].every(
     lp => lp.range && !String(lp.qual || "").includes(lp.range)));
+
+// -- the panel list prints only what changed ------------------------------
+// Sep 19 carries three CCQs. Before this the panel spent six lines saying three
+// things, repeating the date, the countdown and the category on every row while
+// the titles — the only part that differs — were the half being ellipsed.
+//
+// Both directions are silent failures: too eager and a row loses the date it
+// needed, too shy and the repetition comes straight back.
+const pr = (evs) => calPanelRows(evs, "2026-09-15");
+const ccq = (id, day, title) => ({id, kind: "ccq", starts_on: day, title,
+  subtitle: "Challenge Championship Qualifier"});
+
+const three = pr([ccq("a", "2026-09-19", "Brainwash Cards 2K"),
+                  ccq("b", "2026-09-19", "Utopia Fantasy Festival"),
+                  ccq("c", "2026-09-19", "Third Qualifier")]);
+ok("a day leads with its date, countdown and subtitle",
+  three[0].meta === "Sat Sep 19 · in 4 days · Challenge Championship Qualifier", three[0].meta);
+ok("a repeat of the same day prints nothing at all",
+  three[1].meta === "" && three[2].meta === "", JSON.stringify(three.map(r => r.meta)));
+ok("only the day's first row is marked",
+  three.map(r => r.firstOfDay).join(",") === "true,false,false");
+// The whole point: six rendered lines become four.
+ok("three CCQs cost four lines, not six",
+  three.reduce((n, r) => n + (r.meta ? 2 : 1), 0) === 4);
+
+// A single-event day must be byte-identical to the old behaviour — the common
+// case does not pay for the multi-event fix.
+const one = pr([ccq("a", "2026-09-26", "CCS Raleigh 10K Weekend")]);
+ok("a one-event day is unchanged",
+  one[0].meta === "Sat Sep 26 · in 2 wk · Challenge Championship Qualifier"
+  && one[0].firstOfDay === true, one[0].meta);
+
+// A new day always reprints, even when its subtitle matches the row above it.
+const twoDays = pr([ccq("a", "2026-09-19", "One"), ccq("b", "2026-09-20", "Two")]);
+ok("a new day reprints even with the same subtitle",
+  twoDays[1].meta === "Sun Sep 20 · in 5 days · Challenge Championship Qualifier",
+  twoDays[1].meta);
+
+// A mixed day keeps what differs: the second row drops the date but keeps its
+// own subtitle, because that is the part the row above did not already say.
+const mixed = pr([
+  ccq("a", "2026-09-19", "Utopia Fantasy Festival"),
+  {id: "s", kind: "store", starts_on: "2026-09-19", title: "Dice Dojo Set Championship",
+   subtitle: "Dice Dojo"},
+]);
+ok("a differing subtitle survives on a continuation row",
+  mixed[1].meta === "Set Championship", mixed[1].meta);
+
+// ...and a continuation row with NO subtitle adds nothing rather than a stray
+// separator.
+const noSub = pr([
+  ccq("a", "2026-09-19", "Utopia Fantasy Festival"),
+  {id: "x", kind: "set", starts_on: "2026-09-19", title: "Hyperia City", subtitle: "Prerelease"},
+]);
+ok("a subtitle-less continuation row prints nothing", noSub[1].meta === "", noSub[1].meta);
+
+ok("an empty list is an empty list", pr([]).length === 0 && pr(null).length === 0);
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

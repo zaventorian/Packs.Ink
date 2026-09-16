@@ -3239,6 +3239,23 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-ev-strip-amzn{display:block;margin-top:1px;font-size:9.5px;font-weight:600;
   color:var(--text-muted);text-decoration:none;}
 .home-ev-strip-amzn:hover{color:var(--accent);text-decoration:underline;}
+/* ⚠ In the 240px left rail the four-column row gives the set name 58px and the
+   names want up to 106 — "Whispers in the Well" rendered as about half of
+   itself. So the name takes a line of its own and the three numbers sit under
+   the headers, which is the same tables-become-stacks trade the EV and Sealed
+   rows make on a phone. The head row's "Set" cell goes with it: the name is
+   directly above its own numbers and does not need labelling twice.
+   Scoped to the column, not a breakpoint — the rail is a fixed 240px, and in
+   the 360px one the four columns fit as they always did. */
+.home-left-col .home-ev-strip-row{grid-template-columns:repeat(3,minmax(0,1fr));row-gap:1px;}
+.home-left-col .home-ev-strip-set{grid-column:1/-1;}
+.home-left-col .home-ev-strip-head-row > div:first-child{display:none;}
+/* The title and its two checkboxes do not fit one 222px line, and a flex row
+   that cannot fit breaks INSIDE the words — "RECENT SET / EV" and "No /
+   chase". Let the toggles drop to their own line instead, and keep both of
+   them whole. It self-adjusts: where the three fit, nothing wraps. */
+.home-left-col .home-ev-strip-head{flex-wrap:wrap;gap:4px 10px;}
+.home-left-col .home-ev-strip-toggles label{white-space:nowrap;}
 
 /* Following feed — left column above the first banner. Single-line rows:
    green/yellow dot (new vs updated) · deck name · creator + time · ink icons.
@@ -3448,6 +3465,14 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .home-toolbox-title{text-decoration:none;display:block;}
 .home-toolbox-title:hover{text-decoration:underline;}
 .home-toolbox-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;}
+/* ⚠ ONE column in the left rail, which is 240px against the right rail's 360.
+   Two columns there give a chip 108px and its label 64, and the labels want up
+   to 83 — so "Expected Value", "Trade Compare" and "Set Breakdown" all ellipsed,
+   and a clipped name on a NAVIGATION chip is the one thing it cannot afford.
+   Scoped to the column rather than a container query because the rail is a
+   fixed width: moved anywhere wider, the chips pair up again. It costs ~100px
+   of height at the foot of the longest column, which is below the fold anyway. */
+.home-left-col .home-toolbox-grid{grid-template-columns:minmax(0,1fr);}
 /* ── /gear — the Amazon directory page ─────────────────────────────────── */
 .gear-page{max-width:1080px;}
 .gear-hero{margin:0 0 14px;}
@@ -3825,6 +3850,12 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
      169px box and clipped 6 of 6 meta lines and 5 of 6 titles. Full width is
      the difference between a list you can read and a column of ellipses. */
   .home-left-col > .home-feed--calendar{grid-column:1 / -1;}
+  /* ⚠ Set EV spans both for the same reason (2026-09-15). It moved into this
+     rail when the calendar left it, and a half cell here is 176px — narrower
+     than the 240px rail it was tuned for — where even the stacked three-column
+     row clipped every price. The toolbox next to it is one column of chips and
+     reads fine at 162px, so only this one needs the full width. */
+  .home-left-col > .home-ev-strip{grid-column:1 / -1;}
 }
 @media (max-width:1100px){
   /* Stretch the panel full-width inside the stacked column — desktop's
@@ -9796,8 +9827,7 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
    rail is ~200px, and anything that takes width from the title takes the only
    part of the row that says what the event IS. */
 .cal-panel-row{display:flex;flex-direction:column;gap:1px;padding:6px 2px;
-  border-bottom:1px solid var(--border);min-width:0;}
-.cal-panel-row:last-child{border-bottom:none;}
+  min-width:0;}
 /* Sentence case, no letter-spacing: uppercasing this line cost ~15% of its
    width and clipped the store name on every single row, to make secondary text
    look like a tag. Date and countdown lead, so the part that ellipses is the
@@ -10125,8 +10155,17 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
   border-bottom:1px solid var(--border);margin-bottom:2px;}
 /* The rows are buttons now (clicking opens the event), so strip the button look. */
 .cal-panel-list button.cal-panel-row{width:100%;background:none;border:none;
-  border-bottom:1px solid var(--border);text-align:left;cursor:pointer;font:inherit;}
-.cal-panel-list li:last-child button.cal-panel-row{border-bottom:none;}
+  text-align:left;cursor:pointer;font:inherit;}
+/* ⚠ The hairline separates DAYS, not rows — three CCQs on the 19th are three
+   things happening that day, not three unrelated rows that share a date. So it
+   sits on the TOP of each day's first row (border-bottom would need a
+   ":last row of the day" selector CSS cannot express from here), and the very
+   first row of the list has nothing above it to be separated from. */
+.cal-panel-list li.cal-panel-day button.cal-panel-row{border-top:1px solid var(--border);}
+.cal-panel-list li:first-child button.cal-panel-row{border-top:none;}
+/* A continuation row is a single title line hanging under its day: no top gap,
+   and indented so the day above reads as its heading. */
+.cal-panel-list button.cal-panel-row--cont{padding:0 2px 6px 14px;}
 .cal-panel-list button.cal-panel-row:hover{background:var(--bg-surface-hover);}
 .cal-panel-list button.cal-panel-row:hover .cal-panel-title{color:var(--accent);}
 
