@@ -75,8 +75,9 @@ LEADERS = {
     "the-vine-towering-stalk":           ("Steel",    "The Vine - Towering Stalk", {}),
     "tinker-bell-giant-fairy":           ("Steel",    "Tinker Bell - Giant Fairy", {}),
 }
-# NOTE: 19 leaders, 18 starter decks — the Beta 2 leader (The Vine) has no list
-# yet. Nothing breaks; this dict is only consulted for slugs a deck file names.
+# NOTE: a new Beta wave adds leaders here before anyone has written their list.
+# Nothing breaks; this dict is only consulted for slugs a deck file names, and
+# main() prints any leader with no file so the gap reports itself.
 INK_LIMIT = 3   # Coconut's one concession: a third ink, one of which is the leader's
 MIN_CARDS = 60
 
