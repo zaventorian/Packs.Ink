@@ -91,6 +91,10 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const _calSetPhase = (ev) => {", NL + "};"),
   grabLine("const CAL_STORE_KIND_ICONS = "),
   grab("const calendarEventIcon = (ev, artIndex) => {", NL + "};"),
+  grabLine("const CAL_KIND_SHORT = "),
+  grab("const CAL_KIND_PLURAL = {", NL + "};"),
+  grabLine("const calGroupKindLabel = "),
+  grab("const calCellItems = (events, art, openGroups, date) => {", NL + "};"),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -161,6 +165,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calendarSetEstimates, calendarEstimatedSetEntries, calEstimated, calTimelineSkip,",
   " UPCOMING_SET_NAMES, SET_CADENCE_DAYS, SET_RELEASE_DATES, calSetOrdinal, calSetOrdinalLabel,",
   " CAL_TL_LABEL_PX, CAL_TL_MAX_STORE_LANES, CAL_TL_STORE_ROWS, CAL_TL_STORE_REST,",
+  " calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,",
   " calPanelRows, calDayLabel};",
 ].join(NL)));
 
@@ -173,6 +178,7 @@ const {
   osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,
   calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS,
   calPanelRows, calDayLabel,
+  calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
   calendarArtIndex, calendarEventArt, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
@@ -1669,6 +1675,97 @@ const noSub = pr([
 ok("a subtitle-less continuation row prints nothing", noSub[1].meta === "", noSub[1].meta);
 
 ok("an empty list is an empty list", pr([]).length === 0 && pr(null).length === 0);
+
+// ── a month cell collapses repeats, and knows what it must NOT collapse ────
+// Three CCQs on one day drew three identical medals down three rows. They
+// collapse to one "CCQ x3" chip now - but the rule is the ICON, not the kind,
+// and the difference is load-bearing in exactly one place: a set's prerelease
+// and its LGS release fall on the same Friday on every recent set. Collapsing
+// those to "Release x2" would delete the phase words, which are the entire
+// reason a set chip is labelled by phase rather than by name.
+//
+// Both directions are silent. Under-collapsing just looks like the old bug;
+// over-collapsing quietly destroys information and still looks tidy.
+console.log("");
+const cgCell = (list, open, date) => calCellItems(list, null, open, date || "2026-09-19");
+const cgMk = (id, kind, extra) => Object.assign({id, kind, starts_on: "2026-09-19"}, extra || {});
+
+const cgThree = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
+                        cgMk("b", "ccq", {title: "Brainwash Cards 2K CCQ"}),
+                        cgMk("c", "ccq", {title: "Utopica Fantasy Festival CCQ"})]);
+ok("three CCQs on one day become one chip", cgThree.length === 1, cgThree.length);
+ok("and that chip carries all three", cgThree[0].group === true && cgThree[0].events.length === 3);
+ok("the chip word is the short kind", CAL_KIND_SHORT.ccq === "CCQ");
+ok("the hover names them in the plural", calGroupKindLabel("ccq", 3) === "3 qualifiers",
+  calGroupKindLabel("ccq", 3));
+
+// THE case: two set rows, one day, two different phases.
+const cgSetDay = [cgMk("p", "set", {title: "Hyperia City", subtitle: "Prerelease"}),
+                  cgMk("l", "set", {title: "Hyperia City", subtitle: "LGS release"})];
+const cgIcons = cgSetDay.map((e) => calendarEventIcon(e, null).icon);
+ok("a prerelease and an LGS release draw different icons", cgIcons[0] !== cgIcons[1],
+  cgIcons.join("/"));
+const cgTwo = cgCell(cgSetDay);
+ok("so one day's two set phases stay two chips", cgTwo.length === 2, cgTwo.length);
+ok("and neither of them is a group",
+  cgTwo.every((it) => !it.group && it.ev), JSON.stringify(cgTwo.map((it) => !!it.group)));
+
+// Different kinds never merge, even when both are "a tournament".
+const cgMix = cgCell([cgMk("d", "dlc", {title: "DLC Bangkok"}),
+                      cgMk("q", "ccq", {title: "Osaka CCQ"})]);
+ok("a Challenge and a qualifier stay apart", cgMix.length === 2, cgMix.length);
+
+const cgOne = cgCell([cgMk("a", "ccq", {title: "One"})]);
+ok("a lone event is never a group", cgOne.length === 1 && !cgOne[0].group && !!cgOne[0].ev);
+
+// Clicking a group expands it back to its members, in the order they arrived.
+const cgKey = cgThree[0].key;
+const cgOpen = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
+                       cgMk("b", "ccq", {title: "Brainwash Cards 2K CCQ"}),
+                       cgMk("c", "ccq", {title: "Utopica Fantasy Festival CCQ"})], new Set([cgKey]));
+ok("an opened group expands to its members",
+  cgOpen.length === 3 && cgOpen.every((it) => !!it.ev), cgOpen.length);
+ok("in the order they arrived",
+  cgOpen.map((it) => it.ev.id).join(",") === "a,b,c", cgOpen.map((it) => it.ev.id).join(","));
+
+// The key is date-scoped, or opening Sep 19's CCQs would open Sep 26's too.
+const cgOther = cgCell([cgMk("x", "ccq", {title: "A"}), cgMk("y", "ccq", {title: "B"})],
+  null, "2026-09-26");
+ok("group keys are scoped to their day", cgOther[0].key !== cgKey, cgOther[0].key);
+
+// A group sits where its first member was rather than sinking to the end.
+const cgInter = cgCell([cgMk("q1", "ccq", {title: "First"}),
+                        cgMk("d1", "dlc", {title: "A Challenge"}),
+                        cgMk("q2", "ccq", {title: "Second"})]);
+ok("a group sits where its first member was",
+  cgInter.length === 2 && cgInter[0].group === true && cgInter[1].ev.kind === "dlc",
+  JSON.stringify(cgInter.map((it) => it.group ? "grp" : it.ev.kind)));
+
+ok("no events, no items", cgCell([]).length === 0 && cgCell(null).length === 0);
+
+// ── the hover card must not close on a marquee's own scroll ───────────────
+// The listener is capturing, so it hears every scroll in the page, and the home
+// page's movers marquees scroll themselves about every 60ms forever. Closing on
+// all of them killed the card ~70ms after it opened, on the one surface the
+// feature exists for. Source-text, because the fix lives inside a React hook:
+// what is pinned is that the handler FILTERS rather than closing outright.
+const cgHook = grab("function useCalHoverCard(art){", NL + "}");
+ok("the scroll listener is not a bare close",
+  !/addEventListener\("scroll", close, true\)/.test(cgHook));
+ok("it asks whether the scrolled container holds the trigger",
+  /\.contains\(el\)/.test(cgHook));
+ok("and the anchor element is kept for it to ask about",
+  /const next = \{evs, rect, el, day\}/.test(cgHook));
+ok("a trigger that has gone away still closes", /isConnected/.test(cgHook));
+
+// The count has to survive the compact chip's label hide, or a 44px rail cell
+// shows one medal and no number - the same bug, with an extra step.
+const cgCSS = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+ok("the compact chip keeps its count",
+  /\.cal-month--compact \.cal-cell-events > \.cal-chip > span\.cal-chip-x\{[^}]*display:inline/.test(cgCSS));
+// And the version badge that used to paint over everything is contained.
+ok("the graded tile isolates its version badge",
+  /\.gmover-tile\{[^}]*isolation:isolate/.test(cgCSS));
 
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

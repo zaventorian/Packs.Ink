@@ -2682,7 +2682,13 @@ button.gc-slot-quickadd:disabled:hover{background:transparent;border-style:dashe
    clipped it — measured at 375px. The grade is the whole point of a graded
    tile; a badge must never be able to eat it. Solid ground, not a
    transparent bordered chip, since it now lies on card artwork. */
-.gmover-tile{position:relative;}
+/* isolation, and it is load-bearing: .gmover-foil below is absolute with
+   z-index:1, and a position:relative parent with z-index:auto creates NO
+   stacking context - so the badge was painting in the ROOT one. Measured: a
+   full-screen fixed overlay at z-index auto or 0 lost to "PRIZE WALL", which is
+   the badge bleeding through anything on screen over it. Isolating the tile
+   scopes the z-index to the tile, which is all it was ever for. */
+.gmover-tile{position:relative;isolation:isolate;}
 .gmover-foil{position:absolute;top:10px;left:14px;z-index:1;
   font-size:8px;font-weight:800;letter-spacing:0.4px;text-transform:uppercase;
   color:var(--bg-solid);background:var(--accent);border-radius:4px;padding:1px 4px;
@@ -3314,7 +3320,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    rather than shrinking to fit one row. */
 .home-news-cards{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
 .home-news-cards:not(:has(.home-news-card:not([hidden]))){display:none;}
-.home-news-card{flex:1 1 96px;min-width:96px;max-width:176px;display:block;padding:0;
+.home-news-card{flex:0 1 124px;min-width:96px;max-width:124px;display:block;padding:0;
   border:1px solid var(--border);border-radius:8px;background:var(--bg-card);
   overflow:hidden;cursor:pointer;line-height:0;}
 .home-news-card[hidden]{display:none;}
@@ -3999,7 +4005,9 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 
 /* Home toolbar (window picker + direction toggles) */
 .home-toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:8px 0 14px;
-  position:relative;}
+  /* isolation for the same reason as .gmover-tile: .home-shortcuts is absolute
+     with z-index:2 and would otherwise sit in the root stacking context. */
+  position:relative;isolation:isolate;}
 .home-toolbar .seg-grp{display:flex;gap:4px;background:var(--stat-bg);border:1px solid var(--border);
   border-radius:8px;padding:3px;}
 .home-toolbar .seg-grp button{background:transparent;border:none;color:var(--text);
@@ -9676,6 +9684,35 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cal-chip:hover{background:var(--accent-glow);color:var(--accent);}
 .cal-cell-more{font-size:9px;color:var(--text-muted);padding-left:4px;}
+/* The grouped chip: "CCQ x3". The count is pushed to the chip's right edge so
+   the kind word and the number read as two fields rather than one phrase. */
+.cal-chip--group{font-weight:700;}
+.cal-chip-x{margin-left:auto;flex:0 0 auto;font-size:9.5px;font-weight:800;opacity:0.75;
+  font-variant-numeric:tabular-nums;}
+
+/* ── The full grid's cell ──────────────────────────────────────────────────
+   The day number used to own a whole row of the cell and leave the rest of that
+   row empty - about 13px of every cell spent on two digits. It is absolute in
+   the corner now, so the events start at the top of the cell and the grid gains
+   a chip row; the FIRST chip reserves the number's width so a long title cannot
+   run under it.
+
+   The kind icon goes 13px -> 17px in the same breath, because at 13px the
+   Challenge shield and the qualifier's hexagon are the same small smudge, and
+   telling those two apart is most of what the icon is for. The <svg> needs its
+   own size: uiIcon() writes width/height ATTRIBUTES at 13, and growing the box
+   around a 13px glyph only adds padding.
+
+   Scoped to the full grid. The compact rail cell is 34px tall with icon-only
+   chips and was measured to the pixel for the week-height fix, so it keeps
+   exactly the layout it was tuned with. */
+.cal-month:not(.cal-month--compact) .cal-cell{position:relative;}
+.cal-month:not(.cal-month--compact) .cal-cell-num{position:absolute;top:3px;right:5px;
+  font-size:9.5px;line-height:1;pointer-events:none;}
+.cal-month:not(.cal-month--compact) .cal-cell-events > .cal-chip:first-child{padding-right:20px;}
+.cal-month:not(.cal-month--compact) .cal-chip{padding:2.5px 5px;font-size:10.5px;}
+.cal-month:not(.cal-month--compact) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;}
+.cal-month:not(.cal-month--compact) .cal-chip .cal-ico-glyph svg{width:15px;height:15px;}
 
 /* ── The hover card ────────────────────────────────────────────────────────
    ⚠ pointer-events:none. It is positioned over a grid of click targets, and a
@@ -9700,6 +9737,16 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-hover-where{display:flex;align-items:flex-start;gap:5px;margin-top:5px;
   font-size:11.5px;color:var(--text-dim);}
 .cal-hover-where svg{margin-top:2px;}
+/* A grouped chip says "CCQ x3" and nothing else, so its hover card has to name
+   the three. Ruled down the left rather than bulleted: these are peers of one
+   another, all on the one day the header already gave. */
+.cal-hover-list{list-style:none;margin:7px 0 0;padding:0;
+  display:flex;flex-direction:column;gap:6px;}
+.cal-hover-list li{display:flex;flex-direction:column;gap:1px;
+  padding-left:8px;border-left:2px solid var(--border-accent);}
+.cal-hover-li-t{display:flex;align-items:center;gap:5px;flex-wrap:wrap;
+  font-size:12px;font-weight:700;line-height:1.3;}
+.cal-hover-li-s{font-size:11px;color:var(--text-dim);line-height:1.35;}
 .cal-hover-note{margin:6px 0 0;font-size:11px;color:var(--text-muted);line-height:1.5;
   display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden;}
 .cal-hover-hint{margin-top:7px;padding-top:6px;border-top:1px solid var(--border);
@@ -10320,3 +10367,8 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}
 .cal-month--compact .cal-chip .cal-ico{width:11px;height:11px;}
+/* The compact chip hides its label (`> span:not(.cal-ico)`), which would take
+   the count with it - and the count is the entire point of a grouped chip in a
+   44px cell. Four classes so it wins outright rather than on source order. */
+.cal-month--compact .cal-cell-events > .cal-chip > span.cal-chip-x{
+  display:inline;margin-left:1px;font-size:8px;}

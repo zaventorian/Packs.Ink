@@ -1290,6 +1290,18 @@ the Graded Market tile, `paintGradedTile` (its PNG), Your Top Movers, and the gr
   costs no layout width there). In the row it was `flex:0 0 auto` beside an ellipsing
   `.gmover-grade`, so "TOP PRIZE" (51.8px in a 106px row) crushed "PSA 10" from 36.4px to 6.3px
   and clipped it at 375px. The grade is the whole point of a graded tile; a badge must never eat it.
+- **⚠ And because it sits over the art it needs `.gmover-tile{isolation:isolate}`** (2026-09-15,
+  Zaven: *"prize wall logo on cards in movers will bleed over anything on screen over it"*).
+  `.gmover-foil` is `position:absolute; z-index:1`, and a `position:relative` parent with
+  `z-index:auto` **creates no stacking context** — so the badge was painting in the ROOT one and
+  outranked every overlay that does not set an explicit z-index. Measured in the live page: a
+  full-screen fixed overlay at `z-index:auto` or `0` lost the hit test to "PRIZE WALL"; only at
+  `z-index ≥ 1` did it win. Isolating the tile scopes the z-index to the tile, which is all it was
+  ever for.
+  - **The same bug sat on `.home-shortcuts`** (absolute, `z-index:2`, in `.home-toolbar`) and was
+    fixed the same way. Both were found by walking every element with a numeric z-index and
+    asking whether ANY ancestor creates a stacking context — worth re-running after adding a
+    positioned badge, because nothing about the symptom points at the CSS.
 - **Measured over the whole live catalog (5,896 rows) the day it shipped**: 2,662 rows KEEP their
   Foil badge (every genuine mainline split, untouched), **512 stop claiming one** (225 Enchanted,
   90 Epic, 10 Iconic, 162 single-print promos, 25 Extras), and 7 C1 cards go from "Foil" to
@@ -2039,8 +2051,15 @@ Beta cards land weekly, so each one announces itself and then stops, above the s
   (2026-09-15, Zaven: *"have the full card image shown there"*; it was a 52px character crop
   from the reveal tile's first cut the same day). A reveal is about what the card looks like,
   so this one earns the exception — every other tile here stays text-only.
-- **Two click targets, because the card and its name answer different questions**: the ART
-  opens that card, the TITLE opens the Coconut set with that card already open. The `ink +
+- **Two click targets, and BOTH land on the Coconut-filtered Cards page with the card open**
+  (corrected 2026-09-15 — Zaven: *"if you click it, it should open card page on coconut filtered
+  page (i mispoke last time)"*). The art used to call `openCardsWithSearch`, which opens the card
+  against the UNFILTERED catalog: a click from a tile headed "New Coconut card" dropped you on the
+  whole browse with one card open and the format you came for nowhere in sight. Pinned in BOTH
+  directions in `test_coconut_legality.mjs` — that the art reaches the filtered page, and that it
+  does not go back to the unfiltered one, which is the half that fails silently.
+  The card render is also a little smaller (max 124px, was 176px); the documented 96px min-width
+  floor is untouched, so three reveals in one window still wrap rather than shrink past legible. The `ink +
   " leader"` sub-line is gone — the picture says it.
   - **⚠ The button is nested inside the tile's `<a>`, so the anchor takes `navCapture`.** A
     nested button's `stopPropagation` does NOT cancel the anchor's own default navigation.
@@ -5111,13 +5130,82 @@ what the detail modal opens with, minus the map and the buttons.
   screen reader, which is what the attribute was really doing.
 - Positioned SIDEWAYS first (a rail row and a month cell are both narrow, so the room
   is left or right; a card directly below covers the next week), measured in
-  `useLayoutEffect` so it never flashes at its fallback spot, and any scroll closes
-  it — it is fixed against coordinates read once, and a mouse move dismisses it
-  anyway.
+  `useLayoutEffect` so it never flashes at its fallback spot.
+- **⚠ Only a scroll that can actually MOVE the trigger closes it — "any scroll" was
+  the bug** (fixed 2026-09-15, reported as *"it'll pop up and disappear instantly"*).
+  The listener is CAPTURING, so it hears every scroll anywhere in the page, and the
+  home page's movers marquees **scroll themselves for as long as the tab is open**:
+  `.movers-wrap` and `.graded-movers-strip-wrap` each fire a scroll event about every
+  60ms, forever. So the card was closed one frame after it opened, every time, on the
+  home panel — which is the surface this feature exists for. Measured in the live
+  page: `pointerenter` 10290ms, card in 10431ms, card **gone 10504ms**.
+  - The handler now ignores a scroll whose target does not `contain` the anchored
+    element, which is why `hov` carries `el` at all. A document scroll still closes
+    (the document contains everything), an ancestor scroll still closes, and a trigger
+    that has been unmounted closes. All four verified against the live page.
+  - **⚠ It cannot be verified by watching `scrollY`.** A page that is not being
+    painted (pane hidden, window behind) still updates the scroll position but stops
+    DISPATCHING scroll events, so the fix reads as broken and the bug reads as fixed.
+    Dispatch a synthetic `scroll` at a chosen target instead — that is what
+    `test_calendar.mjs` pins, and how the four cases above were separated.
 - One hook per LIST, not per row, so only one card can ever be open.
 - **⚠ In `CalendarMonthView` the hook sits ABOVE the early return** (hook order), and
   in `CalendarPanelList` the card is a SIBLING of the `<ul>` — a `<ul>` may only
   contain `<li>`.
+
+### Same-day repeats collapse to "CCQ ×3" (2026-09-15)
+
+Zaven: *"if multiple of the same event on the same day, can we do like CCQ x3 instead
+of 3 logos? and on hover show all."* Sep 19 carried three CCQs and drew three
+identical medals down three rows — three logos saying the same word, in the one place
+on the site with no room for them. `calCellItems` collapses them to one chip; the
+hover card lists every member; clicking expands the group in place.
+
+- **⚠ The grouping key is the ICON, not the KIND, and that is the whole care in it.**
+  A set's prerelease and its LGS release **share a Friday on every recent set** and
+  draw a sparkle against a box with two different phase words. Keying on kind would
+  render them "Release ×2" and delete the phase — which is the entire reason a set
+  chip is labelled by phase rather than by name. Different icon, so they stay two
+  chips. Verified live on Oct 2026: *Hyperia City Prerelease* and *Hyperia City LGS
+  release* remain separate. The key carries kind + glyph + image, so a store SC
+  (trophy glyph) never merges with a DLC (the Challenge shield image) either.
+- **⚠ Clicking a group EXPANDS it rather than opening an event.** A chip standing for
+  three events cannot honestly mean "open the first one". The open set is keyed
+  `<date>|<kind>|<icon>|<img>` and cleared when the month changes, or a September key
+  would still count as open in October.
+- **⚠ `×` is the literal character, never `&times;`.** htm does not decode HTML
+  entities in a template, so the first cut rendered `CCQ&times;3` on screen. Caught in
+  the browser, not by a test — the DOM said `textContent: "CCQ&times;3"`.
+- **⚠ The count has to survive the compact chip's label hide.** The rail cell hides
+  `> span:not(.cal-ico)`, which would take the count with it — and the count is the
+  entire point of the collapse in a 44px cell. The override is four classes so it wins
+  outright rather than on source order.
+- The hover card's grouped form takes the CELL's day, not the first event's range: a
+  three-day Challenge sitting beside two one-day qualifiers would otherwise head the
+  list with the wrong dates.
+
+### The cell's day number stops owning a row (2026-09-15)
+
+Zaven: *"make the logos a tinny bit bigger, and the numbers a lil smaller. use the
+space better. currently the row with the date number is unused space. I can't tell
+that's a challenge shield on the calendar."*
+
+- The number is **absolute in the top-right corner** (9.5px, was 11px in flow), so the
+  events start at the cell's top and the grid gains a chip row. Measured: the first
+  chip now sits 4px from the cell top. Only the FIRST chip reserves the number's width
+  (`padding-right:20px`), so a long title cannot run under it and the rest keep their
+  5px.
+- The kind icon goes **13px → 17px**, with the `<svg>` sized to 15px in CSS — `uiIcon()`
+  writes width/height ATTRIBUTES at 13, so growing the box alone only adds padding. The
+  DLC/CCQ marks are `<img>`s that fill the box, so this is what makes the Challenge
+  shield tell itself apart from the qualifier's hexagon.
+- **`CAL_CELL_MAX_FULL` (4)** spends the reclaimed row; compact keeps `CAL_CELL_MAX`
+  (3), which was measured to the pixel for the week-height fix and is left alone. A
+  4-chip cell GROWS (86px → 102px, last chip fully inside) rather than clipping —
+  verified, because `.cal-cell` is `overflow:hidden`.
+- **⚠ All of this is scoped `.cal-month:not(.cal-month--compact)`.** The rail cell is
+  34px tall with icon-only chips; an absolute number and a 20px reservation there would
+  undo the tuning the week-height fix depends on.
 
 ### Your local shops are LANES, and SCs near you are one more (2026-09-14)
 

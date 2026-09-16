@@ -287,9 +287,17 @@ check("the card has a min-width floor", /\.home-news-card\{[^}]*min-width:96px/.
 check("and the row wraps rather than squeezing",
   /\.home-news-cards\{[^}]*flex-wrap:wrap/.test(CSS), true);
 
-// Two click targets, and they answer different questions.
-check("the art opens that card",
-  /openCardsWithSearch\(""\s*,\s*coconutRowId\(c\.slug\)\)/.test(tile), true);
+// Two click targets, and BOTH land on the Coconut-filtered Cards page with the
+// card open (Zaven, 2026-09-15). The art used to call openCardsWithSearch, which
+// opens the card against the UNFILTERED catalog - so a click from a tile headed
+// "New Coconut card" dropped you on the whole 5,900-row browse with one card
+// open and the format you came for nowhere in sight. Pinned in both directions:
+// the art must reach the filtered page, and it must not go back to the
+// unfiltered one, which is the half that fails silently.
+check("the art opens that card on the Coconut page",
+  /openCardsFilteredBySet\(COCONUT_SET_NAME,\s*coconutRowId\(c\.slug\)\)/.test(tile), true);
+check("the art does not open the unfiltered catalog",
+  /openCardsWithSearch\(/.test(tile), false);
 check("the title opens the set with the card already open",
   /openCardsFilteredBySet\(COCONUT_SET_NAME,\s*coconutRowId\(/.test(tile), true);
 // ⚠ A nested button's stopPropagation does NOT cancel the anchor's own default

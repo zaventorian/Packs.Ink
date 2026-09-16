@@ -222,7 +222,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=416">
+<link rel="stylesheet" href="styles.css?v=417">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -39202,9 +39202,48 @@ const calWhenLabel = (ev) => {
 // ⚠ pointer-events:none on the card itself. It is positioned over a grid of
 // click targets, and a tooltip that can swallow the click on the thing it is
 // describing is worse than no tooltip.
+// A day with three CCQs drew three identical medals down three rows - three
+// logos saying the same word, in the one place on the site with no room for
+// them. Same-icon events on one day collapse to ONE chip that says how many.
+//
+// The grouping key is the ICON, not the KIND, and that is the whole care in it.
+// A set's prerelease and its LGS release share a Friday on every recent set, and
+// they draw a sparkle and a box with two different phase words - collapsing
+// those to "Release x2" would delete the phase, which is the entire reason a set
+// chip is labelled by phase rather than by name. Different icon, so they stay
+// two chips. A store SC (trophy glyph) and a DLC (the Challenge shield image)
+// never merge either: the key carries the kind and the image alongside the glyph.
+const CAL_KIND_SHORT = {set: "Release", product: "Product", dlc: "DLC", ccq: "CCQ", store: "Store"};
+const CAL_KIND_PLURAL = {
+  set: "releases", product: "product releases",
+  dlc: "Challenges", ccq: "qualifiers", store: "store events",
+};
+const calGroupKindLabel = (kind, n) => n + " " + (CAL_KIND_PLURAL[kind] || "events");
+// One entry per rendered chip: {group:true, events:[...]} for a collapse, {ev}
+// for a single. A group the reader has opened is expanded back to its members.
+const calCellItems = (events, art, openGroups, date) => {
+  const groups = [], by = new Map();
+  for(const ev of (events || [])){
+    const g = calendarEventIcon(ev, art) || {};
+    const key = date + "|" + (ev.kind || "") + "|" + (g.icon || "") + "|" + (g.img || "");
+    const seen = by.get(key);
+    if(seen) seen.events.push(ev);
+    else { const n = {key, kind: ev.kind, group: true, events: [ev]}; by.set(key, n); groups.push(n); }
+  }
+  const items = [];
+  for(const n of groups){
+    if(n.events.length > 1 && !(openGroups && openGroups.has(n.key))) items.push(n);
+    else for(const ev of n.events) items.push({ev});
+  }
+  return items;
+};
+
+// How many events a grouped hover card names before it says "+N more".
+const CAL_HOVER_LIST_MAX = 8;
 const CAL_HOVER_W = 268;
 const CAL_HOVER_DELAY = 120;       // long enough that dragging across a row of cells does not strobe
-const CalendarHoverCard = ({ev, rect, art}) => {
+const CalendarHoverCard = ({evs, day, rect, art}) => {
+  const ev = evs && evs[0];
   const ref = useRef(null);
   const [pos, setPos] = useState(null);
   // useLayoutEffect, not useEffect: the card has to be measured and placed
@@ -39223,8 +39262,28 @@ const CalendarHoverCard = ({ev, rect, art}) => {
     let top = Math.max(M, rect.top - 6);
     if(top + h + M > window.innerHeight) top = Math.max(M, window.innerHeight - h - M);
     setPos({left: Math.round(left), top: Math.round(top)});
-  }, [rect, ev && ev.id]);
+  }, [rect, ev && ev.id, evs && evs.length]);
   if(!ev) return null;
+  // The grouped form. A collapsed "CCQ x3" chip has to be able to say WHICH
+  // three, or the collapse has traded three rows for a number and told you less
+  // than the three rows did.
+  if(evs.length > 1){
+    const cnt = calCountdown(ev, calTodayYmd());
+    return html`<div class="cal-hover" ref=${ref} role="tooltip"
+      style=${{width: CAL_HOVER_W + "px", left: (pos ? pos.left : -9999) + "px", top: (pos ? pos.top : 0) + "px",
+               visibility: pos ? "visible" : "hidden"}}>
+      <div class="cal-hover-kind"><${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/>${calGroupKindLabel(ev.kind, evs.length)}</div>
+      <div class="cal-hover-when">${calDayLabel(day || ev.starts_on)}${cnt && html`<em>${cnt}</em>`}</div>
+      <ul class="cal-hover-list">
+        ${evs.slice(0, CAL_HOVER_LIST_MAX).map((e, i) => html`<li key=${e.id || i}>
+          <span class="cal-hover-li-t">${calEventTitle(e)}${calEstBadge(e)}</span>
+          ${(calEventSubtitle(e) || e.location) && html`<span class="cal-hover-li-s">${calEventSubtitle(e) || e.location}</span>`}
+        </li>`)}
+      </ul>
+      ${evs.length > CAL_HOVER_LIST_MAX && html`<div class="cal-hover-sub">+${evs.length - CAL_HOVER_LIST_MAX} more</div>`}
+      <div class="cal-hover-hint">Click to list them</div>
+    </div>`;
+  }
   const k = CALENDAR_KIND_BY_KEY.get(ev.kind);
   const sub = calEventSubtitle(ev);
   const count = calCountdown(ev, calTodayYmd());
@@ -39250,31 +39309,50 @@ function useCalHoverCard(art){
   const stop = useCallback(() => { if(timer.current){ clearTimeout(timer.current); timer.current = null; } }, []);
   const close = useCallback(() => { stop(); setHov(null); }, [stop]);
   useEffect(() => () => stop(), [stop]);
-  // Any scroll closes it. The card is position:fixed against coordinates read
-  // once, so a scroll leaves it hanging in space over unrelated content —
-  // exactly the bug useCalPopAnchor's capturing listener exists to fix, and
-  // re-anchoring is not worth it for something a mouse move already dismisses.
+  // A scroll closes it - but ONLY a scroll that can actually move the trigger.
+  //
+  // The listener is CAPTURING, so it hears every scroll anywhere in the page,
+  // and the home page's movers marquees scroll THEMSELVES for as long as the tab
+  // is open: `.movers-wrap` and `.graded-movers-strip-wrap` each fire a scroll
+  // event about every 60ms, forever. Closing on all of them killed the card
+  // roughly 70ms after it opened, every single time, on the surface this feature
+  // exists for - measured: pointerenter 10290ms, card in 10431ms, card gone
+  // 10504ms. It read as "it pops up and disappears instantly", and it did.
+  //
+  // A scroll inside a container that does not contain the trigger cannot move
+  // the trigger, so it is ignored. A document scroll (target is the document,
+  // which contains everything) and a scroll in a real ancestor still close, and
+  // a trigger that has been unmounted closes too.
   useEffect(() => {
     if(!hov) return;
-    window.addEventListener("scroll", close, true);
-    return () => window.removeEventListener("scroll", close, true);
+    const onScroll = (e) => {
+      const el = hov.el, t = e.target;
+      if(!el || !el.isConnected) return close();
+      if(!t || t === window || (t.contains && t.contains(el))) close();
+    };
+    window.addEventListener("scroll", onScroll, true);
+    return () => window.removeEventListener("scroll", onScroll, true);
   }, [hov, close]);
-  const open = useCallback((ev, el, now) => {
-    if(!ev || !el) return;
+  // `el` is kept so the scroll filter above can ask whether a scrolling
+  // container actually contains the thing the card is anchored to.
+  const open = useCallback((evs, el, now, day) => {
+    if(!evs || !evs.length || !el) return;
     stop();
     const r = el.getBoundingClientRect();
     const rect = {top: r.top, bottom: r.bottom, left: r.left, right: r.right};
-    if(now) setHov({ev, rect});
-    else timer.current = setTimeout(() => setHov({ev, rect}), CAL_HOVER_DELAY);
+    const next = {evs, rect, el, day};
+    if(now) setHov(next);
+    else timer.current = setTimeout(() => setHov(next), CAL_HOVER_DELAY);
   }, [stop]);
-  const bind = useCallback((ev) => ({
-    onPointerEnter: (e) => { if(e.pointerType === "mouse") open(ev, e.currentTarget); },
+  const bindMany = useCallback((evs, day) => ({
+    onPointerEnter: (e) => { if(e.pointerType === "mouse") open(evs, e.currentTarget, false, day); },
     onPointerLeave: close,
-    onFocus: (e) => open(ev, e.currentTarget, true),
+    onFocus: (e) => open(evs, e.currentTarget, true, day),
     onBlur: close,
   }), [open, close]);
-  return {bind, close,
-    card: hov ? html`<${CalendarHoverCard} ev=${hov.ev} rect=${hov.rect} art=${art}/>` : null};
+  const bind = useCallback((ev) => bindMany([ev], ev && ev.starts_on), [bindMany]);
+  return {bind, bindMany, close,
+    card: hov ? html`<${CalendarHoverCard} evs=${hov.evs} day=${hov.day} rect=${hov.rect} art=${art}/>` : null};
 }
 
 // ⚠ The ✚ popover is position:FIXED, anchored by measurement — never absolute.
@@ -39575,12 +39653,21 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
 // answers both, and this is a phone feature first.
 // How many events a month cell draws before it collapses the rest into "+N".
 const CAL_CELL_MAX = 3;
+// The full grid's cell is taller, and since the day number moved out of the flow
+// and into the corner it has one more row to spend - see .cal-cell in styles.css.
+const CAL_CELL_MAX_FULL = 4;
 const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}) => {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
   const weeks = useMemo(() => m ? calendarMonthGrid(+m[1], +m[2], events) : [], [month, events]);
   // ⚠ Above the early return — hook order. Nothing bails before this today, and
   // anything added that does has to go below it.
   const hover = useCalHoverCard(art);
+  // Clicking a grouped chip expands it in place rather than opening one of the
+  // three events it stands for, because it cannot honestly mean "open the first
+  // one". Cleared when the month changes, or a key from September would still
+  // count as open in October.
+  const [openGroups, setOpenGroups] = useState(() => new Set());
+  useEffect(() => { setOpenGroups(new Set()); }, [month]);
   if(!m) return null;
   return html`<div class=${"cal-month" + (compact ? " cal-month--compact" : "")}>
     <div class="cal-month-bar">
@@ -39602,7 +39689,9 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
         // wrapped to a second line and, because a grid row takes the height of
         // its tallest cell, inflated that entire week by 7px. Capping at two
         // when there is an overflow marker keeps every week the same height.
-        const cap = compact && day.events.length > CAL_CELL_MAX ? CAL_CELL_MAX - 1 : CAL_CELL_MAX;
+        const items = calCellItems(day.events, art, openGroups, day.date);
+        const max = compact ? CAL_CELL_MAX : CAL_CELL_MAX_FULL;
+        const cap = compact && items.length > max ? max - 1 : max;
         return html`<div key=${day.date}
         class=${"cal-cell" + (day.inMonth ? "" : " out") + (day.date === today ? " today" : "")}>
         <div class="cal-cell-num">${day.day}</div>
@@ -39611,14 +39700,21 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
                 together — two boxes, one of them the unstyled single line this
                 replaced. The name stays reachable without a mouse through
                 aria-label, which is what it was really there for. */""}
-          ${day.events.slice(0, cap).map(ev => html`<button key=${ev.id} type="button"
-            class=${"cal-chip" + (calEstimated(ev) ? " cal-chip--est" : "")}
-            aria-label=${calEventFullLabel(ev)} ...${hover.bind(ev)}
-            onClick=${() => onOpen(ev)}>
-            <${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calChipLabel(ev)}</span>
-          </button>`)}
-          ${day.events.length > cap && html`<span class="cal-cell-more"
-            title=${day.events.length + " events"}>+${day.events.length - cap}${compact ? "" : " more"}</span>`}
+          ${items.slice(0, cap).map(it => it.group
+            ? html`<button key=${it.key} type="button" class="cal-chip cal-chip--group"
+                aria-label=${calGroupKindLabel(it.kind, it.events.length) + " on " + calDayLabel(day.date) + " - show them"}
+                ...${hover.bindMany(it.events, day.date)}
+                onClick=${() => { hover.close(); setOpenGroups(prev => { const n = new Set(prev); n.add(it.key); return n; }); }}>
+                <${CalendarKindDot} kind=${it.kind} ev=${it.events[0]} art=${art}/><span>${CAL_KIND_SHORT[it.kind] || "Event"}</span><span class="cal-chip-x">×${it.events.length}</span>
+              </button>`
+            : html`<button key=${it.ev.id} type="button"
+                class=${"cal-chip" + (calEstimated(it.ev) ? " cal-chip--est" : "")}
+                aria-label=${calEventFullLabel(it.ev)} ...${hover.bind(it.ev)}
+                onClick=${() => onOpen(it.ev)}>
+                <${CalendarKindDot} kind=${it.ev.kind} ev=${it.ev} art=${art}/><span>${calChipLabel(it.ev)}</span>
+              </button>`)}
+          ${items.length > cap && html`<span class="cal-cell-more"
+            title=${day.events.length + " events"}>+${items.length - cap}${compact ? "" : " more"}</span>`}
         </div>
       </div>`;
       }))}
@@ -43090,9 +43186,11 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
   // CSS pitfalls note), so the larger size was RE-MEASURED rather than assumed —
   // see `.home-news-cards` in styles.css for the numbers.
   //
-  // Two click targets, because the card and its name answer different questions:
-  //   the ART  → open that card
-  //   the TITLE → the Coconut set, with that card already open
+  // Two click targets, and BOTH land on the Coconut-filtered Cards page with the
+  // card open (Zaven, 2026-09-15 - the art used to open the card against the
+  // unfiltered catalog, which drops you somewhere you then have to filter):
+  //   the ART   -> that card, on the Coconut page
+  //   the TITLE -> the same, for the newest of them
   // ⚠ The button is nested inside the tile's <a>, which is why the anchor takes
   // navCapture: a nested button's stopPropagation does NOT cancel the anchor's
   // own default navigation. Same pattern as the deck tiles.
@@ -43115,7 +43213,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
               type="button" class="home-news-card" title=${"Open " + coconutDisplayName(c)}
               aria-label=${"Open " + coconutDisplayName(c)}
               onClick=${(e)=>{ e.preventDefault(); e.stopPropagation();
-                openCardsWithSearch && openCardsWithSearch("", coconutRowId(c.slug)); }}>
+                openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME, coconutRowId(c.slug)); }}>
               <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt="" aria-hidden="true"
                 onError=${(e)=>{ const b = e.target.closest("button"); if(b) b.hidden = true; }}/>
             </button>`)}
@@ -45654,7 +45752,18 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
   // Bounded one-shot fetch: every public deck edited since the cutoff,
   // ordered server-side by updated_at desc, sorted client-side by favorite
   // count. The cutoff cap keeps the payload small enough that we don't
-  // need pagination — typically <200 decks per cycle.
+  // need pagination.
+  //
+  // ⚠ That cap TRUNCATES, silently — it is a `limit`, not a page size, so
+  // everything past it is simply never fetched and the feed looks complete.
+  // Ordering by updated_at means the decks it drops are always the OLDEST,
+  // which is exactly the house starter decks: seeded once and never edited,
+  // they sink to the bottom the moment the site has DISCOVER_LIMIT livelier
+  // decks. That is how 17 of the 18 Coconut starters left the Coconut tab
+  // (the 18th survived by one second of updated_at), leaving the format's
+  // whole feed as a single deck — the opposite of what they exist for. So
+  // they are fetched SEPARATELY and merged in: a fixed, curated, one-per-leader
+  // set that must never be subject to recency.
   const DISCOVER_LIMIT = 200;
   const refreshDiscover = useCallback(async () => {
     setDiscoverLoading(true);
@@ -45675,13 +45784,41 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
         if(error) throw error;
         return data || [];
       };
+      // The house decks, on their own — no cutoff, no recency order. Bounded
+      // by the leader list rather than by how busy the site is. They are
+      // ownerless, so the `user` filter above would keep them anyway; fetching
+      // them here is only about escaping DISCOVER_LIMIT. A failure is
+      // non-fatal: the rest of the feed is still worth showing.
+      const fetchStarters = async () => {
+        try {
+          const {data, error} = await sbClient.from("decks")
+            .select("id,user_id,name,description,youtube_url,inks,tags,visibility,coconut_card,updated_at")
+            .eq("visibility", "public")
+            .contains("tags", [STARTER_DECK_TAG])
+            .order("updated_at", {ascending:false})
+            .limit(60);
+          if(error) throw error;
+          return data || [];
+        } catch(e){
+          console.warn("starter-deck fetch for discover failed:", e?.message || e);
+          return [];
+        }
+      };
       let usedCutoff = discoverCutoffs.latest;
-      let deckRows = await fetchWindow(usedCutoff);
+      let [deckRows, starterRows] = await Promise.all([fetchWindow(usedCutoff), fetchStarters()]);
+      // ⚠ The <12 fallback counts only the WINDOW. Starters are always there,
+      // so merging them in first would mask an empty fresh window and strand a
+      // set-release day on house decks alone — the cliff that fallback exists
+      // to catch.
       if(deckRows.length < 12 && discoverCutoffs.prev){
         usedCutoff = discoverCutoffs.prev;
         deckRows = await fetchWindow(usedCutoff);
       }
       setDiscoverCutoff(usedCutoff);
+      if(starterRows.length){
+        const seen = new Set(deckRows.map(d => d.id));
+        deckRows = deckRows.concat(starterRows.filter(d => !seen.has(d.id)));
+      }
       if(!deckRows.length){
         setDiscoverEntries([]); setDiscoverHasMore(false); return;
       }
