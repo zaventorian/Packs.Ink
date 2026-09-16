@@ -2408,7 +2408,23 @@ const calTzYmd = (iso, tz) => {
 // Preference order within a set: the plain Booster Pack first (every set has
 // one, and it is the pack art), then a Trove, then a Box. A "Case" is a
 // distributor carton — a photo of a cardboard box, which tells a reader nothing.
+//
+// ⚠ The skip below asks deriveSealedDisplayType, never a name test of its
+// own. It used to hold a word-boundary regex for "case" whose two boundary
+// escapes had been written into the file as literal BACKSPACE bytes, so it
+// matched no product name that can exist and skipped nothing, silently, for as
+// long as it shipped. A second hand-rolled copy of "is this a carton" is what
+// let that hide; the shared classifier is also strictly better here — over the
+// live catalog it drops 44 rows against that regex's 33, the extra 11 being the
+// Starter Deck Displays, which are the same distributor carton and which no
+// test for the word "case" can see at all.
+//
+// ⚠ And the ranking below does NOT cover this: 29 case SKUs match CAL_ART_PREF
+// and rank 1-3 (a "Booster Box Case" is a /booster box/, a "Trove Case" is a
+// trove), so they lose today only because every released set also has a plain
+// Booster Pack at rank 0. This skip is the only thing that tells them apart.
 const CAL_ART_PREF = [/booster pack$/i, /sleeved booster pack/i, /illumineer's trove/i, /booster box/i];
+const CAL_ART_SKIP_TYPES = new Set(["Cases", "Other Displays / Cases"]);
 const calendarArtIndex = (sealedRows, names) => {
   const idx = new Map();
   for(const raw of names || []){
@@ -2417,7 +2433,8 @@ const calendarArtIndex = (sealedRows, names) => {
     let best = null, bestRank = 99;
     for(const r of sealedRows || []){
       const pn = String(r && r.name || "").toLowerCase();
-      if(!r.image_url || !pn.includes(n) || /case/.test(pn)) continue;
+      if(!r.image_url || !pn.includes(n)) continue;
+      if(CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType(r))) continue;
       const at = CAL_ART_PREF.findIndex(re => re.test(pn));
       const rank = at < 0 ? 98 : at;
       if(rank < bestRank){ best = r.image_url; bestRank = rank; }
@@ -12314,8 +12331,16 @@ const CardsView = ({raw, sets, theme, user, collection, updateQty, onSignIn, ope
       // price compares, ownership counters) renders correctly. Same path
       // the Pack/Box sims + Playset rows use.
       const row = raw.find(r => r.card_id === incomingOpenCardId);
-      if(row && row.tcgplayer_product_id){
-        const g = groupFromSimCard(row, raw);
+      if(row){
+        // ⚠ groupFromSimCard looks rows up BY PID, so it cannot serve a card
+        // that has none — every Format Coconut row, which is why a reveal could
+        // not be linked to and the handoff silently landed on the tab with
+        // nothing open. Those have exactly one printing, so grouping their own
+        // row is the whole job. The pid path is untouched: it is the one that
+        // finds BOTH printings of an ordinary card.
+        const g = row.tcgplayer_product_id
+          ? groupFromSimCard(row, raw)
+          : (groupCards([row])[0] || null);
         if(g) setSelectedGroup(g);
       }
     }
@@ -39548,6 +39573,8 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
 // Seven columns on a 390px phone gives each day ~48px, which fits a dot and
 // nothing else — fine for "when is it", useless for "what is it". The list
 // answers both, and this is a phone feature first.
+// How many events a month cell draws before it collapses the rest into "+N".
+const CAL_CELL_MAX = 3;
 const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}) => {
   const m = /^(\d{4})-(\d{2})$/.exec(month);
   const weeks = useMemo(() => m ? calendarMonthGrid(+m[1], +m[2], events) : [], [month, events]);
@@ -39569,7 +39596,14 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
       ${CAL_DOW_SHORT.map(d => html`<div key=${d} class="cal-grid-dow">${d}</div>`)}
     </div>
     <div class="cal-grid">
-      ${weeks.map((week, wi) => week.map(day => html`<div key=${day.date}
+      ${weeks.map((week, wi) => week.map(day => {
+        // ⚠ A rail cell is ~44px wide and holds THREE dots, or two dots and a
+        // "+N" — never three and a "+N". The 19th has four events, so the "+1"
+        // wrapped to a second line and, because a grid row takes the height of
+        // its tallest cell, inflated that entire week by 7px. Capping at two
+        // when there is an overflow marker keeps every week the same height.
+        const cap = compact && day.events.length > CAL_CELL_MAX ? CAL_CELL_MAX - 1 : CAL_CELL_MAX;
+        return html`<div key=${day.date}
         class=${"cal-cell" + (day.inMonth ? "" : " out") + (day.date === today ? " today" : "")}>
         <div class="cal-cell-num">${day.day}</div>
         <div class="cal-cell-events">
@@ -39577,15 +39611,17 @@ const CalendarMonthView = ({month, events, today, onOpen, onMonth, compact, art}
                 together — two boxes, one of them the unstyled single line this
                 replaced. The name stays reachable without a mouse through
                 aria-label, which is what it was really there for. */""}
-          ${day.events.slice(0, 3).map(ev => html`<button key=${ev.id} type="button"
+          ${day.events.slice(0, cap).map(ev => html`<button key=${ev.id} type="button"
             class=${"cal-chip" + (calEstimated(ev) ? " cal-chip--est" : "")}
             aria-label=${calEventFullLabel(ev)} ...${hover.bind(ev)}
             onClick=${() => onOpen(ev)}>
             <${CalendarKindDot} kind=${ev.kind} ev=${ev} art=${art}/><span>${calChipLabel(ev)}</span>
           </button>`)}
-          ${day.events.length > 3 && html`<span class="cal-cell-more">+${day.events.length - 3} more</span>`}
+          ${day.events.length > cap && html`<span class="cal-cell-more"
+            title=${day.events.length + " events"}>+${day.events.length - cap}${compact ? "" : " more"}</span>`}
         </div>
-      </div>`))}
+      </div>`;
+      }))}
     </div>
     ${hover.card}
   </div>`;
@@ -43047,36 +43083,42 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
         </div>`);
   // A reveal is DATED, so it sits above the standing New Format notice below
   // it. Both land on the same filtered Cards page, which is the only place the
-  // card can be seen: ⚠ a `?card=` style open is NOT available here, because
-  // the Cards view's incoming-open effect requires `tcgplayer_product_id` and
-  // every Coconut row has none — it would land on the tab with nothing open.
   // ⚠ This is the ONE tile in this feed that carries art, and the exception is
-  // deliberate: a reveal is about what the card LOOKS like. The feed's edge fade
-  // is a `mask-image`, which softens child `<img>`s (the CSS pitfalls note), so
-  // it was measured rather than assumed — see `.home-news-thumbs` in styles.css
-  // for the numbers. It holds for a chip-sized THUMB and was not tested larger.
-  // ⚠ Thumbs, not the full render: a whole grayscale beta card shrunk to chip
-  // size reads as a broken-image glyph, which is why coconutThumbUrl exists.
+  // deliberate: a reveal is about what the card LOOKS like — so it shows the
+  // whole card, not the 52px character crop it used to (Zaven, 2026-09-15).
+  // The feed's edge fade is a `mask-image`, which softens child `<img>`s (the
+  // CSS pitfalls note), so the larger size was RE-MEASURED rather than assumed —
+  // see `.home-news-cards` in styles.css for the numbers.
+  //
+  // Two click targets, because the card and its name answer different questions:
+  //   the ART  → open that card
+  //   the TITLE → the Coconut set, with that card already open
+  // ⚠ The button is nested inside the tile's <a>, which is why the anchor takes
+  // navCapture: a nested button's stopPropagation does NOT cancel the anchor's
+  // own default navigation. Same pattern as the deck tiles.
   if(freshCoconut.length) newsTiles.push(html`<a key="coconut-new" class="home-news-tile home-news-clickable"
-          href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)}
-          onClick=${navHandler(() => openCardsFilteredBySet && openCardsFilteredBySet(COCONUT_SET_NAME))}
+          href=${"/cards?set=" + encodeURIComponent(COCONUT_SET_NAME)
+                 + "&card=" + encodeURIComponent(coconutRowId(freshCoconut[0].slug))}
+          onClickCapture=${navCapture}
+          onClick=${navHandler(() => openCardsFilteredBySet
+            && openCardsFilteredBySet(COCONUT_SET_NAME, coconutRowId(freshCoconut[0].slug)))}
           style=${{display:"block", textDecoration:"none", color:"inherit", cursor:"pointer"}}>
           <div class="home-news-kicker">${uiIcon("coconut", 13)} New Coconut card${freshCoconut.length===1?"":"s"}</div>
           <div class="home-news-title">${freshCoconut.length === 1
             ? coconutDisplayName(freshCoconut[0])
             : freshCoconut.length + " new leaders revealed"}</div>
-          <div class="home-news-sub">
-            ${freshCoconut.length === 1
-              ? freshCoconut[0].ink + " leader"
-              : freshCoconut.map(coconutDisplayName).join(" · ")} →
-          </div>
-          <div class="home-news-thumbs">
-            ${freshCoconut.slice(0, COCONUT_REVEAL_MAX_THUMBS).map(c => html`<img key=${c.slug}
-              class="home-news-thumb" src=${coconutThumbUrl(c.cn)} crossOrigin="anonymous"
-              alt="" aria-hidden="true"
-              onError=${(e)=>{ const t=e.target;
-                if(!t.dataset.fb){ t.dataset.fb="1"; t.src=coconutArtUrl(c.cn); return; }
-                t.hidden = true; }}/>`)}
+          ${freshCoconut.length > 1 && html`<div class="home-news-sub">
+            ${freshCoconut.map(coconutDisplayName).join(" · ")} →
+          </div>`}
+          <div class="home-news-cards">
+            ${freshCoconut.slice(0, COCONUT_REVEAL_MAX_THUMBS).map(c => html`<button key=${c.slug}
+              type="button" class="home-news-card" title=${"Open " + coconutDisplayName(c)}
+              aria-label=${"Open " + coconutDisplayName(c)}
+              onClick=${(e)=>{ e.preventDefault(); e.stopPropagation();
+                openCardsWithSearch && openCardsWithSearch("", coconutRowId(c.slug)); }}>
+              <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt="" aria-hidden="true"
+                onError=${(e)=>{ const b = e.target.closest("button"); if(b) b.hidden = true; }}/>
+            </button>`)}
           </div>
         </a>`);
   if(showCoconutNews) newsTiles.push(html`<a key="coconut" class="home-news-tile home-news-clickable"
@@ -43835,6 +43877,7 @@ const COCONUT_ART_REV = {4:2, 7:2, 10:2, 14:2};  // Beta 1.1 re-renders, 2026-08
 const coconutRowId = (slug) => `coconut::${slug}`;
 const coconutArtUrl = (cn) =>
   `${SUPABASE_URL}/storage/v1/object/public/card-art/coconut/${String(cn).padStart(3,"0")}.jpg`
+  + (COCONUT_ART_REV[cn] ? `?v=${COCONUT_ART_REV[cn]}` : "");
 // Square character-crop of the art box (160×160, same bucket under thumbs/).
 // The full beta cards are grayscale renders — shrunk to chip size a whole
 // card reads as a broken-image glyph, so chips use these instead. Callers
@@ -50300,7 +50343,10 @@ function App(){
   // Open the Cards tab pre-filtered to one set (home "News" tile → Set 13).
   // Push /cards?set=<name> first so the cards view's URL-sync seeds the chip;
   // cards "owns" ?set= in VIEW_OWNED so the view-sync effect won't strip it.
-  const openCardsFilteredBySet = useCallback((setName) => {
+  // `openCardId` opens that card's modal ON TOP of the filtered set — "the
+  // Coconut cards page with this one already open". ⚠ It is set AFTER the
+  // delete loop, which strips `card` along with every other leaf param.
+  const openCardsFilteredBySet = useCallback((setName, openCardId) => {
     try {
       const url = new URL(window.location.href);
       url.pathname = VIEW_PATHS.cards || "/cards";
@@ -50308,8 +50354,10 @@ function App(){
         url.searchParams.delete(p);
       }
       url.searchParams.set("set", setName);
+      if(openCardId) url.searchParams.set("card", openCardId);
       window.history.pushState({view:"cards"}, "", url.toString());
     } catch {/* no-op */}
+    setIncomingCardsOpenId(openCardId || null);
     setView("cards");
     setTabClickNonce(n => n + 1);
   }, []);

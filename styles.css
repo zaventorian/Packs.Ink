@@ -3308,6 +3308,18 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    weekly reveals inside the 14-day window, so the common case, not an edge one)
    a left-hand thumb column squeezed the title into three wrapped lines. */
 .home-news-thumbs{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px;}
+/* The reveal's full card. ⚠ min-width is what keeps this honest: below ~96px a
+   grayscale beta render stops reading as a card at all, which is the reason the
+   52px thumbs existed. Three reveals inside one 14-day window therefore WRAP
+   rather than shrinking to fit one row. */
+.home-news-cards{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px;}
+.home-news-cards:not(:has(.home-news-card:not([hidden]))){display:none;}
+.home-news-card{flex:1 1 96px;min-width:96px;max-width:176px;display:block;padding:0;
+  border:1px solid var(--border);border-radius:8px;background:var(--bg-card);
+  overflow:hidden;cursor:pointer;line-height:0;}
+.home-news-card[hidden]{display:none;}
+.home-news-card:hover{border-color:var(--accent);}
+.home-news-card img{display:block;width:100%;aspect-ratio:5/7;object-fit:cover;}
 /* Card art is uploaded to the bucket separately from the card's code entry, so
    a just-revealed card can legitimately have no photo yet — and a weekly Beta
    cadence reopens that window every week. When every thumb has failed, collapse
@@ -10193,7 +10205,13 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-month--compact .cal-grid,.cal-month--compact .cal-grid-head{gap:2px;}
 .cal-month--compact .cal-cell{min-height:34px;padding:1px;border-radius:4px;}
 .cal-month--compact .cal-cell-num{font-size:9px;}
-.cal-month--compact .cal-chip{padding:1px;justify-content:center;}
+/* ⚠ Dots ACROSS, not down. Stacked, a day with three CCQs was three rows tall
+   and a CSS grid row takes the height of its tallest cell — so one busy day
+   inflated that whole week, which is what the 19th was doing. Across, three
+   dots are ~42px in a ~44px cell and every week stays the same height. */
+.cal-month--compact .cal-cell-events{flex-direction:row;flex-wrap:wrap;
+  justify-content:center;align-items:center;gap:1px;}
+.cal-month--compact .cal-chip{padding:1px;justify-content:center;width:auto;flex:0 0 auto;}
 .cal-month--compact .cal-chip > span:not(.cal-ico){display:none;}
 .cal-month--compact .cal-cell-more{font-size:7px;text-align:center;padding:0;}
 

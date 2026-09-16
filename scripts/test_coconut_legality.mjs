@@ -250,10 +250,11 @@ check("no leader -> broken deck still 'invalid'", r.format, "invalid");
 console.log("\n== reveal tile art ==");
 const CSS = fs.readFileSync(path.join(ROOT, "styles.css"), "utf8");
 const tile = SRC.slice(SRC.indexOf('key="coconut-new"'), SRC.indexOf('key="coconut"'));
-check("the reveal tile renders thumbs", /class="home-news-thumbs"/.test(tile), true);
-// Thumbs, not the full render: a whole grayscale beta card at chip size reads
-// as a broken-image glyph, which is the reason coconutThumbUrl exists.
-check("it uses the thumb, not the full card", /src=\$\{coconutThumbUrl\(/.test(tile), true);
+check("the reveal tile pictures the card", /class="home-news-cards"/.test(tile), true);
+// ⚠ The FULL card, not the 52px character crop it used to show (2026-09-15) —
+// a reveal is about what the card looks like. The crop still exists and is
+// still right for chips; it is just not what this tile is for.
+check("it uses the full card render", /src=\$\{coconutArtUrl\(/.test(tile), true);
 check("it caps how many it pictures",
   /slice\(0,\s*COCONUT_REVEAL_MAX_THUMBS\)/.test(tile), true);
 check("the cap is a small number", COCONUT_REVEAL_MAX_THUMBS >= 1 && COCONUT_REVEAL_MAX_THUMBS <= 4, true);
@@ -261,20 +262,43 @@ check("the cap is a small number", COCONUT_REVEAL_MAX_THUMBS >= 1 && COCONUT_REV
 // separately, and a later canvas-bound request for the SAME url reuses it and
 // fails with naturalWidth 0. Every <img> on coconut art carries this, even the
 // ones that never touch a canvas.
-check("thumbs are requested with CORS", /crossOrigin="anonymous"/.test(tile), true);
+check("the art is requested with CORS", /crossOrigin="anonymous"/.test(tile), true);
+// ⚠ A Beta 1.1 re-render rewrites the card's RULES TEXT at the same bucket
+// path, and packsink-img-v1 survives deploys — so without the rev an existing
+// visitor keeps the pre-rebalance wording forever. It was on the thumb (the
+// crop least likely to change) and missing from the full card (the only one
+// that shows the text), which is exactly backwards.
+check("the full art carries the cache-bust rev",
+  /const coconutArtUrl[\s\S]{0,240}?COCONUT_ART_REV\[cn\]/.test(SRC), true);
 // Art is uploaded separately from the card entry, so "no photo yet" is a real
-// steady state that recurs with every weekly Beta card. Thumb -> full art ->
-// hide; the last step is what keeps a broken icon out of the feed.
-check("a failed thumb falls back to the full art",
-  /dataset\.fb[\s\S]*?coconutArtUrl\(c\.cn\)/.test(tile), true);
-check("a failed fallback hides the image", /t\.hidden\s*=\s*true/.test(tile), true);
-// ⚠ .home-news-thumb sets display:block, which out-specifies the UA's
-// [hidden]{display:none} — without this rule the hidden thumb still paints an
-// empty bordered box and the row can never collapse.
-check("[hidden] beats the thumb's own display:block",
-  /\.home-news-thumb\[hidden\]\{display:none;?\}/.test(CSS), true);
-check("the row collapses when every thumb failed",
-  /\.home-news-thumbs:not\(:has\(img:not\(\[hidden\]\)\)\)\{display:none;?\}/.test(CSS), true);
+// steady state that recurs with every weekly Beta card. ⚠ It is the BUTTON that
+// hides, not the <img>: hiding the image alone leaves an empty bordered box
+// that is still a click target.
+check("a missing render hides its whole button",
+  /closest\("button"\)[\s\S]{0,40}hidden\s*=\s*true/.test(tile), true);
+check("[hidden] beats the card's own display:block",
+  /\.home-news-card\[hidden\]\{display:none;?\}/.test(CSS), true);
+check("the row collapses when every render failed",
+  /\.home-news-cards:not\(:has\(\.home-news-card:not\(\[hidden\]\)\)\)\{display:none;?\}/.test(CSS), true);
+// ⚠ The floor is what keeps this honest. Below ~96px a grayscale beta render
+// stops reading as a card at all — the reason the 52px thumbs existed — so
+// three reveals in one window must WRAP, never shrink to share a row.
+check("the card has a min-width floor", /\.home-news-card\{[^}]*min-width:96px/.test(CSS), true);
+check("and the row wraps rather than squeezing",
+  /\.home-news-cards\{[^}]*flex-wrap:wrap/.test(CSS), true);
+
+// Two click targets, and they answer different questions.
+check("the art opens that card",
+  /openCardsWithSearch\(""\s*,\s*coconutRowId\(c\.slug\)\)/.test(tile), true);
+check("the title opens the set with the card already open",
+  /openCardsFilteredBySet\(COCONUT_SET_NAME,\s*coconutRowId\(/.test(tile), true);
+// ⚠ A nested button's stopPropagation does NOT cancel the anchor's own default
+// navigation — without navCapture, clicking the art ALSO navigates the tile.
+check("the tile guards its nested button", /onClickCapture=\$\{navCapture\}/.test(tile), true);
+// ⚠ And the Cards view has to be able to open a card with no pid, or both of
+// the above land on the tab with nothing open. Every Coconut row has none.
+check("a pid-less card can be grouped for the modal",
+  /row\.tcgplayer_product_id[\s\S]{0,120}groupCards\(\[row\]\)/.test(SRC), true);
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
