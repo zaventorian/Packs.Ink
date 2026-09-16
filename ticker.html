@@ -1042,10 +1042,16 @@ function renderStrip(){
   layoutStrip();
 }
 
+/* Set by the embed reporter at the foot of this file; a no-op otherwise.
+   layoutStrip is the exact moment the bar's height can change, so it is the
+   one call site that cannot be late. */
+let reportEmbedHeight = () => {};
+
 /* Duplicate the sequence until it spans ≥ 2 viewports, then translate by
    exactly one sequence width — that's what makes the loop seamless. Duration
    derives from width / speed so "speed" is real px/s at any bar height. */
 function layoutStrip(){
+  reportEmbedHeight();
   const rail = $("rail");
   const first = rail.firstChild;
   if(!first) return;
@@ -1284,8 +1290,23 @@ if(document.documentElement.getAttribute("data-embed") === "1"){
     const ro = new ResizeObserver(reportHeight);
     ro.observe(document.documentElement);
     if(document.body) ro.observe(document.body);
-  } catch { /* no ResizeObserver — the load handler still fires once */ }
+  } catch { /* no ResizeObserver — the keepalive below still catches it */ }
   window.addEventListener("load", reportHeight);
+  // ⚠ The ResizeObserver is NOT sufficient on its own, and prod proved it: the
+  // frame settled 21px short of the document while the reporter's own maths
+  // said 1166 — it had simply stopped firing after an earlier, smaller
+  // measurement, so the last of the card art never moved it. Same trap the
+  // deck poster's 6s keepalive and the coachmark's slow keepalive exist for:
+  // async data reflows the page after the observer's last fire.
+  // layoutStrip() above is the precise fix (it runs whenever the bar
+  // re-measures); this bounded keepalive is the belt for anything that changes
+  // height without going through it — fonts, late card art, an image 404.
+  let ticks = 0;
+  const keepalive = setInterval(() => {
+    reportHeight();
+    if(++ticks >= 20) clearInterval(keepalive);   // 15s, then the RO has it
+  }, 750);
+  reportEmbedHeight = reportHeight;
   reportHeight();
 }
 </script>
