@@ -1,5 +1,29 @@
 # Social feed on the home page — feasibility + design (2026-09-15)
 
+> ## ⏸ PARKED — not shipping (Zaven, 2026-09-16)
+>
+> *"can you save this idea locally for work later please? I dont want to add it to
+> site now."*
+>
+> **Nothing from this reached the site.** Verified the day it was parked: zero of
+> these commits are on `main`, `main` carries no `supabase/153_social_feed.sql` and
+> no `SocialFeed` component, and a deploy is a manual Actions run in any case. The
+> work lives on branch `claude/social-feed-home-page-j00r2n` and in **draft** PR #65.
+>
+> **To pick it up later**, in this order:
+> 1. Rebase/merge `main` in — and re-check `sw.js` `CACHE_VERSION` against main's.
+>    This branch holds **v414** because main was at v413; if main has moved past it,
+>    bump PAST whatever main carries, never TO it. Git does not flag that as a
+>    conflict (see the 2026-09-08 v377 double-ship).
+> 2. Re-run `node scripts/test_csp_headers.mjs` — `_headers` carries one full policy
+>    per framed page and they must stay identical apart from `frame-ancestors`, so a
+>    new page added meanwhile needs `i.ytimg.com` too.
+> 3. `node scripts/test_social_feed.mjs` and
+>    `python3 scripts/ingest_social_feed.py --self-test`, both offline.
+> 4. **Only then** paste the migration and pick creators. §8 lists what to decide.
+>
+> Re-number the migration if `supabase/` has grown past 153 in the meantime.
+
 Question: can the home page carry a semi-live feed of Lorcana posts from X —
 popular community posts, or specific creators?
 

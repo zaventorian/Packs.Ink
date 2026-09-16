@@ -1,5 +1,11 @@
 -- 153_social_feed.sql - the home page community feed (2026-09-15).
 --
+-- *** DO NOT PASTE THIS YET - PARKED 2026-09-16 (Zaven: not adding it to the
+-- site now). Nothing that reads these tables is on main, so applying this would
+-- create two tables nothing uses. See scripts/SOCIAL_FEED_RESEARCH.md, which
+-- carries the order to pick the work back up in - and re-number this file if
+-- supabase/ has grown past 153 by then. ***
+--
 -- Two tables. social_sources is the ALLOWLIST a person curates: one row per
 -- creator we are willing to surface. social_posts is one row per item, fed by
 -- scripts/ingest_social_feed.py (YouTube RSS, free, no API key) and by an admin
