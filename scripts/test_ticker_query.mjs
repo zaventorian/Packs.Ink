@@ -17,8 +17,10 @@ if (start < 0 || end < 0) {
 }
 const src = html.slice(start, end);
 const { parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine,
-        TK_BRAND_MAX_GAP } = new Function(
-  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP};"
+        TK_BRAND_MAX_GAP, tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo,
+        TK_GRADED_MIN_SALES } = new Function(
+  src + "\nreturn {parseTickerCfg, buildTickerPlan, TK_GROUPS, nextTickerRefreshMs, tickerRarityLine, TK_BRAND_MAX_GAP," +
+        " tickerSoldAgo, tickerSlabLine, tickerYmdDaysAgo, TK_GRADED_MIN_SALES};"
 )();
 
 let failures = 0;
@@ -217,6 +219,79 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
     /html\[data-embed="1"\] body\{[^}]*min-height:0/.test(html), true);
   check("ticker: the reporter measures content, not scrollHeight",
     /const contentHeight = \(\) =>/.test(html) && !/reportHeight[\s\S]{0,200}documentElement\.scrollHeight/.test(html), true);
+}
+
+// ── Graded sections ─────────────────────────────────────────────────────
+// Graded reads our own eBay sale record, not TCGplayer. Two shapes: movers
+// rank by a percent column, Top Sales ranks by sale_price inside a date window
+// because ONE SALE IS A PRICE, NOT A MOVE and there is no percent to use.
+{
+  check("graded is off by default", buildTickerPlan(parseTickerCfg("")).some(s => s.graded), false);
+
+  const plan = buildTickerPlan(parseTickerCfg("?w=1m&g=chase&gk=movers,sales"), new Date("2026-09-15T18:00:00Z"));
+  check("graded sections follow the window's raw groups",
+    plan.map(s => s.group), ["chase", "graded:movers", "graded:sales"]);
+  check("graded section headers name the tier",
+    plan.slice(1).map(s => s.title + " · " + s.sub),
+    ["1M Graded Risers · PSA 10", "1M Top Sales · PSA 10"]);
+
+  const mv = qs(plan[1].requests[0]);
+  check("movers: ranks by the rollup's own percent column", mv.order, "pct_30d.desc");
+  check("movers: grader + grade are exact filters", [mv.grader, mv.grade], ["eq.PSA", "eq.10"]);
+  // The two printings of a Challenge card are two different markets (8.7x on
+  // Cinderella - Stouthearted PSA 10), so a row we could not classify is an
+  // average of both and describes neither.
+  check("movers: the unclassified printing is excluded", mv.printing, "neq.Unknown");
+  // A percent built on two sales is noise wearing a percent sign.
+  check("movers: sale-count floor is applied", mv.sale_count, "gte." + TK_GRADED_MIN_SALES);
+  check("movers: embeds the card AND its set", /cards\(name,version,image_small,sets\(name\)\)/.test(mv.select), true);
+
+  const sl = qs(plan[2].requests[0]);
+  check("sales: ranks by price, not a percent", sl.order, "sale_price.desc");
+  check("sales: excluded rows never ship", sl.excluded, "is.false");
+  check("sales: window becomes a sold_date floor", sl.sold_date, "gte.2026-08-16");
+  check("sales: carries no percent filter", Object.keys(sl).some(k => k.startsWith("pct")), false);
+  check("sales: one request even when direction is Both",
+    buildTickerPlan(parseTickerCfg("?w=1m&gk=sales&dir=both"))
+      .filter(s => s.graded)[0].requests.length, 1);
+
+  check("grader/grade round-trip", (() => { const c = parseTickerCfg("?gk=sales&gr=cgc&gg=9.5");
+    return [c.grader, c.grade]; })(), ["CGC", "9.5"]);
+  check("a bogus grader falls back", parseTickerCfg("?gk=sales&gr=ACME").grader, "PSA");
+  check("a bogus grade falls back", parseTickerCfg("?gk=sales&gg=11").grade, "10");
+}
+
+// The slab pill, and the recency that replaces Δ% on a single sale.
+{
+  check("slab names the printing when there is one", tickerSlabLine("PSA", "10", "Foil"), "PSA 10 · Foil");
+  check("no printing recorded: say nothing", tickerSlabLine("PSA", "10", ""), "PSA 10");
+  check("the unclassified bucket is never printed", tickerSlabLine("PSA", "10", "Unknown"), "PSA 10");
+  const now = new Date("2026-09-15T18:00:00Z");
+  check("sold today", tickerSoldAgo("2026-09-15", now), "sold today");
+  check("sold yesterday", tickerSoldAgo("2026-09-14", now), "sold yesterday");
+  check("sold days", tickerSoldAgo("2026-09-11", now), "sold 4d ago");
+  check("sold weeks", tickerSoldAgo("2026-08-18", now), "sold 4w ago");
+  check("sold months", tickerSoldAgo("2026-06-15", now), "sold 3mo ago");
+  check("no date, no claim", tickerSoldAgo(null, now), "");
+}
+
+// ⚠ The sales window must be a LOCAL calendar date. toISOString().slice(0,10)
+// is the UTC day, so from early evening in the Americas it names TOMORROW and
+// a 1-day window asks for a day no sale can carry yet — the exact trap
+// CLAUDE.md records for every other date-column query on the site. Asserted
+// against a locally-computed date, so this catches the regression on any
+// machine whose zone is not UTC.
+{
+  const localYmd = (d) => d.getFullYear() + "-" +
+    String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  let allLocal = true;
+  for (const hour of [0, 6, 12, 19, 23]) {
+    const now = new Date(2026, 8, 15, hour, 30, 0);       // local by construction
+    if (tickerYmdDaysAgo(0, now) !== localYmd(now)) allLocal = false;
+    const back = new Date(2026, 8, 15 - 7, hour, 30, 0);
+    if (tickerYmdDaysAgo(7, now) !== localYmd(back)) allLocal = false;
+  }
+  check("sales window uses the LOCAL day at every hour", allLocal, true);
 }
 
 if (failures) {
