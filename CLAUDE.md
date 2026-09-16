@@ -2345,7 +2345,7 @@ Every home section except the movers stack is a **user-arrangeable panel**: show
   sticky so Done and Cancel stay reachable while you rearrange.
 - **On-page layout edit mode (2026-08-21)** replaced the cramped settings-popover editor (which is now just an "✎ Edit home layout" launcher → `startHomeEdit()`). The "✎ Edit layout" chip under the home search enters editing: every panel gets a dashed `.home-edit-card` control bar — ▲▼ reorder, a column `<select>`, Hide/Show — rendered as a SIBLING above the panel, **never a wrapper** (the `.home-left-col > .home-feed` child-selector rule still stands). Hidden panels keep a dimmed bar at the bottom of their column so they're restorable in place. Live panels get `pointer-events:none` + dimming via `.home-editing` so a stray tap can't navigate. The sticky control row (Reset / Cancel / ✓ Done) pins at `top:96px` on phones (below the two-row nav, same trick as `.cards-bulk-bar`). Edits apply live; entering snapshots the layout so **Cancel restores it** (`homeLayoutDraftBase` ref in App); navigating away mid-edit keeps changes and exits. **`normalizeHomeLayout(val)`** is the only way state enters — it drops unknown keys, appends missing ones at their default column, resets bad column names, and never throws. Both App (on load) and HomeView (on render) run it, so a hand-edited or half-migrated value can't render a broken page.
 - **Migration**: the old visibility-only `packsink:homePanels` map is read once on first load and folded into the new shape. Both keys are `localStorage`-only — deliberately NOT in the `user_metadata` prefs-sync effect, since a phone and a desktop wanting different arrangements is normal, not drift to reconcile.
-- **⚠️ Changing a panel's default `col` does NOT reach existing users.** The layout is persisted on EVERY page load, and `normalizeHomeLayout` keeps any stored column that is still a valid column name — so a browser that visited once holds that column forever. This bit the news feed: it defaulted to `announce` from `927ca7b` until `f1e5819` flipped it to `left`, and every browser from that window kept rendering it as a lone 420px `.home-announce` card under the search box with the whole grid shoved below (reported 2026-08-14 from a long-lived signed-in profile; a fresh profile on the same machine looked correct). Fixed by a **one-shot stamped migration** in App's `homeLayout` init (`packsink:homeLayoutNewsRail`) — stamped, not coerced, because `announce` is still an offered column and a permanent coercion would make picking "Top" for news snap back on reload. Do the same for any future default-column change: one-shot keyed on a fresh stamp, never a standing rewrite in `normalizeHomeLayout`. Guarded by `node scripts/test_home_layout.mjs`, which extracts the real code out of Index.html so it can't drift.
+- **⚠️ Changing a panel's default `col` does NOT reach existing users.** The layout is persisted on EVERY page load, and `normalizeHomeLayout` keeps any stored column that is still a valid column name — so a browser that visited once holds that column forever. This bit the news feed: it defaulted to `announce` from `927ca7b` until `f1e5819` flipped it to `left`, and every browser from that window kept rendering it as a lone 420px `.home-announce` card under the search box with the whole grid shoved below (reported 2026-08-14 from a long-lived signed-in profile; a fresh profile on the same machine looked correct). Fixed by a **one-shot stamped migration** in App's `homeLayout` init (`packsink:homeLayoutNewsRail`) — stamped, not coerced, because `announce` is still an offered column and a permanent coercion would make picking "Top" for news snap back on reload. Do the same for any future default-column change: one-shot keyed on a fresh stamp, never a standing rewrite in `normalizeHomeLayout`. Done again 2026-09-15 for the rail swap (`packsink:homeLayoutRailSwap`) — and that one adds the other half of the lesson: **re-seat by POSITION as well as column**, or a panel that was APPENDED already carrying the new column name never moves within it. Guarded by `node scripts/test_home_layout.mjs`, which extracts the real code out of Index.html so it can't drift.
 - **News feed** (`news` panel, reworked 2026-08-12) bundles the pre-release News tile, any live `EVENT_TILES` convention tile, **any Coconut card revealed in the last `COCONUT_REVEAL_NEWS_DAYS` (14)**, and the standing Format Coconut tile — in that order (dated things first, the standing Coconut notice last, per user request). ONE tile list renders into TWO CSS-gated mounts of the same `.home-news-feed` aside: the `--rail` copy is a normal column panel (default = top of the LEFT rail; the column picker governs only this copy), and the `--rl` copy rides the Rare–Legendary movers banner as the right-hand cell of the `.rl-news-row` grid (`minmax(0,1fr) minmax(150px,32%)`) — the same geometry the old mobile tournament column used. `@media (max-width:1100px)` flips which copy displays: ≤1100px the rail columns sink below the movers, so the rl copy is the visible one (per user: desktop = left column, mobile = beside the movers; the old full-width announce tiles ate half a phone screen). Natural heights only (`align-items:start`, list scrolls inside `max-height` — `min(70vh,560px)` rail / `min(66vh,520px)` rl) — do NOT height-lock the pair; that's what killed both `ChaseRowWithTourney` predecessors. **The cap is viewport-relative on purpose** (was a flat 340px on the rl mount): a pixel cap clipped the list hundreds of px short of the room the row actually had on a tall phone. The aside is the `NewsFeed` component (just above `HomeView`) rather than inline JSX because the clip needs an affordance — phones hide their scrollbars, so a half-cut tile reads as a broken box. `edge` state (`""|top|bot|both`, from a scroll + `ResizeObserver` sync) drives a `news-edge-*` class that masks the clipped end and shows a ⌄ chip. The fade is `mask-image`, NOT a gradient overlay: four themes hold a gradient in `--bg`, which can't be a colour stop — and it was safe because these tiles were text-only (see the CSS-pitfalls note on masks softening child `<img>`s). **The Coconut reveal tile is now the one exception, on a measurement**: at chip size the softening is ≤0.302/255 and exactly 0 at DPR 2–3. Re-measure before putting anything BIGGER than a ~52px thumb in this feed; see "A Coconut reveal is news for a fortnight". In the movers loading/error/no-direction branches the rl copy renders full-width above the status message so announcements never vanish behind a data hiccup on phones. The `announce` strip (full-width, under the search box) still exists as a column target; nothing defaults there anymore.
 - **Empty side columns are omitted from the tree**, and `.home-grid` gets `hg-no-left` / `hg-no-right` which narrow `grid-template-columns` to match — otherwise hiding everything on the left left a 240px hole. Columns are **auto-placed in DOM order**; don't reintroduce `grid-column:1` on `.home-left-col` or the omission breaks.
 - `moveHomePanel` swaps with the nearest neighbour that is **both in the same column AND visible**. Plain index±1 would swap past a panel in another column (or a hidden one) and read as a dead button.
@@ -5185,20 +5185,61 @@ the day except:
 
 ### On the home page
 
-- **Default position is the TOP of the LEFT rail, above the news feed** (Zaven,
-  2026-09-12). Two mechanisms, because one is not enough: its place in the
+- **Default position is the TOP of the RIGHT rail** (Zaven, 2026-09-15; it was
+  the top of the LEFT rail from 2026-09-12). **⚠ The rails are not the same
+  width — left is 240px, right is 360px (`.home-grid`) — so "which rail" is
+  really "does this panel need the extra 120px", and the calendar is the panel
+  that does: its rows carry a date, a countdown, a subtitle AND a title.** The
+  Toolbox and Set EV went the other way, to the foot of the left rail, for the
+  mirror reason. Two mechanisms, because one is not enough: its place in the
   `HOME_PANELS` array covers a browser with no stored layout
-  (`defaultHomeLayout` keeps that order), and `HOME_LAYOUT_CALENDAR_KEY` is the
-  one-shot stamp for every browser that has one — `normalizeHomeLayout` APPENDS
-  an unknown key, which for a "what's coming up" box buries it in the one place
-  it is useless. **⚠ The hoist splices before the first LEFT-column panel, not at
-  index 0**: the layout is one flat array across all columns, so index 0 may be a
-  right-rail panel and the calendar would silently change column.
-- **⚠ On mobile it spans BOTH columns of the rail** (`grid-column:1/-1`). At
-  ≤1100px `.home-left-col` is a 2-up grid, which suits Following and Tournament
-  Results — a name and a number — but measured at 375px the calendar got a 169px
-  box and clipped **6 of 6 meta lines and 5 of 6 titles**. Full width is the
-  difference between a list and a column of ellipses.
+  (`defaultHomeLayout` keeps that order), and `HOME_LAYOUT_RAIL_SWAP_KEY` is the
+  one-shot stamp for every browser that has one.
+  - **⚠ Re-seating is by POSITION as well as column.** A browser that never saw
+    `HOME_LAYOUT_CALENDAR_KEY` had the panel APPENDED carrying today's default
+    (`right`) — the right COLUMN but the bottom of it — so a column-only move
+    leaves it under the collection chart forever. Splice before the first panel
+    of the target column, never at index 0: the layout is one flat array across
+    all columns, so index 0 may belong to another rail.
+  - **⚠ Each move is guarded on the panel still being where the OLD default put
+    it**, so a calendar someone dragged to `main` is left alone. `HOME_LAYOUT_CALENDAR_KEY`
+    stays in the code — it is a no-op now, but removing a spent stamp re-fires
+    nothing and costs nothing to keep.
+- **Moving into 240px broke two things, and both were fixed rather than
+  accepted** — the reason this is not just a two-line const change:
+  - **The Toolbox goes ONE column in a rail** (`.home-left-col .home-toolbox-grid`).
+    Two columns there give a chip 108px and its label 64, and the labels want up
+    to 83 — so "Expected Value", "Trade Compare" and "Set Breakdown" all
+    ellipsed, and a clipped name on a NAVIGATION chip is the one thing it cannot
+    afford. Costs ~100px of height at the foot of the longest column.
+  - **Set EV's set name takes a line of its own**, with the three numbers under
+    the headers and the head row's "Set" cell hidden. The four-column row gave
+    the name 58px against the 106 "Whispers in the Well" wants. Same
+    tables-become-stacks trade the EV and Sealed rows already make on a phone.
+  - Both are **scoped to `.home-left-col`, not to a breakpoint** — the rail is a
+    fixed width, so moved anywhere wider they go back to their full shape.
+- **⚠ On mobile a wide panel spans BOTH columns of the rail** (`grid-column:1/-1`).
+  At ≤1100px `.home-left-col` is a 2-up grid, which suits Following and
+  Tournament Results — a name and a number — but a half cell is **176px**, even
+  narrower than the 240px rail. Measured at 375px the calendar got a 169px box
+  and clipped 6 of 6 meta lines and 5 of 6 titles; Set EV clipped every price
+  there once it moved in, so **it now spans too**. The Toolbox does not: one
+  column of chips reads fine at 162px. The calendar's rule stays live for anyone
+  who moves it back to the left.
+- **⚠ A row prints only what CHANGED from the row above it** (`calPanelRows`,
+  2026-09-15). Sep 19 carries three CCQs and the panel spent **six lines saying
+  three things**: every row repeated the date, the countdown and the category,
+  while the titles — the only part that differs — were the half being ellipsed.
+  The date and countdown lead a day, a repeated subtitle is dropped entirely,
+  and that day is four lines. **A day with ONE event is byte-identical to
+  before**; the common case must not pay for the fix.
+  - The comparison is against the PREVIOUS ROW, which is only sound because
+    `rows` is date-sorted (`calendarPanelWindow` slices an already-sorted pool).
+  - **⚠ A continuation row's `aria-label` carries the day**, because the visible
+    date is now on a different row and `aria-label` overrides the content — a
+    screen reader would otherwise hear three untethered titles.
+  - The hairline moved to the TOP of each day's first row: it separates DAYS,
+    not events. Three CCQs on the 19th are three things happening that day.
 - **The panel row is TWO STACKED LINES, not three columns.** In the 240px rail a
   `[date | title | subtitle]` row left the title ~80px, so "GNG Attack of the
   Vine! Set Championship" rendered as "GNG …". Date, countdown and subtitle share
