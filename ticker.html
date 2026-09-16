@@ -306,7 +306,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       <div class="tk-field">
         <label>Price basis</label>
         <div class="tk-seg" id="segMetric"></div>
-        <div class="tk-hint">NM Market is the honest read for short windows — Low is TCGplayer's published Low Price and can sit frozen for weeks.</div>
+        <div class="tk-hint">Low is TCGplayer's published Low Price — it tracks the cheap end of the market. NM Market is their Near-Mint market price, a smoothed average of recent sales.</div>
       </div>
 
       <div class="tk-row">
@@ -458,9 +458,18 @@ const TK_GRADED_UNKNOWN_PRINTING = "Unknown";
    on the market indices. Not exposed as a control: it is a correctness floor,
    not a preference. */
 const TK_GRADED_MIN_SALES = 5;
-const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"mkt", dir:"up", count:15,
+const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"low", dir:"both", count:20,
   min:5, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
   transparent:false, gkinds:[], grader:"PSA", grade:"10", gmin:25};
+/* ⚠ Changing a default RETARGETS EVERY OVERLAY ALREADY IN THE WILD that took
+   it. cfgToParams writes only non-default params, so a streamer who accepted
+   the defaults is running a bare ?bar=1 and picks these up on their next page
+   load — which is the point (2026-09-15, Zaven: both / Low / 20), but it means
+   a default is not a free choice. Anyone who picked a value explicitly keeps
+   it, because their URL names it.
+   Measured before the switch, at the $5 floor: Low has 70 risers and 107
+   fallers on 1D against NM Market's 113/97, and "both" needs only 10 a side,
+   so the reel fills on either basis. */
 
 /* A window's length in days, read off the matview column suffix so the two
    cannot drift (TK_WINDOWS' col IS "_30d"). Graded top sales has no percent

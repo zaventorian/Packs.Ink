@@ -39,14 +39,19 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
     plan.map(s => s.win + "/" + s.group),
     ["1d/chase", "1d/rareleg", "1w/chase", "1w/rareleg"]);
   check("defaults: section headers", plan.map(s => s.title + " · " + s.sub).slice(0, 2),
-    ["1D Risers · Chase", "1D Risers · Rare – Legendary"]);
+    ["1D Movers · Chase", "1D Movers · Rare – Legendary"]);
   const q = qs(plan[0].requests[0]);
-  check("defaults: order", q.order, "mkt_pct_1d.desc");
-  check("defaults: gainers only", q.mkt_pct_1d, "gt.0");
-  check("defaults: price floor $5", q.market_today, "gte.5");
+  // Defaults are both / Low / 20 (2026-09-15). Pinned because changing one
+  // RETARGETS every overlay in the wild that took it: cfgToParams writes only
+  // non-default params, so an accepted-defaults URL is a bare ?bar=1.
+  check("defaults: direction is Both", plan[0].requests.map(r => r.dir), ["up", "down"]);
+  check("defaults: basis is Low", q.order, "pct_1d.desc");
+  check("defaults: risers request is gainers-only", q.pct_1d, "gt.0");
+  check("defaults: fallers request is losers-only", qs(plan[0].requests[1]).pct_1d, "lt.0");
+  check("defaults: price floor $5 on Low", q.low_today, "gte.5");
   check("custom floor respected",
-    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).market_today, "gte.1");
-  check("defaults: limit", q.limit, "15");
+    qs(buildTickerPlan(parseTickerCfg("?min=1"))[0].requests[0]).low_today, "gte.1");
+  check("defaults: 20 a section, 10 each way", q.limit, "10");
   check("defaults: chase rarity filter", q.rarity, 'in.("Enchanted","Epic","Iconic")');
   check("defaults: rareleg rarity filter", qs(plan[1].requests[0]).rarity,
     'in.("Rare","Super Rare","Legendary")');
@@ -67,7 +72,10 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
 
 // Direction: fallers flip sign + sort; both = two requests splitting the budget.
 {
-  const down = buildTickerPlan(parseTickerCfg("?dir=down&w=1w&g=all"))[0];
+  // ⚠ These name the basis explicitly (m=mkt). They used to inherit it from
+  // TK_DEFAULTS, so changing the default basis broke tests that are about
+  // DIRECTION and say nothing about the basis.
+  const down = buildTickerPlan(parseTickerCfg("?dir=down&w=1w&g=all&m=mkt"))[0];
   check("down: header word", down.title, "1W Fallers");
   check("down: order asc", qs(down.requests[0]).order, "mkt_pct_7d.asc");
   check("down: losers only", qs(down.requests[0]).mkt_pct_7d, "lt.0");
@@ -110,7 +118,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("fg hex accepted", c.fg, "#0ab1c2");
   check("transparent bg", parseTickerCfg("?bg=transparent").transparent, true);
   const q = qs(buildTickerPlan(parseTickerCfg("?w=1w&g=all&min=0"))[0].requests[0]);
-  check("min=0: not-null guard", q.market_today, "not.is.null");
+  check("min=0: not-null guard", q.low_today, "not.is.null");
 }
 
 // The rarity line says "· Foil" only for base-rarity foil variants — chase
@@ -233,7 +241,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
     plan.map(s => s.group), ["chase", "graded:movers", "graded:sales"]);
   check("graded section headers name the tier",
     plan.slice(1).map(s => s.title + " · " + s.sub),
-    ["1M Graded Risers · PSA 10", "1M Top Sales · PSA 10"]);
+    ["1M Graded Movers · PSA 10", "1M Top Sales · PSA 10"]);
 
   const mv = qs(plan[1].requests[0]);
   check("movers: ranks by the rollup's own percent column", mv.order, "pct_30d.desc");
