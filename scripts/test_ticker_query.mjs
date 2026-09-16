@@ -218,7 +218,19 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
   check("Index.html: a tab with its own path does not also write ?a=",
     /MARKET_SUB_PATHS\[marketSub\]\) \? null : marketSub/.test(index), true);
   check("Index.html: the ticker tab uses the auto-height frame",
-    /<\$\{AutoHeightFrame\} src="\/ticker\?embed=1"/.test(index), true);
+    /<\$\{AutoHeightFrame\} src=\$\{"\/ticker\?embed=1"/.test(index), true);
+  // ⚠ A hand-written /ticker?gk=sales&g= must reach the configurator. Two
+  // things eat those params otherwise and the page still looks fine, just
+  // showing a default reel: the view-sync effect strips ?g= and ?m= (Price
+  // Graphing and the Screener own those letters), and the embed src used to be
+  // a fixed string that forwarded nothing. Captured at module load because the
+  // strip runs in an effect, and gated on the landing path so arriving from
+  // /price-graphing?g=c~123 can't feed that ?g= in as a rarity group.
+  check("Index.html: ticker config params are forwarded into the embed",
+    /const TICKER_EMBED_PARAMS = \(\(\) => \{/.test(index) &&
+    /\(TICKER_EMBED_PARAMS \? "&" \+ TICKER_EMBED_PARAMS : ""\)/.test(index), true);
+  check("Index.html: ...and only for a direct /ticker landing",
+    /TICKER_EMBED_PARAMS[\s\S]{0,600}?!== "\/ticker"\) return ""/.test(index), true);
   // The embed reporter must measure CONTENT, not the document: body carries
   // min-height:100vh from styles.css, and inside an auto-height frame 100vh is
   // the frame itself, so scrollHeight feeds a growth loop (measured: 6210px
@@ -241,7 +253,7 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
     plan.map(s => s.group), ["chase", "graded:movers", "graded:sales"]);
   check("graded section headers name the tier",
     plan.slice(1).map(s => s.title + " · " + s.sub),
-    ["1M Graded Movers · PSA 10", "1M Top Sales · PSA 10"]);
+    ["1M Graded Movers · PSA · 10", "1M Top Sales · PSA · 10"]);
 
   const mv = qs(plan[1].requests[0]);
   check("movers: ranks by the rollup's own percent column", mv.order, "pct_30d.desc");
@@ -264,9 +276,38 @@ const qs = (req) => Object.fromEntries(new URLSearchParams(req.qs));
       .filter(s => s.graded)[0].requests.length, 1);
 
   check("grader/grade round-trip", (() => { const c = parseTickerCfg("?gk=sales&gr=cgc&gg=9.5");
-    return [c.grader, c.grade]; })(), ["CGC", "9.5"]);
-  check("a bogus grader falls back", parseTickerCfg("?gk=sales&gr=ACME").grader, "PSA");
-  check("a bogus grade falls back", parseTickerCfg("?gk=sales&gg=11").grade, "10");
+    return [c.graders, c.grades]; })(), [["CGC"], ["9.5"]]);
+  check("a bogus grader falls back", parseTickerCfg("?gk=sales&gr=ACME").graders, ["PSA"]);
+  check("a bogus grade falls back", parseTickerCfg("?gk=sales&gg=11").grades, ["10"]);
+}
+
+// Grader and grade are ANY COMBINATION (Zaven, 2026-09-15) — they were
+// one-of-N segmented controls, which meant "PSA 10 and CGC 10" was unaskable.
+{
+  const gq = (q) => qs(buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).requests[0]);
+  const lbl = (q) => buildTickerPlan(parseTickerCfg(q)).find(s => s.graded).sub;
+
+  // ⚠ A single value stays on eq., so every single-grader overlay URL already
+  // in the wild produces a byte-identical query to the one it produced before.
+  check("one grader still uses eq.", gq("?gk=sales&gr=psa").grader, "eq.PSA");
+  check("several graders use in.", gq("?gk=sales&gr=psa,cgc").grader, 'in.("PSA","CGC")');
+  check("several grades use in.", gq("?gk=sales&gg=10,9.5,9").grade, 'in.("10","9.5","9")');
+  check("canonical order regardless of param order",
+    parseTickerCfg("?gk=sales&gr=sgc,psa,bgs").graders, ["PSA", "BGS", "SGC"]);
+  check("order survives into the query",
+    gq("?gk=sales&gr=sgc,psa").grader, 'in.("PSA","SGC")');
+
+  // ⚠ Neither list may empty: a graded section with no grader selected can
+  // only query nothing, which is the empty-reel failure in another costume.
+  check("an empty grader list keeps the default", parseTickerCfg("?gk=sales&gr=").graders, ["PSA"]);
+  check("an empty grade list keeps the default", parseTickerCfg("?gk=sales&gg=").grades, ["10"]);
+
+  // The label has to survive being read at a glance on a moving bar: "/" binds
+  // within a dimension, " · " separates them.
+  check("label: one of each", lbl("?gk=sales"), "PSA · 10");
+  check("label: several graders", lbl("?gk=sales&gr=psa,cgc"), "PSA/CGC · 10");
+  check("label: everything collapses to Any",
+    lbl("?gk=sales&gr=psa,cgc,bgs,sgc&gg=10,9.5,9,8.5,8"), "Any grader · Any grade");
 }
 
 // The slab pill, and the recency that replaces Δ% on a single sale.

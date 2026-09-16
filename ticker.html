@@ -332,12 +332,13 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
       </div>
       <div id="gradedOpts">
         <div class="tk-field">
-          <label>Grader</label>
-          <div class="tk-seg" id="segGrader"></div>
+          <label>Graders — pick any combination</label>
+          <div class="tk-chips" id="chipsGrader"></div>
         </div>
         <div class="tk-field">
-          <label>Grade</label>
-          <div class="tk-seg" id="segGrade"></div>
+          <label>Grades — pick any combination</label>
+          <div class="tk-chips" id="chipsGrade"></div>
+          <div class="tk-hint">Every card still shows its own grader and grade, so a mixed section stays readable.</div>
         </div>
         <div class="tk-field">
           <label>Min price $</label>
@@ -410,7 +411,7 @@ html[data-bar="1"] .tk-bar{--tkt:100vh;height:100vh;width:100vw;}
         If you have any questions, ideas, or requests, please reach out —
         <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style="color:var(--accent);">@HighScoreZAP</a>
         or <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style="color:var(--accent);">@packs_ink</a>
-        on X. I'd be happy to help make this something that benefits your stream.
+        on Twitter. I'd be happy to help make this something that benefits your stream.
       </p>
     </div>
   </main>
@@ -476,7 +477,7 @@ const TK_GRADED_UNKNOWN_PRINTING = "Unknown";
 const TK_GRADED_MIN_SALES = 5;
 const TK_DEFAULTS = {wins:["1d","1w"], groups:["chase","rareleg"], metric:"low", dir:"both", count:20,
   min:5, foil:true, nonfoil:true, img:true, brand:true, speed:55, bg:"#171226", fg:"#f2eefc",
-  transparent:false, gkinds:[], grader:"PSA", grade:"10", gmin:25};
+  transparent:false, gkinds:[], graders:["PSA"], grades:["10"], gmin:25};
 /* ⚠ Changing a default RETARGETS EVERY OVERLAY ALREADY IN THE WILD that took
    it. cfgToParams writes only non-default params, so a streamer who accepted
    the defaults is running a bare ?bar=1 and picks these up on their next page
@@ -499,6 +500,20 @@ const TK_GRADED_ROLLUP_SELECT =
   "card_id,printing,grader,grade,last_sold_price,avg_last_5,sale_count," + TK_GRADED_EMBED;
 const TK_GRADED_SALE_SELECT =
   "card_id,printing,grader,grade,sale_price,sold_date," + TK_GRADED_EMBED;
+
+/* One-or-many PostgREST filter. Stays on eq. for a single value so a
+   single-grader URL reads exactly as it did before multi-select. */
+const tickerInFilter = (arr) => arr.length === 1
+  ? "eq." + arr[0]
+  : "in.(" + arr.map(v => '"' + v + '"').join(",") + ")";
+
+/* The graded section's sub-label. ⚠ "/" WITHIN a dimension and " · " BETWEEN
+   them, so "PSA/CGC · 10/9.5" cannot be misread as four graders. Everything
+   selected collapses to "Any", or the header grows longer than the cards. */
+function tickerGradedLabel(graders, grades){
+  const part = (sel, all, word) => sel.length >= all.length ? "Any " + word : sel.join("/");
+  return part(graders, TK_GRADERS, "grader") + " · " + part(grades, TK_GRADES, "grade");
+}
 
 const tickerWindowDays = (win) => parseInt(String(win.col).replace(/[^0-9]/g, ""), 10) || 1;
 /* ⚠ Local calendar date, never toISOString().slice(0,10) — that is the UTC
@@ -555,10 +570,16 @@ function parseTickerCfg(search){
   const gk = csv("gk");
   const gksel = TK_GRADED_KINDS.map(k => k.key).filter(k => gk.includes(k));
   cfg.gkinds = gksel;
-  const gr = (q.get("gr") || "").toUpperCase();
-  if(TK_GRADERS.includes(gr)) cfg.grader = gr;
-  const gg = (q.get("gg") || "").trim();
-  if(TK_GRADES.includes(gg)) cfg.grade = gg;
+  // Any combination of graders and grades (Zaven, 2026-09-15). Canonical order
+  // again, so the label and the query are predictable whatever the param says.
+  // An empty or unrecognised list keeps the default rather than emptying it: a
+  // graded section with no grader selected can only query nothing.
+  const grSel = (q.get("gr") || "").split(",").map(v => v.trim().toUpperCase()).filter(Boolean);
+  const graders = TK_GRADERS.filter(g => grSel.includes(g));
+  if(graders.length) cfg.graders = graders;
+  const ggSel = (q.get("gg") || "").split(",").map(v => v.trim()).filter(Boolean);
+  const grades = TK_GRADES.filter(g => ggSel.includes(g));
+  if(grades.length) cfg.grades = grades;
   const gmin = parseFloat(q.get("gmin"));
   if(Number.isFinite(gmin)) cfg.gmin = Math.max(0, Math.min(100000, gmin));
   // ⚠ The one state the reel must never be in. The chips cannot reach it (each
@@ -621,7 +642,7 @@ function buildTickerPlan(cfg, now){
     for(const gk of TK_GRADED_KINDS.filter(k => cfg.gkinds.includes(k.key))){
       const word = cfg.dir === "up" ? gk.label : cfg.dir === "down" ? gk.fallLabel : gk.bothLabel;
       const head = {win: win.key, title: win.label + " " + word, group: "graded:" + gk.key,
-                    sub: cfg.grader + " " + cfg.grade, detail: gk.detail, graded: gk.key};
+                    sub: tickerGradedLabel(cfg.graders, cfg.grades), detail: gk.detail, graded: gk.key};
       if(gk.key === "sales"){
         // ⚠ Top Sales has no percent to rank by — one sale is a PRICE, not a
         // move — so it ranks by sale_price inside a date window instead. That
@@ -629,8 +650,8 @@ function buildTickerPlan(cfg, now){
         const q = new URLSearchParams();
         q.set("select", TK_GRADED_SALE_SELECT);
         q.set("excluded", "is.false");
-        q.set("grader", "eq." + cfg.grader);
-        q.set("grade", "eq." + cfg.grade);
+        q.set("grader", tickerInFilter(cfg.graders));
+        q.set("grade", tickerInFilter(cfg.grades));
         q.set("sold_date", "gte." + tickerYmdDaysAgo(tickerWindowDays(win), now));
         if(cfg.gmin > 0) q.set("sale_price", "gte." + cfg.gmin);
         q.set("order", "sale_price.desc");
@@ -641,8 +662,8 @@ function buildTickerPlan(cfg, now){
         const requests = dirs.map(dir => {
           const q = new URLSearchParams();
           q.set("select", TK_GRADED_ROLLUP_SELECT + "," + pctCol);
-          q.set("grader", "eq." + cfg.grader);
-          q.set("grade", "eq." + cfg.grade);
+          q.set("grader", tickerInFilter(cfg.graders));
+          q.set("grade", tickerInFilter(cfg.grades));
           q.set("printing", "neq." + TK_GRADED_UNKNOWN_PRINTING);
           q.set("sale_count", "gte." + TK_GRADED_MIN_SALES);
           q.set(pctCol, dir === "up" ? "gt.0" : "lt.0");
@@ -1024,8 +1045,8 @@ function cfgToParams(c){
   // three are inert, so they are only written when graded is actually on.
   if(c.gkinds.length){
     q.set("gk", c.gkinds.join(","));
-    if(c.grader !== TK_DEFAULTS.grader) q.set("gr", c.grader);
-    if(c.grade !== TK_DEFAULTS.grade) q.set("gg", c.grade);
+    if(c.graders.join(",") !== TK_DEFAULTS.graders.join(",")) q.set("gr", c.graders.join(","));
+    if(c.grades.join(",") !== TK_DEFAULTS.grades.join(",")) q.set("gg", c.grades.join(","));
     if(c.gmin !== TK_DEFAULTS.gmin) q.set("gmin", String(c.gmin));
   }
   return q;
@@ -1089,8 +1110,15 @@ function initConfigUI(){
       v => cfg.gkinds = toggleKey(cfg.gkinds, v, TK_GRADED_KINDS.map(k => k.key), cfg.groups.length > 0));
     const gradedOn = cfg.gkinds.length > 0;
     $("gradedOpts").style.display = gradedOn ? "" : "none";
-    seg($("segGrader"), TK_GRADERS.map(g => ({label: g, value: g})), () => cfg.grader, v => cfg.grader = v);
-    seg($("segGrade"), TK_GRADES.map(g => ({label: g, value: g})), () => cfg.grade, v => cfg.grade = v);
+    // ⚠ Multi-select, and neither list may empty: a graded section with no
+    // grader (or no grade) selected can only ever query nothing, which is the
+    // empty-reel failure the chip rule exists to prevent.
+    chipGroup($("chipsGrader"), TK_GRADERS.map(g => ({label: g, value: g})),
+      v => cfg.graders.includes(v),
+      v => cfg.graders = toggleKey(cfg.graders, v, TK_GRADERS, false));
+    chipGroup($("chipsGrade"), TK_GRADES.map(g => ({label: g, value: g})),
+      v => cfg.grades.includes(v),
+      v => cfg.grades = toggleKey(cfg.grades, v, TK_GRADES, false));
     $("inGmin").value = cfg.gmin;
     $("inCount").value = cfg.count;
     $("inMin").value = cfg.min;

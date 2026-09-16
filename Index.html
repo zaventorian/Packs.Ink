@@ -29808,7 +29808,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <p>The full, current policy lives at <a href="/privacy" style=${{color:"var(--accent)"}}>packs.ink/privacy</a> — what we store, the card-scanner photo notice, the graded-data terms of use, the general terms of use, and how to delete your account. In short: browsing needs no account; signing in stores your Google email and display name; only the features you actually use store anything; we never sell data.</p>
 
     <h2>About</h2>
-    <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on X for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
+    <p>Follow <a href="https://x.com/packs_ink" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@packs_ink</a> on Twitter for updates. For bug reports and feature requests, ping <a href="https://x.com/HighScoreZAP" target="_blank" rel="noopener" style=${{color:"var(--accent)"}}>@HighScoreZAP</a>.</p>
     <p>Logo by Valley Creatives.</p>
 
     <h2>Data & image credits</h2>
@@ -34755,6 +34755,31 @@ const AnalyticsOverview = ({subs, onOpen, onOpenSealed}) => html`<${React.Fragme
     ${" "}<a href="/screener" onClick=${navHandler(onOpenSealed)}>Screener's Sealed mode</a>.</p>`}
 <//>`;
 
+/* The Stream Ticker's own config params, captured at MODULE LOAD.
+   ⚠ Two separate things eat them otherwise, and the result looks like a
+   working page showing the wrong reel. The view-sync effect strips ?g= and ?m=
+   (Price Graphing and the Screener own those letters, and Analytics does not),
+   and the embed src is a fixed "/ticker?embed=1" that carried nothing across
+   regardless. So a hand-written /ticker?gk=sales&g= silently opened a default
+   raw reel — which it did NOT do before /ticker became an SPA route.
+   Captured at module load because the strip happens in an effect, i.e. after
+   first render; gated on the landing path so navigating in from
+   /price-graphing?g=c~123 cannot feed that ?g= to the ticker as a rarity
+   group. The overlay URL (?bar=1) never comes through here — the worker hands
+   those straight to ticker.html. */
+const TICKER_EMBED_PARAMS = (() => {
+  try {
+    if((window.location.pathname.replace(/\/$/, "") || "/") !== "/ticker") return "";
+    const q = new URLSearchParams(window.location.search);
+    const out = new URLSearchParams();
+    for(const k of ["w","g","m","dir","n","min","foil","nf","img","brand",
+                    "speed","bg","fg","gk","gr","gg","gmin"]){
+      if(q.has(k)) out.set(k, q.get(k));
+    }
+    return out.toString();
+  } catch { return ""; }
+})();
+
 // An embedded tool page that grows to its own content rather than scrolling
 // inside a fixed box. The child posts its height (see the embed reporter in
 // ticker.html) and this sets the frame to match, so the tool reads as part of
@@ -34913,7 +34938,8 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
     ${sub==="ticker" && html`<${React.Fragment}>
       <${MarketHeader} title="Stream Ticker"
         sub="A scrolling bar of the biggest movers for your stream — set it up here, then paste one URL into an OBS browser source."/>
-      <${AutoHeightFrame} src="/ticker?embed=1" title="Stream Ticker"/>
+      <${AutoHeightFrame} src=${"/ticker?embed=1" + (TICKER_EMBED_PARAMS ? "&" + TICKER_EMBED_PARAMS : "")}
+        title="Stream Ticker"/>
     <//>`}
   </div>`;
 }
