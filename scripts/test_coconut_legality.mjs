@@ -71,9 +71,10 @@ console.log("\n== data integrity ==");
 // Cards land in waves during the beta, so the exact count is a tripwire: it
 // fails on purpose when one is added, which is the prompt to check the rest of
 // this block still describes the set. Beta 1 was 18, 3 per ink; Beta 2 opened
-// with a 4th Steel leader, so the per-ink split is no longer even.
+// with a 4th Steel leader, then a second Beta 2 wave (2026-09-17) added 2
+// Emerald + 1 Ruby + 1 Sapphire, so the per-ink split is no longer even.
 const COCONUT_INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
-check("19 Coconut cards", COCONUT_CARDS.length, 19);
+check("23 Coconut cards", COCONUT_CARDS.length, 23);
 // The durable half of the old "3 per ink" check. A typo'd ink ("Steal") would
 // leave the card out of CoconutLeaderPicker entirely — it renders one group per
 // canonical ink — and nothing else would notice.
@@ -82,10 +83,10 @@ check("every ink is canonical",
 check("every ink has a leader",
   COCONUT_INKS.every(i => COCONUT_CARDS.some(c => c.ink === i)), true);
 check("per-ink counts", COCONUT_INKS.map(
-  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [3,3,3,3,3,4]);
-check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 19);
-check("collector numbers 1..19", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
-  Array.from({length:19},(_,i)=>i+1));
+  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [3,3,5,4,4,4]);
+check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 23);
+check("collector numbers 1..23", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
+  Array.from({length:23},(_,i)=>i+1));
 check("every associated name is '<name> - <version>'",
   COCONUT_CARDS.every(c => c.associated === `${c.name} - ${c.version}`), true);
 
