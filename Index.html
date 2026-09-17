@@ -43755,6 +43755,20 @@ const getDeckLimitForUI = (productName) => {
   return lim === Infinity ? SPECIAL_LIMIT_UI_CAP : lim;
 };
 
+// A handful of cards grant "you can have OTHER <Classification> characters
+// in your deck regardless of ink type" — Christopher Robin - Hunny Sage's
+// "Gather the Party" (Hunny) is the current example. Detected from the
+// card's own text rather than hardcoded like SPECIAL_DECK_LIMITS, so a
+// future printing of the same mechanic (a different classification) works
+// with no code change. "Other" is load-bearing: the granting card's OWN
+// ink still counts toward the deck's ink limit — only a DIFFERENT card
+// sharing the named classification is exempt.
+const PARTY_RULE_RE = /you can have other ([a-z][a-z' -]*?) characters in your deck regardless of ink type/i;
+const partyClassificationOf = (text) => {
+  const m = PARTY_RULE_RE.exec(text || "");
+  return m ? m[1].trim().toLowerCase() : null;
+};
+
 // Lorcana card-type groups used by the editor's sectioning.
 const DECK_SECTIONS = [
   {key:"Character", label:"Characters", match: t => t === "Character"},
@@ -47510,12 +47524,27 @@ function checkDeckLegality(deck, cardById, setsByProductName){
   // 60 is the minimum; going over is allowed (Lorcana has no upper cap).
   // Coconut keeps the same floor.
   if(total < 60) issues.push(`${total} / 60 cards — need ${60 - total} more`);
+  // A card like Christopher Robin - Hunny Sage ("Gather the Party") grants
+  // OTHER cards of a named classification (Hunny) an ink exemption — their
+  // color doesn't count toward the limit. Gather every such grant in the
+  // deck first (name of the grantor, not its card_id, so any printing of it
+  // still excludes itself from its own grant below).
+  const partyGrants = [];
+  for(const c of deck.cards||[]){
+    const meta = (cardById[c.card_id]||[])[0];
+    const cls = partyClassificationOf(meta?.text);
+    if(cls) partyGrants.push({cls, grantorName: meta?.["Product Name"]});
+  }
   // Dual-ink cards contribute BOTH colors to the deck's ink set. A deck with
   // an Emerald/Sapphire dual + an Amber single uses 3 inks (Amber, Emerald,
   // Sapphire) — over the 2-ink cap.
   const inks = new Set();
   for(const c of deck.cards||[]){
     const meta = (cardById[c.card_id]||[])[0];
+    const name = meta?.["Product Name"];
+    const classes = (meta?.classifications || []).map(x => String(x).toLowerCase());
+    const exempt = partyGrants.some(g => g.grantorName !== name && classes.includes(g.cls));
+    if(exempt) continue;
     const inksList = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
     for(const i of inksList) inks.add(i);
   }

@@ -1771,6 +1771,27 @@ Default 4-of-any-card. `SPECIAL_DECK_LIMITS` in Index.html:
 
 `getDeckLimit(name)` returns cap. `getDeckLimitForUI(name)` clamps Infinity to 99. `checkDeckLegality` sums by Product Name across variants before comparing. DB constraint relaxed to `quantity <= 99` in migration 28.
 
+## Ink-limit exceptions ("Gather the Party" cards, 2026-09-16)
+
+Some cards grant **OTHER** characters of a named classification an exemption from the
+2-ink cap — Christopher Robin - Hunny Sage's "Gather the Party" ("You can have other
+Hunny characters in your deck regardless of ink type") is the shipping example. A
+6-Hunny-ink Christopher Robin deck was reporting `6 inks — limit is 2` and reading as
+invalid, because `checkDeckLegality`'s ink `Set` summed every card's ink with no
+exceptions at all — unlike the quantity cap, which already had `SPECIAL_DECK_LIMITS`.
+
+- **`partyClassificationOf(text)` detects the grant from the card's OWN `text`**
+  (`PARTY_RULE_RE`), not a hardcoded name→classification map — so a future printing of
+  the same mechanic (a different classification) works with no code change, the same
+  reasoning `keywords` extraction uses.
+- **"Other" is load-bearing.** The exemption is matched by `grantorName !== name` (both
+  Product Name, not card_id, so any printing of the granting card still excludes
+  itself) — the granting card's OWN ink still counts toward the limit. Only a
+  DIFFERENT card sharing the named classification is exempt.
+- `checkDeckLegality` gathers every grant in the deck first (`partyGrants`), then skips
+  a card's ink contribution when its `classifications` include a grant it didn't itself
+  make. Multiple different granting cards (present or future) compose for free.
+
 ## Decks tab — logged-out access (2026-06-05)
 
 The Decks tab is **usable without signing in**. The 5 sub-sections behave differently:
