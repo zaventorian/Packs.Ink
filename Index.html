@@ -38361,12 +38361,15 @@ const EVENT_TILES = [
     // No official recap page yet — this came off the Lorecast stream, not a
     // page we can link. Revisit if/when Ravensburger posts one.
     eventUrl: null,
-    // The prizing half is a fast-moving reveal ("more next week"); the format
-    // half is season-structure reference. Merged into one tile since both are
-    // the same stream, same day — the longer window is the honest one, since
-    // taking this down early would drop the still-relevant format rules.
+    // Full writeup lives at /news — the rail is deliberately text-only and
+    // these slides are dense presentation graphics that won't read at rail
+    // width, so this stays a short teaser + link rather than the dense
+    // all-facts note it used to be.
+    articleSlug: "challenge-season-update-2026",
+    // Season-structure rules, not a one-off reveal — longer shelf life than
+    // the 2-week reveal window (~6 weeks, off the feed by early Nov).
     expiresAtMs: Date.UTC(2026, 10, 1, 0, 0, 0),
-    note: "World Championship 2026 prizing: Minnie Mouse - Amethyst Champion (LCP C2 #20, queued — see YEAR3_PRINTING_BY_NUMBER). Foil for Worlds players; non-foil at LGS. — Main Event 1: Fri–Sun, 4,096 players, Core Constructed Bo3 — Fri 8 rounds of Swiss (cut at 18 pts), Sat 7 rounds (cut to Top 8), Sun Top 8 single-elim Bo5. Top 32 + tied players qualify for their region's Championship. Day 1 is Open Ink Pairings; Days 2–3 are Open Deck Lists. — Main Event 2: Sat–Sun, 1,280 players, Core Constructed Bo3 — Sat 8 rounds (cut at 18 pts), Sun 3 rounds of Swiss, no Top Cut. Only Top 8 qualifies for Championships, with no equal-point ties. No Serialized Golden Hades - Dark Usurper promos; same promos and playmats up to Top 16 as Main Event 1. Players can't compete in both Main Events; Day 1 Open Ink Pairings, Day 2 Open Deck Lists. — On-site CCQ at DLC weekends (run by Revival Events — NOT the independently-run regional CCQs already on the calendar, which each set their own player count and structure): Sat–Sun, 216 players, Infinity Constructed Bo3 — Sat 8 rounds (cut to Top 8), Sun Top 8 single-elim. Only 1st place qualifies. \"Mother Knows Best\" prizing; tickets go on sale with the other DLC side events ahead of the weekend.",
+    note: "World Championship 2026's promo, a new lower-commitment Main Event tier for every DLC weekend, and most of the 2027 schedule.",
     artists: [],
   },
 ];
@@ -42376,6 +42379,113 @@ function amazonDirectory(){
   }
   return out;
 }
+// ── /news: real articles, not just the home rail's terse tiles ─────────────
+// The home news rail (EVENT_TILES + the Coconut reveal tile) is a small,
+// deliberately text-only widget — a fine home for "here's what happened" but
+// not for "here's what it MEANS", and the announcement slides it's built from
+// are too dense to read at rail width anyway. This is that fuller read: real
+// paragraphs, the actual slides, and the implications for deckbuilding /
+// tournament attendance, not just the bullet points off the stream.
+//
+// Deliberately NOT a CMS — two articles, hand-written, `body` is a small
+// block list (`p` / `h2` / `img`) rendered in order. Add a third the same way
+// rather than building general infrastructure for a two-item list.
+const NEWS_ARTICLES = [
+  {
+    slug: "coconut-beta2-wave2",
+    kicker: "Format Coconut",
+    title: "Six new leaders, and all six are dual-ink",
+    dateLabel: "September 17, 2026",
+    dek: "The second Beta 2 wave brings the leader pool to 25 — and introduces dual-ink leaders to Coconut for the first time.",
+    body: [
+      {type:"p", text:"Ravensburger's Format Coconut Beta 2 stream revealed a second wave of six leaders on September 17: Woody & Buzz Lightyear, The Madrigal Family, Peter Pan & Tinker Bell, Aladdin & Genie, Belle & Beast, and Darkwing Duck & Launchpad. Combined with the first wave and The Vine - Towering Stalk, the Coconut leader pool now stands at 25 across all six inks."},
+      {type:"p", text:"The headline change isn't any one ability — it's that every leader in this wave is printed in two inks. Coconut has never had a dual-ink leader before; every leader through Beta 1 and the first half of Beta 2 was single-ink. That's a real rules question, not just a cosmetic one: Coconut's whole format hook is that you get a third ink in your deck, as long as one of your deck's inks matches your leader's. With a dual-ink leader, the natural reading is that either of the leader's two inks can be the one that matches — and that's what shipped here, so a deck built around any of these six now has a genuine choice of which of the leader's two colors to lean into."},
+      {type:"img", src:"Logos/news/coconut-wave2-woody-madrigal.jpg", alt:"Woody & Buzz Lightyear - Best Buddies and The Madrigal Family - Every Generation beta cards", caption:"Woody & Buzz Lightyear (Amber/Emerald) and The Madrigal Family (Amber/Sapphire)."},
+      {type:"h2", text:"Woody & Buzz Lightyear - Best Buddies · Amber/Emerald"},
+      {type:"p", text:"“Once during your turn, you may pay 1 ink less for the next Toy character you play this turn. If you do and you have a character named Woody and a character named Buzz Lightyear in play, draw a card.” A Toy-tribal discount that turns into card advantage once both title characters are on board. How good it is depends on how deep the Toy classification actually runs in the catalog — Coconut's near-singleton deckbuilding rule (one copy of almost everything) limits how many real payoffs you can stack behind a tribal leader."},
+      {type:"h2", text:"The Madrigal Family - Every Generation · Amber/Sapphire"},
+      {type:"p", text:"“During your turn, whenever you remove 1 or more damage from one of your characters, you may ready them. They can't quest or challenge for the rest of this turn.” This turns any healing effect into a reusable exert ability — Support, tap-for-value items, and the like — without letting the readied character actually attack or quest again. It's a utility/ability-spam leader, not an extra-damage or extra-lore one."},
+      {type:"img", src:"Logos/news/coconut-wave2-peterpan-aladdin.jpg", alt:"Peter Pan & Tinker Bell - Fast Friends and Aladdin & Genie - Mischievous Pals beta cards", caption:"Peter Pan & Tinker Bell (Amethyst/Ruby) and Aladdin & Genie (Amethyst/Emerald)."},
+      {type:"h2", text:"Peter Pan & Tinker Bell - Fast Friends · Amethyst/Ruby"},
+      {type:"p", text:"“Once during your turn, you may give chosen character Evasive until the start of your next turn. If they already had Evasive, they get +1 strength until the start of your next turn.” A flexible combat trick — grant Evasive to protect a vulnerable attacker, or pump an already-Evasive character into a real threat. It scales with how many Evasive characters the rest of the deck already runs."},
+      {type:"h2", text:"Aladdin & Genie - Mischievous Pals · Amethyst/Emerald"},
+      {type:"p", text:"“Whenever you draw a card during your turn, if it's the third card you drew this turn, gain 2 lore.” Never triggers on an ordinary draw-for-turn — it's a payoff specifically for decks chaining multiple draw effects (Boost, card-draw items and actions) in a single turn, and does nothing otherwise."},
+      {type:"img", src:"Logos/news/coconut-wave2-belle-darkwing.jpg", alt:"Belle & Beast - Certain as the Sun and Darkwing Duck & Launchpad - St. Canard's Finest beta cards", caption:"Belle & Beast (Ruby/Sapphire) and Darkwing Duck & Launchpad (Sapphire/Steel)."},
+      {type:"h2", text:"Belle & Beast - Certain as the Sun · Ruby/Sapphire"},
+      {type:"p", text:"“Whenever one of your characters with cost 5 or more readies, draw a card.” A ramp/top-heavy payoff — any effect that readies an expensive character turns into a card. Rewards a curve that climbs rather than one built to be fast."},
+      {type:"h2", text:"Darkwing Duck & Launchpad - St. Canard's Finest · Sapphire/Steel"},
+      {type:"p", text:"“During your turn, whenever an opposing character is banished in a challenge, gain 1 lore. If they were a Villain character, gain 3 lore instead.” Three lore off one challenge is a big number at Coconut's 25-lore win condition and 3-4 player table — this rewards an aggressive, challenge-heavy deck, and specifically punishes challenging into Villains."},
+      {type:"h2", text:"Open questions"},
+      {type:"p", text:"Two things aren't locked down yet. The Madrigal Family's artist credit is a best-effort read of a handwritten signature on the beta render (“LadyShalimr”) — worth confirming before it's treated as final. And the dual-ink ruling above (either of the leader's two inks satisfies the “must match” requirement, deck ink cap unchanged at three total) is our own reading of the mechanic, since Ravensburger hasn't published Coconut rules text for dual-ink leaders specifically — it's what shipped in code, but it's a judgment call, not a quoted rule."},
+    ],
+  },
+  {
+    slug: "challenge-season-update-2026",
+    kicker: "Disney Lorcana Challenge",
+    title: "A second Main Event tier, Worlds 2026's promo, and the 2027 calendar",
+    dateLabel: "September 17, 2026",
+    dek: "Ravensburger's Organized Play team streamed three updates at once: what Worlds 2026 hands out, a new lower-commitment path into every DLC weekend, and most of next year's schedule.",
+    body: [
+      {type:"p", text:"The same September 17 stream covered three separate things for the 2026-27 Challenge season: the World Championship 2026 promo card, a brand-new second tournament tier for every Disney Lorcana Challenge (DLC) weekend, and confirmation of most of 2027's DLC and qualifier dates."},
+      {type:"h2", text:"Worlds 2026 prizing"},
+      {type:"img", src:"Logos/news/worlds-2026-minnie-promo.jpg", alt:"Minnie Mouse - Amethyst Champion promo card, LCP C2 #20", caption:"Minnie Mouse - Amethyst Champion, LCP C2 #20, art by Max Ulichney."},
+      {type:"p", text:"The promo is Minnie Mouse - Amethyst Champion (LCP C2 #20, “Mystical Balance” — a 4-cost, 2/3 Amethyst Dreamborn Hero), art by Max Ulichney. It splits two ways: a foil copy goes to Worlds competitors, and a non-foil copy is available at local game stores — the same split past promos like A Whole New World have used. Expect the foil to carry real scarcity, tied to Worlds attendance, and the non-foil to be broadly available and cheap, the way past LGS promos have gone."},
+      {type:"h2", text:"A second Main Event tier"},
+      {type:"p", text:"This is the structural change. DLC weekends have always run one Main Event; now they run two in parallel."},
+      {type:"img", src:"Logos/news/op-main-event-1.jpg", alt:"Main Event 1 organized-play rules slide", caption:"Main Event 1 — the existing big event."},
+      {type:"p", text:"Main Event 1 is the event that's always existed: 4,096 players, Friday through Sunday, Core Constructed best-of-three. Friday is 8 rounds of Swiss with a cut at 18 points, Saturday is 7 more rounds cutting to Top 8, and Sunday is a Top 8 single-elimination bracket, best-of-five. Top 32 — and anyone tied with 32nd place — earns an invite to their region's Continental Championship. Day 1 pairings are open (ink colors visible), and Days 2-3 run with open deck lists."},
+      {type:"img", src:"Logos/news/op-main-event-2.jpg", alt:"Main Event 2 organized-play rules slide", caption:"Main Event 2 — the new, smaller-field second tier."},
+      {type:"p", text:"Main Event 2 is new: 1,280 players, Saturday and Sunday only (no Friday), also Core Constructed best-of-three. Saturday is 8 rounds of Swiss cutting at 18 points, same as Main Event 1 — but Sunday is just 3 more rounds of Swiss, with no bracket at all. Standings after all 11 rounds decide everything. Only the outright Top 8 earns a Championship invite, with no equal-point ties (a real difference from Main Event 1's Top 32-plus-ties). Main Event 2 also doesn't award the serialized Golden Hades - Dark Usurper promos, though it shares the same promos and playmats down through Top 16 as Main Event 1. Players can enter one Main Event or the other, not both."},
+      {type:"p", text:"Read together, Main Event 2 is a genuine second-chance path into a Challenge weekend — smaller field, shorter commitment (two days instead of three), and no need to fight through a 4,096-player Friday. But it's a strictly harder invite in exchange: no bracket to win your way in from the bubble, and no tiebreak grace at the cutoff. It reads like a way to grow DLC weekend attendance without diluting what Main Event 1 means."},
+      {type:"h2", text:"On-site CCQ at DLC weekends (Revival Events)"},
+      {type:"img", src:"Logos/news/op-ccq.jpg", alt:"CCQ organized-play rules slide", caption:"The Revival Events CCQ run on-site at DLC weekends."},
+      {type:"p", text:"This slide's numbers are specifically about the qualifier Revival Events runs on-site at the Challenge itself — not the many independently-organized regional CCQs already happening at local game stores around the world (Essen, Raleigh, Sevilla, and dozens more), each of which sets its own player count and structure. Conflating the two would be wrong: those regional CCQs vary a lot by organizer."},
+      {type:"p", text:"The on-site version: Saturday-Sunday, 216 players, Infinity Constructed best-of-three, 8 rounds of Swiss on Saturday cutting to a Sunday Top 8 single-elimination bracket. Only 1st place earns the Challenge invite — a much narrower door than either Main Event's. “Mother Knows Best” prizing is confirmed for the on-site CCQ, and tickets go on sale alongside the weekend's other side events rather than separately in advance."},
+      {type:"h2", text:"The 2027 calendar"},
+      {type:"img", src:"Logos/news/season-2027-timeline-jan-may.jpg", alt:"2027 season timeline, January through May", caption:"2027 season timeline, January–May."},
+      {type:"img", src:"Logos/news/season-2027-timeline-jun-oct.jpg", alt:"2027 season timeline, June through October", caption:"2027 season timeline, June–October."},
+      {type:"p", text:"The same stream's timeline graphics confirmed most of the 2027 DLC and CCQ dates the site already tracked from the community-maintained wiki — Milwaukee, Singapore, Melbourne, Turin, Hong Kong, Las Vegas, Lyon, Utrecht, Taipei, Portland, Toronto, and Düsseldorf all matched exactly. Four were corrected from single-day placeholders to their real multi-day ranges: Tokyo CCQ (Jan 9-11, not just the 11th), DLC Tokyo (Mar 27-28), Sydney CCQ (Apr 3-4), and Auckland CCQ (Jul 31-Aug 1). A new Oceania Championship 2027 was also announced for September/October — no exact date yet, so it isn't on the site's calendar until Ravensburger names one; a confident wrong date is worse than no date at all."},
+    ],
+  },
+];
+const NEWS_BY_SLUG = Object.fromEntries(NEWS_ARTICLES.map(a => [a.slug, a]));
+function NewsArticleBlock({b}){
+  if(b.type === "h2") return html`<h2 class="news-art-h2">${b.text}</h2>`;
+  if(b.type === "img") return html`<figure class="news-art-fig">
+    <img src=${b.src} alt=${b.alt} loading="lazy"/>
+    ${b.caption && html`<figcaption>${b.caption}</figcaption>`}
+  </figure>`;
+  return html`<p class="news-art-p">${b.text}</p>`;
+}
+function NewsArticle({a}){
+  return html`<article id=${a.slug} class="news-article">
+    <div class="news-art-kicker">${a.kicker}</div>
+    <h1 class="news-art-h1">${a.title}</h1>
+    <div class="news-art-meta">${a.dateLabel}</div>
+    <p class="news-art-dek">${a.dek}</p>
+    ${a.body.map((b, i) => html`<${NewsArticleBlock} key=${i} b=${b}/>`)}
+  </article>`;
+}
+// /news — jumps to a single article via #<slug> if one is named (the home
+// tiles link here), otherwise lists both, newest first. No routing state of
+// its own: the browser's native #hash scroll does the "open this one" job,
+// so a shared /news#coconut-beta2-wave2 link works with no JS on arrival.
+function NewsView(){
+  useEffect(() => {
+    if(window.location.hash){
+      const el = document.getElementById(window.location.hash.slice(1));
+      if(el) el.scrollIntoView({behavior:"instant", block:"start"});
+    }
+  }, []);
+  return html`<div class="faq-section news-page">
+    <header class="news-hero">
+      <h1 class="news-page-h1">News</h1>
+      <p class="news-page-lede">What's new for Lorcana players — Format Coconut reveals, Challenge season changes, and anything else worth a real explanation rather than a one-line tile.</p>
+    </header>
+    ${NEWS_ARTICLES.map(a => html`<${NewsArticle} key=${a.slug} a=${a}/>`)}
+  </div>`;
+}
+
 // The /gear page: product cards. Every photo and price on it is TCGplayer's
 // (see amazonSealedMatches for why that is the compliant source), and the page
 // says so — a TCGplayer price must never read as Amazon's.
@@ -43224,6 +43334,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             ${ev.eventUrl && html`<span class="home-news-event-link-arrow" aria-hidden="true">↗</span>`}
           </a>`}
           ${ev.note && html`<div class="home-news-sub">${ev.note}</div>`}
+          ${ev.articleSlug && html`<a class="home-news-readmore" href=${"/news#"+ev.articleSlug}
+            onClick=${navHandler(()=>openView && openView("news"))}>Read the full story →</a>`}
           ${ev.artists && ev.artists.length > 0 && html`<ul class="home-news-list">
             ${ev.artists.map(name => html`<li key=${name}>
               <button class="home-news-link" onClick=${()=>onEventClick(name)}
@@ -50137,6 +50249,7 @@ const VIEW_PATHS = {
   decks:      "/decks",
   faq:        "/how-it-works",
   gear:       "/gear",
+  news:       "/news",
   calendar:   "/calendar",
   elo:        "/elo",   // hidden — Chicagoland Lorcana Elo leaderboard (no nav entry)
 };
@@ -50172,6 +50285,7 @@ const VIEW_TITLES = {
   decks:      "Lorcana Decks & Tournaments — Packs.Ink",
   faq:        "How Packs.Ink Works",
   gear:       "Lorcana on Amazon — Packs.Ink",
+  news:       "Lorcana News — Packs.Ink",
   calendar:   "Lorcana Release & Event Calendar — Packs.Ink",
   elo:        "Chicagoland Lorcana Elo — Packs.Ink",
 };
@@ -53519,6 +53633,7 @@ function App(){
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
     ${view==="gear"&&html`<${GearView} sealedPrices=${sealedPrices} setsMeta=${setsMeta}/>`}
+    ${view==="news"&&html`<${NewsView}/>`}
     ${view==="calendar"&&html`<${CalendarView} user=${user} onSignIn=${signIn}
       onFindEvents=${openEventFinder} sealedPrices=${sealedPrices}/>`}
     ${eventFinderOpen&&html`<${UpcomingSCsBox} overlay=${true} user=${user}
