@@ -1610,6 +1610,19 @@ const YEAR3_PRINTING_BY_NUMBER = {
   5:"normal", 6:"normal", 7:"normal", 8:"normal", 9:"normal", 10:"normal",
   15:"normal", 16:"normal", 17:"normal", 18:"normal",
 };
+// ⚠ QUEUED, not yet in Lorcast — cn 20, "Minnie Mouse - Amethyst Champion"
+// (Dreamborn Hero, cost 4, 2{S}/3{W}, artist Max Ulichney), announced
+// 2026-09-17 as World Championship 2026's prizing card: foil for Worlds
+// players, non-foil handed out at LGS. Unlike every card above, Ravensburger's
+// own reveal shows BOTH printings under the SAME number (20/C2 on the render),
+// which — if TCGCSV ever lists a real SKU for the Worlds-only foil — is the
+// ORDINARY two-printing shape and needs NO entry here at all. Only add 20 if
+// it turns out the foil never gets a market listing (à la cn 10's "A Whole
+// New World", which is genuinely non-foil-only for pricing purposes despite
+// a foil top-cut prize existing) — in which case set it to "normal", matching
+// that precedent. Check once Lorcast/TCGCSV pick it up; may also need a
+// TCG_PID_OVERRIDES entry the way "A Whole New World|10" does today.
+
 
 // Display-name overrides for sets. Catalog set name (from Lorcast) → name
 // shown in the UI. Applied in transformSupabaseData so every downstream
@@ -38317,6 +38330,9 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
 // order, and the user wants soonest-ending event on top. Each tile is
 // hidden client-side once Date.now() crosses its `expiresAtMs`. To remove
 // permanently, delete the entry; to add another, append to the array.
+// `artists` is optional (omit or `[]` for a tile with no Artist Alley list —
+// e.g. a prizing/announcement tile); `note` is an optional one-line blurb,
+// rendered below the date link and above any artist list.
 const EVENT_TILES = [
   {
     id: "na-champs",
@@ -38337,6 +38353,20 @@ const EVENT_TILES = [
     // hide the tile at 2026-09-14 00:00 CEST = 2026-09-13 22:00 UTC.
     expiresAtMs: Date.UTC(2026, 8, 13, 22, 0, 0),
     artists: ["Jeanne Plounevez", "Kendall Hale", "Kenneth Anderson"],
+  },
+  {
+    id: "worlds-2026-prizing",
+    title: "World Championship 2026 prizing revealed",
+    dateLabel: "Announced Sep 17, 2026",
+    // No official recap page yet — this came off the Lorecast stream, not a
+    // page we can link. Revisit if/when Ravensburger posts one.
+    eventUrl: null,
+    // Special Lorecast follows up "next week" per the stream — a ~2-week
+    // shelf life, same window the Coconut reveal tiles use, gets this off
+    // the feed once it's stale news rather than leaving it up indefinitely.
+    expiresAtMs: Date.UTC(2026, 9, 1, 0, 0, 0),
+    note: "Minnie Mouse - Amethyst Champion (LCP C2 #20, queued — see YEAR3_PRINTING_BY_NUMBER). Foil for Worlds players; non-foil at LGS.",
+    artists: [],
   },
 ];
 
@@ -43192,7 +43222,8 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             <span>${ev.dateLabel}</span>
             ${ev.eventUrl && html`<span class="home-news-event-link-arrow" aria-hidden="true">↗</span>`}
           </a>`}
-          <ul class="home-news-list">
+          ${ev.note && html`<div class="home-news-sub">${ev.note}</div>`}
+          ${ev.artists && ev.artists.length > 0 && html`<ul class="home-news-list">
             ${ev.artists.map(name => html`<li key=${name}>
               <button class="home-news-link" onClick=${()=>onEventClick(name)}
                 title=${"Open Artist Alley for "+name}>
@@ -43200,7 +43231,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                 <span class="home-news-link-chev" aria-hidden="true">→</span>
               </button>
             </li>`)}
-          </ul>
+          </ul>`}
         </div>`);
   // A reveal is DATED, so it sits above the standing New Format notice below
   // it. Both land on the same filtered Cards page, which is the only place the
