@@ -31,7 +31,26 @@
     "",
     "Use the CLI rather than hand-editing, then commit the file:",
     "  python scripts/reconcile_catalog.py --ack missing_single:711520 --why \"...\" [--until YYYY-MM-DD]",
-    "  python scripts/reconcile_catalog.py --done japan-core --next 2027-02-05"
+    "  python scripts/reconcile_catalog.py --done japan-core --next 2027-02-05",
+    "",
+    "OPTIONAL `resolution` ON AN ACK — the mechanical half of a promo-printing",
+    "finding, once a human has read the card. reconcile_catalog.py's own hint",
+    "already computes everything except the printed collector number and (if",
+    "the name matches >1 card) which base to clone — see promo_printing_hint.",
+    "Add exactly that as the ack's `resolution`:",
+    "  \"resolution\": {\"kind\": \"reprint_promo\", \"base_pid\": <int>,",
+    "                  \"set_id\": \"<set the promo belongs in>\",",
+    "                  \"collector_number\": \"<printed N>\", \"new_id\": \"crd_...\",",
+    "                  \"promo_pid\": <int>}",
+    "scripts/apply_catalog_resolutions.py (run daily in catalog-watch.yml) reads",
+    "this and writes the matching REPRINT_PROMOS line into",
+    "patch_pid_overrides.py's AUTO-RESOLVED block, then removes the ack — files",
+    "only, never the database, and opens a PR rather than committing straight to",
+    "main. It is deliberately narrow: only `kind: \"reprint_promo\"` (a brand new",
+    "synthetic row) is auto-appliable. A `kind: \"reassign\"` (moving an EXISTING",
+    "row's set/collector_number, i.e. fixing a mis-filing) always stays a manual",
+    "PR — it mutates identity on a row real collections may already reference,",
+    "which is a decision this script does not get to make unattended."
   ],
   "rules": [
     {

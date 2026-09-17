@@ -324,6 +324,11 @@ def main() -> None:
         # #245, so that collides. Q1/Q2 quest cards dodge this only because they
         # are numbered above their booster range (223-225); Q3 renumbers from 1.
         (704583, PD1_SET, "16", "crd_pd1_16_with_a_few_good_friends",  709896),
+        # === AUTO-RESOLVED — lines below this point are written by
+        # scripts/apply_catalog_resolutions.py from a "resolution" block in
+        # catalog_watch.json, keyed by the trailing `# auto:<promo_pid>` comment.
+        # Hand-edit above the marker; don't hand-edit below it, or the next run
+        # can't tell your line from one it owns and may overwrite it.
     ]
     print("\nBuilding promo-reprint rows (clone base, carry promo pid + set/cn)...")
     try:
