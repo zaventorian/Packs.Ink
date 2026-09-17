@@ -147,7 +147,36 @@ def main() -> None:
     print(f"  found {len(sets)} sets")
 
     set_rows = [transform_set(s) for s in sets]
-    sb.upsert("sets", set_rows, on_conflict="id")
+
+    # `sets.code` carries its own UNIQUE constraint on top of the `id` PK this
+    # upsert conflicts on. That's normally harmless — Lorcast's id is stable —
+    # but a hand-minted set (e.g. set_curators_cc1, migration 107, made before
+    # Lorcast indexed Curator's Collection) can collide on `code` once Lorcast
+    # later publishes the same physical set under ITS OWN id. On_conflict=id
+    # then tries an INSERT for a "new" id and 23505s on the code index, which
+    # crashed this whole daily job (see catalog_watch.json's missing_set ack
+    # for CC1 — converging the two ids is a deliberate call for the
+    # promo-printing-policy review, not something this loader should do on
+    # its own). Detect + skip any such incoming row rather than let one
+    # collision take down every other set's card refresh.
+    existing = sb.select("sets", columns="id,code")
+    existing_by_code: dict[str, str] = {
+        r["code"]: r["id"] for r in existing if r.get("code")
+    }
+    skipped_ids: set[str] = set()
+    filtered_set_rows = []
+    for row in set_rows:
+        code = row.get("code")
+        existing_id = existing_by_code.get(code) if code else None
+        if existing_id and existing_id != row["id"]:
+            print(
+                f"  SKIP set {row['id']} ({row.get('name')}): code {code!r} "
+                f"already used by {existing_id} — see catalog_watch.json missing_set ack"
+            )
+            skipped_ids.add(row["id"])
+            continue
+        filtered_set_rows.append(row)
+    sb.upsert("sets", filtered_set_rows, on_conflict="id")
 
     all_card_rows: list[dict] = []
     missing_tcg = 0
@@ -155,6 +184,13 @@ def main() -> None:
     for s in sets:
         sid = s["id"]
         sname = s.get("name", sid)
+        if sid in skipped_ids:
+            # cards.set_id references sets(id) — the set row above was never
+            # inserted, so its cards would FK-violate. Skip them too; they
+            # stay reachable under our own hand-minted set id until the
+            # promo-printing-policy review decides whether to converge.
+            print(f"  SKIP cards for {sname} (set row skipped above)")
+            continue
         print(f"Fetching cards for set: {sname}")
         cards_resp = get_json(f"{LORCAST_BASE}/sets/{sid}/cards")
         cards = cards_resp.get("results") if isinstance(cards_resp, dict) and "results" in cards_resp else cards_resp
