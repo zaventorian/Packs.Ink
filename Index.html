@@ -50929,6 +50929,20 @@ function App(){
   useEffect(() => {
     try { localStorage.setItem("packsink:elo:pinned", eloPinned ? "1" : "0"); } catch {}
   }, [eloPinned]);
+  // One-shot: the first time a signed-in account lands on /elo with nothing
+  // pinned yet, pin it for them — that's the whole reason they followed the
+  // link. Synced to the account (not just localStorage) so it fires once
+  // EVER for that person, not once per device, and a deliberate unpin never
+  // gets silently re-pinned by opening the same link again or on another
+  // device. Decided in the prefs-hydration effect below, not a separate
+  // effect in EloView — see that effect's comment for why.
+  const [eloAutopinned, setEloAutopinned] = useState(() => {
+    try { return localStorage.getItem("packsink:elo:autopinned") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:elo:autopinned", eloAutopinned ? "1" : "0"); } catch {}
+  }, [eloAutopinned]);
   // Collection completion goal {n:non-foil, f:foil} — lifted to App so it can
   // be synced to user_metadata (with the theme prefs below) and follow the user
   // across devices. localStorage is the fast/offline path + signed-out fallback.
@@ -51930,7 +51944,27 @@ function App(){
     if(LIGHT_VARIANTS.includes(meta.lightTheme)) setLightTheme(meta.lightTheme);
     if(DARK_VARIANTS.includes(meta.darkTheme))   setDarkTheme(meta.darkTheme);
     if(typeof meta.tipsEnabled === "boolean") setTipsEnabled(meta.tipsEnabled);
-    if(typeof meta.eloPinned === "boolean") setEloPinned(meta.eloPinned);
+    // Elo pin + its one-shot autopin flag. Folded into THIS hydration effect
+    // (rather than a separate effect inside EloView) so there's no
+    // child-vs-parent effect-ordering race: React fires a child's effects
+    // before its parent's on the same commit, so an autopin decision made in
+    // EloView could fire on stale pre-hydration state and wrongly re-pin an
+    // account that already used its one shot, or hasn't hydrated yet on a
+    // brand-new device. Deciding it here, synchronously with the hydration
+    // it depends on, removes that race entirely.
+    const hydPinned = typeof meta.eloPinned === "boolean" ? meta.eloPinned : eloPinned;
+    const hydAutopinned = typeof meta.eloAutopinned === "boolean" ? meta.eloAutopinned : eloAutopinned;
+    const landedOnElo = view === "elo" || (view === "market" && marketSub === "elo");
+    if(landedOnElo && !hydPinned && !hydAutopinned){
+      // The whole reason they're here is the link — pin it for them. Still
+      // just a starting point: the checkbox on /elo lets them unpin any time,
+      // and this can never fire again for this account.
+      setEloPinned(true);
+      setEloAutopinned(true);
+    } else {
+      if(typeof meta.eloPinned === "boolean") setEloPinned(meta.eloPinned);
+      if(typeof meta.eloAutopinned === "boolean") setEloAutopinned(meta.eloAutopinned);
+    }
     if(typeof meta.avatarCardId === "string" || meta.avatarCardId === null) setAvatarCardId(meta.avatarCardId);
     if(meta.collectionGoal && typeof meta.collectionGoal === "object") setCollectionGoal(normalizeGoal(meta.collectionGoal));
   }, [user]);
@@ -51948,11 +51982,11 @@ function App(){
   useEffect(() => {
     if(!prefsHydrated.current) return;
     const t = setTimeout(() => {
-      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId, collectionGoal}}).catch(e =>
+      sbClient.auth.updateUser({data: {themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, eloAutopinned, avatarCardId, collectionGoal}}).catch(e =>
         console.error("user prefs sync failed:", e));
     }, 250);
     return () => clearTimeout(t);
-  }, [themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, avatarCardId, collectionGoal]);
+  }, [themeMode, lightTheme, darkTheme, theme, tipsEnabled, eloPinned, eloAutopinned, avatarCardId, collectionGoal]);
 
   // Mirror the chosen avatar card's image URL into public.profiles so other
   // users see it on shared decks / creator profiles. Google avatar URLs are
