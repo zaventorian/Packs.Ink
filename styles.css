@@ -454,6 +454,11 @@ input[type="checkbox"]:disabled{opacity:0.4;cursor:not-allowed;}
   text-decoration:none;color:inherit;}
 .tabs-logo-btn:hover{opacity:0.85;}
 .tabs-logo-btn img{height:60px;width:auto;display:block;pointer-events:none;}
+/* Default (desktop/tablet) state for the signed-out mobile-collapse glyph
+   below — declared BEFORE the @media block on purpose (same specificity as
+   the mobile override, so source order decides; after it, this "off" rule
+   would win at every width and the glyph would never show). */
+.signin-btn-icon{display:none;}
 @media (max-width:640px){
   /* Reclaim horizontal real estate: body padding was 24px on each side, 13% of a 375 viewport.
      Still pad top/bottom by env(safe-area-inset) so iOS Dynamic Island /
@@ -554,7 +559,19 @@ input[type="checkbox"]:disabled{opacity:0.4;cursor:not-allowed;}
   /* Mobile tap targets — Apple HIG recommends 44pt minimum; we cap at 36px
      to keep the two-row nav from getting too tall. Was 28px which made the
      profile pill (Photo 4 regression) almost impossible to hit on iPhone. */
-  .signin-btn{padding:6px 11px;font-size:11px;min-height:36px;}
+  /* Signed-out mirrors the signed-in .profile-btn collapse just below: the
+     "Sign in" text pill measured ~101px wide here (vs. the avatar's fixed
+     36px), which is what was actually stealing width from the tabs scroller
+     — DECKS truncated to "DECK" and ANALYTICS to "AN" behind it on every
+     page, for every visitor who hasn't signed in. Same fixed 36x36 circle,
+     same "tap opens the popover, the real content is in there" contract —
+     here the popover's first, primary button is Sign in with Google. */
+  .signin-btn{padding:0;width:36px;min-width:36px;max-width:36px;
+    height:36px;min-height:36px;border-radius:50%;gap:0;
+    justify-content:center;}
+  .signin-btn > span:not(.signin-btn-icon){display:none;}
+  .signin-btn-icon{display:inline-flex;align-items:center;justify-content:center;}
+  .signin-btn-icon svg{display:block;width:16px;height:16px;}
   /* On mobile the profile button collapses to just the avatar circle. The
      name eats ~80px which was the difference between row 2 (Screener / Price
      Graphing / Analytics / ?) fitting vs. the help button scrolling off the
@@ -7176,6 +7193,14 @@ html[data-mode="dark"] .trade-printing.foil .trade-pr-label{color:#c0a3ef;}
   .trade-addtoggle{width:100%;justify-content:space-between;}
   .trade-seg{flex:1;}
   .trade-seg button{flex:1;max-width:none;}
+  /* The DIFFERENCE row's tools (Share / Clear all / Cards|Compact) are
+     flex-shrink:0 + nowrap with nothing to wrap them, and body{overflow-x:
+     clip} means an overflowing tail isn't even reachable by scroll — the
+     Compact button sat ~15px past a 375px viewport with no way to tap it.
+     Letting the row wrap is the minimal fix: DIFFERENCE stays on its own
+     line at the width where the tools no longer fit beside it. */
+  .trade-diff-head{flex-wrap:wrap;}
+  .trade-diff-tools{flex-wrap:wrap;}
   /* Non-Foil + Foil sit side-by-side to save vertical space; each becomes a
      compact vertical block (label, qty stepper, prices) with the TCGplayer
      arrow pinned to its top-right corner. */
