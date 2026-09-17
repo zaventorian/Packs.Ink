@@ -9706,14 +9706,25 @@ body:has(.deck-quickadd) .offline-pill{
 
    Scoped to the full grid. The compact rail cell is 34px tall with icon-only
    chips and was measured to the pixel for the week-height fix, so it keeps
-   exactly the layout it was tuned with. */
-.cal-month:not(.cal-month--compact) .cal-cell{position:relative;}
+   exactly the layout it was tuned with.
+
+   The full grid has the room a rail cell doesn't, so a chip's title WRAPS
+   here (2 lines, clamped) instead of ellipsing at the first line — the same
+   trade the rail makes in reverse. The icon sits at the top of the chip
+   (align-items:flex-start) rather than centered, so it stays level with the
+   FIRST line rather than drifting to the vertical middle of two. */
+.cal-month:not(.cal-month--compact) .cal-cell{position:relative;min-height:128px;}
 .cal-month:not(.cal-month--compact) .cal-cell-num{position:absolute;top:3px;right:5px;
   font-size:9.5px;line-height:1;pointer-events:none;}
 .cal-month:not(.cal-month--compact) .cal-cell-events > .cal-chip:first-child{padding-right:20px;}
-.cal-month:not(.cal-month--compact) .cal-chip{padding:2.5px 5px;font-size:10.5px;}
-.cal-month:not(.cal-month--compact) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;}
+.cal-month:not(.cal-month--compact) .cal-chip{padding:3px 5px;font-size:10.5px;
+  align-items:flex-start;}
+.cal-month:not(.cal-month--compact) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;
+  margin-top:1px;}
 .cal-month:not(.cal-month--compact) .cal-chip .cal-ico-glyph svg{width:15px;height:15px;}
+.cal-month:not(.cal-month--compact) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
+  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+  overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.28;}
 
 /* ── The hover card ────────────────────────────────────────────────────────
    ⚠ pointer-events:none. It is positioned over a grid of click targets, and a
@@ -10243,25 +10254,37 @@ html[data-mode="dark"] .set-logo--mono{filter:invert(1) brightness(1.6);}
 .cal-panel-list button.cal-panel-row:hover{background:var(--bg-surface-hover);}
 .cal-panel-list button.cal-panel-row:hover .cal-panel-title{color:var(--accent);}
 
-/* A month grid inside a ~240px rail: dots only, same trade as the phone grid.
-   The cell is ~30px, which fits a day number and a couple of dots and nothing
-   else — the point here is "is anything happening", and the click answers what. */
+/* A month grid inside a ~240px rail: the day number used to own its own row —
+   same waste the full grid's cell had, fixed the same way (see .cal-cell
+   above): it goes absolute in the corner, translucent and click-through, so
+   the icon(s) get the WHOLE box instead of what's left under a date line.
+   `.cal-chip` grows to fill the freed space — one icon nearly fills the cell,
+   two or three share it — rather than sitting fixed-size in the middle of it. */
 .cal-month--compact .cal-month-label{font-size:12px;}
 .cal-month--compact .cal-month-nav{width:22px;height:22px;font-size:13px;}
 .cal-month--compact .cal-month-today{padding:3px 7px;font-size:10px;}
 .cal-month--compact .cal-grid-dow{font-size:8px;padding-bottom:2px;}
 .cal-month--compact .cal-grid,.cal-month--compact .cal-grid-head{gap:2px;}
-.cal-month--compact .cal-cell{min-height:34px;padding:1px;border-radius:4px;}
-.cal-month--compact .cal-cell-num{font-size:9px;}
+.cal-month--compact .cal-cell{min-height:40px;padding:0;border-radius:5px;position:relative;}
+.cal-month--compact .cal-cell-num{position:absolute;top:2px;right:3px;font-size:8.5px;
+  line-height:1;opacity:0.5;pointer-events:none;z-index:1;}
 /* ⚠ Dots ACROSS, not down. Stacked, a day with three CCQs was three rows tall
    and a CSS grid row takes the height of its tallest cell — so one busy day
    inflated that whole week, which is what the 19th was doing. Across, three
-   dots are ~42px in a ~44px cell and every week stays the same height. */
-.cal-month--compact .cal-cell-events{flex-direction:row;flex-wrap:wrap;
-  justify-content:center;align-items:center;gap:1px;}
-.cal-month--compact .cal-chip{padding:1px;justify-content:center;width:auto;flex:0 0 auto;}
+   dots are ~42px in a ~44px cell and every week stays the same height. That
+   invariant survives the fill: `flex:1 1 30%` still lets 1-3 chips share ONE
+   row, it just also lets them grow to use the row's full height and width. */
+.cal-month--compact .cal-cell-events{position:absolute;inset:0;flex-direction:row;
+  flex-wrap:wrap;justify-content:center;align-content:stretch;align-items:stretch;gap:1px;}
+.cal-month--compact .cal-chip{padding:2px;justify-content:center;align-items:center;
+  flex:1 1 30%;min-width:0;background:transparent;}
 .cal-month--compact .cal-chip > span:not(.cal-ico){display:none;}
-.cal-month--compact .cal-cell-more{font-size:7px;text-align:center;padding:0;}
+/* The icon fills most of its chip's box (a chip that's the only one in the row
+   IS the row, so its icon nearly fills the whole cell); capped so a lone icon
+   in a wide rail doesn't blow past a sane glyph size. */
+.cal-month--compact .cal-chip .cal-ico{width:72%;height:72%;max-width:30px;max-height:30px;}
+.cal-month--compact .cal-cell-more{font-size:7px;text-align:center;padding:0;
+  flex:1 1 30%;display:flex;align-items:center;justify-content:center;color:var(--text-muted);}
 
 /* ── the mini map ─────────────────────────────────────────────────────────── */
 .cal-map{margin-top:14px;}
@@ -10367,7 +10390,6 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-modal-kind .cal-ico{width:22px;height:22px;}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}
-.cal-month--compact .cal-chip .cal-ico{width:11px;height:11px;}
 /* The compact chip hides its label (`> span:not(.cal-ico)`), which would take
    the count with it - and the count is the entire point of a grouped chip in a
    44px cell. Four classes so it wins outright rather than on source order. */
