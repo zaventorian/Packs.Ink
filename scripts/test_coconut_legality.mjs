@@ -36,12 +36,12 @@ const mod = new Function(parts.join("\n\n") + `
   return {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
           COCONUT_INK_LIMIT, computeCoreSets, getDeckLimit,
           coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS,
-          COCONUT_REVEAL_MAX_THUMBS};
+          COCONUT_REVEAL_MAX_THUMBS, coconutInks, coconutInkLabel};
 `)();
 
 const {checkDeckLegality, COCONUT_CARDS, coconutDeckLimit, getCoconutCard,
        coconutFreshCards, coconutRowId, COCONUT_REVEAL_NEWS_DAYS,
-       COCONUT_REVEAL_MAX_THUMBS} = mod;
+       COCONUT_REVEAL_MAX_THUMBS, coconutInks, coconutInkLabel} = mod;
 
 // ── fixtures ──────────────────────────────────────────────────────────
 // Minimal catalog rows keyed the way checkDeckLegality reads them.
@@ -71,23 +71,69 @@ console.log("\n== data integrity ==");
 // Cards land in waves during the beta, so the exact count is a tripwire: it
 // fails on purpose when one is added, which is the prompt to check the rest of
 // this block still describes the set. Beta 1 was 18, 3 per ink; Beta 2 opened
-// with a 4th Steel leader, so the per-ink split is no longer even.
+// with a 4th Steel leader, then a second wave (2026-09-17) added 6 more
+// leaders — and EVERY ONE of the 6 is dual-ink (Zaven: "all new coconut
+// leaders are dual ink"), the first dual-ink leaders Coconut has had. `ink`
+// is the primary/first of the pair; `inks` carries both. Primary-ink counts:
+// +2 Amber (Woody&Buzz, Madrigal), +2 Amethyst (Peter Pan&Tinker Bell,
+// Aladdin&Genie), +1 Ruby (Belle&Beast), +1 Sapphire (Darkwing&Launchpad).
 const COCONUT_INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
-check("19 Coconut cards", COCONUT_CARDS.length, 19);
+check("25 Coconut cards", COCONUT_CARDS.length, 25);
 // The durable half of the old "3 per ink" check. A typo'd ink ("Steal") would
 // leave the card out of CoconutLeaderPicker entirely — it renders one group per
 // canonical ink — and nothing else would notice.
 check("every ink is canonical",
   [...new Set(COCONUT_CARDS.map(c=>c.ink))].sort(), [...COCONUT_INKS].sort());
+// Same guard on the SECOND ink of a dual-ink leader — a typo there is invisible
+// to every other check here (primary-ink checks never look at it).
+check("every dual leader's second ink is canonical",
+  COCONUT_CARDS.filter(c => Array.isArray(c.inks) && c.inks.length > 1)
+    .every(c => c.inks.every(i => COCONUT_INKS.includes(i))), true);
 check("every ink has a leader",
   COCONUT_INKS.every(i => COCONUT_CARDS.some(c => c.ink === i)), true);
-check("per-ink counts", COCONUT_INKS.map(
-  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [3,3,3,3,3,4]);
-check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 19);
-check("collector numbers 1..19", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
-  Array.from({length:19},(_,i)=>i+1));
+check("per-ink counts (primary ink)", COCONUT_INKS.map(
+  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [5,5,3,4,4,4]);
+check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 25);
+check("collector numbers 1..25", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
+  Array.from({length:25},(_,i)=>i+1));
 check("every associated name is '<name> - <version>'",
   COCONUT_CARDS.every(c => c.associated === `${c.name} - ${c.version}`), true);
+
+// ── dual-ink leaders (wave-2, 2026-09-17) ────────────────────────────────
+console.log("\n== dual-ink leaders ==");
+const DUAL_SLUGS = [
+  "woody-buzz-lightyear-best-buddies", "the-madrigal-family-every-generation",
+  "peter-pan-tinker-bell-fast-friends", "aladdin-genie-mischievous-pals",
+  "belle-beast-certain-as-the-sun", "darkwing-duck-launchpad-st-canards-finest",
+];
+check("exactly 6 dual-ink leaders",
+  COCONUT_CARDS.filter(c => Array.isArray(c.inks) && c.inks.length === 2).map(c=>c.slug).sort(),
+  [...DUAL_SLUGS].sort());
+check("no OTHER leader is dual-ink",
+  COCONUT_CARDS.filter(c => !DUAL_SLUGS.includes(c.slug))
+    .every(c => coconutInks(c).length === 1), true);
+check("coconutInks falls back to [ink] for a single-ink leader",
+  coconutInks(getCoconutCard("scar-finally-king")), ["Steel"]);
+check("coconutInkLabel joins with '/'",
+  coconutInkLabel(getCoconutCard("belle-beast-certain-as-the-sun")), "Ruby/Sapphire");
+
+// The third-ink match now accepts EITHER of a dual leader's inks, not just
+// the first — this is the actual rules effect, not just a display nicety.
+{
+  const coconut = "belle-beast-certain-as-the-sun"; // Ruby/Sapphire
+  const deckSapphireOnly = { coconut_card: coconut, cards: filler(60, "Sapphire") };
+  const r1 = checkDeckLegality(deckSapphireOnly, catalog, setsByProductName);
+  check("Sapphire-only deck matches a Ruby/Sapphire leader via its SECOND ink",
+    r1.issues.some(i => i.startsWith("No Ruby/Sapphire cards")), false);
+
+  const deckNeither = {
+    coconut_card: coconut,
+    cards: filler(60, "Emerald"),
+  };
+  const r2 = checkDeckLegality(deckNeither, catalog, setsByProductName);
+  check("a deck matching NEITHER of the leader's two inks is still flagged",
+    r2.issues.some(i => i.startsWith("No Ruby/Sapphire cards")), true);
+}
 
 // ── home news tile ────────────────────────────────────────────────────
 // A reveal is announced on the home news feed for COCONUT_REVEAL_NEWS_DAYS.

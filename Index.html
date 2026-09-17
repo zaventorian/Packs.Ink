@@ -1610,6 +1610,19 @@ const YEAR3_PRINTING_BY_NUMBER = {
   5:"normal", 6:"normal", 7:"normal", 8:"normal", 9:"normal", 10:"normal",
   15:"normal", 16:"normal", 17:"normal", 18:"normal",
 };
+// ⚠ QUEUED, not yet in Lorcast — cn 20, "Minnie Mouse - Amethyst Champion"
+// (Dreamborn Hero, cost 4, 2{S}/3{W}, artist Max Ulichney), announced
+// 2026-09-17 as World Championship 2026's prizing card: foil for Worlds
+// players, non-foil handed out at LGS. Unlike every card above, Ravensburger's
+// own reveal shows BOTH printings under the SAME number (20/C2 on the render),
+// which — if TCGCSV ever lists a real SKU for the Worlds-only foil — is the
+// ORDINARY two-printing shape and needs NO entry here at all. Only add 20 if
+// it turns out the foil never gets a market listing (à la cn 10's "A Whole
+// New World", which is genuinely non-foil-only for pricing purposes despite
+// a foil top-cut prize existing) — in which case set it to "normal", matching
+// that precedent. Check once Lorcast/TCGCSV pick it up; may also need a
+// TCG_PID_OVERRIDES entry the way "A Whole New World|10" does today.
+
 
 // Display-name overrides for sets. Catalog set name (from Lorcast) → name
 // shown in the UI. Applied in transformSupabaseData so every downstream
@@ -38317,6 +38330,9 @@ const HomeQuickSearch = ({raw, openCardsWithSearch}) => {
 // order, and the user wants soonest-ending event on top. Each tile is
 // hidden client-side once Date.now() crosses its `expiresAtMs`. To remove
 // permanently, delete the entry; to add another, append to the array.
+// `artists` is optional (omit or `[]` for a tile with no Artist Alley list —
+// e.g. a prizing/announcement tile); `note` is an optional one-line blurb,
+// rendered below the date link and above any artist list.
 const EVENT_TILES = [
   {
     id: "na-champs",
@@ -38337,6 +38353,24 @@ const EVENT_TILES = [
     // hide the tile at 2026-09-14 00:00 CEST = 2026-09-13 22:00 UTC.
     expiresAtMs: Date.UTC(2026, 8, 13, 22, 0, 0),
     artists: ["Jeanne Plounevez", "Kendall Hale", "Kenneth Anderson"],
+  },
+  {
+    id: "dlc-season-updates-2026",
+    title: "Season of Villainy: Worlds prizing + Challenge format changes",
+    dateLabel: "Announced Sep 17, 2026",
+    // No official recap page yet — this came off the Lorecast stream, not a
+    // page we can link. Revisit if/when Ravensburger posts one.
+    eventUrl: null,
+    // Full writeup lives at /news — the rail is deliberately text-only and
+    // these slides are dense presentation graphics that won't read at rail
+    // width, so this stays a short teaser + link rather than the dense
+    // all-facts note it used to be.
+    articleSlug: "challenge-season-update-2026",
+    // Season-structure rules, not a one-off reveal — longer shelf life than
+    // the 2-week reveal window (~6 weeks, off the feed by early Nov).
+    expiresAtMs: Date.UTC(2026, 10, 1, 0, 0, 0),
+    note: "World Championship 2026's promo, a new lower-commitment Main Event tier for every DLC weekend, and most of the 2027 schedule.",
+    artists: [],
   },
 ];
 
@@ -42345,6 +42379,158 @@ function amazonDirectory(){
   }
   return out;
 }
+// ── /news: real articles, not just the home rail's terse tiles ─────────────
+// The home news rail (EVENT_TILES + the Coconut reveal tile) is a small,
+// deliberately text-only widget — a fine home for "here's what happened" but
+// not for "here's what it MEANS", and the announcement slides it's built from
+// are too dense to read at rail width anyway. This is that fuller read: real
+// paragraphs, the actual slides, and the implications for deckbuilding /
+// tournament attendance, not just the bullet points off the stream.
+//
+// Deliberately NOT a CMS — two articles, hand-written, `body` is a small
+// block list (`p` / `h2` / `img`) rendered in order. Add a third the same way
+// rather than building general infrastructure for a two-item list.
+// The six wave-2 slugs, in reveal order — the "cards" block below renders
+// each through coconutArtUrl/coconutDisplayName so it's always the CURRENT
+// art (once uploaded) and never a second, static copy of it.
+const COCONUT_WAVE2_SLUGS = [
+  "woody-buzz-lightyear-best-buddies", "the-madrigal-family-every-generation",
+  "peter-pan-tinker-bell-fast-friends", "aladdin-genie-mischievous-pals",
+  "belle-beast-certain-as-the-sun", "darkwing-duck-launchpad-st-canards-finest",
+];
+const NEWS_ARTICLES = [
+  {
+    slug: "coconut-beta2-wave2",
+    kicker: "Format Coconut",
+    title: "6 new dual-ink Coconut leaders, all accounted for",
+    dateLabel: "September 17, 2026",
+    body: [
+      {type:"cards", slugs: COCONUT_WAVE2_SLUGS},
+    ],
+  },
+  {
+    slug: "challenge-season-update-2026",
+    kicker: "Disney Lorcana Challenge",
+    title: "Challenge season update: two Main Events, and what changed",
+    dateLabel: "September 17, 2026",
+    body: [
+      {type:"h2", text:"World Championship 2026 update"},
+      {type:"ul", items: [
+        "Dec 4–6, 2026, at Aulani, A Disney Resort & Spa in Ko Olina, Hawaii.",
+        "Promo: Minnie Mouse - Amethyst Champion (LCP C2 #20). Foil for competitors, non-foil at LGS.",
+      ]},
+      {type:"img", src:"Logos/news/worlds-2026-minnie-promo.jpg", alt:"Minnie Mouse - Amethyst Champion promo card, LCP C2 #20", caption:"Minnie Mouse - Amethyst Champion, LCP C2 #20, art by Max Ulichney."},
+      {type:"h2", text:"Main Event 1: unchanged, 4,096 players"},
+      {type:"img", src:"Logos/news/op-main-event-1.jpg", alt:"Main Event 1 organized-play rules slide"},
+      {type:"ul", items: [
+        "Core Constructed, Bo3, Fri–Sun.",
+        "Fri: 8 rounds Swiss, cut at 18 points.",
+        "Sat: 7 rounds Swiss, cut to Top 8.",
+        "Sun: Top 8 single-elim, Bo5.",
+        "Top 32 + tied players qualify for their region's Championship.",
+        "Awards the serialized Golden Hades - Dark Usurper promo.",
+      ]},
+      {type:"h2", text:"Main Event 2: new, 1,280 players"},
+      {type:"img", src:"Logos/news/op-main-event-2.jpg", alt:"Main Event 2 organized-play rules slide"},
+      {type:"ul", items: [
+        "Core Constructed, Bo3, Sat–Sun only, no Friday.",
+        "Sat: 8 rounds Swiss, cut at 18 points.",
+        "Sun: 3 more rounds of Swiss, no Top Cut. Final standings decide it.",
+        "Only the outright Top 8 qualifies, no equal-point ties (Main Event 1 has ties, this doesn't).",
+        "No Golden Hades - Dark Usurper promo. Same promos/playmats to Top 16 as Main Event 1.",
+        "Can't enter both Main Events.",
+      ]},
+      {type:"h2", text:"Open Ink Pairings"},
+      {type:"ul", items: [
+        "Day 1 (both Main Events): pairings show each player's ink colors.",
+        "Days 2–3 (Day 2 for Main Event 2): Open Deck Lists.",
+      ]},
+      {type:"h2", text:"On-site CCQ at DLC weekends (Revival Events)"},
+      {type:"img", src:"Logos/news/op-ccq.jpg", alt:"CCQ organized-play rules slide"},
+      {type:"p", text:"This is the qualifier Revival Events runs on-site at the Challenge itself, not the independently-run regional CCQs already on the calendar (Essen, Raleigh, Sevilla, etc.), which each set their own player count and structure."},
+      {type:"ul", items: [
+        "216 players, Infinity Constructed, Bo3, Sat–Sun.",
+        "Sat: 8 rounds Swiss, cut to Top 8.",
+        "Sun: Top 8 single-elim.",
+        "Only 1st place qualifies for the Challenge invite.",
+        "“Mother Knows Best” prizing. Tickets go on sale with the weekend's other side events.",
+      ]},
+      {type:"h2", text:"2027 calendar"},
+      {type:"img", src:"Logos/news/season-2027-timeline-jan-may.jpg", alt:"2027 season timeline, January through May"},
+      {type:"img", src:"Logos/news/season-2027-timeline-jun-oct.jpg", alt:"2027 season timeline, June through October"},
+      {type:"ul", items: [
+        "Jan 9-11: Tokyo CCQ",
+        "Feb 19-21: DLC Milwaukee",
+        "Feb 26-28: DLC Singapore",
+        "Feb 26-28: DLC Melbourne",
+        "Mar 5-7: DLC Turin",
+        "Mar 27-28: DLC Tokyo",
+        "Apr 3-4: Sydney CCQ",
+        "Apr 9-11: DLC Hong Kong",
+        "Apr 30-May 2: DLC Las Vegas",
+        "May 7-9: DLC Lyon",
+        "May 28-30: DLC Utrecht",
+        "Jun 11-13: DLC Taipei",
+        "Jun 18-20: DLC Portland",
+        "Jul 16-18: DLC Toronto",
+        "Jul 23-25: DLC Düsseldorf",
+        "Jul 31-Aug 1: Auckland CCQ",
+        "Sep/Oct: Oceania Championship 2027, Melbourne (exact date not yet announced)",
+      ]},
+    ],
+  },
+];
+function NewsArticleBlock({b}){
+  if(b.type === "h2") return html`<h2 class="news-art-h2">${b.text}</h2>`;
+  if(b.type === "ul") return html`<ul class="news-art-ul">
+    ${b.items.map((t, i) => html`<li key=${i}>${t}</li>`)}
+  </ul>`;
+  if(b.type === "img") return html`<figure class="news-art-fig">
+    <img src=${b.src} alt=${b.alt} loading="lazy"/>
+    ${b.caption && html`<figcaption>${b.caption}</figcaption>`}
+  </figure>`;
+  // A grid of the real card renders (coconutArtUrl), not a static copy of the
+  // reveal-slide screenshot — so it's automatically correct once art lands in
+  // the bucket, and a still-missing render hides its own tile rather than
+  // showing a broken image, same contract as the home reveal tile.
+  if(b.type === "cards") return html`<div class="news-art-cards">
+    ${b.slugs.map(slug => { const c = getCoconutCard(slug); return c && html`<figure key=${slug} class="news-art-card">
+      <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt=${coconutDisplayName(c)} loading="lazy"
+        onError=${(e)=>{ const f = e.target.closest("figure"); if(f) f.hidden = true; }}/>
+      <figcaption>${coconutDisplayName(c)}<span class="news-art-card-ink">${coconutInkLabel(c)}</span></figcaption>
+    </figure>`; })}
+  </div>`;
+  return html`<p class="news-art-p">${b.text}</p>`;
+}
+function NewsArticle({a}){
+  return html`<article id=${a.slug} class="news-article">
+    <div class="news-art-kicker">${a.kicker}</div>
+    <h1 class="news-art-h1">${a.title}</h1>
+    <div class="news-art-meta">${a.dateLabel}</div>
+    ${a.dek && html`<p class="news-art-dek">${a.dek}</p>`}
+    ${a.body.map((b, i) => html`<${NewsArticleBlock} key=${i} b=${b}/>`)}
+  </article>`;
+}
+// /news — jumps to a single article via #<slug> if one is named (the home
+// tiles link here), otherwise lists both, newest first. No routing state of
+// its own: the browser's native #hash scroll does the "open this one" job,
+// so a shared /news#coconut-beta2-wave2 link works with no JS on arrival.
+function NewsView(){
+  useEffect(() => {
+    if(window.location.hash){
+      const el = document.getElementById(window.location.hash.slice(1));
+      if(el) el.scrollIntoView({behavior:"instant", block:"start"});
+    }
+  }, []);
+  return html`<div class="faq-section news-page">
+    <header class="news-hero">
+      <h1 class="news-page-h1">News</h1>
+      <p class="news-page-lede">What's new for Lorcana players — Format Coconut reveals, Challenge season changes, and anything else worth a real explanation rather than a one-line tile.</p>
+    </header>
+    ${NEWS_ARTICLES.map(a => html`<${NewsArticle} key=${a.slug} a=${a}/>`)}
+  </div>`;
+}
+
 // The /gear page: product cards. Every photo and price on it is TCGplayer's
 // (see amazonSealedMatches for why that is the compliant source), and the page
 // says so — a TCGplayer price must never read as Amazon's.
@@ -43192,7 +43378,10 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
             <span>${ev.dateLabel}</span>
             ${ev.eventUrl && html`<span class="home-news-event-link-arrow" aria-hidden="true">↗</span>`}
           </a>`}
-          <ul class="home-news-list">
+          ${ev.note && html`<div class="home-news-sub">${ev.note}</div>`}
+          ${ev.articleSlug && html`<a class="home-news-readmore" href=${"/news#"+ev.articleSlug}
+            onClick=${navHandler(()=>openView && openView("news"))}>Read the full story →</a>`}
+          ${ev.artists && ev.artists.length > 0 && html`<ul class="home-news-list">
             ${ev.artists.map(name => html`<li key=${name}>
               <button class="home-news-link" onClick=${()=>onEventClick(name)}
                 title=${"Open Artist Alley for "+name}>
@@ -43200,7 +43389,7 @@ const HomeView = ({raw, sets, avgs, theme, user, collection, collectionLoading, 
                 <span class="home-news-link-chev" aria-hidden="true">→</span>
               </button>
             </li>`)}
-          </ul>
+          </ul>`}
         </div>`);
   // A reveal is DATED, so it sits above the standing New Format notice below
   // it. Both land on the same filtered Cards page, which is the only place the
@@ -43976,7 +44165,54 @@ const COCONUT_CARDS = [
   {slug:"tinker-bell-giant-fairy", cn:15, name:"Tinker Bell", version:"Giant Fairy",
    ink:"Steel", associated:"Tinker Bell - Giant Fairy",
    ability:"Whenever one of your other abilities or actions deals damage to an opposing character, deal 1 damage to that character."},
+
+  // Second "[Format Coconut] • Beta 2" wave, revealed 2026-09-17. cn continues
+  // from 19 per the numbering rule on that entry above — these are OURS, not
+  // Ravensburger's. Art not yet uploaded to the bucket (coming tonight); the
+  // reveal tiles stay hidden until 020–025.jpg land at
+  // card-art/coconut/0{cn}.jpg, per the "revealed but no photo yet" contract.
+  //
+  // ⚠ EVERY LEADER IN THIS WAVE IS DUAL-INK (Zaven, 2026-09-17: "all new
+  // coconut leaders are dual ink") — the first time Coconut has had one at
+  // all. Confirmed from the beta render's own two ink-shield icons (not just
+  // the title-band gradient, which only carries the DOMINANT of the two and
+  // was what the first read of these cards missed for 4 of 6). `inks` holds
+  // both in PRINT order (left icon first, matching the catalog's own dual-ink
+  // convention); `ink` stays the first/primary one for every call site that
+  // still reads a single value. `coconutInks(c)` below is the one accessor —
+  // route through it rather than reading `c.ink/c.inks` directly.
+  {slug:"woody-buzz-lightyear-best-buddies", cn:20, name:"Woody & Buzz Lightyear", version:"Best Buddies",
+   ink:"Amber", inks:["Amber","Emerald"], artist:"Marcel Berg", associated:"Woody & Buzz Lightyear - Best Buddies",
+   revealed:"2026-09-17",
+   ability:"Once during your turn, you may pay 1 {I} less for the next Toy character you play this turn. If you do and you have a character named Woody and a character named Buzz Lightyear in play, draw a card."},
+  // TODO verify artist credit against the real card file tonight — handwritten
+  // signature on the beta render was hard to OCR ("LadyShalimr" is a best guess).
+  {slug:"the-madrigal-family-every-generation", cn:21, name:"The Madrigal Family", version:"Every Generation",
+   ink:"Amber", inks:["Amber","Sapphire"], artist:"LadyShalimr", associated:"The Madrigal Family - Every Generation",
+   revealed:"2026-09-17",
+   ability:"During your turn, whenever you remove 1 or more damage from one of your characters, you may ready them. They can't quest or challenge for the rest of this turn."},
+  {slug:"peter-pan-tinker-bell-fast-friends", cn:22, name:"Peter Pan & Tinker Bell", version:"Fast Friends",
+   ink:"Amethyst", inks:["Amethyst","Ruby"], artist:"Alice Pisoni", associated:"Peter Pan & Tinker Bell - Fast Friends",
+   revealed:"2026-09-17",
+   ability:"Once during your turn, you may give chosen character Evasive until the start of your next turn. If they already had Evasive, they get +1 {S} until the start of your next turn."},
+  {slug:"aladdin-genie-mischievous-pals", cn:23, name:"Aladdin & Genie", version:"Mischievous Pals",
+   ink:"Amethyst", inks:["Amethyst","Emerald"], artist:"Natalia Trykowska", associated:"Aladdin & Genie - Mischievous Pals",
+   revealed:"2026-09-17",
+   ability:"Whenever you draw a card during your turn, if it's the third card you drew this turn, gain 2 lore."},
+  {slug:"belle-beast-certain-as-the-sun", cn:24, name:"Belle & Beast", version:"Certain as the Sun",
+   ink:"Ruby", inks:["Ruby","Sapphire"], artist:"Ian MacDonald", associated:"Belle & Beast - Certain as the Sun",
+   revealed:"2026-09-17",
+   ability:"Whenever one of your characters with cost 5 or more readies, draw a card."},
+  {slug:"darkwing-duck-launchpad-st-canards-finest", cn:25, name:"Darkwing Duck & Launchpad", version:"St. Canard's Finest",
+   ink:"Sapphire", inks:["Sapphire","Steel"], artist:"Carlos Luzzi", associated:"Darkwing Duck & Launchpad - St. Canard's Finest",
+   revealed:"2026-09-17",
+   ability:"During your turn, whenever an opposing character is banished in a challenge, gain 1 lore. If they were a Villain character, gain 3 lore instead."},
 ];
+// The one accessor for a leader's ink(s) — every dual-ink card elsewhere in
+// the catalog falls back to `[meta.ink]` when `inks` is absent, and Coconut
+// leaders follow the same rule now that six of them carry a real `inks` pair.
+const coconutInks = (c) => (c && Array.isArray(c.inks) && c.inks.length) ? c.inks : (c && c.ink ? [c.ink] : []);
+const coconutInkLabel = (c) => coconutInks(c).join("/");
 // Cards revealed inside the news window, newest first. Dates are parsed as UTC
 // midnight, matching COCONUT_NEWS_UNTIL: this is a window, never a calendar day
 // being named, so the few hours' skew west of UTC costs nothing.
@@ -46470,7 +46706,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             everything a generated name used to. */""}
       ${d.name && html`<div class="deck-card-name">${d.name}</div>`}
       ${starterLeader && html`<div class="deck-card-tourney deck-card-starter"
-        title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${starterLeader.ink}`}>
+        title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${coconutInkLabel(starterLeader)}`}>
         <img class="deck-coconut-slot-art" src=${coconutThumbUrl(starterLeader.cn)} crossOrigin="anonymous"
           alt="" aria-hidden="true" loading="lazy"
           onError=${(e)=>{ const t=e.target; if(t.dataset.fb) return; t.dataset.fb="1"; t.src=coconutArtUrl(starterLeader.cn); }}/>
@@ -47571,8 +47807,14 @@ function checkDeckLegality(deck, cardById, setsByProductName){
   }
   // Skipped while the deck is empty — a fresh Coconut deck already reads
   // "0 / 60 cards", and adding "must include <ink>" on top is just noise.
-  if(coconut && inks.size && !inks.has(coconut.ink)){
-    issues.push(`No ${coconut.ink} cards — one ink must match ${coconutDisplayName(coconut)}`);
+  // ⚠ A dual-ink leader (the whole Beta 2 wave-2 batch) satisfies this with
+  // EITHER of its two inks — the deck still caps at COCONUT_INK_LIMIT total,
+  // this only widens which single ink can be the one that matches.
+  if(coconut){
+    const coconutLeaderInks = coconutInks(coconut);
+    if(inks.size && !coconutLeaderInks.some(i => inks.has(i))){
+      issues.push(`No ${coconutInkLabel(coconut)} cards — one ink must match ${coconutDisplayName(coconut)}`);
+    }
   }
 
   // Quantity cap. Default Lorcana is 4-of-any-card, with a few cards
@@ -48237,11 +48479,12 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
             <img src=${INK_ICONS[ink]} alt="" aria-hidden="true"/><span>${ink}</span>
           </div>
           <div class="coconut-picker-grid">
-            ${COCONUT_CARDS.filter(c => c.ink === ink).map(c => html`
+            ${COCONUT_CARDS.filter(c => coconutInks(c).includes(ink)).map(c => html`
               <button key=${c.slug} class=${"coconut-picker-card"+(current===c.slug?" active":"")}
                 onClick=${()=>onPick(c.slug)}>
                 <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt=${coconutDisplayName(c)} loading="lazy"/>
-                <span class="coconut-picker-name">${coconutDisplayName(c)}</span>
+                <span class="coconut-picker-name">${coconutDisplayName(c)}${coconutInks(c).length > 1
+                  ? html` <span class="coconut-picker-inks">${coconutInkLabel(c)}</span>` : ""}</span>
                 <span class="coconut-picker-ability">${coconutAbilityText(c.ability)}</span>
               </button>`)}
           </div>
@@ -49135,7 +49378,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // remove the last card of an ink.
   const coconutInkBudget = useMemo(() => {
     if(!coconutCard) return null;
-    const allowed = new Set([coconutCard.ink]);
+    // A dual-ink leader (the wave-2 Beta 2 batch) seeds BOTH of its inks —
+    // it's printed in both, so a deck built around it wants access to either
+    // from the start. That spends 2 of the 3-ink budget up front, same as
+    // spending 1 of 3 does for a single-ink leader.
+    const allowed = new Set(coconutInks(coconutCard));
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0];
       const list = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
@@ -49348,7 +49595,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           disabled=${!isOwnDeck}
           onClick=${()=>setCoconutPickerOpen(true)}
           title=${legality.coconut
-            ? `${coconutDisplayName(legality.coconut)} — ${legality.coconut.ink}. Click to change or remove.`
+            ? `${coconutDisplayName(legality.coconut)} — ${coconutInkLabel(legality.coconut)}. Click to change or remove.`
             : "Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore."}>
           ${legality.coconut
             ? html`<img class="deck-coconut-slot-art" src=${coconutThumbUrl(legality.coconut.cn)}
@@ -50047,6 +50294,7 @@ const VIEW_PATHS = {
   decks:      "/decks",
   faq:        "/how-it-works",
   gear:       "/gear",
+  news:       "/news",
   calendar:   "/calendar",
   elo:        "/elo",   // hidden — Chicagoland Lorcana Elo leaderboard (no nav entry)
 };
@@ -50082,6 +50330,7 @@ const VIEW_TITLES = {
   decks:      "Lorcana Decks & Tournaments — Packs.Ink",
   faq:        "How Packs.Ink Works",
   gear:       "Lorcana on Amazon — Packs.Ink",
+  news:       "Lorcana News — Packs.Ink",
   calendar:   "Lorcana Release & Event Calendar — Packs.Ink",
   elo:        "Chicagoland Lorcana Elo — Packs.Ink",
 };
@@ -53429,6 +53678,7 @@ function App(){
       onStartSiteWalk=${TOURS_ENABLED ? startSiteTour : null}
       onStartSectionTour=${TOURS_ENABLED ? ((v)=>{ onTabClick(v); setTimeout(()=>setActiveTour(v), 500); }) : null}/>`}
     ${view==="gear"&&html`<${GearView} sealedPrices=${sealedPrices} setsMeta=${setsMeta}/>`}
+    ${view==="news"&&html`<${NewsView}/>`}
     ${view==="calendar"&&html`<${CalendarView} user=${user} onSignIn=${signIn}
       onFindEvents=${openEventFinder} sealedPrices=${sealedPrices}/>`}
     ${eventFinderOpen&&html`<${UpcomingSCsBox} overlay=${true} user=${user}
