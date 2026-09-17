@@ -290,8 +290,19 @@ def main() -> None:
     # packaging, not a set. That is why Illumineer's Quest Q3 gets no set row of
     # its own: its foils are PD1 cards (Zaven, 2026-09-16).
     PD1_SET = "set_b55bc6fc08484b40841f6956ba416fb2"
+    # DIS is a THIRD series, distinct from both AVP and PD1 (promo-printing-policy
+    # Step 1, 2026-09-10/17) — Disney Parks exclusives ("Magical Places"), printed
+    # N/DIS. We already held it as a real Lorcast set, id set_cc126d2d050b406aa
+    # 0bbbc18268fb119, name "EPCOT Festival of the Arts" (code DIS), holding
+    # Rapunzel - Appreciative Artist #1 / Donald Duck - Pie Slinger #2 / Stitch -
+    # Rock Star #3 — Maleficent (#294 below) had been mis-filed into AVP_SET as a
+    # fabricated #9 instead of her real 4/DIS. #5 is still unaccounted for.
+    DIS_SET = "set_cc126d2d050b406aa0bbbc18268fb119"
     REPRINT_PROMOS = [
-        (702677, AVP_SET, "9",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo
+        (702677, DIS_SET, "4",  "crd_avp_9_maleficent_exultant",      705086),  # Magical Places promo, 4/DIS (was mis-filed AVP #9 — id kept so owned collection refs don't orphan)
+        (659628, DIS_SET, "6",  "crd_dis_6_mickey_mouse_amber_champion",  712042),  # Magical Places promo, 6/DIS
+        (555245, DIS_SET, "7",  "crd_dis_7_elsa_the_fifth_spirit",        712044),  # Magical Places promo, 7/DIS
+        (704593, DIS_SET, "8",  "crd_dis_8_buzz_lightyear_providing_cover", 712043),  # Magical Places promo, 8/DIS — base is the AotV mainline printing (#77), not the existing 5/PD1 promo of the same card (Zaven, 2026-09-17)
         (702660, AVP_SET, "10", "crd_avp_10_tigger_hunny_barbarian",  705083),  # buy-a-box promo
         # Set Championship pair for Attack of the Vine!, both printings of
         # AOTV #95 (base pid 702655). Participant is non-foil, the Top-8
@@ -313,6 +324,11 @@ def main() -> None:
         # #245, so that collides. Q1/Q2 quest cards dodge this only because they
         # are numbered above their booster range (223-225); Q3 renumbers from 1.
         (704583, PD1_SET, "16", "crd_pd1_16_with_a_few_good_friends",  709896),
+        # === AUTO-RESOLVED — lines below this point are written by
+        # scripts/apply_catalog_resolutions.py from a "resolution" block in
+        # catalog_watch.json, keyed by the trailing `# auto:<promo_pid>` comment.
+        # Hand-edit above the marker; don't hand-edit below it, or the next run
+        # can't tell your line from one it owns and may overwrite it.
     ]
     print("\nBuilding promo-reprint rows (clone base, carry promo pid + set/cn)...")
     try:

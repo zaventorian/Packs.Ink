@@ -33,7 +33,8 @@ on:
         default: true
 
 permissions:
-  contents: read
+  contents: write       # only for the "Open PR" step's branch push — the rest
+  pull-requests: write  # of the job (sweep + calendar watch) only ever reads
 
 concurrency:
   group: catalog-watch
@@ -80,3 +81,48 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         run: python scripts/watch_calendar_sources.py
+
+      # A finding sitting acknowledged with a decided `resolution` used to just
+      # sit there — see apply_catalog_resolutions.py's header for how long the
+      # Rapunzel SC pair did exactly that. This is the mechanical half only: it
+      # never decides anything (no DB access, no card-identity judgment), it
+      # only turns an already-decided resolution into the patch_pid_overrides.py
+      # line it describes and opens a PR for a human to read and merge — same
+      # "agents stage, a person applies" rule as every migration in this repo.
+      # `if: always()` for the same reason as the step above.
+      - name: Test the resolutions layer
+        if: always()
+        id: test_resolutions
+        run: python scripts/test_apply_catalog_resolutions.py
+      - name: Draft a PR for any resolved-but-unapplied findings
+        if: always() && steps.test_resolutions.outcome == 'success'
+        id: resolve
+        run: |
+          if python scripts/apply_catalog_resolutions.py --check; then
+            echo "nothing to apply"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            python scripts/apply_catalog_resolutions.py
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Open PR
+        if: always() && steps.resolve.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          commit-message: "Catalog watch: apply decided promo-printing resolutions"
+          title: "Catalog watch: apply decided promo-printing resolutions"
+          body: |
+            Opened automatically by `scripts/apply_catalog_resolutions.py`,
+            which turns a `resolution` block a human already wrote on a
+            catalog_watch.json ack into the patch_pid_overrides.py entry it
+            describes, and drops the ack.
+
+            **This does not touch the live database.** Merging this PR only
+            updates the two files; someone still needs to run
+            `python scripts/patch_pid_overrides.py` (with real Supabase
+            credentials) for the new row(s) to reach the site.
+          branch: catalog-watch/apply-resolutions
+          delete-branch: true
+          add-paths: |
+            scripts/catalog_watch.json
+            scripts/patch_pid_overrides.py
