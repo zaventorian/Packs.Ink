@@ -44012,43 +44012,50 @@ const COCONUT_CARDS = [
   // Second "[Format Coconut] • Beta 2" wave, revealed 2026-09-17. cn continues
   // from 19 per the numbering rule on that entry above — these are OURS, not
   // Ravensburger's. Art not yet uploaded to the bucket (coming tonight); the
-  // reveal tiles stay hidden until 020–023.jpg land at
+  // reveal tiles stay hidden until 020–025.jpg land at
   // card-art/coconut/0{cn}.jpg, per the "revealed but no photo yet" contract.
+  //
+  // ⚠ EVERY LEADER IN THIS WAVE IS DUAL-INK (Zaven, 2026-09-17: "all new
+  // coconut leaders are dual ink") — the first time Coconut has had one at
+  // all. Confirmed from the beta render's own two ink-shield icons (not just
+  // the title-band gradient, which only carries the DOMINANT of the two and
+  // was what the first read of these cards missed for 4 of 6). `inks` holds
+  // both in PRINT order (left icon first, matching the catalog's own dual-ink
+  // convention); `ink` stays the first/primary one for every call site that
+  // still reads a single value. `coconutInks(c)` below is the one accessor —
+  // route through it rather than reading `c.ink/c.inks` directly.
   {slug:"woody-buzz-lightyear-best-buddies", cn:20, name:"Woody & Buzz Lightyear", version:"Best Buddies",
-   ink:"Emerald", artist:"Marcel Berg", associated:"Woody & Buzz Lightyear - Best Buddies",
+   ink:"Amber", inks:["Amber","Emerald"], artist:"Marcel Berg", associated:"Woody & Buzz Lightyear - Best Buddies",
    revealed:"2026-09-17",
    ability:"Once during your turn, you may pay 1 {I} less for the next Toy character you play this turn. If you do and you have a character named Woody and a character named Buzz Lightyear in play, draw a card."},
   // TODO verify artist credit against the real card file tonight — handwritten
   // signature on the beta render was hard to OCR ("LadyShalimr" is a best guess).
   {slug:"the-madrigal-family-every-generation", cn:21, name:"The Madrigal Family", version:"Every Generation",
-   ink:"Sapphire", artist:"LadyShalimr", associated:"The Madrigal Family - Every Generation",
+   ink:"Amber", inks:["Amber","Sapphire"], artist:"LadyShalimr", associated:"The Madrigal Family - Every Generation",
    revealed:"2026-09-17",
    ability:"During your turn, whenever you remove 1 or more damage from one of your characters, you may ready them. They can't quest or challenge for the rest of this turn."},
   {slug:"peter-pan-tinker-bell-fast-friends", cn:22, name:"Peter Pan & Tinker Bell", version:"Fast Friends",
-   ink:"Ruby", artist:"Alice Pisoni", associated:"Peter Pan & Tinker Bell - Fast Friends",
+   ink:"Amethyst", inks:["Amethyst","Ruby"], artist:"Alice Pisoni", associated:"Peter Pan & Tinker Bell - Fast Friends",
    revealed:"2026-09-17",
    ability:"Once during your turn, you may give chosen character Evasive until the start of your next turn. If they already had Evasive, they get +1 {S} until the start of your next turn."},
   {slug:"aladdin-genie-mischievous-pals", cn:23, name:"Aladdin & Genie", version:"Mischievous Pals",
-   ink:"Emerald", artist:"Natalia Trykowska", associated:"Aladdin & Genie - Mischievous Pals",
+   ink:"Amethyst", inks:["Amethyst","Emerald"], artist:"Natalia Trykowska", associated:"Aladdin & Genie - Mischievous Pals",
    revealed:"2026-09-17",
    ability:"Whenever you draw a card during your turn, if it's the third card you drew this turn, gain 2 lore."},
-  // ⚠ The beta render's band is a Ruby→Sapphire split gradient, which every
-  // other dual-ink card on the site reads as `inks:["Ruby","Sapphire"]` — but
-  // COCONUT_CARDS has never had a dual-ink leader and `ink` is read as ONE
-  // canonical string everywhere (CoconutLeaderPicker's per-ink grouping,
-  // checkDeckLegality's `inks.has(coconut.ink)` third-ink test). Filed under
-  // Ruby as a placeholder — confirm the real split against tonight's file
-  // before this ships; if it's genuinely dual, the ink/legality plumbing needs
-  // extending first, not a silent single-ink guess.
   {slug:"belle-beast-certain-as-the-sun", cn:24, name:"Belle & Beast", version:"Certain as the Sun",
-   ink:"Ruby", artist:"Ian MacDonald", associated:"Belle & Beast - Certain as the Sun",
+   ink:"Ruby", inks:["Ruby","Sapphire"], artist:"Ian MacDonald", associated:"Belle & Beast - Certain as the Sun",
    revealed:"2026-09-17",
    ability:"Whenever one of your characters with cost 5 or more readies, draw a card."},
   {slug:"darkwing-duck-launchpad-st-canards-finest", cn:25, name:"Darkwing Duck & Launchpad", version:"St. Canard's Finest",
-   ink:"Sapphire", artist:"Carlos Luzzi", associated:"Darkwing Duck & Launchpad - St. Canard's Finest",
+   ink:"Sapphire", inks:["Sapphire","Steel"], artist:"Carlos Luzzi", associated:"Darkwing Duck & Launchpad - St. Canard's Finest",
    revealed:"2026-09-17",
    ability:"During your turn, whenever an opposing character is banished in a challenge, gain 1 lore. If they were a Villain character, gain 3 lore instead."},
 ];
+// The one accessor for a leader's ink(s) — every dual-ink card elsewhere in
+// the catalog falls back to `[meta.ink]` when `inks` is absent, and Coconut
+// leaders follow the same rule now that six of them carry a real `inks` pair.
+const coconutInks = (c) => (c && Array.isArray(c.inks) && c.inks.length) ? c.inks : (c && c.ink ? [c.ink] : []);
+const coconutInkLabel = (c) => coconutInks(c).join("/");
 // Cards revealed inside the news window, newest first. Dates are parsed as UTC
 // midnight, matching COCONUT_NEWS_UNTIL: this is a window, never a calendar day
 // being named, so the few hours' skew west of UTC costs nothing.
@@ -46542,7 +46549,7 @@ const DecksView = ({raw, user, collection, updateQty, tabClickNonce, incomingDec
             everything a generated name used to. */""}
       ${d.name && html`<div class="deck-card-name">${d.name}</div>`}
       ${starterLeader && html`<div class="deck-card-tourney deck-card-starter"
-        title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${starterLeader.ink}`}>
+        title=${`Starter deck for ${coconutDisplayName(starterLeader)} — ${coconutInkLabel(starterLeader)}`}>
         <img class="deck-coconut-slot-art" src=${coconutThumbUrl(starterLeader.cn)} crossOrigin="anonymous"
           alt="" aria-hidden="true" loading="lazy"
           onError=${(e)=>{ const t=e.target; if(t.dataset.fb) return; t.dataset.fb="1"; t.src=coconutArtUrl(starterLeader.cn); }}/>
@@ -47643,8 +47650,14 @@ function checkDeckLegality(deck, cardById, setsByProductName){
   }
   // Skipped while the deck is empty — a fresh Coconut deck already reads
   // "0 / 60 cards", and adding "must include <ink>" on top is just noise.
-  if(coconut && inks.size && !inks.has(coconut.ink)){
-    issues.push(`No ${coconut.ink} cards — one ink must match ${coconutDisplayName(coconut)}`);
+  // ⚠ A dual-ink leader (the whole Beta 2 wave-2 batch) satisfies this with
+  // EITHER of its two inks — the deck still caps at COCONUT_INK_LIMIT total,
+  // this only widens which single ink can be the one that matches.
+  if(coconut){
+    const coconutLeaderInks = coconutInks(coconut);
+    if(inks.size && !coconutLeaderInks.some(i => inks.has(i))){
+      issues.push(`No ${coconutInkLabel(coconut)} cards — one ink must match ${coconutDisplayName(coconut)}`);
+    }
   }
 
   // Quantity cap. Default Lorcana is 4-of-any-card, with a few cards
@@ -48309,11 +48322,12 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
             <img src=${INK_ICONS[ink]} alt="" aria-hidden="true"/><span>${ink}</span>
           </div>
           <div class="coconut-picker-grid">
-            ${COCONUT_CARDS.filter(c => c.ink === ink).map(c => html`
+            ${COCONUT_CARDS.filter(c => coconutInks(c).includes(ink)).map(c => html`
               <button key=${c.slug} class=${"coconut-picker-card"+(current===c.slug?" active":"")}
                 onClick=${()=>onPick(c.slug)}>
                 <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt=${coconutDisplayName(c)} loading="lazy"/>
-                <span class="coconut-picker-name">${coconutDisplayName(c)}</span>
+                <span class="coconut-picker-name">${coconutDisplayName(c)}${coconutInks(c).length > 1
+                  ? html` <span class="coconut-picker-inks">${coconutInkLabel(c)}</span>` : ""}</span>
                 <span class="coconut-picker-ability">${coconutAbilityText(c.ability)}</span>
               </button>`)}
           </div>
@@ -49207,7 +49221,11 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // remove the last card of an ink.
   const coconutInkBudget = useMemo(() => {
     if(!coconutCard) return null;
-    const allowed = new Set([coconutCard.ink]);
+    // A dual-ink leader (the wave-2 Beta 2 batch) seeds BOTH of its inks —
+    // it's printed in both, so a deck built around it wants access to either
+    // from the start. That spends 2 of the 3-ink budget up front, same as
+    // spending 1 of 3 does for a single-ink leader.
+    const allowed = new Set(coconutInks(coconutCard));
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0];
       const list = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
@@ -49420,7 +49438,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           disabled=${!isOwnDeck}
           onClick=${()=>setCoconutPickerOpen(true)}
           title=${legality.coconut
-            ? `${coconutDisplayName(legality.coconut)} — ${legality.coconut.ink}. Click to change or remove.`
+            ? `${coconutDisplayName(legality.coconut)} — ${coconutInkLabel(legality.coconut)}. Click to change or remove.`
             : "Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore."}>
           ${legality.coconut
             ? html`<img class="deck-coconut-slot-art" src=${coconutThumbUrl(legality.coconut.cn)}
