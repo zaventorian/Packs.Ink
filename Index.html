@@ -29550,7 +29550,7 @@ function EloStores({canViewStore, onStoreClick}){
   </div>`;
 }
 
-function EloView({eloPinned, setEloPinned, user}){
+function EloView({eloPinned, setEloPinned, user, onSignIn}){
   // Inner tab state: leaderboard | tournaments | stores | upcoming | player | event | store
   // Synced to URL params: ?sub=tournaments|stores|upcoming|scout, ?p=<id>, ?e=<id>, ?store=<name>
   // (Avoid ?t=… — Packs.Ink already uses that for Trade tokens.)
@@ -29675,6 +29675,17 @@ function EloView({eloPinned, setEloPinned, user}){
   const backToLeaderboard = () => { setTab("leaderboard"); setPlayerId(null); setEventId(null); setStoreKey(null); };
   const backToTournaments = () => { setTab("tournaments"); setEventId(null); };
 
+  // Turning the pin ON while signed out would only ever write to this one
+  // browser's localStorage — nothing syncs it to the account, so it reads as
+  // "pinned" here and then silently isn't there on packs.ink in a different
+  // browser/device. Gate it on sign-in like every other write action in the
+  // app, so a pin always ends up account-synced and actually follows you.
+  // Turning it OFF stays a local-only action — nothing to lose there.
+  const onTogglePin = (checked) => {
+    if(checked && !user){ onSignIn && onSignIn(); return; }
+    setEloPinned(checked);
+  };
+
   // Scouting panel for one event. A modal rather than a tab of its own: you
   // open it from a roster you are already looking at, and close back to it.
   const [scoutEvent, setScoutEvent] = useState(null);   // {event_id, ...meta}
@@ -29685,8 +29696,8 @@ function EloView({eloPinned, setEloPinned, user}){
     <header class="elo-hero">
       <div class="elo-hero-row">
         <h1 class="elo-title">Chicagoland Lorcana Elo</h1>
-        ${setEloPinned && html`<label class="elo-pin-toggle" title=${eloPinned ? "Hide from Analytics tab (still accessible via /elo)" : "Pin under Analytics tab"}>
-          <input type="checkbox" checked=${!!eloPinned} onChange=${e => setEloPinned(e.target.checked)}/>
+        ${setEloPinned && html`<label class="elo-pin-toggle" title=${eloPinned ? "Hide from Analytics tab (still accessible via /elo)" : user ? "Pin under Analytics tab" : "Sign in to pin this to your account"}>
+          <input type="checkbox" checked=${!!eloPinned} onChange=${e => onTogglePin(e.target.checked)}/>
           <span>${eloPinned ? "Pinned to Analytics" : "Pin to Analytics"}</span>
         </label>`}
       </div>
@@ -34936,7 +34947,7 @@ function MarketView({raw, sets, avgs, theme, nc, setNc, ne, setNe,
       onOpenSealed=${openScreenerSealed}/>`}
     ${sub==="lore" && html`<${LoreTracker} onOpen=${setSub} onHome=${onHome}/>`}
     ${sub==="dice" && html`<${DiceTray} onOpen=${setSub}/>`}
-    ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
+    ${sub==="elo" && html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user} onSignIn=${onSignIn}/>`}
     ${sub==="setval"  && html`<${SetValuesView} rawData=${raw} sets=${setsNewest} theme=${theme}
       priceMode=${priceMode} setPriceMode=${setPriceMode}
       user=${user} collection=${collection} updateQty=${updateQty} onSignIn=${onSignIn}/>`}
@@ -53383,7 +53394,7 @@ function App(){
       onFindEvents=${openEventFinder} sealedPrices=${sealedPrices}/>`}
     ${eventFinderOpen&&html`<${UpcomingSCsBox} overlay=${true} user=${user}
       onClose=${closeEventFinder}/>`}
-    ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user}/>`}
+    ${viewsReady&&view==="elo"&&html`<${EloView} eloPinned=${eloPinned} setEloPinned=${setEloPinned} user=${user} onSignIn=${signIn}/>`}
     <${Footer} lastEtlDate=${lastEtlDate} lastRawPriceDate=${lastRawPriceDate}
       user=${user} onFeedback=${()=>setFeedbackOpen(true)}
       onViewFeedback=${isGradedAdmin ? ()=>setFeedbackAdminOpen(true) : null}
