@@ -222,7 +222,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=422">
+<link rel="stylesheet" href="styles.css?v=424">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9520,6 +9520,17 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     if(colors.length === 1) return `linear-gradient(180deg,${colors[0]} 0%,#0d0a1f 100%)`;
     return "linear-gradient(180deg,#2a2a2a 0%,#0a0a0a 100%)";
   }, [bgStyle, deckInks]);
+  // A solid stand-in for bgCss's gradient, used as html2canvas's backgroundColor
+  // so the poster's rounded corners (borderRadius:10 below) render opaque
+  // instead of transparent — a transparent-cornered PNG is what makes chat
+  // apps like Messenger render the exported image "sticker style" (no bubble
+  // chrome) instead of as a normal photo.
+  const bgFlat = useMemo(() => {
+    if(bgStyle === "dark")  return "#0d0a1f";
+    if(bgStyle === "light") return "#e6dfcb";
+    const colors = deckInks.slice(0, 2).map(i => (INK_COLORS[i]?.border) || "#3c3c3c");
+    return colors[colors.length - 1] || "#0a0a0a";
+  }, [bgStyle, deckInks]);
 
   const isLightBg = bgStyle === "light";
 
@@ -9601,7 +9612,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       const scale = Math.min(2, Math.max(1, Math.sqrt(POSTER_TARGET_MP / Math.max(0.1, naturalMP))));
       return await h2c(el, {
         useCORS: true,
-        backgroundColor: null,
+        backgroundColor: bgFlat,
         scale,
         // /large/ card art is a heavier fetch than the old /normal/; give it
         // headroom past html2canvas's 15s default so a slow proxy image doesn't
@@ -9617,7 +9628,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       }
       if(scaleWrap) scaleWrap.style.transform = prevScale;
     }
-  }, []);
+  }, [bgFlat]);
 
   const copyImage = useCallback(async () => {
     setError(null); setBusy("copy");

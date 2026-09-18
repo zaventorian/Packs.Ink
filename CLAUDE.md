@@ -727,15 +727,18 @@ turn it back:
   path or the copied PNG disagrees with what's on screen.
 
 Applied to: the card-detail modal (canvas tile AND the plain-`<img>` fallback), the deck
-editor's image-grid and stacked-pile views, and the deck poster's card cells. **A landscape
-poster cell must declare `aspectRatio:"7/5"` itself** — its image is absolutely positioned, so
-the cell would otherwise collapse to zero height.
+editor's image-grid and stacked-pile views, and the deck poster's card cells.
+
+**A landscape poster cell must declare `aspectRatio:"7/5"` itself** — its image is absolutely
+positioned, so the cell would otherwise collapse to zero height.
 
 **⚠ A cover-fit, crop-to-match-neighbours cell was tried 2026-09-18 and reverted the same day —
 don't reintroduce it.** A Location rendered visibly shorter than the cards around it (reported
 from the wild), and the first fix kept the cell's footprint at `aspectRatio:"5/7"` (matching its
 neighbours) with `overflow:"hidden"`, overscaling the rotated image to `width:"140%"` so it
-COVERED that taller box — center-cropped left/right. The user's actual ask was narrower: **still
+COVERED that taller box — center-cropped left/right. (140% is the cover-fit math: a 7:5-shaped
+image covering a 5:7 box needs its pre-rotation width scaled to the box's OWN height, 1.4x, which
+is 1.96x wide post-rotation — hence the clip.) The user's actual ask was narrower: **still
 horizontal, and the card not cut off** — "as if you turned the real card horizontal." A cropped
 edge fails that even though the cell is now the "right" size, so the shorter `7/5` cell (and the
 resulting gap versus its portrait neighbours) is the accepted tradeoff — cropping the card is not.
