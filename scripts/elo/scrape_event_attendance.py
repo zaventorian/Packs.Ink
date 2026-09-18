@@ -69,9 +69,23 @@ def _get(path: str):
         return json.loads(r.read().decode("utf-8", "ignore") or "[]")
 
 
+def _dedupe_on_conflict(rows: list[dict], conflict: str) -> list[dict]:
+    """Postgres's ON CONFLICT DO UPDATE raises 21000 if one command carries two
+    rows with the same conflict-target values — RPH can return the same
+    registration twice within an event (seen live: overlapping pages), which a
+    bare upsert doesn't dedupe the way the JS client's Supabase.upsert() does.
+    Last occurrence wins, matching the resolution=merge-duplicates semantic."""
+    keys = conflict.split(",")
+    out: dict[tuple, dict] = {}
+    for r in rows:
+        out[tuple(r.get(k) for k in keys)] = r
+    return list(out.values())
+
+
 def _post(table: str, rows: list[dict], conflict: str) -> None:
     if not rows:
         return
+    rows = _dedupe_on_conflict(rows, conflict)
     endpoint = f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict}"
     headers = _hdr({"Prefer": "resolution=merge-duplicates,return=minimal"})
     for i in range(0, len(rows), 200):
