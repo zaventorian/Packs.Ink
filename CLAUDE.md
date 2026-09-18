@@ -5761,6 +5761,12 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- **`supabase/159_deck_short_links.sql`** — **STAGED 2026-09-18, needs a paste.** Short deck links:
+  `packs.ink/?d=<12 chars>` instead of the ~100-char `?deck=&token=` link. `deck_short_links` +
+  `deck_short_code(deck, token)` (mint, one per deck+token) + `resolve_deck_short_code(code)`. A
+  code dies with its token, so the existing rotate-on-less-visible trigger revokes it. Safe to ship
+  the client first: the poster falls back to the full link (minus `https://`), and an unresolvable
+  `?d=` lands on `/decks`.
 - ~~`supabase/152_calendar_dlc_nanjing.sql`~~ - **STAGED 2026-09-14, needs a paste.**
   One row: DLC Nanjing, 21-22 Nov 2026, at `confirmed = false` so it is admin-only
   until ruled on in the /calendar editor. Pure ASCII, short header, per the 142
