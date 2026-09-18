@@ -222,7 +222,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=425">
+<link rel="stylesheet" href="styles.css?v=428">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9269,6 +9269,29 @@ const deckDisplayTitle = (deck, tournamentContext) => {
   return "Untitled deck";
 };
 
+// Short deck links (migration 159): packs.ink/?d=<12 chars> instead of the
+// ~100-char ?deck=<uuid>&token=<token>. Minted on demand, one per (deck, token),
+// cached for the session. Resolves null on ANY failure (pre-migration database,
+// private deck, offline) so callers fall back to the full link.
+const _deckShortUrls = new Map();
+const deckShortUrl = (shareUrl) => {
+  if(!shareUrl) return Promise.resolve(null);
+  if(_deckShortUrls.has(shareUrl)) return _deckShortUrls.get(shareUrl);
+  let u;
+  try { u = new URL(shareUrl); } catch { return Promise.resolve(null); }
+  const deckId = u.searchParams.get("deck");
+  if(!deckId) return Promise.resolve(null);
+  const p = sbClient.rpc("deck_short_code", {p_deck_id: deckId, p_token: u.searchParams.get("token") || null})
+    .then(({data, error}) => (!error && typeof data === "string" && data)
+      ? `${u.origin}/?d=${data}` : null)
+    .catch(() => null)
+    .then(r => { if(!r) _deckShortUrls.delete(shareUrl); return r; });
+  _deckShortUrls.set(shareUrl, p);
+  return p;
+};
+// What a printed URL shows: the protocol is noise to someone typing it.
+const displayUrl = (url) => String(url || "").replace(/^https?:\/\//, "");
+
 // Deck poster export — renders the full poster inline in the modal as a live
 // preview, then snapshots it via html2canvas for the Copy / Save buttons.
 // Lorcast images flow through the /img-proxy/* rewrite so the resulting canvas
@@ -9723,16 +9746,31 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // Unlisted deck — to a third party, and the service worker then kept that
   // PNG (URL and all) in the deploy-surviving image cache. A data: URL draws to
   // canvas cleanly and never touches the network.
+  // The short link (packs.ink/?d=…) is what the poster prints AND encodes, so
+  // the QR is smaller and the printed URL is typeable. It resolves before the
+  // QR is drawn, so the QR never flips from long to short under a snapshot.
+  const [shortUrl, setShortUrl] = useState(null);
+  const [shortDone, setShortDone] = useState(!shareUrl);
+  useEffect(() => {
+    let cancelled = false;
+    setShortUrl(null);
+    if(!shareUrl){ setShortDone(true); return; }
+    setShortDone(false);
+    deckShortUrl(shareUrl).then(u => { if(!cancelled){ setShortUrl(u); setShortDone(true); } });
+    return () => { cancelled = true; };
+  }, [shareUrl]);
+  const linkUrl = shortUrl || shareUrl;
   const [qrSrc, setQrSrc] = useState(null);
   const [qrDone, setQrDone] = useState(false);
   useEffect(() => {
     if(!(showQr && shareUrl)){ setQrSrc(null); setQrDone(false); return; }
     let cancelled = false;
     setQrDone(false);
+    if(!shortDone) return () => { cancelled = true; };
     window.__loadQrcode().then((qrcode) => {
       if(cancelled) return;
       const qr = qrcode(0, "M");
-      qr.addData(shareUrl);
+      qr.addData(linkUrl);
       qr.make();
       setQrSrc(qr.createDataURL(4, 4));
       setQrDone(true);
@@ -9741,12 +9779,12 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       if(!cancelled){ setQrSrc(null); setQrDone(true); }
     });
     return () => { cancelled = true; };
-  }, [showQr, shareUrl]);
+  }, [showQr, shareUrl, shortDone, linkUrl]);
   // The headless autoCopy path must not snapshot before the QR has resolved.
   // ⚠ Declared ABOVE the autoCopy effect: that effect lists qrPending in its
   // deps, and a deps array is read at the useEffect call site — a `const`
   // below it is in the temporal dead zone and threw on every poster open.
-  const qrPending = !!(showQr && shareUrl) && !qrDone;
+  const qrPending = (!!(showQr && shareUrl) && !qrDone) || !shortDone;
 
   // Headless one-click capture path used by the deck-tile "Copy image" button.
   // The parent passes the unresolved blobPromise to navigator.clipboard.write
@@ -10254,7 +10292,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         <div style=${{fontSize:11,fontWeight:600,color:textColor,letterSpacing:0.3,opacity:0.85}}>
           packs.ink · ${new Date().toLocaleDateString()}
         </div>
-        ${showUrl && shareUrl && html`<div style=${{fontWeight:600,color:textColor,fontSize:10,textAlign:"right"}}>${shareUrl}</div>`}
+        ${showUrl && shareUrl && html`<div style=${{fontWeight:600,color:textColor,fontSize:10,textAlign:"right"}}>${displayUrl(linkUrl)}</div>`}
       </div>
     </div>
   </div>`;
@@ -54138,6 +54176,31 @@ class ErrorBoundary extends React.Component {
     const slug = new URLSearchParams(window.location.search).get("season");
     if(slug && SEASON_REVIEWS[slug]) seasonMeta = SEASON_REVIEWS[slug];
   } catch {}
+  // A short deck link (?d=<code>) is rewritten to the full ?deck=&token= form
+  // BEFORE App mounts, so every existing deep-link path handles it unchanged.
+  // An unknown, rotated or unreachable code lands on /decks rather than a
+  // blank page.
+  let shortCode = null;
+  try { shortCode = new URLSearchParams(window.location.search).get("d"); } catch {}
+  if(!seasonMeta && shortCode && /^[A-Za-z0-9]{6,24}$/.test(shortCode)){
+    let settled = false;
+    const settle = (href) => {
+      if(settled) return;
+      settled = true;
+      try { window.history.replaceState(null, "", href); } catch {}
+      root.render(html`<${ErrorBoundary}><${App}/><//>`);
+    };
+    const bail = setTimeout(() => settle("/decks"), 8000);
+    sbClient.rpc("resolve_deck_short_code", {p_code: shortCode}).then(({data, error}) => {
+      clearTimeout(bail);
+      const row = !error && Array.isArray(data) ? data[0] : null;
+      if(!row || !row.deck_id){ settle("/decks"); return; }
+      const q = new URLSearchParams({deck: row.deck_id});
+      if(row.share_token) q.set("token", row.share_token);
+      settle("/decks?" + q.toString());
+    }, () => { clearTimeout(bail); settle("/decks"); });
+    return;
+  }
   if(seasonMeta){
     // Link-only standalone recap — bypasses the full app shell entirely.
     document.documentElement.classList.add("season-standalone");
