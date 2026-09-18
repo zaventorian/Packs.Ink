@@ -1,34 +1,28 @@
 // test_deck_poster_grid.mjs — guards the deck poster's card grid against the
-// blown-out-column bug.
+// blown-out-column bug, and against a Location cell being a visible runt.
 //
 //     node scripts/test_deck_poster_grid.mjs
 //
-// The regression this locks down (reported from the wild 2026-09-08, a Discord
-// screenshot of a Ruby/Amber deck with 4 Locations): the grid was
-// `repeat(N, 1fr)`. A bare `1fr` is `minmax(auto, 1fr)`, so a track can never be
-// narrower than the min-content of its widest cell -- and a LANDSCAPE cell
-// declares `aspect-ratio: 7/5` on the cell itself, because its image is
-// absolutely positioned and the cell would otherwise have no height.
+// Bug #1 (reported from the wild 2026-09-08, a Discord screenshot of a
+// Ruby/Amber deck with 4 Locations): the grid was `repeat(N, 1fr)`. A bare
+// `1fr` is `minmax(auto, 1fr)`, so a track can never be narrower than the
+// min-content of its widest cell -- and a landscape cell used to declare
+// `aspect-ratio: 7/5` on the cell itself (its image is absolutely positioned,
+// so the cell needs the aspect-ratio to have a height at all). Measured in
+// Chromium at 7 columns on a 1000px poster: the row was 188px tall (the
+// portrait cards set it), so a 7/5 cell demanded 188 * 7/5 = 263px of width.
+// That demand became the track's automatic minimum, froze the Location's
+// whole COLUMN at ~2x, and starved the other columns -- in the reproduction,
+// three of them to literally 0px. The track must stay `minmax(0, 1fr)`, or a
+// cell whose min-content is wider than the column can hijack it again.
 //
-// Those two facts are in tension, and that is the whole bug. Measured in
-// Chromium at 7 columns on a 1000px poster: the row is 188px tall (the portrait
-// cards set it), so the 7/5 cell demands 188 * 7/5 = 263px of width. That demand
-// became the track's automatic minimum, froze the Location's whole COLUMN at
-// ~2x, and starved the other columns -- in the reproduction, three of them to
-// literally 0px. Every card sharing a hijacked column rendered oversized,
-// including the rows ABOVE the Location, which is why the reporter saw two giant
-// cards stacked in one column with the rest of the poster shrunken.
-//
-// Locations sort last, so the cell that poisons a column is usually below the
-// fold of a cropped preview -- there is nothing at the blowout to look at. And
-// whether it bites at all depends on which column the Locations happen to land
-// in, which is why it read as "not sure if it's just me".
-//
-// Both halves are pinned here, because removing EITHER brings the bug back:
-//   - the track must stay minmax(0, 1fr), or the 7/5 cell hijacks its column;
-//   - the landscape cell must keep aspect-ratio 7/5, or it collapses to zero
-//     height (the reason it was added -- see CLAUDE.md "Location cards read
-//     landscape where you're READING one").
+// Bug #2 (reported 2026-09-18): with the cell shaped 7/5 (shorter than a
+// portrait cell), a Location rendered visibly SMALLER than every card around
+// it -- same width, much less height. The cell now keeps the SAME 5/7
+// footprint as every other card, and the rotated image is overscaled to
+// 140% width (COVER, not exact-fit) so it fills that taller box and is
+// center-cropped left/right by the cell's own `overflow:hidden`, rather than
+// shrinking the whole cell to fit the image untouched.
 //
 // There is no client-side CI, so it is manual — but it reads the real markup out
 // of Index.html rather than restating it, so it cannot drift from what ships.
@@ -58,19 +52,23 @@ if (grid) {
     "the grid is back to `repeat(${cols},1fr)`");
 }
 
-// The landscape cell keeps the aspect-ratio that makes it a box at all.
-check("landscape poster cell still declares aspect-ratio 7/5",
-  /\?\s*\{position:"relative",\s*aspectRatio:"7\/5"\}\s*:\s*\{position:"relative"\}/.test(src),
-  "the landscape branch of the poster cell no longer sets aspectRatio 7/5 — its " +
-  "image is absolutely positioned, so the cell now has no height at all.");
+// The landscape cell matches the portrait cell's footprint (5/7), same as
+// every other card, and clips the overscaled image to it.
+check("landscape poster cell matches the portrait 5/7 footprint",
+  /\?\s*\{position:"relative",\s*aspectRatio:"5\/7",\s*overflow:"hidden",\s*borderRadius:8\}\s*:\s*\{position:"relative"\}/.test(src),
+  "the landscape branch of the poster cell no longer sets aspectRatio 5/7 + " +
+  "overflow:hidden — it will render shorter than its portrait neighbours again.");
+check("landscape poster cell does NOT go back to the shorter 7/5 box",
+  !/\?\s*\{position:"relative",\s*aspectRatio:"7\/5"\}\s*:\s*\{position:"relative"\}/.test(src),
+  "found the old 7/5 landscape cell shape — that is the shorter box that made " +
+  "a Location look smaller than the cards around it.");
 
-// The landscape image geometry the aspect-ratio is sized against. 71.4286% is
-// 5/7: laid out portrait at that width, a quarter turn lands it exactly on the
-// wrapper's edges. It is not a round number by accident.
-check("landscape poster image is still laid out at 5/7 of the cell",
-  /width:"71\.4286%"/.test(src),
-  "the rotated poster image's width left 71.4286% (5/7) — the rotation no longer " +
-  "lands on the cell edges.");
+// The landscape image is overscaled to COVER the taller 5/7 box (140% width,
+// still sized by the 5/7 aspect-ratio) rather than exact-fitting a 7/5 one.
+check("landscape poster image is overscaled to 140% to cover the cell",
+  /width:"140%",height:"auto",\s*aspectRatio:"5\/7"/.test(src),
+  "the rotated poster image is no longer sized at 140% width / aspect-ratio 5/7 " +
+  "— it will exact-fit a 7/5 box again instead of covering the 5/7 cell.");
 
 console.log(failures === 0
   ? "\ndeck poster grid: all checks passed"
