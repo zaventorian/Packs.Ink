@@ -9382,6 +9382,17 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const [showStats, setShowStats] = useState(true);
   const [showCurve, setShowCurve] = useState(true);
   const [showCost, setShowCost] = useState({nonFoil:true, foil:true, maxRarity:true});
+  // EXPERIMENT (2026-09-18): "classic" is the header every shipped poster has;
+  // "dash" is the charts-panel layout on trial. Classic stays the default and
+  // its markup is untouched, so reverting is deleting the dash branch.
+  const [headerStyle, setHeaderStyleRaw] = useState(() => {
+    try { return localStorage.getItem("packsink:poster:header") === "dash" ? "dash" : "classic"; }
+    catch { return "classic"; }
+  });
+  const setHeaderStyle = (v) => {
+    setHeaderStyleRaw(v);
+    try { localStorage.setItem("packsink:poster:header", v); } catch {}
+  };
   const [error, setError] = useState(null);
 
   // Three deck-cost totals using the same Low-Price field shown elsewhere on
@@ -9882,12 +9893,137 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     </svg>`;
   }, [costBuckets, curveMax, dualKeys, textColor, subColor]);
 
+  // ── "dash" header (experiment) ─────────────────────────────────────────────
+  // One translucent panel holding the curve, three donuts and the prices, so the
+  // stats read as a single instrument instead of a row of loose numbers. Colours
+  // are LITERALS, never var(--…): html2canvas rasterises the SVG outside the
+  // page's cascade, so a CSS variable would paint black in the export.
+  const inkSlices = useMemo(() => {
+    const m = new Map();
+    for(const c of cards){
+      const inks = c.meta.inks?.length ? c.meta.inks : (c.meta.ink ? [c.meta.ink] : []);
+      const key = !inks.length ? "None" : inks.length === 1 ? inks[0] : inks.slice(0,2).join("/");
+      m.set(key, (m.get(key)||0) + c.quantity);
+    }
+    return Array.from(m.entries()).sort((a,b) => b[1]-a[1]).map(([k,v]) => ({
+      label: k.includes("/") ? k.replace("/", " / ") : k, value: v,
+      color: k.includes("/") ? "#475569" : (INK_COLORS[k]?.border || "#888"),
+    }));
+  }, [cards]);
+  const dashDonut = (slices, center, centerLbl) => {
+    const size = 74, r = size/2, t = 13, total = slices.reduce((s,x) => s+x.value, 0) || 1;
+    const sep = isLightBg ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.5)";
+    const pt = (a, rad) => [r + rad*Math.cos(a), r + rad*Math.sin(a)];
+    let a0 = -Math.PI/2;
+    const live = slices.filter(s => s.value > 0);
+    const paths = live.map((s, i) => {
+      if(live.length === 1){
+        return html`<circle key=${i} cx=${r} cy=${r} r=${r - t/2 - 0.5} fill="none"
+          stroke=${s.color} stroke-width=${t}/>`;
+      }
+      const a1 = a0 + (s.value/total) * Math.PI*2;
+      const large = (a1 - a0) > Math.PI ? 1 : 0;
+      const [x0,y0] = pt(a0, r-0.5), [x1,y1] = pt(a1, r-0.5);
+      const [x2,y2] = pt(a1, r-t), [x3,y3] = pt(a0, r-t);
+      const d = `M${x0} ${y0} A${r-0.5} ${r-0.5} 0 ${large} 1 ${x1} ${y1} L${x2} ${y2} A${r-t} ${r-t} 0 ${large} 0 ${x3} ${y3} Z`;
+      a0 = a1;
+      return html`<path key=${i} d=${d} fill=${s.color} stroke=${sep} stroke-width="1.2" stroke-linejoin="round"/>`;
+    });
+    return html`<svg width=${size} height=${size} viewBox=${`0 0 ${size} ${size}`} style=${{display:"block",flexShrink:0}}>
+      ${paths}
+      <text x=${r} y=${r+1} text-anchor="middle" font-size="19" font-weight="800" fill=${textColor}>${center}</text>
+      <text x=${r} y=${r+13} text-anchor="middle" font-size="7.5" font-weight="700" letter-spacing="0.5" fill=${subColor}>${centerLbl}</text>
+    </svg>`;
+  };
+  const dashLegend = (slices) => html`<div style=${{display:"flex",flexDirection:"column",gap:3,minWidth:0}}>
+    ${slices.filter(s => s.value > 0).map(s => html`<div key=${s.label} style=${{display:"flex",alignItems:"center",gap:6,fontSize:11,lineHeight:1.15,whiteSpace:"nowrap"}}>
+      <span style=${{width:8,height:8,borderRadius:2,background:s.color,flexShrink:0,
+        boxShadow:"0 0 0 1px rgba(255,255,255,0.35)"}}></span>
+      <span style=${{color:subColor}}>${s.label}</span>
+      <span style=${{marginLeft:"auto",paddingLeft:6,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${s.value}</span>
+    </div>`)}
+  </div>`;
+  const dashHead = (label, right) => html`<div style=${{display:"flex",justifyContent:"space-between",gap:8,
+    fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:700,letterSpacing:0.6,marginBottom:6}}>
+    <span>${label}</span>${right && html`<span style=${{letterSpacing:0.3}}>${right}</span>`}</div>`;
+  // Legend UNDER the donut, not beside it: beside, three donuts ate ~540px of
+  // the band and squeezed the cost curve to a 70px-tall sliver.
+  const dashChart = (label, slices, center, centerLbl) => html`<div style=${{display:"flex",flexDirection:"column",minWidth:0,width:108}}>
+    ${dashHead(label)}
+    <div style=${{display:"flex",justifyContent:"center",marginBottom:8}}>${dashDonut(slices, center, centerLbl)}</div>
+    ${dashLegend(slices)}
+  </div>`;
+  const panelLine = isLightBg ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.16)";
+  const dashCell = (node, first, flex) => html`<div style=${{flex:flex||"0 0 auto",minWidth:0,
+    paddingLeft:first?0:16,marginLeft:first?0:16,borderLeft:first?"none":`1px solid ${panelLine}`}}>${node}</div>`;
+  const dashCells = [];
+  if(showCurve) dashCells.push(["curve", html`<div>
+    ${dashHead("Cost curve", `${totalCount} cards · ${totalUnique} unique`)}
+    ${curveSvg}</div>`, "1 1 330px"]);
+  if(showStats){
+    dashCells.push(["inks", dashChart("Inks", inkSlices, totalCount, "CARDS")]);
+    dashCells.push(["inkable", dashChart("Inkwell", [
+      {label:"Inkable", value:stats.inkable, color:"#e8c547"},
+      {label:"Uninkable", value:stats.uninkable, color:"#15161c"},
+    ], stats.inkable, "INKABLE")]);
+    const typeSlices = [
+      {label:"Characters", value:stats.chars, color:"#e8c547"},
+      {label:"Actions", value:stats.actions, color:"#3f8e88"},
+      {label:"Songs", value:stats.songs, color:"#8a6fc0"},
+      {label:"Items", value:stats.items, color:"#c07f3c"},
+      {label:"Locations", value:stats.locations, color:"#6f9e57"},
+    ];
+    dashCells.push(["types", dashChart("Types", typeSlices, totalUnique, "UNIQUE")]);
+  }
+  if(anyCost){
+    const rows = [
+      showCost.nonFoil && ["Non-foil", costs.nonFoil, false],
+      showCost.foil && ["Foil", costs.foil, false],
+      showCost.maxRarity && ["Max rarity", costs.maxRarity, true],
+    ].filter(Boolean);
+    dashCells.push(["cost", html`<div>
+      ${dashHead("Deck cost")}
+      <div style=${{display:"flex",flexDirection:"column",gap:6}}>
+        ${rows.map(([l, v, hi]) => html`<div key=${l}>
+          <div style=${{fontSize:9,color:subColor,fontWeight:600,letterSpacing:0.3,lineHeight:1}}>${l}</div>
+          <div style=${{fontSize:hi?19:16,fontWeight:800,lineHeight:1.15,fontVariantNumeric:"tabular-nums",
+            color:hi?(isLightBg?"#8a5a00":"#fbd46b"):textColor}}>${fmtUSD(v)}</div>
+        </div>`)}
+      </div>
+    </div>`]);
+  }
+  const dashHeader = html`<div style=${{marginBottom:16}}>
+    <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:14}}>
+      <div style=${{minWidth:0,flex:"1 1 auto"}}>
+        <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:34,lineHeight:1,letterSpacing:"-0.3px"}}>${deckDisplayTitle(deck, tournamentContext)}</div>
+        <div style=${{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginTop:8}}>
+          ${tournamentContext
+            ? html`<span style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:600,fontSize:14,color:subColor}}>
+                ${uiIcon("trophy")} ${tournamentContext.tournament_name}${tournamentContext.place ? ` · ${tournamentContext.place}` : ""}${tournamentContext.num_players ? ` · ${tournamentContext.num_players} players` : ""}${tournamentContext.player_name ? ` · ${tournamentContext.player_name}` : ""}</span>`
+            : (creatorName && html`<span style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:500,fontSize:14,color:subColor}}>by ${creatorName}</span>`)}
+          <span style=${{padding:"3px 10px",borderRadius:12,fontSize:12,fontWeight:600,
+            background:isLightBg?"rgba(0,0,0,0.08)":"rgba(255,255,255,0.18)"}}>${inkLabel}</span>
+        </div>
+      </div>
+      ${qrSrc && html`<div style=${{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+        <div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:700,letterSpacing:0.6,
+          textAlign:"right",lineHeight:1.35}}>Scan to<br/>open deck</div>
+        <img src=${qrSrc} crossOrigin="anonymous" alt="QR code"
+          style=${{width:72,height:72,background:"#fff",borderRadius:6,padding:3,display:"block"}}/>
+      </div>`}
+    </div>
+    ${dashCells.length > 0 && html`<div style=${{display:"flex",alignItems:"stretch",padding:"12px 16px",borderRadius:12,
+      background:isLightBg?"rgba(255,255,255,0.45)":"rgba(0,0,0,0.2)",border:`1px solid ${panelLine}`}}>
+      ${dashCells.map(([k, node, flex], i) => html`<${React.Fragment} key=${k}>${dashCell(node, i === 0, flex)}</>`)}
+    </div>`}
+  </div>`;
+
   // Built once so the autoCopy off-screen branch + the visible-modal branch
   // share the same DOM (and the same wrapRef / posterRef refs).
   const posterDom = html`<div class="deck-poster-wrap" ref=${wrapRef} style=${{position:"relative",marginBottom:14}}>
     <div ref=${posterRef} class="deck-poster" style=${{background:bgCss,padding:24,borderRadius:10,
       color:textColor,position:"relative",zIndex:1}}>
-      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
+      ${headerStyle === "dash" ? dashHeader : html`<div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
         <div style=${{minWidth:260,flex:"1 1 320px"}}>
           <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:32,lineHeight:1,letterSpacing:"-0.3px"}}>${deckDisplayTitle(deck, tournamentContext)}</div>
           ${tournamentContext
@@ -9939,7 +10075,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           ${qrSrc && html`<img src=${qrSrc} crossOrigin="anonymous" alt="QR code"
             style=${{width:96,height:96,background:"#fff",borderRadius:6,padding:4,display:"block"}}/>`}
         </div>
-      </div>
+      </div>`}
       ${posterIssues.length > 0 && html`<div style=${{marginBottom:12,padding:"9px 12px",
         borderRadius:8,background:isLightBg?"rgba(146,64,14,0.12)":"rgba(245,158,11,0.16)",
         border:`1px solid ${isLightBg?"rgba(146,64,14,0.3)":"rgba(245,158,11,0.4)"}`}}>
@@ -10065,9 +10201,18 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       <div style=${{marginTop:16,display:"flex",justifyContent:"space-between",
         alignItems:"flex-end",gap:14,fontSize:9,color:subColor,lineHeight:1.4,
         wordBreak:"break-all"}}>
-        <div style=${{fontSize:11,fontWeight:600,color:textColor,letterSpacing:0.3,opacity:0.85}}>
-          packs.ink · ${new Date().toLocaleDateString()}
-        </div>
+        ${headerStyle === "dash"
+          ? html`<div style=${{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+              <img src="Logos/packs-ink-logo.png?v=5" alt="packs.ink" crossOrigin="anonymous"
+                style=${{height:52,width:"auto",display:"block",
+                  filter:isLightBg?"none":"drop-shadow(0 2px 4px rgba(0,0,0,0.4))"}}/>
+              <div style=${{fontSize:11,fontWeight:600,color:textColor,letterSpacing:0.3,opacity:0.85,lineHeight:1.3}}>
+                packs.ink<br/><span style=${{fontWeight:500,opacity:0.8}}>${new Date().toLocaleDateString()}</span>
+              </div>
+            </div>`
+          : html`<div style=${{fontSize:11,fontWeight:600,color:textColor,letterSpacing:0.3,opacity:0.85}}>
+              packs.ink · ${new Date().toLocaleDateString()}
+            </div>`}
         ${showUrl && shareUrl && html`<div style=${{fontWeight:600,color:textColor,fontSize:10,textAlign:"right"}}>${shareUrl}</div>`}
       </div>
     </div>
@@ -10106,7 +10251,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     const iv = setInterval(calc, 300);
     const stop = setTimeout(() => clearInterval(iv), 6000);
     return () => { if(ro) ro.disconnect(); clearInterval(iv); clearTimeout(stop); };
-  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle]);
+  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle, headerStyle]);
 
   if(autoCopy){
     return html`<div aria-hidden="true" style=${{position:"fixed",left:"-100000px",top:"0",
@@ -10203,6 +10348,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                   ${[5,6,7,8].map(n => html`<button key=${n}
                     class=${"chip "+(cols===n?"active":"")}
                     onClick=${()=>setCols(n)}>${n}</button>`)}
+                </div>
+              </div>
+              <div>
+                <div class="poster-options-sublbl">Header</div>
+                <div style=${{display:"flex",gap:4}}>
+                  ${[["classic","Classic"],["dash","Charts (beta)"]].map(([k,l]) => html`<button key=${k}
+                    class=${"chip "+(headerStyle===k?"active":"")}
+                    onClick=${()=>setHeaderStyle(k)}>${l}</button>`)}
                 </div>
               </div>
             </div>
