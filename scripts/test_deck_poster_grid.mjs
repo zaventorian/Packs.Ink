@@ -89,7 +89,7 @@ if (grid) {
 
 // Landscape cards are grouped into runs by ADJACENCY, so the grouping still
 // works if a Location ever stops sorting last — it just takes a row of its own.
-const groupMemo = src.match(/const posterGroups = useMemo\(\(\) => \{\n([\s\S]*?)\n  \}, \[cards\]\);/);
+const groupMemo = src.match(/const posterGroups = useMemo\(\(\) => \{\r?\n([\s\S]*?)\r?\n  \}, \[cards\]\);/);
 check("the poster still groups landscape cards into runs", !!groupMemo,
   "the `posterGroups` useMemo is gone — without it every Location is its own " +
   "cell again and neighbouring Locations go back to sitting ~100px apart.");
