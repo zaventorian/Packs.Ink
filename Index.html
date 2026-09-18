@@ -9330,14 +9330,18 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   }, [deck.cards, cardById, deck.coconut_card]);
 
   // Landscape cards, grouped into RUNS. Locations sort last, so in practice a
-  // deck's Locations arrive as one contiguous run — and a run gets ONE
-  // full-width row of its own, inside which the cards are a plain flex line at
-  // the grid's own 10px gap. When each Location took its own 2-column span
-  // instead, the ~45px of dead air on either side of the card landed back to
-  // back and two neighbouring Locations sat ~100px apart, which is not a gap,
-  // it is a hole. Grouping is by adjacency rather than by "is a Location", so
-  // a landscape card that somehow isn't last still renders correctly — it just
-  // takes a row of its own.
+  // deck's Locations arrive as one contiguous run — and a run gets ONE grid
+  // cell, spanning just enough columns for its cards at 1.4W each plus their
+  // internal gaps, inside which they're a plain flex line at the grid's own
+  // 10px gap. Auto-placement (no explicit start) shares the current row with
+  // whatever's already there when the span fits, and wraps to a new one when
+  // it doesn't — see the comment above the render below for the two shipped
+  // and reverted attempts this replaced (a 2-column span per card left ~45px
+  // of dead air on each side and ~100px between neighbouring Locations; a
+  // forced full-width row fixed that but could never share a row with
+  // anything, even a row with plenty of room left). Grouping is by adjacency
+  // rather than by "is a Location", so a landscape card that somehow isn't
+  // last still renders correctly — it just gets its own span.
   const posterGroups = useMemo(() => {
     const out = [];
     for(const c of cards){
@@ -9992,26 +9996,54 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             padding:"3px 8px",borderRadius:6,letterSpacing:0.4,
             boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>＋ BONUS</span>`}
         </div>`}
-        ${/* A RUN OF LANDSCAPE CARDS TAKES A FULL-WIDTH ROW, because a rotated
-              card does not shrink. A portrait cell is W wide and 1.4W tall, so
-              the card's long edge is 1.4W — turn that same card sideways and
-              its long edge is still 1.4W, which does not fit in one W-wide
-              column. Squeezed into one column (every version before
-              2026-09-18) the Location rendered at 1/1.4 = 71% the linear size
-              of every card beside it, which is what "it small" reported,
-              twice. Cropping it to fill a portrait footprint was tried the
-              same day and rejected: "still horizontal and card not cut off ...
-              as if you turned the real card horizontal".
+        ${/* A RUN OF LANDSCAPE CARDS SHARES THE CURRENT ROW WHEN THERE'S ROOM,
+              because a rotated card does not shrink. A portrait cell is W
+              wide and 1.4W tall, so the card's long edge is 1.4W — turn that
+              same card sideways and its long edge is still 1.4W, which does
+              not fit in one W-wide column. Squeezed into one column (every
+              version before 2026-09-18) the Location rendered at 1/1.4 = 71%
+              the linear size of every card beside it, which is what "it
+              small" reported, twice. Cropping it to fill a portrait footprint
+              was tried the same day and rejected: "still horizontal and card
+              not cut off ... as if you turned the real card horizontal".
 
               Giving each one its own 2-column span fixed the SIZE and left a
               hole: 1.4W inside a 2W+gap span leaves ~45px of dead air on each
-              side, so two neighbouring Locations sat ~100px apart. The run
-              therefore shares ONE row (`gridColumn:"1 / -1"`) and lays its
-              cards out with the grid's own 10px gap. Each card is still
-              exactly 1.4W — the row is the full grid width, so
-              (100% - (cols-1)*10) / cols is W by construction, whatever the
-              column count. flexWrap handles a deck with more Locations than
-              fit on one line.
+              side, so two neighbouring Locations sat ~100px apart. Forcing the
+              whole run onto its OWN full-width row (`gridColumn:"1 / -1"`)
+              fixed THAT — but a forced full span always needs the entire row
+              empty to place (CSS Grid auto-placement can't put a "1 / -1"
+              item beside anything), so a run landing after a half-empty row
+              (3 items in a 7-wide row, say) got its own mostly-empty row
+              below it rather than continuing the one it had room to share —
+              reported the same day the full-width fix shipped.
+
+              The fix is `gridColumn:`span ${spanCols}`` with NO explicit
+              start: ordinary CSS Grid auto-placement. Given a span (not a
+              start), the browser tries the CURRENT row first and only wraps
+              to a new one when the span doesn't fit — exactly "share the line
+              when there's room, otherwise take a new one", and it already
+              knows about every cell a leader's 2x2 span reserved, so nothing
+              here has to re-derive that.
+
+              `spanCols` is picked per run: `Math.max(2, Math.ceil(n * 1.4))`.
+              For any n this is PROVABLY enough room (n*1.4*W plus (n-1) internal
+              gaps always fits inside spanCols columns plus (spanCols-1) grid
+              gaps, since spanCols >= 1.4n and, for n>=1, spanCols always
+              exceeds n itself) — verified in Chromium at n=1 (spanCols=2,
+              10.0px from the previous card, zero dead air) and n=2
+              (spanCols=3, 10.0px before the run AND 10.0px between the two
+              Locations inside it — the exact hole the full-width fix closed).
+
+              Each card is sized `calc((100% - (spanCols-1)*10px) / spanCols *
+              1.4)` — spanCols, not the grid's own `cols`. A cell spanning N
+              tracks of a `repeat(cols, minmax(0,1fr))` grid has width exactly
+              N*W + (N-1)*10 (grid includes the internal gutters in a spanning
+              item's box), so this formula algebraically cancels back to W
+              regardless of N — the same 1.4W every portrait card's neighbour
+              gets, whether the run is sharing a row or landed on one of its
+              own. Verified: pre-rotation image width comes back bit-identical
+              to a portrait card's own width at both spanCols=2 and spanCols=3.
 
               Inside each box the image rides `.lscape-wrap`'s standing math —
               laid out portrait at 71.4286% (5/7) of the box, so the quarter
@@ -10053,10 +10085,15 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             const c = g.items[0];
             return html`<div key=${c.card_id} style=${{position:"relative"}}>${cell(c, false)}</div>`;
           }
+          // Enough columns to hold n cards at 1.4W plus their internal gaps,
+          // provably (see the comment above `posterGroups.map`). No explicit
+          // start — plain auto-placement shares the current row when the span
+          // fits, wraps to a new one when it doesn't.
+          const spanCols = Math.min(cols, Math.max(2, Math.ceil(g.items.length * 1.4)));
           return html`<div key=${"lrow:" + g.items[0].card_id}
-            style=${{gridColumn:"1 / -1",display:"flex",flexWrap:"wrap",gap:10}}>
+            style=${{gridColumn:`span ${spanCols}`,display:"flex",flexWrap:"wrap",gap:10}}>
             ${g.items.map(c => html`<div key=${c.card_id} style=${{position:"relative",
-              width:`calc((100% - ${(cols-1)*10}px) / ${cols} * 1.4)`,aspectRatio:"7/5"}}>
+              width:`calc((100% - ${(spanCols-1)*10}px) / ${spanCols} * 1.4)`,aspectRatio:"7/5"}}>
               ${cell(c, true)}
             </div>`)}
           </div>`;

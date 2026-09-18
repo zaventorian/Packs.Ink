@@ -729,7 +729,7 @@ turn it back:
 Applied to: the card-detail modal (canvas tile AND the plain-`<img>` fallback), the deck
 editor's image-grid and stacked-pile views, and the deck poster's card cells.
 
-### ⚠ A DECK POSTER's Locations SHARE A FULL-WIDTH ROW — a rotated card doesn't shrink (2026-09-18)
+### ⚠ A DECK POSTER's Locations SHARE A ROW WHEN THERE'S ROOM — a rotated card doesn't shrink (2026-09-18)
 
 **A portrait cell is W wide and 1.4W tall, so a card's long edge is 1.4W. Turn that same card
 sideways and the long edge is STILL 1.4W, which does not fit in one W-wide column.** Every
@@ -740,30 +740,54 @@ card horizontal."*
 
 Giving each Location its own `gridColumn:"span 2"` fixed the size and left a **hole**: 1.4W inside
 a 2W+gap span leaves ~45px of dead air on each side, so two neighbouring Locations sat **~100px
-apart** — reported the same day as *"a giant gap between the two locations"*. So a **RUN** of
-landscape cards takes one full-width row (`gridColumn:"1 / -1"`) and lays its cards out as a
-wrapping flex line at the grid's own `gap:10`.
+apart** — reported the same day as *"a giant gap between the two locations"*. Forcing the whole
+**RUN** onto one full-width row (`gridColumn:"1 / -1"`) fixed that — but a forced full span can
+only be placed into an entirely EMPTY row, so a run landing after a row with room left in it (3
+items in a 7-wide row, say) got a brand-new, mostly-empty row of its own rather than continuing
+the one it had space to share. Reported the same day, fourth ask: *"can we keep the locations on
+the same line as the other cards assuming there is room?"*
+
+**The fix is `gridColumn:`span ${spanCols}`` with NO explicit start** — ordinary CSS Grid
+auto-placement. Given a span but no start, the browser tries the CURRENT row first and only wraps
+to a new one when the span doesn't fit there — exactly "share when there's room, otherwise take a
+new one" — and it already knows about every cell a Coconut leader's `gridRow:"span 2"` reserved,
+so nothing here has to re-derive that.
 
 - **`posterGroups` (a useMemo beside `cards`) groups landscape cards by ADJACENCY**, not by
   "is a Location". Locations sort last so in practice a deck's are one contiguous run — but a
-  landscape card that somehow isn't last still renders correctly, it just takes a row of its own.
+  landscape card that somehow isn't last still renders correctly, it just gets its own span.
   Grouping on the card type instead would put the two in the same row.
-- **Each card box is `width:` `calc((100% - ${(cols-1)*10}px) / ${cols} * 1.4)` at
-  `aspectRatio:"7/5"`.** The row IS the full grid width, so that expression is 1.4W by
-  construction at every column count the poster offers (5/6/7/8) — no magic number tied to one
-  layout. Inside it the image rides `.lscape-wrap`'s standing math (**71.4286%** = 5/7), so the
-  quarter turn lands on the box's edges: nothing cropped, nothing overflowing.
+- **`spanCols = Math.min(cols, Math.max(2, Math.ceil(n * 1.4)))`**, per run of `n` landscape
+  cards. This is PROVABLY enough room: `n` cards at 1.4W plus `(n-1)` internal 10px gaps always
+  fit inside `spanCols` columns plus `(spanCols-1)` grid gaps, because `spanCols >= 1.4n` and, for
+  every `n >= 1`, `spanCols` strictly exceeds `n` itself (so the gap-count term never falls short
+  either). Capped at `cols` so an oversized run (more Locations than fit one row) still gets a
+  single cell, and its own internal `flexWrap` (below) spills the excess onto a second line INSIDE
+  that cell rather than fighting the grid for a second row.
+- **Each card box is `width:` `calc((100% - ${(spanCols-1)*10}px) / ${spanCols} * 1.4)` at
+  `aspectRatio:"7/5"` — sized off the run's OWN `spanCols`, never the grid's full `cols`.** A cell
+  spanning N tracks of a `repeat(cols, minmax(0,1fr))` grid has width exactly `N*W + (N-1)*10`
+  (grid gutters between the spanned tracks are part of a spanning item's own box), so this formula
+  algebraically cancels back to `W` regardless of `N` — the identical 1.4W every portrait card's
+  neighbour gets, whether the run is sharing a row or sitting on one of its own. Sizing off `cols`
+  instead (the pre-2026-09-18 formula) renders the WRONG size the instant a run's span is narrower
+  than the full grid — that's the one line that had to change alongside the span itself. Inside
+  each box the image rides `.lscape-wrap`'s standing math (**71.4286%** = 5/7), so the quarter turn
+  lands on the box's edges: nothing cropped, nothing overflowing.
 - **⚠ The box is IN FLOW, never absolutely positioned.** That is what gives the row a height at
   all — an absolutely positioned box gives its row none, which is the collapse the old
   `aspectRatio` on the CELL existed to prevent.
 - **⚠ The quantity badge lives INSIDE the box.** On the row it would pin to the far corner of the
   whole grid rather than to the card it counts.
-- Measured in Chromium against the shipped markup at **5, 6, 7 and 8 columns**: the Location's
-  long edge equals a portrait card's long edge to within 0.03px (188.0 vs 188.0 at 7 columns on
-  the 1000px grid — the same rectangle, turned), two adjacent Locations sit **10.0px** apart, and
-  the badge rides the card's own corner 6px in.
+- Measured in Chromium against the shipped math: a 1-item run (`spanCols=2`) shares the current
+  row and lands **10.0px** from the previous card — zero dead air; a 2-item run (`spanCols=3`)
+  shares the row AND its own two Locations sit **10.0px** apart, the exact hole the full-width fix
+  closed; a run that genuinely can't fit (only 1 free column against a `spanCols` of 2) correctly
+  wraps to a new row; and the pre-rotation image width comes back bit-identical to a portrait
+  card's own width at both `spanCols=2` and `spanCols=3` — the algebra holds in practice, not just
+  on paper.
 - **⚠ A cover-fit CROP to a portrait footprint is the other thing that was tried and rejected**
-  (same day, between the two "it small" reports): cell at `aspectRatio:"5/7"` + `overflow:"hidden"`
+  (2026-09-18, between the two "it small" reports): cell at `aspectRatio:"5/7"` + `overflow:"hidden"`
   with the image overscaled to `width:"140%"`. It made the cell the right size and cut the card's
   ends off, which fails *"card not cut off"*. Don't reintroduce it; the guard test asserts the
   140% sizing is absent.

@@ -26,18 +26,38 @@
 // was tried in between and rejected: "still horizontal and card not cut off ...
 // as if you turned the real card horizontal".
 //
-// THE HOLE (same day, third report): giving each Location its own 2-column span
-// got the size right and left ~45px of dead air on either side of the card, so
-// two neighbouring Locations sat ~100px apart. A RUN of landscape cards now
-// shares ONE full-width row and lays out as a flex line at the grid's own 10px
-// gap. Each card is still exactly 1.4W, because the row is the full grid width:
-// (100% - (cols-1)*10) / cols is W by construction at every column count.
+// THE HOLE (2026-09-18, third report): giving each Location its own 2-column
+// span got the size right and left ~45px of dead air on either side of the
+// card, so two neighbouring Locations sat ~100px apart. Forcing the whole run
+// onto ONE full-width row (`gridColumn:"1 / -1"`) fixed that -- but a forced
+// full span can only be placed in an entirely EMPTY row, so a run that landed
+// after a half-full row (3 items in a 7-wide row, say) got its own new,
+// mostly-empty row below rather than continuing the one it had room to share.
 //
-// Measured in Chromium against this exact markup, at every column count the
-// poster offers (5/6/7/8): the Location's long edge equals a portrait card's
-// long edge to within 0.03px (188.0 vs 188.0 at 7 columns), two adjacent
-// Locations sit 10px apart, and the quantity badge rides the card's own corner
-// 6px in -- not the row's.
+// THE SHARED ROW (same day, fourth report -- "keep the locations on the same
+// line as the other cards assuming there is room?"): the run is now placed
+// with `gridColumn:`span ${spanCols}`` and NO explicit start. Plain CSS Grid
+// auto-placement tries the CURRENT row first and only wraps to a new one when
+// the span doesn't fit -- exactly "share when there's room, else wrap" -- and
+// it already knows about every cell a Coconut leader's 2x2 span reserved, so
+// nothing has to re-derive that. `spanCols = max(2, ceil(n * 1.4))` is provably
+// enough room for n cards at 1.4W plus their internal 10px gaps, whatever n is
+// (spanCols always exceeds n itself for n>=1, and spanCols >= 1.4n).
+//
+// Each card is sized off `spanCols`, not the grid's own `cols` --
+// `calc((100% - (spanCols-1)*10px) / spanCols * 1.4)`. A cell spanning N
+// tracks of a `repeat(cols, minmax(0,1fr))` grid has width exactly
+// N*W + (N-1)*10 (a spanning item's box includes the gutters between the
+// tracks it spans), so the formula algebraically cancels back to W --
+// the SAME 1.4W every portrait card's neighbour gets -- regardless of N.
+//
+// Measured in Chromium against this exact geometry: a 1-item run (spanCols=2)
+// shares the current row and lands exactly 10.0px from the previous card,
+// zero dead air; a 2-item run (spanCols=3) shares the row AND its own two
+// Locations sit 10.0px apart -- the exact hole the full-width fix closed; a
+// run landing after a row CSS Grid can't fit it into correctly wraps to a new
+// one; and the pre-rotation image width comes back bit-identical to a
+// portrait card's own width at both spanCols=2 and spanCols=3.
 //
 // There is no client-side CI, so it is manual — but it reads the real markup out
 // of Index.html rather than restating it, so it cannot drift from what ships.
@@ -82,22 +102,40 @@ if (groupMemo) {
     "isn't last into the same row as one that is.");
 }
 
-// A run takes a full-width row; the cards inside it are a flex line at the
-// grid's own gap, which is what makes two Locations sit 10px apart.
-check("a landscape run takes a full-width row",
-  /gridColumn:"1 \/ -1",display:"flex",flexWrap:"wrap",gap:10/.test(src),
-  "the landscape run no longer spans the whole grid as a wrapping flex row. " +
-  "Per-card 2-column spans put ~45px of dead air on each side of every card, " +
-  "so two neighbouring Locations sat ~100px apart — the 'giant gap' report.");
+// spanCols is computed per run, sized so n cards at 1.4W plus their internal
+// gaps provably fit — never a fixed/forced full-width span.
+const spanRe = /const spanCols = Math\.min\(cols, Math\.max\(2, Math\.ceil\(g\.items\.length \* 1\.4\)\)\);/;
+check("spanCols is derived from the run's own item count",
+  spanRe.test(src),
+  "the landscape run's column span is no longer computed from the number of " +
+  "cards in the run (max(2, ceil(n*1.4)), capped at `cols`) — without it either " +
+  "it can't hold n cards without overlap, or it over-reserves a whole row again.");
+
+// The run is placed with a SPAN and no explicit start, so plain grid
+// auto-placement shares the current row when it fits and wraps when it
+// doesn't — the fix for "keep the locations on the same line ... if there is
+// room". A hardcoded "1 / -1" forces a brand-new, always-empty row every time.
+check("a landscape run is auto-placed by span, not forced to its own row",
+  /gridColumn:`span \$\{spanCols\}`,display:"flex",flexWrap:"wrap",gap:10/.test(src),
+  "the landscape run is no longer placed with an unanchored `span ${spanCols}` " +
+  "— either it's back to `gridColumn:\"1 / -1\"` (which can never share a row, " +
+  "even one with room to spare) or an explicit start crept in.");
+check("the old forced full-width span is gone",
+  !/gridColumn:"1 \/ -1",display:"flex",flexWrap:"wrap"/.test(src),
+  "found the reverted `gridColumn:\"1 / -1\"` full-row force — that's what " +
+  "stops a Location sharing a row with room left in it.");
 
 // The card's own footprint: 1.4 * the column width the grid itself is using,
 // which is exactly a portrait card's long edge. aspect-ratio 7/5 makes the
-// short edge W. IN FLOW, so a row of nothing but Locations still has a height.
-check("landscape card box is 1.4 grid columns wide at aspect-ratio 7/5",
-  /width:`calc\(\(100% - \$\{\(cols-1\)\*10\}px\) \/ \$\{cols\} \* 1\.4\)`,aspectRatio:"7\/5"/.test(src),
-  "the landscape card box is no longer sized at 1.4 of the grid's own column " +
-  "width — that is what makes the rotated card exactly as big as its portrait " +
-  "neighbours, at every column count the poster offers.");
+// short edge W. Sized off `spanCols` (the run's own cell), NOT the grid's
+// `cols` — algebraically the same W either way (see header), but only the
+// spanCols form is correct once the run's cell is narrower than the full grid.
+// IN FLOW, so a row of nothing but Locations still has a height.
+check("landscape card box is 1.4 * spanCols-relative column width, at aspect-ratio 7/5",
+  /width:`calc\(\(100% - \$\{\(spanCols-1\)\*10\}px\) \/ \$\{spanCols\} \* 1\.4\)`,aspectRatio:"7\/5"/.test(src),
+  "the landscape card box is no longer sized at 1.4 of ITS OWN CELL's column " +
+  "width (via spanCols) — sizing off the grid's full `cols` instead would " +
+  "render the wrong size the moment a run's span is narrower than the full grid.");
 
 // 71.4286% is 5/7: laid out portrait at that width inside the 7/5 box, a quarter
 // turn lands the image exactly on the box's edges — EXACT fit, no cropping.
