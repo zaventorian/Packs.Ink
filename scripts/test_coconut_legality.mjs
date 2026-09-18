@@ -71,21 +71,30 @@ console.log("\n== data integrity ==");
 // Cards land in waves during the beta, so the exact count is a tripwire: it
 // fails on purpose when one is added, which is the prompt to check the rest of
 // this block still describes the set. Beta 1 was 18, 3 per ink; Beta 2 opened
-// with a 4th Steel leader, so the per-ink split is no longer even.
+// with a 4th Steel leader, then 6 DUAL-ink team-up leaders (real existing
+// cards — Peter Pan & Tinker Bell etc. — so the per-ink split by PRIMARY ink
+// is no longer even either.
 const COCONUT_INKS = ["Amber","Amethyst","Emerald","Ruby","Sapphire","Steel"];
-check("19 Coconut cards", COCONUT_CARDS.length, 19);
+check("25 Coconut cards", COCONUT_CARDS.length, 25);
 // The durable half of the old "3 per ink" check. A typo'd ink ("Steal") would
 // leave the card out of CoconutLeaderPicker entirely — it renders one group per
 // canonical ink — and nothing else would notice.
-check("every ink is canonical",
+check("every primary ink is canonical",
   [...new Set(COCONUT_CARDS.map(c=>c.ink))].sort(), [...COCONUT_INKS].sort());
+// A dual-ink leader's SECOND ink must be canonical too, or the picker's
+// membership filter (which checks the whole `inks` array, not just `ink`)
+// silently fails to group it under its second ink's header.
+check("every dual ink is canonical",
+  COCONUT_CARDS.every(c => !c.inks || c.inks.every(i => COCONUT_INKS.includes(i))), true);
 check("every ink has a leader",
   COCONUT_INKS.every(i => COCONUT_CARDS.some(c => c.ink === i)), true);
-check("per-ink counts", COCONUT_INKS.map(
-  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [3,3,3,3,3,4]);
-check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 19);
-check("collector numbers 1..19", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
-  Array.from({length:19},(_,i)=>i+1));
+check("per-ink counts (by primary ink)", COCONUT_INKS.map(
+  i => COCONUT_CARDS.filter(c=>c.ink===i).length), [5,5,3,4,4,4]);
+check("6 dual-ink leaders, each a real 2-ink pair",
+  COCONUT_CARDS.filter(c => c.inks && c.inks.length === 2).length, 6);
+check("slugs unique", new Set(COCONUT_CARDS.map(c=>c.slug)).size, 25);
+check("collector numbers 1..25", COCONUT_CARDS.map(c=>c.cn).sort((a,b)=>a-b),
+  Array.from({length:25},(_,i)=>i+1));
 check("every associated name is '<name> - <version>'",
   COCONUT_CARDS.every(c => c.associated === `${c.name} - ${c.version}`), true);
 
@@ -204,6 +213,36 @@ check("missing leader ink flagged", r.issues.some(s=>/No Sapphire cards/.test(s)
 // Empty deck should NOT nag about the leader ink.
 r = checkDeckLegality({coconut_card:"moana-curious-explorer", cards:[]}, catalog, setsByProductName);
 check("empty deck: only the 60-card issue", r.issues, ["0 / 60 cards — need 60 more"]);
+
+// ── dual-ink leader (Peter Pan & Tinker Bell — Amethyst/Ruby) ──────────
+// A dual-ink leader needs only ONE of its two inks matched, and both of its
+// own inks count toward the 3-ink budget (same rule real dual-ink cards get).
+console.log("\n== dual-ink leader ==");
+const ppId = card("Peter Pan & Tinker Bell - Fast Friends", "Amethyst");
+r = checkDeckLegality({coconut_card:"peter-pan-tinker-bell-fast-friends",
+  cards:[{card_id:ppId, quantity:4}, ...filler(56,"Amethyst")]}, catalog, setsByProductName);
+check("primary ink alone satisfies a dual leader", r.format, "coconut");
+check("...and is legal", r.legal, true);
+r = checkDeckLegality({coconut_card:"peter-pan-tinker-bell-fast-friends",
+  cards:[{card_id:ppId, quantity:4}, ...filler(56,"Ruby")]}, catalog, setsByProductName);
+check("the OTHER half of the pair also satisfies it", r.legal, true);
+r = checkDeckLegality({coconut_card:"peter-pan-tinker-bell-fast-friends",
+  cards:[...filler(20,"Amber"), ...filler(20,"Steel"), ...filler(20,"Emerald")]},
+  catalog, setsByProductName);
+check("neither half present is flagged",
+  r.issues.some(s=>/No Amethyst or Ruby cards/.test(s)), true);
+// The leader's own two inks use up 2 of the 3-ink budget, leaving exactly one
+// more free — a 4th (beyond the pair) still trips the cap.
+r = checkDeckLegality({coconut_card:"peter-pan-tinker-bell-fast-friends",
+  cards:[{card_id:ppId, quantity:4}, ...filler(28,"Amethyst"), ...filler(28,"Steel")]},
+  catalog, setsByProductName);
+check("leader pair + one more ink (3 total) is legal", r.format, "coconut");
+check("...and legal", r.legal, true);
+r = checkDeckLegality({coconut_card:"peter-pan-tinker-bell-fast-friends",
+  cards:[{card_id:ppId, quantity:4}, ...filler(19,"Amethyst"), ...filler(19,"Ruby"),
+         ...filler(18,"Steel")]}, catalog, setsByProductName);
+check("leader's own pair + a 3rd ink (3 total, both leader inks present) is legal",
+  r.legal, true);
 
 // Nick Wilde's Pawpsicle exception end-to-end.
 const nickId = card("Nick Wilde - Wily Fox", "Sapphire");

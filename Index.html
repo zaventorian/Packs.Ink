@@ -3829,8 +3829,8 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       "img_small":        official?.img_small  || img,
       "img_normal":       img,
       "img_large":        official?.img_large  || img,
-      "ink":              cc.ink,
-      "inks":             [cc.ink],
+      "ink":              cc.ink || null,
+      "inks":             (cc.inks && cc.inks.length) ? cc.inks : (cc.ink ? [cc.ink] : null),
       "cost":             null,
       "inkable":          null,
       "card_type":        COCONUT_CARD_TYPE,
@@ -43976,6 +43976,36 @@ const COCONUT_CARDS = [
   {slug:"tinker-bell-giant-fairy", cn:15, name:"Tinker Bell", version:"Giant Fairy",
    ink:"Steel", associated:"Tinker Bell - Giant Fairy",
    ability:"Whenever one of your other abilities or actions deals damage to an opposing character, deal 1 damage to that character."},
+  // Beta 2, revealed 2026-09-17. Unlike every leader above, these six are
+  // DUAL-ink — each `associated` card is a real existing team-up printing
+  // (Whispers in the Well) whose `cards.inks` pair we pulled from the DB
+  // rather than guessed off the beta render. `ink` mirrors the DB's own
+  // chosen primary; `inks` carries the full pair, same shape the catalog
+  // itself uses for a dual-ink row.
+  {slug:"peter-pan-tinker-bell-fast-friends", cn:20, name:"Peter Pan & Tinker Bell", version:"Fast Friends",
+   ink:"Amethyst", inks:["Amethyst","Ruby"], artist:"Alice Pisoni",
+   associated:"Peter Pan & Tinker Bell - Fast Friends", revealed:"2026-09-17",
+   ability:"Once during your turn, you may give chosen character Evasive until the start of your next turn. If they already had Evasive, they get +1 {L} until the start of your next turn."},
+  {slug:"aladdin-genie-mischievous-pals", cn:21, name:"Aladdin & Genie", version:"Mischievous Pals",
+   ink:"Amethyst", inks:["Amethyst","Emerald"], artist:"Natalia Trykowska",
+   associated:"Aladdin & Genie - Mischievous Pals", revealed:"2026-09-17",
+   ability:"Whenever you draw a card during your turn, if it's the third card you drew this turn, gain 2 lore."},
+  {slug:"woody-buzz-lightyear-best-buddies", cn:22, name:"Woody & Buzz Lightyear", version:"Best Buddies",
+   ink:"Amber", inks:["Amber","Emerald"], artist:"Marcel Berg",
+   associated:"Woody & Buzz Lightyear - Best Buddies", revealed:"2026-09-17",
+   ability:"Once during your turn, you may pay 1 {I} less for the next Toy character you play this turn. If you do and you have a character named Woody and a character named Buzz Lightyear in play, draw a card."},
+  {slug:"the-madrigal-family-every-generation", cn:23, name:"The Madrigal Family", version:"Every Generation",
+   ink:"Amber", inks:["Amber","Sapphire"], artist:"LadyShalirin",
+   associated:"The Madrigal Family - Every Generation", revealed:"2026-09-17",
+   ability:"During your turn, whenever you remove 1 or more damage from one of your characters, you may ready them. They can't quest or challenge for the rest of this turn."},
+  {slug:"belle-beast-certain-as-the-sun", cn:24, name:"Belle & Beast", version:"Certain as the Sun",
+   ink:"Ruby", inks:["Ruby","Sapphire"], artist:"Ian MacDonald",
+   associated:"Belle & Beast - Certain as the Sun", revealed:"2026-09-17",
+   ability:"Whenever one of your characters with cost 5 or more readies, draw a card."},
+  {slug:"darkwing-duck-launchpad-st-canards-finest", cn:25, name:"Darkwing Duck & Launchpad", version:"St. Canard's Finest",
+   ink:"Sapphire", inks:["Sapphire","Steel"], artist:"Carlos Iuzzi",
+   associated:"Darkwing Duck & Launchpad - St. Canard's Finest", revealed:"2026-09-17",
+   ability:"During your turn, whenever an opposing character is banished in a challenge, gain 1 lore. If they were a Villain character, gain 3 lore instead."},
 ];
 // Cards revealed inside the news window, newest first. Dates are parsed as UTC
 // midnight, matching COCONUT_NEWS_UNTIL: this is a window, never a calendar day
@@ -47571,8 +47601,11 @@ function checkDeckLegality(deck, cardById, setsByProductName){
   }
   // Skipped while the deck is empty — a fresh Coconut deck already reads
   // "0 / 60 cards", and adding "must include <ink>" on top is just noise.
-  if(coconut && inks.size && !inks.has(coconut.ink)){
-    issues.push(`No ${coconut.ink} cards — one ink must match ${coconutDisplayName(coconut)}`);
+  // A dual-ink leader (e.g. a team-up card) needs only ONE of its two inks
+  // matched, not both — the deck's 3rd ink is still a free pick either way.
+  const coconutInks = coconut ? ((coconut.inks && coconut.inks.length) ? coconut.inks : (coconut.ink ? [coconut.ink] : [])) : [];
+  if(coconut && inks.size && coconutInks.length && !coconutInks.some(i => inks.has(i))){
+    issues.push(`No ${coconutInks.join(" or ")} cards — one ink must match ${coconutDisplayName(coconut)}`);
   }
 
   // Quantity cap. Default Lorcana is 4-of-any-card, with a few cards
@@ -48237,7 +48270,7 @@ const CoconutLeaderPicker = ({current, onPick, onClose}) => {
             <img src=${INK_ICONS[ink]} alt="" aria-hidden="true"/><span>${ink}</span>
           </div>
           <div class="coconut-picker-grid">
-            ${COCONUT_CARDS.filter(c => c.ink === ink).map(c => html`
+            ${COCONUT_CARDS.filter(c => ((c.inks && c.inks.length) ? c.inks : (c.ink ? [c.ink] : [])).includes(ink)).map(c => html`
               <button key=${c.slug} class=${"coconut-picker-card"+(current===c.slug?" active":"")}
                 onClick=${()=>onPick(c.slug)}>
                 <img src=${coconutArtUrl(c.cn)} crossOrigin="anonymous" alt=${coconutDisplayName(c)} loading="lazy"/>
@@ -49135,7 +49168,8 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
   // remove the last card of an ink.
   const coconutInkBudget = useMemo(() => {
     if(!coconutCard) return null;
-    const allowed = new Set([coconutCard.ink]);
+    const leaderInks = (coconutCard.inks && coconutCard.inks.length) ? coconutCard.inks : (coconutCard.ink ? [coconutCard.ink] : []);
+    const allowed = new Set(leaderInks);
     for(const c of deck.cards||[]){
       const meta = (cardById[c.card_id]||[])[0];
       const list = (meta?.inks && meta.inks.length) ? meta.inks : (meta?.ink ? [meta.ink] : []);
@@ -49348,7 +49382,7 @@ const DeckEditor = ({deck, cardById, setsByProductName, collection, updateQty, r
           disabled=${!isOwnDeck}
           onClick=${()=>setCoconutPickerOpen(true)}
           title=${legality.coconut
-            ? `${coconutDisplayName(legality.coconut)} — ${legality.coconut.ink}. Click to change or remove.`
+            ? `${coconutDisplayName(legality.coconut)} — ${((legality.coconut.inks && legality.coconut.inks.length) ? legality.coconut.inks : (legality.coconut.ink ? [legality.coconut.ink] : [])).join("/")}. Click to change or remove.`
             : "Build a [Format Coconut] deck: pick a leader, get a 3rd ink, 1-of everything else, race to 25 lore."}>
           ${legality.coconut
             ? html`<img class="deck-coconut-slot-art" src=${coconutThumbUrl(legality.coconut.cn)}
