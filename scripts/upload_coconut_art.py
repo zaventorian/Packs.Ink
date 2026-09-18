@@ -100,6 +100,13 @@ COCONUT_SLUGS = {
     # It must match the card's `cn` in Index.html: that is what names this object
     # AND what the site displays as the card's number.
     19: "the-vine-towering-stalk",
+    # Second Beta 2 wave, revealed 2026-09-17.
+    20: "woody-buzz-lightyear-best-buddies",
+    21: "the-madrigal-family-every-generation",
+    22: "peter-pan-tinker-bell-fast-friends",
+    23: "aladdin-genie-mischievous-pals",
+    24: "belle-beast-certain-as-the-sun",
+    25: "darkwing-duck-launchpad-st-canards-finest",
 }
 
 
