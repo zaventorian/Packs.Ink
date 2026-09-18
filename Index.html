@@ -9386,6 +9386,17 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const [showStats, setShowStats] = useState(true);
   const [showCurve, setShowCurve] = useState(true);
   const [showCost, setShowCost] = useState({nonFoil:true, foil:true, maxRarity:true});
+  // EXPERIMENT (2026-09-18): "classic" is the header every shipped poster has;
+  // "dash" is the charts-panel layout on trial. Classic stays the default and
+  // its markup is untouched, so reverting is deleting the dash branch.
+  const [headerStyle, setHeaderStyleRaw] = useState(() => {
+    try { return localStorage.getItem("packsink:poster:header") === "dash" ? "dash" : "classic"; }
+    catch { return "classic"; }
+  });
+  const setHeaderStyle = (v) => {
+    setHeaderStyleRaw(v);
+    try { localStorage.setItem("packsink:poster:header", v); } catch {}
+  };
   const [error, setError] = useState(null);
 
   // Three deck-cost totals using the same Low-Price field shown elsewhere on
@@ -9398,11 +9409,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   //   - maxRarity: most-expensive chase-tier variant
   //              (Enchanted / Iconic / Epic / Promo) across ALL printings of
   //              that Product Name; falls back to the Normal price when the
-  //              card has no chase printing. Two exclusions for sanity:
-  //                * Promo Set 1 cards #1-7 (Prize Wall promos — listed
-  //                  prices aren't representative).
-  //                * Any Promo-rarity variant priced >$1000 — but Iconics
-  //                  >$1000 are kept (a legit chase tier).
+  //              card has no chase printing. No exclusions — every priced
+  //              chase printing counts (the old Promo Set 1 #1-7 and
+  //              >$1000-promo filters were removed 2026-09-18, Zaven).
   const variantsByName = useMemo(() => {
     const m = new Map();
     for(const arr of Object.values(cardById || {})){
@@ -9453,11 +9462,6 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         if(!/Enchanted|Iconic|Epic|Promo/i.test(rar)) return false;
         const p = priceOf(v);
         if(p == null) return false;
-        const num = parseInt(String(v.Number||"").replace(/\D/g,""), 10);
-        // Exclude Promo Set 1 #1-7 (Prize Wall / rarely-traded outliers).
-        if(v.Set === "Promo Set 1" && num >= 1 && num <= 7) return false;
-        // Exclude individual Promo cards >$1000 (but Iconics >$1000 are kept).
-        if(/Promo/i.test(rar) && !/Iconic/i.test(rar) && p > 1000) return false;
         return true;
       });
       const chasePrices = chaseVariants.map(priceOf).filter(p => p != null);
@@ -9824,7 +9828,10 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     // padL=0 so the first bar starts flush with the SVG's left edge, which
     // is the same x as the stats row above it. Keeps the cost curve aligned
     // with "60 CARDS" / "14 UNINKABLE" / etc.
-    const W = 460, H = 130, padL = 0, padR = 16, padT = 18, padB = 26;
+    // The charts header uses a wider viewBox at the same height, and a width
+    // CAP: an uncapped curve scales its HEIGHT with the cell and ballooned on a
+    // tournament deck whose donut column was narrow.
+    const W = headerStyle === "dash" ? 600 : 460, H = 130, padL = 0, padR = 16, padT = 18, padB = 26;
     const colCount = 9;
     const innerW = W - padL - padR;
     const innerH = H - padT - padB;
@@ -9879,19 +9886,161 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       bars.push(html`<text key=${"l"+i} x=${x+bw/2} y=${H-padB+14} text-anchor="middle"
         font-size="10" fill=${subColor}>${i===8?"9+":i+1}</text>`);
     }
-    return html`<svg viewBox=${`0 0 ${W} ${H}`} style=${{width:"100%",maxWidth:W+"px",height:"auto",display:"block"}}>
+    return html`<svg viewBox=${`0 0 ${W} ${H}`} style=${{width:"100%",maxWidth:(headerStyle==="dash"?640:W)+"px",height:"auto",display:"block"}}>
       ${gradientDefs.length ? html`<defs>${gradientDefs}</defs>` : null}
       <line x1=${padL} y1=${H-padB+0.5} x2=${W-padR} y2=${H-padB+0.5} stroke=${subColor} stroke-width="0.6"/>
       ${bars}
     </svg>`;
-  }, [costBuckets, curveMax, dualKeys, textColor, subColor]);
+  }, [costBuckets, curveMax, dualKeys, textColor, subColor, headerStyle]);
+
+  // ── "dash" header (experiment) ─────────────────────────────────────────────
+  // One translucent panel holding the curve, three donuts and the prices, so the
+  // stats read as a single instrument instead of a row of loose numbers. Colours
+  // are LITERALS, never var(--…): html2canvas rasterises the SVG outside the
+  // page's cascade, so a CSS variable would paint black in the export.
+  const inkSlices = useMemo(() => {
+    const m = new Map();
+    for(const c of cards){
+      const inks = c.meta.inks?.length ? c.meta.inks : (c.meta.ink ? [c.meta.ink] : []);
+      const key = !inks.length ? "None" : inks.length === 1 ? inks[0] : inks.slice(0,2).join("/");
+      m.set(key, (m.get(key)||0) + c.quantity);
+    }
+    return Array.from(m.entries()).sort((a,b) => b[1]-a[1]).map(([k,v]) => ({
+      label: k.includes("/") ? k.replace("/", " / ") : k, value: v,
+      color: k.includes("/") ? "#475569" : (INK_COLORS[k]?.border || "#888"),
+    }));
+  }, [cards]);
+  const dashDonut = (slices, center, centerLbl) => {
+    const size = 74, r = size/2, t = 13, total = slices.reduce((s,x) => s+x.value, 0) || 1;
+    const sep = isLightBg ? "rgba(255,255,255,0.95)" : "rgba(255,255,255,0.5)";
+    const pt = (a, rad) => [r + rad*Math.cos(a), r + rad*Math.sin(a)];
+    let a0 = -Math.PI/2;
+    const live = slices.filter(s => s.value > 0);
+    const paths = live.map((s, i) => {
+      if(live.length === 1){
+        return html`<circle key=${i} cx=${r} cy=${r} r=${r - t/2 - 0.5} fill="none"
+          stroke=${s.color} stroke-width=${t}/>`;
+      }
+      const a1 = a0 + (s.value/total) * Math.PI*2;
+      const large = (a1 - a0) > Math.PI ? 1 : 0;
+      const [x0,y0] = pt(a0, r-0.5), [x1,y1] = pt(a1, r-0.5);
+      const [x2,y2] = pt(a1, r-t), [x3,y3] = pt(a0, r-t);
+      const d = `M${x0} ${y0} A${r-0.5} ${r-0.5} 0 ${large} 1 ${x1} ${y1} L${x2} ${y2} A${r-t} ${r-t} 0 ${large} 0 ${x3} ${y3} Z`;
+      a0 = a1;
+      return html`<path key=${i} d=${d} fill=${s.color} stroke=${sep} stroke-width="1.2" stroke-linejoin="round"/>`;
+    });
+    return html`<svg width=${size} height=${size} viewBox=${`0 0 ${size} ${size}`} style=${{display:"block",flexShrink:0}}>
+      ${paths}
+      ${(() => {
+        const lines = [].concat(centerLbl);
+        const y0 = r + (lines.length > 1 ? -3 : 1);
+        return html`<${React.Fragment}>
+          <text x=${r} y=${y0} text-anchor="middle" font-size="19" font-weight="800" fill=${textColor}>${center}</text>
+          ${lines.map((ln, i) => html`<text key=${i} x=${r} y=${y0 + 12 + i*8.5} text-anchor="middle" font-size="7.5" font-weight="700" letter-spacing="0.5" fill=${subColor}>${ln}</text>`)}
+        </>`;
+      })()}
+    </svg>`;
+  };
+  const dashLegend = (slices) => html`<div style=${{display:"flex",flexDirection:"column",gap:3,minWidth:0}}>
+    ${slices.filter(s => s.value > 0).map(s => html`<div key=${s.label} style=${{display:"flex",alignItems:"center",gap:6,fontSize:11,lineHeight:1.15,whiteSpace:"nowrap"}}>
+      <span style=${{width:8,height:8,borderRadius:2,background:s.color,flexShrink:0,
+        boxShadow:"0 0 0 1px rgba(255,255,255,0.35)"}}></span>
+      <span style=${{color:subColor}}>${s.label}</span>
+      <span style=${{marginLeft:"auto",paddingLeft:6,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${s.value}</span>
+    </div>`)}
+  </div>`;
+  const dashHead = (label, right) => html`<div style=${{display:"flex",justifyContent:"space-between",gap:8,
+    fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:700,letterSpacing:0.6,marginBottom:6}}>
+    <span>${label}</span>${right && html`<span style=${{letterSpacing:0.3}}>${right}</span>`}</div>`;
+  // Legend UNDER the donut, not beside it: beside, three donuts ate ~540px of
+  // the band and squeezed the cost curve to a 70px-tall sliver.
+  const dashChart = (label, slices, center, centerLbl) => html`<div style=${{display:"flex",flexDirection:"column",minWidth:0,width:108}}>
+    ${dashHead(label)}
+    <div style=${{display:"flex",justifyContent:"center",marginBottom:8}}>${dashDonut(slices, center, centerLbl)}</div>
+    ${dashLegend(slices)}
+  </div>`;
+  const panelLine = isLightBg ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.16)";
+  const dashCell = (node, first, flex) => html`<div style=${{flex:flex||"0 0 auto",minWidth:0,
+    paddingLeft:first?0:16,marginLeft:first?0:16,borderLeft:first?"none":`1px solid ${panelLine}`}}>${node}</div>`;
+  const dashCells = [];
+  if(showCurve) dashCells.push(["curve", html`<div>
+    ${dashHead("Cost curve")}
+    ${curveSvg}</div>`, "1 1 330px"]);
+  if(showStats){
+    dashCells.push(["inks", dashChart("Inks", inkSlices, totalCount, "CARDS")]);
+    dashCells.push(["inkable", dashChart("Inkwell", [
+      {label:"Inkable", value:stats.inkable, color:"#e8c547"},
+      {label:"Uninkable", value:stats.uninkable, color:"#15161c"},
+    ], stats.inkable, "INKABLE")]);
+    const typeSlices = [
+      {label:"Characters", value:stats.chars, color:"#5b9bd5"},
+      {label:"Actions", value:stats.actions, color:"#3f8e88"},
+      {label:"Songs", value:stats.songs, color:"#8a6fc0"},
+      {label:"Items", value:stats.items, color:"#c07f3c"},
+      {label:"Locations", value:stats.locations, color:"#6f9e57"},
+    ];
+    dashCells.push(["types", dashChart("Types", typeSlices, totalUnique, ["UNIQUE","CARDS"])]);
+  }
+  // Deck cost rides the TOP row as one compact strip (same size + colour for all
+  // three — no hero number), which fills the dead space beside the title and
+  // hands the panel's width back to the cost curve.
+  const costRows = [
+    showCost.nonFoil && ["Non-foil", costs.nonFoil],
+    showCost.foil && ["Foil", costs.foil],
+    showCost.maxRarity && ["Max rarity", costs.maxRarity],
+  ].filter(Boolean);
+  const costStrip = costRows.length > 0 && html`<div style=${{display:"flex",alignItems:"stretch",flexShrink:0,
+    padding:"8px 4px",borderRadius:10,border:`1px solid ${panelLine}`,
+    background:isLightBg?"rgba(255,255,255,0.45)":"rgba(0,0,0,0.2)"}}>
+    ${costRows.map(([l, v], i) => html`<div key=${l} style=${{padding:"0 14px",
+      borderLeft:i?`1px solid ${panelLine}`:"none"}}>
+      <div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:700,letterSpacing:0.6,lineHeight:1}}>${l}</div>
+      <div style=${{fontSize:17,fontWeight:800,lineHeight:1.2,marginTop:4,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(v)}</div>
+    </div>`)}
+  </div>`;
+  // A tournament deck with no name of its own is TITLED by its tournament, so
+  // the meta line must not repeat it — it did, and the pair wrapped the header
+  // onto four lines and crushed the price strip. Long titles step down in size
+  // so they hold one line in the common case.
+  const dashTitle = deckDisplayTitle(deck, tournamentContext);
+  const dashTitleFromEvent = !(deck?.name || "").trim() && !!tournamentContext?.tournament_name;
+  const dashTitleSize = dashTitle.length > 44 ? 20 : dashTitle.length > 26 ? 26 : 34;
+  const dashMeta = tournamentContext
+    ? [!dashTitleFromEvent && tournamentContext.tournament_name,
+       !dashTitleFromEvent && tournamentContext.place,
+       tournamentContext.num_players && `${tournamentContext.num_players} players`,
+       tournamentContext.player_name && `by ${tournamentContext.player_name}`].filter(Boolean).join(" · ")
+    : (creatorName ? `by ${creatorName}` : "");
+  const dashHeader = html`<div style=${{marginBottom:16}}>
+    <div style=${{display:"flex",alignItems:"center",gap:16,marginBottom:14}}>
+      <img src="Logos/packs-ink-logo.png?v=5" alt="packs.ink" crossOrigin="anonymous"
+        style=${{height:78,width:"auto",display:"block",flexShrink:0,
+          filter:isLightBg?"none":"drop-shadow(0 2px 5px rgba(0,0,0,0.4))"}}/>
+      <div style=${{minWidth:0,flex:"1 1 auto"}}>
+        <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:dashTitleSize,lineHeight:1.05,letterSpacing:"-0.3px"}}>${dashTitle}</div>
+        <div style=${{display:"flex",alignItems:"center",gap:10,marginTop:8,minWidth:0}}>
+          ${dashMeta && html`<span style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:500,fontSize:14,color:subColor,
+            whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>${dashMeta}</span>`}
+          <span style=${{padding:"3px 10px",borderRadius:12,fontSize:12,fontWeight:600,flexShrink:0,whiteSpace:"nowrap",
+            background:isLightBg?"rgba(0,0,0,0.08)":"rgba(255,255,255,0.18)"}}>${inkLabel}</span>
+        </div>
+      </div>
+      ${costStrip}
+      ${qrSrc && html`<img src=${qrSrc} crossOrigin="anonymous" alt="QR code" title="Scan to open this deck"
+        style=${{width:78,height:78,background:"#fff",borderRadius:6,padding:3,display:"block",flexShrink:0}}/>`}
+    </div>
+    ${dashCells.length > 0 && html`<div style=${{display:"flex",alignItems:"stretch",padding:"12px 16px",borderRadius:12,
+      background:isLightBg?"rgba(255,255,255,0.45)":"rgba(0,0,0,0.2)",border:`1px solid ${panelLine}`}}>
+      ${dashCells.map(([k, node, flex], i) => html`<${React.Fragment} key=${k}>${dashCell(node, i === 0, flex)}</>`)}
+    </div>`}
+  </div>`;
 
   // Built once so the autoCopy off-screen branch + the visible-modal branch
   // share the same DOM (and the same wrapRef / posterRef refs).
   const posterDom = html`<div class="deck-poster-wrap" ref=${wrapRef} style=${{position:"relative",marginBottom:14}}>
     <div ref=${posterRef} class="deck-poster" style=${{background:bgCss,padding:24,borderRadius:10,
       color:textColor,position:"relative",zIndex:1}}>
-      <div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
+      ${headerStyle === "dash" ? dashHeader : html`<div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
         <div style=${{minWidth:260,flex:"1 1 320px"}}>
           <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:32,lineHeight:1,letterSpacing:"-0.3px"}}>${deckDisplayTitle(deck, tournamentContext)}</div>
           ${tournamentContext
@@ -9914,7 +10063,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.foil)}</span>
             </div>`}
             ${showCost.maxRarity && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
-              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Max Rarity*</span>
+              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Max Rarity</span>
               <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.maxRarity)}</span>
             </div>`}
           </div>`}
@@ -9943,7 +10092,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
           ${qrSrc && html`<img src=${qrSrc} crossOrigin="anonymous" alt="QR code"
             style=${{width:96,height:96,background:"#fff",borderRadius:6,padding:4,display:"block"}}/>`}
         </div>
-      </div>
+      </div>`}
       ${posterIssues.length > 0 && html`<div style=${{marginBottom:12,padding:"9px 12px",
         borderRadius:8,background:isLightBg?"rgba(146,64,14,0.12)":"rgba(245,158,11,0.16)",
         border:`1px solid ${isLightBg?"rgba(146,64,14,0.3)":"rgba(245,158,11,0.4)"}`}}>
@@ -10143,7 +10292,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     const iv = setInterval(calc, 300);
     const stop = setTimeout(() => clearInterval(iv), 6000);
     return () => { if(ro) ro.disconnect(); clearInterval(iv); clearTimeout(stop); };
-  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle]);
+  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle, headerStyle]);
 
   if(autoCopy){
     return html`<div aria-hidden="true" style=${{position:"fixed",left:"-100000px",top:"0",
@@ -10242,6 +10391,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                     onClick=${()=>setCols(n)}>${n}</button>`)}
                 </div>
               </div>
+              <div>
+                <div class="poster-options-sublbl">Header</div>
+                <div style=${{display:"flex",gap:4}}>
+                  ${[["classic","Classic"],["dash","Charts (beta)"]].map(([k,l]) => html`<button key=${k}
+                    class=${"chip "+(headerStyle===k?"active":"")}
+                    onClick=${()=>setHeaderStyle(k)}>${l}</button>`)}
+                </div>
+              </div>
             </div>
           </div>
           <div class="poster-options-group">
@@ -10264,7 +10421,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 title="Total deck cost using cheapest Foil printings">Foil $</button>
               <button class=${"chip "+(showCost.maxRarity?"active":"")}
                 onClick=${()=>setShowCost(c=>({...c,maxRarity:!c.maxRarity}))}
-                title="Total deck cost using each card's most expensive Enchanted / Iconic / Epic / Promo printing (with sanity exclusions — see ? page)">Max Rarity $</button>
+                title="Total deck cost using each card's most expensive Enchanted / Iconic / Epic / Promo printing">Max Rarity $</button>
             </div>
           </div>
           <div class="poster-options-group">
@@ -29936,12 +30093,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <ul>
       <li><strong>Non-Foil</strong> — total cost if every copy in the deck is a Normal printing.</li>
       <li><strong>Foil</strong> — total cost using the cheapest Foil printing for each card.</li>
-      <li><strong>Max Rarity</strong>* — the "treasure-hunt" build: for each card, use its most expensive Enchanted / Iconic / Epic / Promo printing. Cards with no chase printing fall back to their Non-Foil price so totals stay meaningful.</li>
-    </ul>
-    <p><strong>*Max Rarity exclusions</strong> — two narrow filters so a couple of outlier promos don't dominate the total:</p>
-    <ul>
-      <li><strong>Promo Set 1, #1–7</strong> are skipped entirely (they're so rarely traded that the listed prices aren't representative).</li>
-      <li>Other <strong>Promo</strong>-rarity printings priced over <strong>$1,000</strong> are also skipped. (<strong>Iconic</strong>-rarity printings priced over $1,000 are kept — that's a legitimate chase tier, not an outlier.)</li>
+      <li><strong>Max Rarity</strong> — the "treasure-hunt" build: for each card, use its most expensive Enchanted / Iconic / Epic / Promo printing, with nothing excluded. Cards with no chase printing fall back to their Non-Foil price so totals stay meaningful.</li>
     </ul>
     <p>All cost lines use the same <strong>Low</strong> price shown elsewhere on the site.</p>
 
