@@ -9329,6 +9329,26 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     return arr;
   }, [deck.cards, cardById, deck.coconut_card]);
 
+  // Landscape cards, grouped into RUNS. Locations sort last, so in practice a
+  // deck's Locations arrive as one contiguous run — and a run gets ONE
+  // full-width row of its own, inside which the cards are a plain flex line at
+  // the grid's own 10px gap. When each Location took its own 2-column span
+  // instead, the ~45px of dead air on either side of the card landed back to
+  // back and two neighbouring Locations sat ~100px apart, which is not a gap,
+  // it is a hole. Grouping is by adjacency rather than by "is a Location", so
+  // a landscape card that somehow isn't last still renders correctly — it just
+  // takes a row of its own.
+  const posterGroups = useMemo(() => {
+    const out = [];
+    for(const c of cards){
+      const landscape = isLandscapeCard(c.meta);
+      const prev = out[out.length-1];
+      if(landscape && prev && prev.landscape) prev.items.push(c);
+      else out.push({landscape, items:[c]});
+    }
+    return out;
+  }, [cards]);
+
   // A card the catalog has not loaded yet is dropped by the `if(!meta) continue`
   // above, silently. On a cold visit the decks arrive BEFORE the catalog does
   // (the Discover format re-stamp exists for the same reason), so a preview
@@ -9972,65 +9992,73 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             padding:"3px 8px",borderRadius:6,letterSpacing:0.4,
             boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>＋ BONUS</span>`}
         </div>`}
-        ${/* A LANDSCAPE cell SPANS TWO COLUMNS, because a rotated card does not
-              shrink. A portrait cell is W wide and 1.4W tall, so the card's long
-              edge is 1.4W — turn that same card sideways and its long edge is
-              still 1.4W, which does not fit in one W-wide column. Squeezed into
-              one column (every version before 2026-09-18) the Location rendered
-              at 1/1.4 = 71% the linear size of every card beside it, which is
-              what "it small" reported, twice. Cropping it to fill a portrait
-              footprint was tried the same day and rejected: "still horizontal
-              and card not cut off ... as if you turned the real card
-              horizontal". So the cell takes the width the card actually needs
-              and the leftover space is left empty — the spacing is deliberately
-              odd; the card is whole, sideways, and full size.
+        ${/* A RUN OF LANDSCAPE CARDS TAKES A FULL-WIDTH ROW, because a rotated
+              card does not shrink. A portrait cell is W wide and 1.4W tall, so
+              the card's long edge is 1.4W — turn that same card sideways and
+              its long edge is still 1.4W, which does not fit in one W-wide
+              column. Squeezed into one column (every version before
+              2026-09-18) the Location rendered at 1/1.4 = 71% the linear size
+              of every card beside it, which is what "it small" reported,
+              twice. Cropping it to fill a portrait footprint was tried the
+              same day and rejected: "still horizontal and card not cut off ...
+              as if you turned the real card horizontal".
 
-              Inside it, `cardBox` is the card's own 7:5 footprint at 1.4W:
-              0.7 * (span width - gap) = 0.7 * 2W = 1.4W. The image then rides
-              `.lscape-wrap`'s standing math — laid out portrait at 71.4286%
-              (5/7) of that box, so the quarter turn lands it exactly on the
-              box's edges. Nothing is cropped and nothing overflows into the
-              neighbouring columns. The box is IN FLOW, so it floors the cell's
-              height at W even when a whole row is Locations (an absolutely
-              positioned one gives its cell no height at all) and the flex
-              centring parks it mid-row when portrait neighbours make the row
-              1.4W tall. */""}
-        ${cards.map(c => {
-          const landscape = isLandscapeCard(c.meta);
-          const art = c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
-            alt=${c.meta["Product Name"]||""}
-            onError=${(e)=>{
-              // Proxy unreachable (dev server not running img-proxy, or
-              // Lorcast blocked us). Fall back to direct URL so the
-              // preview at least renders — canvas export will taint but
-              // the user gets a visible deck image.
-              const t = e.target;
-              if(t.dataset.fallback) return;
-              t.dataset.fallback = "1";
-              t.removeAttribute("crossorigin");
-              t.src = c.img;
-            }}
-            style=${landscape
-              ? {position:"absolute",top:"50%",left:"50%",width:"71.4286%",height:"auto",
-                 transform:"translate(-50%,-50%) rotate(90deg)",objectFit:"cover",borderRadius:8,
-                 boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}
-              : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
-                 boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`;
-          /* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
-             only the multiples are worth calling out. */
-          const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
-            fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
-            fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
-            boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`;
-          return html`<div key=${c.card_id} style=${landscape
-            ? {position:"relative",gridColumn:"span 2",display:"flex",
-               alignItems:"center",justifyContent:"center"}
-            : {position:"relative"}}>
-            ${landscape
-              ? html`<div style=${{position:"relative",width:"calc((100% - 10px) * 0.7)",aspectRatio:"7/5"}}>
-                  ${art}${qty}
-                </div>`
-              : html`<${React.Fragment}>${art}${qty}</>`}
+              Giving each one its own 2-column span fixed the SIZE and left a
+              hole: 1.4W inside a 2W+gap span leaves ~45px of dead air on each
+              side, so two neighbouring Locations sat ~100px apart. The run
+              therefore shares ONE row (`gridColumn:"1 / -1"`) and lays its
+              cards out with the grid's own 10px gap. Each card is still
+              exactly 1.4W — the row is the full grid width, so
+              (100% - (cols-1)*10) / cols is W by construction, whatever the
+              column count. flexWrap handles a deck with more Locations than
+              fit on one line.
+
+              Inside each box the image rides `.lscape-wrap`'s standing math —
+              laid out portrait at 71.4286% (5/7) of the box, so the quarter
+              turn lands it exactly on the box's edges. Nothing is cropped. The
+              box is IN FLOW, so the row has a height (an absolutely positioned
+              one gives its row none). */""}
+        ${posterGroups.map(g => {
+          const cell = (c, landscape) => {
+            const art = c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
+              alt=${c.meta["Product Name"]||""}
+              onError=${(e)=>{
+                // Proxy unreachable (dev server not running img-proxy, or
+                // Lorcast blocked us). Fall back to direct URL so the
+                // preview at least renders — canvas export will taint but
+                // the user gets a visible deck image.
+                const t = e.target;
+                if(t.dataset.fallback) return;
+                t.dataset.fallback = "1";
+                t.removeAttribute("crossorigin");
+                t.src = c.img;
+              }}
+              style=${landscape
+                ? {position:"absolute",top:"50%",left:"50%",width:"71.4286%",height:"auto",
+                   transform:"translate(-50%,-50%) rotate(90deg)",objectFit:"cover",borderRadius:8,
+                   boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}
+                : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
+                   boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`;
+            /* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
+               only the multiples are worth calling out. The badge lives INSIDE
+               the card's own box on a landscape card, or it would pin to the
+               far corner of the row rather than to the card it counts. */
+            const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
+              fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
+              fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
+              boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`;
+            return html`<${React.Fragment}>${art}${qty}</>`;
+          };
+          if(!g.landscape){
+            const c = g.items[0];
+            return html`<div key=${c.card_id} style=${{position:"relative"}}>${cell(c, false)}</div>`;
+          }
+          return html`<div key=${"lrow:" + g.items[0].card_id}
+            style=${{gridColumn:"1 / -1",display:"flex",flexWrap:"wrap",gap:10}}>
+            ${g.items.map(c => html`<div key=${c.card_id} style=${{position:"relative",
+              width:`calc((100% - ${(cols-1)*10}px) / ${cols} * 1.4)`,aspectRatio:"7/5"}}>
+              ${cell(c, true)}
+            </div>`)}
           </div>`;
         })}
       </div>

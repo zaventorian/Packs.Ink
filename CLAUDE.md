@@ -729,31 +729,39 @@ turn it back:
 Applied to: the card-detail modal (canvas tile AND the plain-`<img>` fallback), the deck
 editor's image-grid and stacked-pile views, and the deck poster's card cells.
 
-### ⚠ A DECK POSTER's Location cell SPANS TWO COLUMNS — a rotated card doesn't shrink (2026-09-18)
+### ⚠ A DECK POSTER's Locations SHARE A FULL-WIDTH ROW — a rotated card doesn't shrink (2026-09-18)
 
 **A portrait cell is W wide and 1.4W tall, so a card's long edge is 1.4W. Turn that same card
 sideways and the long edge is STILL 1.4W, which does not fit in one W-wide column.** Every
 version that squeezed it into one column therefore drew the Location at **1/1.4 = 71% the linear
-size of every card beside it** — reported twice in one day, both times as *"it small"*. The cell
-takes `gridColumn:"span 2"` now, and the leftover space is left empty: Zaven's own framing was
-*"I know the spacing will be weird but I want to ensure card is as if you turned the real card
-horizontal."*
+size of every card beside it** — reported twice in one day, both times as *"it small"*. Zaven's
+framing: *"I know the spacing will be weird but I want to ensure card is as if you turned the real
+card horizontal."*
 
-- **`cardBox` is the card's own 7:5 footprint at `width:"calc((100% - 10px) * 0.7)"`** — 0.7 of
-  (two columns + the 10px gap, minus that gap) = 0.7 × 2W = **1.4W**, exactly a portrait card's
-  long edge. `aspectRatio:"7/5"` then makes the short edge W. Inside it the image rides
-  `.lscape-wrap`'s standing math (**71.4286%** = 5/7), so the quarter turn lands on the box's
-  edges: nothing cropped, nothing overflowing into the neighbouring columns.
-- **⚠ The box is IN FLOW (flex-centred), never absolutely positioned.** That is what floors the
-  cell's height at W when a whole row is Locations — an absolutely positioned box gives its cell
-  no height at all, which is the collapse the old `aspectRatio` on the CELL existed to prevent.
-  The flex centring is what parks it mid-row when portrait neighbours make the row 1.4W tall.
-- **⚠ The quantity badge moved INSIDE the box.** Left on the cell it would pin to the far corner
-  of a 2-column span, ~55px adrift of the card it counts.
-- Measured in Chromium against the shipped markup at 7 columns on the 1000px grid: portrait
-  **134.28 x 187.98**, landscape **187.98 x 134.28** — the same rectangle, turned. ~55px clear of
-  each neighbouring column, vertically centred, and two Locations alone in a row both render full
-  size instead of collapsing.
+Giving each Location its own `gridColumn:"span 2"` fixed the size and left a **hole**: 1.4W inside
+a 2W+gap span leaves ~45px of dead air on each side, so two neighbouring Locations sat **~100px
+apart** — reported the same day as *"a giant gap between the two locations"*. So a **RUN** of
+landscape cards takes one full-width row (`gridColumn:"1 / -1"`) and lays its cards out as a
+wrapping flex line at the grid's own `gap:10`.
+
+- **`posterGroups` (a useMemo beside `cards`) groups landscape cards by ADJACENCY**, not by
+  "is a Location". Locations sort last so in practice a deck's are one contiguous run — but a
+  landscape card that somehow isn't last still renders correctly, it just takes a row of its own.
+  Grouping on the card type instead would put the two in the same row.
+- **Each card box is `width:` `calc((100% - ${(cols-1)*10}px) / ${cols} * 1.4)` at
+  `aspectRatio:"7/5"`.** The row IS the full grid width, so that expression is 1.4W by
+  construction at every column count the poster offers (5/6/7/8) — no magic number tied to one
+  layout. Inside it the image rides `.lscape-wrap`'s standing math (**71.4286%** = 5/7), so the
+  quarter turn lands on the box's edges: nothing cropped, nothing overflowing.
+- **⚠ The box is IN FLOW, never absolutely positioned.** That is what gives the row a height at
+  all — an absolutely positioned box gives its row none, which is the collapse the old
+  `aspectRatio` on the CELL existed to prevent.
+- **⚠ The quantity badge lives INSIDE the box.** On the row it would pin to the far corner of the
+  whole grid rather than to the card it counts.
+- Measured in Chromium against the shipped markup at **5, 6, 7 and 8 columns**: the Location's
+  long edge equals a portrait card's long edge to within 0.03px (188.0 vs 188.0 at 7 columns on
+  the 1000px grid — the same rectangle, turned), two adjacent Locations sit **10.0px** apart, and
+  the badge rides the card's own corner 6px in.
 - **⚠ A cover-fit CROP to a portrait footprint is the other thing that was tried and rejected**
   (same day, between the two "it small" reports): cell at `aspectRatio:"5/7"` + `overflow:"hidden"`
   with the image overscaled to `width:"140%"`. It made the cell the right size and cut the card's
