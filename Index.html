@@ -9961,19 +9961,19 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             padding:"3px 8px",borderRadius:6,letterSpacing:0.4,
             boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>＋ BONUS</span>`}
         </div>`}
-        ${/* A landscape cell keeps the SAME 5:7 footprint as every other cell
-              (so it reads as one card among the rest, not a runt) — never the
-              7:5 box the rotation math alone would produce, which is shorter
-              than its portrait neighbours and is exactly what made a Location
-              tile look smaller than the cards around it. The rotated image is
-              overscaled to COVER that taller box (140% width, aspect-ratio
-              5/7 still driving its height) rather than exactly filling a 7:5
-              wrapper, and the cell clips the overflow — a landscape card
-              center-cropped to a portrait card's height, same as any other
-              cover-fit thumbnail. */""}
+        ${/* An absolutely-positioned rotated image gives its cell no height,
+              so a landscape cell has to declare the box itself: aspectRatio
+              "7/5", sized so the image lands EXACTLY on the wrapper's edges
+              after the quarter turn (71.4286% = 5/7) — the same math
+              `.lscape-wrap` uses everywhere else. Tried a 5/7-footprint,
+              overscaled-and-cropped version of this cell (2026-09-18) so a
+              Location would match its neighbours' height; reverted the same
+              day on user feedback — "still horizontal and card not cut off
+              ... as if you turned the real card horizontal" rules out
+              cropping. The shorter box (and the resulting gap versus its
+              portrait neighbours) is accepted; the whole card is not. */""}
         ${cards.map(c => html`<div key=${c.card_id} style=${isLandscapeCard(c.meta)
-          ? {position:"relative", aspectRatio:"5/7", overflow:"hidden", borderRadius:8}
-          : {position:"relative"}}>
+          ? {position:"relative", aspectRatio:"7/5"} : {position:"relative"}}>
           ${c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
             alt=${c.meta["Product Name"]||""}
             onError=${(e)=>{
@@ -9988,9 +9988,8 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               t.src = c.img;
             }}
             style=${isLandscapeCard(c.meta || c)
-              ? {position:"absolute",top:"50%",left:"50%",width:"140%",height:"auto",
-                 aspectRatio:"5/7",
-                 transform:"translate(-50%,-50%) rotate(90deg)",objectFit:"cover",
+              ? {position:"absolute",top:"50%",left:"50%",width:"71.4286%",height:"auto",
+                 transform:"translate(-50%,-50%) rotate(90deg)",objectFit:"cover",borderRadius:8,
                  boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}
               : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
                  boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`}
