@@ -337,6 +337,70 @@ def delete_orphans(conn, sb: Supabase, dry: bool, sweep_ratings: bool = True) ->
             n = delete_in(table, col, orphans)
             print(f"  {table}: deleted {n} orphan rows")
 
+    # elo_event_standings_official has a composite (event_id, player_id) PK and
+    # no surrogate id, so it can't reuse fetch_ids/delete_in above. Without this
+    # sweep a row corrected/removed locally (e.g. a fabricated standings entry
+    # deleted by hand) stays behind in Supabase forever — upserts only ever add
+    # or update, never remove. Found the hard way: a manual fix to event 631941
+    # left two fake players' standings rows live on the site after the export.
+    local_standings_pairs = {
+        (r["event_id"], r["player_id"])
+        for r in fetch_all(conn, "SELECT event_id, player_id FROM event_standings_official")
+    }
+    remote_standings_pairs = set()
+    PAGE, start = 1000, 0
+    while True:
+        rr = requests.get(
+            f"{sb.url}/rest/v1/elo_event_standings_official?select=event_id,player_id"
+            "&order=event_id.asc,player_id.asc",
+            headers={**sb._headers(), "Range-Unit": "items",
+                     "Range": f"{start}-{start+PAGE-1}"},
+            timeout=60,
+        )
+        if not rr.ok and rr.status_code != 206:
+            raise RuntimeError(f"fetch elo_event_standings_official pairs failed: "
+                                f"{rr.status_code} {rr.text[:200]}")
+        data = rr.json()
+        if not data:
+            break
+        remote_standings_pairs.update((row["event_id"], row["player_id"]) for row in data)
+        if len(data) < PAGE:
+            break
+        start += PAGE
+
+    standings_orphans = remote_standings_pairs - local_standings_pairs
+    suspicious = (not local_standings_pairs) or (
+        bool(remote_standings_pairs) and len(standings_orphans) > 0.6 * len(remote_standings_pairs))
+    if dry:
+        flag = "  ⚠ SUSPICIOUS — real run would REFUSE" if suspicious else ""
+        print(f"  elo_event_standings_official: {len(standings_orphans)} orphans (would delete){flag}")
+    elif suspicious:
+        raise RuntimeError(
+            f"refusing to sweep elo_event_standings_official: "
+            f"{len(standings_orphans)}/{len(remote_standings_pairs)} remote rows flagged as "
+            f"orphans (local has {len(local_standings_pairs)} pairs). Local SQLite looks "
+            f"empty/corrupt/partial — aborting before it deletes real data."
+        )
+    elif standings_orphans:
+        by_event: dict[int, list[int]] = {}
+        for eid, pid in standings_orphans:
+            by_event.setdefault(eid, []).append(pid)
+        total = 0
+        for eid, pids in by_event.items():
+            for i in range(0, len(pids), 200):
+                batch = pids[i:i+200]
+                r = requests.delete(
+                    f"{sb.url}/rest/v1/elo_event_standings_official"
+                    f"?event_id=eq.{eid}&player_id=in.({','.join(str(x) for x in batch)})",
+                    headers={**sb._headers(), "Prefer": "return=minimal"},
+                    timeout=60,
+                )
+                if not r.ok:
+                    raise RuntimeError(
+                        f"delete elo_event_standings_official failed: {r.status_code} {r.text[:200]}")
+                total += len(batch)
+        print(f"  elo_event_standings_official: deleted {total} orphan rows")
+
     # The elo_ratings sweeps below are DESTRUCTIVE and only correct once the new
     # canonical-side ratings are safely in place. Gate them on a fully-successful
     # players + ratings export — otherwise a half-applied run (players upsert
