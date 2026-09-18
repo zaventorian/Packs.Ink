@@ -222,7 +222,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=429">
+<link rel="stylesheet" href="styles.css?v=430">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9850,11 +9850,39 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // Inline cost-curve SVG used inside the live React preview (same logic as
   // before; pure SVG so html2canvas can render it). Dual-ink buckets emit
   // a 135° linearGradient via <defs>; single-ink uses a flat ink color.
+  // The curve FILLS its cell: the donut columns set the panel's height, and a
+  // fixed-aspect curve left a band of dead space under the bars beside a tall
+  // Inks legend. The box is measured in LAYOUT px (clientWidth/Height, never
+  // getBoundingClientRect — the view-only preview scales the poster with a
+  // transform) and the viewBox takes the box's aspect, so the text inside keeps
+  // its size and only the bars grow. The SVG is absolutely positioned in the
+  // box, so it can never feed its own height back into the measurement — the
+  // loop that once ballooned an uncapped curve on a narrow tournament deck.
+  const curveBoxRef = useRef(null);
+  // ⚠ Keyed on showCurve, NEVER a bare no-deps effect: one that setStates on
+  // every commit is an update loop (React #185) the moment anything else in the
+  // modal re-renders — toggling Stats took the whole page down.
+  const [curveBox, setCurveBox] = useState(null);
+  const curveBoxLast = useRef("");
+  useLayoutEffect(() => {
+    const el = curveBoxRef.current;
+    if(!el || typeof ResizeObserver === "undefined") return;
+    const read = () => {
+      const w = el.clientWidth, h = el.clientHeight, k = w + "x" + h;
+      if(k === curveBoxLast.current) return;
+      curveBoxLast.current = k;
+      setCurveBox({w, h});
+    };
+    read();
+    const ro = new ResizeObserver(read);
+    ro.observe(el);
+    return () => { ro.disconnect(); curveBoxLast.current = ""; };
+  }, [showCurve]);
   const curveSvg = useMemo(() => {
-    // padL=0 so the first bar starts flush with the panel's left edge. The
-    // width is CAPPED at render: an uncapped curve scales its HEIGHT with the
-    // cell and ballooned on a tournament deck whose donut column was narrow.
-    const W = 600, H = 130, padL = 0, padR = 16, padT = 18, padB = 26;
+    // padL=0 so the first bar starts flush with the panel's left edge.
+    const W = 600, padL = 0, padR = 16, padT = 18, padB = 26;
+    const H = (curveBox && curveBox.w > 0)
+      ? Math.max(130, Math.min(320, Math.round(W * curveBox.h / curveBox.w))) : 130;
     const colCount = 9;
     const innerW = W - padL - padR;
     const innerH = H - padT - padB;
@@ -9909,12 +9937,13 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       bars.push(html`<text key=${"l"+i} x=${x+bw/2} y=${H-padB+14} text-anchor="middle"
         font-size="10" fill=${subColor}>${i===8?"9+":i+1}</text>`);
     }
-    return html`<svg viewBox=${`0 0 ${W} ${H}`} style=${{width:"100%",maxWidth:"640px",height:"auto",display:"block"}}>
+    return html`<svg viewBox=${`0 0 ${W} ${H}`} preserveAspectRatio="xMinYMax meet"
+      style=${{position:"absolute",inset:0,width:"100%",height:"100%",display:"block"}}>
       ${gradientDefs.length ? html`<defs>${gradientDefs}</defs>` : null}
       <line x1=${padL} y1=${H-padB+0.5} x2=${W-padR} y2=${H-padB+0.5} stroke=${subColor} stroke-width="0.6"/>
       ${bars}
     </svg>`;
-  }, [costBuckets, curveMax, dualKeys, textColor, subColor]);
+  }, [costBuckets, curveMax, dualKeys, textColor, subColor, curveBox]);
 
   // ── Poster header ─────────────────────────────────────────────
   // Logo, title and deck cost across the top; one translucent panel holding the
@@ -9929,10 +9958,24 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       const key = !inks.length ? "None" : inks.length === 1 ? inks[0] : inks.slice(0,2).join("/");
       m.set(key, (m.get(key)||0) + c.quantity);
     }
-    return Array.from(m.entries()).sort((a,b) => b[1]-a[1]).map(([k,v]) => ({
-      label: k.includes("/") ? k.replace("/", " / ") : k, value: v,
-      color: k.includes("/") ? "#475569" : (INK_COLORS[k]?.border || "#888"),
-    }));
+    // Singles first, then dual pairs, each by count: a dual is a combination of
+    // two rows already listed, so it reads as a footnote under them rather than
+    // wedged between Amber and Emerald.
+    return Array.from(m.entries())
+      .sort((a,b) => (a[0].includes("/") - b[0].includes("/")) || (b[1]-a[1]))
+      .map(([k,v]) => {
+        const pair = k.includes("/") ? k.split("/") : null;
+        return {
+          label: pair ? pair.join(" / ") : k,
+          // Short form for the two-column legend: "Amethyst / Sapphire" is ~105px
+          // at 11px and a column there is ~85px, so the full name pushed the count
+          // out past the panel (reported 2026-09-18).
+          short: pair ? pair.map(s => s.slice(0,3)).join(" / ") : k,
+          value: v,
+          color: pair ? "#475569" : (INK_COLORS[k]?.border || "#888"),
+          swatch: pair ? `linear-gradient(135deg, ${INK_COLORS[pair[0]]?.border || "#888"} 50%, ${INK_COLORS[pair[1]]?.border || "#888"} 50%)` : null,
+        };
+      });
   }, [cards]);
   const dashDonut = (slices, center, centerLbl) => {
     const size = 74, r = size/2, t = 13, total = slices.reduce((s,x) => s+x.value, 0) || 1;
@@ -9965,12 +10008,34 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       })()}
     </svg>`;
   };
-  const dashLegend = (slices) => html`<div style=${{display:"flex",flexDirection:"column",gap:3,minWidth:0}}>
-    ${slices.filter(s => s.value > 0).map(s => html`<div key=${s.label} style=${{display:"flex",alignItems:"center",gap:6,fontSize:11,lineHeight:1.15,whiteSpace:"nowrap"}}>
-      <span style=${{width:8,height:8,borderRadius:2,background:s.color,flexShrink:0,
+  // Legend layout rules — one place decides the shape so every donut follows them:
+  //   ≤ DASH_LEGEND_ONE_COL (5) rows → one column, full names.
+  //   more → two columns, filled top-to-bottom (column-major, so the biggest
+  //          inks still read first), and dual pairs use their 3-letter form.
+  // Each row is a grid (swatch | label | count) with the label allowed to shrink,
+  // so a long name ellipses instead of shoving its count outside the cell.
+  // 5, because Types can list five rows and that height is already the panel's;
+  // anything taller than Types is what made the panel grow.
+  const DASH_LEGEND_ONE_COL = 5;
+  const dashLegendShape = (slices) => {
+    const n = slices.filter(s => s.value > 0).length;
+    const cols = n > DASH_LEGEND_ONE_COL ? 2 : 1;
+    const hasDual = slices.some(s => s.value > 0 && s.short && s.short !== s.label);
+    // One column needs room for a full dual name; two columns hold the short form.
+    const width = cols === 2 ? 168 : hasDual ? 150 : 108;
+    return {cols, rows: Math.ceil(n / cols), width};
+  };
+  const dashLegend = (slices, shape) => html`<div style=${{display:"grid",
+    gridTemplateColumns:`repeat(${shape.cols},minmax(0,1fr))`,
+    gridTemplateRows:`repeat(${shape.rows},auto)`,gridAutoFlow:"column",
+    columnGap:shape.cols === 2 ? 10 : 14,rowGap:shape.cols === 2 ? 2 : 3,minWidth:0}}>
+    ${slices.filter(s => s.value > 0).map(s => html`<div key=${s.label} title=${s.label}
+      style=${{display:"grid",gridTemplateColumns:"8px minmax(0,1fr) auto",alignItems:"center",
+        columnGap:shape.cols === 2 ? 5 : 6,fontSize:shape.cols === 2 ? 10 : 11,lineHeight:1.15,whiteSpace:"nowrap",minWidth:0}}>
+      <span style=${{width:8,height:8,borderRadius:2,background:s.swatch || s.color,
         boxShadow:"0 0 0 1px rgba(255,255,255,0.35)"}}></span>
-      <span style=${{color:subColor}}>${s.label}</span>
-      <span style=${{marginLeft:"auto",paddingLeft:6,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${s.value}</span>
+      <span style=${{color:subColor,overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>${shape.cols === 2 && s.short ? s.short : s.label}</span>
+      <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${s.value}</span>
     </div>`)}
   </div>`;
   const dashHead = (label, right) => html`<div style=${{display:"flex",justifyContent:"space-between",gap:8,
@@ -9978,18 +10043,21 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     <span>${label}</span>${right && html`<span style=${{letterSpacing:0.3}}>${right}</span>`}</div>`;
   // Legend UNDER the donut, not beside it: beside, three donuts ate ~540px of
   // the band and squeezed the cost curve to a 70px-tall sliver.
-  const dashChart = (label, slices, center, centerLbl) => html`<div style=${{display:"flex",flexDirection:"column",minWidth:0,width:108}}>
-    ${dashHead(label)}
-    <div style=${{display:"flex",justifyContent:"center",marginBottom:8}}>${dashDonut(slices, center, centerLbl)}</div>
-    ${dashLegend(slices)}
-  </div>`;
+  const dashChart = (label, slices, center, centerLbl) => {
+    const shape = dashLegendShape(slices);
+    return html`<div style=${{display:"flex",flexDirection:"column",minWidth:0,width:shape.width}}>
+      ${dashHead(label)}
+      <div style=${{display:"flex",justifyContent:"center",marginBottom:8}}>${dashDonut(slices, center, centerLbl)}</div>
+      ${dashLegend(slices, shape)}
+    </div>`;
+  };
   const panelLine = isLightBg ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.16)";
-  const dashCell = (node, first, flex) => html`<div style=${{flex:flex||"0 0 auto",minWidth:0,
+  const dashCell = (node, first, flex) => html`<div style=${{flex:flex||"0 0 auto",minWidth:0,display:"flex",flexDirection:"column",
     paddingLeft:first?0:16,marginLeft:first?0:16,borderLeft:first?"none":`1px solid ${panelLine}`}}>${node}</div>`;
   const dashCells = [];
-  if(showCurve) dashCells.push(["curve", html`<div>
+  if(showCurve) dashCells.push(["curve", html`<div style=${{display:"flex",flexDirection:"column",flex:"1 1 auto"}}>
     ${dashHead("Cost curve")}
-    ${curveSvg}</div>`, "1 1 330px"]);
+    <div ref=${curveBoxRef} style=${{position:"relative",flex:"1 1 auto",minHeight:130}}>${curveSvg}</div></div>`, "1 1 330px"]);
   if(showStats){
     dashCells.push(["inks", dashChart("Inks", inkSlices, totalCount, "CARDS")]);
     dashCells.push(["inkable", dashChart("Inkwell", [
