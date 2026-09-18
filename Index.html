@@ -222,7 +222,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=428">
+<link rel="stylesheet" href="styles.css?v=429">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9409,17 +9409,6 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const [showStats, setShowStats] = useState(true);
   const [showCurve, setShowCurve] = useState(true);
   const [showCost, setShowCost] = useState({nonFoil:true, foil:true, maxRarity:true});
-  // EXPERIMENT (2026-09-18): "classic" is the header every shipped poster has;
-  // "dash" is the charts-panel layout on trial. Classic stays the default and
-  // its markup is untouched, so reverting is deleting the dash branch.
-  const [headerStyle, setHeaderStyleRaw] = useState(() => {
-    try { return localStorage.getItem("packsink:poster:header") === "dash" ? "dash" : "classic"; }
-    catch { return "classic"; }
-  });
-  const setHeaderStyle = (v) => {
-    setHeaderStyleRaw(v);
-    try { localStorage.setItem("packsink:poster:header", v); } catch {}
-  };
   const [error, setError] = useState(null);
 
   // Three deck-cost totals using the same Low-Price field shown elsewhere on
@@ -9495,7 +9484,6 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     return {nonFoil, foil, maxRarity, nfHits, fHits, mrHits};
   }, [cards, cardById, variantsByName]);
   const fmtUSD = (n) => "$" + n.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2});
-  const anyCost = showCost.nonFoil || showCost.foil || showCost.maxRarity;
 
   // Cost curve buckets 1..9+, keyed by ink composition. Single-ink cards
   // contribute to their ink's bar; dual-ink cards form their OWN bucket
@@ -9863,13 +9851,10 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   // before; pure SVG so html2canvas can render it). Dual-ink buckets emit
   // a 135° linearGradient via <defs>; single-ink uses a flat ink color.
   const curveSvg = useMemo(() => {
-    // padL=0 so the first bar starts flush with the SVG's left edge, which
-    // is the same x as the stats row above it. Keeps the cost curve aligned
-    // with "60 CARDS" / "14 UNINKABLE" / etc.
-    // The charts header uses a wider viewBox at the same height, and a width
-    // CAP: an uncapped curve scales its HEIGHT with the cell and ballooned on a
-    // tournament deck whose donut column was narrow.
-    const W = headerStyle === "dash" ? 600 : 460, H = 130, padL = 0, padR = 16, padT = 18, padB = 26;
+    // padL=0 so the first bar starts flush with the panel's left edge. The
+    // width is CAPPED at render: an uncapped curve scales its HEIGHT with the
+    // cell and ballooned on a tournament deck whose donut column was narrow.
+    const W = 600, H = 130, padL = 0, padR = 16, padT = 18, padB = 26;
     const colCount = 9;
     const innerW = W - padL - padR;
     const innerH = H - padT - padB;
@@ -9924,16 +9909,17 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       bars.push(html`<text key=${"l"+i} x=${x+bw/2} y=${H-padB+14} text-anchor="middle"
         font-size="10" fill=${subColor}>${i===8?"9+":i+1}</text>`);
     }
-    return html`<svg viewBox=${`0 0 ${W} ${H}`} style=${{width:"100%",maxWidth:(headerStyle==="dash"?640:W)+"px",height:"auto",display:"block"}}>
+    return html`<svg viewBox=${`0 0 ${W} ${H}`} style=${{width:"100%",maxWidth:"640px",height:"auto",display:"block"}}>
       ${gradientDefs.length ? html`<defs>${gradientDefs}</defs>` : null}
       <line x1=${padL} y1=${H-padB+0.5} x2=${W-padR} y2=${H-padB+0.5} stroke=${subColor} stroke-width="0.6"/>
       ${bars}
     </svg>`;
-  }, [costBuckets, curveMax, dualKeys, textColor, subColor, headerStyle]);
+  }, [costBuckets, curveMax, dualKeys, textColor, subColor]);
 
-  // ── "dash" header (experiment) ─────────────────────────────────────────────
-  // One translucent panel holding the curve, three donuts and the prices, so the
-  // stats read as a single instrument instead of a row of loose numbers. Colours
+  // ── Poster header ─────────────────────────────────────────────
+  // Logo, title and deck cost across the top; one translucent panel holding the
+  // curve and three donuts, so the stats read as a single instrument instead of
+  // a row of loose numbers. Colours
   // are LITERALS, never var(--…): html2canvas rasterises the SVG outside the
   // page's cascade, so a CSS variable would paint black in the export.
   const inkSlices = useMemo(() => {
@@ -10078,59 +10064,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   const posterDom = html`<div class="deck-poster-wrap" ref=${wrapRef} style=${{position:"relative",marginBottom:14}}>
     <div ref=${posterRef} class="deck-poster" style=${{background:bgCss,padding:24,borderRadius:10,
       color:textColor,position:"relative",zIndex:1}}>
-      ${headerStyle === "dash" ? dashHeader : html`<div style=${{display:"flex",justifyContent:"space-between",alignItems:"flex-start",gap:18,marginBottom:16}}>
-        <div style=${{minWidth:260,flex:"1 1 320px"}}>
-          <div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:800,fontSize:32,lineHeight:1,letterSpacing:"-0.3px"}}>${deckDisplayTitle(deck, tournamentContext)}</div>
-          ${tournamentContext
-            ? html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:600,fontSize:14,lineHeight:1.2,marginTop:6,color:subColor,letterSpacing:"0.2px"}}>
-                ${uiIcon("trophy")} ${tournamentContext.tournament_name}${tournamentContext.place ? ` · ${tournamentContext.place}` : ""}${tournamentContext.num_players ? ` · ${tournamentContext.num_players} players` : ""}
-              </div>
-              ${tournamentContext.player_name && html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:500,fontSize:14,lineHeight:1.2,marginTop:3,color:subColor,letterSpacing:"0.2px"}}>by ${tournamentContext.player_name}</div>`}`
-            : (creatorName && html`<div style=${{fontFamily:"'Cinzel', Georgia, serif",fontWeight:500,
-                fontSize:14,lineHeight:1.2,marginTop:6,color:subColor,letterSpacing:"0.2px"}}>by ${creatorName}</div>`)}
-          <div style=${{display:"flex",gap:6,flexWrap:"wrap",marginTop:8,fontSize:12}}>
-            <span style=${{padding:"3px 10px",borderRadius:12,background:isLightBg?"rgba(0,0,0,0.08)":"rgba(255,255,255,0.18)",fontWeight:600}}>${inkLabel}</span>
-          </div>
-          ${anyCost && html`<div style=${{display:"flex",flexDirection:"column",gap:4,marginTop:10}}>
-            ${showCost.nonFoil && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
-              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Non-Foil</span>
-              <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.nonFoil)}</span>
-            </div>`}
-            ${showCost.foil && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
-              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Foil</span>
-              <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.foil)}</span>
-            </div>`}
-            ${showCost.maxRarity && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
-              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Max Rarity</span>
-              <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.maxRarity)}</span>
-            </div>`}
-          </div>`}
-        </div>
-        ${(showStats || showCurve) && html`<div style=${{display:"flex",flexDirection:"column",gap:10,flex:"1 1 auto",minWidth:0,alignItems:"stretch"}}>
-          ${showStats && html`<div style=${{display:"flex",gap:18,flexWrap:"wrap",alignItems:"flex-end"}}>
-            <div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${totalCount}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Cards</div></div>
-            <div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${stats.uninkable}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Uninkable</div></div>
-            <div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${stats.chars}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Chars</div></div>
-            <div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${stats.actions}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Actions</div></div>
-            <div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${stats.songs}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Songs</div></div>
-            ${stats.items > 0 && html`<div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${stats.items}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Items</div></div>`}
-            ${stats.locations > 0 && html`<div><div style=${{fontSize:22,fontWeight:800,lineHeight:1}}>${stats.locations}</div><div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginTop:2}}>Locations</div></div>`}
-          </div>`}
-          ${showCurve && html`<div style=${{width:"100%",maxWidth:460}}>
-            <div style=${{fontSize:9,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,marginBottom:2}}>Cost Curve</div>
-            ${curveSvg}
-          </div>`}
-        </div>`}
-        <div style=${{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:8,
-          flexShrink:0,alignSelf:"flex-start"}}>
-          <img src="Logos/packs-ink-logo.png?v=5" alt="packs.ink"
-            crossOrigin="anonymous"
-            style=${{height:96,width:"auto",display:"block",
-              filter:isLightBg?"none":"drop-shadow(0 2px 5px rgba(0,0,0,0.4))"}}/>
-          ${qrSrc && html`<img src=${qrSrc} crossOrigin="anonymous" alt="QR code"
-            style=${{width:96,height:96,background:"#fff",borderRadius:6,padding:4,display:"block"}}/>`}
-        </div>
-      </div>`}
+      ${dashHeader}
       ${posterIssues.length > 0 && html`<div style=${{marginBottom:12,padding:"9px 12px",
         borderRadius:8,background:isLightBg?"rgba(146,64,14,0.12)":"rgba(245,158,11,0.16)",
         border:`1px solid ${isLightBg?"rgba(146,64,14,0.3)":"rgba(245,158,11,0.4)"}`}}>
@@ -10330,7 +10264,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     const iv = setInterval(calc, 300);
     const stop = setTimeout(() => clearInterval(iv), 6000);
     return () => { if(ro) ro.disconnect(); clearInterval(iv); clearTimeout(stop); };
-  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle, headerStyle]);
+  }, [previewing, catalogPending, cols, showStats, showCurve, bgStyle]);
 
   if(autoCopy){
     return html`<div aria-hidden="true" style=${{position:"fixed",left:"-100000px",top:"0",
@@ -10427,14 +10361,6 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                   ${[5,6,7,8].map(n => html`<button key=${n}
                     class=${"chip "+(cols===n?"active":"")}
                     onClick=${()=>setCols(n)}>${n}</button>`)}
-                </div>
-              </div>
-              <div>
-                <div class="poster-options-sublbl">Header</div>
-                <div style=${{display:"flex",gap:4}}>
-                  ${[["classic","Classic"],["dash","Charts (beta)"]].map(([k,l]) => html`<button key=${k}
-                    class=${"chip "+(headerStyle===k?"active":"")}
-                    onClick=${()=>setHeaderStyle(k)}>${l}</button>`)}
                 </div>
               </div>
             </div>
