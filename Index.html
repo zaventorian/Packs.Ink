@@ -9405,11 +9405,9 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
   //   - maxRarity: most-expensive chase-tier variant
   //              (Enchanted / Iconic / Epic / Promo) across ALL printings of
   //              that Product Name; falls back to the Normal price when the
-  //              card has no chase printing. Two exclusions for sanity:
-  //                * Promo Set 1 cards #1-7 (Prize Wall promos — listed
-  //                  prices aren't representative).
-  //                * Any Promo-rarity variant priced >$1000 — but Iconics
-  //                  >$1000 are kept (a legit chase tier).
+  //              card has no chase printing. No exclusions — every priced
+  //              chase printing counts (the old Promo Set 1 #1-7 and
+  //              >$1000-promo filters were removed 2026-09-18, Zaven).
   const variantsByName = useMemo(() => {
     const m = new Map();
     for(const arr of Object.values(cardById || {})){
@@ -9460,11 +9458,6 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
         if(!/Enchanted|Iconic|Epic|Promo/i.test(rar)) return false;
         const p = priceOf(v);
         if(p == null) return false;
-        const num = parseInt(String(v.Number||"").replace(/\D/g,""), 10);
-        // Exclude Promo Set 1 #1-7 (Prize Wall / rarely-traded outliers).
-        if(v.Set === "Promo Set 1" && num >= 1 && num <= 7) return false;
-        // Exclude individual Promo cards >$1000 (but Iconics >$1000 are kept).
-        if(/Promo/i.test(rar) && !/Iconic/i.test(rar) && p > 1000) return false;
         return true;
       });
       const chasePrices = chaseVariants.map(priceOf).filter(p => p != null);
@@ -9934,8 +9927,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     });
     return html`<svg width=${size} height=${size} viewBox=${`0 0 ${size} ${size}`} style=${{display:"block",flexShrink:0}}>
       ${paths}
-      <text x=${r} y=${r+1} text-anchor="middle" font-size="19" font-weight="800" fill=${textColor}>${center}</text>
-      <text x=${r} y=${r+13} text-anchor="middle" font-size="7.5" font-weight="700" letter-spacing="0.5" fill=${subColor}>${centerLbl}</text>
+      ${(() => {
+        const lines = [].concat(centerLbl);
+        const y0 = r + (lines.length > 1 ? -3 : 1);
+        return html`<${React.Fragment}>
+          <text x=${r} y=${y0} text-anchor="middle" font-size="19" font-weight="800" fill=${textColor}>${center}</text>
+          ${lines.map((ln, i) => html`<text key=${i} x=${r} y=${y0 + 12 + i*8.5} text-anchor="middle" font-size="7.5" font-weight="700" letter-spacing="0.5" fill=${subColor}>${ln}</text>`)}
+        </>`;
+      })()}
     </svg>`;
   };
   const dashLegend = (slices) => html`<div style=${{display:"flex",flexDirection:"column",gap:3,minWidth:0}}>
@@ -9961,7 +9960,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     paddingLeft:first?0:16,marginLeft:first?0:16,borderLeft:first?"none":`1px solid ${panelLine}`}}>${node}</div>`;
   const dashCells = [];
   if(showCurve) dashCells.push(["curve", html`<div>
-    ${dashHead("Cost curve", `${totalCount} cards · ${totalUnique} unique`)}
+    ${dashHead("Cost curve")}
     ${curveSvg}</div>`, "1 1 330px"]);
   if(showStats){
     dashCells.push(["inks", dashChart("Inks", inkSlices, totalCount, "CARDS")]);
@@ -9970,13 +9969,13 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       {label:"Uninkable", value:stats.uninkable, color:"#15161c"},
     ], stats.inkable, "INKABLE")]);
     const typeSlices = [
-      {label:"Characters", value:stats.chars, color:"#e8c547"},
+      {label:"Characters", value:stats.chars, color:"#5b9bd5"},
       {label:"Actions", value:stats.actions, color:"#3f8e88"},
       {label:"Songs", value:stats.songs, color:"#8a6fc0"},
       {label:"Items", value:stats.items, color:"#c07f3c"},
       {label:"Locations", value:stats.locations, color:"#6f9e57"},
     ];
-    dashCells.push(["types", dashChart("Types", typeSlices, totalUnique, "UNIQUE")]);
+    dashCells.push(["types", dashChart("Types", typeSlices, totalUnique, ["UNIQUE","CARDS"])]);
   }
   // Deck cost rides the TOP row as one compact strip (same size + colour for all
   // three — no hero number), which fills the dead space beside the title and
@@ -10060,7 +10059,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.foil)}</span>
             </div>`}
             ${showCost.maxRarity && html`<div style=${{display:"flex",alignItems:"baseline",gap:8,fontSize:13}}>
-              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Max Rarity*</span>
+              <span style=${{fontSize:10,color:subColor,textTransform:"uppercase",fontWeight:600,letterSpacing:0.4,minWidth:78}}>Max Rarity</span>
               <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${fmtUSD(costs.maxRarity)}</span>
             </div>`}
           </div>`}
@@ -10385,7 +10384,7 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
                 title="Total deck cost using cheapest Foil printings">Foil $</button>
               <button class=${"chip "+(showCost.maxRarity?"active":"")}
                 onClick=${()=>setShowCost(c=>({...c,maxRarity:!c.maxRarity}))}
-                title="Total deck cost using each card's most expensive Enchanted / Iconic / Epic / Promo printing (with sanity exclusions — see ? page)">Max Rarity $</button>
+                title="Total deck cost using each card's most expensive Enchanted / Iconic / Epic / Promo printing">Max Rarity $</button>
             </div>
           </div>
           <div class="poster-options-group">
@@ -30057,12 +30056,7 @@ function FAQView({onStartTour, onStartSiteWalk, onStartSectionTour, user}){
     <ul>
       <li><strong>Non-Foil</strong> — total cost if every copy in the deck is a Normal printing.</li>
       <li><strong>Foil</strong> — total cost using the cheapest Foil printing for each card.</li>
-      <li><strong>Max Rarity</strong>* — the "treasure-hunt" build: for each card, use its most expensive Enchanted / Iconic / Epic / Promo printing. Cards with no chase printing fall back to their Non-Foil price so totals stay meaningful.</li>
-    </ul>
-    <p><strong>*Max Rarity exclusions</strong> — two narrow filters so a couple of outlier promos don't dominate the total:</p>
-    <ul>
-      <li><strong>Promo Set 1, #1–7</strong> are skipped entirely (they're so rarely traded that the listed prices aren't representative).</li>
-      <li>Other <strong>Promo</strong>-rarity printings priced over <strong>$1,000</strong> are also skipped. (<strong>Iconic</strong>-rarity printings priced over $1,000 are kept — that's a legitimate chase tier, not an outlier.)</li>
+      <li><strong>Max Rarity</strong> — the "treasure-hunt" build: for each card, use its most expensive Enchanted / Iconic / Epic / Promo printing, with nothing excluded. Cards with no chase printing fall back to their Non-Foil price so totals stay meaningful.</li>
     </ul>
     <p>All cost lines use the same <strong>Low</strong> price shown elsewhere on the site.</p>
 
