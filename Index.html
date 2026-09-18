@@ -9929,10 +9929,24 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       const key = !inks.length ? "None" : inks.length === 1 ? inks[0] : inks.slice(0,2).join("/");
       m.set(key, (m.get(key)||0) + c.quantity);
     }
-    return Array.from(m.entries()).sort((a,b) => b[1]-a[1]).map(([k,v]) => ({
-      label: k.includes("/") ? k.replace("/", " / ") : k, value: v,
-      color: k.includes("/") ? "#475569" : (INK_COLORS[k]?.border || "#888"),
-    }));
+    // Singles first, then dual pairs, each by count: a dual is a combination of
+    // two rows already listed, so it reads as a footnote under them rather than
+    // wedged between Amber and Emerald.
+    return Array.from(m.entries())
+      .sort((a,b) => (a[0].includes("/") - b[0].includes("/")) || (b[1]-a[1]))
+      .map(([k,v]) => {
+        const pair = k.includes("/") ? k.split("/") : null;
+        return {
+          label: pair ? pair.join(" / ") : k,
+          // Short form for the two-column legend: "Amethyst / Sapphire" is ~105px
+          // at 11px and a column there is ~85px, so the full name pushed the count
+          // out past the panel (reported 2026-09-18).
+          short: pair ? pair.map(s => s.slice(0,3)).join(" / ") : k,
+          value: v,
+          color: pair ? "#475569" : (INK_COLORS[k]?.border || "#888"),
+          swatch: pair ? `linear-gradient(135deg, ${INK_COLORS[pair[0]]?.border || "#888"} 50%, ${INK_COLORS[pair[1]]?.border || "#888"} 50%)` : null,
+        };
+      });
   }, [cards]);
   const dashDonut = (slices, center, centerLbl) => {
     const size = 74, r = size/2, t = 13, total = slices.reduce((s,x) => s+x.value, 0) || 1;
@@ -9965,12 +9979,34 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
       })()}
     </svg>`;
   };
-  const dashLegend = (slices) => html`<div style=${{display:"flex",flexDirection:"column",gap:3,minWidth:0}}>
-    ${slices.filter(s => s.value > 0).map(s => html`<div key=${s.label} style=${{display:"flex",alignItems:"center",gap:6,fontSize:11,lineHeight:1.15,whiteSpace:"nowrap"}}>
-      <span style=${{width:8,height:8,borderRadius:2,background:s.color,flexShrink:0,
+  // Legend layout rules — one place decides the shape so every donut follows them:
+  //   ≤ DASH_LEGEND_ONE_COL (5) rows → one column, full names.
+  //   more → two columns, filled top-to-bottom (column-major, so the biggest
+  //          inks still read first), and dual pairs use their 3-letter form.
+  // Each row is a grid (swatch | label | count) with the label allowed to shrink,
+  // so a long name ellipses instead of shoving its count outside the cell.
+  // 5, because Types can list five rows and that height is already the panel's;
+  // anything taller than Types is what made the panel grow.
+  const DASH_LEGEND_ONE_COL = 5;
+  const dashLegendShape = (slices) => {
+    const n = slices.filter(s => s.value > 0).length;
+    const cols = n > DASH_LEGEND_ONE_COL ? 2 : 1;
+    const hasDual = slices.some(s => s.value > 0 && s.short && s.short !== s.label);
+    // One column needs room for a full dual name; two columns hold the short form.
+    const width = cols === 2 ? 188 : hasDual ? 150 : 108;
+    return {cols, rows: Math.ceil(n / cols), width};
+  };
+  const dashLegend = (slices, shape) => html`<div style=${{display:"grid",
+    gridTemplateColumns:`repeat(${shape.cols},minmax(0,1fr))`,
+    gridTemplateRows:`repeat(${shape.rows},auto)`,gridAutoFlow:"column",
+    columnGap:14,rowGap:3,minWidth:0}}>
+    ${slices.filter(s => s.value > 0).map(s => html`<div key=${s.label} title=${s.label}
+      style=${{display:"grid",gridTemplateColumns:"8px minmax(0,1fr) auto",alignItems:"center",
+        columnGap:6,fontSize:11,lineHeight:1.15,whiteSpace:"nowrap",minWidth:0}}>
+      <span style=${{width:8,height:8,borderRadius:2,background:s.swatch || s.color,
         boxShadow:"0 0 0 1px rgba(255,255,255,0.35)"}}></span>
-      <span style=${{color:subColor}}>${s.label}</span>
-      <span style=${{marginLeft:"auto",paddingLeft:6,fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${s.value}</span>
+      <span style=${{color:subColor,overflow:"hidden",textOverflow:"ellipsis",minWidth:0}}>${shape.cols === 2 && s.short ? s.short : s.label}</span>
+      <span style=${{fontWeight:700,fontVariantNumeric:"tabular-nums"}}>${s.value}</span>
     </div>`)}
   </div>`;
   const dashHead = (label, right) => html`<div style=${{display:"flex",justifyContent:"space-between",gap:8,
@@ -9978,11 +10014,14 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
     <span>${label}</span>${right && html`<span style=${{letterSpacing:0.3}}>${right}</span>`}</div>`;
   // Legend UNDER the donut, not beside it: beside, three donuts ate ~540px of
   // the band and squeezed the cost curve to a 70px-tall sliver.
-  const dashChart = (label, slices, center, centerLbl) => html`<div style=${{display:"flex",flexDirection:"column",minWidth:0,width:108}}>
-    ${dashHead(label)}
-    <div style=${{display:"flex",justifyContent:"center",marginBottom:8}}>${dashDonut(slices, center, centerLbl)}</div>
-    ${dashLegend(slices)}
-  </div>`;
+  const dashChart = (label, slices, center, centerLbl) => {
+    const shape = dashLegendShape(slices);
+    return html`<div style=${{display:"flex",flexDirection:"column",minWidth:0,width:shape.width}}>
+      ${dashHead(label)}
+      <div style=${{display:"flex",justifyContent:"center",marginBottom:8}}>${dashDonut(slices, center, centerLbl)}</div>
+      ${dashLegend(slices, shape)}
+    </div>`;
+  };
   const panelLine = isLightBg ? "rgba(0,0,0,0.12)" : "rgba(255,255,255,0.16)";
   const dashCell = (node, first, flex) => html`<div style=${{flex:flex||"0 0 auto",minWidth:0,
     paddingLeft:first?0:16,marginLeft:first?0:16,borderLeft:first?"none":`1px solid ${panelLine}`}}>${node}</div>`;
