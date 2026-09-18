@@ -222,7 +222,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=424">
+<link rel="stylesheet" href="styles.css?v=425">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -9972,20 +9972,32 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
             padding:"3px 8px",borderRadius:6,letterSpacing:0.4,
             boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>＋ BONUS</span>`}
         </div>`}
-        ${/* An absolutely-positioned rotated image gives its cell no height,
-              so a landscape cell has to declare the box itself: aspectRatio
-              "7/5", sized so the image lands EXACTLY on the wrapper's edges
-              after the quarter turn (71.4286% = 5/7) — the same math
-              `.lscape-wrap` uses everywhere else. Tried a 5/7-footprint,
-              overscaled-and-cropped version of this cell (2026-09-18) so a
-              Location would match its neighbours' height; reverted the same
-              day on user feedback — "still horizontal and card not cut off
-              ... as if you turned the real card horizontal" rules out
-              cropping. The shorter box (and the resulting gap versus its
-              portrait neighbours) is accepted; the whole card is not. */""}
-        ${cards.map(c => html`<div key=${c.card_id} style=${isLandscapeCard(c.meta)
-          ? {position:"relative", aspectRatio:"7/5"} : {position:"relative"}}>
-          ${c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
+        ${/* A LANDSCAPE cell SPANS TWO COLUMNS, because a rotated card does not
+              shrink. A portrait cell is W wide and 1.4W tall, so the card's long
+              edge is 1.4W — turn that same card sideways and its long edge is
+              still 1.4W, which does not fit in one W-wide column. Squeezed into
+              one column (every version before 2026-09-18) the Location rendered
+              at 1/1.4 = 71% the linear size of every card beside it, which is
+              what "it small" reported, twice. Cropping it to fill a portrait
+              footprint was tried the same day and rejected: "still horizontal
+              and card not cut off ... as if you turned the real card
+              horizontal". So the cell takes the width the card actually needs
+              and the leftover space is left empty — the spacing is deliberately
+              odd; the card is whole, sideways, and full size.
+
+              Inside it, `cardBox` is the card's own 7:5 footprint at 1.4W:
+              0.7 * (span width - gap) = 0.7 * 2W = 1.4W. The image then rides
+              `.lscape-wrap`'s standing math — laid out portrait at 71.4286%
+              (5/7) of that box, so the quarter turn lands it exactly on the
+              box's edges. Nothing is cropped and nothing overflows into the
+              neighbouring columns. The box is IN FLOW, so it floors the cell's
+              height at W even when a whole row is Locations (an absolutely
+              positioned one gives its cell no height at all) and the flex
+              centring parks it mid-row when portrait neighbours make the row
+              1.4W tall. */""}
+        ${cards.map(c => {
+          const landscape = isLandscapeCard(c.meta);
+          const art = c.img && html`<img src=${proxyImg(c.img)} crossOrigin="anonymous"
             alt=${c.meta["Product Name"]||""}
             onError=${(e)=>{
               // Proxy unreachable (dev server not running img-proxy, or
@@ -9998,19 +10010,29 @@ const DeckPosterModal = ({deck, cardById, shareUrl, creatorName, tournamentConte
               t.removeAttribute("crossorigin");
               t.src = c.img;
             }}
-            style=${isLandscapeCard(c.meta || c)
+            style=${landscape
               ? {position:"absolute",top:"50%",left:"50%",width:"71.4286%",height:"auto",
                  transform:"translate(-50%,-50%) rotate(90deg)",objectFit:"cover",borderRadius:8,
                  boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}
               : {width:"100%",aspectRatio:"5/7",objectFit:"cover",borderRadius:8,
-                 boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`}
-          ${/* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
-                only the multiples are worth calling out. */""}
-          ${(!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
+                 boxShadow:"0 3px 8px rgba(0,0,0,0.3)",background:"rgba(255,255,255,0.05)"}}/>`;
+          /* Coconut is near-singleton, so a "1x" on 55 of 56 tiles is noise —
+             only the multiples are worth calling out. */
+          const qty = (!posterCoconut || c.quantity > 1) && html`<span style=${{position:"absolute",top:6,right:6,background:"rgba(0,0,0,0.82)",color:"#fff",
             fontSize:14,fontWeight:800,padding:"3px 8px",borderRadius:6,
             fontVariantNumeric:"tabular-nums",letterSpacing:"-0.3px",
-            boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`}
-        </div>`)}
+            boxShadow:"0 2px 5px rgba(0,0,0,0.35)"}}>${c.quantity}x</span>`;
+          return html`<div key=${c.card_id} style=${landscape
+            ? {position:"relative",gridColumn:"span 2",display:"flex",
+               alignItems:"center",justifyContent:"center"}
+            : {position:"relative"}}>
+            ${landscape
+              ? html`<div style=${{position:"relative",width:"calc((100% - 10px) * 0.7)",aspectRatio:"7/5"}}>
+                  ${art}${qty}
+                </div>`
+              : html`<${React.Fragment}>${art}${qty}</>`}
+          </div>`;
+        })}
       </div>
       <div style=${{marginTop:16,display:"flex",justifyContent:"space-between",
         alignItems:"flex-end",gap:14,fontSize:9,color:subColor,lineHeight:1.4,

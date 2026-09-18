@@ -729,36 +729,52 @@ turn it back:
 Applied to: the card-detail modal (canvas tile AND the plain-`<img>` fallback), the deck
 editor's image-grid and stacked-pile views, and the deck poster's card cells.
 
-**A landscape poster cell must declare `aspectRatio:"7/5"` itself** — its image is absolutely
-positioned, so the cell would otherwise collapse to zero height.
+### ⚠ A DECK POSTER's Location cell SPANS TWO COLUMNS — a rotated card doesn't shrink (2026-09-18)
 
-**⚠ A cover-fit, crop-to-match-neighbours cell was tried 2026-09-18 and reverted the same day —
-don't reintroduce it.** A Location rendered visibly shorter than the cards around it (reported
-from the wild), and the first fix kept the cell's footprint at `aspectRatio:"5/7"` (matching its
-neighbours) with `overflow:"hidden"`, overscaling the rotated image to `width:"140%"` so it
-COVERED that taller box — center-cropped left/right. (140% is the cover-fit math: a 7:5-shaped
-image covering a 5:7 box needs its pre-rotation width scaled to the box's OWN height, 1.4x, which
-is 1.96x wide post-rotation — hence the clip.) The user's actual ask was narrower: **still
-horizontal, and the card not cut off** — "as if you turned the real card horizontal." A cropped
-edge fails that even though the cell is now the "right" size, so the shorter `7/5` cell (and the
-resulting gap versus its portrait neighbours) is the accepted tradeoff — cropping the card is not.
-Guarded by `node scripts/test_deck_poster_grid.mjs`, which pins the exact-fit `71.4286%` sizing
-AND asserts the cover-crop sizing is absent.
+**A portrait cell is W wide and 1.4W tall, so a card's long edge is 1.4W. Turn that same card
+sideways and the long edge is STILL 1.4W, which does not fit in one W-wide column.** Every
+version that squeezed it into one column therefore drew the Location at **1/1.4 = 71% the linear
+size of every card beside it** — reported twice in one day, both times as *"it small"*. The cell
+takes `gridColumn:"span 2"` now, and the leftover space is left empty: Zaven's own framing was
+*"I know the spacing will be weird but I want to ensure card is as if you turned the real card
+horizontal."*
 
-**⚠ And that declaration is exactly why the poster grid must be `repeat(N, minmax(0,1fr))`, never
-a bare `1fr`.** A bare `1fr` is `minmax(auto,1fr)`, so no track can be narrower than its widest
-cell's min-content — and a `7/5` cell at a row height set by the portrait cards around it (188px
-at 7 columns on the 1000px poster) demands **263px of width**. That demand froze the Location's
-whole COLUMN at ~2x and starved its neighbours; in the reproduction three columns went to
-literally **0px**. Every card sharing a hijacked column rendered oversized, *including the rows
-above the Location*, so what you see is two giant cards stacked in one column with the rest of
-the poster shrunken and spilling off the bottom edge. Reported from the wild 2026-09-08.
+- **`cardBox` is the card's own 7:5 footprint at `width:"calc((100% - 10px) * 0.7)"`** — 0.7 of
+  (two columns + the 10px gap, minus that gap) = 0.7 × 2W = **1.4W**, exactly a portrait card's
+  long edge. `aspectRatio:"7/5"` then makes the short edge W. Inside it the image rides
+  `.lscape-wrap`'s standing math (**71.4286%** = 5/7), so the quarter turn lands on the box's
+  edges: nothing cropped, nothing overflowing into the neighbouring columns.
+- **⚠ The box is IN FLOW (flex-centred), never absolutely positioned.** That is what floors the
+  cell's height at W when a whole row is Locations — an absolutely positioned box gives its cell
+  no height at all, which is the collapse the old `aspectRatio` on the CELL existed to prevent.
+  The flex centring is what parks it mid-row when portrait neighbours make the row 1.4W tall.
+- **⚠ The quantity badge moved INSIDE the box.** Left on the cell it would pin to the far corner
+  of a 2-column span, ~55px adrift of the card it counts.
+- Measured in Chromium against the shipped markup at 7 columns on the 1000px grid: portrait
+  **134.28 x 187.98**, landscape **187.98 x 134.28** — the same rectangle, turned. ~55px clear of
+  each neighbouring column, vertically centred, and two Locations alone in a row both render full
+  size instead of collapsing.
+- **⚠ A cover-fit CROP to a portrait footprint is the other thing that was tried and rejected**
+  (same day, between the two "it small" reports): cell at `aspectRatio:"5/7"` + `overflow:"hidden"`
+  with the image overscaled to `width:"140%"`. It made the cell the right size and cut the card's
+  ends off, which fails *"card not cut off"*. Don't reintroduce it; the guard test asserts the
+  140% sizing is absent.
 
-The two facts are in tension and both are load-bearing: drop the aspect-ratio and landscape cells
-collapse, drop the `minmax(0,` and they hijack a column. Locations sort LAST, so the poisoning
-cell is usually below the fold of a cropped Discord preview — there is nothing at the blowout to
-look at — and whether it bites depends on which column the Locations land in, which is why it
-reads as "not sure if it's just me".
+**⚠ The poster grid must stay `repeat(N, minmax(0,1fr))`, never a bare `1fr`.** A bare `1fr` is
+`minmax(auto,1fr)`, so no track can be narrower than its widest cell's min-content — and the
+landscape cell used to declare `aspect-ratio:7/5` on ITSELF, which at a row height set by the
+portrait cards around it (188px at 7 columns on the 1000px poster) demanded **263px of width**.
+That demand froze the Location's whole COLUMN at ~2x and starved its neighbours; in the
+reproduction three columns went to literally **0px**, and every card sharing a hijacked column
+rendered oversized *including the rows above the Location* — two giant cards stacked in one column
+with the rest of the poster shrunken and spilling off the bottom edge. Reported from the wild
+2026-09-08. The cell carries no aspect-ratio today, but `minmax(0,` is the general defence against
+any cell whose min-content outgrows its column; don't drop it because today's shape doesn't
+trigger it. Locations sort LAST, so the poisoning cell is usually below the fold of a cropped
+Discord preview — there is nothing at the blowout to look at — and whether it bites depends on
+which column the Locations land in, which is why it read as "not sure if it's just me".
+
+Guarded by `node scripts/test_deck_poster_grid.mjs`.
 
 **Browse GRID tiles stay portrait deliberately.** A 7:5 tile in a 5:7 grid either breaks the row
 or shrinks every other card to accommodate the odd one out, and on a browse wall you're picking
