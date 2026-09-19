@@ -1351,9 +1351,9 @@ the Graded Market tile, `paintGradedTile` (its PNG), Your Top Movers, and the gr
 - **⚠ The rule is NOT "is this a chase rarity", and the live catalog holds counterexamples in
   BOTH directions.** Challenge Promo (C1) is rarity *Promo* and its 8 cards genuinely split, into
   Top Prize foil and Prize Wall non-foil — two different markets (Cinderella - Stouthearted PSA
-  10: **$1,707 vs $280**). PD1's *Beast - Snowfield Troublemaker* is also rarity Promo and splits
-  Normal / Cold Foil like an ordinary booster card. So the question is **whether a second printing
-  exists**, which only the catalog can answer — hence an index rather than a rarity list.
+  10: **$1,707 vs $280**). So the question is **whether a second printing exists**, which only
+  the catalog can answer — hence an index rather than a rarity list. (This used to cite PD1's Beast
+  as a Promo that splits Normal / Cold Foil. It doesn't; see the promo-sets note below.)
 - **⚠ The Challenge words are looked up by BUCKET, never by the raw printing.**
   `PRINTING_VARIANT_LABEL` is keyed `"Foil"`/`"Non-Foil"`, and C1 stores its foil as `"Holofoil"`,
   which `variantBadge` deliberately suppresses as a finish word — so passing the raw value returns
@@ -1781,6 +1781,11 @@ so #7 there is five different cards.
   SC pair (Maleficent - Monstrous Dragon), unpriced synthetic rows from `supabase/160` labelled via
   `REGIONAL_EXCLUSIVE_LABEL`; #63 JP Buzz IS on TCGplayer (714954), so it keeps its price and gets
   its label from `PRICED_REGIONAL_LABEL_BY_ID`.
+- **A single-printing promo gets exactly ONE row** — one add box — whatever emitted it.
+  `collapsePromoPrintings` runs last in `transformSupabaseData` over every `UNIFIED_TILE_SETS` set and
+  keeps the priced row, then foil over Normal. Reported 2026-09-18: unpriced PD1 cards rendered a
+  Non-Foil AND a Foil box. C1/C2 are deliberately outside it. Guarded by
+  `node scripts/test_promo_single_printing.mjs`.
 - **Every promo set shows one "Promos" counter** on its Collection tile (`UNIFIED_TILE_SETS`), and
   the grid rules them off from the booster sets with `.collection-sets-divider`.
 

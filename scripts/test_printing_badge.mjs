@@ -18,8 +18,8 @@
 //   · the 8 Challenge Promo (C1) cards, whose Top Prize foil and Prize Wall
 //     non-foil are two genuinely different markets ($1,707 vs $280 for one
 //     PSA 10), and which must be labelled with the Challenge words;
-//   · PD1's Beast - Snowfield Troublemaker, which splits Normal / Cold Foil
-//     like an ordinary booster card.
+//   · (PD1's Beast was once listed here as splitting Normal / Cold Foil; it
+//     doesn't — see collapsePromoPrintings.)
 // So the question is whether a SECOND PRINTING EXISTS, which only the catalog
 // can answer — hence the _printBadge index rather than a rarity list.
 //

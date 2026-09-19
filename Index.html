@@ -670,8 +670,9 @@ const gradedVariantLabel = (printing, setName) => {
 //     Top Prize foil and Prize Wall non-foil, two genuinely different markets
 //     (Cinderella - Stouthearted PSA 10: $1,707 vs $280). Those must be
 //     labelled, and with the Challenge words, never "Foil".
-//   · PD1's Beast - Snowfield Troublemaker is rarity Promo and splits Normal /
-//     Cold Foil like an ordinary booster card.
+//   · (PD1's Beast - Snowfield Troublemaker was listed here as splitting Normal /
+//     Cold Foil. It doesn't — every PD1 card is one printing, and
+//     collapsePromoPrintings now enforces that.)
 // So the question is not what a card is CALLED, it is whether a second printing
 // exists to be told apart from — which only the catalog can answer.
 let _printBadge = new Map();   // `${card_id}|${Foil|Non-Foil}` -> badge text
@@ -1958,6 +1959,27 @@ const REGIONAL_EXCLUSIVE_LABEL = {
 // transformSupabaseData, after every printing row exists).
 const PRICED_REGIONAL_LABEL_BY_ID = {
   "crd_p3_63_buzz_space_ranger_ja": "Japanese Exclusive",  // 63/P3, pid 714954
+};
+// A card in a single-printing promo set (UNIFIED_TILE_SETS) exists in exactly
+// ONE version, so it must emit exactly one row — one add box, one counter. Two
+// paths used to break that: an unpriced card got a Normal + Cold Foil
+// placeholder pair, and TCGCSV can publish a promo pid under two printings.
+// This runs last in transformSupabaseData, so whatever emitted the rows, the
+// promo ends up with one. Keeps the priced row; among priced ones the foil
+// finish (promos are foil far more often), then Normal.
+// Guarded by scripts/test_promo_single_printing.mjs.
+const PROMO_PRINTING_PREF = ["Holofoil", "Cold Foil", "Foil", "Normal"];
+const collapsePromoPrintings = (rows) => {
+  const keep = new Map();
+  for(const r of rows){
+    if(!UNIFIED_TILE_SETS.has(r.Set) || !r.card_id) continue;
+    const cur = keep.get(r.card_id);
+    if(!cur){ keep.set(r.card_id, r); continue; }
+    const priced = (x) => x["Market Price"] != null || x["Low Price"] != null || x["TCGPlayer Market"] != null;
+    const rank = (x) => { const i = PROMO_PRINTING_PREF.indexOf(x.tcg_printing); return i < 0 ? 99 : i; };
+    if((priced(r) && !priced(cur)) || (priced(r) === priced(cur) && rank(r) < rank(cur))) keep.set(r.card_id, r);
+  }
+  return rows.filter(r => !UNIFIED_TILE_SETS.has(r.Set) || !r.card_id || keep.get(r.card_id) === r);
 };
 // Promo sets that print one card per number — no Normal + Cold Foil placeholder
 // pair for an unpriced card, and row-flow layout in the Collection set detail.
@@ -3918,8 +3940,9 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     if(lbl) r.variant_label = lbl;  // not localized_exclusive: that tooltip says "no U.S. market"
   }
 
-  setPromoBaseSet(rows);
-  return rows;
+  const out = collapsePromoPrintings(rows);
+  setPromoBaseSet(out);
+  return out;
 };
 
 const buildPools = (data, set) => {
