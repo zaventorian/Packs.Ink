@@ -318,10 +318,14 @@ def main() -> None:
         (704593, DIS_SET, "8",  "crd_dis_8_buzz_lightyear_providing_cover", 712043),  # Magical Places promo, 8/DIS — base is the AotV mainline printing (#77), not the existing 5/PD1 promo of the same card (Zaven, 2026-09-17)
         # Promo Set 3 #58 / #60 — Attack of the Vine!-era event promos Lorcast's
         # P3 feed doesn't carry (it stops at #57, plus our #59). Printed 58/P3
-        # and 60/P3. #61/#62 (Japan Set Championship pair) and #63 (JP-exclusive
-        # Buzz, pid 714954) are still open.
+        # and 60/P3.
         (690201, P3_SET,  "58", "crd_p3_58_sulley_the_new_boss",      692490),  # base AotV #24
         (702669, P3_SET,  "60", "crd_p3_60_woody_helping_a_friend",   692491),  # base AotV #1
+        # 63/P3 — Japan-exclusive Buzz, but TCGplayer sells it (714954), so it
+        # is priced; Index.html stamps "Japanese Exclusive" by card_id. Clone of
+        # the English 57/P3. #61/#62 (Japan SC Maleficent pair) have no SKU and
+        # are plain rows from supabase/160.
+        (692489, P3_SET,  "63", "crd_p3_63_buzz_space_ranger_ja",     714954),
         # Printed 15/PD1 — the promo packed with Quest of Wonders: An
         # Illumineer's Lorebook. Base is Wilds Unknown #106.
         (692050, PD1_SET, "15", "crd_pd1_15_pegasus_searching_high_and_low", 711485),

@@ -1013,7 +1013,7 @@ This is where catalog correctness lives. Structural cleanups:
 5. **`CUSTOM_CARDS`** — placeholder; currently empty. Kept as infra.
 6. **`SET_DISPLAY_NAMES`** — `{"Challenge Promo": "Lorcana Challenge Promo (C1)", "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)", "EPCOT Festival of the Arts": "Magical Places Promos"}`. **All in-code set comparisons use the DISPLAY name.** The last entry (2026-09-18, Zaven): Lorcast names this set after its first three cards (the EPCOT drop), but `N/DIS` is Ravensburger's whole promo LINE — Mickey/Elsa/Buzz Lightyear's promos share the set and aren't EPCOT cards. EPCOT is a sub-label inside the set, like a grading sub-designation, not a set of its own.
 7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_cn>`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community #1/2/3/4.
-8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3/4, D23 Collection, Magical Places Promos. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
+8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3/4, PD1, D23 Collection, Magical Places Promos, Curator's Collection. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
 9. **`CHINA_ONLY_NONFOIL` + `JAPAN_ONLY_NONFOIL`** — `{name|cn: image path}` for non-foil printings that exist only in a regional market. Get `variant_label: "Chinese Exclusive"` / `"Japanese Exclusive"`, null prices, local image, no TCGPlayer link. Currently CN: Dragon Fire #25, Let It Go #41. JP: Snow White - Unexpected Houseguest #41 (Promo Set 1, added via migration 52) and Elsa - Exploring the Unknown #59 (Promo Set 3, the JA-10 promo; synthetic row from migration 108). **The image is the whole point of this map** — the sibling `REGIONAL_EXCLUSIVE_LABEL` stamps the same "Japanese Exclusive" label but keeps the Lorcast art, so a JP-only card parked there renders the ENGLISH frame. Elsa sat there for exactly that reason until a scan existed; move a key across the moment you have one. Pattern works only when the card row exists in `cards` table — Lorcast-indexed cards just need the map entry; non-Lorcast cards need a `cards` insert too (see migration 52).
 10. **`TCG_PID_OVERRIDES` is authoritative** — overrides Lorcast even when Lorcast has a (wrong) value. Used for Hiro Hamada #24/24B pid swap. **Applied client-side in `transformSupabaseData` AND server-side via `scripts/patch_pid_overrides.py`** — the latter writes them into `cards` so the matview JOIN picks them up. Client-only overrides don't help the matview.
 11. **Image fallback in `buildRow`** — `img_normal || img_large || img_small`, etc. Lorcast occasionally populates only `image_large` (LCP C1 Dragon Fire, Let It Go, Cinderella, Rapunzel). **Downstream surfaces reading `price_movers` directly (home banners, Screener) DON'T see buildRow fallback** + `img_large` is stripped from catalog cache. Look up `raw[i].img_normal` (contains the large URL via fallback) and inject as `image_normal` on the matview row.
@@ -1777,8 +1777,12 @@ so #7 there is five different cards.
 - **`SUPPRESSED_CARD_IDS`** drops Lorcast rows we refuse to carry — deleting them from `cards`
   doesn't stick, the daily Lorcast load re-inserts them. Today: Lorcast's P4 #7/#8 Daisy Duck -
   Paranormal Investigator (printed `JA`); that card's promos are P3 #23/#24.
-- **Still open in P3**: #61/#62 (Japan Set Championship pair) and #63 (JP-exclusive Buzz, pid
-  714954).
+- **P3 runs to #63.** #58 Sulley / #60 Woody are REPRINT_PROMOS clones; #61/#62 are Japan's Fabled
+  SC pair (Maleficent - Monstrous Dragon), unpriced synthetic rows from `supabase/160` labelled via
+  `REGIONAL_EXCLUSIVE_LABEL`; #63 JP Buzz IS on TCGplayer (714954), so it keeps its price and gets
+  its label from `PRICED_REGIONAL_LABEL_BY_ID`.
+- **Every promo set shows one "Promos" counter** on its Collection tile (`UNIFIED_TILE_SETS`), and
+  the grid rules them off from the booster sets with `.collection-sets-divider`.
 
 ## Set conventions
 

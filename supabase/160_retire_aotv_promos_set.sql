@@ -2,12 +2,12 @@
 -- "Attack of the Vine! Promos" (set_aotv_promos) was never a real set. Its
 -- three cards are Promo Set 4 #12 / #15 / #16, which Lorcast indexed on
 -- 2026-09-18. Move every reference onto the Lorcast rows, drop the stand-ins,
--- and give P4 #9-16 + PD1 #2 their TCGplayer pids.
+-- and give P4 #9-16 + PD1 #2 their TCGplayer pids. Also adds P3 #61/#62.
 --
 -- Run step 1 (this whole file) in the SQL editor. Step 2, separately:
 --   select public.refresh_card_prices_latest();
 --   select public.refresh_graded_sales_rollup();
--- Then: python scripts/patch_pid_overrides.py  (builds P3 #58/#60, PD1 #15)
+-- Then: python scripts/patch_pid_overrides.py  (builds P3 #58/#60/#63, PD1 #15)
 --
 -- User decks store card_id encrypted, so those refs cannot be moved from SQL;
 -- a deck holding a stand-in card shows it as unknown until re-added.
@@ -93,6 +93,23 @@ from (values
   ('crd_b1a43b5f8158413f81457f6268bfbc93', 711443)   -- PD1 #2 Rapunzel - Ethereal Protector
 ) as v(id, pid)
 where c.id = v.id;
+
+-- Promo Set 3 #61 / #62: Japan's Fabled Set Championship pair (Maleficent -
+-- Monstrous Dragon, participant + Top 8 foil). Not on Lorcast or TCGplayer US,
+-- so synthetic rows cloned off the English pair (P3 #4 / #5) with a null pid,
+-- same as #59 in migration 108. Index.html labels them Japanese Exclusive.
+insert into public.cards (id, set_id, name, version, collector_number, rarity, ink, cost, inkable,
+  card_type, classifications, text, flavor_text, tcgplayer_product_id,
+  image_small, image_normal, image_large, inks, illustrators, strength, willpower, lore, move_cost, split_printing, foil_split)
+select v.new_id, c.set_id, c.name, c.version, v.cn, c.rarity, c.ink, c.cost, c.inkable,
+  c.card_type, c.classifications, c.text, c.flavor_text, null,
+  c.image_small, c.image_normal, c.image_large, c.inks, c.illustrators, c.strength, c.willpower, c.lore, c.move_cost, c.split_printing, c.foil_split
+from (values
+  ('crd_p3_61_maleficent_monstrous_dragon_ja', '61', 'crd_a79483514b7249cbb16c12a9ef1d065d'),
+  ('crd_p3_62_maleficent_monstrous_dragon_ja', '62', 'crd_d0844776beac4b5e839cff0cb9c31c14')
+) as v(new_id, cn, src_id)
+join public.cards c on c.id = v.src_id
+on conflict (id) do nothing;
 
 commit;
 

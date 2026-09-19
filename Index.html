@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=431">
+<link rel="stylesheet" href="styles.css?v=432">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -1594,6 +1594,8 @@ const UNIFIED_TILE_SETS = new Set([
   "Promo Set 1", "Promo Set 2", "Promo Set 3", "Promo Set 4",
   "D23 Collection",
   "Magical Places Promos",
+  "Curator's Collection: Heroines",
+  "PD1",
 ]);
 
 // Sets where every card is a promo regardless of what Lorcast labels its
@@ -1935,6 +1937,11 @@ const JAPAN_ONLY_NONFOIL = {
 // null price/link, which they already have via a null pid). Keyed by
 // "<Product Name>|<collector_number>". Value = the variant_label to surface.
 const REGIONAL_EXCLUSIVE_LABEL = {
+  // 61/P3 + 62/P3: Japan's Fabled Set Championship pair (participant, Top 8
+  // foil). Synthetic rows cloned off P3 #4/#5 by supabase/161 — English art
+  // until a JP scan lands in JAPAN_ONLY_NONFOIL.
+  "Maleficent - Monstrous Dragon|61":    "Japanese Exclusive",
+  "Maleficent - Monstrous Dragon|62":    "Japanese Exclusive",
   "Elsa - Snow Queen|38":                "Chinese Exclusive",
   "Snow White - Unexpected Houseguest|42": "Chinese Exclusive",
   "Stitch - Little Rocket|43":           "Chinese Exclusive",
@@ -1944,6 +1951,15 @@ const REGIONAL_EXCLUSIVE_LABEL = {
 // locally-hosted image + null price. Keyed by "<Product Name>|<collector_number>"
 // → tcgplayer_product_id. The localized row-builds use this for the link
 // instead of nulling the pid outright.
+// Regional exclusives that TCGplayer DOES sell with a live price, so they keep
+// it — only the label is stamped on. Keyed by card_id (post-pass at the end of
+// transformSupabaseData, after every printing row exists).
+const PRICED_REGIONAL_LABEL_BY_ID = {
+  "crd_p3_63_buzz_space_ranger_ja": "Japanese Exclusive",  // 63/P3, pid 714954
+};
+// Promo sets that print one card per number — no Normal + Cold Foil placeholder
+// pair for an unpriced card, and row-flow layout in the Collection set detail.
+const NUMBERED_PROMO_SETS = new Set(["Promo Set 1", "Promo Set 2", "Promo Set 3", "Promo Set 4", "PD1"]);
 const LOCALIZED_TCG_LINK = {
   "Snow White - Unexpected Houseguest|41": 626546, // JP-exclusive (Promo Set 1)
 };
@@ -3592,7 +3608,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
         || SUPPRESS_NONFOIL_NAMES.has(name + "|" + (c.collector_number||""));
       // Promo sets almost always ship a single printing per card (typically
       // Cold Foil). Emitting both placeholder rows is noise — collapse to one.
-      const isPromoSet = setName === "Promo Set 1" || setName === "Promo Set 2" || setName === "Promo Set 3";
+      const isPromoSet = NUMBERED_PROMO_SETS.has(setName);
       // Localized-only (China/Japan) cards never have TCGCSV prices — they
       // need to render as Normal placeholders with the localized image + label.
       const locKey   = name + "|" + (c.collector_number||"");
@@ -3893,6 +3909,11 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
       "isCoconut":        true,
       "coconutSlug":      cc.slug,
     });
+  }
+
+  for(const r of rows){
+    const lbl = PRICED_REGIONAL_LABEL_BY_ID[r.card_id];
+    if(lbl) r.variant_label = lbl;  // not localized_exclusive: that tooltip says "no U.S. market"
   }
 
   setPromoBaseSet(rows);
@@ -18424,7 +18445,7 @@ const CollectionSetDetail = ({setName, raw, collection, updateQty, bulkUpdateCol
   // Promo sets get row-flow grid (1-3 row 1, 4-6 row 2, ...) instead of the
   // column-flow we use for main sets, and tighter +/- counters so the long
   // card names ("Dalmatian Puppy - Tail Wagger" etc.) actually fit.
-  const isPromoSet = setName === "Promo Set 1" || setName === "Promo Set 2" || setName === "Promo Set 3";
+  const isPromoSet = NUMBERED_PROMO_SETS.has(setName);
   // Sets that get the Non-Foil + Foil section split in the Collection set
   // detail view (top stack = non-foil, bottom stack = foil) instead of the
   // usual mixed-printing rows. Both have a meaningful price gap between the
@@ -27142,8 +27163,10 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
       </div>
     </div>
 
-    <div class="collection-sets">
-      ${setsToShow.map(setName => {
+    ${(() => {
+      // Booster sets first, then a ruled-off second section for promo sets and
+      // Extras — two different kinds of thing to complete.
+      const renderSetCard = (setName) => {
         const tot = setTotals[setName];
         const own = owned[setName] || {normal:new Set(),foil:new Set(),enchanted:new Set(),iconic:new Set(),epic:new Set()};
         // Extras & Oddities is a flat catch-all bucket — split foil/normal
@@ -27206,8 +27229,17 @@ const CollectionView = ({raw, user, collection, collectionLoading, updateQty, bu
             </div>`)}
           </div>`}
         </div>`;
-      })}
-    </div>
+      };
+      const mainSets  = setsToShow.filter(s => MAINLINE_SETS.includes(s));
+      const otherSets = setsToShow.filter(s => !MAINLINE_SETS.includes(s));
+      return html`<div class="collection-sets">
+        ${mainSets.map(renderSetCard)}
+        ${mainSets.length > 0 && otherSets.length > 0 && html`<div class="collection-sets-divider" role="separator">
+          <span>Promos & other sets</span>
+        </div>`}
+        ${otherSets.map(renderSetCard)}
+      </div>`;
+    })()}
   </div>`}
   </div>`;
 };
