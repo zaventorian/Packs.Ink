@@ -985,6 +985,15 @@ over our already-dark palette.
   aggressively.
 - The root declaration also covers what the old form-control-scoped rule was for: native
   `<select>` option panels, scrollbars and focus rings stay readable in dark themes.
+- **⚠ Samsung Internet ignores all of the above (2026-09-18).** v430 carried the declaration
+  and Samsung (browser AND its installed PWA) still double-darkened the dark themes and turned
+  the light ones grey, while Chrome's PWA was fine. Samsung decides whether to force its own
+  dark mode by whether the STYLESHEET has a `@media (prefers-color-scheme: dark)` query — and
+  ours had none, because the theme is resolved in JS onto `html[data-mode]`. styles.css (and
+  privacy.html) now carry one that restates the root rules; **don't delete it as a
+  duplicate.** The values are also `only dark` / `only light` (meta: `dark light only`): a bare
+  `light` on the root reads as un-themed to Chromium's auto-dark, `only` is the spec's
+  "don't override my colours". Unverified on a real Samsung device at commit time.
 
 ## price_movers matview gotcha
 

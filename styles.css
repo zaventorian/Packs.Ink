@@ -345,8 +345,22 @@ html[data-theme="light"] {
    global button rule below sets `appearance:none`, so no button can fall back
    to a UA-painted widget in any engine. Declare BOTH modes: a light theme left
    undeclared is the case those darkening filters treat most aggressively. */
-html[data-mode="dark"]{ color-scheme: dark; }
-html[data-mode="light"]{ color-scheme: light; }
+html[data-mode="dark"]{ color-scheme: only dark; }
+html[data-mode="light"]{ color-scheme: only light; }
+/* ⚠ Samsung Internet does NOT read color-scheme to decide whether to force its
+   own dark mode (2026-09-18: v430 shipped with the declaration above and Samsung
+   still double-darkened the dark themes and turned the light ones grey, while
+   Chrome's PWA rendered correctly). Its test is whether the STYLESHEET carries a
+   `prefers-color-scheme: dark` media query — and ours carried none, because the
+   whole theme is resolved in JS onto html[data-mode]. This block is that signal.
+   It restates the rules above, so it changes nothing in any other engine; don't
+   delete it as a duplicate. `only` is the spec's explicit "do not override my
+   colours" keyword, which is what stops Chromium's auto-dark on a LIGHT theme —
+   a bare `light` there reads as "un-themed" and gets darkened. */
+@media (prefers-color-scheme: dark){
+  html[data-mode="dark"]{ color-scheme: only dark; }
+  html[data-mode="light"]{ color-scheme: only light; }
+}
 
 /* Body padding uses max(designed, safe-area-inset) so iOS notched devices
    (iPhone 14 Pro+, Dynamic Island) pad content away from the Island,
