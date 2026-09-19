@@ -40,6 +40,10 @@ function grab(startMarker, endMarker) {
 
 const mainline = grab("const MAINLINE_SETS = [", "\n];");
 const parents  = grab("const SET_PARENT = {", "\n};");
+// SET_PARENT is empty in the shipped file (its one entry, the made-up AotV promo
+// set, was retired 2026-09-18). Section 4 still tests the MECHANISM, so it gets
+// a fixture entry of its own.
+const parentsFixture = 'SET_PARENT["Attack of the Vine! Promos"] = "Attack of the Vine!";';
 const display  = grab("const SET_DISPLAY_NAMES = {", "\n};");
 const maps     = grab("let _setReleaseById = new Map();", "_setMainlineById = main;\n};");
 const fromRows = grab("const printingsFromRows = (rows) => {", "\n};");
@@ -51,7 +55,7 @@ const verdictFn = grab("const reprintVerdict = (printings, curSetId) => {", "\n}
 
 const { setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes } =
   await import("data:text/javascript," + encodeURIComponent(
-    [mainline, parents, display, maps, fromRows, printFn, spansFn, spansMain, deckFn, verdictFn,
+    [mainline, parents, parentsFixture, display, maps, fromRows, printFn, spansFn, spansMain, deckFn, verdictFn,
      "export {setSetReleaseDates, cardPrintingsFor, reprintVerdict, deckReprintNotes};"].join("\n")));
 
 // The real sets table, trimmed to the rows these cases exercise. Dates are the
