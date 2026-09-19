@@ -985,15 +985,17 @@ over our already-dark palette.
   aggressively.
 - The root declaration also covers what the old form-control-scoped rule was for: native
   `<select>` option panels, scrollbars and focus rings stay readable in dark themes.
-- **⚠ Samsung Internet ignores all of the above (2026-09-18).** v430 carried the declaration
-  and Samsung (browser AND its installed PWA) still double-darkened the dark themes and turned
-  the light ones grey, while Chrome's PWA was fine. Samsung decides whether to force its own
-  dark mode by whether the STYLESHEET has a `@media (prefers-color-scheme: dark)` query — and
-  ours had none, because the theme is resolved in JS onto `html[data-mode]`. styles.css (and
-  privacy.html) now carry one that restates the root rules; **don't delete it as a
-  duplicate.** The values are also `only dark` / `only light` (meta: `dark light only`): a bare
-  `light` on the root reads as un-themed to Chromium's auto-dark, `only` is the spec's
-  "don't override my colours". Unverified on a real Samsung device at commit time.
+- **⚠ Samsung Internet's forced dark mode CANNOT be opted out of from the page (2026-09-18).**
+  Samsung (browser AND installed PWA) double-darkens the dark themes and greys the light
+  ones, while Chrome's PWA is fine. Tell-tale: the black-translucent corner buttons on mover
+  tiles render WHITE. v431 added `only dark` / `only light` (meta `dark light only`) and a
+  `prefers-color-scheme: dark` block in styles.css on the theory that Samsung looks for one —
+  **that theory was wrong**, verified on Zaven's phone the same night. Samsung's stable force-dark
+  ignores color-scheme, `only` and the media query alike; only its experimental "Adaptive Force
+  Dark" (`internet://flags`) respects the page. Both changes are kept: `only` is correct for
+  Chromium's auto-dark and harmless elsewhere. The user-side fix is Samsung Internet →
+  Settings → Labs → **Use website dark theme** (or turning off its dark mode for sites).
+  Don't burn another round on CSS for this.
 
 ## price_movers matview gotcha
 
