@@ -1013,12 +1013,12 @@ This is where catalog correctness lives. Structural cleanups:
 5. **`CUSTOM_CARDS`** — placeholder; currently empty. Kept as infra.
 6. **`SET_DISPLAY_NAMES`** — `{"Challenge Promo": "Lorcana Challenge Promo (C1)", "Lorcana Challenge Year 3": "Lorcana Challenge Promo (C2)", "EPCOT Festival of the Arts": "Magical Places Promos"}`. **All in-code set comparisons use the DISPLAY name.** The last entry (2026-09-18, Zaven): Lorcast names this set after its first three cards (the EPCOT drop), but `N/DIS` is Ravensburger's whole promo LINE — Mickey/Elsa/Buzz Lightyear's promos share the set and aren't EPCOT cards. EPCOT is a sub-label inside the set, like a grading sub-designation, not a set of its own.
 7. **`COLLECTOR_NUMBER_OVERRIDES`** — keyed by `<set_id>|<lorcast_cn>`. Currently renumbers Challenge Promo's Lorcast #25/41/42/43 → community #1/2/3/4.
-8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3, D23 Collection, Magical Places Promos. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
+8. **`UNIFIED_TILE_SETS`** — collapses Normal/Foil/Enchanted to one row in Collection grid: Promo Set 1/2/3/4, D23 Collection, Magical Places Promos. **C1 and C2 are NOT here** — both have real Non-Foil/Foil splits.
 9. **`CHINA_ONLY_NONFOIL` + `JAPAN_ONLY_NONFOIL`** — `{name|cn: image path}` for non-foil printings that exist only in a regional market. Get `variant_label: "Chinese Exclusive"` / `"Japanese Exclusive"`, null prices, local image, no TCGPlayer link. Currently CN: Dragon Fire #25, Let It Go #41. JP: Snow White - Unexpected Houseguest #41 (Promo Set 1, added via migration 52) and Elsa - Exploring the Unknown #59 (Promo Set 3, the JA-10 promo; synthetic row from migration 108). **The image is the whole point of this map** — the sibling `REGIONAL_EXCLUSIVE_LABEL` stamps the same "Japanese Exclusive" label but keeps the Lorcast art, so a JP-only card parked there renders the ENGLISH frame. Elsa sat there for exactly that reason until a scan existed; move a key across the moment you have one. Pattern works only when the card row exists in `cards` table — Lorcast-indexed cards just need the map entry; non-Lorcast cards need a `cards` insert too (see migration 52).
 10. **`TCG_PID_OVERRIDES` is authoritative** — overrides Lorcast even when Lorcast has a (wrong) value. Used for Hiro Hamada #24/24B pid swap. **Applied client-side in `transformSupabaseData` AND server-side via `scripts/patch_pid_overrides.py`** — the latter writes them into `cards` so the matview JOIN picks them up. Client-only overrides don't help the matview.
 11. **Image fallback in `buildRow`** — `img_normal || img_large || img_small`, etc. Lorcast occasionally populates only `image_large` (LCP C1 Dragon Fire, Let It Go, Cinderella, Rapunzel). **Downstream surfaces reading `price_movers` directly (home banners, Screener) DON'T see buildRow fallback** + `img_large` is stripped from catalog cache. Look up `raw[i].img_normal` (contains the large URL via fallback) and inject as `image_normal` on the matview row.
 12. **Low ↔ Market fallback in `processData`** — collects samples from both `low_price` and `market_price`. When a card has one but not the other, the missing side falls back so it still contributes to rarity averages.
-13. **`PROMO_RARITY_SETS`** — every card in the 7 promo-only sets (Promo Set 1/2/3, LCP C1, LCP C2, D23 Collection, Magical Places Promos) gets rarity overridden to `"Promo"` in `buildRow`.
+13. **`PROMO_RARITY_SETS`** — every card in the promo-only sets (Promo Set 1/2/3/4, PD1, LCP C1, LCP C2, D23 Collection, Magical Places Promos, Curator's Collection) gets rarity overridden to `"Promo"` in `buildRow`.
 14. **`YEAR3_PRINTING_BY_NUMBER`** — LCP (C2) cards each exist as exactly ONE printing per collector number. TCGCSV emits both Normal and Cold Foil under every pid (ghost rows). Map declares the canonical printing per number so the bogus one is suppressed.
 15. **`SPLIT_BY_PRINTING_SETS`** (in `groupCards`) — sets where Normal and Foil are economically distinct and render as separate tiles. Currently `{LCP (C1)}`. Group key suffix-appends `::Normal` / `::Foil`. `card_id` stays untouched. C2 is NOT here — its printings have distinct card_ids from Lorcast.
 16. **`SECTION_SPLIT_SETS`** (in `CollectionSetDetail`) — non-foil/foil section split in the set-detail view. Currently `{LCP (C1), LCP (C2)}`.
@@ -1759,6 +1759,26 @@ The trade is **persisted in the `trades` table keyed by a token**, not stuffed i
 - **Open**: `App.initialUrlParams.tradeToken` (via `getTradeShareToken()`, captured in `useMemo` before the URL-cleanup effect runs) forces `view="market"`; `marketSub` inits to `"trade"`; `TradeView` fetches via `get_trade`, hydrates, and the App view-sync effect cleans the path to `/analytics`. Token is passed down as a **prop** (`shareToken`) — NOT re-read from the URL in the hydration effect, because the catalog loads async and the URL is cleaned before then. Legacy `?trade=` blobs still decode (`decodeTrade`).
 - **Analytics sub-tab routing**: `marketSub` lives in App, mirrored to `?a=<sub>` (added to `dirtyParams` so it's stripped when leaving Analytics). First sync uses `replaceState`, user tab clicks use `pushState` (Back/Forward step through tabs); a popstate handler syncs `marketSub` from `?a=`. This is why refresh keeps the tab. The `if(cur===want) return` guard in the sync effect prevents the popstate→setState→push loop.
 - **localStorage**: `packsink:trade:v1` (`{a,b,nameA,nameB}`) auto-saves the in-progress trade locally; a `?t=` share link takes precedence over it on load.
+
+### Promo sets are named by the PRINTED suffix (2026-09-18, Zaven)
+
+A promo belongs to the set its card face says: `12/P4` is Promo Set 4 #12, `5/PD1` is PD1 #5,
+`4/DIS` is Magical Places Promos #4. **Read the number off the card image**, never off TCGplayer:
+its "Disney Lorcana Promo Cards" group files every promo under a bare number with no suffix,
+so #7 there is five different cards.
+
+- **Promo Set 4 (P4)** — Lorcast indexed it 2026-09-18 with null pids; `TCG_PID_OVERRIDES` (both
+  copies) links #9-16. #1-6 aren't indexed yet.
+- **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
+  (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk.
+- **"Attack of the Vine! Promos" is gone.** It was a hand-made stand-in that flattened P4, PD1 and
+  DIS into invented numbers (Tigger sat at #10, Meilin Lee's real number). `supabase/160` moved its
+  last three cards onto P4 #12/#15/#16. `SET_PARENT` is now empty but the mechanism stays.
+- **`SUPPRESSED_CARD_IDS`** drops Lorcast rows we refuse to carry — deleting them from `cards`
+  doesn't stick, the daily Lorcast load re-inserts them. Today: Lorcast's P4 #7/#8 Daisy Duck -
+  Paranormal Investigator (printed `JA`); that card's promos are P3 #23/#24.
+- **Still open in P3**: #61/#62 (Japan Set Championship pair) and #63 (JP-exclusive Buzz, pid
+  714954).
 
 ## Set conventions
 

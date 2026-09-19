@@ -60,14 +60,27 @@ OVERRIDES = {
     # crd_custom_ row; that duplicate was retired 2026-08-12 (same dance as
     # supabase/107 for #52-55).
     "Buzz Lightyear - Space Ranger|57": 692489,
-    # Attack of the Vine! prerelease-box promos (set_aotv_promos). Prestaged as
-    # image+name; TCGplayer has now assigned pids, so link them for prices.
+    # PD1 #2-#8 (printed N/PD1, checked off the card faces 2026-09-18). Lorcast
+    # indexes them with a null pid, so link them for prices.
+    "Rapunzel - Ethereal Protector|2": 711443,       # Collection Starter Set promo
     "Pocahontas - Guiding the Tribe|3": 705068,
     "Vixey - Expert Fisher|4": 705072,
     "Buzz Lightyear - Providing Cover|5": 705073,
     "Boo - Energetic Child|6": 702706,
     "Merlin - Envisioning the Future|7": 705074,
     "Maximus - Relentless Stallion|8": 702707,
+    # Promo Set 4 #9-#16 (printed N/P4). Lorcast indexed P4 on 2026-09-18 with
+    # null pids. #12/#15/#16 used to be hand-built rows in a made-up
+    # "Attack of the Vine! Promos" set under invented numbers (Tigger sat at #10,
+    # which is really Meilin Lee's number) - retired by supabase/160.
+    "Morph - Little Imitator|9": 705078,
+    "Meilin Lee - Lead Vocalist|10": 705080,
+    "Randall Boggs - Scary Smart|11": 705079,
+    "Tigger - Hunny Barbarian|12": 705083,
+    "Belle - Always Reading|13": 705082,
+    "If I Didn't Have You|14": 705081,
+    "Rapunzel - Escaping the Tower|15": 705084,     # Set Championship participant
+    "Rapunzel - Escaping the Tower|16": 705085,     # Set Championship (Top 8, foil)
     "Mickey Mouse - Playful Sorcerer|7": 559564,
     "Iago - Out of Reach|8": 630086,
     "Mickey Mouse - True Friend|36": 653906,            # Promo Set 2 — Puzzle Promo
@@ -283,14 +296,14 @@ def main() -> None:
     # reprint of a Lorcast-indexed card. Clone the base row (by pid) and override
     # set / collector# / id / rarity / pid + swap to the promo's TCGplayer art.
     #   (base_pid, set_id, collector_number, new_id, promo_pid)
-    AVP_SET = "set_aotv_promos"        # Attack of the Vine! Promos (folds under Set 13)
+    P3_SET  = "set_1e6669367c7a4a208ce51fd8bd7d2c41"  # Promo Set 3
     CC1_SET = "set_curators_cc1"       # Curator's Collection: Heroines
     # PD1 is Lorcast's own rolling promo set (#1-#8 today). A promo that ships
     # inside a product hangs off PD1 by its PRINTED number - the product is the
     # packaging, not a set. That is why Illumineer's Quest Q3 gets no set row of
     # its own: its foils are PD1 cards (Zaven, 2026-09-16).
     PD1_SET = "set_b55bc6fc08484b40841f6956ba416fb2"
-    # DIS is a THIRD series, distinct from both AVP and PD1 (promo-printing-policy
+    # DIS is a separate series from PD1 and P4 (promo-printing-policy
     # Step 1, 2026-09-10/17) — Disney Parks exclusives ("Magical Places"), printed
     # N/DIS. We already held it as a real Lorcast set, id set_cc126d2d050b406aa
     # 0bbbc18268fb119, name "EPCOT Festival of the Arts" (code DIS), holding
@@ -303,13 +316,15 @@ def main() -> None:
         (659628, DIS_SET, "6",  "crd_dis_6_mickey_mouse_amber_champion",  712042),  # Magical Places promo, 6/DIS
         (555245, DIS_SET, "7",  "crd_dis_7_elsa_the_fifth_spirit",        712044),  # Magical Places promo, 7/DIS
         (704593, DIS_SET, "8",  "crd_dis_8_buzz_lightyear_providing_cover", 712043),  # Magical Places promo, 8/DIS — base is the AotV mainline printing (#77), not the existing 5/PD1 promo of the same card (Zaven, 2026-09-17)
-        (702660, AVP_SET, "10", "crd_avp_10_tigger_hunny_barbarian",  705083),  # buy-a-box promo
-        # Set Championship pair for Attack of the Vine!, both printings of
-        # AOTV #95 (base pid 702655). Participant is non-foil, the Top-8
-        # winner's copy is Holofoil — two numbers, two SKUs, same shape as the
-        # Promo Set 3 pairs (Tinker Bell #33/#34, Woody #53/#54).
-        (702655, AVP_SET, "15", "crd_avp_15_rapunzel_escaping_sc_participant", 705084),
-        (702655, AVP_SET, "16", "crd_avp_16_rapunzel_escaping_sc_champion",    705085),
+        # Promo Set 3 #58 / #60 — Attack of the Vine!-era event promos Lorcast's
+        # P3 feed doesn't carry (it stops at #57, plus our #59). Printed 58/P3
+        # and 60/P3. #61/#62 (Japan Set Championship pair) and #63 (JP-exclusive
+        # Buzz, pid 714954) are still open.
+        (690201, P3_SET,  "58", "crd_p3_58_sulley_the_new_boss",      692490),  # base AotV #24
+        (702669, P3_SET,  "60", "crd_p3_60_woody_helping_a_friend",   692491),  # base AotV #1
+        # Printed 15/PD1 — the promo packed with Quest of Wonders: An
+        # Illumineer's Lorebook. Base is Wilds Unknown #106.
+        (692050, PD1_SET, "15", "crd_pd1_15_pegasus_searching_high_and_low", 711485),
         (504451, CC1_SET, "1",  "crd_cc1_1_ariel_spectacular_singer", 702517),
         (619434, CC1_SET, "2",  "crd_cc1_2_elsa_trusted_sister",      702518),
         (586172, CC1_SET, "3",  "crd_cc1_3_jasmine_royal_seafarer",   702519),

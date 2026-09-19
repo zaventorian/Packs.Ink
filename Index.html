@@ -1332,11 +1332,21 @@ const SET_ORDER = [
 // legality — players looking at the parent set see these printings too, and
 // either copy counts as the parent set's card when deckbuilding. The child set
 // keeps its own tiles/labels; it just isn't a separate filter chip and is
-// matched + ranked + made legal as its parent. Set 13's prerelease promos
-// (set_aotv_promos) are Set 13 cards, so they live under "Attack of the Vine!".
+// matched + ranked + made legal as its parent. Empty today: its one entry,
+// the made-up "Attack of the Vine! Promos" set, was retired 2026-09-18 — its
+// cards are really Promo Set 4 #12/#15/#16 (supabase/160).
 const SET_PARENT = {
-  "Attack of the Vine! Promos": "Attack of the Vine!",
 };
+
+// Lorcast rows we deliberately never render. Deleting them from `cards` would
+// not stick — the daily Lorcast load re-inserts them — so they are dropped in
+// transformSupabaseData instead. Lorcast files Daisy Duck - Paranormal
+// Investigator as Promo Set 4 #7/#8; that card's promos are Promo Set 3
+// #23/#24, which we already carry (Zaven, 2026-09-18).
+const SUPPRESSED_CARD_IDS = new Set([
+  "crd_3649235bb31d4cf09fcdfa873f660fe3",  // "Promo Set 4" #7 Daisy Duck
+  "crd_1923db6966fd4f2991e4dd850de4c627",  // "Promo Set 4" #8 Daisy Duck
+]);
 // Promos live in their own sets (Promo Set 1/2/3, D23, EPCOT, LCP …) but are
 // reprints of cards from a mainline set. `_promoBaseSet` maps a promo's Product
 // Name -> the set its base (non-promo) card lives in, so filtering that set in
@@ -1844,14 +1854,23 @@ const TCG_PID_OVERRIDES = {
   // Promo Set 3 #57 — Lorcast indexes it now (pid null); the old crd_custom_
   // reprint row was retired 2026-08-12 (same dance as #52-55 / supabase 107).
   "Buzz Lightyear - Space Ranger|57": 692489,
-  // Attack of the Vine! prerelease-box promos (set_aotv_promos) — pid parity
-  // with patch_pid_overrides so the DB and client agree.
+  // PD1 #2-#8 and Promo Set 4 #9-#16 — pid parity with patch_pid_overrides so
+  // the DB and client agree. Lorcast indexes both sets with null pids.
+  "Rapunzel - Ethereal Protector|2": 711443,
   "Pocahontas - Guiding the Tribe|3": 705068,
   "Vixey - Expert Fisher|4": 705072,
   "Buzz Lightyear - Providing Cover|5": 705073,
   "Boo - Energetic Child|6": 702706,
   "Merlin - Envisioning the Future|7": 705074,
   "Maximus - Relentless Stallion|8": 702707,
+  "Morph - Little Imitator|9": 705078,
+  "Meilin Lee - Lead Vocalist|10": 705080,
+  "Randall Boggs - Scary Smart|11": 705079,
+  "Tigger - Hunny Barbarian|12": 705083,
+  "Belle - Always Reading|13": 705082,
+  "If I Didn't Have You|14": 705081,
+  "Rapunzel - Escaping the Tower|15": 705084,       // Set Championship participant
+  "Rapunzel - Escaping the Tower|16": 705085,       // Set Championship (Top 8, foil)
   "Mickey Mouse - Playful Sorcerer|7": 559564,
   "Iago - Out of Reach|8": 630086,
   "Mickey Mouse - True Friend|36": 653906,            // Promo Set 2 — Puzzle Promo
@@ -3424,6 +3443,7 @@ const transformSupabaseData = (priceRows, cardsRows, setNameById) => {
     // card — it's the foil printing of its base. Skip it here so the
     // catalog doesn't show a duplicate "1f" row alongside the base "1".
     if(origC.tcgplayer_product_id != null && FOIL_COMPANION_PIDS.has(origC.tcgplayer_product_id)) continue;
+    if(SUPPRESSED_CARD_IDS.has(origC.id)) continue;
 
     const rawSetName = setNameById[origC.set_id] || "";
     const setName = SET_DISPLAY_NAMES[rawSetName] || rawSetName;
