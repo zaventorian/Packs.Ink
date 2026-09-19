@@ -666,10 +666,11 @@ bundle → `Logos/lorcana/` (44 files, 728 KB). Guarded by `node scripts/test_br
 - **`PROMO_STAMPS` is keyed by SET name**, and only for stamps that map to a set in `SET_ORDER`. The
   bundle also carries GenCon, Disney100, League, Cruise, Film, Publishing and Magical Places marks;
   baking them would ship icons nothing can render. A promo set with no stamp (Magical Places Promos,
-  Curator's Collection) falls back to the generic Promo rarity icon. **⚠ Now that "Magical Places
-  Promos" is a real `SET_ORDER` name (renamed 2026-09-18, see the catalog-merging rules), the
-  bundle's own Magical Places mark could actually be baked and wired up here — hasn't been done yet,
-  needs a re-run of `bake_brand_assets.py` against the bundle.**
+  Curator's Collection, Promo Set 4, PD1) falls back to the generic Promo rarity icon. **Magical
+  Places Promos carries the bundle's own mark** (`promo/magical-places.svg`, from
+  `MagicalPlaces_Dark.svg`, baked 2026-09-18). **⚠ `.gitignore`'s promo-kit rule must stay
+  anchored (`/promo/`)** — the bare `promo/` it was matched `Logos/lorcana/promo/` too, so a newly
+  baked stamp was silently left out of `git add` while the six older ones (tracked earlier) looked fine.
 - **The rarity icons already shipped from an earlier copy of this bundle** — 6 of the 8 are
   byte-identical to `Rarity Icons/*-Color.svg`. `uncommon` and `legendary` are the Outlined
   variants, deliberately.

@@ -1323,6 +1323,8 @@ const SET_ORDER = [
   // card in it is an EPCOT Festival of the Arts card — that's a sub-label inside this
   // set (like a grading sub), not a set of its own.
   "Curator's Collection: Heroines", // 2026-07-17 — premium 6-card promo set (CC1)
+  "Promo Set 4",                    // 2026-07-17 — P4, Lorcast-indexed
+  "PD1",                            // 2026-07-28 — Lorcast's rolling product-promo set (5/PD1, 16/PD1 …)
   ...MAINLINE_SETS,
 ];
 
@@ -1579,7 +1581,7 @@ const cardParentSetForFilter = (row) => {
 // non-foils vs the rare foil prizes). Year 3 even gives foil and non-foil
 // different collector numbers.
 const UNIFIED_TILE_SETS = new Set([
-  "Promo Set 1", "Promo Set 2", "Promo Set 3",
+  "Promo Set 1", "Promo Set 2", "Promo Set 3", "Promo Set 4",
   "D23 Collection",
   "Magical Places Promos",
 ]);
@@ -1597,6 +1599,8 @@ const PROMO_RARITY_SETS = new Set([
   "Lorcana Challenge Promo (C2)",
   "Magical Places Promos",
   "Curator's Collection: Heroines",
+  "Promo Set 4",
+  "PD1",
 ]);
 
 // Lorcana Challenge Promo (C2) publishes foil and non-foil at DIFFERENT collector
@@ -2074,8 +2078,8 @@ const inkShieldSrc = (inks, ink) => {
 
 // The stamp actually PRINTED on a promo card, keyed by the set the site files it
 // under. These are single-fill SVGs rewritten to currentColor, so one file works
-// on all seven themes. A promo set with no stamp in the bundle (EPCOT Festival,
-// Curator's Collection) simply falls back to the generic Promo rarity icon.
+// on all seven themes. A promo set with no stamp in the bundle (Curator's
+// Collection, Promo Set 4, PD1) simply falls back to the generic Promo rarity icon.
 const PROMO_STAMPS = {
   "Promo Set 1":                  LORCANA_ART + "promo/promo-set-1.svg",
   "Promo Set 2":                  LORCANA_ART + "promo/promo-set-2.svg",
@@ -2083,6 +2087,7 @@ const PROMO_STAMPS = {
   "Lorcana Challenge Promo (C1)": LORCANA_ART + "promo/challenge.svg",
   "Lorcana Challenge Promo (C2)": LORCANA_ART + "promo/challenge.svg",
   "D23 Collection":               LORCANA_ART + "promo/d23.svg",
+  "Magical Places Promos":        LORCANA_ART + "promo/magical-places.svg",
 };
 
 // ⚠ A single-colour SVG must be rendered as a CSS MASK, never as an <img>.
@@ -5962,8 +5967,10 @@ const parseSearchQuery = (input) => {
     const next = tokens[i+1];
     if(/^\d+$/.test(next)){
       const idx = parseInt(next,10) - 1;
-      if(idx >= 0 && idx < SET_ORDER.length){
-        out.filters.set = SET_ORDER[idx];
+      // "set 1" is The First Chapter — the booster ordinal, so index
+      // MAINLINE_SETS. SET_ORDER starts with Extras and the promo sets.
+      if(idx >= 0 && idx < MAINLINE_SETS.length){
+        out.filters.set = MAINLINE_SETS[idx];
         used.add(i); used.add(i+1);
         break;
       }
@@ -21599,7 +21606,7 @@ function buildImportNameIndex(raw){
 const DREAMBORN_CN_SUFFIX_SETS = {
   p1: "Promo Set 1", p2: "Promo Set 2", p3: "Promo Set 3", p4: "Promo Set 4",
   c1: "Lorcana Challenge Promo (C1)", c2: "Lorcana Challenge Promo (C2)",
-  pd1: "D23 Collection", d23: "D23 Collection",
+  pd1: "PD1", d23: "D23 Collection",
 };
 
 // Parse a Dreamborn-style CSV and resolve each row to (card_id, printing,

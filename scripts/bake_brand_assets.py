@@ -125,8 +125,8 @@ INKS = ["Amber", "Amethyst", "Emerald", "Ruby", "Sapphire", "Steel"]
 # the bundle files them by YEAR ("1stPromo", "Promo2023") and we file them by set.
 #
 # ⚠ Only stamps that map to a set the site tracks. The bundle also carries
-# GenCon, Disney100, League, Cruise, Film, Publishing and Magical Places marks,
-# and none of them is a set in SET_ORDER — baking them would ship five icons
+# GenCon, Disney100, League, Cruise, Film and Publishing marks, and none of them
+# is a set in SET_ORDER — baking them would ship five icons
 # nothing can ever render. Add one the day its set exists, not before.
 #
 # The _White variants are the ones to take: they are single-fill, so bake_svg_mono
@@ -138,6 +138,8 @@ PROMO_STAMPS = [
     ("Promo Icons/3rdPromo_White.svg",                   "promo-set-3"),
     ("Promo Icons/ChallengePromoFullVersion_White.svg",  "challenge"),   # LCP C1 + C2
     ("Promo Icons/D23Expo_White.svg",                    "d23"),         # D23 Collection
+    # Single-fill (#1e1b4b) like the _White ones, so it bakes to currentColor too.
+    ("Promo Icons/MagicalPlaces_Dark.svg",               "magical-places"),  # Magical Places Promos (N/DIS)
 ]
 
 # Card-face glyphs. All single-colour, all recoloured to currentColor, so a
