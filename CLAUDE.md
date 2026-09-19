@@ -864,10 +864,10 @@ ETL → Supabase → client fetches once → localStorage cache → render. **Ne
 
 ## Client cache rules
 
-- **Catalog lives in IndexedDB** (2026-07 offline rework): db `packsink`, store `kv`, key `catalog`, record `{v: CACHE_KEY, t, rows, latestDate}`. `CACHE_KEY` (`packsink:catalog:vN`, currently **v55**) is still the version stamp — bump N whenever cached row shape changes; a mismatched `v` is treated as missing and the next write replaces it. 24h TTL with background refresh. **Full rows are stored — `img_large` and `text` are NOT stripped anymore** (that strip existed for the 5MB localStorage quota; IDB has no such ceiling). Body-text smart search therefore works on cache-replay sessions, including offline; the lazy text backfill only fires for rows migrated from a legacy localStorage cache.
+- **Catalog lives in IndexedDB** (2026-07 offline rework): db `packsink`, store `kv`, key `catalog`, record `{v: CACHE_KEY, t, rows, latestDate}`. `CACHE_KEY` (`packsink:catalog:vN`, currently **v57**) is still the version stamp — bump N whenever cached row shape changes; a mismatched `v` is treated as missing and the next write replaces it. 24h TTL with background refresh. **Full rows are stored — `img_large` and `text` are NOT stripped anymore** (that strip existed for the 5MB localStorage quota; IDB has no such ceiling). Body-text smart search therefore works on cache-replay sessions, including offline; the lazy text backfill only fires for rows migrated from a legacy localStorage cache.
 - **Legacy migration**: `readCache()` falls back to the old localStorage `packsink:catalog:vN` entry, returns it, and one-shot migrates it into IDB, deleting the localStorage copy on success (frees ~2.5MB back to the aux caches). `writeCache()` falls back to the old slim localStorage write only when IDB is unavailable (old private-mode Safari). Both are async now — `loadFromSupabase` awaits `readCache()`.
 - **IDB helpers** (Index.html top): `idbOpen/idbGet/idbSet/idbDel` — resolve (never reject); reads → `undefined`, writes → `false` on failure. `offlineMirrorWrite/offlineMirrorRead("<what>:<uid>", data)` wrap them for per-user offline mirrors (see "Offline support" below).
-- **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs. On network failure the probe trusts the TTL and keeps the cached catalog (this is the offline path).
+- **Freshness probe** (added 2026-05-24): every page load with a "still fresh by TTL" cache fires a single-row query against `card_prices_latest` for `max(price_date)`. If server > cache's stored `latestDate`, cache is invalidated and refreshed. Means daily visitors see today's prices within seconds of opening the site after the ETL, not 24h later. **When the probe detects an outdated catalog it also wipes every price-derived aux cache** (`packsink:*` except catalog/auth/install-prefs) — movers, sealed, history, setsMeta, colvalue all derive from price data and were going stale silently behind their 12h TTLs. On network failure the probe trusts the TTL and keeps the cached catalog (this is the offline path). **It also compares the `cards` row count** (a HEAD with `Prefer: count=exact`, stored as `cardCount` in the IDB record, 2026-09-18): Lorcast adds cards on its own clock, and Promo Set 4 landed after that day's prices, so a catalog saved that morning passed the date check and hid the whole set for up to 24h. Don't swap it for `max(updated_at)` — the daily Lorcast load touches nearly every row, which would cold-fetch everyone daily.
 - **`AUX_CACHE_VERSION` sentinel** (Index.html top, added 2026-05-24): per-deploy stamp compared against `packsink:auxCacheVersion` on module load. Mismatch → one-shot wipe of every `packsink:*` key except catalog/auth/install-prefs. **Bump the string to force every existing user's next page load to refresh aux caches** — useful when an ETL/matview change makes those caches stale faster than their TTLs catch. Independent from `CACHE_KEY` (which only invalidates the catalog itself).
 - **Visibility re-probe**: `visibilitychange` + `pageshow` listeners re-run `loadFromSupabase` when the tab/PWA becomes visible again (throttled 60s). Without this, PWA users who background the app would see stale data forever on resume — React tree never remounts.
 - Per-view caches use `readJsonCache(key, ttlMs)` / `writeJsonCache(key, data)`:
@@ -1351,9 +1351,9 @@ the Graded Market tile, `paintGradedTile` (its PNG), Your Top Movers, and the gr
 - **⚠ The rule is NOT "is this a chase rarity", and the live catalog holds counterexamples in
   BOTH directions.** Challenge Promo (C1) is rarity *Promo* and its 8 cards genuinely split, into
   Top Prize foil and Prize Wall non-foil — two different markets (Cinderella - Stouthearted PSA
-  10: **$1,707 vs $280**). PD1's *Beast - Snowfield Troublemaker* is also rarity Promo and splits
-  Normal / Cold Foil like an ordinary booster card. So the question is **whether a second printing
-  exists**, which only the catalog can answer — hence an index rather than a rarity list.
+  10: **$1,707 vs $280**). So the question is **whether a second printing exists**, which only
+  the catalog can answer — hence an index rather than a rarity list. (This used to cite PD1's Beast
+  as a Promo that splits Normal / Cold Foil. It doesn't; see the promo-sets note below.)
 - **⚠ The Challenge words are looked up by BUCKET, never by the raw printing.**
   `PRINTING_VARIANT_LABEL` is keyed `"Foil"`/`"Non-Foil"`, and C1 stores its foil as `"Holofoil"`,
   which `variantBadge` deliberately suppresses as a finish word — so passing the raw value returns
@@ -1781,6 +1781,11 @@ so #7 there is five different cards.
   SC pair (Maleficent - Monstrous Dragon), unpriced synthetic rows from `supabase/160` labelled via
   `REGIONAL_EXCLUSIVE_LABEL`; #63 JP Buzz IS on TCGplayer (714954), so it keeps its price and gets
   its label from `PRICED_REGIONAL_LABEL_BY_ID`.
+- **A single-printing promo gets exactly ONE row** — one add box — whatever emitted it.
+  `collapsePromoPrintings` runs last in `transformSupabaseData` over every `UNIFIED_TILE_SETS` set and
+  keeps the priced row, then foil over Normal. Reported 2026-09-18: unpriced PD1 cards rendered a
+  Non-Foil AND a Foil box. C1/C2 are deliberately outside it. Guarded by
+  `node scripts/test_promo_single_printing.mjs`.
 - **Every promo set shows one "Promos" counter** on its Collection tile (`UNIFIED_TILE_SETS`), and
   the grid rules them off from the booster sets with `.collection-sets-divider`.
 
