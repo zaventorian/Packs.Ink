@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=432">
+<link rel="stylesheet" href="styles.css?v=433">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -576,7 +576,7 @@ const deckVersionsUnavailable = (err) => {
 
 // Local cache: render instantly on subsequent loads, then refresh in background.
 // Bump the version suffix any time the row shape changes (or to bust a bad cache).
-const CACHE_KEY = "packsink:catalog:v56";  // v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
+const CACHE_KEY = "packsink:catalog:v57";  // v57: promo-set rework — SUPPRESSED_CARD_IDS, one placeholder row per unpriced P4/PD1 card, the P3 #63 "Japanese Exclusive" label, and the cards-count freshness probe (a v56 record has no cardCount). (v56: Coconut Beta 2 — The Vine - Towering Stalk is a NEW synthetic row baked in by transformSupabaseData, so a cache replay would leave it out of Cards browse and smart search for 24h. (v55: Elsa - Exploring the Unknown 59/P3 (JA) moved to JAPAN_ONLY_NONFOIL, so its img_* now point at the JP scan — the English frame is baked into cached rows and a replay would keep showing it for 24h. v54: Coconut Beta 1.1 — Stitch/Mufasa/Donald Duck/Robin Hood ability text + their re-revved art URLs are baked into the cached synthetic rows, so a replay would keep the old wording searchable for 24h. v53: retired the 6 crd_prestage_avp_* rows (superseded by Lorcast's PD1 twins — same pid) + the crd_custom_692489 P3 #57 reprint row; a replayed cache would keep showing the duplicate tiles for 24h. Cold-fetch required. v52: Coconut leader merge/suppress.)
 // Per-deploy sentinel for the price-derived auxiliary caches (movers, sealed,
 // per-card history, setsMeta, colvalue, etc.). Bump this whenever an ETL or
 // matview change makes those caches stale faster than their TTLs would catch.
@@ -935,7 +935,8 @@ async function readCache(){
     const rec = await idbGet(CATALOG_IDB_KEY);
     if(rec && rec.v === CACHE_KEY && typeof rec.t === "number" &&
        Array.isArray(rec.rows) && rec.rows.length >= CACHE_MIN_ROWS){
-      return {rows: rec.rows, stale: Date.now() - rec.t > CACHE_MAX_AGE_MS, latestDate: rec.latestDate || null};
+      return {rows: rec.rows, stale: Date.now() - rec.t > CACHE_MAX_AGE_MS, latestDate: rec.latestDate || null,
+              cardCount: typeof rec.cardCount === "number" ? rec.cardCount : null};
     }
   } catch {}
   // Legacy / no-IDB fallback: the old localStorage cache.
@@ -957,14 +958,15 @@ async function readCache(){
     return {rows, stale, latestDate: latestDate || null};
   } catch { return null; }
 }
-async function writeCache(rows, latestDate){
+async function writeCache(rows, latestDate, cardCount){
   if(!Array.isArray(rows) || rows.length < CACHE_MIN_ROWS) return; // don't poison the cache with partial data
   // IndexedDB path: store the FULL rows — no img_large/text strip. The strip
   // below exists purely for localStorage's ~5MB quota; IDB has no such
   // ceiling, and keeping text means body-text smart search works on
   // cache-replay sessions (including fully offline) without the lazy
   // backfill, while img_large keeps the detail modal / posters sharp.
-  const idbOk = await idbSet(CATALOG_IDB_KEY, {v: CACHE_KEY, t: Date.now(), rows, latestDate: latestDate || null});
+  const idbOk = await idbSet(CATALOG_IDB_KEY, {v: CACHE_KEY, t: Date.now(), rows, latestDate: latestDate || null,
+    cardCount: typeof cardCount === "number" ? cardCount : null});
   if(idbOk){
     // Free the legacy localStorage copy — its ~2.5MB goes back to aux caches.
     try { localStorage.removeItem(CACHE_KEY); } catch {}
@@ -53448,12 +53450,27 @@ function App(){
       // (~50ms) so the cost is trivial vs the correctness win.
       if(!cached.stale){
         try {
-          const r = await fetch(SUPABASE_URL + "/rest/v1/card_prices_latest?select=price_date&order=price_date.desc&limit=1",
-            {headers: sbHeaders()});
+          // Second probe, in parallel: the number of rows in `cards`. Prices
+          // land once a day, but Lorcast adds cards on its own clock — Promo
+          // Set 4 arrived AFTER 2026-09-18's prices, so a catalog saved that
+          // morning passed the date check and hid the whole set for up to
+          // 24h. A HEAD with count=exact returns no rows, just the total.
+          const [r, rc] = await Promise.all([
+            fetch(SUPABASE_URL + "/rest/v1/card_prices_latest?select=price_date&order=price_date.desc&limit=1",
+              {headers: sbHeaders()}),
+            fetch(SUPABASE_URL + "/rest/v1/cards?select=id&limit=1",
+              {method: "HEAD", headers: {...sbHeaders(), Prefer: "count=exact"}}).catch(() => null),
+          ]);
           if(r.ok){
             const j = await r.json();
             const serverDate = (j && j[0] && j[0].price_date) || null;
-            if(serverDate && cached.latestDate && serverDate <= cached.latestDate){
+            const cr = rc && rc.ok ? rc.headers.get("content-range") : null;
+            const serverCards = cr ? parseInt(cr.split("/")[1], 10) : NaN;
+            // A cache written before this probe existed has no count: treat it
+            // as current on that axis rather than forcing everyone to refetch.
+            const cardsCurrent = !Number.isFinite(serverCards) || cached.cardCount == null
+              || serverCards === cached.cardCount;
+            if(serverDate && cached.latestDate && serverDate <= cached.latestDate && cardsCurrent){
               return; // cache is genuinely current
             }
             console.log("Catalog cache out of date (server:", serverDate, "cache:", cached.latestDate, "). Refreshing...");
@@ -53563,7 +53580,7 @@ function App(){
       for(const p of priceRows){
         if(p && p.price_date && (!maxPriceDate || p.price_date > maxPriceDate)) maxPriceDate = p.price_date;
       }
-      writeCache(allRows, maxPriceDate);
+      writeCache(allRows, maxPriceDate, cardsRows.length);
     } catch(e){
       // If we already showed cache, just log and keep that on screen.
       if(cached && cached.rows.length) console.warn("background refresh failed:", e);
