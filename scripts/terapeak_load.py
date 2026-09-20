@@ -64,7 +64,17 @@ def parse_date(s):
 # is NOT — Set Championship promos in Promo Set 1/2 use it too ("Ursula Set
 # Championship Top Prize Promo 38/P1", $66), and those aren't C1 foils. So the
 # foil side additionally requires Challenge context.
-CHALLENGE_CTX_RE = re.compile(r"\bc[12]\b|/\s*c[12]\b|challenge|continentals", re.I)
+# "DLC" is Disney Lorcana Challenge, and terapeak_match's SET_ALIASES already
+# reads it as one (it is what makes set_hint return "Challenge Promo") -- this
+# regex was the one place that did not, so a "DLC Top Prize" title scored a set
+# hint and NO printing, landing the row in a different pkey bucket from the same
+# card's other sales. Measured over all 88,912 stored titles: 225 say DLC, 180
+# already carry another Challenge token, and adding it flips exactly 4 rows
+# None -> Foil -- three of which someone had ALREADY corrected to Foil by hand,
+# which is the argument for the token. The 34 DLC titles with no Top-Prize
+# wording are untouched, and none of the 225 is a "downloadable content" false
+# positive.
+CHALLENGE_CTX_RE = re.compile(r"\bc[12]\b|/\s*c[12]\b|challenge|continentals|\bdlc\b", re.I)
 TOP_PRIZE_RE = re.compile(r"\btop\s*(?:prize|4|8|16|32|64)\b|\bcontinentals\b", re.I)
 PRIZE_WALL_RE = re.compile(r"\bprize\s*wall\b|\bside\s*event\b", re.I)
 

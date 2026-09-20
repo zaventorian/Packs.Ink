@@ -1455,6 +1455,55 @@ Attribution is title-based, so wrong rows are inevitable. Three layers, in pipel
 
 **`graded_sales.exclude_reason`** (migration 111) is what makes that reversible: before it, `excluded` was a bare boolean, so a mis-set threshold couldn't be undone without also undoing every hand-reviewed exclusion. Values: `outlier`, `lot`, `foreign`, `auto`, `troll`, `cn-conflict`, `nomatch`, `manual`; NULL for rows excluded before 111.
 
+### An unattributed sale is invisible FOREVER unless something re-asks (2026-09-20)
+
+`terapeak_load.py --new-only` is `ON CONFLICT DO NOTHING` and has to be (it is what
+makes manual `excluded` / `card_id` / grade fixes survive a re-load). The undocumented
+consequence: **every improvement to the matcher is invisible to rows already in the
+table.** A sale that failed attribution the day it was scraped stays failed, and it
+fails silently twice over — an unmatched row is also auto-flagged `excluded`, so it
+appears on no surface and in no report.
+
+Found when Zaven asked why a **$39,100 PSA 10 sale was missing** (eBay item
+298340921150, "Gold Mickey - Brave Little Tailor ... DLC Top Prize", scraped
+2026-06-22). Nothing was broken at the time: the title covers 4 of that card's 5 name
+tokens because it says "Gold Mickey" and never "Mickey Mouse", giving **overlap 0.80
+against the 0.85 no-other-evidence gate** — the `match_confidence: 0.8` stored on the
+row is literally that number, fossilised. The matcher has since learned `DLC` as a set
+hint and resolves the same title at score 1.20, onto the right card. It was simply
+never asked again. Meanwhile that card's PSA 10 tier showed **$3,760 and "−79%"** when
+its real latest PSA 10 sale was ten times that.
+
+- **`scripts/rematch_graded_unmatched.py` is the answer, and it is NOT
+  `reattribute_graded_sales.py`** (which the graded-scrape skill rightly forbids: that
+  one walks every row and excludes anything the matcher cannot place, hand-made
+  attributions included). The scoping is the entire safety argument: it fetches **only
+  `card_id IS NULL`** and skips any row carrying a concrete `exclude_reason`, so it can
+  only act on rows that have **never been attributed** — which means they have never
+  appeared on the site, so **there is no human decision about them to clobber.** That is
+  what makes un-excluding them safe, and it is the one claim to re-check before widening
+  the query by so much as a column.
+- **⚠ It un-excludes only a row that can actually reach the rollup.** The matview's gate
+  is `card_id AND grade AND sale_price AND NOT excluded`, so a gradeless row is
+  attributed but deliberately **left excluded** and reported for the slab-OCR pass.
+  Clearing the flag there would report a fix that fixed nothing.
+- **The straggler report is half the point.** Every run names every still-unattributed
+  sale at or above **$500** (`LOUD_USD`). The reason this went three months unnoticed is
+  that nothing ever said "we are holding a five-figure sale we cannot place"; a dry run
+  today names 741 of them, worth re-reading rather than re-deriving.
+- Wired into `graded_run.ps1` as **Stage 4b**, right after the load. Guarded by
+  `python scripts/test_rematch_unmatched.py` (no network — it builds a mini catalog index
+  and drives the real `decide()`), which pins BOTH directions: loosening the scoping is
+  silent data loss, tightening it goes back to losing the sales.
+- **⚠ `CHALLENGE_CTX_RE` now includes `dlc`**, because `terapeak_match`'s `SET_ALIASES`
+  always did and this regex was the one place that didn't — so a "DLC Top Prize" title
+  scored a set hint and **no printing**, which would file it in a different
+  `graded_sale_pkey` bucket from the same card's other sales. Measured over all 88,912
+  stored titles: 225 say DLC, 180 already carry another Challenge token, and the token
+  flips exactly **4** rows `None → Foil` — **three of which someone had already corrected
+  to Foil by hand**, which is the argument for it. Set Championship promos ("Top Prize
+  Promo 38/P1") still correctly resolve to `None`.
+
 **Counting `#NNN` occurrences does NOT detect multi-card lots** — sellers append PSA cert and inventory numbers in the same form, so the rule flagged 574 ordinary single-card sales against 1 real lot. Don't reintroduce it; the note is in `terapeak_match.py`.
 
 ### Price Graphing "By Graded" mode

@@ -72,7 +72,10 @@ if ($KeepChrome) {
 if ($DryRun) {
   Say "dry run: would launch Chrome on the burner profile, then:"
   Say "  $Py -u scripts\terapeak_topup.py $Grader"
-  if (-not $SkipLoad) { Say "  $Py -u scripts\terapeak_load.py --new-only" }
+  if (-not $SkipLoad) {
+    Say "  $Py -u scripts\terapeak_load.py --new-only"
+    Say "  $Py -u scripts\rematch_graded_unmatched.py --commit"
+  }
   exit 0
 }
 
@@ -124,6 +127,19 @@ try {
   & $Py -u "scripts\terapeak_load.py" --new-only | Tee-Object -FilePath (Join-Path $LogDir "_run_load_$stamp.log")
   $rc = $LASTEXITCODE
   if ($rc -ne 0) { Die "terapeak_load.py exited $rc - see the log in $LogDir" 1 }
+
+  # --- Stage 4b: re-ask the CURRENT matcher about never-attributed rows ------
+  # --new-only above is ON CONFLICT DO NOTHING, so matcher improvements never
+  # reach rows already in the table: a sale that failed attribution the day it
+  # was scraped stays failed, and silently, because an unmatched row is also
+  # auto-excluded. That is how a $39,100 PSA 10 sale sat invisible for three
+  # months. This pass only ever touches rows with card_id IS NULL and no
+  # concrete exclude_reason -- it cannot reach a hand-made fix -- and it prints
+  # every still-unattributed sale over $500 so the next one gets NOTICED.
+  Say "re-matching never-attributed rows (safe: card_id IS NULL only)"
+  & $Py -u "scripts\rematch_graded_unmatched.py" --commit | Tee-Object -FilePath (Join-Path $LogDir "_run_rematch_$stamp.log")
+  $rc = $LASTEXITCODE
+  if ($rc -ne 0) { Die "rematch_graded_unmatched.py exited $rc - see the log in $LogDir" 1 }
 }
 finally { Pop-Location }
 
