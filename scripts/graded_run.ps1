@@ -11,6 +11,10 @@ reconcile + conflation audit) are judgment calls and run after this - see
   ... -SkipLoad       scrape only
   ... -DryRun         checks only, launches and scrapes nothing
   ... -KeepChrome     reuse a running Chrome (stale date window - avoid)
+  ... -Raw            scrape RAW (ungraded) sales for the raw_watchlist promos
+                      into raw_sales instead. Same Chrome, same captcha rules.
+  ... -Deep           with -Raw: ignore per-query cutoffs and pull each query to
+                      exhaustion (the right mode for a first run).
 
 Exit codes: 0 ok | 2 Chrome/login/captcha before scraping | 3 captcha mid-scrape
 (progress saved, re-run resumes) | 1 anything else.
@@ -20,7 +24,9 @@ param(
   [string]$Grader = "ALL",
   [switch]$DryRun,
   [switch]$SkipLoad,
-  [switch]$KeepChrome
+  [switch]$KeepChrome,
+  [switch]$Raw,
+  [switch]$Deep
 )
 
 $ErrorActionPreference = "Stop"
@@ -41,7 +47,7 @@ if (-not (Test-Path $LogDir))    { New-Item -ItemType Directory -Path $LogDir | 
 
 # --- Stage 1a: never two scrapers against the same tab -----------------------
 $live = Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
-        Where-Object { $_.CommandLine -match 'terapeak_(topup|scrape|backfill_loop)' -and $_.ProcessId -ne $PID }
+        Where-Object { $_.CommandLine -match 'terapeak_(topup|scrape|backfill_loop)|raw_topup' -and $_.ProcessId -ne $PID }
 if ($live) {
   $live | ForEach-Object { Say ("  running: PID {0}  {1}" -f $_.ProcessId, $_.CommandLine) }
   Die "a Terapeak scraper is already running - two against one Chrome tab causes redirects and stalls. Let it finish or taskkill it (NOT the dev_server.py PIDs)." 1
@@ -71,8 +77,16 @@ if ($KeepChrome) {
 
 if ($DryRun) {
   Say "dry run: would launch Chrome on the burner profile, then:"
-  Say "  $Py -u scripts\terapeak_topup.py $Grader"
-  if (-not $SkipLoad) { Say "  $Py -u scripts\terapeak_load.py --new-only" }
+  if ($Raw) {
+    Say "  $Py -u scripts\raw_topup.py$(if($Deep){' --deep'})"
+    if (-not $SkipLoad) { Say "  $Py -u scripts\raw_load.py --from-jsonl   (dry run; --commit is yours)" }
+  } else {
+    Say "  $Py -u scripts\terapeak_topup.py $Grader"
+    if (-not $SkipLoad) {
+      Say "  $Py -u scripts\terapeak_load.py --new-only"
+      Say "  $Py -u scripts\rematch_graded_unmatched.py --commit"
+    }
+  }
   exit 0
 }
 
@@ -110,20 +124,58 @@ Say "Chrome ready: $title"
 Push-Location $Repo
 try {
   # --- Stage 3: scrape -------------------------------------------------------
+  # -Raw drives the SAME Chrome through the SAME SPA; only the query list and the
+  # destination differ (card names -> scripts/raw_output/ -> raw_sales). Sharing
+  # this driver rather than forking it is deliberate: stages 1a-1c hold the
+  # stale-Chrome and captcha knowledge, and a second copy would drift from it.
   $stamp = Get-Date -Format "yyyyMMdd_HHmmss"
-  Say "scraping ($Grader) - All-sites SPA, newest-first, bounded to the last-scrape date"
-  & $Py -u "scripts\terapeak_topup.py" $Grader | Tee-Object -FilePath (Join-Path $LogDir "_run_topup_$stamp.log")
+  if ($Raw) {
+    $rawArgs = @()
+    if ($Deep) { $rawArgs += "--deep" }
+    Say "scraping RAW watchlist queries - All-sites SPA, newest-first"
+    & $Py -u "scripts\raw_topup.py" @rawArgs | Tee-Object -FilePath (Join-Path $LogDir "_run_rawtopup_$stamp.log")
+  } else {
+    Say "scraping ($Grader) - All-sites SPA, newest-first, bounded to the last-scrape date"
+    & $Py -u "scripts\terapeak_topup.py" $Grader | Tee-Object -FilePath (Join-Path $LogDir "_run_topup_$stamp.log")
+  }
   $rc = $LASTEXITCODE
   if ($rc -eq 3) { Die "eBay threw a captcha mid-scrape. Progress is saved - solve it in the Chrome window, then re-run (already-done graders no-op via JSONL dedup)." 3 }
   if ($rc -ne 0) { Die "terapeak_topup.py exited $rc - see the log in $LogDir" 1 }
 
   if ($SkipLoad) { Say "scrape done (-SkipLoad); stopping before the DB load."; exit 0 }
 
+  if ($Raw) {
+    # ⚠ NOT --commit. raw_load.py is dry-run by default on purpose: these cards
+    # are on the watchlist BECAUSE the site shows a fossil or a dash for them, so
+    # any number published is believed, and every mis-attribution available is an
+    # order of magnitude wrong. Read the review report it prints (per-card price
+    # spread, multi-quantity listings, outliers), then re-run with --commit.
+    Say "loading raw_sales - DRY RUN; read the report, then re-run with --commit"
+    & $Py -u "scripts\raw_load.py" --from-jsonl | Tee-Object -FilePath (Join-Path $LogDir "_run_rawload_$stamp.log")
+    $rc = $LASTEXITCODE
+    if ($rc -ne 0) { Die "raw_load.py exited $rc - see the log in $LogDir" 1 }
+    Say "raw scrape done. Review the report, then: $Py scripts\raw_load.py --from-jsonl --commit"
+    exit 0
+  }
+
   # --- Stage 4: insert-only load --------------------------------------------
   Say "loading into graded_sales (--new-only: never updates existing rows)"
   & $Py -u "scripts\terapeak_load.py" --new-only | Tee-Object -FilePath (Join-Path $LogDir "_run_load_$stamp.log")
   $rc = $LASTEXITCODE
   if ($rc -ne 0) { Die "terapeak_load.py exited $rc - see the log in $LogDir" 1 }
+
+  # --- Stage 4b: re-ask the CURRENT matcher about never-attributed rows ------
+  # --new-only above is ON CONFLICT DO NOTHING, so matcher improvements never
+  # reach rows already in the table: a sale that failed attribution the day it
+  # was scraped stays failed, and silently, because an unmatched row is also
+  # auto-excluded. That is how a $39,100 PSA 10 sale sat invisible for three
+  # months. This pass only ever touches rows with card_id IS NULL and no
+  # concrete exclude_reason -- it cannot reach a hand-made fix -- and it prints
+  # every still-unattributed sale over $500 so the next one gets NOTICED.
+  Say "re-matching never-attributed rows (safe: card_id IS NULL only)"
+  & $Py -u "scripts\rematch_graded_unmatched.py" --commit | Tee-Object -FilePath (Join-Path $LogDir "_run_rematch_$stamp.log")
+  $rc = $LASTEXITCODE
+  if ($rc -ne 0) { Die "rematch_graded_unmatched.py exited $rc - see the log in $LogDir" 1 }
 }
 finally { Pop-Location }
 

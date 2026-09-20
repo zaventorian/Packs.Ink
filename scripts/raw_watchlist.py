@@ -87,6 +87,37 @@ WATCHLIST = [
 ]
 
 
+# ⚠ TWO of these cards share a (name, collector number) with ANOTHER catalog
+# card, and a title cannot always tell them apart. Found 2026-09-20 in the loaded
+# data, not in theory: Promo Set 1 #1's sales came back bimodal -- $855-$1,900
+# against $166-$295 -- with the two clusters carrying LITERALLY indistinguishable
+# titles ("...Brave Little Tailor D23 Expo Promo Foil 01/D23 EN" at $202.95 and
+# "...Brave Little Tailor D23 Expo Pro..." at $1,900). The cheap cluster is the
+# 2024 D23 COLLECTION #1, whose TCGplayer market is $209.05 -- a dead match.
+#
+# The matcher cannot fix this: `set_hint` maps the token "D23" to Promo Set 1
+# unconditionally, so every D23 Collection card is hinted onto the 2022 set. That
+# bias is invisible in the graded pipeline (a slab's title carries a year and a
+# grade) and fatal here, because last-sold is the headline number -- the card
+# would have published $202.95 against a real market near $1,142.
+#
+# So a twinned card must PROVE its era. This is gate 2's rule (undecidable means
+# dropped) applied where the ambiguity is between two real cards rather than
+# between a promo and a bulk rare. It fails closed: sales that cannot prove it
+# are excluded, including genuine ones, which is the cheap side of the trade.
+#
+# ⚠ Both twins have a live TCGplayer price, so by gate 3 they are not ours to
+# price anyway -- we simply cannot tell which rows are theirs.
+#   #1 -> D23 Collection #1 ($209.05) : "D23" is shared, so only a YEAR separates
+#         them. 2022 is the Expo set; the Collection is 2024.
+#   #5 -> Promo Set 3 #5 ($49.40)     : Promo Set 3 is Disney Cruise Line, so the
+#         token "D23" IS decisive here, as is the year.
+TWIN_REQUIRE = {
+    ("Promo Set 1", "1"): r"\b2022\b",
+    ("Promo Set 1", "5"): r"\bd23\b|\b2022\b",
+}
+
+
 def queries():
     """The DISTINCT keyword searches covering the whole list, ordered so the
     highest-value cards are scraped first (a captcha mid-run keeps what it got).

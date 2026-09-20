@@ -36,7 +36,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from terapeak_load import printing_of, exclude_reason_for, NON_FOIL_RE
+from terapeak_load import printing_for, exclude_reason_for, NON_FOIL_RE
 from terapeak_match import is_nonsingle
 
 try:
@@ -56,7 +56,7 @@ def fetch_all():
     rows, off = [], 0
     while True:
         r = requests.get(f"{SB}/rest/v1/graded_sales", headers=HEAD, timeout=90, params={
-            "select": "item_id,title,printing,excluded,exclude_reason,sale_price",
+            "select": "item_id,card_id,title,printing,excluded,exclude_reason,sale_price",
             "offset": off, "limit": 1000, "order": "item_id"})
         r.raise_for_status()
         b = r.json()
@@ -112,13 +112,17 @@ def main():
     # the bare `"foil" in t` test — which stores the OPPOSITE of what the listing
     # said. Rows stored as "Normal" are deliberately NOT touched: printing_of never
     # returns that value, so they came from some other path and their provenance is
-    # unknown.
+    # unknown. (printing_for CAN return "Normal", for a named-variant card whose
+    # title does not name the variant -- but that only ever fills a NULL above,
+    # never overwrites, so the rule still holds.)
     fix_inverted = []
 
     for r in rows:
         t = r.get("title") or ""
         if r.get("printing") is None:
-            p = printing_of(t)
+            # printing_for, not printing_of: a named-variant card names its own
+            # printing, and on those the finish reader answers for the wrong axis.
+            p = printing_for(r.get("card_id"), t)
             if p:
                 add_printing[p].append(r["item_id"])
         elif r["printing"] in ("Foil", "Cold Foil") and NON_FOIL_RE.search(t.lower()):

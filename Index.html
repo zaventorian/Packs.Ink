@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=436">
+<link rel="stylesheet" href="styles.css?v=438">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -653,6 +653,101 @@ const gradedVariantLabel = (printing, setName) => {
   if(printing === "Non-Foil") return "Non-Foil";
   return variantBadge(printing);                            // Two Swords / Text Error / null
 };
+
+// ── Raw (ungraded) eBay sales ────────────────────────────────────────────────
+// The last real sold price for the ~24 high-end promos TCGplayer cannot price.
+// `card_prices_latest` is an INNER JOIN on a TCGplayer product, so a card it has
+// never recorded a sale for renders a dash and one it froze on renders a fossil
+// — Challenge Promo #5 Mickey Mouse - Brave Little Tailor has NEVER had a
+// market_price, #9 Baymax shows its $63 NON-foil while the foil trades in five
+// figures, and a raw Rapunzel - Gifted with Healing 4/C1 Foil sold for $16,406.
+// For those cards this is not a second opinion, it is the only number there is.
+// Pipeline: scripts/raw_watchlist.py → raw_topup.py → raw_match.py → raw_load.py
+// → raw_sales → raw_sales_rollup (migration 163).
+//
+// The whole table is ~30 rows (24 cards, a couple of printing buckets each), so
+// it is fetched once per session and held in module scope — a per-card request
+// would cost a round trip on every modal open to answer a question about a list
+// that fits in a screenful.
+// `rollup` is the summary (last sold / avg of 5, per printing bucket) and
+// `sales` the individual sales, which the price-history chart plots as dots.
+// Both are fetched together because the card modal always wants both, and both
+// are tiny — the whole INCLUDED dataset is under a hundred rows.
+let _rawSales = null;                       // {rollup: Map, sales: Map} | null
+let _rawSalesPromise = null;
+const EMPTY_RAW = {rollup: new Map(), sales: new Map()};
+async function fetchRawSales(){
+  if(_rawSales) return _rawSales;
+  if(_rawSalesPromise) return _rawSalesPromise;
+  const group = (rows, key) => {
+    const m = new Map();
+    for(const r of (rows || [])){
+      if(!m.has(r[key])) m.set(r[key], []);
+      m.get(r[key]).push(r);
+    }
+    return m;
+  };
+  _rawSalesPromise = Promise.all([
+    sbFetchAll("raw_sales_rollup", {
+      select: "card_id,printing,sale_count,last_sold_date,first_sold_date,last_sold_price,avg_last_5,last_5_count,min_price,max_price",
+    }),
+    // ⚠ `excluded=is.false` is not optional. The table deliberately KEEPS every
+    // row it rejected (a slab, a pin, a poster, a twin it could not place) so a
+    // class stays auditable and reversible — plotting them would put a $16,406
+    // PSA 10 and an $8 pin on the same chart as the card's real sales.
+    sbFetchAll("raw_sales", {
+      select: "card_id,printing,sold_date,sale_price,quantity_sold,title,listing_url",
+      excluded: "is.false", card_id: "not.is.null", order: "sold_date.asc",
+    }),
+  ]).then(([roll, sales]) => {
+    _rawSales = {rollup: group(roll, "card_id"), sales: group(sales, "card_id")};
+    return _rawSales;
+  }).catch(() => {
+    // ⚠ Empty Maps, never a throw and never a retry loop. Before migration 163
+    // is applied this 404s on every card opened, and a card page must not break
+    // — or even look different — because an optional extra price source is not
+    // deployed yet. Cached so it is asked exactly once per session.
+    _rawSales = EMPTY_RAW;
+    return _rawSales;
+  });
+  return _rawSalesPromise;
+}
+
+// Pick the rollup row for one printing. The rollup is keyed by the SAME bucket
+// the graded rollup uses (public.graded_sale_pkey), so this mirrors the client's
+// existing gradedSlotBucket rather than inventing a second mapping.
+//
+// ⚠ An empty-string bucket means the card has ONE printing — graded_sale_pkey
+// returns '' when neither split_printing nor foil_split is set, which is the case
+// for every Promo Set 1/3 and C2 card on the watchlist. Those must match whatever
+// printing the stat row is asking about. The Challenge (C1) cards DO split, and
+// there the two buckets are Top Prize foil and Prize Wall non-foil — markets
+// ~50x apart ($1,707 vs $280 on Cinderella - Stouthearted), so a mismatch there
+// is the most expensive bug this feature can have. 'Unknown' is its own bucket
+// by construction and can never be read as either real printing.
+// The individual sales to plot, for the printings currently on the chart.
+// ⚠ A Challenge card's Top Prize foil ($16,406) and Prize Wall non-foil ($122)
+// on one axis makes the cheaper series unreadable, so the dots follow the same
+// foil toggle the TCGplayer lines already obey.
+const rawPointsFor = (raw, cardId, printings) => {
+  if(!raw) return null;
+  const roll = raw.rollup.get(cardId), sales = raw.sales.get(cardId);
+  if(!roll || !sales || !sales.length) return null;
+  // One bucket ('') means the card has no printing axis at all — every sale
+  // belongs to whichever row is on screen. Same rule as rawSaleMatch.
+  if(roll.length === 1 && !roll[0].printing) return sales;
+  const want = new Set(printings.map(gradedSlotBucket).filter(Boolean));
+  return sales.filter(x => want.has(gradedSlotBucket(x.printing)));
+};
+
+const rawSaleMatch = (rows, printing) => {
+  if(!rows || !rows.length) return null;
+  const single = rows.find(r => !r.printing);
+  if(single) return single;
+  const b = gradedSlotBucket(printing);
+  return b ? (rows.find(r => r.printing === b) || null) : null;
+};
+
 // ── Does this card's PRINTING deserve a word on a tile? ───────────────────────
 // One answer for every surface that stamps a finish on a card: the movers
 // tiles and their canvas exports, the Graded Market strip and its export, and
@@ -5184,6 +5279,13 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
       ${series.map((s,i) => {
         const valid = (s.data||[]).filter(p => Number.isFinite(p.y));
         if(!valid.length) return null;
+        // ⚠ A scatter series must NEVER be joined into a polyline. These are
+        // individual eBay sales — twelve of them across three years — and a line
+        // between two dots a year apart draws a price path that did not happen.
+        // The TCGplayer series are genuinely daily and are lines; these are not.
+        if(s.scatter) return html`<g key=${"s"+i}>${valid.map((p,j) => html`<circle
+          key=${j} cx=${xScale(p.x).toFixed(1)} cy=${yScale(p.y).toFixed(1)}
+          r="3.2" fill=${s.color} stroke="var(--bg-solid)" stroke-width="1.1"/>`)}</g>`;
         // A polyline of one vertex draws nothing. Render the lone point as a
         // dot so a single-sale graded tier is visible instead of invisible.
         if(valid.length === 1) return html`<circle key=${"s"+i}
@@ -5226,8 +5328,14 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
 // Build chart series array from raw history rows for a card.
 // showLow/showMarket let us render Low and Market on the same chart as
 // solid (Low) + dashed (Market) lines.
+// ⚠ A literal hex, not var(--accent), because these series are consumed by the
+// CANVAS poster as well as the DOM chart and canvas cannot resolve a CSS
+// variable. An amber that is legible on all seven themes and distinct from both
+// TCGplayer line colours (green Low, purple Foil).
+const RAW_SALE_COLOR = "#d9861f";
+
 const buildHistorySeries = (normalRows, foilRows, opts={}) => {
-  const {showLow=true, showMarket=false, showFoil=true} = opts;
+  const {showLow=true, showMarket=false, showFoil=true, rawPoints=null} = opts;
   const out = [];
   const seriesFor = (rows, color, kind) => {
     if(showLow){
@@ -5251,6 +5359,18 @@ const buildHistorySeries = (normalRows, foilRows, opts={}) => {
   };
   if(normalRows && normalRows.length) seriesFor(normalRows, "#1d8d4a", "Non-Foil");
   if(showFoil && foilRows && foilRows.length) seriesFor(foilRows, "#7e54c4", "Foil");
+  // Individual RAW eBay sales, for the handful of promos TCGplayer cannot price.
+  // Pushed LAST so the dots paint over the lines rather than under them: on
+  // these cards the dots are the real data and the lines are the fossil.
+  if(rawPoints && rawPoints.length){
+    out.push({
+      label: "Raw eBay sale", color: RAW_SALE_COLOR, scatter: true,
+      data: rawPoints.map(r => ({
+        x: Date.parse(r.sold_date),
+        y: r.sale_price != null ? parseFloat(r.sale_price) : null,
+      })).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)),
+    });
+  }
   return out;
 };
 
@@ -8079,13 +8199,29 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
 // poster draws its own rows on a canvas in buildCardPosterBlob).
-const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing}) => {
+const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing, rawSale}) => {
   const buyUrl = tcgUrl(productId, printing);
+  // A raw eBay sold price, for the handful of promos TCGplayer cannot price.
+  // ⚠ It must never read as a TCGplayer number, so it says "eBay raw" and it
+  // carries its own DATE: several of these cards last traded in 2023, and a
+  // bare price beside a live Low/Mkt pair would imply it is current. The
+  // tooltip carries the sale count and the range, because one sale of a card
+  // with five known copies is a data point, not a market.
+  const rawTip = rawSale && (
+    rawSale.sale_count + (rawSale.sale_count === 1 ? " raw sale" : " raw sales")
+    + " on record, " + (rawSale.first_sold_date || "?") + " to "
+    + (rawSale.last_sold_date || "?")
+    + (rawSale.sale_count > 1
+        ? ", ranging " + fmt(rawSale.min_price) + "–" + fmt(rawSale.max_price) : "")
+    + ". These are eBay sold prices for the ungraded card, not TCGplayer prices — "
+    + "TCGplayer rarely or never lists this promo, so its Low and Market are an "
+    + "asking price or a frozen one.");
   return html`
   <div class="cd-stat">
     <div class="cd-stat-id">
       ${color ? html`<span class="cd-stat-dot" style=${{color}}>●</span>` : null}
-      <span class="cd-stat-name">${label}</span>
+      <span class="cd-stat-name">${label}${rawSale ? html`<span class="raw-star"
+        title="Priced from real eBay sales, not TCGplayer — see the note below.">*</span>` : null}</span>
       ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
       ${standing && html`<span class=${"price-standing price-standing--" + standing.tone}
         title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
@@ -8097,7 +8233,22 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         Buy on TCGplayer
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
-      <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      ${rawSale ? html`
+        <span class="cd-stat-px cd-stat-px--raw" title=${rawTip}>
+          Last sold <b>${fmt(rawSale.last_sold_price)}</b>
+          ${rawSale.last_5_count > 1 && html`<${React.Fragment}
+            ><span class="cd-stat-pxsep"> · </span>Avg ${rawSale.last_5_count} <b>${fmt(rawSale.avg_last_5)}</b></>`}
+          ${/* ⚠ One expression, not text split across lines: htm collapses the
+                newline between a word and a ${} and "raw" + "sales" rendered as
+                "rawsales". Same trap as the calendar's Started-ago chip. */ ""}
+          <span class="cd-stat-rawmeta">${rawSale.sale_count + (rawSale.sale_count === 1 ? " raw sale" : " raw sales")
+            + " · latest " + rawSale.last_sold_date}</span>
+        </span>
+        <span class="cd-stat-px cd-stat-px--tcg">TCGplayer Low <b>${fmt(low.now)}</b
+          ><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      ` : html`
+        <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      `}
     </div>
     <div class="cd-stat-grid">
       <span></span>
@@ -8324,6 +8475,48 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // first expand; fetchCardHistory caches them.
   const [variants, setVariants] = useState({open:false, loading:false, data:{}});
   useEffect(()=>{ setVariants({open:false, loading:false, data:{}}); }, [group?.card_id]);
+
+  // Raw (ungraded) eBay sales for this card, when it is one of the ~24 promos
+  // TCGplayer cannot price. One module-cached fetch serves the whole session, so
+  // this is a Map lookup after the first card opened; `alive` guards the modal
+  // being closed or navigated mid-flight.
+  // ⚠ The whole Map is held, not just this card's rows, because the variant rows
+  // below are OTHER card_ids — and they are exactly where this is most useful:
+  // expanding variants on the $2 First Chapter Mickey is how you reach the $1,900
+  // D23 promo of the same name.
+  const [rawMap, setRawMap] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetchRawSales().then(m => { if(alive) setRawMap(m); });
+    return () => { alive = false; };
+  }, []);
+
+  // ⚠ A raw-priced card opens on NM Market instead of Low, and this is a
+  // correctness fix rather than a preference. Low is a published aggregate that
+  // one listing can move, and on exactly these thinly-listed promos it throws
+  // phantom spikes — Promo Set 1 #1's Low reaches $10,000 against real sales of
+  // $518–$1,550, which flattens every raw dot onto the axis and makes the one
+  // series the card is here for unreadable. Market is the accurate side
+  // (median ratio 1.000 against real sales) and keeps the dots legible.
+  // Applied once per card, and only to nudge the DEFAULT — both checkboxes stay
+  // live, so a deliberate toggle is never overridden.
+  // ⚠ Symmetric, because this modal does NOT remount between cards — its state
+  // survives navigating from one card to the next. Without the restore, opening
+  // one raw promo would silently leave Low switched off for every ordinary card
+  // opened afterwards.
+  const rawDefaultApplied = useRef(null);
+  useEffect(() => {
+    const id = group?.card_id;
+    const isRaw = !!(rawMap && rawMap.rollup.get(id));
+    if(isRaw){
+      if(rawDefaultApplied.current === id) return;   // already nudged this card
+      rawDefaultApplied.current = id;
+      setShowLow(false); setShowMarket(true);
+    } else if(rawDefaultApplied.current != null){
+      rawDefaultApplied.current = null;
+      setShowLow(true); setShowMarket(false);        // back to the site default
+    }
+  }, [rawMap, group?.card_id]);
   // Swipe-to-navigate (touch). _swipeSuppressUntil (module scope — onNavigate
   // remounts this component via key=cardNavKey, so an instance ref would reset
   // before the leftover click lands) suppresses the click-to-enlarge that would
@@ -8475,7 +8668,19 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // checkbox guard below) to avoid offering a control that does nothing.
   const hasBothPrintings = !!(group.normal && group.foil);
   const effectiveShowFoil = hasBothPrintings ? showFoil : true;
-  const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil: effectiveShowFoil});
+  // Raw eBay sales for this card, plotted as dots on the price history.
+  // ⚠ Only the printings this card actually HAS, never a defaulted "Normal".
+  // A Challenge card opened on its Top Prize foil has no non-foil side, and
+  // defaulting the missing one to "Normal" pulled the Prize Wall sales ($70-$150)
+  // onto the foil chart ($16,406) — the two markets on one axis, which is the
+  // exact conflation graded_sale_pkey exists to prevent. Mirrors statRows, which
+  // only emits a row for a printing that has history.
+  const rawChartPoints = useMemo(() => rawPointsFor(rawMap, group.card_id, [
+    ...(group.normal ? [group.normal.tcg_printing || "Normal"] : []),
+    ...(effectiveShowFoil && group.foil ? [group.foil.tcg_printing || "Foil"] : []),
+  ]), [rawMap, group, effectiveShowFoil]);
+  const chartSeries = buildHistorySeries(history.normal, history.foil,
+    {showLow, showMarket, showFoil: effectiveShowFoil, rawPoints: rawChartPoints});
   const chartStartMs = computeChartStartMs(rangeKey, customStart, hidePreorders, group.Set);
 
   // Every other (card_id, printing) tuple that shares this card's Product Name
@@ -8560,6 +8765,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       low: computeSeriesDeltas(history.normal, "low_price"),
       market: computeSeriesDeltas(history.normal, "market_price"),
       standing: priceStanding(history.normal),
+      rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(group.card_id),
+        (group.normal && group.normal.tcg_printing) || "Normal"),
     });
     if(history.foil && history.foil.length) rows.push({
       key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
@@ -8568,6 +8775,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       low: computeSeriesDeltas(history.foil, "low_price"),
       market: computeSeriesDeltas(history.foil, "market_price"),
       standing: priceStanding(history.foil),
+      rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(group.card_id),
+        (group.foil && group.foil.tcg_printing) || "Foil"),
     });
     if(variants.open){
       for(const v of variantRows){
@@ -8586,11 +8795,12 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           standing: priceStanding(vr),
           low: computeSeriesDeltas(vr, "low_price"),
           market: computeSeriesDeltas(vr, "market_price"),
+          rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(v.row.card_id), v.printing),
         });
       }
     }
     return rows;
-  }, [history, variants, variantRows, group]);
+  }, [history, variants, variantRows, group, rawMap]);
 
   // Copy-image export inputs (the poster is drawn on a canvas — see
   // buildCardPosterBlob — so no hidden DOM / html2canvas is needed).
@@ -8837,10 +9047,16 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         </button>`}
       </div>
       <div class="cd-stat-list">
-        ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub}
+        ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub} rawSale=${r.rawSale}
           color=${r.color} low=${r.low} market=${r.market} standing=${r.standing}
           productId=${r.productId} printing=${r.printing}/>`)}
       </div>
+      ${statRows.some(r => r.rawSale) && html`<div class="cd-raw-note">
+        <span class="raw-star">*</span> Priced from real <b>eBay sold listings</b> for the
+        ungraded card. TCGplayer rarely or never lists this promo, so its Low and Market are
+        an asking price or a frozen one — they are shown underneath for reference.
+        Individual sales are the amber dots on the price history below.
+      </div>`}
     </div>`}
 
     <div class="card-detail-history-section">
@@ -8855,6 +9071,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ${hasAnyHistory && html`<div class="card-detail-history-legend">
             ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Non-Foil</span>`}
             ${effectiveShowFoil && history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
+            ${rawChartPoints && rawChartPoints.length > 0 && html`<span
+              title="Individual eBay sold listings for the ungraded card. Dots, not a line — these are separate sales, sometimes months apart, and joining them would draw a price path that never happened."
+              ><span class="legend-swatch legend-swatch--dot" style=${{background:RAW_SALE_COLOR}}/>Raw eBay sales</span>`}
             <span class="legend-line-style"><span class="line-solid"/>Low</span>
             <span class="legend-line-style"><span class="line-dashed"/>NM Market</span>
           </div>`}
@@ -13883,6 +14102,63 @@ const SEALED_PUZZLES = [
   puzzle_pieces: p.pieces,
   puzzle_exclusive: p.exclusive,
 }));
+// Retailer-exclusive sealed product — a bundle you can only buy at one chain.
+// Same reasoning as SEALED_PUZZLES above: TCGplayer doesn't list it, so there
+// is no pid, no price and no sealed_prices_latest row, and it lives here shaped
+// like a sealed_prices row so the Sealed collection's grouping and tiles take it
+// unchanged. Ownership persists in sealed_collection_items (no FK on the product
+// id). Band: 930000000 + n — clear of the puzzles' 912.0M and below the 950-970M
+// window isCollectiblePid owns, so pins/counters keep their exclusion from the
+// sealed unit + SKU counts while these DO count (they are boxes you own).
+//
+// ⚠ `n` is a stable hand-assigned id. Never renumber one — it is the product id
+// somebody's owned mark is filed under, same rule as the pins.
+//
+// ⚠ This is the one static catalog whose rows CAN become real TCGplayer
+// products: a retailer exclusive usually reaches the secondary market, and the
+// daily loader would then bring in a second row for the same box under its own
+// set. When that happens, DELETE the entry here rather than keeping both — two
+// tiles for one product is worse than the owned marks it drops, and the real
+// row is the one that carries a price. `scripts/reconcile_catalog.py --watch`
+// is what reports the new listing (`missing_sealed`).
+const SEALED_EXCLUSIVES = [
+  {
+    n: 1,
+    name: "Best Buddies Bundle",
+    retailer: "Costco",
+    date: "Sep 2026",
+    type: "Bundle",
+    art: "Logos/sealed/best-buddies-bundle.jpg",
+    // Printed on the box, verbatim: "1 CARD PORTFOLIO + 6 WILDS UNKNOWN BOOSTER
+    // PACKS + 2 SPECIAL EDITION PROMO CARDS + 1 PIN". The portfolio holds 252
+    // cards; the promos are 18/PD1 and 19/PD1 and the pin is LORCANA_PINS n:45.
+    contents: "Card portfolio (252 cards) · 6 Wilds Unknown booster packs · 2 promo cards (18/PD1, 19/PD1) · 1 pin",
+  },
+].map(p => ({
+  tcgplayer_product_id: 930000000 + p.n,
+  name: p.name,
+  clean_name: p.name,
+  product_type: p.type,
+  // null -> the grouping files it under "__other__" / "Other / Promo", beside
+  // the portfolios and the other sealed rows TCGplayer gives no set (Zaven,
+  // 2026-09-20). A section of its own was one product in an empty room.
+  set_id: null,
+  printing: "Normal",
+  low_price: null,
+  market_price: null,
+  image_url: p.art,
+  buy_url: null,
+  is_exclusive: true,
+  exclusive_retailer: p.retailer,
+  exclusive_date: p.date,
+  exclusive_contents: p.contents,
+}));
+// "Static catalog row, so there is no TCGplayer SKU behind it and no price to
+// show." Three kinds qualify today — puzzles, pins/counters and retailer
+// exclusives — and every surface that would otherwise build a TCGplayer buy
+// link, fetch price history or multiply a price by a quantity has to ask. A
+// missed call site is silent: a dead affiliate link, or an empty chart.
+const isUnpricedSealed = (p) => !!(p && (p.is_puzzle || p.is_collectible || p.is_exclusive));
 // Official Lorcana PINS and LORE COUNTERS (the spin-dial trackers) — the two
 // non-card collectibles Ravensburger has run since launch. Neither is sold: a
 // pin comes from a Weekly Play / League season kit, a convention, a Challenge
@@ -13969,6 +14245,16 @@ const LORCANA_PINS = [
   {n:38, name:"Gaston - Superior Archer",                  source:"League - Season of Villainy",      date:"Sep 2026"},
   {n:39, name:"Madam Mim - Resourceful Trickster",         source:"League - Season of Villainy",      date:"Sep 2026"},
   {n:40, name:"Ursula - Deceiver",                         source:"League - Season of Villainy",      date:"Sep 2026"},
+  // The first pin that comes in a RETAIL BOX rather than an event kit, a
+  // convention or a prize wall — the Costco-exclusive Best Buddies Bundle
+  // (SEALED_EXCLUSIVES n:1), which also carries the 18/PD1 + 19/PD1 promos.
+  // Its photo is a cut from the announcement shot rather than a studio one, so
+  // it is worth re-cutting from a better source later; it is in storage as
+  // pins/45.png like every other entry, so that is a re-upload, not a code edit.
+  //
+  // ⚠ The name is the character, not a card printing: the photo is too low-res
+  // to read a version off, so "Mike Wazowski - <something>" would be invented.
+  {n:45, name:"Mike Wazowski",                             source:"Best Buddies Bundle (Costco exclusive)", date:"Sep 2026"},
   {n:41, name:"The Great Hunny Rescue",                    source:"Illumineer's Quest (retail)",      date:"Oct 2026"},
 ];
 // Weekly Play counters come first (one per season, six per store kit), then the
@@ -14291,11 +14577,11 @@ const amazonListingKey = (url) => {
 function amazonSealedMatches(sealedPrices, setNameById){
   const num = (v) => { const n = v == null ? NaN : Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
   const byUrl = new Map();
-  for(const row of [...(sealedPrices || []), ...SEALED_PUZZLES]){
+  for(const row of [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_EXCLUSIVES]){
     if(!row || row.product_type === "Promo Single" || isHiddenSealedListing(row)) continue;
     const type = deriveSealedDisplayType(row);
     if(!AMAZON_SEALED_TYPE_LABEL[type]) continue;
-    const setName = row.is_puzzle ? null : ((setNameById && setNameById[row.set_id]) || null);
+    const setName = isUnpricedSealed(row) ? null : ((setNameById && setNameById[row.set_id]) || null);
     const az = amazonForSealed(row, setName);
     if(!az) continue;
     const mkt = num(row.market_price), low = num(row.low_price);
@@ -14304,7 +14590,9 @@ function amazonSealedMatches(sealedPrices, setNameById){
       name: cleanSealedName(row.name),
       sub: row.is_puzzle
         ? "Puzzle · " + row.puzzle_pieces + " pcs"
-        : [setName, AMAZON_SEALED_TYPE_LABEL[type]].filter(Boolean).join(" · "),
+        : row.is_exclusive
+          ? row.exclusive_retailer + " exclusive"
+          : [setName, AMAZON_SEALED_TYPE_LABEL[type]].filter(Boolean).join(" · "),
       type, setName,
       setRank: setName ? MAINLINE_SETS.indexOf(setName) : -1,
       img: tcgImgSized(row.image_url),
@@ -14312,7 +14600,7 @@ function amazonSealedMatches(sealedPrices, setNameById){
       priceBasis: mkt != null ? "market" : (low != null ? "low" : null),
       priceDate: row.price_date || null,
       amazon: az.url, exact: az.exact,
-      tcg: row.is_puzzle ? null : tcgUrl(row.tcgplayer_product_id),
+      tcg: isUnpricedSealed(row) ? null : tcgUrl(row.tcgplayer_product_id),
     };
     // Two SKUs can resolve to one listing; keep the one TCGplayer actually prices.
     const prev = byUrl.get(az.url);
@@ -22059,7 +22347,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   // per-card cache (readCardHistCache) — sealed pids slot into the same
   // (pid, printing) keyspace cleanly.
   useEffect(() => {
-    if(!product?.tcgplayer_product_id || product?.is_puzzle || product?.is_collectible){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
+    if(!product?.tcgplayer_product_id || isUnpricedSealed(product)){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
     let cancelled = false;
     setHistoryState({loading: true, error: null});
     fetchCardHistory(product.tcgplayer_product_id, "Normal")
@@ -22136,6 +22424,49 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               currentPaid=${sealedMeta?.[pc]?.amount_paid ?? null}
               currentDate=${sealedMeta?.[pc]?.acquired_date || null}
               onCommit=${patch => updateSealedMeta(pc, patch)}/>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+  // A retailer exclusive has no TCGplayer SKU, so there is no price, no chart
+  // and no Δ% to show — the same trimmed modal the puzzles get. What a
+  // collector wants here is what is in the box and where to buy it.
+  if(product.is_exclusive){
+    const px = product.tcgplayer_product_id;
+    const qx = sealedCollection?.[px] || 0;
+    const bumpX = (delta) => { const next = Math.max(0, Math.min(99, qx + delta)); if(next !== qx) updateSealedQty(px, next); };
+    return html`<div class="card-detail-overlay" onClick=${onClose}>
+      <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
+        <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+        <div class="sealed-detail-head">
+          <div class="sealed-detail-img-wrap">
+            ${product.image_url
+              ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph="box" size=${44}/></span>`
+              : html`<div class="sealed-detail-img-fallback">${product.name||"Sealed product"}</div>`}
+          </div>
+          <div class="sealed-detail-info">
+            <h2 class="sealed-detail-name">${product.name}</h2>
+            <div class="sealed-detail-meta muted">
+              <span>${product.exclusive_retailer} exclusive</span>
+              <span class="sealed-detail-sep">·</span><span>${product.exclusive_date}</span>
+            </div>
+            ${product.exclusive_contents && html`<div class="sealed-detail-meta muted">${product.exclusive_contents}</div>`}
+            <div class="sealed-detail-prices">
+              <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>Retailer exclusive — not listed on TCGplayer, so no market price is tracked.</span>
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow sponsored">Buy ↗</a>`}
+              <${AmazonBuyLink} product=${product}/>
+            </div>
+            ${!readOnly && html`<div class="sealed-detail-owncounter">
+              <span class="sealed-detail-owncounter-lbl">Owned</span>
+              <button onClick=${()=>bumpX(-1)} disabled=${qx<=0} aria-label="Decrease quantity">−</button>
+              <span class=${"sealed-coll-counter-qty"+(qx>0?" has":"")}>${qx}</span>
+              <button onClick=${()=>bumpX(+1)} disabled=${qx>=99} aria-label="Increase quantity">+</button>
+            </div>`}
+            ${!readOnly && qx > 0 && html`<${CostDateInputs}
+              currentPaid=${sealedMeta?.[px]?.amount_paid ?? null}
+              currentDate=${sealedMeta?.[px]?.acquired_date || null}
+              onCommit=${patch => updateSealedMeta(px, patch)}/>`}
           </div>
         </div>
       </div>
@@ -22379,7 +22710,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     // as their own section alongside the priced sealed products. Pins and lore
     // counters (SEALED_COLLECTIBLES) have their own tab since 2026-09-11 — see
     // CollectiblesView.
-    const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
+    const items = [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_EXCLUSIVES].filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const filtered = (hideUnowned
@@ -22601,8 +22932,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     // Every sealed tile carries an Amazon twin now, not only the
                     // puzzles: TCGplayer first (it has the live price), Amazon beside.
                     const amzn = item.is_collectible ? null
-                      : amazonForSealed(item, item.is_puzzle ? null : (setNameById[item.set_id] || null));
-                    const url = item.is_puzzle
+                      : amazonForSealed(item, isUnpricedSealed(item) ? null : (setNameById[item.set_id] || null));
+                    const url = item.is_puzzle || item.is_exclusive
                       ? (amzn?.url || item.buy_url)
                       : item.is_collectible
                       ? item.buy_url
@@ -22635,7 +22966,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     const paidSealed = sealedMeta[item.tcgplayer_product_id]?.amount_paid;
                     const paidNum = paidSealed != null ? Number(paidSealed) : null;
                     const ownedValSealed = (price || 0) * qty;
-                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle && !item.is_collectible
+                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !isUnpricedSealed(item)
                       && paidNum != null && Number.isFinite(paidNum) && paidNum > 0;
                     const retSealed = hasRetSealed ? ownedValSealed - paidNum : null;
                     const retPctSealed = hasRetSealed ? (retSealed/paidNum)*100 : null;
@@ -22654,6 +22985,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.collectible_date}</span>`
                             : item.is_puzzle
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.puzzle_pieces} pcs${item.puzzle_exclusive ? " · Disney Store excl." : ""}</span>`
+                            : item.is_exclusive
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.exclusive_retailer} exclusive · ${item.exclusive_date}</span>`
                             : showBoth
                             ? html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lowPx)}</span>
                                    <span class="gc-card-raw-px gc-card-raw-px-secondary"><span class="gc-card-raw-px-lbl">Mkt</span> ${fmt(mktPx)}</span>`
@@ -22663,8 +22996,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                               onClick=${e=>e.stopPropagation()}
                               title=${item.is_puzzle
                                 ? (amzn ? "Buy this puzzle on Amazon (affiliate link)" : "View on Ravensburger")
-                                : "Buy on TCGplayer (affiliate link)"}>${item.is_puzzle || item.is_collectible ? "Buy" : "TCG"} ↗</a>`}
-                          ${amzn && !item.is_puzzle && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amzn.url} target="_blank"
+                                : item.is_exclusive
+                                ? "Search Amazon for this bundle (affiliate link)"
+                                : "Buy on TCGplayer (affiliate link)"}>${isUnpricedSealed(item) ? "Buy" : "TCG"} ↗</a>`}
+                          ${amzn && !item.is_puzzle && !item.is_exclusive && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amzn.url} target="_blank"
                               rel="noopener nofollow sponsored"
                               onClick=${e=>e.stopPropagation()}
                               title=${amzn.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this product (affiliate link)"}>Amazon ↗</a>`}
@@ -22700,10 +23035,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                                         if(qty < need) updateSealedQty(item.tcgplayer_product_id, need);
                                       }
                                     }}>${i}</button>`)}
-                                  ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                  ${qty > 0 && !isUnpricedSealed(item) && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 </span>`
                               : html`
-                                ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                ${qty > 0 && !isUnpricedSealed(item) && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${"Now " + fmt(ownedValSealed) + " · paid " + fmt(paidNum)}
                                   style=${{color: retSealed>=0?"var(--green)":"var(--red)"}}>${retSealed>=0?"+":""}${fmt(retSealed)} (${fmtPct(retPctSealed)})</span>`}`}
                           </div>
@@ -35650,7 +35985,7 @@ const drawPosterLegend = (ctx, rightX, baselineY, series, P) => {
 };
 // Line chart into the box (x,y,w,h). Mirrors LineChart's scaling/ticks.
 const drawPosterChart = (ctx, series, x, y, w, h, P) => {
-  const valid = (series || []).map(s => ({color:s.color, dashed:s.dashed, pts:(s.data||[]).filter(p => p && Number.isFinite(p.y))})).filter(s => s.pts.length);
+  const valid = (series || []).map(s => ({color:s.color, dashed:s.dashed, scatter:s.scatter, pts:(s.data||[]).filter(p => p && Number.isFinite(p.y))})).filter(s => s.pts.length);
   let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
   for(const s of valid) for(const p of s.pts){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
   if(!Number.isFinite(minX) || !Number.isFinite(maxY)){
@@ -35674,6 +36009,17 @@ const drawPosterChart = (ctx, series, x, y, w, h, P) => {
   xticks.forEach((t,i) => { ctx.textAlign = i===0?"left":i===2?"right":"center"; ctx.fillText(fmtTickDate(t, span), sx(t), y+h+14); });
   ctx.textAlign = "left";
   for(const s of valid){
+    // ⚠ Scatter series are dots here too. The copied PNG has to be the same
+    // document as the screen — drawing a line through sparse eBay sales in the
+    // export while the modal shows dots would make the shareable image claim a
+    // price path the site itself does not.
+    if(s.scatter){
+      ctx.fillStyle = s.color;
+      for(const p of s.pts){
+        ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), 3.2, 0, Math.PI * 2); ctx.fill();
+      }
+      continue;
+    }
     ctx.strokeStyle = s.color; ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.setLineDash(s.dashed ? [5,3] : []);
     ctx.beginPath();
@@ -36518,7 +36864,7 @@ function sealedMoverCandidates(sealedPrices){
   const out = [];
   for(const p of (sealedPrices || [])){
     if(!p || p.printing !== "Normal" || p.product_type === "Promo Single" || p.is_stale) continue;
-    if(p.is_puzzle || p.is_collectible || p.tcgplayer_product_id == null || isHiddenSealedListing(p)) continue;
+    if(isUnpricedSealed(p) || p.tcgplayer_product_id == null || isHiddenSealedListing(p)) continue;
     const type = deriveSealedDisplayType(p);
     const kind = SEALED_MOVER_KIND_OF_TYPE[type];
     if(kind) out.push({product: p, type, kind});

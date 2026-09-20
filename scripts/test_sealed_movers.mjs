@@ -35,6 +35,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const SEALED_DISPLAY_TYPE_ORDER = [", NL + "];"),
   grab("const SEALED_DISPLAY_TYPE_FOR = {", NL + "};"),
   grab("function isHiddenSealedListing(item){", NL + "}"),
+  grabLine("const isUnpricedSealed = "),
   grab("function deriveSealedDisplayType(item){", NL + "}"),
   grab("function computeSealedDeltas(history){", NL + "}"),
   grab("const MOVER_WINDOWS = [", NL + "];"),

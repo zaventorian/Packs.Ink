@@ -388,10 +388,17 @@ extracts the real pure functions out of Index.html.
 
 ## Pin + lore-counter photos (2026-08-24)
 
-44 pins and 23 lore counters render on their own Collection tab (Pins & Counters — see the next
+45 pins and 25 lore counters render on their own Collection tab (Pins & Counters — see the next
 section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from the static
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
 cut out and served from our own storage.
+
+**A pin can come in a RETAIL BOX**, not just an event kit / convention / prize wall — n:45 ships
+inside the Costco Best Buddies Bundle (`SEALED_EXCLUSIVES`), which is also where 18/PD1 and
+19/PD1 come from. Its photo is a cut from the announcement shot rather than a studio one and is
+worth re-cutting from a better source, which is a re-upload rather than a code edit — it sits at
+`pins/45.png` like every other entry. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
+the highest valid `n`, so it moves with the list (45 today, counters 25).
 
 **⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
 `privacy.html`'s takedown line both named one until 2026-09-13, when Zaven asked for it gone
@@ -467,7 +474,7 @@ the source is a fan site with gaps.
 - Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
 - **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
   valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
-  the list length (44 / 23) even while three entries have no photo to upload.
+  the list length (**45 / 25** as of 2026-09-20), even where an entry has no photo to upload.
 - **`scripts/cut_collectible_bg.py`** removes the white studio background. Two things make it
   work: the background is found by **flood fill from the border**, not by "white → transparent"
   (which punches straight through Baymax, every logo pin and every ink symbol's highlight); and
@@ -1455,7 +1462,114 @@ Attribution is title-based, so wrong rows are inevitable. Three layers, in pipel
 
 **`graded_sales.exclude_reason`** (migration 111) is what makes that reversible: before it, `excluded` was a bare boolean, so a mis-set threshold couldn't be undone without also undoing every hand-reviewed exclusion. Values: `outlier`, `lot`, `foreign`, `auto`, `troll`, `cn-conflict`, `nomatch`, `manual`; NULL for rows excluded before 111.
 
+### An unattributed sale is invisible FOREVER unless something re-asks (2026-09-20)
+
+`terapeak_load.py --new-only` is `ON CONFLICT DO NOTHING` and has to be (it is what
+makes manual `excluded` / `card_id` / grade fixes survive a re-load). The undocumented
+consequence: **every improvement to the matcher is invisible to rows already in the
+table.** A sale that failed attribution the day it was scraped stays failed, and it
+fails silently twice over — an unmatched row is also auto-flagged `excluded`, so it
+appears on no surface and in no report.
+
+Found when Zaven asked why a **$39,100 PSA 10 sale was missing** (eBay item
+298340921150, "Gold Mickey - Brave Little Tailor ... DLC Top Prize", scraped
+2026-06-22). Nothing was broken at the time: the title covers 4 of that card's 5 name
+tokens because it says "Gold Mickey" and never "Mickey Mouse", giving **overlap 0.80
+against the 0.85 no-other-evidence gate** — the `match_confidence: 0.8` stored on the
+row is literally that number, fossilised. The matcher has since learned `DLC` as a set
+hint and resolves the same title at score 1.20, onto the right card. It was simply
+never asked again. Meanwhile that card's PSA 10 tier showed **$3,760 and "−79%"** when
+its real latest PSA 10 sale was ten times that.
+
+- **`scripts/rematch_graded_unmatched.py` is the answer, and it is NOT
+  `reattribute_graded_sales.py`** (which the graded-scrape skill rightly forbids: that
+  one walks every row and excludes anything the matcher cannot place, hand-made
+  attributions included). The scoping is the entire safety argument: it fetches **only
+  `card_id IS NULL`** and skips any row carrying a concrete `exclude_reason`, so it can
+  only act on rows that have **never been attributed** — which means they have never
+  appeared on the site, so **there is no human decision about them to clobber.** That is
+  what makes un-excluding them safe, and it is the one claim to re-check before widening
+  the query by so much as a column.
+- **⚠ It un-excludes only a row that can actually reach the rollup.** The matview's gate
+  is `card_id AND grade AND sale_price AND NOT excluded`, so a gradeless row is
+  attributed but deliberately **left excluded** and reported for the slab-OCR pass.
+  Clearing the flag there would report a fix that fixed nothing.
+- **The straggler report is half the point.** Every run names every still-unattributed
+  sale at or above **$500** (`LOUD_USD`). The reason this went three months unnoticed is
+  that nothing ever said "we are holding a five-figure sale we cannot place"; a dry run
+  today names 741 of them, worth re-reading rather than re-deriving.
+- Wired into `graded_run.ps1` as **Stage 4b**, right after the load. Guarded by
+  `python scripts/test_rematch_unmatched.py` (no network — it builds a mini catalog index
+  and drives the real `decide()`), which pins BOTH directions: loosening the scoping is
+  silent data loss, tightening it goes back to losing the sales.
+- **⚠ `CHALLENGE_CTX_RE` now includes `dlc`**, because `terapeak_match`'s `SET_ALIASES`
+  always did and this regex was the one place that didn't — so a "DLC Top Prize" title
+  scored a set hint and **no printing**, which would file it in a different
+  `graded_sale_pkey` bucket from the same card's other sales. Measured over all 88,912
+  stored titles: 225 say DLC, 180 already carry another Challenge token, and the token
+  flips exactly **4** rows `None → Foil` — **three of which someone had already corrected
+  to Foil by hand**, which is the argument for it. Set Championship promos ("Top Prize
+  Promo 38/P1") still correctly resolve to `None`.
+
 **Counting `#NNN` occurrences does NOT detect multi-card lots** — sellers append PSA cert and inventory numbers in the same form, so the rule flagged 574 ordinary single-card sales against 1 real lot. Don't reintroduce it; the note is in `terapeak_match.py`.
+
+### A named VARIANT is a printing, not a card_id (2026-09-20)
+
+Two cards' graded sales split on a **variant** rather than a finish: Peter Pan -
+Pirate's Bane (Enchanted #215) *Text Error* and Genie - On the Job (Enchanted
+#209) *Two Swords*. The design is already right and is easy to mis-read:
+
+- the **`::variant::` catalog tile is RAW-ONLY and has no graded market** — it
+  exists because TCGCSV has no separate SKU, so it carries null prices;
+- the **graded sales live on the BASE `card_id` under a distinct `printing`**
+  (`"Text Error"` / `"Two Swords"`), which `graded_sale_pkey` keeps in its own
+  rollup bucket because `cards.split_printing` is true;
+- `canonicalGradedSlot` maps an owned slot keyed on the clone back to
+  (base, variant printing), so nothing lands on a dead id.
+
+**So do NOT add a `cards` row for a `::variant::` id** to "make graded work" —
+it already works, and a real row would duplicate the client's clone.
+
+**⚠ Nothing in the ETL set that printing, so every such sale landed as `Normal`
+or NULL.** Measured on Peter Pan #215: 19 rows filed Normal and 21 with no
+printing at all, blurring a real **~49% premium** (PSA 10 avg-of-5 **$400 Text
+Error vs $269 Normal**). `VARIANT_PRINTING_BY_CARD` + `variant_printing_for()`
+in `terapeak_load.py` now decide it, and returning **`"Normal"` rather than NULL
+when the title is silent is deliberate** — NULL parks the row in an "Unknown"
+tier belonging to neither market.
+
+**⚠ The TITLE is only ~93% reliable here, and the SLAB LABEL is the truth.** The
+error is a single stray `}` after "Peter Pan" in the Shift reminder text
+(corrected on a later print run), so sellers routinely miss it. Measured by
+OCR-ing 280 slab labels against their titles: **14 rows whose seller never wrote
+"text error" carry PSA's own `ENCHANTED-TEXT ERROR` designation, and 6 that
+claim it are labelled plain.** Verified independently by reading the brace off
+four cards — the OCR label agreed with the card every time, including both
+silent ones.
+
+For a GRADED card the label *is* the product identity, and it is also the most
+legible thing in a listing photo, which is what makes this decidable at all:
+`pytesseract` on the top 45% of the image reads `ENCHANTED-TEXT ERROR` cleanly
+in ~0.4s (point it at `C:\Program Files\Tesseract-OCR\tesseract.exe`).
+`terapeak_ocr_reconcile.py` is where that correction belongs long-term; the
+title rule is a floor, not the last word.
+
+**⚠ The Genie half is NOT detectable and must not be assumed to be.** Its
+variant is the *double sword error* (the first print shows two swords in a
+background detail, corrected to one). PSA does not designate it — 12 slabs we
+already call Two Swords all read a plain `GENIE ENCHANTED` label — **no title in
+the table has ever contained the words**, and the detail is too small to read in
+a listing photo. Its entry in `VARIANT_PRINTING_BY_CARD` exists only to stop the
+finish-reader filing Genie sales as `Foil`/NULL; the 28 rows marked Two Swords
+were curated by hand and a new one lands as `Normal` until somebody says
+otherwise. Separating Genie properly needs an art pass at high zoom on that one
+background region, which is a different job from reading a label.
+
+Guarded by `python scripts/test_variant_printing.py`, which also pins that the
+**same two card ids and the same printing STRINGS appear on both sides** —
+`VARIANT_PRINTING_BY_CARD` in Python and `SPLIT_PRINTING_CARD_IDS` /
+`SPLIT_CARD_PRINTING_OPTIONS` in Index.html. Drift there is silent: the sales
+just pile into the wrong bucket.
 
 ### Price Graphing "By Graded" mode
 
@@ -1570,6 +1684,48 @@ Card detail modal's Graded tab:
 - **Top featured chart**: 12-month LineChart defaulting to PSA 10 (falls back to first available combo if no PSA 10 history).
 - **Per-row sparkline buttons**: click any row's sparkline → expands a full LineChart inline beneath that row. Multiple rows can expand at once for grade-premium comparison.
 - Helper: `buildGradedSeries(history, grader, grade, label)`. Color map: PSA red, CGC blue, BGS purple, SGC green, TAG orange.
+
+## Retailer-exclusive sealed product (2026-09-20)
+
+`SEALED_EXCLUSIVES` — a box you can only buy at one chain, which therefore has no TCGplayer
+listing, no pid, no price and no `sealed_prices_latest` row. Same answer as `SEALED_PUZZLES`: a
+static client const shaped like a sealed_prices row, merged into the Sealed collection at the two
+sites that spread the puzzles. Ownership persists in `sealed_collection_items` — no FK on the
+product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** (Costco, Sep 2026)
+— portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45.
+
+- **⚠ `set_id` is NULL, which files it under "Other / Promo"** with the portfolios and everything
+  else TCGplayer gives no set (Zaven, 2026-09-20). It shipped with a synthetic `__exclusives__`
+  id and a **Retailer Exclusives** section of its own first, which was one product in an empty
+  room. Don't give it a real set either: a bundle with Wilds Unknown packs, Attack of the Vine!
+  promos and Toy Story portfolio art would be claiming membership of whichever one you picked.
+
+- **Band is `930000000 + n`** — clear of the puzzles' 912.0M and BELOW the 950–970M window
+  `isCollectiblePid` owns. That is deliberate: pins and counters are excluded from the Sealed
+  tab's unit and SKU counts, and these must NOT be, because a bundle is a box you own.
+- **⚠ `n` is a stable hand-assigned id.** Never renumber one — it is what somebody's owned mark
+  is filed under. Same rule as the pins.
+- **⚠ This is the one static catalog whose rows can become REAL TCGplayer products.** A retailer
+  exclusive usually reaches the secondary market, and the daily loader would then bring in a
+  second row for the same box under its own set. When that happens **delete the entry here** —
+  two tiles for one product is worse than the owned marks it drops, and the real row is the one
+  with a price. `reconcile_catalog.py --watch` reports the new listing as `missing_sealed`.
+- **`isUnpricedSealed(p)`** is the one predicate for "static row, no TCGplayer SKU, no price" —
+  puzzles, pins/counters and exclusives. Every surface that would otherwise build a TCGplayer buy
+  link, fetch price history or multiply a price by a quantity asks it. **A missed call site is
+  silent**: a dead affiliate link on a tile, or a modal that fetches history for a pid that has
+  none and draws an empty chart. It is NOT the right question everywhere — the Amazon LINK is
+  still gated on `is_collectible` alone, because a puzzle and a bundle are both purchasable there
+  and only a pin is not.
+- **An exclusive's tile and modal take Amazon as the PRIMARY link**, the shape the puzzles
+  already use: there is no TCGplayer page to be the first button, and `amazonForSealed` falls
+  through to a `Disney Lorcana <name>` search ("Find on Amazon"), which is honest about not
+  promising the product page. That same search fallback is why it does not reach the home Amazon
+  shelf: `amazonShelfPool` keeps only `exact` listings plus newest-set searches, and an exclusive
+  is neither. Curate an ASIN for one and it WOULD join the shelf, which is the right outcome —
+  by then there is a real listing to link to.
+- Guarded by the `SEALED_EXCLUSIVES` / `isUnpricedSealed` section of
+  `node scripts/test_amazon_links.mjs`.
 
 ## Sealed enhancements (2026-06-05 — modal + Δ% + Screener)
 
@@ -1770,7 +1926,20 @@ so #7 there is five different cards.
 - **Promo Set 4 (P4)** — Lorcast indexed it 2026-09-18 with null pids; `TCG_PID_OVERRIDES` (both
   copies) links #9-16. #1-6 aren't indexed yet.
 - **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
-  (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk.
+  (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk, **#18 Sulley - Protective
+  Monster / #19 Violet Parr - Super Resilient** (Best Buddies Bundle, 2026-09-19).
+- **A promo TCGplayer has not listed yet is a `REPRINT_PROMOS` entry with a NULL pid** (2026-09-20).
+  That tuple grew an optional 6th field: `(base_pid, set_id, cn, new_id, promo_pid[, art])`. A null
+  `promo_pid` leaves the row unpriced — already the handled case, `NUMBERED_PROMO_SETS` emits one
+  placeholder printing — and `art` carries a repo-local scan, because the image would otherwise
+  fall back to the BOOSTER printing's picture, which is the wrong art on a promo tile. Filling the
+  pid in later and deleting the art path updates the row **in place**: same `card_id`, so nobody's
+  collection mark moves. That is the reason to use this script rather than a one-off migration —
+  and it re-applies after every Lorcast load instead of being a single insert that can drift.
+- **⚠ Check Lorcast before hand-writing any promo's stats.** #18/#19 turned out to be promo
+  printings of Attack of the Vine! #128 and #176, so cloning those rows gave exact cost / ink /
+  stats / lore / classifications / ability text instead of a blurry photo's best guess. A promo
+  packed in a product is USUALLY a reprint of a booster card; read the photo only to confirm it.
 - **"Attack of the Vine! Promos" is gone.** It was a hand-made stand-in that flattened P4, PD1 and
   DIS into invented numbers (Tigger sat at #10, Meilin Lee's real number). `supabase/160` moved its
   last three cards onto P4 #12/#15/#16. `SET_PARENT` is now empty but the mechanism stays.
@@ -2814,6 +2983,193 @@ SELECT public.refresh_graded_prices_latest();
 - **Lorcast's API key for inkable is `inkwell`**, not `inkable`. Our column is `inkable`; loader translates.
 - **The legacy graded feed (retired 2026-06-30) capped `/history` at ~1 year and was very sparse for low-liquidity cards** — which is why the graded value chart needs its backward-fill. Kept only to explain that backward-fill's existence; the API and the tables are gone (see "Legacy graded deletion").
 - **Image sizes**: small (200w), normal (400w), large (734w). Use `img_normal` for tiles ≤200px; `img_large` for hover/modal/poster; `img_small` ≤80px thumbs. `img_large` NOT in catalog cache (stripped); fallback to img_normal.
+
+## Raw eBay sales — the ~24 promos TCGplayer cannot price (2026-09-20)
+
+`card_prices_latest` is an INNER JOIN on a TCGplayer product, so a card TCGplayer
+has never recorded a sale for shows **nothing**, and one it froze on shows a
+fossil. Measured on the live catalog: promos freeze for **50–181 days** where
+Enchanted/Iconic chase cards freeze for 10–18 (packs keep supplying those, so a
+flat reading there is a lull, not an absent market). The worst cases are total —
+Challenge Promo #5 *Mickey Mouse - Brave Little Tailor* has **never** had a
+`market_price`, #7 *Elsa's Ice Palace* likewise, #9 *Baymax* shows the $63
+**non-foil** while its foil slabs reach $33,494. Meanwhile a RAW *Rapunzel -
+Gifted with Healing* 4/C1 Foil sold on eBay for **$16,406**. For these cards an
+eBay sold price is not a second opinion; it is the only honest number there is.
+
+Pipeline: `raw_watchlist.py` (the list) → `raw_topup.py` (scrape) → `raw_match.py`
+(attribute) → `raw_load.py` (load + review report) → `raw_sales` →
+`raw_sales_rollup` (**migration 163**). Guarded by
+`python scripts/test_raw_match.py` (no network, no `.env`).
+
+**Scope is promos only, deliberately.** A promo is a fixed, event-distributed
+population, so its market is structurally somewhere other than TCGplayer. Every
+Enchanted and Iconic is **out** — TCGplayer is right about those, and a second
+source could only disagree with a correct number.
+
+### The asymmetry that drives every rule
+
+Publishing a wrong number here is far worse than publishing nothing: these cards
+are on the watchlist *because* the site shows a dash or a fossil, so anything
+shown will be believed — and every mis-attribution available is an order of
+magnitude off, in **both** directions. So every gate fails CLOSED and the
+residual is reported, never guessed. `raw_load.py` is **dry-run by default**.
+
+- **⚠ A name search is a NET, not an identity.** Every watchlist token nets 2–5
+  different catalog cards; "Brave Little Tailor" alone returns The First Chapter
+  #115 (a bulk rare), D23 Collection #1, and Promo Set 1 #1, whose graded copies
+  pass $14,000.
+- **⚠ `terapeak_match.match_one` stays the ONLY matcher.** Measured over the
+  8,253 corpus titles carrying a watchlist token, stripping every grading token
+  out of a title (which is what a raw title looks like) changed the attributed
+  card in **0 of 8,182** cases. Don't write a second matcher; `raw_match` adds
+  gates on top of that one.
+- **⚠ PRICE MAY NEVER ATTRIBUTE A SALE.** Using "too cheap to be the promo" to
+  reject a row, or "$16,000 must be it" to accept one, makes the published price
+  a function of the assumption — we would be choosing which sales count by
+  whether they already agree with the answer, then publishing that answer as
+  evidence. Price flags a row for a human; it decides nothing.
+  `test_raw_match.py` fails if `raw_verdict` ever grows a price argument.
+
+### The three gates, and what each cost to learn
+
+1. **A slab is not a raw sale.** A name sweep returns that card's slabs, which
+   are already in `graded_sales`. `tc.parse_grade` needs a grader AND a number,
+   so **23 slabs leaked** the first cut — the dearest a **$17,500** "Gem Mint 10"
+   whose title never says PSA. Gate 1 is three tests: a full parse, a bare grader
+   NAME ("PSA Authentic", "TAG Score 942"), and grader-less grading language
+   (`gem mint`, `graded`, `Grade 9`, `pristine`, `pop 90`). **⚠ Every word was
+   cleared against card names** — bare `badge` hits *Detective's Badge*, bare
+   `pop` hits *Gazelle - Pop Star*, bare `slab` hits *Vision Slab*, and a bare
+   `mint` would eat the "Near Mint" most raw listings say about themselves.
+2. **No evidence means no attribution.** `match_one` matches on name tokens alone
+   (its `ov >= 0.85` branch), and same-named cards have IDENTICAL token sets, so
+   they tie and the winner is arbitrary. **700 corpus titles carry neither a
+   collector number nor a set hint**, and that tiebreak put **$1.75 on Let It Go
+   (C1 #41, a $1,350 promo)** and $13.50 on Stouthearted. Undecidable, so dropped.
+3. **Off-watchlist sales are dropped.** A sale attributing to TFC #115 is real,
+   and that card has a live TCGplayer price which is the authority for it.
+
+### Things that wear a card's NAME and beat every identity gate
+
+These satisfy gates 1–3 completely, because they genuinely *are* "the D23 Mickey
+Brave Little Tailor". Only a product-type rule stops them.
+
+- **PINS need a BROADER rule here than in the graded pipeline, and the two must
+  not be merged.** `tc.ACC_RE` is narrow on purpose — a bare `\bpins?\b` matches
+  ~30 active graded rows that are real card sales merely mentioning a bundled pin
+  (one $8,500). The raw sweep inverts that trade: those all say PSA so gate 1 has
+  them, while **17 actual pins survived at $7.00–$14.99** against a card whose
+  graded copies pass $14,000. `raw_match.RAW_PIN_RE` is raw-only; the test fails
+  if that breadth migrates into `ACC_RE`.
+- **MERCH**: a 13x19 **poster** of Elsa - Snow Queen sold at $34–$100 and
+  attributed cleanly. `proxy`/`custom`/`replica` matter more here than anywhere —
+  a counterfeit of a $1 common isn't worth making. **⚠ bare `print` is NOT
+  matched** (367 corpus hits are legitimate "1st Print"), and `custom` is safe
+  only because `\bcustom\b` cannot match "Customer".
+- **⚠ "EXTENDED ART" IS A DIFFERENT CARD.** The 2024 D23 Collection printings are
+  the Rainbow Foil / Extended Art ones at **$16–$316**; the 2022 Promo Set 1
+  cards tracked here run **$700–$1,900**. They share a character, a collector
+  number (#01) and the token "D23", so it lands on the 2022 card and drags its
+  price down 10x.
+
+### The backfill — real data before a single page is scraped
+
+`graded_sales` **already holds raw sales**. The grader sweeps search "Lorcana"
+"PSA", eBay returns listings whose titles never say PSA, and those land grade-null
+— which the graded rollup ignores by design, so they have been invisible since
+the day they were scraped. **113 of them are real raw sales of watchlist cards**,
+spanning 2023-10 to 2026-09 across 19 of the 24 cards, including the $16,406
+Rapunzel. `raw_load.py --backfill-graded` recovers them.
+
+- **⚠ `grade is null` is a HARD prerequisite, not an optimisation.** Four rows
+  carry a stored grade (filled later by slab-OCR or by hand) while their titles
+  say nothing about grading — gate 1 reads titles and cannot see that, so this is
+  the one piece of evidence only the backfill has.
+- **A backfilled row keeps its item_id and so exists in BOTH tables.** Correct:
+  `graded_sales` is the scrape LEDGER, `raw_sales` is the price SOURCE. **Never
+  delete from `graded_sales`** — the row is grade-null so the graded rollup
+  already ignores it, and deleting it makes the next `--new-only` grader load
+  re-insert it.
+
+### Storage, rollup and the client
+
+- **⚠ Output goes to `scripts/raw_output/`, NEVER `scripts/terapeak_output/`.**
+  `terapeak_clean.load_all_dedup()` globs `terapeak_output/lorcana_*.jsonl` and
+  its filename filter would not reject a raw file: `classify()` returns
+  NEEDS_GRADE for any title with no grade token, so every raw sale would be
+  inserted into `graded_sales` under a grader invented from the filename. Nothing
+  errors; the rollup just gains a grader called TAILOR. Pinned by the test.
+- **The rollup reuses `graded_sale_pkey`**, so raw and graded can never disagree
+  about which bucket a printing is in. **⚠ An empty-string bucket means the card
+  has ONE printing** (every Promo Set 1/3 and C2 card here); the Challenge (C1)
+  cards DO split, and there the buckets are Top Prize foil vs Prize Wall non-foil
+  — markets ~50x apart, so a mismatch is the most expensive bug available.
+  `rawSaleMatch` in Index.html mirrors it via the existing `gradedSlotBucket`.
+- **⚠ NO `pct_*` delta columns**, unlike the graded rollup. Migration 85 had to
+  retrofit a window guard there because sparse data produced honest-looking
+  nonsense ("+884% (1W)" off a nine-month-old reference). This is sparser still —
+  19 of 24 cards have fewer than ten known sales *ever* — so every window would
+  be null or misleading. Sale count and date carry the uncertainty instead.
+- **⚠ `quantity_sold` matters more than it does for graded.** A slab is unique so
+  Terapeak's "avg sold price" collapses to the single sale; a raw card is
+  fungible, so one listing can sell several copies and the price is a per-unit
+  AVERAGE with only the LAST date. Kept (it is a fair price point) but reported,
+  because a multi-quantity sale of a card with a handful of copies is also a
+  mis-attribution hint.
+### On a raw-priced card the hierarchy INVERTS (2026-09-20, Zaven)
+
+*"instead of normal low/market, lets use last sold/avg last 5, as the main
+indicators for these raw cards, as if they were graded … lets still include the
+tcgp prices too, but those are secondary."* On these cards TCGplayer's number is
+the fossil and the eBay sales are the market, so the card page says so:
+
+- **`*` after the printing label** (`.raw-star`), the site's existing
+  footnote mark — the same one set-release dates use. A `.cd-raw-note` under the
+  Price-changes list explains it, and is rendered only when a row carries one.
+- **`Last sold · Avg N` takes `.cd-stat-px`'s own size and the accent colour;
+  `TCGplayer Low · Mkt` drops to a muted line underneath.** Everywhere else the
+  plain `.cd-stat-px` rule is untouched. **⚠ "Avg N", not "Avg 5"** — it is
+  `last_5_count`, so a card with three sales says `Avg 3` rather than claiming
+  five. The sale count and latest date sit under it because one sale of a card
+  with five known copies is a data point, not a market.
+- **Individual sales are DOTS on the price history**, never a line
+  (`scatter: true`, handled in `LineChart` AND `drawPosterChart` so the copied
+  PNG is the same document as the screen). ⚠ Joining twelve sales spread over
+  three years would draw a price path that never happened; the TCGplayer series
+  are genuinely daily and stay lines.
+- **⚠ A raw card opens the chart on NM Market, not Low, and that is a
+  correctness fix rather than a preference.** Low is a published aggregate one
+  listing can move, and on exactly these thinly-listed promos it throws phantom
+  spikes — Promo Set 1 #1's Low reaches **$10,000** against real sales of
+  $518–$1,550, which flattens every dot onto the axis. Market is the accurate
+  side (median ratio 1.000 against real sales). Applied once per card; both
+  checkboxes stay live. **⚠ It is SYMMETRIC** — this modal does not remount
+  between cards, so without restoring the default, one raw promo would leave Low
+  switched off for every ordinary card opened afterwards.
+- **⚠ The chart plots only the printings the card actually HAS**, never a
+  defaulted "Normal". A Challenge card opened on its Top Prize foil has no
+  non-foil side, and defaulting the missing one pulled the Prize Wall sales
+  ($70–$150) onto the foil chart ($16,406) — the two markets on one axis, the
+  exact conflation `graded_sale_pkey` exists to prevent.
+- **⚠ The sales fetch filters `excluded=is.false`.** The table deliberately
+  keeps every row it rejected, so plotting unfiltered would put a $16,406 PSA 10
+  and an $8 pin on the card's chart.
+
+- **Client plumbing**: the whole table is under a hundred rows, so the rollup and
+  the individual sales are fetched **together, once per session** into module
+  scope (`fetchRawSales()` → `{rollup, sales}`). A missing table 404s, is cached
+  as empty Maps and asked once; the card page then renders exactly as it does
+  today. **⚠ `RAW_SALE_COLOR` is a literal hex, not `var(--accent)`** — these
+  series are consumed by the canvas poster, which cannot resolve a CSS variable.
+
+### Running it
+
+`powershell -File scripts\graded_run.ps1 -Raw [-Deep]` — the SAME driver as the
+graded scrape, because stages 1a–1c hold the stale-Chrome and captcha knowledge
+and a second copy would drift. `-Deep` (first run) pulls each query to
+exhaustion; after that a query is bounded by its own file's max date. It stops at
+the DRY-RUN load: read the review report, then `--commit` yourself.
 
 ## Price standing — "is this actually a good price?" (2026-09-10)
 
@@ -5802,6 +6158,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
+- ~~`supabase/163_raw_sales.sql`~~ — **APPLIED 2026-09-20 by Zaven**, and the backfill is
+  **loaded**: 78 raw sales across 18 cards, back to 2023-10. `raw_sales` + `raw_sales_rollup` +
+  `refresh_raw_sales_rollup()`. **⚠ Its `statement_timeout` is a function-level `SET` clause,
+  not a `set local`** — migration 131 had to fix exactly that on the market-index refresh, which
+  died at the role default every time because the GUC is armed before the body runs.
 - **`supabase/159_deck_short_links.sql`** — **STAGED 2026-09-18, needs a paste.** Short deck links:
   `packs.ink/?d=<12 chars>` instead of the ~100-char `?deck=&token=` link. `deck_short_links` +
   `deck_short_code(deck, token)` (mint, one per deck+token) + `resolve_deck_short_code(code)`. A
