@@ -68,13 +68,31 @@ def main():
     check(L.printing_of("Elsa Snow Queen text error PSA 10") is None,
           "and the finish reader does not invent one either")
 
-    print("\n4. the loader actually consults it")
-    src = (HERE / "terapeak_load.py").read_text(encoding="utf-8")
-    check("variant_printing_for(card[\"id\"], title)" in src,
-          "terapeak_load's row builder calls variant_printing_for")
-    check(re.search(r"variant_printing_for\(.*?\)\s*\n?\s*.*?\)\s*or printing_of\(title\)", src, re.S)
-          or "or printing_of(title)" in src,
-          "and falls back to printing_of for everything else")
+    print("\n4. printing_for is the ONE accessor, and EVERY writer uses it")
+    # This is the drift that actually bites. A writer that calls printing_of()
+    # directly on a named-variant card files the sale under a finish (or NULL),
+    # which is how Peter Pan ended up with 19 rows in the wrong bucket and 21 in
+    # no bucket at all -- and nothing errors when it happens.
+    load_src = (HERE / "terapeak_load.py").read_text(encoding="utf-8")
+    check("def printing_for(" in load_src, "terapeak_load defines printing_for()")
+    check("return variant_printing_for(card_id, title) or printing_of(title)" in load_src,
+          "printing_for = named variant first, finish second")
+    check('"printing": printing_for(card["id"], title) if card else printing_of(title),' in load_src,
+          "the loader's row builder goes through printing_for")
+
+    for fname, needle in (("rematch_graded_unmatched.py", 'printing_for(card["id"], title)'),
+                          ("backfill_graded_printing.py", 'printing_for(r.get("card_id"), t)')):
+        src = (HERE / fname).read_text(encoding="utf-8")
+        check(needle in src, "%s calls printing_for" % fname)
+        # ...and does not call the finish reader behind its back.
+        body = re.sub(r"#.*", "", src)          # strip comments before looking
+        check("printing_of(" not in body, "%s never calls printing_of directly" % fname)
+
+    # backfill cannot decide a variant without knowing which card it is
+    bf = (HERE / "backfill_graded_printing.py").read_text(encoding="utf-8")
+    sel = re.search(r'"select":\s*"([^"]+)"', bf)
+    check(bool(sel) and "card_id" in sel.group(1),
+          "backfill fetches card_id (printing_for needs it)")
 
     print("\n5. the python map and the client agree on WHICH cards these are")
     idx = (HERE.parent / "Index.html").read_text(encoding="utf-8", errors="replace")

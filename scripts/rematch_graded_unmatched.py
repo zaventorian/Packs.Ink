@@ -59,7 +59,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-from terapeak_load import exclude_reason_for, printing_of
+from terapeak_load import exclude_reason_for, printing_for
 from terapeak_match import build_index, match_one, is_nonsingle
 
 try:
@@ -113,7 +113,10 @@ def decide(row, by_cn, inv):
         return None, "skip:still-unmatched"
 
     body = {"card_id": card["id"], "match_confidence": conf, "cn_conflict": False}
-    pr = printing_of(title)
+    # printing_for, never printing_of: on a named-variant card (Peter Pan Text
+    # Error, Genie Two Swords) the finish reader answers for the wrong axis and
+    # parks the sale in a bucket belonging to neither market.
+    pr = printing_for(card["id"], title)
     if pr:
         body["printing"] = pr
 

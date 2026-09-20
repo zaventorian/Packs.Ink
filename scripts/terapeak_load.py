@@ -148,6 +148,18 @@ def variant_printing_for(card_id, title):
     return name if rx.search(title or "") else "Normal"
 
 
+def printing_for(card_id, title):
+    """THE printing a graded sale should carry: a named variant when the card has
+    one, otherwise the finish read off the title.
+
+    Every writer must go through this -- the loader, rematch_graded_unmatched and
+    backfill_graded_printing. Calling printing_of() directly on a named-variant
+    card files the sale under a finish (or NULL) instead of its variant, which
+    blurs two markets that are ~49% apart. scripts/test_variant_printing.py pins
+    that all three callers use this and not printing_of."""
+    return variant_printing_for(card_id, title) or printing_of(title)
+
+
 def printing_of(title: str):
     t = (title or "").lower()
     if NON_FOIL_RE.search(t):
@@ -341,8 +353,7 @@ def main():
             "grade": grade,
             # A named-variant card decides its own printing (see
             # VARIANT_PRINTING_BY_CARD); everything else reads the finish.
-            "printing": (variant_printing_for(card["id"], title)
-                         if card else None) or printing_of(title),
+            "printing": printing_for(card["id"], title) if card else printing_of(title),
             "match_confidence": conf,
             "cn_conflict": cn_conflict,
             "excluded": reason is not None,
