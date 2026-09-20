@@ -1506,6 +1506,53 @@ its real latest PSA 10 sale was ten times that.
 
 **Counting `#NNN` occurrences does NOT detect multi-card lots** — sellers append PSA cert and inventory numbers in the same form, so the rule flagged 574 ordinary single-card sales against 1 real lot. Don't reintroduce it; the note is in `terapeak_match.py`.
 
+### A named VARIANT is a printing, not a card_id (2026-09-20)
+
+Two cards' graded sales split on a **variant** rather than a finish: Peter Pan -
+Pirate's Bane (Enchanted #215) *Text Error* and Genie - On the Job (Enchanted
+#209) *Two Swords*. The design is already right and is easy to mis-read:
+
+- the **`::variant::` catalog tile is RAW-ONLY and has no graded market** — it
+  exists because TCGCSV has no separate SKU, so it carries null prices;
+- the **graded sales live on the BASE `card_id` under a distinct `printing`**
+  (`"Text Error"` / `"Two Swords"`), which `graded_sale_pkey` keeps in its own
+  rollup bucket because `cards.split_printing` is true;
+- `canonicalGradedSlot` maps an owned slot keyed on the clone back to
+  (base, variant printing), so nothing lands on a dead id.
+
+**So do NOT add a `cards` row for a `::variant::` id** to "make graded work" —
+it already works, and a real row would duplicate the client's clone.
+
+**⚠ Nothing in the ETL set that printing, so every such sale landed as `Normal`
+or NULL.** Measured on Peter Pan #215: 19 rows filed Normal and 21 with no
+printing at all, blurring a real **~49% premium** (PSA 10 avg-of-5 **$400 Text
+Error vs $269 Normal**). `VARIANT_PRINTING_BY_CARD` + `variant_printing_for()`
+in `terapeak_load.py` now decide it, and returning **`"Normal"` rather than NULL
+when the title is silent is deliberate** — NULL parks the row in an "Unknown"
+tier belonging to neither market.
+
+**⚠ The TITLE is only ~93% reliable here, and the SLAB LABEL is the truth.** The
+error is a single stray `}` after "Peter Pan" in the Shift reminder text
+(corrected on a later print run), so sellers routinely miss it. Measured by
+OCR-ing 280 slab labels against their titles: **14 rows whose seller never wrote
+"text error" carry PSA's own `ENCHANTED-TEXT ERROR` designation, and 6 that
+claim it are labelled plain.** Verified independently by reading the brace off
+four cards — the OCR label agreed with the card every time, including both
+silent ones.
+
+For a GRADED card the label *is* the product identity, and it is also the most
+legible thing in a listing photo, which is what makes this decidable at all:
+`pytesseract` on the top 45% of the image reads `ENCHANTED-TEXT ERROR` cleanly
+in ~0.4s (point it at `C:\Program Files\Tesseract-OCR\tesseract.exe`).
+`terapeak_ocr_reconcile.py` is where that correction belongs long-term; the
+title rule is a floor, not the last word.
+
+Guarded by `python scripts/test_variant_printing.py`, which also pins that the
+**same two card ids and the same printing STRINGS appear on both sides** —
+`VARIANT_PRINTING_BY_CARD` in Python and `SPLIT_PRINTING_CARD_IDS` /
+`SPLIT_CARD_PRINTING_OPTIONS` in Index.html. Drift there is silent: the sales
+just pile into the wrong bucket.
+
 ### Price Graphing "By Graded" mode
 
 Ported off the frozen legacy feed onto `graded_sales` 2026-07-29 (it had been graphing lines that all flat-lined at 2026-06-30 for every user).

@@ -97,6 +97,47 @@ PRIZE_WALL_RE = re.compile(r"\bprize\s*wall\b|\bside\s*event\b", re.I)
 NON_FOIL_RE = re.compile(r"\b(?:non?|not|n/)[\s\-./]*foil")
 
 
+# A few cards' graded sales split on a NAMED VARIANT rather than a finish: the
+# error/variant print shares one card_id with the base, and graded_sales_rollup
+# keeps the two apart because cards.split_printing is true. The client mirrors
+# this exactly in SPLIT_PRINTING_CARD_IDS / SPLIT_CARD_PRINTING_OPTIONS -- the
+# ::variant:: catalog tile is raw-only and has no graded market of its own.
+#
+# Nothing here used to set these, so EVERY such sale landed as Normal or NULL and
+# the two markets blurred: measured on Peter Pan #215, 19 rows were filed Normal
+# and 21 carried no printing at all, against a real ~49% premium for the error
+# print (PSA 10 avg-of-5 $400 vs $269).
+#
+# WARNING: the title is only ~93% reliable here. Measured by OCR-ing 280 slab
+# labels: 14 rows whose seller never wrote "text error" carry PSA's own
+# ENCHANTED-TEXT ERROR designation, and 6 that claim it are labelled plain.
+# The SLAB LABEL is the authoritative signal -- for a graded card it IS the
+# product identity -- and terapeak_ocr_reconcile.py is where that correction
+# belongs. This is a floor, not the last word.
+VARIANT_PRINTING_BY_CARD = {
+    # Peter Pan - Pirate's Bane (Enchanted #215): a stray "}" after "Peter Pan"
+    # in the Shift reminder text, corrected on a later print run.
+    "crd_b5e74b533270492982dff9472aee8664": (
+        "Text Error", re.compile(r"text\s*[-_. ]?\s*err(?:or)?\b|errata", re.I)),
+    # Genie - On the Job (Enchanted #209): the Two Swords variant art.
+    "crd_ae7e91462bfc4861bbf97e99ed53a1c1": (
+        "Two Swords", re.compile(r"two\s*swords", re.I)),
+}
+
+
+def variant_printing_for(card_id, title):
+    """For a named-variant card, the variant name or "Normal"; None otherwise.
+
+    Returning "Normal" rather than None is deliberate: on these cards the base
+    print IS the default, and leaving it NULL parks the row in an "Unknown"
+    rollup tier that belongs to neither market."""
+    ent = VARIANT_PRINTING_BY_CARD.get(card_id)
+    if not ent:
+        return None
+    name, rx = ent
+    return name if rx.search(title or "") else "Normal"
+
+
 def printing_of(title: str):
     t = (title or "").lower()
     if NON_FOIL_RE.search(t):
@@ -288,7 +329,10 @@ def main():
             "card_id": card["id"] if card else None,
             "grader": grader,
             "grade": grade,
-            "printing": printing_of(title),
+            # A named-variant card decides its own printing (see
+            # VARIANT_PRINTING_BY_CARD); everything else reads the finish.
+            "printing": (variant_printing_for(card["id"], title)
+                         if card else None) or printing_of(title),
             "match_confidence": conf,
             "cn_conflict": cn_conflict,
             "excluded": reason is not None,
