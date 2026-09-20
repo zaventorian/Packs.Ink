@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=438">
+<link rel="stylesheet" href="styles.css?v=440">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -37568,6 +37568,16 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
     catch { return "raw"; }
   });
   useEffect(() => { try { localStorage.setItem("packsink:home:moversMode", moversMode); } catch {} }, [moversMode]);
+  // Collapse the movers list on its own, independently of the panel's own
+  // minimize: the chart and the headline value are what most people keep
+  // open, and the movers table is the tallest thing under them.
+  const [moversMin, setMoversMin] = useState(() => {
+    try { return localStorage.getItem("packsink:home:colMoversMin") === "1"; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem("packsink:home:colMoversMin", moversMin ? "1" : "0"); } catch {}
+  }, [moversMin]);
   // Two-layer cache. (1) In-memory historyCache keyed by (productsHash,
   // rangeKey) holds the raw fetched rows for instant within-session range
   // switching. (2) A localStorage cache holds the COMPUTED value series
@@ -38106,9 +38116,14 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             ? html`<div style=${{padding:"40px 0",textAlign:"center",color:"var(--red)",fontSize:11}}>${historyState.error}</div>`
             : html`<div class="muted" style=${{padding:"40px 0",textAlign:"center",fontSize:12}}>No price history for the selected range yet.</div>`}
     </div>
-    <div class="panel-movers">
-      <div class="panel-movers-title">Your Top Movers</div>
-      ${hasGraded && html`<div class="panel-movers-mode-tabs" role="tablist"
+    <div class=${"panel-movers" + (moversMin ? " is-min" : "")}>
+      <button class="panel-movers-title" onClick=${()=>setMoversMin(m => !m)}
+        aria-expanded=${!moversMin}
+        title=${moversMin ? "Show your top movers" : "Hide your top movers"}>
+        <span>Your Top Movers</span>
+        <span class="panel-movers-caret" aria-hidden="true">${moversMin ? "▸" : "▾"}</span>
+      </button>
+      ${!moversMin && hasGraded && html`<div class="panel-movers-mode-tabs" role="tablist"
         style=${{display:"flex",gap:4,marginBottom:6}}>
         <button class=${moversMode==="raw"?"active":""}
           onClick=${()=>setMoversMode("raw")}
@@ -38119,7 +38134,7 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
           style=${{fontSize:11,padding:"3px 10px"}}
           title="Graded card Δ% (eBay sale averages)">Graded</button>
       </div>`}
-      <div class="panel-movers-controls">
+      ${!moversMin && html`<div class="panel-movers-controls">
         <div class="panel-range-buttons">
           ${MOVER_WINDOWS.map(w => html`<button key=${w.key}
             class=${moversWindow===w.key?"active":""}
@@ -38135,8 +38150,8 @@ const CollectionPanel = ({raw, user, collection, sealedCollection, sealedMeta, s
             ▼ Droppers
           </label>
         </div>
-      </div>
-      ${moversMode === "raw"
+      </div>`}
+      ${moversMin ? null : moversMode === "raw"
         ? (collectionMovers.length === 0
           ? html`<div class="muted" style=${{fontSize:11,padding:"10px 2px",textAlign:"center"}}>
               No ${moversWin.label} movement in your collection matching the filters.</div>`
