@@ -295,7 +295,12 @@ def main() -> None:
     # Promo reprints Lorcast doesn't index as a separate printing, but each is a
     # reprint of a Lorcast-indexed card. Clone the base row (by pid) and override
     # set / collector# / id / rarity / pid + swap to the promo's TCGplayer art.
-    #   (base_pid, set_id, collector_number, new_id, promo_pid)
+    #   (base_pid, set_id, collector_number, new_id, promo_pid[, art])
+    # promo_pid may be None for a promo TCGplayer has not listed yet -- the row
+    # is then unpriced, which the client already handles (NUMBERED_PROMO_SETS
+    # emits one placeholder printing). `art` is an optional repo-local image
+    # for that case; without it the row would silently keep the BOOSTER
+    # printing's picture, which is the wrong art on a promo tile.
     P3_SET  = "set_1e6669367c7a4a208ce51fd8bd7d2c41"  # Promo Set 3
     CC1_SET = "set_curators_cc1"       # Curator's Collection: Heroines
     # PD1 is Lorcast's own rolling promo set (#1-#8 today). A promo that ships
@@ -343,6 +348,20 @@ def main() -> None:
         # #245, so that collides. Q1/Q2 quest cards dodge this only because they
         # are numbered above their booster range (223-225); Q3 renumbers from 1.
         (704583, PD1_SET, "16", "crd_pd1_16_with_a_few_good_friends",  709896),
+        # Printed 18/PD1 and 19/PD1 -- the two promos packed in the Costco-
+        # exclusive Best Buddies Bundle (Sep 2026, SEALED_EXCLUSIVES n:1).
+        # Bases are the Attack of the Vine! printings: Sulley - Protective
+        # Monster #128 (702691) and Violet Parr - Super Resilient #176
+        # (704672). Cost / ink / stats / lore / classifications / ability text
+        # on the real cards were read off the announcement photo and match
+        # those two rows exactly, which is what makes cloning them safe.
+        # TCGplayer has not listed either promo yet, so no pid: fill it in and
+        # delete the art path when it does, and the row updates in place --
+        # same card_id, so nobody's collection mark moves.
+        (702691, PD1_SET, "18", "crd_pd1_18_sulley_protective_monster",   None,
+         "Logos/cards/sulley-protective-monster-pd1-18.jpg"),
+        (704672, PD1_SET, "19", "crd_pd1_19_violet_parr_super_resilient", None,
+         "Logos/cards/violet-parr-super-resilient-pd1-19.jpg"),
         # === AUTO-RESOLVED — lines below this point are written by
         # scripts/apply_catalog_resolutions.py from a "resolution" block in
         # catalog_watch.json, keyed by the trailing `# auto:<promo_pid>` comment.
@@ -356,7 +375,9 @@ def main() -> None:
                             filters={"tcgplayer_product_id": f"in.({','.join(str(p) for p in rp_base_pids)})"})
         rp_by_pid = {r["tcgplayer_product_id"]: r for r in rp_base}
         rp_rows = []
-        for base_pid, set_id, cn, new_id, promo_pid in REPRINT_PROMOS:
+        for entry in REPRINT_PROMOS:
+            base_pid, set_id, cn, new_id, promo_pid = entry[:5]
+            art = entry[5] if len(entry) > 5 else None
             b = rp_by_pid.get(base_pid)
             if not b:
                 print(f"  skip reprint {new_id}: base {base_pid} not in cards")
@@ -367,9 +388,14 @@ def main() -> None:
             row["collector_number"] = cn
             row["rarity"] = "Promo"
             row["tcgplayer_product_id"] = promo_pid
-            row["image_small"]  = tcg_img(promo_pid, 200)
-            row["image_normal"] = tcg_img(promo_pid, 400)
-            row["image_large"]  = tcg_img(promo_pid, 400)
+            if art:
+                row["image_small"] = row["image_normal"] = row["image_large"] = art
+            elif promo_pid:
+                row["image_small"]  = tcg_img(promo_pid, 200)
+                row["image_normal"] = tcg_img(promo_pid, 400)
+                row["image_large"]  = tcg_img(promo_pid, 400)
+            else:
+                print(f"  note {new_id}: no promo pid and no art -- keeping the base printing's image")
             rp_rows.append(row)
         if rp_rows:
             sb.upsert("cards", rp_rows, on_conflict="id")

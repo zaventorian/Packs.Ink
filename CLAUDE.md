@@ -388,10 +388,23 @@ extracts the real pure functions out of Index.html.
 
 ## Pin + lore-counter photos (2026-08-24)
 
-44 pins and 23 lore counters render on their own Collection tab (Pins & Counters — see the next
+45 pins and 25 lore counters render on their own Collection tab (Pins & Counters — see the next
 section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from the static
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
 cut out and served from our own storage.
+
+**⚠ An entry may carry `img` to override the storage URL, and n:45 is the first to use it**
+(2026-09-20, the Best Buddies Bundle pin). That is for a PROVISIONAL cut — a crop of an
+announcement photo rather than the studio shot every other entry has — and it deliberately leaves
+the canonical `pins/45.png` slot in storage EMPTY, so "has a real photo" stays answerable by
+looking at the bucket. When a real photo lands, upload it and delete the `img` line; `n` already
+points `collectibleArtUrl` at the right file. `noArt` remains the other option, for an entry with
+no usable photo at all.
+
+**A pin can now come in a RETAIL BOX**, not just an event kit / convention / prize wall — n:45
+ships inside the Costco Best Buddies Bundle (`SEALED_EXCLUSIVES`), which is also where 18/PD1 and
+19/PD1 come from. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks the highest valid `n`,
+so it moves with the list (45 today, counters 25).
 
 **⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
 `privacy.html`'s takedown line both named one until 2026-09-13, when Zaven asked for it gone
@@ -464,10 +477,11 @@ the source is a fan site with gaps.
   - **⚠ "Hunny Archmage" (Attack of the Vine! 40/207) is NOT "Hunny Wizard"** (Rise of the Floodborn
     59/204, which is the pin at `LORCANA_PINS` n:8). Two different Pooh-as-wizard cards two sets
     apart; the counter art was checked against Lorcast to pick the right one.
-- Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
+- Adding an entry still means uploading its photo in the same commit, flagging it `noArt`, or —
+  for a provisional cut — pointing `img` at a repo file (see the top of this section).
 - **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
   valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
-  the list length (44 / 23) even while three entries have no photo to upload.
+  the list length (**45 / 25** as of 2026-09-20), even where an entry has no photo to upload.
 - **`scripts/cut_collectible_bg.py`** removes the white studio background. Two things make it
   work: the background is found by **flood fill from the border**, not by "white → transparent"
   (which punches straight through Baymax, every logo pin and every ink symbol's highlight); and
@@ -1678,6 +1692,43 @@ Card detail modal's Graded tab:
 - **Per-row sparkline buttons**: click any row's sparkline → expands a full LineChart inline beneath that row. Multiple rows can expand at once for grade-premium comparison.
 - Helper: `buildGradedSeries(history, grader, grade, label)`. Color map: PSA red, CGC blue, BGS purple, SGC green, TAG orange.
 
+## Retailer-exclusive sealed product (2026-09-20)
+
+`SEALED_EXCLUSIVES` — a box you can only buy at one chain, which therefore has no TCGplayer
+listing, no pid, no price and no `sealed_prices_latest` row. Same answer as `SEALED_PUZZLES`: a
+static client const shaped like a sealed_prices row, merged into the Sealed collection at the two
+sites that spread the puzzles, rendering in its own **Retailer Exclusives** section
+(`SEALED_STATIC_SECTION_NAMES["__exclusives__"]`). Ownership persists in `sealed_collection_items`
+— no FK on the product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle**
+(Costco, Sep 2026) — portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45.
+
+- **Band is `930000000 + n`** — clear of the puzzles' 912.0M and BELOW the 950–970M window
+  `isCollectiblePid` owns. That is deliberate: pins and counters are excluded from the Sealed
+  tab's unit and SKU counts, and these must NOT be, because a bundle is a box you own.
+- **⚠ `n` is a stable hand-assigned id.** Never renumber one — it is what somebody's owned mark
+  is filed under. Same rule as the pins.
+- **⚠ This is the one static catalog whose rows can become REAL TCGplayer products.** A retailer
+  exclusive usually reaches the secondary market, and the daily loader would then bring in a
+  second row for the same box under its own set. When that happens **delete the entry here** —
+  two tiles for one product is worse than the owned marks it drops, and the real row is the one
+  with a price. `reconcile_catalog.py --watch` reports the new listing as `missing_sealed`.
+- **`isUnpricedSealed(p)`** is the one predicate for "static row, no TCGplayer SKU, no price" —
+  puzzles, pins/counters and exclusives. Every surface that would otherwise build a TCGplayer buy
+  link, fetch price history or multiply a price by a quantity asks it. **A missed call site is
+  silent**: a dead affiliate link on a tile, or a modal that fetches history for a pid that has
+  none and draws an empty chart. It is NOT the right question everywhere — the Amazon LINK is
+  still gated on `is_collectible` alone, because a puzzle and a bundle are both purchasable there
+  and only a pin is not.
+- **An exclusive's tile and modal take Amazon as the PRIMARY link**, the shape the puzzles
+  already use: there is no TCGplayer page to be the first button, and `amazonForSealed` falls
+  through to a `Disney Lorcana <name>` search ("Find on Amazon"), which is honest about not
+  promising the product page. That same search fallback is why it does not reach the home Amazon
+  shelf: `amazonShelfPool` keeps only `exact` listings plus newest-set searches, and an exclusive
+  is neither. Curate an ASIN for one and it WOULD join the shelf, which is the right outcome —
+  by then there is a real listing to link to.
+- Guarded by the `SEALED_EXCLUSIVES` / `isUnpricedSealed` section of
+  `node scripts/test_amazon_links.mjs`.
+
 ## Sealed enhancements (2026-06-05 — modal + Δ% + Screener)
 
 Three parallel additions made sealed feel like graded:
@@ -1877,7 +1928,20 @@ so #7 there is five different cards.
 - **Promo Set 4 (P4)** — Lorcast indexed it 2026-09-18 with null pids; `TCG_PID_OVERRIDES` (both
   copies) links #9-16. #1-6 aren't indexed yet.
 - **PD1** — product/prerelease promos: #1-8 printed `/PD1` (checked 2026-09-18), #15 Pegasus
-  (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk.
+  (Lorebook), #16 With a Few Good Friends (Q3), #17 The Beanstalk, **#18 Sulley - Protective
+  Monster / #19 Violet Parr - Super Resilient** (Best Buddies Bundle, 2026-09-19).
+- **A promo TCGplayer has not listed yet is a `REPRINT_PROMOS` entry with a NULL pid** (2026-09-20).
+  That tuple grew an optional 6th field: `(base_pid, set_id, cn, new_id, promo_pid[, art])`. A null
+  `promo_pid` leaves the row unpriced — already the handled case, `NUMBERED_PROMO_SETS` emits one
+  placeholder printing — and `art` carries a repo-local scan, because the image would otherwise
+  fall back to the BOOSTER printing's picture, which is the wrong art on a promo tile. Filling the
+  pid in later and deleting the art path updates the row **in place**: same `card_id`, so nobody's
+  collection mark moves. That is the reason to use this script rather than a one-off migration —
+  and it re-applies after every Lorcast load instead of being a single insert that can drift.
+- **⚠ Check Lorcast before hand-writing any promo's stats.** #18/#19 turned out to be promo
+  printings of Attack of the Vine! #128 and #176, so cloning those rows gave exact cost / ink /
+  stats / lore / classifications / ability text instead of a blurry photo's best guess. A promo
+  packed in a product is USUALLY a reprint of a booster card; read the photo only to confirm it.
 - **"Attack of the Vine! Promos" is gone.** It was a hand-made stand-in that flattened P4, PD1 and
   DIS into invented numbers (Tigger sat at #10, Meilin Lee's real number). `supabase/160` moved its
   last three cards onto P4 #12/#15/#16. `SET_PARENT` is now empty but the mechanism stays.

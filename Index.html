@@ -14064,6 +14064,7 @@ const SEALED_STATIC_SECTION_NAMES = {
   "__puzzles__": "Puzzles",
   "__pins__": "Pins",
   "__lore_counters__": "Lore Counters",
+  "__exclusives__": "Retailer Exclusives",
 };
 const sealedDisplayTypeRank = (t) => {
   const i = SEALED_DISPLAY_TYPE_ORDER.indexOf(t);
@@ -14102,6 +14103,60 @@ const SEALED_PUZZLES = [
   puzzle_pieces: p.pieces,
   puzzle_exclusive: p.exclusive,
 }));
+// Retailer-exclusive sealed product — a bundle you can only buy at one chain.
+// Same reasoning as SEALED_PUZZLES above: TCGplayer doesn't list it, so there
+// is no pid, no price and no sealed_prices_latest row, and it lives here shaped
+// like a sealed_prices row so the Sealed collection's grouping and tiles take it
+// unchanged. Ownership persists in sealed_collection_items (no FK on the product
+// id). Band: 930000000 + n — clear of the puzzles' 912.0M and below the 950-970M
+// window isCollectiblePid owns, so pins/counters keep their exclusion from the
+// sealed unit + SKU counts while these DO count (they are boxes you own).
+//
+// ⚠ `n` is a stable hand-assigned id. Never renumber one — it is the product id
+// somebody's owned mark is filed under, same rule as the pins.
+//
+// ⚠ This is the one static catalog whose rows CAN become real TCGplayer
+// products: a retailer exclusive usually reaches the secondary market, and the
+// daily loader would then bring in a second row for the same box under its own
+// set. When that happens, DELETE the entry here rather than keeping both — two
+// tiles for one product is worse than the owned marks it drops, and the real
+// row is the one that carries a price. `scripts/reconcile_catalog.py --watch`
+// is what reports the new listing (`missing_sealed`).
+const SEALED_EXCLUSIVES = [
+  {
+    n: 1,
+    name: "Best Buddies Bundle",
+    retailer: "Costco",
+    date: "Sep 2026",
+    type: "Bundle",
+    art: "Logos/sealed/best-buddies-bundle.jpg",
+    // Printed on the box, verbatim: "1 CARD PORTFOLIO + 6 WILDS UNKNOWN BOOSTER
+    // PACKS + 2 SPECIAL EDITION PROMO CARDS + 1 PIN". The portfolio holds 252
+    // cards; the promos are 18/PD1 and 19/PD1 and the pin is LORCANA_PINS n:45.
+    contents: "Card portfolio (252 cards) · 6 Wilds Unknown booster packs · 2 promo cards (18/PD1, 19/PD1) · 1 pin",
+  },
+].map(p => ({
+  tcgplayer_product_id: 930000000 + p.n,
+  name: p.name,
+  clean_name: p.name,
+  product_type: p.type,
+  set_id: "__exclusives__",
+  printing: "Normal",
+  low_price: null,
+  market_price: null,
+  image_url: p.art,
+  buy_url: null,
+  is_exclusive: true,
+  exclusive_retailer: p.retailer,
+  exclusive_date: p.date,
+  exclusive_contents: p.contents,
+}));
+// "Static catalog row, so there is no TCGplayer SKU behind it and no price to
+// show." Three kinds qualify today — puzzles, pins/counters and retailer
+// exclusives — and every surface that would otherwise build a TCGplayer buy
+// link, fetch price history or multiply a price by a quantity has to ask. A
+// missed call site is silent: a dead affiliate link, or an empty chart.
+const isUnpricedSealed = (p) => !!(p && (p.is_puzzle || p.is_collectible || p.is_exclusive));
 // Official Lorcana PINS and LORE COUNTERS (the spin-dial trackers) — the two
 // non-card collectibles Ravensburger has run since launch. Neither is sold: a
 // pin comes from a Weekly Play / League season kit, a convention, a Challenge
@@ -14188,6 +14243,21 @@ const LORCANA_PINS = [
   {n:38, name:"Gaston - Superior Archer",                  source:"League - Season of Villainy",      date:"Sep 2026"},
   {n:39, name:"Madam Mim - Resourceful Trickster",         source:"League - Season of Villainy",      date:"Sep 2026"},
   {n:40, name:"Ursula - Deceiver",                         source:"League - Season of Villainy",      date:"Sep 2026"},
+  // The first pin that comes in a RETAIL BOX rather than an event kit, a
+  // convention or a prize wall — the Costco-exclusive Best Buddies Bundle
+  // (SEALED_EXCLUSIVES n:1), which also carries the 18/PD1 + 19/PD1 promos.
+  //
+  // ⚠ `img` overrides the storage URL because this is a provisional cut from
+  // the announcement photo, not the studio shot every other entry carries — it
+  // is deliberately NOT sitting in storage as pins/45.png, so the canonical
+  // slot stays empty until a real photo exists. When one lands, upload it
+  // (scripts/upload_collectible_photos.py) and delete this line; `n` already
+  // points collectibleArtUrl at the right file.
+  //
+  // ⚠ The name is the character, not a card printing: the photo is too low-res
+  // to read a version off, so "Mike Wazowski - <something>" would be invented.
+  {n:45, name:"Mike Wazowski",                             source:"Best Buddies Bundle (Costco exclusive)", date:"Sep 2026",
+                                                           img:"Logos/collectibles/pin-45-mike-wazowski.png"},
   {n:41, name:"The Great Hunny Rescue",                    source:"Illumineer's Quest (retail)",      date:"Oct 2026"},
 ];
 // Weekly Play counters come first (one per season, six per store kit), then the
@@ -14510,11 +14580,11 @@ const amazonListingKey = (url) => {
 function amazonSealedMatches(sealedPrices, setNameById){
   const num = (v) => { const n = v == null ? NaN : Number(v); return Number.isFinite(n) && n > 0 ? n : null; };
   const byUrl = new Map();
-  for(const row of [...(sealedPrices || []), ...SEALED_PUZZLES]){
+  for(const row of [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_EXCLUSIVES]){
     if(!row || row.product_type === "Promo Single" || isHiddenSealedListing(row)) continue;
     const type = deriveSealedDisplayType(row);
     if(!AMAZON_SEALED_TYPE_LABEL[type]) continue;
-    const setName = row.is_puzzle ? null : ((setNameById && setNameById[row.set_id]) || null);
+    const setName = isUnpricedSealed(row) ? null : ((setNameById && setNameById[row.set_id]) || null);
     const az = amazonForSealed(row, setName);
     if(!az) continue;
     const mkt = num(row.market_price), low = num(row.low_price);
@@ -14523,7 +14593,9 @@ function amazonSealedMatches(sealedPrices, setNameById){
       name: cleanSealedName(row.name),
       sub: row.is_puzzle
         ? "Puzzle · " + row.puzzle_pieces + " pcs"
-        : [setName, AMAZON_SEALED_TYPE_LABEL[type]].filter(Boolean).join(" · "),
+        : row.is_exclusive
+          ? row.exclusive_retailer + " exclusive"
+          : [setName, AMAZON_SEALED_TYPE_LABEL[type]].filter(Boolean).join(" · "),
       type, setName,
       setRank: setName ? MAINLINE_SETS.indexOf(setName) : -1,
       img: tcgImgSized(row.image_url),
@@ -14531,7 +14603,7 @@ function amazonSealedMatches(sealedPrices, setNameById){
       priceBasis: mkt != null ? "market" : (low != null ? "low" : null),
       priceDate: row.price_date || null,
       amazon: az.url, exact: az.exact,
-      tcg: row.is_puzzle ? null : tcgUrl(row.tcgplayer_product_id),
+      tcg: isUnpricedSealed(row) ? null : tcgUrl(row.tcgplayer_product_id),
     };
     // Two SKUs can resolve to one listing; keep the one TCGplayer actually prices.
     const prev = byUrl.get(az.url);
@@ -22278,7 +22350,7 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
   // per-card cache (readCardHistCache) — sealed pids slot into the same
   // (pid, printing) keyspace cleanly.
   useEffect(() => {
-    if(!product?.tcgplayer_product_id || product?.is_puzzle || product?.is_collectible){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
+    if(!product?.tcgplayer_product_id || isUnpricedSealed(product)){ setHistory([]); setHistoryState({loading:false, error:null}); return; }
     let cancelled = false;
     setHistoryState({loading: true, error: null});
     fetchCardHistory(product.tcgplayer_product_id, "Normal")
@@ -22355,6 +22427,49 @@ const SealedDetailModal = ({product, sealedCollection, sealedMeta, updateSealedQ
               currentPaid=${sealedMeta?.[pc]?.amount_paid ?? null}
               currentDate=${sealedMeta?.[pc]?.acquired_date || null}
               onCommit=${patch => updateSealedMeta(pc, patch)}/>`}
+          </div>
+        </div>
+      </div>
+    </div>`;
+  }
+  // A retailer exclusive has no TCGplayer SKU, so there is no price, no chart
+  // and no Δ% to show — the same trimmed modal the puzzles get. What a
+  // collector wants here is what is in the box and where to buy it.
+  if(product.is_exclusive){
+    const px = product.tcgplayer_product_id;
+    const qx = sealedCollection?.[px] || 0;
+    const bumpX = (delta) => { const next = Math.max(0, Math.min(99, qx + delta)); if(next !== qx) updateSealedQty(px, next); };
+    return html`<div class="card-detail-overlay" onClick=${onClose}>
+      <div class="card-detail card-detail--price-first sealed-detail" onClick=${e=>e.stopPropagation()}>
+        <button class="card-detail-close" onClick=${onClose} aria-label="Close">×</button>
+        <div class="sealed-detail-head">
+          <div class="sealed-detail-img-wrap">
+            ${product.image_url
+              ? html`<span class="sealed-detail-img"><${ProductPhoto} src=${product.image_url} glyph="box" size=${44}/></span>`
+              : html`<div class="sealed-detail-img-fallback">${product.name||"Sealed product"}</div>`}
+          </div>
+          <div class="sealed-detail-info">
+            <h2 class="sealed-detail-name">${product.name}</h2>
+            <div class="sealed-detail-meta muted">
+              <span>${product.exclusive_retailer} exclusive</span>
+              <span class="sealed-detail-sep">·</span><span>${product.exclusive_date}</span>
+            </div>
+            ${product.exclusive_contents && html`<div class="sealed-detail-meta muted">${product.exclusive_contents}</div>`}
+            <div class="sealed-detail-prices">
+              <span class="muted" style=${{fontSize:"12.5px",lineHeight:1.4}}>Retailer exclusive — not listed on TCGplayer, so no market price is tracked.</span>
+              ${product.buy_url && html`<a class="sealed-detail-buy" href=${product.buy_url} target="_blank" rel="noopener nofollow sponsored">Buy ↗</a>`}
+              <${AmazonBuyLink} product=${product}/>
+            </div>
+            ${!readOnly && html`<div class="sealed-detail-owncounter">
+              <span class="sealed-detail-owncounter-lbl">Owned</span>
+              <button onClick=${()=>bumpX(-1)} disabled=${qx<=0} aria-label="Decrease quantity">−</button>
+              <span class=${"sealed-coll-counter-qty"+(qx>0?" has":"")}>${qx}</span>
+              <button onClick=${()=>bumpX(+1)} disabled=${qx>=99} aria-label="Increase quantity">+</button>
+            </div>`}
+            ${!readOnly && qx > 0 && html`<${CostDateInputs}
+              currentPaid=${sealedMeta?.[px]?.amount_paid ?? null}
+              currentDate=${sealedMeta?.[px]?.acquired_date || null}
+              onCommit=${patch => updateSealedMeta(px, patch)}/>`}
           </div>
         </div>
       </div>
@@ -22598,7 +22713,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
     // as their own section alongside the priced sealed products. Pins and lore
     // counters (SEALED_COLLECTIBLES) have their own tab since 2026-09-11 — see
     // CollectiblesView.
-    const items = [...(sealedPrices || []), ...SEALED_PUZZLES].filter(p =>
+    const items = [...(sealedPrices || []), ...SEALED_PUZZLES, ...SEALED_EXCLUSIVES].filter(p =>
       p.printing === "Normal" && p.product_type !== "Promo Single" && !isHiddenSealedListing(p)
     );
     const filtered = (hideUnowned
@@ -22820,8 +22935,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     // Every sealed tile carries an Amazon twin now, not only the
                     // puzzles: TCGplayer first (it has the live price), Amazon beside.
                     const amzn = item.is_collectible ? null
-                      : amazonForSealed(item, item.is_puzzle ? null : (setNameById[item.set_id] || null));
-                    const url = item.is_puzzle
+                      : amazonForSealed(item, isUnpricedSealed(item) ? null : (setNameById[item.set_id] || null));
+                    const url = item.is_puzzle || item.is_exclusive
                       ? (amzn?.url || item.buy_url)
                       : item.is_collectible
                       ? item.buy_url
@@ -22854,7 +22969,7 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                     const paidSealed = sealedMeta[item.tcgplayer_product_id]?.amount_paid;
                     const paidNum = paidSealed != null ? Number(paidSealed) : null;
                     const ownedValSealed = (price || 0) * qty;
-                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !item.is_puzzle && !item.is_collectible
+                    const hasRetSealed = !readOnly && trackCosts && qty>0 && !isUnpricedSealed(item)
                       && paidNum != null && Number.isFinite(paidNum) && paidNum > 0;
                     const retSealed = hasRetSealed ? ownedValSealed - paidNum : null;
                     const retPctSealed = hasRetSealed ? (retSealed/paidNum)*100 : null;
@@ -22873,6 +22988,8 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.collectible_date}</span>`
                             : item.is_puzzle
                             ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.puzzle_pieces} pcs${item.puzzle_exclusive ? " · Disney Store excl." : ""}</span>`
+                            : item.is_exclusive
+                            ? html`<span class="gc-card-raw-px gc-card-puzzle-meta">${item.exclusive_retailer} exclusive · ${item.exclusive_date}</span>`
                             : showBoth
                             ? html`<span class="gc-card-raw-px"><span class="gc-card-raw-px-lbl">Low</span> ${fmt(lowPx)}</span>
                                    <span class="gc-card-raw-px gc-card-raw-px-secondary"><span class="gc-card-raw-px-lbl">Mkt</span> ${fmt(mktPx)}</span>`
@@ -22882,8 +22999,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                               onClick=${e=>e.stopPropagation()}
                               title=${item.is_puzzle
                                 ? (amzn ? "Buy this puzzle on Amazon (affiliate link)" : "View on Ravensburger")
-                                : "Buy on TCGplayer (affiliate link)"}>${item.is_puzzle || item.is_collectible ? "Buy" : "TCG"} ↗</a>`}
-                          ${amzn && !item.is_puzzle && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amzn.url} target="_blank"
+                                : item.is_exclusive
+                                ? "Search Amazon for this bundle (affiliate link)"
+                                : "Buy on TCGplayer (affiliate link)"}>${isUnpricedSealed(item) ? "Buy" : "TCG"} ↗</a>`}
+                          ${amzn && !item.is_puzzle && !item.is_exclusive && html`<a class="gc-card-buy gc-card-buy--amazon" href=${amzn.url} target="_blank"
                               rel="noopener nofollow sponsored"
                               onClick=${e=>e.stopPropagation()}
                               title=${amzn.exact ? "Buy this on Amazon (affiliate link)" : "Search Amazon for this product (affiliate link)"}>Amazon ↗</a>`}
@@ -22919,10 +23038,10 @@ function SealedCollectionView({raw, user, sealedPrices, sealedCollection, sealed
                                         if(qty < need) updateSealedQty(item.tcgplayer_product_id, need);
                                       }
                                     }}>${i}</button>`)}
-                                  ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                  ${qty > 0 && !isUnpricedSealed(item) && html`<span class="gc-pack-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 </span>`
                               : html`
-                                ${qty > 0 && !item.is_puzzle && !item.is_collectible && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
+                                ${qty > 0 && !isUnpricedSealed(item) && html`<span class="gc-card-foot-val" title="Owned value">${fmt((price || 0) * qty)}</span>`}
                                 ${hasRetSealed && html`<span class="gc-card-foot-ret" title=${"Now " + fmt(ownedValSealed) + " · paid " + fmt(paidNum)}
                                   style=${{color: retSealed>=0?"var(--green)":"var(--red)"}}>${retSealed>=0?"+":""}${fmt(retSealed)} (${fmtPct(retPctSealed)})</span>`}`}
                           </div>
@@ -36748,7 +36867,7 @@ function sealedMoverCandidates(sealedPrices){
   const out = [];
   for(const p of (sealedPrices || [])){
     if(!p || p.printing !== "Normal" || p.product_type === "Promo Single" || p.is_stale) continue;
-    if(p.is_puzzle || p.is_collectible || p.tcgplayer_product_id == null || isHiddenSealedListing(p)) continue;
+    if(isUnpricedSealed(p) || p.tcgplayer_product_id == null || isHiddenSealedListing(p)) continue;
     const type = deriveSealedDisplayType(p);
     const kind = SEALED_MOVER_KIND_OF_TYPE[type];
     if(kind) out.push({product: p, type, kind});

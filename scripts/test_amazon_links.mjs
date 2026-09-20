@@ -52,6 +52,8 @@ const moduleSrc = [
   grabLine("const _amznNorm = "),
   grab("function amazonForSealed(product, setName){", NL + "}"),
   grab("const SEALED_PUZZLES = [", "}));"),
+  grab("const SEALED_EXCLUSIVES = [", "}));"),
+  grabLine("const isUnpricedSealed = "),
   grab("const LORCANA_GEAR = [", NL + "];"),
   grabLine("const gearUrl = "),
   grabLine("const gearKey = "),
@@ -80,7 +82,8 @@ const moduleSrc = [
   "  LORCANA_GEAR, MAINLINE_SETS, amazonDirectory,",
   "  tcgProductImg, tcgImgSized, amazonSealedMatches,",
   "  amazonShelfItems, AMAZON_SHELF_MAX, amazonListingKey, amazonShelfPool,",
-  "  AMAZON_PRICE_CEILING, amazonPriceCeiling, amazonListingHidden};",
+  "  AMAZON_PRICE_CEILING, amazonPriceCeiling, amazonListingHidden,",
+  "  SEALED_EXCLUSIVES, isUnpricedSealed};",
 ].join(NL);
 
 const m = await import("data:text/javascript," + encodeURIComponent(moduleSrc));
@@ -217,6 +220,41 @@ const puzzle300 = m.amazonForSealed(
 check("an uncurated puzzle falls back to search", puzzle300.exact, false);
 
 check("a nameless product yields no link", m.amazonForSealed({name: ""}, "Fabled"), null);
+// Retailer exclusives (SEALED_EXCLUSIVES) are a static catalog with a
+// synthetic pid, like the puzzles: TCGplayer has no page for one, so a TCG
+// link on its tile or in the Amazon shelf would be dead. Both failures are
+// silent -- the link renders and 404s -- so pin them.
+ok("every exclusive is flagged and unpriced",
+  m.SEALED_EXCLUSIVES.length > 0 && m.SEALED_EXCLUSIVES.every(p =>
+    p.is_exclusive === true && p.low_price === null && p.market_price === null &&
+    p.exclusive_retailer && p.set_id === "__exclusives__"),
+  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.name)));
+ok("…on a pid band of their own, clear of puzzles and of isCollectiblePid",
+  m.SEALED_EXCLUSIVES.every(p => p.tcgplayer_product_id >= 930000000 &&
+    p.tcgplayer_product_id < 940000000),
+  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.tcgplayer_product_id)));
+ok("…with distinct ids, since the id is what an owned mark is filed under",
+  new Set(m.SEALED_EXCLUSIVES.map(p => p.tcgplayer_product_id)).size === m.SEALED_EXCLUSIVES.length);
+for (const [label, row, want] of [
+  ["a puzzle", {is_puzzle: true}, true],
+  ["a collectible", {is_collectible: true}, true],
+  ["an exclusive", {is_exclusive: true}, true],
+  ["an ordinary sealed row", {name: "x"}, false],
+  ["nothing at all", null, false],
+]) check("isUnpricedSealed: " + label, m.isUnpricedSealed(row), want);
+// (amazonSealedMatches merges the static catalogs in itself, so the puzzles
+// come back too — pick our row out by its key rather than by count.)
+const exclKeys = new Set(m.SEALED_EXCLUSIVES.map(p => "amz:" + p.tcgplayer_product_id));
+const exclHits = [...m.amazonSealedMatches([], {}).values()].filter(it => exclKeys.has(it.key));
+ok("every exclusive reaches the Amazon shelf as a search, with no TCG twin",
+  exclHits.length === m.SEALED_EXCLUSIVES.length &&
+  exclHits.every(it => it.tcg === null && it.exact === false &&
+    it.sub.endsWith(" exclusive") && it.price === null),
+  JSON.stringify(exclHits.map(it => [it.sub, it.tcg, it.exact, it.price])));
+ok("…and the shelf pool skips it — a search with no set is neither exact nor newest-set",
+  !m.amazonShelfPool(m.SEALED_EXCLUSIVES, {}).some(it => exclKeys.has(it.key)),
+  JSON.stringify(m.amazonShelfPool(m.SEALED_EXCLUSIVES, {}).map(it => it.key)));
+
 check("no product yields no link", m.amazonForSealed(null, "Fabled"), null);
 
 // ── Gear ────────────────────────────────────────────────────────────────────
