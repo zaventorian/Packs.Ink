@@ -2997,13 +2997,51 @@ Rapunzel. `raw_load.py --backfill-graded` recovers them.
   AVERAGE with only the LAST date. Kept (it is a fair price point) but reported,
   because a multi-quantity sale of a card with a handful of copies is also a
   mis-attribution hint.
-- **Client**: the whole table is ~30 rows, so it is fetched **once per session**
-  into module scope and rendered as a `.cd-stat-raw` chip under the Low/Mkt line
-  in the card modal's Price-changes rows. It carries its own **date** — several
-  of these last traded in 2023 and a bare price beside a live Low/Mkt pair would
-  read as current — and its tooltip says outright that it is an eBay sold price,
-  not a TCGplayer one. A missing table 404s, is cached as an empty Map and asked
-  once; the card page renders identically.
+### On a raw-priced card the hierarchy INVERTS (2026-09-20, Zaven)
+
+*"instead of normal low/market, lets use last sold/avg last 5, as the main
+indicators for these raw cards, as if they were graded … lets still include the
+tcgp prices too, but those are secondary."* On these cards TCGplayer's number is
+the fossil and the eBay sales are the market, so the card page says so:
+
+- **`*` after the printing label** (`.raw-star`), the site's existing
+  footnote mark — the same one set-release dates use. A `.cd-raw-note` under the
+  Price-changes list explains it, and is rendered only when a row carries one.
+- **`Last sold · Avg N` takes `.cd-stat-px`'s own size and the accent colour;
+  `TCGplayer Low · Mkt` drops to a muted line underneath.** Everywhere else the
+  plain `.cd-stat-px` rule is untouched. **⚠ "Avg N", not "Avg 5"** — it is
+  `last_5_count`, so a card with three sales says `Avg 3` rather than claiming
+  five. The sale count and latest date sit under it because one sale of a card
+  with five known copies is a data point, not a market.
+- **Individual sales are DOTS on the price history**, never a line
+  (`scatter: true`, handled in `LineChart` AND `drawPosterChart` so the copied
+  PNG is the same document as the screen). ⚠ Joining twelve sales spread over
+  three years would draw a price path that never happened; the TCGplayer series
+  are genuinely daily and stay lines.
+- **⚠ A raw card opens the chart on NM Market, not Low, and that is a
+  correctness fix rather than a preference.** Low is a published aggregate one
+  listing can move, and on exactly these thinly-listed promos it throws phantom
+  spikes — Promo Set 1 #1's Low reaches **$10,000** against real sales of
+  $518–$1,550, which flattens every dot onto the axis. Market is the accurate
+  side (median ratio 1.000 against real sales). Applied once per card; both
+  checkboxes stay live. **⚠ It is SYMMETRIC** — this modal does not remount
+  between cards, so without restoring the default, one raw promo would leave Low
+  switched off for every ordinary card opened afterwards.
+- **⚠ The chart plots only the printings the card actually HAS**, never a
+  defaulted "Normal". A Challenge card opened on its Top Prize foil has no
+  non-foil side, and defaulting the missing one pulled the Prize Wall sales
+  ($70–$150) onto the foil chart ($16,406) — the two markets on one axis, the
+  exact conflation `graded_sale_pkey` exists to prevent.
+- **⚠ The sales fetch filters `excluded=is.false`.** The table deliberately
+  keeps every row it rejected, so plotting unfiltered would put a $16,406 PSA 10
+  and an $8 pin on the card's chart.
+
+- **Client plumbing**: the whole table is under a hundred rows, so the rollup and
+  the individual sales are fetched **together, once per session** into module
+  scope (`fetchRawSales()` → `{rollup, sales}`). A missing table 404s, is cached
+  as empty Maps and asked once; the card page then renders exactly as it does
+  today. **⚠ `RAW_SALE_COLOR` is a literal hex, not `var(--accent)`** — these
+  series are consumed by the canvas poster, which cannot resolve a CSS variable.
 
 ### Running it
 
@@ -6000,16 +6038,11 @@ the two .mp4s are a REGENERATED artifact, never a committed one.
 - ~~`supabase/126_deck_versions_grants.sql`~~ — **APPLIED 2026-08-24 by Zaven; verified** (an authenticated read of `deck_versions` returns 200, was a flat 403). Original note: 125 created `deck_versions` with RLS policies but **no table GRANT**, so an owner reading their own history gets a flat 403 (`42501`) before RLS is ever consulted; Postgres's own hint names the fix. Same rule CLAUDE.md already states for matviews: a new relation grants nothing implicitly. Until it lands the History modal shows its "isn't switched on yet" branch — `deckVersionsUnavailable` can't tell "no such table" from "no permission", and shouldn't try. It also deletes one empty probe row left behind while diagnosing.
 
 **Migration ledger (drops need a human — the auto-mode classifier refuses `DROP TABLE` / `DROP MATERIALIZED VIEW` through automation, so agents stage the SQL and Zaven pastes it):**
-- **`supabase/163_raw_sales.sql`** — **STAGED 2026-09-20, needs a paste.** `raw_sales` +
-  `raw_sales_rollup` + `refresh_raw_sales_rollup()`: RAW (ungraded) eBay sales for the ~24
-  high-end promos TCGplayer cannot price. See "Raw eBay sales" above. **Safe to ship the client
-  first** — until it lands the rollup fetch 404s, is cached as an empty Map, asked once per
-  session, and every card page renders exactly as it does today. After pasting:
-  `python scripts/raw_load.py --backfill-graded` (dry run — read the review report), then
-  `--commit` to load the 113 real raw sales already sitting grade-null in `graded_sales`.
-  **⚠ Its `statement_timeout` is a function-level `SET` clause, not a `set local`** — migration
-  131 had to fix exactly that on the market-index refresh, which died at the role default every
-  time because the GUC is armed before the body runs.
+- ~~`supabase/163_raw_sales.sql`~~ — **APPLIED 2026-09-20 by Zaven**, and the backfill is
+  **loaded**: 78 raw sales across 18 cards, back to 2023-10. `raw_sales` + `raw_sales_rollup` +
+  `refresh_raw_sales_rollup()`. **⚠ Its `statement_timeout` is a function-level `SET` clause,
+  not a `set local`** — migration 131 had to fix exactly that on the market-index refresh, which
+  died at the role default every time because the GUC is armed before the body runs.
 - **`supabase/159_deck_short_links.sql`** — **STAGED 2026-09-18, needs a paste.** Short deck links:
   `packs.ink/?d=<12 chars>` instead of the ~100-char `?deck=&token=` link. `deck_short_links` +
   `deck_short_code(deck, token)` (mint, one per deck+token) + `resolve_deck_short_code(code)`. A

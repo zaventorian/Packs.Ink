@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=437">
+<link rel="stylesheet" href="styles.css?v=438">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -669,27 +669,45 @@ const gradedVariantLabel = (printing, setName) => {
 // it is fetched once per session and held in module scope — a per-card request
 // would cost a round trip on every modal open to answer a question about a list
 // that fits in a screenful.
-let _rawSales = null;                       // Map<card_id, rollup rows> | null
+// `rollup` is the summary (last sold / avg of 5, per printing bucket) and
+// `sales` the individual sales, which the price-history chart plots as dots.
+// Both are fetched together because the card modal always wants both, and both
+// are tiny — the whole INCLUDED dataset is under a hundred rows.
+let _rawSales = null;                       // {rollup: Map, sales: Map} | null
 let _rawSalesPromise = null;
+const EMPTY_RAW = {rollup: new Map(), sales: new Map()};
 async function fetchRawSales(){
   if(_rawSales) return _rawSales;
   if(_rawSalesPromise) return _rawSalesPromise;
-  _rawSalesPromise = sbFetchAll("raw_sales_rollup", {
-    select: "card_id,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,min_price,max_price",
-  }).then(rows => {
+  const group = (rows, key) => {
     const m = new Map();
     for(const r of (rows || [])){
-      if(!m.has(r.card_id)) m.set(r.card_id, []);
-      m.get(r.card_id).push(r);
+      if(!m.has(r[key])) m.set(r[key], []);
+      m.get(r[key]).push(r);
     }
-    _rawSales = m;
     return m;
+  };
+  _rawSalesPromise = Promise.all([
+    sbFetchAll("raw_sales_rollup", {
+      select: "card_id,printing,sale_count,last_sold_date,first_sold_date,last_sold_price,avg_last_5,last_5_count,min_price,max_price",
+    }),
+    // ⚠ `excluded=is.false` is not optional. The table deliberately KEEPS every
+    // row it rejected (a slab, a pin, a poster, a twin it could not place) so a
+    // class stays auditable and reversible — plotting them would put a $16,406
+    // PSA 10 and an $8 pin on the same chart as the card's real sales.
+    sbFetchAll("raw_sales", {
+      select: "card_id,printing,sold_date,sale_price,quantity_sold,title,listing_url",
+      excluded: "is.false", card_id: "not.is.null", order: "sold_date.asc",
+    }),
+  ]).then(([roll, sales]) => {
+    _rawSales = {rollup: group(roll, "card_id"), sales: group(sales, "card_id")};
+    return _rawSales;
   }).catch(() => {
-    // ⚠ An empty Map, never a throw, and never a retry loop. Until migration 163
+    // ⚠ Empty Maps, never a throw and never a retry loop. Before migration 163
     // is applied this 404s on every card opened, and a card page must not break
     // — or even look different — because an optional extra price source is not
-    // deployed yet. Cached as empty so it is asked exactly once per session.
-    _rawSales = new Map();
+    // deployed yet. Cached so it is asked exactly once per session.
+    _rawSales = EMPTY_RAW;
     return _rawSales;
   });
   return _rawSalesPromise;
@@ -707,6 +725,21 @@ async function fetchRawSales(){
 // ~50x apart ($1,707 vs $280 on Cinderella - Stouthearted), so a mismatch there
 // is the most expensive bug this feature can have. 'Unknown' is its own bucket
 // by construction and can never be read as either real printing.
+// The individual sales to plot, for the printings currently on the chart.
+// ⚠ A Challenge card's Top Prize foil ($16,406) and Prize Wall non-foil ($122)
+// on one axis makes the cheaper series unreadable, so the dots follow the same
+// foil toggle the TCGplayer lines already obey.
+const rawPointsFor = (raw, cardId, printings) => {
+  if(!raw) return null;
+  const roll = raw.rollup.get(cardId), sales = raw.sales.get(cardId);
+  if(!roll || !sales || !sales.length) return null;
+  // One bucket ('') means the card has no printing axis at all — every sale
+  // belongs to whichever row is on screen. Same rule as rawSaleMatch.
+  if(roll.length === 1 && !roll[0].printing) return sales;
+  const want = new Set(printings.map(gradedSlotBucket).filter(Boolean));
+  return sales.filter(x => want.has(gradedSlotBucket(x.printing)));
+};
+
 const rawSaleMatch = (rows, printing) => {
   if(!rows || !rows.length) return null;
   const single = rows.find(r => !r.printing);
@@ -5246,6 +5279,13 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
       ${series.map((s,i) => {
         const valid = (s.data||[]).filter(p => Number.isFinite(p.y));
         if(!valid.length) return null;
+        // ⚠ A scatter series must NEVER be joined into a polyline. These are
+        // individual eBay sales — twelve of them across three years — and a line
+        // between two dots a year apart draws a price path that did not happen.
+        // The TCGplayer series are genuinely daily and are lines; these are not.
+        if(s.scatter) return html`<g key=${"s"+i}>${valid.map((p,j) => html`<circle
+          key=${j} cx=${xScale(p.x).toFixed(1)} cy=${yScale(p.y).toFixed(1)}
+          r="3.2" fill=${s.color} stroke="var(--bg-solid)" stroke-width="1.1"/>`)}</g>`;
         // A polyline of one vertex draws nothing. Render the lone point as a
         // dot so a single-sale graded tier is visible instead of invisible.
         if(valid.length === 1) return html`<circle key=${"s"+i}
@@ -5288,8 +5328,14 @@ const LineChart = ({series, width=320, height=120, padding={top:8,right:8,bottom
 // Build chart series array from raw history rows for a card.
 // showLow/showMarket let us render Low and Market on the same chart as
 // solid (Low) + dashed (Market) lines.
+// ⚠ A literal hex, not var(--accent), because these series are consumed by the
+// CANVAS poster as well as the DOM chart and canvas cannot resolve a CSS
+// variable. An amber that is legible on all seven themes and distinct from both
+// TCGplayer line colours (green Low, purple Foil).
+const RAW_SALE_COLOR = "#d9861f";
+
 const buildHistorySeries = (normalRows, foilRows, opts={}) => {
-  const {showLow=true, showMarket=false, showFoil=true} = opts;
+  const {showLow=true, showMarket=false, showFoil=true, rawPoints=null} = opts;
   const out = [];
   const seriesFor = (rows, color, kind) => {
     if(showLow){
@@ -5313,6 +5359,18 @@ const buildHistorySeries = (normalRows, foilRows, opts={}) => {
   };
   if(normalRows && normalRows.length) seriesFor(normalRows, "#1d8d4a", "Non-Foil");
   if(showFoil && foilRows && foilRows.length) seriesFor(foilRows, "#7e54c4", "Foil");
+  // Individual RAW eBay sales, for the handful of promos TCGplayer cannot price.
+  // Pushed LAST so the dots paint over the lines rather than under them: on
+  // these cards the dots are the real data and the lines are the fossil.
+  if(rawPoints && rawPoints.length){
+    out.push({
+      label: "Raw eBay sale", color: RAW_SALE_COLOR, scatter: true,
+      data: rawPoints.map(r => ({
+        x: Date.parse(r.sold_date),
+        y: r.sale_price != null ? parseFloat(r.sale_price) : null,
+      })).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)),
+    });
+  }
   return out;
 };
 
@@ -8150,18 +8208,20 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
   // tooltip carries the sale count and the range, because one sale of a card
   // with five known copies is a data point, not a market.
   const rawTip = rawSale && (
-    "Last RAW (ungraded) sale on eBay: " + fmt(rawSale.last_sold_price)
-    + " on " + (rawSale.last_sold_date || "?")
-    + ". " + rawSale.sale_count + (rawSale.sale_count === 1 ? " sale" : " sales")
-    + " on record" + (rawSale.sale_count > 1
-        ? " (" + fmt(rawSale.min_price) + "–" + fmt(rawSale.max_price) + ")" : "")
-    + ". This is an eBay sold price, not a TCGplayer price — these promos are "
-    + "rarely or never listed there.");
+    rawSale.sale_count + (rawSale.sale_count === 1 ? " raw sale" : " raw sales")
+    + " on record, " + (rawSale.first_sold_date || "?") + " to "
+    + (rawSale.last_sold_date || "?")
+    + (rawSale.sale_count > 1
+        ? ", ranging " + fmt(rawSale.min_price) + "–" + fmt(rawSale.max_price) : "")
+    + ". These are eBay sold prices for the ungraded card, not TCGplayer prices — "
+    + "TCGplayer rarely or never lists this promo, so its Low and Market are an "
+    + "asking price or a frozen one.");
   return html`
   <div class="cd-stat">
     <div class="cd-stat-id">
       ${color ? html`<span class="cd-stat-dot" style=${{color}}>●</span>` : null}
-      <span class="cd-stat-name">${label}</span>
+      <span class="cd-stat-name">${label}${rawSale ? html`<span class="raw-star"
+        title="Priced from real eBay sales, not TCGplayer — see the note below.">*</span>` : null}</span>
       ${sub ? html`<span class="cd-stat-sub">${sub}</span>` : null}
       ${standing && html`<span class=${"price-standing price-standing--" + standing.tone}
         title=${"Today's NM Market price sits in the " + Math.round(standing.pct * 100)
@@ -8173,11 +8233,22 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         Buy on TCGplayer
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
-      <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
-      ${rawSale && html`<span class="cd-stat-raw" title=${rawTip}>eBay raw
-        <b>${fmt(rawSale.last_sold_price)}</b>
-        <span class="cd-stat-rawdate">${(rawSale.last_sold_date || "").slice(0, 7)}</span>
-      </span>`}
+      ${rawSale ? html`
+        <span class="cd-stat-px cd-stat-px--raw" title=${rawTip}>
+          Last sold <b>${fmt(rawSale.last_sold_price)}</b>
+          ${rawSale.last_5_count > 1 && html`<${React.Fragment}
+            ><span class="cd-stat-pxsep"> · </span>Avg ${rawSale.last_5_count} <b>${fmt(rawSale.avg_last_5)}</b></>`}
+          ${/* ⚠ One expression, not text split across lines: htm collapses the
+                newline between a word and a ${} and "raw" + "sales" rendered as
+                "rawsales". Same trap as the calendar's Started-ago chip. */ ""}
+          <span class="cd-stat-rawmeta">${rawSale.sale_count + (rawSale.sale_count === 1 ? " raw sale" : " raw sales")
+            + " · latest " + rawSale.last_sold_date}</span>
+        </span>
+        <span class="cd-stat-px cd-stat-px--tcg">TCGplayer Low <b>${fmt(low.now)}</b
+          ><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      ` : html`
+        <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      `}
     </div>
     <div class="cd-stat-grid">
       <span></span>
@@ -8419,6 +8490,33 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
     fetchRawSales().then(m => { if(alive) setRawMap(m); });
     return () => { alive = false; };
   }, []);
+
+  // ⚠ A raw-priced card opens on NM Market instead of Low, and this is a
+  // correctness fix rather than a preference. Low is a published aggregate that
+  // one listing can move, and on exactly these thinly-listed promos it throws
+  // phantom spikes — Promo Set 1 #1's Low reaches $10,000 against real sales of
+  // $518–$1,550, which flattens every raw dot onto the axis and makes the one
+  // series the card is here for unreadable. Market is the accurate side
+  // (median ratio 1.000 against real sales) and keeps the dots legible.
+  // Applied once per card, and only to nudge the DEFAULT — both checkboxes stay
+  // live, so a deliberate toggle is never overridden.
+  // ⚠ Symmetric, because this modal does NOT remount between cards — its state
+  // survives navigating from one card to the next. Without the restore, opening
+  // one raw promo would silently leave Low switched off for every ordinary card
+  // opened afterwards.
+  const rawDefaultApplied = useRef(null);
+  useEffect(() => {
+    const id = group?.card_id;
+    const isRaw = !!(rawMap && rawMap.rollup.get(id));
+    if(isRaw){
+      if(rawDefaultApplied.current === id) return;   // already nudged this card
+      rawDefaultApplied.current = id;
+      setShowLow(false); setShowMarket(true);
+    } else if(rawDefaultApplied.current != null){
+      rawDefaultApplied.current = null;
+      setShowLow(true); setShowMarket(false);        // back to the site default
+    }
+  }, [rawMap, group?.card_id]);
   // Swipe-to-navigate (touch). _swipeSuppressUntil (module scope — onNavigate
   // remounts this component via key=cardNavKey, so an instance ref would reset
   // before the leftover click lands) suppresses the click-to-enlarge that would
@@ -8570,7 +8668,19 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // checkbox guard below) to avoid offering a control that does nothing.
   const hasBothPrintings = !!(group.normal && group.foil);
   const effectiveShowFoil = hasBothPrintings ? showFoil : true;
-  const chartSeries = buildHistorySeries(history.normal, history.foil, {showLow, showMarket, showFoil: effectiveShowFoil});
+  // Raw eBay sales for this card, plotted as dots on the price history.
+  // ⚠ Only the printings this card actually HAS, never a defaulted "Normal".
+  // A Challenge card opened on its Top Prize foil has no non-foil side, and
+  // defaulting the missing one to "Normal" pulled the Prize Wall sales ($70-$150)
+  // onto the foil chart ($16,406) — the two markets on one axis, which is the
+  // exact conflation graded_sale_pkey exists to prevent. Mirrors statRows, which
+  // only emits a row for a printing that has history.
+  const rawChartPoints = useMemo(() => rawPointsFor(rawMap, group.card_id, [
+    ...(group.normal ? [group.normal.tcg_printing || "Normal"] : []),
+    ...(effectiveShowFoil && group.foil ? [group.foil.tcg_printing || "Foil"] : []),
+  ]), [rawMap, group, effectiveShowFoil]);
+  const chartSeries = buildHistorySeries(history.normal, history.foil,
+    {showLow, showMarket, showFoil: effectiveShowFoil, rawPoints: rawChartPoints});
   const chartStartMs = computeChartStartMs(rangeKey, customStart, hidePreorders, group.Set);
 
   // Every other (card_id, printing) tuple that shares this card's Product Name
@@ -8655,7 +8765,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       low: computeSeriesDeltas(history.normal, "low_price"),
       market: computeSeriesDeltas(history.normal, "market_price"),
       standing: priceStanding(history.normal),
-      rawSale: rawSaleMatch(rawMap && rawMap.get(group.card_id),
+      rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(group.card_id),
         (group.normal && group.normal.tcg_printing) || "Normal"),
     });
     if(history.foil && history.foil.length) rows.push({
@@ -8665,7 +8775,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       low: computeSeriesDeltas(history.foil, "low_price"),
       market: computeSeriesDeltas(history.foil, "market_price"),
       standing: priceStanding(history.foil),
-      rawSale: rawSaleMatch(rawMap && rawMap.get(group.card_id),
+      rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(group.card_id),
         (group.foil && group.foil.tcg_printing) || "Foil"),
     });
     if(variants.open){
@@ -8685,7 +8795,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           standing: priceStanding(vr),
           low: computeSeriesDeltas(vr, "low_price"),
           market: computeSeriesDeltas(vr, "market_price"),
-          rawSale: rawSaleMatch(rawMap && rawMap.get(v.row.card_id), v.printing),
+          rawSale: rawSaleMatch(rawMap && rawMap.rollup.get(v.row.card_id), v.printing),
         });
       }
     }
@@ -8941,6 +9051,12 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           color=${r.color} low=${r.low} market=${r.market} standing=${r.standing}
           productId=${r.productId} printing=${r.printing}/>`)}
       </div>
+      ${statRows.some(r => r.rawSale) && html`<div class="cd-raw-note">
+        <span class="raw-star">*</span> Priced from real <b>eBay sold listings</b> for the
+        ungraded card. TCGplayer rarely or never lists this promo, so its Low and Market are
+        an asking price or a frozen one — they are shown underneath for reference.
+        Individual sales are the amber dots on the price history below.
+      </div>`}
     </div>`}
 
     <div class="card-detail-history-section">
@@ -8955,6 +9071,9 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           ${hasAnyHistory && html`<div class="card-detail-history-legend">
             ${history.normal && history.normal.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#1d8d4a"}}/>Non-Foil</span>`}
             ${effectiveShowFoil && history.foil && history.foil.length > 0 && html`<span><span class="legend-swatch" style=${{background:"#7e54c4"}}/>Foil</span>`}
+            ${rawChartPoints && rawChartPoints.length > 0 && html`<span
+              title="Individual eBay sold listings for the ungraded card. Dots, not a line — these are separate sales, sometimes months apart, and joining them would draw a price path that never happened."
+              ><span class="legend-swatch legend-swatch--dot" style=${{background:RAW_SALE_COLOR}}/>Raw eBay sales</span>`}
             <span class="legend-line-style"><span class="line-solid"/>Low</span>
             <span class="legend-line-style"><span class="line-dashed"/>NM Market</span>
           </div>`}
@@ -35750,7 +35869,7 @@ const drawPosterLegend = (ctx, rightX, baselineY, series, P) => {
 };
 // Line chart into the box (x,y,w,h). Mirrors LineChart's scaling/ticks.
 const drawPosterChart = (ctx, series, x, y, w, h, P) => {
-  const valid = (series || []).map(s => ({color:s.color, dashed:s.dashed, pts:(s.data||[]).filter(p => p && Number.isFinite(p.y))})).filter(s => s.pts.length);
+  const valid = (series || []).map(s => ({color:s.color, dashed:s.dashed, scatter:s.scatter, pts:(s.data||[]).filter(p => p && Number.isFinite(p.y))})).filter(s => s.pts.length);
   let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
   for(const s of valid) for(const p of s.pts){ if(p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y; }
   if(!Number.isFinite(minX) || !Number.isFinite(maxY)){
@@ -35774,6 +35893,17 @@ const drawPosterChart = (ctx, series, x, y, w, h, P) => {
   xticks.forEach((t,i) => { ctx.textAlign = i===0?"left":i===2?"right":"center"; ctx.fillText(fmtTickDate(t, span), sx(t), y+h+14); });
   ctx.textAlign = "left";
   for(const s of valid){
+    // ⚠ Scatter series are dots here too. The copied PNG has to be the same
+    // document as the screen — drawing a line through sparse eBay sales in the
+    // export while the modal shows dots would make the shareable image claim a
+    // price path the site itself does not.
+    if(s.scatter){
+      ctx.fillStyle = s.color;
+      for(const p of s.pts){
+        ctx.beginPath(); ctx.arc(sx(p.x), sy(p.y), 3.2, 0, Math.PI * 2); ctx.fill();
+      }
+      continue;
+    }
     ctx.strokeStyle = s.color; ctx.lineWidth = 1.8; ctx.lineJoin = "round"; ctx.lineCap = "round";
     ctx.setLineDash(s.dashed ? [5,3] : []);
     ctx.beginPath();
