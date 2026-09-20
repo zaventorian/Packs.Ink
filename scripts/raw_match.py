@@ -90,6 +90,7 @@ EXCLUDE_REASONS = (
     "other-tcg",     # not Lorcana
     "foreign",       # a regional printing; a separate market
     "auto",          # autographed / sketch / 1-of-1
+    "manual",        # a human opened the listing and ruled on it
 )
 
 # Grading vocabulary that carries NO grader name. Measured against the corpus:

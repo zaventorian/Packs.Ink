@@ -26,8 +26,10 @@ believed, and every mis-attribution available is an order of magnitude wrong.
 ⚠ INSERT-ONLY unless `--merge` is passed. Same rule, and same reason, as
 `terapeak_load.py --new-only`: once a human has corrected an `excluded` or a
 `card_id`, a re-load that re-derives attribution from the title silently undoes
-it. `--merge` exists for the early days when there are no manual fixes to lose;
-after that it is the banned button.
+it. `--merge` existed for the early days when there were no manual fixes to
+lose. There are now, so it REFUSES rather than trusting anyone to remember --
+see `manual_exclusions()`. That check is the whole protection, because a
+clobbered ruling looks exactly like a ruling nobody ever made.
 
 ⚠ A backfilled row keeps its eBay item_id and therefore exists in BOTH tables.
 That is correct and deliberate -- graded_sales is the scrape LEDGER (what the
@@ -217,13 +219,18 @@ def fetch_printing_flags(card_ids):
     return flags
 
 
-def review_report(rows, label_of, flags):
+def review_report(rows, label_of, flags, ruled=frozenset()):
     """Print what a human should look at. This REPORTS, it never excludes.
 
     Price cannot decide identity here (see raw_match's module docstring: using
     "too cheap to be the promo" to drop a row makes the published price a
     function of the assumption). So a suspicious price is a question for someone
-    who can open the listing, not a verdict this script is entitled to reach."""
+    who can open the listing, not a verdict this script is entitled to reach.
+
+    ⚠ `ruled` marks rows somebody has ALREADY opened and decided. Without it a
+    hand-excluded outlier is re-flagged on every run for ever, and a report that
+    keeps raising a question already answered is one people stop reading — which
+    costs the next genuine flag."""
     inc = [r for r in rows if not r["excluded"] and r["sale_price"]]
     by_card = collections.defaultdict(list)
     for r in inc:
@@ -241,7 +248,8 @@ def review_report(rows, label_of, flags):
             for r in rs:
                 p = float(r["sale_price"])
                 if p > med * OUTLIER_FACTOR or p < med / OUTLIER_FACTOR:
-                    flagged.append((label_of(key[0]), key[1], p, med, r["title"]))
+                    flagged.append((label_of(key[0]), key[1], p, med, r["title"],
+                                    r["item_id"] in ruled))
         print(line)
 
     multi = [r for r in inc if (r["quantity_sold"] or 1) > 1]
@@ -253,10 +261,26 @@ def review_report(rows, label_of, flags):
                   f"{(r['title'] or '')[:62]}")
 
     if flagged:
+        open_n = sum(1 for f in flagged if not f[5])
         print(f"\n--- {len(flagged)} price outliers (>{OUTLIER_FACTOR:g}x from the card's "
-              f"median, >={OUTLIER_MIN_NEIGHBOURS} sales). NOT excluded -- open these ---")
-        for lab, pr, p, med, title in sorted(flagged, key=lambda x: -x[2])[:20]:
-            print(f"  ${p:>11,.2f} vs median ${med:>9,.2f}  {lab} {pr}\n      {(title or '')[:76]}")
+              f"median, >={OUTLIER_MIN_NEIGHBOURS} sales); {open_n} still open ---")
+        for lab, pr, p, med, title, done in sorted(flagged, key=lambda x: -x[2])[:20]:
+            mark = "[ruled]" if done else "[OPEN] "
+            print(f"  {mark} ${p:>11,.2f} vs median ${med:>9,.2f}  {lab} {pr or '-'}"
+                  f"\n          {(title or '')[:74]}")
+
+
+def manual_exclusions():
+    """Rows a human ruled on (exclude_reason='manual').
+
+    ⚠ These are the ONLY rows in the table that cannot be re-derived from a
+    title — somebody opened the eBay listing and decided. A `--merge` load
+    recomputes every verdict from the title and would silently restore them, so
+    their existence is what turns `--merge` off for good."""
+    r = requests.get(f"{SB_URL}/rest/v1/raw_sales?select=item_id,sale_price,title"
+                     f"&exclude_reason=eq.manual", headers=HEAD, timeout=60)
+    r.raise_for_status()
+    return r.json()
 
 
 def upsert(rows, merge):
@@ -320,9 +344,20 @@ def main():
         print(f"  {k:<16} {v:6}")
 
     flags = fetch_printing_flags({r["card_id"] for r in out if r["card_id"]})
-    review_report(out, lambda cid: label.get(cid, cid or "?"), flags)
+    ruled = {r["item_id"] for r in manual_exclusions()}
+    review_report(out, lambda cid: label.get(cid, cid or "?"), flags, ruled)
 
     inc = sum(1 for r in out if not r["excluded"])
+    if args.merge:
+        held = manual_exclusions()
+        if held:
+            print(f"\nREFUSING --merge: {len(held)} row(s) carry a hand-made ruling that a "
+                  f"merge would re-derive from the title and silently undo:")
+            for r in held[:10]:
+                print(f"  {r['item_id']}  ${r['sale_price']}  {(r['title'] or '')[:64]}")
+            print("Re-run without --merge — insert-only is the default and preserves them.")
+            return 1
+
     print(f"\n{len(out)} rows prepared, {inc} of them counting as raw prices.")
     if not args.commit:
         print("DRY RUN — nothing written. Re-run with --commit.")
