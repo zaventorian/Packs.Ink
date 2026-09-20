@@ -393,18 +393,12 @@ section; until 2026-09-11 they were tiles at the foot of the Sealed tab), from t
 `LORCANA_PINS` / `LORCANA_LORE_COUNTERS` consts — there is no feed behind either. The photos are
 cut out and served from our own storage.
 
-**⚠ An entry may carry `img` to override the storage URL, and n:45 is the first to use it**
-(2026-09-20, the Best Buddies Bundle pin). That is for a PROVISIONAL cut — a crop of an
-announcement photo rather than the studio shot every other entry has — and it deliberately leaves
-the canonical `pins/45.png` slot in storage EMPTY, so "has a real photo" stays answerable by
-looking at the bucket. When a real photo lands, upload it and delete the `img` line; `n` already
-points `collectibleArtUrl` at the right file. `noArt` remains the other option, for an entry with
-no usable photo at all.
-
-**A pin can now come in a RETAIL BOX**, not just an event kit / convention / prize wall — n:45
-ships inside the Costco Best Buddies Bundle (`SEALED_EXCLUSIVES`), which is also where 18/PD1 and
-19/PD1 come from. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks the highest valid `n`,
-so it moves with the list (45 today, counters 25).
+**A pin can come in a RETAIL BOX**, not just an event kit / convention / prize wall — n:45 ships
+inside the Costco Best Buddies Bundle (`SEALED_EXCLUSIVES`), which is also where 18/PD1 and
+19/PD1 come from. Its photo is a cut from the announcement shot rather than a studio one and is
+worth re-cutting from a better source, which is a re-upload rather than a code edit — it sits at
+`pins/45.png` like every other entry. `EXPECTED_PINS` in `upload_collectible_photos.py` tracks
+the highest valid `n`, so it moves with the list (45 today, counters 25).
 
 **⚠ Do NOT credit a photo source anywhere user-facing.** The Help credits paragraph and
 `privacy.html`'s takedown line both named one until 2026-09-13, when Zaven asked for it gone
@@ -477,8 +471,7 @@ the source is a fan site with gaps.
   - **⚠ "Hunny Archmage" (Attack of the Vine! 40/207) is NOT "Hunny Wizard"** (Rise of the Floodborn
     59/204, which is the pin at `LORCANA_PINS` n:8). Two different Pooh-as-wizard cards two sets
     apart; the counter art was checked against Lorcast to pick the right one.
-- Adding an entry still means uploading its photo in the same commit, flagging it `noArt`, or —
-  for a provisional cut — pointing `img` at a repo file (see the top of this section).
+- Adding an entry still means uploading its photo in the same commit, or flagging it `noArt`.
 - **⚠ `EXPECTED_PINS` / `EXPECTED_COUNTERS` in `upload_collectible_photos.py` are the highest
   valid `n`, not a photo count**, and they bound the "unexpected number" warning — so they track
   the list length (**45 / 25** as of 2026-09-20), even where an entry has no photo to upload.
@@ -1697,10 +1690,15 @@ Card detail modal's Graded tab:
 `SEALED_EXCLUSIVES` — a box you can only buy at one chain, which therefore has no TCGplayer
 listing, no pid, no price and no `sealed_prices_latest` row. Same answer as `SEALED_PUZZLES`: a
 static client const shaped like a sealed_prices row, merged into the Sealed collection at the two
-sites that spread the puzzles, rendering in its own **Retailer Exclusives** section
-(`SEALED_STATIC_SECTION_NAMES["__exclusives__"]`). Ownership persists in `sealed_collection_items`
-— no FK on the product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle**
-(Costco, Sep 2026) — portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45.
+sites that spread the puzzles. Ownership persists in `sealed_collection_items` — no FK on the
+product id, so a synthetic id is fine. First entry: the **Best Buddies Bundle** (Costco, Sep 2026)
+— portfolio, 6 Wilds Unknown packs, 18/PD1 + 19/PD1, and `LORCANA_PINS` n:45.
+
+- **⚠ `set_id` is NULL, which files it under "Other / Promo"** with the portfolios and everything
+  else TCGplayer gives no set (Zaven, 2026-09-20). It shipped with a synthetic `__exclusives__`
+  id and a **Retailer Exclusives** section of its own first, which was one product in an empty
+  room. Don't give it a real set either: a bundle with Wilds Unknown packs, Attack of the Vine!
+  promos and Toy Story portfolio art would be claiming membership of whichever one you picked.
 
 - **Band is `930000000 + n`** — clear of the puzzles' 912.0M and BELOW the 950–970M window
   `isCollectiblePid` owns. That is deliberate: pins and counters are excluded from the Sealed

@@ -227,8 +227,15 @@ check("a nameless product yields no link", m.amazonForSealed({name: ""}, "Fabled
 ok("every exclusive is flagged and unpriced",
   m.SEALED_EXCLUSIVES.length > 0 && m.SEALED_EXCLUSIVES.every(p =>
     p.is_exclusive === true && p.low_price === null && p.market_price === null &&
-    p.exclusive_retailer && p.set_id === "__exclusives__"),
+    p.exclusive_retailer),
   JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.name)));
+// ⚠ A null set_id is what files it under "Other / Promo" with the portfolios.
+// Give it a real set and it claims to be part of that set's product line; give
+// it a synthetic one and it gets a section to itself, which is where this
+// started and is one product in an empty room.
+ok("…and carries no set, so the grouping files it under Other / Promo",
+  m.SEALED_EXCLUSIVES.every(p => p.set_id == null),
+  JSON.stringify(m.SEALED_EXCLUSIVES.map(p => p.set_id)));
 ok("…on a pid band of their own, clear of puzzles and of isCollectiblePid",
   m.SEALED_EXCLUSIVES.every(p => p.tcgplayer_product_id >= 930000000 &&
     p.tcgplayer_product_id < 940000000),
