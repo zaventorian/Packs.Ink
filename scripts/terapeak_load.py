@@ -119,7 +119,17 @@ VARIANT_PRINTING_BY_CARD = {
     # in the Shift reminder text, corrected on a later print run.
     "crd_b5e74b533270492982dff9472aee8664": (
         "Text Error", re.compile(r"text\s*[-_. ]?\s*err(?:or)?\b|errata", re.I)),
-    # Genie - On the Job (Enchanted #209): the Two Swords variant art.
+    # Genie - On the Job (Enchanted #209): the "double sword error" -- the first
+    # print shows TWO swords in the background detail, corrected to one later.
+    #
+    # WARNING: unlike Peter Pan, NOTHING detects this. PSA does not designate it
+    # (12 slabs we already call Two Swords all read a plain "GENIE ENCHANTED"
+    # label), no title in the table has ever contained the words, and the
+    # difference is a background detail too small to read in a listing photo. So
+    # this entry only stops the finish-reader filing Genie sales as Foil/NULL;
+    # the 28 rows currently marked Two Swords were curated by hand and a new one
+    # will land as Normal until somebody says otherwise. Do not mistake the
+    # presence of this key for working detection.
     "crd_ae7e91462bfc4861bbf97e99ed53a1c1": (
         "Two Swords", re.compile(r"two\s*swords", re.I)),
 }

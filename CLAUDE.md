@@ -1547,6 +1547,17 @@ in ~0.4s (point it at `C:\Program Files\Tesseract-OCR\tesseract.exe`).
 `terapeak_ocr_reconcile.py` is where that correction belongs long-term; the
 title rule is a floor, not the last word.
 
+**⚠ The Genie half is NOT detectable and must not be assumed to be.** Its
+variant is the *double sword error* (the first print shows two swords in a
+background detail, corrected to one). PSA does not designate it — 12 slabs we
+already call Two Swords all read a plain `GENIE ENCHANTED` label — **no title in
+the table has ever contained the words**, and the detail is too small to read in
+a listing photo. Its entry in `VARIANT_PRINTING_BY_CARD` exists only to stop the
+finish-reader filing Genie sales as `Foil`/NULL; the 28 rows marked Two Swords
+were curated by hand and a new one lands as `Normal` until somebody says
+otherwise. Separating Genie properly needs an art pass at high zoom on that one
+background region, which is a different job from reading a label.
+
 Guarded by `python scripts/test_variant_printing.py`, which also pins that the
 **same two card ids and the same printing STRINGS appear on both sides** —
 `VARIANT_PRINTING_BY_CARD` in Python and `SPLIT_PRINTING_CARD_IDS` /
