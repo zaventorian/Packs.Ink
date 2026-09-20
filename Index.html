@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=436">
+<link rel="stylesheet" href="styles.css?v=437">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -653,6 +653,68 @@ const gradedVariantLabel = (printing, setName) => {
   if(printing === "Non-Foil") return "Non-Foil";
   return variantBadge(printing);                            // Two Swords / Text Error / null
 };
+
+// ── Raw (ungraded) eBay sales ────────────────────────────────────────────────
+// The last real sold price for the ~24 high-end promos TCGplayer cannot price.
+// `card_prices_latest` is an INNER JOIN on a TCGplayer product, so a card it has
+// never recorded a sale for renders a dash and one it froze on renders a fossil
+// — Challenge Promo #5 Mickey Mouse - Brave Little Tailor has NEVER had a
+// market_price, #9 Baymax shows its $63 NON-foil while the foil trades in five
+// figures, and a raw Rapunzel - Gifted with Healing 4/C1 Foil sold for $16,406.
+// For those cards this is not a second opinion, it is the only number there is.
+// Pipeline: scripts/raw_watchlist.py → raw_topup.py → raw_match.py → raw_load.py
+// → raw_sales → raw_sales_rollup (migration 163).
+//
+// The whole table is ~30 rows (24 cards, a couple of printing buckets each), so
+// it is fetched once per session and held in module scope — a per-card request
+// would cost a round trip on every modal open to answer a question about a list
+// that fits in a screenful.
+let _rawSales = null;                       // Map<card_id, rollup rows> | null
+let _rawSalesPromise = null;
+async function fetchRawSales(){
+  if(_rawSales) return _rawSales;
+  if(_rawSalesPromise) return _rawSalesPromise;
+  _rawSalesPromise = sbFetchAll("raw_sales_rollup", {
+    select: "card_id,printing,sale_count,last_sold_date,last_sold_price,avg_last_5,min_price,max_price",
+  }).then(rows => {
+    const m = new Map();
+    for(const r of (rows || [])){
+      if(!m.has(r.card_id)) m.set(r.card_id, []);
+      m.get(r.card_id).push(r);
+    }
+    _rawSales = m;
+    return m;
+  }).catch(() => {
+    // ⚠ An empty Map, never a throw, and never a retry loop. Until migration 163
+    // is applied this 404s on every card opened, and a card page must not break
+    // — or even look different — because an optional extra price source is not
+    // deployed yet. Cached as empty so it is asked exactly once per session.
+    _rawSales = new Map();
+    return _rawSales;
+  });
+  return _rawSalesPromise;
+}
+
+// Pick the rollup row for one printing. The rollup is keyed by the SAME bucket
+// the graded rollup uses (public.graded_sale_pkey), so this mirrors the client's
+// existing gradedSlotBucket rather than inventing a second mapping.
+//
+// ⚠ An empty-string bucket means the card has ONE printing — graded_sale_pkey
+// returns '' when neither split_printing nor foil_split is set, which is the case
+// for every Promo Set 1/3 and C2 card on the watchlist. Those must match whatever
+// printing the stat row is asking about. The Challenge (C1) cards DO split, and
+// there the two buckets are Top Prize foil and Prize Wall non-foil — markets
+// ~50x apart ($1,707 vs $280 on Cinderella - Stouthearted), so a mismatch there
+// is the most expensive bug this feature can have. 'Unknown' is its own bucket
+// by construction and can never be read as either real printing.
+const rawSaleMatch = (rows, printing) => {
+  if(!rows || !rows.length) return null;
+  const single = rows.find(r => !r.printing);
+  if(single) return single;
+  const b = gradedSlotBucket(printing);
+  return b ? (rows.find(r => r.printing === b) || null) : null;
+};
+
 // ── Does this card's PRINTING deserve a word on a tile? ───────────────────────
 // One answer for every surface that stamps a finish on a card: the movers
 // tiles and their canvas exports, the Graded Market strip and its export, and
@@ -8079,8 +8141,22 @@ const GradedPrivateSaleModal = ({cardId, cardName, onClose, onAdded}) => {
 // style delta grid (6 windows × LOW/MKT), the current Low / Market price, and a
 // per-variant "Buy on TCGplayer" affiliate link. Live-modal only (the copy-image
 // poster draws its own rows on a canvas in buildCardPosterBlob).
-const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing}) => {
+const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, standing, rawSale}) => {
   const buyUrl = tcgUrl(productId, printing);
+  // A raw eBay sold price, for the handful of promos TCGplayer cannot price.
+  // ⚠ It must never read as a TCGplayer number, so it says "eBay raw" and it
+  // carries its own DATE: several of these cards last traded in 2023, and a
+  // bare price beside a live Low/Mkt pair would imply it is current. The
+  // tooltip carries the sale count and the range, because one sale of a card
+  // with five known copies is a data point, not a market.
+  const rawTip = rawSale && (
+    "Last RAW (ungraded) sale on eBay: " + fmt(rawSale.last_sold_price)
+    + " on " + (rawSale.last_sold_date || "?")
+    + ". " + rawSale.sale_count + (rawSale.sale_count === 1 ? " sale" : " sales")
+    + " on record" + (rawSale.sale_count > 1
+        ? " (" + fmt(rawSale.min_price) + "–" + fmt(rawSale.max_price) + ")" : "")
+    + ". This is an eBay sold price, not a TCGplayer price — these promos are "
+    + "rarely or never listed there.");
   return html`
   <div class="cd-stat">
     <div class="cd-stat-id">
@@ -8098,6 +8174,10 @@ const ScreenerStatsRow = ({label, sub, color, low, market, productId, printing, 
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 4h6v6"/><path d="M20 4l-9 9"/><path d="M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5"/></svg>
       </a>`}
       <span class="cd-stat-px">Low <b>${fmt(low.now)}</b><span class="cd-stat-pxsep"> · </span>Mkt <b>${fmt(market.now)}</b></span>
+      ${rawSale && html`<span class="cd-stat-raw" title=${rawTip}>eBay raw
+        <b>${fmt(rawSale.last_sold_price)}</b>
+        <span class="cd-stat-rawdate">${(rawSale.last_sold_date || "").slice(0, 7)}</span>
+      </span>`}
     </div>
     <div class="cd-stat-grid">
       <span></span>
@@ -8324,6 +8404,21 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
   // first expand; fetchCardHistory caches them.
   const [variants, setVariants] = useState({open:false, loading:false, data:{}});
   useEffect(()=>{ setVariants({open:false, loading:false, data:{}}); }, [group?.card_id]);
+
+  // Raw (ungraded) eBay sales for this card, when it is one of the ~24 promos
+  // TCGplayer cannot price. One module-cached fetch serves the whole session, so
+  // this is a Map lookup after the first card opened; `alive` guards the modal
+  // being closed or navigated mid-flight.
+  // ⚠ The whole Map is held, not just this card's rows, because the variant rows
+  // below are OTHER card_ids — and they are exactly where this is most useful:
+  // expanding variants on the $2 First Chapter Mickey is how you reach the $1,900
+  // D23 promo of the same name.
+  const [rawMap, setRawMap] = useState(null);
+  useEffect(() => {
+    let alive = true;
+    fetchRawSales().then(m => { if(alive) setRawMap(m); });
+    return () => { alive = false; };
+  }, []);
   // Swipe-to-navigate (touch). _swipeSuppressUntil (module scope — onNavigate
   // remounts this component via key=cardNavKey, so an instance ref would reset
   // before the leftover click lands) suppresses the click-to-enlarge that would
@@ -8560,6 +8655,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       low: computeSeriesDeltas(history.normal, "low_price"),
       market: computeSeriesDeltas(history.normal, "market_price"),
       standing: priceStanding(history.normal),
+      rawSale: rawSaleMatch(rawMap && rawMap.get(group.card_id),
+        (group.normal && group.normal.tcg_printing) || "Normal"),
     });
     if(history.foil && history.foil.length) rows.push({
       key:"__foil", label: group.isChase ? group.Rarity : "Foil", color:"#7e54c4", sub:null,
@@ -8568,6 +8665,8 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
       low: computeSeriesDeltas(history.foil, "low_price"),
       market: computeSeriesDeltas(history.foil, "market_price"),
       standing: priceStanding(history.foil),
+      rawSale: rawSaleMatch(rawMap && rawMap.get(group.card_id),
+        (group.foil && group.foil.tcg_printing) || "Foil"),
     });
     if(variants.open){
       for(const v of variantRows){
@@ -8586,11 +8685,12 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
           standing: priceStanding(vr),
           low: computeSeriesDeltas(vr, "low_price"),
           market: computeSeriesDeltas(vr, "market_price"),
+          rawSale: rawSaleMatch(rawMap && rawMap.get(v.row.card_id), v.printing),
         });
       }
     }
     return rows;
-  }, [history, variants, variantRows, group]);
+  }, [history, variants, variantRows, group, rawMap]);
 
   // Copy-image export inputs (the poster is drawn on a canvas — see
   // buildCardPosterBlob — so no hidden DOM / html2canvas is needed).
@@ -8837,7 +8937,7 @@ const CardDetailModal = ({group, onClose, onNavigate, theme, user, collection, u
         </button>`}
       </div>
       <div class="cd-stat-list">
-        ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub}
+        ${statRows.map(r => html`<${ScreenerStatsRow} key=${r.key} label=${r.label} sub=${r.sub} rawSale=${r.rawSale}
           color=${r.color} low=${r.low} market=${r.market} standing=${r.standing}
           productId=${r.productId} printing=${r.printing}/>`)}
       </div>
