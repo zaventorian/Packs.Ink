@@ -95,7 +95,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grabLine("const CAL_KIND_SHORT = "),
   grab("const CAL_KIND_PLURAL = {", NL + "};"),
   grabLine("const calGroupKindLabel = "),
-  grab("const calCellItems = (events, art, openGroups, date) => {", NL + "};"),
+  grab("const calCellItems = (events, art, date) => {", NL + "};"),
   grabLine("const calendarHiddenSet = (subs) =>"),
   grab("const calendarApplyHidden = (events, hidden, saved) => {", NL + "};"),
   grab("const CAL_STORE_KINDS = [", NL + "];"),
@@ -1707,7 +1707,7 @@ ok("an empty list is an empty list", pr([]).length === 0 && pr(null).length === 
 // Both directions are silent. Under-collapsing just looks like the old bug;
 // over-collapsing quietly destroys information and still looks tidy.
 console.log("");
-const cgCell = (list, open, date) => calCellItems(list, null, open, date || "2026-09-19");
+const cgCell = (list, date) => calCellItems(list, null, date || "2026-09-19");
 const cgMk = (id, kind, extra) => Object.assign({id, kind, starts_on: "2026-09-19"}, extra || {});
 
 const cgThree = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
@@ -1738,19 +1738,24 @@ ok("a Challenge and a qualifier stay apart", cgMix.length === 2, cgMix.length);
 const cgOne = cgCell([cgMk("a", "ccq", {title: "One"})]);
 ok("a lone event is never a group", cgOne.length === 1 && !cgOne[0].group && !!cgOne[0].ev);
 
-// Clicking a group expands it back to its members, in the order they arrived.
+// ⚠ A group NEVER expands in place. It used to: clicking "CCQ ×3" replaced one
+// chip with three, which in a 44px cell turns one readable mark into three
+// unreadable ones ("it breaks the big logo into little logos"). Clicking now
+// opens the day's list -- see CalendarDayModal -- so the cell always shows the
+// collapsed form and the answer to "what are these three" is three NAMES.
 const cgKey = cgThree[0].key;
-const cgOpen = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
-                       cgMk("b", "ccq", {title: "Brainwash Cards 2K CCQ"}),
-                       cgMk("c", "ccq", {title: "Utopica Fantasy Festival CCQ"})], new Set([cgKey]));
-ok("an opened group expands to its members",
-  cgOpen.length === 3 && cgOpen.every((it) => !!it.ev), cgOpen.length);
-ok("in the order they arrived",
-  cgOpen.map((it) => it.ev.id).join(",") === "a,b,c", cgOpen.map((it) => it.ev.id).join(","));
+const cgStill = cgCell([cgMk("a", "ccq", {title: "CCQ Essen"}),
+                        cgMk("b", "ccq", {title: "Brainwash Cards 2K CCQ"}),
+                        cgMk("c", "ccq", {title: "Utopica Fantasy Festival CCQ"})]);
+ok("a group stays collapsed however it is asked",
+  cgStill.length === 1 && cgStill[0].group === true, cgStill.length);
+ok("and it still carries every member for the list to render",
+  cgStill[0].events.map((e) => e.id).join(",") === "a,b,c",
+  cgStill[0].events.map((e) => e.id).join(","));
 
-// The key is date-scoped, or opening Sep 19's CCQs would open Sep 26's too.
+// The key is still date-scoped -- the hover card and the day list both key off it.
 const cgOther = cgCell([cgMk("x", "ccq", {title: "A"}), cgMk("y", "ccq", {title: "B"})],
-  null, "2026-09-26");
+  "2026-09-26");
 ok("group keys are scoped to their day", cgOther[0].key !== cgKey, cgOther[0].key);
 
 // A group sits where its first member was rather than sinking to the end.
@@ -1942,6 +1947,95 @@ ok("the graded tile isolates its version badge",
     /\.cal-products li\{[^}]*flex-wrap:wrap/.test(css3));
   ok("and the name has a basis the chips cannot squeeze past",
     /\.cal-prod-name\{flex:1 1 150px/.test(css3));
+}
+
+// ── a busy day opens a LIST, never more icons ───────────────────────────────
+// Reported as "it breaks the big logo into little logos": clicking a grouped
+// chip expanded it back into individual chips IN THE CELL, which is the one
+// place with no room for them.
+{
+  const monthView = grab("const CalendarMonthView = ({month, events, today, onOpen, onOpenDay,",
+                         NL + "};");
+  ok("the month view takes an onOpenDay", /onOpenDay/.test(monthView));
+  ok("a grouped chip opens the day rather than expanding in the cell",
+    /onOpenDay\(day\.date, day\.events\)/.test(monthView));
+  ok("and nothing can expand a group in place any more",
+    !/setOpenGroups/.test(monthView) && !/openGroups/.test(monthView));
+  // ⚠ The overflow marker asks the same question, so it opens the same list --
+  // it was the one thing in a full cell you could not click.
+  ok("the +N marker is a button now", /<button type="button" class="cal-cell-more"/.test(monthView));
+  ok("and it opens the same day list",
+    (monthView.match(/onOpenDay\(day\.date, day\.events\)/g) || []).length === 2);
+
+  const dayModal = grab("const CalendarDayModal = ({day, events, onOpen, onClose, art}) => {",
+                        NL + "};");
+  ok("the day list names every event", /events\.map\(ev =>/.test(dayModal));
+  ok("a row opens that event's own modal", /onClick=\$\{\(\) => onOpen\(ev\)\}/.test(dayModal));
+  ok("Esc closes it", /e\.key === "Escape"/.test(dayModal));
+  // ⚠ Only ONE dialog at a time: opening a row swaps the list for the event's
+  // modal rather than stacking, so Esc and the backdrop always belong to one.
+  ok("the list yields to the detail modal rather than stacking under it",
+    (src.match(/\$\{!sel && dayList && html`<\$\{CalendarDayModal\}/g) || []).length === 2);
+  ok("and picking a row closes the list as it opens the event",
+    (src.match(/setDayList\(null\); setSel\(ev\);/g) || []).length === 2);
+  // A <button> with the global button paint left on reads as a chip, and a list
+  // of chips stops looking like a list.
+  const css4 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the row unsets the global button paint",
+    /\.cal-day-row\{[^}]*border:none;background:none/.test(css4));
+  ok("so does the +N marker", /\.cal-cell-more\{[^}]*border:none;background:none/.test(css4));
+}
+
+// ── the icon ground is OPT-IN ───────────────────────────────────────────────
+// ⚠ It used to be unconditional, which painted a pale square behind
+// Ravensburger's own marks -- they are transparent PNGs, so a dark shield sat on
+// a light tile whose corners showed past its points. Reported as "these
+// backgrounds still white", and it is the likeliest reading of "are the CCQ
+// shields cut off?" too: nothing is clipped (measured -- object-fit:contain
+// paints 14.7x17 inside a 17x17 box), but a square behind a pointed mark makes
+// it look like a crop of something bigger.
+{
+  const css5 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the bare icon rule paints no ground",
+    /\.cal-ico-img\{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;\}/.test(css5));
+  ok("and the ground is a class the component has to ask for",
+    /\.cal-ico-img\.on-white\{background:var\(--bg-surface\);\}/.test(css5));
+  const dot = grab("const CalendarKindDot = ({kind, ev, art}) => {", NL + "};");
+  // ⚠ cors is true only for a photo proxyImg rewrites, i.e. a CDN catalog shot
+  // where the white studio sweep is the rule. A brand mark is same-origin, so
+  // it never asks for a ground and never goes near the canvas.
+  ok("only an uncut CDN photo asks for one",
+    /photo\.cors && !photo\.cut \? " on-white" : ""/.test(dot));
+  ok("the chip icon goes through the shared cut", /useProductCutUrl\(img\)/.test(dot));
+
+  const hook = grab("const useProductCutUrl = (src) => {", NL + "};");
+  ok("the hook cuts ONLY what proxyImg rewrites",
+    /const u = proxyImg\(src\);/.test(hook) && /u !== src \? u : null/.test(hook));
+  // Both halves, same reason ProductPhoto needs them: a fresh fetch fires
+  // onLoad, but an image already decoded before React attached the handler
+  // never will, and then the effect's `complete` check is all that runs.
+  ok("it covers both ways an image can arrive",
+    /el\.complete && el\.naturalWidth/.test(hook) && /onLoad/.test(hook));
+  ok("and shares ProductPhoto's cache rather than cutting twice",
+    /_productCuts\.get\(proxied\)/.test(hook));
+}
+
+// ── a release modal is wider, because its rows are ──────────────────────────
+// ⚠ At the standard 460px the product NAME got 168px and clipped. And the first
+// fix did not work: margin-left:auto on the buy chips absorbs the positive free
+// space BEFORE flex-grow sees any, so the name never grew past its basis and
+// sat beside 200px of nothing.
+{
+  const css6 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the release modal gets its own width", /\.cal-modal--wide\{max-width:560px;\}/.test(css6));
+  ok("declared AFTER the base rule it has to beat",
+    css6.indexOf(".cal-modal--wide{") > css6.indexOf(".cal-modal{position:relative"));
+  ok("the buy chips claim no auto margin",
+    !/\.cal-buy\{[^}]*margin-left:auto/.test(css6));
+  const modal2 = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {",
+                      NL + "};");
+  ok("and only a modal that actually lists products is widened",
+    /const wide = !!\(isSet && products && products\.length > 0\);/.test(modal2));
 }
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

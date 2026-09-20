@@ -9839,6 +9839,28 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-add-check.last:hover{background:none;color:var(--text);}
 
 
+/* ── one day's events, as a list ──────────────────────────────────── */
+/* ⚠ No width override here. One would sit BEFORE .cal-modal in this file and
+   lose to it on source order at equal specificity -- and the day list wants the
+   detail modal's width anyway: they are the two halves of one gesture, and two
+   dialogs of different widths swapping places reads as a jump. */
+.cal-day-list{list-style:none;margin:12px 0 0;padding:0;}
+.cal-day-list li + li{border-top:1px solid var(--border);}
+/* Unsetting all four of the global button paints, or every row reads as a chip
+   and the list stops looking like a list. */
+.cal-day-row{display:flex;align-items:center;gap:9px;width:100%;box-sizing:border-box;
+  padding:9px 4px;border:none;background:none;border-radius:7px;
+  font-family:inherit;text-align:left;cursor:pointer;color:var(--text);}
+.cal-day-row:hover{background:var(--bg-surface-hover);}
+.cal-day-row .cal-ico{width:20px;height:20px;border-radius:4px;}
+.cal-day-row-txt{flex:1;min-width:0;display:flex;flex-direction:column;gap:1px;}
+.cal-day-row-title{font-size:12.5px;font-weight:700;line-height:1.3;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-day-row-sub{font-size:10.5px;color:var(--text-muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.cal-day-row-go{flex:0 0 auto;font-size:15px;color:var(--text-muted);line-height:1;}
+.cal-day-row:hover .cal-day-row-go{color:var(--accent);}
+
 /* ── followed stores ── */
 .cal-follow{margin:0 0 14px;}
 /* It sits at the end of the filter row now, so it takes the row's chip metric —
@@ -9892,7 +9914,12 @@ body:has(.deck-quickadd) .offline-pill{
   background:var(--bg-surface-hover);color:var(--text);cursor:pointer;text-align:left;}
 .cal-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .cal-chip:hover{background:var(--accent-glow);color:var(--accent);}
-.cal-cell-more{font-size:9px;color:var(--text-muted);padding-left:4px;}
+/* A <button> now, so it needs the global button paint unset -- it is a line of
+   text in a cell, not a control with a box. */
+.cal-cell-more{font-size:9px;color:var(--text-muted);padding-left:4px;
+  border:none;background:none;font-family:inherit;font-weight:600;cursor:pointer;
+  text-align:left;width:100%;}
+.cal-cell-more:hover{color:var(--accent);}
 /* The grouped chip: "CCQ x3". The count is pushed to the chip's right edge so
    the kind word and the number read as two fields rather than one phrase. */
 .cal-chip--group{font-weight:700;}
@@ -10007,6 +10034,9 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-modal{position:relative;background:var(--bg-modal);border:1px solid var(--border);
   border-radius:12px;padding:20px;max-width:460px;width:100%;
   max-height:88vh;overflow-y:auto;box-shadow:0 20px 50px rgba(0,0,0,0.4);}
+/* Only the release modal, only because it carries the product list. width:100%
+   still caps it on a phone, so this costs narrow screens nothing. */
+.cal-modal--wide{max-width:560px;}
 .cal-modal-close{position:absolute;top:max(8px,env(safe-area-inset-top));right:10px;
   border:none;background:none;font-size:22px;line-height:1;color:var(--text-muted);cursor:pointer;}
 /* ── Official set logos ─────────────────────────────────────────────────────
@@ -10543,9 +10573,13 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-prod-name{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 /* Where to buy. Outlined and small: this sits inside a list of releases, and a
    row of filled buttons would out-shout the dates the modal is actually about. */
-/* margin-left:auto pins the chips right whether they are sharing the name's line
-   or sitting on one of their own. */
-.cal-buy{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;margin-left:auto;}
+/* ⚠ NO margin-left:auto. An auto margin on a flex item absorbs the positive
+   free space BEFORE flex-grow gets any, so the chips sat hard right and the
+   name never grew past its 150px basis -- a wide modal showed "Hyperia City
+   Sleeved Booster ..." with 200px of empty space beside it. Letting the name
+   grow is what pushes the chips to the edge, and on a wrapped second line they
+   start under the name rather than floating right. */
+.cal-buy{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;}
 .cal-buy-link{font-size:9.5px;font-weight:700;white-space:nowrap;text-decoration:none;
   padding:3px 7px;border-radius:999px;border:1px solid var(--btn-border);
   color:var(--text-dim);background:var(--btn-bg);}
@@ -10635,8 +10669,16 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-ico{position:relative;display:inline-flex;align-items:center;justify-content:center;
   width:18px;height:18px;flex:0 0 auto;border-radius:3px;overflow:hidden;}
 .cal-ico-glyph{display:inline-flex;}
-.cal-ico-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;
-  background:var(--bg-surface);}
+/* ⚠ The ground is OPT-IN, and it used to be unconditional. It exists to hide the
+   seam an object-fit:contain letterbox leaves around a white-backed photo --
+   but Ravensburger's own marks are transparent PNGs, so behind one it painted a
+   pale square with a dark shield or hexagon sitting on it. That is what read as
+   "these backgrounds still white", and very likely as "are the shields cut
+   off?" too: the square's corners show past the mark's points, so the mark
+   looks like a crop of something bigger. Same rule ProductPhoto follows -- a
+   ground only for a photo we know is on a studio sweep and have not cut yet. */
+.cal-ico-img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;}
+.cal-ico-img.on-white{background:var(--bg-surface);}
 .cal-modal-kind .cal-ico{width:22px;height:22px;}
 .cal-row-title .cal-ico,.cal-panel-title .cal-ico{margin-right:1px;}
 .cal-chip .cal-ico{width:13px;height:13px;border-radius:2px;}
