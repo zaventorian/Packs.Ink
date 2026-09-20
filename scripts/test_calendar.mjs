@@ -1767,5 +1767,71 @@ ok("the compact chip keeps its count",
 ok("the graded tile isolates its version badge",
   /\.gmover-tile\{[^}]*isolation:isolate/.test(cgCSS));
 
+
+// -- the home panel opens on the MONTH grid ---------------------------------
+// Flipped list -> month 2026-09-20. The mode is persisted on every mount, so a
+// plain default change reaches nobody who has ever loaded the home page; the
+// stamp is what moves them, and it has to be ONE-SHOT or a later deliberate
+// pick of List snaps back on the next reload. Both halves fail silently.
+{
+  const body = grab("const calReadPanelViewPref = () => {", NL + "};")
+    .replace("const calReadPanelViewPref = ", "").replace(/;\s*$/, "");
+  // The two key names have to come along: without them the body throws on an
+  // undefined const and its own `catch { return "month"; }` swallows it, so
+  // every case "passes" and the test is measuring nothing.
+  const keys = grabLine("const CAL_PANEL_VIEW_LS = ") + NL + grabLine("const CAL_PANEL_VIEW_MONTH_KEY = ");
+  const run = (init) => {
+    const st = {...init};
+    const ls = {getItem: (k) => (k in st ? st[k] : null), setItem: (k, v) => { st[k] = String(v); }};
+    return new Function("localStorage", keys + NL + "return (" + body + ")();")(ls);
+  };
+  ok("(the harness really runs the helper, not its catch)",
+    run({"packsink:cal:panelView": "list", "packsink:cal:panelViewMonth": "1"}) !==
+    run({"packsink:cal:panelView": "month", "packsink:cal:panelViewMonth": "1"}));
+  ok("a fresh browser opens on the month grid", run({}) === "month");
+  ok("and a browser holding the old list default is moved once",
+    run({"packsink:cal:panelView": "list"}) === "month");
+  ok("but the stamp fires ONCE - a deliberate list pick sticks",
+    run({"packsink:cal:panelView": "list", "packsink:cal:panelViewMonth": "1"}) === "list");
+  ok("and a deliberate month pick is left alone too",
+    run({"packsink:cal:panelView": "month", "packsink:cal:panelViewMonth": "1"}) === "month");
+}
+
+// -- following a store is a SUBSET, from the result tile ---------------------
+// The finder's Follow was all-or-nothing, so the one control that puts a shop's
+// Set Championship on your calendar also put its weeklies there, and the subset
+// lived two screens away in the drawer. Nothing throws if this regresses - the
+// menu just quietly goes back to one line.
+{
+  const btn = grab("const ScCalendarButton = ({series, subs}) => {", NL + "};");
+  ok("the popover offers the kind boxes", /cal-add-check/.test(btn));
+  ok("built from the one CAL_STORE_KINDS list, not a local copy",
+    /CAL_STORE_KINDS\.map/.test(btn) && /CAL_STORE_KIND_KEYS\.filter/.test(btn));
+  // Absent meta.kinds means everything: that is what keeps every pre-existing
+  // follow working, and what lets a future fourth kind ride along.
+  ok("a plain Follow writes no kinds at all",
+    /subs\.add\(\{kind: "store"/.test(btn) && !/meta: \{[^}]*kinds:/.test(btn));
+  ok("the menu stays open on Follow so the boxes are on screen, and closes on Unfollow",
+    /if\(following\)\{[\s\S]{0,120}setOpen\(false\);[\s\S]{0,160}subs\.remove\("store", storeId\)/.test(btn));
+  ok("the last ticked kind cannot be unticked",
+    /const last = isOn && storeKinds\.length === 1;/.test(btn) && /if\(last\) return;/.test(btn));
+  // The menu GROWS by three rows the moment you follow, and it used to be
+  // placed once at open against a constant - 35px of it fell off a 812x400
+  // screen, taking the .ics row with it.
+  const anchor = grab("const useCalPopAnchor = (open, btnRef", NL + "};");
+  ok("the anchor measures the real popover instead of assuming CAL_POP_H",
+    /popRef && popRef\.current/.test(anchor) && /scrollHeight/.test(anchor));
+  ok("and re-places when the menu grows", /\}, \[open, grow\]\);/.test(anchor));
+  ok("clamping only when neither side fits, so the common case keeps no scrollbar",
+    /h > Math\.max\(below, above\)/.test(anchor));
+  ok("the growing menu passes both", /useCalPopAnchor\(open, btnRef, popRef, following\)/.test(src));
+
+  const css2 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the kind boxes keep the 36px tap floor on touch",
+    /@media \(hover:none\)\{\.cal-add-check\{padding-top:10px;padding-bottom:10px;\}\}/.test(css2));
+  ok("and are indented under Follow rather than reading as more menu items",
+    /\.cal-add-check\{[^}]*padding-left:30px/.test(css2));
+}
+
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

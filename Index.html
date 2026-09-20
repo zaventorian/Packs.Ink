@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=440">
+<link rel="stylesheet" href="styles.css?v=441">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2479,6 +2479,10 @@ const UI_ICON_PATHS = {
   wave:      _icoSvg(html`<path d="M8 11.2V7.9a1.5 1.5 0 0 1 3 0v3"/><path d="M11 10.4V5.4a1.5 1.5 0 0 1 3 0v5"/><path d="M14 10.6V6.1a1.5 1.5 0 0 1 3 0v5"/><path d="M17 11.6V8.6a1.5 1.5 0 0 1 3 0v5.9a6.5 6.5 0 0 1-6.5 6.5h-1a5.5 5.5 0 0 1-4.4-2.2l-3.4-4.5a1.6 1.6 0 0 1 2.4-2.1L9.5 15"/>`),
   party:     _icoSvg(html`<path d="M3.2 20.8l4.4-12 8.4 8.4z"/><path d="M13.5 4.5c1.3-1.3 3-1.2 3.9 0"/><path d="M19 8c1.3-1.3 1.4-3 .1-4.3"/><path d="M14.8 10.2l1.4-1.4"/><path d="M19.6 13.4h.01"/><path d="M11.4 4.1h.01"/>`),
   check:     _icoSvg(html`<path d="M4 12.5l5.5 5.5L20 7"/>`),
+  // A tick alone reads as "done"; a tick in a BOX reads as "this is optional and
+  // you may untick it", which is the whole point wherever one of these is used.
+  checkbox:  _icoSvg(html`<rect x="3.5" y="3.5" width="17" height="17" rx="4"/>`),
+  checkboxOn:_icoSvg(html`<rect x="3.5" y="3.5" width="17" height="17" rx="4"/><path d="M7.5 12.2l3.2 3.3L16.8 9"/>`),
   sun:       _icoSvg(html`<circle cx="12" cy="12" r="4.2"/><path d="M12 2.5v2.4"/><path d="M12 19.1v2.4"/><path d="M4.2 4.2l1.7 1.7"/><path d="M18.1 18.1l1.7 1.7"/><path d="M2.5 12h2.4"/><path d="M19.1 12h2.4"/><path d="M4.2 19.8l1.7-1.7"/><path d="M18.1 5.9l1.7-1.7"/>`),
   moon:      _icoSvg(html`<path d="M20.5 14.8A8.8 8.8 0 0 1 9.2 3.5a8.8 8.8 0 1 0 11.3 11.3z"/>`),
   reprint:   _icoSvg(html`<path d="M4 10.2a6.4 6.4 0 0 1 10.8-3.5l2.7 2.5"/><path d="M17.9 4.6v4.6h-4.6"/><path d="M20 13.8a6.4 6.4 0 0 1-10.8 3.5l-2.7-2.5"/><path d="M6.1 19.4v-4.6h4.6"/>`),
@@ -40172,7 +40176,14 @@ function useCalHoverCard(art){
 // scroll listener is CAPTURING, or scrolling the inner list leaves the menu
 // hanging in space over the page.
 const CAL_POP_W = 252, CAL_POP_H = 190, CAL_POP_M = 8;
-const useCalPopAnchor = (open, btnRef) => {
+// ⚠ `popRef` + `grow` are what keep this honest for a menu whose HEIGHT depends
+// on its own state — the store-kind boxes appear the moment you press Follow. The
+// original measured nothing and flipped against the CAL_POP_H constant, so a menu
+// taller than the constant kept its assumed placement and dropped its last rows
+// off the bottom of a short viewport (measured: 35px lost at 812x400). Both are
+// optional, so every existing caller is unchanged apart from getting a real
+// measurement instead of a guess.
+const useCalPopAnchor = (open, btnRef, popRef, grow) => {
   const [style, setStyle] = useState(null);
   useLayoutEffect(() => {
     if(!open || !btnRef.current){ setStyle(null); return; }
@@ -40183,17 +40194,27 @@ const useCalPopAnchor = (open, btnRef) => {
       // Right-align to the button, then clamp inside the viewport — on a phone a
       // menu anchored to a button near the right edge would otherwise run off.
       const left = Math.max(CAL_POP_M, Math.min(r.right - CAL_POP_W, window.innerWidth - CAL_POP_W - CAL_POP_M));
-      const flipUp = r.bottom + 4 + CAL_POP_H > window.innerHeight && r.top > CAL_POP_H;
-      setStyle(flipUp
-        ? {position: "fixed", left: `${left}px`, top: "auto", right: "auto",
-           bottom: `${window.innerHeight - r.top + 4}px`}
-        : {position: "fixed", left: `${left}px`, top: `${r.bottom + 4}px`, right: "auto", bottom: "auto"});
+      const pop = popRef && popRef.current;
+      // scrollHeight, not the rect: once a clamp is applied the rect IS the clamp,
+      // so re-placing from it would ratchet the menu smaller on every scroll tick.
+      const h = (pop && Math.max(pop.scrollHeight, pop.getBoundingClientRect().height)) || CAL_POP_H;
+      const below = window.innerHeight - r.bottom - 4 - CAL_POP_M;
+      const above = r.top - 4 - CAL_POP_M;
+      const up = h > below && above > below;
+      // Only clamp when NEITHER side fits, so the common case keeps its natural
+      // height and no scrollbar; when nothing fits, the menu scrolls inside
+      // itself rather than putting a row somewhere nobody can reach.
+      const maxHeight = h > Math.max(below, above) ? `${Math.max(120, up ? above : below)}px` : null;
+      setStyle({position: "fixed", left: `${left}px`, right: "auto",
+        ...(up ? {top: "auto", bottom: `${window.innerHeight - r.top + 4}px`}
+               : {top: `${r.bottom + 4}px`, bottom: "auto"}),
+        ...(maxHeight ? {maxHeight, overflowY: "auto"} : {})});
     };
     place();
     window.addEventListener("scroll", place, true);
     window.addEventListener("resize", place);
     return () => { window.removeEventListener("scroll", place, true); window.removeEventListener("resize", place); };
-  }, [open]);
+  }, [open, grow]);
   return style;
 };
 
@@ -40205,7 +40226,8 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const btnRef = useRef(null);
-  const popStyle = useCalPopAnchor(open, btnRef);
+  const popRef = useRef(null);
+  const popStyle = useCalPopAnchor(open, btnRef, popRef);
   useEffect(() => {
     if(!open) return;
     const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -40227,7 +40249,7 @@ const CalendarAddMenu = ({ev, subs, compact}) => {
       onClick=${(e) => { e.stopPropagation(); setOpen(o => !o); }}>
       ${uiIcon(on ? "check" : "calendarPlus", compact ? 13 : 14)}
     </button>
-    ${open && html`<div class="cal-add-pop" style=${popStyle} onClick=${e => e.stopPropagation()}>
+    ${open && html`<div class="cal-add-pop" ref=${popRef} style=${popStyle} onClick=${e => e.stopPropagation()}>
       ${subRef && html`<button type="button" class="cal-add-item" onClick=${() => {
         subs.toggle({kind: "event", ref: subRef, label,
                      meta: ev.kind === "store" ? {store_id: ev.store_id} : null});
@@ -41054,6 +41076,23 @@ const calReadSpanPref = (seed) => {
 // you, not about a surface — but a month grid in a 240px rail and a month grid
 // on a full page are different enough that forcing them to agree is annoying.
 const CAL_PANEL_VIEW_LS = "packsink:cal:panelView";
+// ⚠ Default flipped list → MONTH 2026-09-20 (Zaven). The mode is persisted on
+// every mount, so every browser that has ever loaded the home page already holds
+// "list" and a plain default change reaches nobody — the same trap the home
+// LAYOUT defaults hit. Hence a one-shot stamp, and STAMPED rather than coerced:
+// a later deliberate pick of List has to stick.
+const CAL_PANEL_VIEW_MONTH_KEY = "packsink:cal:panelViewMonth";
+const calReadPanelViewPref = () => {
+  try {
+    const raw = localStorage.getItem(CAL_PANEL_VIEW_LS);
+    if(!localStorage.getItem(CAL_PANEL_VIEW_MONTH_KEY)){
+      localStorage.setItem(CAL_PANEL_VIEW_MONTH_KEY, "1");
+      if(raw !== "month") localStorage.setItem(CAL_PANEL_VIEW_LS, "month");
+      return "month";
+    }
+    return raw === "list" ? "list" : "month";
+  } catch { return "month"; }
+};
 const CAL_REGION_LS = "packsink:cal:region";
 const calNormRegionPref = (v) => {
   const set = calRegionSet(v);
@@ -41128,10 +41167,7 @@ const CalendarPanel = ({panelNav, user, onFindEvents, finderOpen, sealedPrices})
   // choice is not (a grid in a 240px rail is a different proposition).
   const [kinds, setKinds] = useState(calReadKindPref);
   const [region, setRegion] = useState(calReadRegionPref);
-  const [mode, setMode] = useState(() => {
-    try { return localStorage.getItem(CAL_PANEL_VIEW_LS) === "month" ? "month" : "list"; }
-    catch { return "list"; }
-  });
+  const [mode, setMode] = useState(calReadPanelViewPref);
   const [openFilters, setOpenFilters] = useState(false);
   const [page, setPage] = useState(0);
   const [sel, setSel] = useState(null);
@@ -42082,7 +42118,7 @@ const ScCalendarButton = ({series, subs}) => {
   const [open, setOpen] = useState(false);
   const ref = useRef(null);
   const btnRef = useRef(null);
-  const popStyle = useCalPopAnchor(open, btnRef);
+  const popRef = useRef(null);
   useEffect(() => {
     if(!open) return;
     const onDoc = (e) => { if(ref.current && !ref.current.contains(e.target)) setOpen(false); };
@@ -42097,9 +42133,16 @@ const ScCalendarButton = ({series, subs}) => {
     start_datetime: o.start_datetime, end_datetime: o.end_datetime,
   })).filter(Boolean);
   const storeId = series.store_id != null ? String(series.store_id) : null;
-  const following = storeId && subs.has("store", storeId);
+  const storeSub = storeId ? subs.subs.find(s => s.kind === "store" && String(s.ref) === storeId) : null;
+  const following = !!storeSub;
+  // Absent meta.kinds means "everything", so an unfollowed store previews as all
+  // three ticked — which is exactly what pressing Follow gives you.
+  const storeKinds = calStoreKindsOf(storeSub);
   const pinned = subs.has("series", series.series_key);
   const on = following || pinned;
+  // ⚠ Re-anchored on `following`, because that is what grows the menu by three
+  // rows — placed once at open, the boxes push its last rows off a short screen.
+  const popStyle = useCalPopAnchor(open, btnRef, popRef, following);
   return html`<div class="cal-add-wrap" ref=${ref}>
     <button type="button" aria-expanded=${open ? "true" : "false"} ref=${btnRef}
       class=${"sc-tile-pin cal-add-btn" + (on ? " on" : "")}
@@ -42108,7 +42151,7 @@ const ScCalendarButton = ({series, subs}) => {
       onClick=${(e) => { e.stopPropagation(); setOpen(o => !o); }}>
       ${uiIcon(on ? "check" : "calendarPlus", 13)}
     </button>
-    ${open && html`<div class="cal-add-pop cal-add-pop--sc" style=${popStyle}
+    ${open && html`<div class="cal-add-pop cal-add-pop--sc" ref=${popRef} style=${popStyle}
       onClick=${e => e.stopPropagation()}>
       <button type="button" class="cal-add-item" onClick=${() => {
         setOpen(false);
@@ -42119,13 +42162,45 @@ const ScCalendarButton = ({series, subs}) => {
         flashToast(pinned ? "Removed from your calendar" : `Added ${occ.length || 1} date${occ.length === 1 ? "" : "s"} to your calendar`);
       }}>${uiIcon(pinned ? "close" : "calendarPlus", 13)}
         ${pinned ? "Remove these dates" : `Add ${occ.length > 1 ? `these ${occ.length} dates` : "this date"}`}</button>
-      ${storeId && html`<button type="button" class="cal-add-item" onClick=${() => {
-        setOpen(false);
-        subs.toggle({kind: "store", ref: storeId, label: series.store_name,
-                     meta: {city: series.city, state: series.state}});
-        flashToast(following ? `Unfollowed ${series.store_name}` : `Following ${series.store_name} — every event lands on your calendar`);
-      }}>${uiIcon(following ? "close" : "store", 13)}
-        ${following ? "Unfollow this store" : "Follow this store — every event"}</button>`}
+      ${/* Following used to be all-or-nothing here, so the one control that could
+            put a shop's Set Championship on your calendar also put six copies of
+            "Weekly Core Constructed" there — the subset the drawer has always
+            offered was two screens away, and you had to already know it existed.
+            The popover STAYS OPEN on Follow so the boxes are on screen the moment
+            you have something to untick. */""}
+      ${storeId && html`<div class="cal-add-store">
+        <button type="button" class="cal-add-item" onClick=${() => {
+          if(following){
+            setOpen(false);
+            subs.remove("store", storeId);
+            flashToast(`Unfollowed ${series.store_name}`);
+            return;
+          }
+          // Deliberately writes NO meta.kinds: absent means everything, which is
+          // what a plain Follow means and what keeps a future fourth kind riding
+          // along. Only unticking one writes the array.
+          subs.add({kind: "store", ref: storeId, label: series.store_name,
+                    meta: {city: series.city, state: series.state}});
+          flashToast(`Following ${series.store_name} — untick anything you don't want`);
+        }}>${uiIcon(following ? "close" : "store", 13)}
+          ${following ? "Unfollow this store" : "Follow this store"}</button>
+        ${following && CAL_STORE_KINDS.map(k => {
+          const isOn = storeKinds.includes(k.key);
+          // Same invariant as the drawer and every other chip group on the site:
+          // the LAST one cannot be unticked. A follow that delivers nothing is a
+          // confusing way to spell "unfollow", and Unfollow is directly above.
+          const last = isOn && storeKinds.length === 1;
+          return html`<button key=${k.key} type="button"
+            class=${"cal-add-item cal-add-check" + (isOn ? " on" : "") + (last ? " last" : "")}
+            aria-pressed=${isOn ? "true" : "false"}
+            title=${last ? "Keep at least one, or use Unfollow above" : k.long}
+            onClick=${() => { if(last) return;
+              subs.updateMeta("store", storeId, {kinds: isOn
+                ? storeKinds.filter(x => x !== k.key)
+                : CAL_STORE_KIND_KEYS.filter(x => storeKinds.includes(x) || x === k.key)});
+            }}>${uiIcon(isOn ? "checkboxOn" : "checkbox", 13)} ${k.label}</button>`;
+        })}
+      </div>`}
       ${entries[0] && googleCalUrl(entries[0]) && html`<a class="cal-add-item"
         href=${googleCalUrl(entries[0])} target="_blank" rel="noopener noreferrer"
         onClick=${() => setOpen(false)}>${uiIcon("link", 13)} Google Calendar (next date) ↗</a>`}
