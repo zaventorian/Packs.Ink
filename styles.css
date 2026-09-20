@@ -3048,14 +3048,26 @@ button.graded-home-title{cursor:pointer;}
   cursor:pointer;font-size:12px;line-height:1;padding:3px 7px;border-radius:5px;}
 .sc-collapse-btn:hover{color:var(--accent);background:var(--accent-glow);}
 .sc-box-body{margin-top:8px;}
-.sc-mode-toggle{display:flex;gap:0;margin-bottom:8px;border:1px solid var(--btn-border);
-  border-radius:8px;overflow:hidden;background:var(--bg-solid);}
-.sc-mode-btn{flex:1;padding:6px 8px;font-size:11.5px;font-weight:700;cursor:pointer;
-  border:none;background:transparent;color:var(--text-dim);font-family:inherit;
-  letter-spacing:0.02em;white-space:nowrap;transition:background .12s,color .12s;}
-.sc-mode-btn+.sc-mode-btn{border-left:1px solid var(--btn-border);}
-.sc-mode-btn:hover{color:var(--text);}
-.sc-mode-btn.active{background:var(--accent);color:#fff;}
+/* ⚠ A WRAPPING chip row, not a joined segmented bar. The segmented shape is
+   what a one-of-N control looks like, and this stopped being one when the kinds
+   became a multi-select -- three joined cells all lit reads as broken rather than
+   as three things switched on. Wrapping is also what lets a fourth button exist
+   at all: four joined cells in the calendar tile's ~220px rail gave each 46px. */
+.sc-mode-toggle{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;}
+.sc-mode-btn{flex:0 1 auto;display:inline-flex;align-items:center;gap:4px;
+  padding:5px 10px;font-size:11.5px;font-weight:700;cursor:pointer;
+  border:1px solid var(--btn-border);border-radius:999px;background:var(--btn-bg);
+  color:var(--text-dim);font-family:inherit;letter-spacing:0.02em;white-space:nowrap;
+  transition:background .12s,color .12s,border-color .12s;}
+.sc-mode-btn:hover{color:var(--text);border-color:var(--accent);}
+.sc-mode-btn.active{background:var(--accent);color:#fff;border-color:var(--accent);}
+/* All is a SHORTCUT, not a kind: it carries no tickbox, because there is nothing
+   to untick -- pressing it turns the other three on. */
+.sc-mode-all{font-style:normal;}
+.sc-mode-all.active{background:var(--accent-glow);color:var(--accent);border-color:var(--border-accent);}
+/* The last kind standing cannot be unticked, so it must not offer to be. */
+.sc-mode-kind.last{cursor:default;}
+.sc-mode-kind.last:hover{border-color:var(--accent);}
 .sc-tile-kind{display:inline-block;margin-right:5px;padding:1px 5px;border-radius:4px;
   font-size:9px;font-weight:800;letter-spacing:0.03em;text-transform:uppercase;vertical-align:middle;}
 .sc-tile-kind--sc{background:var(--accent-glow);color:var(--accent);}
@@ -3095,7 +3107,7 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
    of usable width, which is inside the margin of error for a longer future
    label. 4px buys ~24px back and costs nothing — the segment is already full
    width, so the buttons keep their hit area. */
-.sc-box--embed .sc-mode-btn{padding:6px 4px;font-size:11px;}
+.sc-box--embed .sc-mode-btn{padding:4px 7px;font-size:10.5px;gap:3px;}
 /* Shorter than the 340px standalone list: the pins float to the top, so ~4
    tiles is the pinned shops plus a look at what is next, and the rest is a
    scroll rather than a tile that owns the rail. */
@@ -3172,6 +3184,19 @@ html[data-mode="dark"] .sc-tile-kind--pre{background:rgba(120,210,130,0.16);colo
 .sc-date-input{padding:3px 6px;font-size:11px;border:1px solid var(--btn-border);
   border-radius:5px;background:var(--bg-solid);color:var(--text);font-family:inherit;}
 .sc-date-input:focus{outline:none;border-color:var(--accent);}
+/* One chip per chosen date. It IS the remove button -- a date you picked on
+   purpose is a thing you take back off, and a separate × on a 60px chip is a
+   target nobody can hit. */
+.sc-date-chip{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;
+  font-size:10.5px;font-weight:700;font-family:inherit;white-space:nowrap;cursor:pointer;
+  border:1px solid var(--border-accent);border-radius:999px;
+  background:var(--accent-glow);color:var(--accent);}
+.sc-date-chip:hover{border-color:var(--red);color:var(--red);background:none;}
+.sc-date-chip span{opacity:0.7;font-weight:800;}
+/* A date in the past can never match (the feed is upcoming-only), so it says so
+   rather than sitting there looking like every other chip. */
+.sc-date-chip.past{border-style:dashed;opacity:0.72;}
+.sc-date-past{display:flex;align-items:center;gap:5px;margin-top:5px;font-size:10.5px;}
 .sc-date-clear{background:none;border:none;color:var(--text-muted);cursor:pointer;
   font-size:15px;line-height:1;padding:0 4px;border-radius:4px;}
 .sc-date-clear:hover{color:var(--red);}
@@ -9905,9 +9930,18 @@ body:has(.deck-quickadd) .offline-pill{
 .cal-month:not(.cal-month--compact) .cal-chip .cal-ico{width:17px;height:17px;border-radius:3px;
   margin-top:1px;}
 .cal-month:not(.cal-month--compact) .cal-chip .cal-ico-glyph svg{width:15px;height:15px;}
-.cal-month:not(.cal-month--compact) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
-  display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
-  overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.28;}
+/* ⚠ min-width, and that bound is load-bearing. Unscoped, this rule OUT-SPECIFIES
+   the ≤700px `display:none` that is supposed to drop the label on a phone
+   (5 classes + span against 2 classes), so below 700px every chip label became a
+   ZERO-WIDTH box still two lines tall: invisible text costing 10px a chip. A day
+   with three icons then blew its cell past its siblings' and took the whole grid
+   row with it — reported as "dates like 10/16 get broken w/3 icons on it". The
+   label only wraps where there is width to wrap in. */
+@media (min-width:701px){
+  .cal-month:not(.cal-month--compact) .cal-chip span:not(.cal-ico):not(.cal-chip-x){
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+    overflow:hidden;text-overflow:ellipsis;white-space:normal;line-height:1.28;}
+}
 
 /* ── The hover card ────────────────────────────────────────────────────────
    ⚠ pointer-events:none. It is positioned over a grid of click targets, and a
@@ -10492,8 +10526,41 @@ html[data-mode="dark"] .cal-map-box img{filter:brightness(0.82) saturate(0.85);}
 .cal-products ul{list-style:none;margin:0;padding:0;}
 .cal-products li{display:flex;align-items:baseline;gap:8px;padding:3px 0;font-size:12px;}
 .cal-products li + li{border-top:1px solid var(--border);}
-.cal-products li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
-.cal-products li em{font-style:normal;font-size:10px;color:var(--text-muted);flex:0 0 auto;}
+/* ⚠ WRAPS, and the name carries a flex-basis. Without both, the two buy chips
+   (a fixed 174px) took their width first and left the product NAME 51px on a
+   phone -- the one thing the row exists to say, clipped to nothing, by controls
+   that only matter once you have read it. Basis 150 means the chips drop to
+   their own line the moment the name would be squeezed below that. */
+.cal-products li{align-items:center;flex-wrap:wrap;gap:6px 9px;}
+.cal-products li em{font-style:normal;font-size:10px;color:var(--text-muted);flex:0 0 auto;
+  margin-left:7px;}
+/* ⚠ The well carries the size. ProductPhoto's wrapper is position:absolute;
+   inset:0, so a slot that used to take its height from the <img> inside it
+   collapses to nothing. */
+.cal-prod-art{position:relative;flex:0 0 auto;width:34px;height:34px;border-radius:5px;
+  overflow:hidden;}
+.cal-prod-art img{max-width:100%;max-height:100%;object-fit:contain;}
+.cal-prod-name{flex:1 1 150px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+/* Where to buy. Outlined and small: this sits inside a list of releases, and a
+   row of filled buttons would out-shout the dates the modal is actually about. */
+/* margin-left:auto pins the chips right whether they are sharing the name's line
+   or sitting on one of their own. */
+.cal-buy{display:inline-flex;align-items:center;gap:5px;flex:0 0 auto;margin-left:auto;}
+.cal-buy-link{font-size:9.5px;font-weight:700;white-space:nowrap;text-decoration:none;
+  padding:3px 7px;border-radius:999px;border:1px solid var(--btn-border);
+  color:var(--text-dim);background:var(--btn-bg);}
+.cal-buy-link:hover{border-color:var(--accent);color:var(--accent);}
+.cal-buy-link--amzn:hover{border-color:#f0a33e;color:#f0a33e;}
+.cal-prodbuy{margin-top:12px;}
+.cal-prodbuy .cal-buy-link{font-size:11px;padding:5px 12px;}
+/* Required verbatim, and the FTC wants it NEAR the links rather than only in a
+   footer -- so every surface that renders an Amazon link carries its own. */
+.cal-products-aff{margin:8px 0 0;font-size:9px;line-height:1.4;color:var(--text-muted);}
+/* A product drop's photo is the hero of its modal, so it gets real height. The
+   ground is deliberately NOT painted: ProductPhoto cuts TCGplayer's white sweep
+   to transparency, and what shows through is the modal's own surface. */
+.cal-modal-prodart{position:relative;width:100%;height:150px;margin:0 0 12px;}
+.cal-modal-prodart img{max-width:100%;max-height:100%;object-fit:contain;}
 
 /* dl rows in the detail modal */
 /* Details / Scout inside the calendar's event modal — same folder-tab chrome as

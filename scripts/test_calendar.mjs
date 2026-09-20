@@ -86,6 +86,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   grab("const SEALED_DISPLAY_TYPE_FOR = {", NL + "};"),
   grab("function deriveSealedDisplayType(item){", NL + "}"),
   grab("const calendarArtIndex = (sealedRows, names) => {", NL + "};"),
+  grab("const calendarEventProduct = (ev, artIndex) => {", NL + "};"),
   grab("const calendarEventArt = (ev, artIndex) => {", NL + "};"),
   grabLine("const CAL_SET_PHASE_ICONS = "),
   grab("const _calSetPhase = (ev) => {", NL + "};"),
@@ -157,7 +158,7 @@ const mod = await import("data:text/javascript," + encodeURIComponent([
   " calRegionOf, calRegionless, calMatchesRegion, calRegionSet, calMatchesQuery, calendarMergeStore, calTlLabelParts,",
   " osmTileLayout, osmTileUrl, CALENDAR_REGIONS, calendarCombine,",
   " calendarPanelWindow, calShortDay, calStoreKindsOf, calStoreAllows, CAL_STORE_KINDS, CAL_STORE_KIND_KEYS,",
-  " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt,",
+  " calendarHiddenSet, calendarApplyHidden, calendarArtIndex, calendarEventArt, calendarEventProduct,",
   " CAL_ART_SKIP_TYPES, deriveSealedDisplayType,",
   " CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,",
   " calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,",
@@ -180,7 +181,7 @@ const {
   calPanelRows, calDayLabel,
   calCellItems, calGroupKindLabel, CAL_KIND_SHORT, CAL_KIND_PLURAL,
   CAL_STORE_KIND_KEYS, calendarHiddenSet, calendarApplyHidden,
-  calendarArtIndex, calendarEventArt, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
+  calendarArtIndex, calendarEventArt, calendarEventProduct, CAL_ART_SKIP_TYPES, deriveSealedDisplayType,
   CALENDAR_KINDS, CALENDAR_KIND_KEYS, CALENDAR_KIND_LONG, SET_RELEASE_LABELS,
   calendarTimeline, calTimelineLane, calTimelineLabels, CAL_TL_MONTHS, CAL_TL_MIN_PX,
   CAL_TL_GROUP_MODES, CAL_TL_CIRCUIT_KINDS, CAL_TL_KIND_LANES, calMonthLabelShort,
@@ -809,8 +810,13 @@ ok("a bad date has no label", calShortDay("nope") === "");
   // ⚠ The plain Booster Pack IS the set's art, and it is the one product every
   // set has. A Case is a distributor carton - a photo of cardboard.
   ok("a set resolves to its booster pack, not its box or case",
-    idx.get("hyperia city") === "pack.jpg", idx.get("hyperia city"));
-  ok("a case is never chosen", [...idx.values()].every(v => v !== "case.jpg"));
+    idx.get("hyperia city").image_url === "pack.jpg", idx.get("hyperia city"));
+  ok("a case is never chosen", [...idx.values()].every(v => v.image_url !== "case.jpg"));
+  // ⚠ The index stores the sealed ROW, not its URL — that is what lets the
+  // detail modal build a TCGplayer link and ask amazonForSealed about the SAME
+  // product the photo came from. A second lookup would be a second answer.
+  ok("the index holds the row, so a buy link can be built from it",
+    !!idx.get("hyperia city").name && idx.get("hyperia city").name.includes("Booster Pack"));
   // ⚠ Everything above this line loses on RANK, not on the skip: a plain
   // Booster Pack is rank 0 and beats a case whatever the skip does. So none of
   // it can tell a live skip from a dead one — and the shipped skip WAS dead for
@@ -830,11 +836,11 @@ ok("a bad date has no label", calShortDay("nope") === "");
     && !CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType(
          {name: "X Booster Pack", product_type: "Booster Pack"})));
   ok("a product resolves to its own photo",
-    idx.get("rapunzel collector's gift set") === "gift.jpg");
+    idx.get("rapunzel collector's gift set").image_url === "gift.jpg");
   ok("a product with no image is absent rather than null",
     !idx.has("some product with no picture"));
   ok("an unmatched name is absent", !idx.has("nothing at all"));
-  ok("one set does not borrow another set's art", idx.get("hyperia city") !== "winter.jpg");
+  ok("one set does not borrow another set's art", idx.get("hyperia city").image_url !== "winter.jpg");
 
   const ev = (k, extra) => ({id: "x", kind: k, title: "Hyperia City", starts_on: "2026-10-16", ...extra});
   ok("a set event finds its art", calendarEventArt(ev("set"), idx) === "pack.jpg");
@@ -854,6 +860,17 @@ ok("a bad date has no label", calShortDay("nope") === "");
   ok("no index means no art", calendarEventArt(ev("set"), null) === null);
   ok("art tolerates nulls", calendarEventArt(null, idx) === null
     && calendarArtIndex(null, null).size === 0);
+  // The row accessor answers for exactly the kinds the art one does, so the
+  // photo and the buy links under it can never describe different products.
+  ok("the row accessor agrees with the art accessor about which kinds have one",
+    ["set","product","dlc","ccq","store"].every(k =>
+      !!calendarEventProduct(ev(k), idx) === (calendarEventArt(ev(k), idx) !== null)));
+  // ⚠ A curated image_url overrides the PICTURE, never the product: a row
+  // corrected to a hand-picked photo still links to the product it matched.
+  ok("a curated image does not erase the matched row",
+    !!calendarEventProduct(ev("set", {image_url: "mine.png"}), idx));
+  ok("the row accessor tolerates nulls",
+    calendarEventProduct(null, idx) === null && calendarEventProduct(ev("set"), null) === null);
 }
 ok("the kinds with no product behind them use drawn glyphs", (() => {
   const by = Object.fromEntries(CALENDAR_KINDS.map(k => [k.key, k.icon]));
@@ -1032,7 +1049,10 @@ ok("a DLC and a CCQ carry different official marks",
 // ⚠ The regression this guards: every set date resolved the same booster-pack
 // photo, which sat ON TOP of the glyph and made the three phases identical
 // again however different their glyphs were.
-const artIdx = new Map([["hyperia city", "https://cdn/pack.png"]]);
+// ⚠ The index holds the sealed ROW, not a bare URL — a fixture that stores a
+// string reads as "no photo" everywhere and every assertion below passes for
+// the wrong reason.
+const artIdx = new Map([["hyperia city", {name: "Hyperia City Booster Pack", image_url: "https://cdn/pack.png"}]]);
 ok("a set date resolves no automatic photo at icon size",
   calendarEventIcon({kind: "set", title: "Hyperia City", subtitle: "Prerelease",
                      set_name: "Hyperia City"}, artIdx).img === null);
@@ -1833,5 +1853,95 @@ ok("the graded tile isolates its version badge",
     /\.cal-add-check\{[^}]*padding-left:30px/.test(css2));
 }
 
+
+// ── the ≤700px month chip drops its LABEL ───────────────────────────────────
+// ⚠ Specificity, and it cost a whole grid row. The two-line clamp added with the
+// bigger icons (2026-09-15) carries 5 classes + an element; the ≤700px
+// `display:none` that is supposed to drop the label on a phone carries 2. So the
+// clamp won, and below 700px every chip label became a ZERO-WIDTH box still two
+// lines tall — invisible text costing 10px a chip. A day with three icons then
+// blew its cell past its siblings' and took the whole week's row with it
+// ("dates like 10/16 get broken w/3 icons on it"). Measured at 375px: chips 33px
+// and a 7px row spread before, 24px and a spread of 0 after.
+{
+  const css2 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the two-line clamp only applies where there is width to wrap in",
+    /@media \(min-width:701px\)\{[\s\S]{0,400}?\.cal-month:not\(\.cal-month--compact\) \.cal-chip span:not\(\.cal-ico\):not\(\.cal-chip-x\)\{/.test(css2));
+  ok("and the phone rule that hides the label is still there to win",
+    /@media \(max-width:700px\)\{[\s\S]*?\.cal-chip > span:not\(\.cal-ico\)\{display:none;\}/.test(css2));
+  // ⚠ Never the icon. `.cal-ico` is a <span> too, and a bare `.cal-chip span`
+  // rule hid it — featureless grey bars where the glyph is the only thing a
+  // 48px cell can still say.
+  ok("the hide names the icon's class so the glyph survives",
+    /\.cal-chip > span:not\(\.cal-ico\)\{display:none;\}/.test(css2));
+}
+
+// ── a release row says where to buy it ──────────────────────────────────────
+// "Out that day" was a plain text list: it answered what comes out and not what
+// it looks like or where to get it, which are the two things anyone reading a
+// release date is about to ask.
+{
+  const modal = grab("const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {",
+                     NL + "};");
+  const links = grab("const calProductLinks = (row, setName) => {", NL + "};");
+  // ⚠ isUnpricedSealed, not a bare pid check: a jigsaw, a pin and a
+  // retailer-exclusive bundle all carry a SYNTHETIC pid in a reserved band and
+  // have no TCGplayer page at all, so a link built from one is a dead affiliate
+  // link that looks exactly like a live one.
+  ok("the TCGplayer half is gated on the product being purchasable there",
+    /!isUnpricedSealed\(row\)/.test(links));
+  ok("and on it actually having a pid", /row\.tcgplayer_product_id/.test(links));
+  ok("Amazon goes through the one resolver", /amazonForSealed\(row, setName/.test(links));
+  // ⚠ `exact` decides the label: a curated ASIN says "Amazon", a search says
+  // "Find on Amazon", because a search cannot promise the page it lands on.
+  ok("a search link says so rather than promising the product",
+    /az\.exact \? "Amazon/.test(links) && /Find on Amazon/.test(links));
+  ok("every Amazon link is nofollow sponsored",
+    (links.match(/rel="noopener nofollow sponsored"/g) || []).length >= 2);
+  ok("the required Associate disclosure sits with the links, not only in the footer",
+    (modal.match(/As an Amazon Associate I earn from qualifying purchases\./g) || []).length >= 2);
+  // ⚠ ProductPhoto, never a bare <img>: TCGplayer shoots on a WHITE sweep, so
+  // the raw JPEG is a white slab in a dark modal. ProductPhoto cuts it to
+  // transparency and the modal's own surface shows through.
+  ok("the product event's hero photo goes through ProductPhoto",
+    /class="cal-modal-prodart"[\s\S]{0,700}?<\$\{ProductPhoto\}/.test(modal));
+  ok("and so does every row of the release list",
+    /class="cal-prod-art"><\$\{ProductPhoto\}/.test(modal));
+  ok("the release list carries a buy row per product", /\$\{calProductLinks\(pr,/.test(modal));
+  // A product drop is ONE product, so its links sit beside it rather than in a
+  // list of one.
+  ok("a product drop gets its own buy row",
+    /ev\.kind === "product" && calProductLinks\(calendarEventProduct\(ev, art\)/.test(modal));
+  // ⚠ Only real COLUMNS in the select. is_puzzle / is_collectible / is_exclusive
+  // are CLIENT-side flags the catalog transform stamps on, not fields of
+  // sealed_products — asking for one 42703s the whole select, which useSetProducts
+  // swallows into an empty list. Nothing errors; the modal just stops listing
+  // what comes out that day. (Shipped for about ten minutes; caught by probing.)
+  const setProducts = grab("function useSetProducts(setName, enabled){", NL + "}");
+  // The SELECT's own argument, not the function text — the comment above it
+  // names those flags precisely to say they are not columns.
+  const sel = (setProducts.match(/\.select\("([^"]*)"\)/) || [])[1] || "";
+  ok("useSetProducts asks only for columns that exist",
+    !!sel && !/is_puzzle|is_collectible|is_exclusive/.test(sel));
+}
+
+// ── the product photo's well carries the size ───────────────────────────────
+// ⚠ ProductPhoto's wrapper is position:absolute; inset:0, so a slot that used to
+// take its height from the <img> inside it collapses to nothing.
+{
+  const css3 = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
+  ok("the release row's photo well is sized and positioned",
+    /\.cal-prod-art\{position:relative;[^}]*width:34px;height:34px/.test(css3));
+  ok("the hero well is sized and positioned",
+    /\.cal-modal-prodart\{position:relative;[^}]*height:150px/.test(css3));
+  // ⚠ The row WRAPS and the name carries a basis. Without both, the two buy
+  // chips (a fixed 174px) took their width first and left the product NAME 51px
+  // on a phone — the one thing the row exists to say, clipped to nothing by
+  // controls that only matter once you have read it.
+  ok("the release row wraps so the name keeps its width",
+    /\.cal-products li\{[^}]*flex-wrap:wrap/.test(css3));
+  ok("and the name has a basis the chips cannot squeeze past",
+    /\.cal-prod-name\{flex:1 1 150px/.test(css3));
+}
 console.log(failed ? `\n${failed} FAILED` : "\nall calendar checks passed");
 process.exit(failed ? 1 : 0);

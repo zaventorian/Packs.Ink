@@ -224,7 +224,7 @@
      2 files / 57 KB after. Keep the families in alphabetical order (css2 requires it)
      and keep the ranges — narrowing one back to a list silently flattens bold again. -->
 <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400..700&family=Nunito+Sans:wght@300..800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="styles.css?v=441">
+<link rel="stylesheet" href="styles.css?v=442">
 <!-- Preload the six ink-shield icons so the home Following feed and other
      ink-chip surfaces don't paint a brief gap-then-pop on first visit.
      Each PNG is ~3-5 KB so the cost is negligible. -->
@@ -2626,20 +2626,28 @@ const calendarArtIndex = (sealedRows, names) => {
       if(CAL_ART_SKIP_TYPES.has(deriveSealedDisplayType(r))) continue;
       const at = CAL_ART_PREF.findIndex(re => re.test(pn));
       const rank = at < 0 ? 98 : at;
-      if(rank < bestRank){ best = r.image_url; bestRank = rank; }
+      if(rank < bestRank){ best = r; bestRank = rank; }
     }
     if(best) idx.set(n, best);
   }
   return idx;
+};
+// ⚠ The index stores the sealed ROW, not its image URL. The detail modal needs
+// the row to build a TCGplayer link off its pid and to ask amazonForSealed —
+// and one map with two accessors is the only way those two can never disagree
+// about WHICH product a calendar row is showing.
+const calendarEventProduct = (ev, artIndex) => {
+  if(!ev || !artIndex || (ev.kind !== "set" && ev.kind !== "product")) return null;
+  const key = String((ev.kind === "set" ? (ev.set_name || ev.title) : ev.title) || "").toLowerCase().trim();
+  return artIndex.get(key) || null;
 };
 // The curated override always wins: it is the only way to correct a wrong
 // automatic match, and a wrong picture is worse than no picture.
 const calendarEventArt = (ev, artIndex) => {
   if(!ev) return null;
   if(ev.image_url) return ev.image_url;
-  if(!artIndex || (ev.kind !== "set" && ev.kind !== "product")) return null;
-  const key = String((ev.kind === "set" ? (ev.set_name || ev.title) : ev.title) || "").toLowerCase().trim();
-  return artIndex.get(key) || null;
+  const row = calendarEventProduct(ev, artIndex);
+  return (row && row.image_url) || null;
 };
 
 // The filter chips, in render order. `store` is the personal category — it holds
@@ -40338,6 +40346,31 @@ const CalendarMiniMap = ({lat, lng, label, zoom}) => {
 // six products were already listed), so the id join would find nothing exactly
 // when this is most interesting.
 const CAL_PRODUCT_ORDER = ["Booster Box","Booster Pack","Trove","Starter Deck","Gift Set","Bundle","Quest"];
+// Where to buy one sealed product, for the calendar's release rows. TCGplayer
+// first (it is the site's own market and the one with a price behind it),
+// Amazon beside it.
+//
+// ⚠ isUnpricedSealed is the gate on the TCGplayer half, not a pid check: a
+// jigsaw, a pin and a retailer-exclusive bundle all carry a SYNTHETIC pid in a
+// reserved band and have no TCGplayer page at all, so a link built from one is
+// a dead affiliate link that looks exactly like a live one.
+//
+// ⚠ Amazon links are rel="noopener nofollow sponsored" and every surface that
+// renders one carries the required Associate disclosure near it -- the FTC wants
+// it by the link, not only in a footer.
+const calProductLinks = (row, setName) => {
+  if(!row) return null;
+  const tcg = !isUnpricedSealed(row) && row.tcgplayer_product_id
+    ? tcgUrl(row.tcgplayer_product_id) : null;
+  const az = amazonForSealed(row, setName || null);
+  if(!tcg && !(az && az.url)) return null;
+  return html`<span class="cal-buy">
+    ${tcg && html`<a class="cal-buy-link" href=${tcg} target="_blank"
+      rel="noopener nofollow sponsored">TCGplayer ↗</a>`}
+    ${az && az.url && html`<a class="cal-buy-link cal-buy-link--amzn" href=${az.url} target="_blank"
+      rel="noopener nofollow sponsored">${az.exact ? "Amazon ↗" : "Find on Amazon ↗"}</a>`}
+  </span>`;
+};
 function useSetProducts(setName, enabled){
   const [rows, setRows] = useState(null);
   useEffect(() => {
@@ -40346,6 +40379,11 @@ function useSetProducts(setName, enabled){
     (async () => {
       try {
         const {data} = await sbClient.from("sealed_products")
+          // ⚠ Only real COLUMNS. `is_puzzle` / `is_collectible` / `is_exclusive`
+          // are CLIENT-side flags the catalog transform stamps on, not fields of
+          // this table -- asking for one 42703s the whole select, which this
+          // function then swallows into an empty list. Nothing errors; the modal
+          // simply stops listing what comes out that day.
           .select("tcgplayer_product_id,name,product_type,image_url")
           .ilike("name", `%${setName}%`).limit(40);
         if(!cancelled) setRows(data || []);
@@ -40402,9 +40440,15 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
             drop shows its photo in the same slot; every other kind shows
             nothing, and the title carries it. */
         isSet ? html`<${SetLogo} set=${ev.set_name || ev.title} klass="cal-modal-art"/>`
-        : (ev.kind === "product" && calendarEventArt(ev, art)) ? html`<img class="cal-modal-art"
-            src=${calendarEventArt(ev, art)} alt="" aria-hidden="true" loading="lazy"
-            onError=${hideBrokenImg}/>` : null}
+        : (ev.kind === "product" && calendarEventArt(ev, art)) ? html`<div class="cal-modal-prodart">
+            ${/* ⚠ ProductPhoto, never a bare <img>. TCGplayer shoots sealed product
+                  on a WHITE sweep, so the raw JPEG is a white slab in the middle of
+                  a dark modal — and at this size it is a big one. ProductPhoto cuts
+                  the sweep to transparency, which leaves the modal's own surface
+                  showing through: the site's purple on the dark themes, the page
+                  colour on the light ones, without a frame being guessed anywhere. */""}
+            <${ProductPhoto} src=${calendarEventArt(ev, art)} glyph="gift" size=${40}/>
+          </div>` : null}
       ${/* A set row names its place in the run — "Set 14" — because that is the
             one thing the set's own name does not say, and it is what tells you
             whether a Challenge falls before or after it. */""}
@@ -40436,12 +40480,37 @@ const CalendarDetailModal = ({ev, subs, onClose, onFindEvents, art}) => {
       </dl>
       ${ev.notes && html`<p class="cal-modal-notes">${ev.notes}</p>`}
 
+      ${/* A product drop is ONE product, so its links belong beside it rather than
+            in a list of one. */""}
+      ${ev.kind === "product" && calProductLinks(calendarEventProduct(ev, art), null) && html`<div class="cal-prodbuy">
+        ${calProductLinks(calendarEventProduct(ev, art), null)}
+        <p class="cal-products-aff">As an Amazon Associate I earn from qualifying purchases.
+          TCGplayer links are affiliate links.</p>
+      </div>`}
+
+      ${/* Each product gets its PHOTO and where to buy it. It was a plain text
+            list, which answered "what comes out" and not "what does it look like
+            / where do I get it" -- the two things anyone reading a release date
+            is actually about to ask. */""}
       ${isSet && products && products.length > 0 && html`<div class="cal-products">
         <div class="cal-products-head">${uiIcon("box", 13)} Out that day</div>
-        <ul>${products.map(pr => html`<li key=${pr.tcgplayer_product_id}>
-          <span>${cleanSealedName ? cleanSealedName(pr.name) : pr.name}</span>
-          ${pr.product_type && html`<em>${pr.product_type}</em>`}
-        </li>`)}</ul>
+        <ul>${products.map(pr => {
+          const nm = cleanSealedName ? cleanSealedName(pr.name) : pr.name;
+          // ⚠ The type is dropped when the NAME already says it, which is most of
+          // them: "Hyperia City Booster Box · Booster Box" spends a third of the
+          // row repeating itself, and what it costs is characters off the name.
+          // It stays where it adds something -- "2-Player Starter Set" is filed
+          // under Starter Deck, which the name never says.
+          const type = pr.product_type && !String(nm).toLowerCase().includes(String(pr.product_type).toLowerCase())
+            ? pr.product_type : null;
+          return html`<li key=${pr.tcgplayer_product_id}>
+            <span class="cal-prod-art"><${ProductPhoto} src=${pr.image_url} glyph="box" size=${20}/></span>
+            <span class="cal-prod-name" title=${nm}>${nm}${type && html`<em>${type}</em>`}</span>
+            ${calProductLinks(pr, ev.set_name || ev.title)}
+          </li>`;
+        })}</ul>
+        <p class="cal-products-aff">As an Amazon Associate I earn from qualifying purchases.
+          TCGplayer links are affiliate links.</p>
       </div>`}
 
       <div class="cal-modal-actions">
@@ -42086,6 +42155,54 @@ const SC_KIND_LABEL = {sc: "Set Championship", prerelease: "Prerelease", other: 
 const SC_KIND_BADGE = {sc: "Set Champ", prerelease: "Prerelease", other: "Locals"};
 const SC_KIND_CLASS = {sc: "sc", prerelease: "pre", other: "other"};
 
+// ── Which KINDS the finder shows ────────────────────────────────────────────
+// It was one-of-N: All | Set Champs | Prereleases, with no way to see locals on
+// their own and no way to ask for two of the three. But the three are not
+// alternatives — "Set Championships and prereleases, but not league nights" is
+// a real question, and it was unaskable.
+//
+// ⚠ The labels come from CAL_STORE_KINDS, the SAME list the follow-a-store
+// boxes are built from. They are the same three things, so a second copy here
+// would be two lists that have to agree about what "other" is called.
+const SC_KINDS = CAL_STORE_KINDS;
+const SC_KIND_KEYS = CAL_STORE_KIND_KEYS;
+const SC_KIND_PLURAL = {sc: "Set Championships", prerelease: "Prereleases", other: "locals"};
+// ⚠ Legacy single values still have to parse. `?scmode=sc` links are in the
+// wild, App's openEventFinder("prerelease") passes one, and the stored
+// packsink:scMode is whatever a browser last left there. An unparseable value
+// means EVERYTHING rather than nothing — a filter nobody asked for, silently
+// hiding most of the results, is the worse failure.
+const SC_KIND_ALIAS = {all: null, sc: "sc", champ: "sc", champs: "sc", championships: "sc",
+  pre: "prerelease", pr: "prerelease", prerelease: "prerelease", prereleases: "prerelease",
+  other: "other", local: "other", locals: "other"};
+const scParseKinds = (raw) => {
+  const toks = String(raw || "").toLowerCase().split(/[,+\s]+/).filter(Boolean);
+  const want = new Set(toks.map(t => SC_KIND_ALIAS[t]).filter(Boolean));
+  const out = SC_KIND_KEYS.filter(k => want.has(k));
+  return out.length ? out : SC_KIND_KEYS.slice();
+};
+// RPH only ever classifies sc / prerelease / other, but an unknown kind must
+// ride with the catch-all rather than vanish — the same rule calStoreAllows
+// follows, and the same rule the feed itself follows.
+const scKindOf = (row) => SC_KIND_KEYS.includes(row && row.kind) ? row.kind : "other";
+const scKindsLabel = (ks) => ks.length === SC_KIND_KEYS.length ? "Lorcana Events"
+  : ks.map(k => SC_KIND_PLURAL[k]).join(" & ");
+
+// ── Which DATES ─────────────────────────────────────────────────────────────
+// One date became a list: "which of these three Saturdays" is the question a
+// person planning a month actually has, and one date at a time could not ask it.
+const scParseDates = (raw) => [...new Set(String(raw || "").split(/[,\s]+/)
+  .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d)))].sort();
+// ⚠ UTC in and UTC out. `new Date("2026-10-16")` is midnight UTC, so local
+// getters read Oct 15 anywhere west of Greenwich — a chip naming the day before
+// the one it filters on.
+const scDateChipLabel = (ymd) => {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(ymd || "");
+  if(!m) return ymd || "";
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return `${SC_DOW[d.getUTCDay()]} ${+m[2]}/${+m[3]}`;
+};
+
 // Captured at module load (before any App URL-cleanup effect): did this visit
 // arrive on an event deep link? Forces the box to render even when the user has
 // hidden the home panel — otherwise shared links dead-end.
@@ -42233,22 +42350,18 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // Pins are intentionally NOT in the URL — they're a personal per-device pref.
   const [scSeed] = useState(() => SC_DEEP_SEED || {});
   const pZip = scSeed.zip, pCtry = scSeed.ctry, pDist = scSeed.dist, pDate = scSeed.date, pMode = scSeed.mode;
-  // Which event type the box shows: "all" (EVERY Lorcana event RPH lists near
-  // you — locals, league nights, drafts, prereleases and Set Championships),
-  // "sc" (competitive Set Championships only), or "prerelease" (a set's
-  // launch-weekend sealed events only). All three read the SAME table now
-  // (lorcana_events); a mode is just a `kind` filter, so "all" can never
-  // disagree with the narrow tabs the way two separate tables could.
-  const [mode, setMode] = useState(() => {
-    try {
-      const raw = (pMode || localStorage.getItem("packsink:scMode") || "all").toLowerCase();
-      if(raw === "prerelease" || raw === "pre" || raw === "pr") return "prerelease";
-      if(raw === "sc" || raw === "champ" || raw === "championships") return "sc";
-      return "all";
-    } catch { return "all"; }
+  // Which event kinds the box shows — any subset of Set Championships,
+  // prereleases and locals (league nights, drafts, everything else RPH lists).
+  // All three come from the SAME table (lorcana_events), so the selection is a
+  // client-side filter and "all" can never disagree with a narrow selection the
+  // way two separate tables could.
+  const [kinds, setKinds] = useState(() => {
+    try { return scParseKinds(pMode || localStorage.getItem("packsink:scMode")); }
+    catch { return scParseKinds(pMode); }
   });
-  const isPre = mode === "prerelease", isAll = mode === "all";
-  const KIND_PLURAL = isAll ? "Lorcana Events" : isPre ? "Prereleases" : "Set Championships";
+  const isAll = kinds.length === SC_KIND_KEYS.length;
+  const isPre = kinds.length === 1 && kinds[0] === "prerelease";
+  const KIND_PLURAL = scKindsLabel(kinds);
   // Label for one series, from the `kind` the discovery script classified it as.
   const scKindLabel = (row) => SC_KIND_LABEL[row && row.kind] || "Event";
   const [zip, setZip] = useState(() => { try { return pZip || localStorage.getItem("packsink:scZip") || ""; } catch { return pZip || ""; } });
@@ -42281,7 +42394,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   const [copied, setCopied] = useState(false);
   const [pinned, setPinned] = useState(() => { try { const p = JSON.parse(localStorage.getItem("packsink:scPinned") || "[]"); return Array.isArray(p) ? p : []; } catch { return []; } });
   const [dateOn, setDateOn] = useState(() => { try { return pDate ? true : localStorage.getItem("packsink:scDateOn") === "1"; } catch { return !!pDate; } });
-  const [dateFrom, setDateFrom] = useState(() => { try { return pDate || localStorage.getItem("packsink:scDateFrom") || ""; } catch { return pDate || ""; } });
+  const [dates, setDates] = useState(() => { try { return scParseDates(pDate || localStorage.getItem("packsink:scDateFrom")); } catch { return scParseDates(pDate); } });
   // What the last search RESOLVED to, not a choice anyone made. It seeds the
   // next guess through packsink:scCountry (the strongest signal there is: the
   // country that actually worked for this person) and rides the share link so a
@@ -42306,7 +42419,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // control breaking under the click that just used it.
   const probedZip = useRef("");
   // "Has anything been searched yet" — set by runSearch itself, so a manual
-  // first search arms the mode-switch effect exactly as the mount auto-run does.
+  // first search counts exactly as the mount auto-run does.
   const didSearch = useRef(false);
   // ⚠ Two searches can be in flight at once — Search pressed twice, a radius
   // chip tapped mid-search, a "did you mean" button — and the loser must never
@@ -42317,10 +42430,10 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
   // initial value would erase the stored preference of everyone who had picked
   // one, on mount, before they had searched for anything.
   useEffect(() => { try { if(country) localStorage.setItem("packsink:scCountry", country); } catch {} }, [country]);
-  useEffect(() => { try { localStorage.setItem("packsink:scMode", mode); } catch {} }, [mode]);
+  useEffect(() => { try { localStorage.setItem("packsink:scMode", kinds.join(",")); } catch {} }, [kinds]);
   useEffect(() => { try { localStorage.setItem("packsink:scCollapsed", collapsed ? "1" : "0"); } catch {} }, [collapsed]);
   useEffect(() => { try { localStorage.setItem("packsink:scDateOn", dateOn ? "1" : "0"); } catch {} }, [dateOn]);
-  useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dateFrom); } catch {} }, [dateFrom]);
+  useEffect(() => { try { localStorage.setItem("packsink:scDateFrom", dates.join(",")); } catch {} }, [dates]);
   useEffect(() => { try { localStorage.setItem("packsink:scPinned", JSON.stringify(pinned)); } catch {} }, [pinned]);
   // Esc exits the full-screen view; lock body scroll while it's open.
   useEffect(() => {
@@ -42342,11 +42455,15 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     const {data, error} = await sbClient.rpc("get_nearby_lorcana_events", {
       p_lat: lat, p_lng: lng,
       p_radius_mi: Math.max(1, Math.min(500, parseInt(r, 10) || 50)),
-      p_kind: mode === "all" ? null : mode,
+      // ⚠ ALWAYS null. All three kinds live in ONE table, so a subset is a
+      // client-side filter over rows we already hold -- which is what lets the
+      // kind chips be a multi-select at all, and means toggling one re-renders
+      // instead of throwing the results away and re-querying.
+      p_kind: null,
     });
     if(error) throw error;
     return data || [];
-  }, [mode]);
+  }, []);
   // `forceCc` is only ever set by the "did you mean" row and by a ?scc= deep
   // link — a plain search infers the country instead of asking for it.
   const runSearch = useCallback(async (z, r, forceCc) => {
@@ -42376,7 +42493,7 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
         .catch(() => {});
     } catch(e){ if(live()){ setErr(String(e && e.message || e)); setResults(null); setCountryOpts([]); setAltPlaces([]); } }
     finally { if(live()) setLoading(false); }
-  }, [mode, fetchNear]);
+  }, [fetchNear]);
   // Re-run the same query against a country the first pass skipped.
   const useAltCountry = useCallback((cc) => runSearch(zip, radius, cc), [zip, radius, runSearch]);
   // A town name matched several real places. Swapping between them needs no
@@ -42434,32 +42551,39 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     if(!didSearch.current && scZipReady(zip)) runSearch(zip, radius, pCtry || undefined);
   }, []);
 
-  // Switching Set Championships <-> Prereleases re-queries the other table.
-  useEffect(() => {
-    if(!didSearch.current) return;        // nothing searched yet
-    setSel(null); setResults(null); setErr(null);
-    if(scZipReady(zip)) runSearch(zip, radius);
-  }, [mode]);
-
-  const pickMode = (m) => { if(m !== mode){ setSel(null); setResults(null); setErr(null); setMode(m); } };
+  // ⚠ There is no longer a re-query on a kind change, and that is the point:
+  // the fetch asks for every kind, so narrowing is free. It also means a
+  // selection can be changed WHILE reading the results without losing them.
+  const toggleKind = (k) => setKinds(cur => {
+    // Same invariant as every other chip group on the site: the last active one
+    // cannot be switched off. An empty selection renders an empty box whose only
+    // way back is the chip you just used to empty it.
+    if(cur.includes(k)) return cur.length === 1 ? cur : cur.filter(x => x !== k);
+    return SC_KIND_KEYS.filter(x => cur.includes(x) || x === k);
+  });
   const pickRadius = (r) => { setRadius(r); setCustomOpen(false); if(scZipReady(zip)) searchAtRadius(r); };
 
   // Decorate each series with its per-occurrence local days, then apply the
   // optional date filter. A series survives the filter if ANY of its dates lands
   // on the chosen day, and the tile then leads with THAT date rather than the
   // series' natural next one.
-  const dateActive = dateOn && dateFrom;
+  const dateActive = dateOn && dates.length > 0;
+  const dateKey = dates.join(",");
+  const kindKey = kinds.join(",");
   const visible = useMemo(() => {
     if(!results) return results;
+    const wantKinds = kindKey.split(",");
+    const wantDays = dateKey ? new Set(dateKey.split(",")) : null;
     const out = [];
     for(const s of results){
+      if(!wantKinds.includes(scKindOf(s))) continue;
       const occ = (s.occurrences || []).map(o => ({...o, _day: scLocalDay(o.start_datetime, s.timezone)}));
-      const shown = dateActive ? occ.filter(o => o._day === dateFrom) : occ;
+      const shown = (dateActive && wantDays) ? occ.filter(o => wantDays.has(o._day)) : occ;
       if(!shown.length) continue;
       out.push({...s, _occ: occ, _shown: shown, _next: shown[0], _mi: s.distance_mi});
     }
     return out;
-  }, [results, dateActive, dateFrom]);
+  }, [results, dateActive, dateKey, kindKey]);
 
   const isPinned = (k) => pinned.includes(k);
   const togglePin = (k) => setPinned(p => p.includes(k) ? p.filter(x => x !== k) : [...p, k]);
@@ -42478,8 +42602,10 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
     if(zip) u.searchParams.set("sczip", zip);
     if(country) u.searchParams.set("scc", country);
     u.searchParams.set("scdist", String(radius));
-    if(mode !== "all") u.searchParams.set("scmode", mode);
-    if(dateActive) u.searchParams.set("scdate", dateFrom);
+    // Both are csv now, and both omit the default: a bare /?sczip= still means
+    // "everything, no date filter", so an ordinary link stays short.
+    if(!isAll) u.searchParams.set("scmode", kinds.join(","));
+    if(dateActive) u.searchParams.set("scdate", dates.join(","));
     return u.toString();
   };
   const copyLink = async () => {
@@ -42524,13 +42650,24 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
       </div>
     </div>
     ${(!collapsed || expanded) && html`<div class="sc-box-body">
-      <div class="sc-mode-toggle" role="group" aria-label="Event type">
-        <button type="button" class=${"sc-mode-btn"+(mode==="all"?" active":"")}
-          aria-pressed=${mode==="all"} onClick=${()=>pickMode("all")}>All</button>
-        <button type="button" class=${"sc-mode-btn"+(mode==="sc"?" active":"")}
-          aria-pressed=${mode==="sc"} onClick=${()=>pickMode("sc")}>Set Champs</button>
-        <button type="button" class=${"sc-mode-btn"+(mode==="prerelease"?" active":"")}
-          aria-pressed=${mode==="prerelease"} onClick=${()=>pickMode("prerelease")}>Prereleases</button>
+      ${/* ⚠ "All" is a SHORTCUT, not a fourth kind — it lights up when all three
+            are on and its click turns them all on. Modelling it as a member of
+            the set is what makes "all, plus Set Champs" expressible, which is
+            nonsense; and a person who has just unticked Locals should see two
+            chips lit, not a mystery fourth one go dark. */""}
+      <div class="sc-mode-toggle" role="group" aria-label="Event types">
+        <button type="button" class=${"sc-mode-btn sc-mode-all"+(isAll?" active":"")}
+          aria-pressed=${isAll} title="Show every kind of Lorcana event"
+          onClick=${()=>setKinds(SC_KIND_KEYS.slice())}>All</button>
+        ${SC_KINDS.map(k => {
+          const on = kinds.includes(k.key);
+          const last = on && kinds.length === 1;
+          return html`<button key=${k.key} type="button"
+            class=${"sc-mode-btn sc-mode-kind"+(on?" active":"")+(last?" last":"")}
+            aria-pressed=${on} title=${last ? "Keep at least one — press All to show everything" : k.long}
+            onClick=${()=>{ if(!last) toggleKind(k.key); }}>
+            ${uiIcon(on ? "checkboxOn" : "checkbox", 12)} ${k.label}</button>`;
+        })}
       </div>
       <form class="sc-search-row" onSubmit=${e=>{ e.preventDefault(); runSearch(zip, radius); }}>
         ${countryOpts.length > 1 && html`<select class="sc-origin-country" value=${country}
@@ -42572,20 +42709,40 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
           Filter by date
         </label>
         ${dateOn && html`<span class="sc-date-inputs">
-          <input type="date" class="sc-date-input" value=${dateFrom} min=${todayStr}
-            aria-label="On date" onInput=${e=>setDateFrom(e.target.value)}/>
-          ${dateFrom && html`<button type="button" class="sc-date-clear"
-            title="Clear date" onClick=${()=>setDateFrom("")}>×</button>`}
+          ${/* ⚠ The picker ADDS rather than replaces, and its own value stays
+                empty: a controlled date input holding the last pick reads as
+                "the" date, which is the single-date model this replaced. The
+                chips below are the selection. */""}
+          <input type="date" class="sc-date-input" value=""
+            aria-label="Add a date" title="Add a date to the filter"
+            onInput=${e=>{ const v = e.target.value;
+              if(/^\d{4}-\d{2}-\d{2}$/.test(v)) setDates(d => d.includes(v) ? d : [...d, v].sort());
+              e.target.value = ""; }}/>
+          ${dates.map(d => html`<button key=${d} type="button"
+            class=${"sc-date-chip"+(d < todayStr ? " past" : "")}
+            title=${d < todayStr ? `${d} — in the past; remove` : `${d} — remove`}
+            onClick=${()=>setDates(cur => cur.filter(x => x !== d))}>
+            ${scDateChipLabel(d)} <span aria-hidden="true">×</span></button>`)}
+          ${dates.length > 1 && html`<button type="button" class="sc-date-clear"
+            title="Clear every date" onClick=${()=>setDates([])}>Clear</button>`}
         </span>`}
       </div>
+      ${/* ⚠ A past date is pickable but cannot match: lorcana_events is an
+            UPCOMING feed and prunes what has already happened, so the honest
+            thing is to allow the pick and say why it came back empty rather
+            than to clamp the picker and leave a person fighting it. */""}
+      ${dateOn && dates.some(d => d < todayStr) && html`<div class="sc-msg muted sc-date-past">
+        ${uiIcon("warn", 12)} This finds UPCOMING events, so a date before today will always come back empty.</div>`}
       ${err && html`<div class="sc-msg sc-msg-err">${err}</div>`}
       ${loading && html`<div class="sc-msg muted">Finding events…</div>`}
       ${!loading && results && results.length === 0 && html`<div class="sc-msg muted">
         No ${KIND_PLURAL} within ${radius} mi${origin?` of ${origin.city}, ${origin.state}`:""}. Try a wider radius.</div>`}
       ${!loading && results && results.length > 0 && visible.length === 0 && html`<div class="sc-msg muted">
-        No events on that date. Pick another day or turn the filter off.</div>`}
+        ${dateActive
+          ? `No ${isAll ? "events" : KIND_PLURAL} on ${dates.length === 1 ? scDateChipLabel(dates[0]) : `those ${dates.length} dates`}. Pick another day, or turn the date filter off.`
+          : `No ${KIND_PLURAL} in these results. Turn another kind back on above.`}</div>`}
       ${!loading && visibleSorted && visibleSorted.length > 0 && html`<div class="sc-results">
-        ${origin && html`<div class="sc-results-head">${visibleSorted.length}${dateActive?" on "+dateFrom:""} near ${origin.city}, ${origin.state}</div>`}
+        ${origin && html`<div class="sc-results-head">${visibleSorted.length}${dateActive?(dates.length===1?" on "+scDateChipLabel(dates[0]):` on ${dates.length} dates`):""} near ${origin.city}, ${origin.state}</div>`}
         <div class="sc-list">
           ${visibleSorted.map(e => {
             const next = e._next;
@@ -42616,7 +42773,11 @@ const UpcomingSCsBox = ({user, overlay, embed, subs, onClose}) => {
                     : `${e.occurrence_count} dates`}
                 </span>`}
                 <span class="sc-tile-loc">
-                  ${isAll && html`<span class=${"sc-tile-kind sc-tile-kind--"+(SC_KIND_CLASS[e.kind]||"other")}>${SC_KIND_BADGE[e.kind]||"Event"}</span>`}
+                  ${/* ⚠ Gated on "is this list MIXED", not on isAll. It used to be
+                        isAll, which was the same question while the alternative was
+                        a single kind — with a 2-of-3 selection the list is mixed and
+                        this badge is the only thing telling the two apart. */""}
+                  ${kinds.length > 1 && html`<span class=${"sc-tile-kind sc-tile-kind--"+(SC_KIND_CLASS[e.kind]||"other")}>${SC_KIND_BADGE[e.kind]||"Event"}</span>`}
                   ${e.city}, ${e.state}
                 </span>
               </span>
