@@ -41,6 +41,8 @@ CARDS = [
     ("p1_1",    "Mickey Mouse", "Brave Little Tailor", "1",   "Promo", "Promo Set 1"),
     ("d23_1",   "Mickey Mouse", "Brave Little Tailor", "1",   "Promo", "D23 Collection"),
     ("tfc115",  "Mickey Mouse", "Brave Little Tailor", "115", "Rare",  "The First Chapter"),
+    ("p1_5",    "Maleficent", "Monstrous Dragon", "5", "Promo", "Promo Set 1"),
+    ("p3_5",    "Maleficent", "Monstrous Dragon", "5", "Promo", "Promo Set 3"),
     ("chal43",  "Rapunzel", "Gifted with Healing", "43", "Promo", "Challenge Promo"),
     ("tfc18",   "Rapunzel", "Gifted with Healing", "18", "Rare",  "The First Chapter"),
     ("chal41",  "Let It Go", None, "41", "Promo", "Challenge Promo"),
@@ -84,8 +86,22 @@ CASES = [
     # ...and the over-tightening trap: ordinary raw condition language.
     ("Disney Lorcana D23 Expo 2022 Mickey Mouse Brave Little Tailor 1/P1 Near Mint",
      None, "'Near Mint' is raw condition language, NOT a grade"),
-    ("Disney Lorcana Mickey Mouse Brave Little Tailor 1/P1 NM ungraded raw card",
+    ("Disney Lorcana 2022 Mickey Mouse Brave Little Tailor 1/P1 NM ungraded raw card",
      None, "'ungraded'/'raw card' is this pipeline's TARGET, not an exclusion"),
+
+    # ---- gate 4: a twinned card must prove its era ----
+    # D23 Collection #1 (2024, TCGplayer $209) and Promo Set 1 #1 (2022, ~$1,142)
+    # share a name AND a collector number AND the token "D23". set_hint maps D23
+    # to Promo Set 1 unconditionally, so without this the 2024 card's sales land
+    # on the 2022 one -- measured, and it put $202.95 next to a $1,900 sale.
+    ("Disney Lorcana Mickey Mouse Brave Little Tailor D23 Expo Promo Foil 01/D23 EN",
+     "twin", "no year: cannot rule out the 2024 D23 Collection card"),
+    ("Disney Lorcana Mickey Mouse - Brave Little Tailor D23 Expo 2022 Promo 01/D23",
+     None, "same title WITH the year is decisive — the gate must not eat these"),
+    ("Disney Lorcana Maleficent Monstrous Dragon 5/P3 Cruise Line Promo",
+     "off-watchlist", "P3 #5 is the twin and is not on the watchlist"),
+    ("Disney Lorcana Maleficent Monstrous Dragon 5/P1 D23 Expo Promo",
+     None, "D23 separates P1 #5 from the Cruise Line P3 #5"),
 
     # ---- pins and merch wear the card's name ----
     ("Disney D23 Expo 2022 Lorcana Mickey Mouse Brave Little Tailor 1/P1 Promo Pin",
@@ -171,6 +187,16 @@ def main():
                       ("Elsa Snow Queen 3/P1 Pop 90", True)]:
         if rm.is_graded_listing(t) != should:
             fails.append(f"  is_graded_listing={not should} (want {should}) for: {t}")
+
+    # A TWIN_REQUIRE entry that names a card not on the watchlist is dead — it
+    # would silently protect nothing.
+    from raw_watchlist import TWIN_REQUIRE
+    wl_keys = {(st, cn) for st, cn, _n, _v, _q, _p in WATCHLIST}
+    for key in TWIN_REQUIRE:
+        if key not in wl_keys:
+            fails.append(f"  TWIN_REQUIRE has {key}, which is not a watchlist card")
+    if not any(e["require"] is not None for e in wl.values()):
+        fails.append("  build_watchlist_index compiled no TWIN_REQUIRE patterns — gate 4 is inert")
 
     # Every watchlist card must be reachable by some query, or it is on a list
     # that nothing ever searches for.

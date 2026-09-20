@@ -69,7 +69,7 @@ import re
 
 import terapeak_clean as tc
 import terapeak_match as tm
-from raw_watchlist import WATCHLIST
+from raw_watchlist import WATCHLIST, TWIN_REQUIRE
 
 # Every reason a scraped row is kept but not counted. Stored in
 # raw_sales.exclude_reason so a class can be re-evaluated on its own later --
@@ -79,6 +79,7 @@ EXCLUDE_REASONS = (
     "graded",        # a slab; already in graded_sales (gate 1)
     "ambiguous",     # no collector# and no set hint; identity undecidable (gate 2)
     "off-watchlist", # attributed to a card TCGplayer already prices (gate 3)
+    "twin",          # a same-name+same-number twin the title cannot rule out
     "nomatch",       # the matcher declined
     "cn-conflict",   # title's explicit collector# disagrees with the matched card
     "lot",           # multi-card listing
@@ -231,9 +232,13 @@ def build_watchlist_index(by_cn, inv):
     verify()` already proves the pair resolves to exactly one catalog card."""
     idx = {}
     for st, cn, name, ver, query, printing_tracked in WATCHLIST:
+        req = TWIN_REQUIRE.get((st, cn))
         idx[(st, tm.norm_cn(cn))] = {
             "set": st, "cn": cn, "name": name, "version": ver,
             "query": query, "printing_tracked": printing_tracked,
+            # Compiled once per build rather than per row -- the loader calls
+            # raw_verdict tens of thousands of times.
+            "require": re.compile(req, re.I) if req else None,
         }
     return idx
 
@@ -324,7 +329,13 @@ def raw_verdict(title, by_cn, inv, wl_idx, *, skip_title_reasons=False):
         return None, conf, cn_conflict, ("cn-conflict" if cn_conflict else "nomatch")
 
     # Gate 3 -- TCGplayer is the authority for any card it actually prices.
-    if (card["_set"], card["_cn"]) not in wl_idx:
+    entry = wl_idx.get((card["_set"], card["_cn"]))
+    if entry is None:
         return card, conf, cn_conflict, "off-watchlist"
+
+    # Gate 4 -- a twinned card must prove its era. See TWIN_REQUIRE in
+    # raw_watchlist.py for the $202.95-vs-$1,900 measurement behind this.
+    if entry["require"] is not None and not entry["require"].search(t):
+        return card, conf, cn_conflict, "twin"
 
     return card, conf, cn_conflict, None
