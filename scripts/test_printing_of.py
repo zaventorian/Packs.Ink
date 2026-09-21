@@ -21,6 +21,13 @@ import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# ⚠ terapeak_match reads SUPABASE_URL at MODULE scope, so the import below
+# fails outright without it -- which is what took this guard red the first
+# time CI actually ran it. Stubs, never real credentials: every guard here
+# is offline by construction, and one that needs a key goes red for reasons
+# nobody can fix from a PR.
+os.environ.setdefault("SUPABASE_URL", "https://example.invalid")
+os.environ.setdefault("SUPABASE_SERVICE_KEY", "test-key")
 from terapeak_load import printing_of  # noqa: E402
 
 # (title, expected, why) — every "REAL" title is verbatim from graded_sales.

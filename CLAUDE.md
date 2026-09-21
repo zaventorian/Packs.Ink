@@ -316,11 +316,61 @@ shipped index: bit-reversing the query hash took correct matches from 30-47 down
 3-14, and fixed a real misread on the spot (Develop Your Brain, which had been
 reading as Prince John).
 
-**This changes the camera scanner's ranking too** — `searchCrop` re-ranks its top-25
-by `lambda * (ham/64)`, which was previously a near-constant offset plus noise. It
-should only help, but the scanner's 98.2% precision was measured WITH the broken
-hash, so that number is now unverified in either direction. Re-run the round-11
-photo-verify method if it matters.
+**The fix is CONFIRMED, and it does NOT move the camera scanner — measured 2026-09-20.**
+Replayed the shipped `dhash64` in Chromium against the shipped `dhash.bin` over 80 cards:
+
+| query image | dHash hamming to the truth card | colour top-1 |
+|---|---|---|
+| clean Lorcast art (`data/img/*.avif`) | median **9.5**, 79/80 ≤ 16 (reversed packing: **38**) | **70/80** |
+| the stored camera crop of the same card | median **33** — no signal | **0/40** |
+
+So the bit order is right (9.5 vs 38 settles it), and the 98.2% figure is **not** in
+doubt from this change after all — the earlier worry here is retired.
+
+**⚠ But the whole VISUAL path is inert on camera photos.** Colour goes 87.5% → 0% top-1
+and dHash lands *further* from the truth card than two random reference cards are from
+each other (median 33 vs a 21 random-pair baseline). A camera scan's identity is carried
+**entirely by OCR**; `searchCrop`'s `lambda * (ham/64)` re-rank is operating on noise
+there, and always was. Not a framing bug — insetting the crop 2–16% to drop the
+background margin was tried and changes nothing (top-1 stays 0–2/80 at every inset).
+The same machinery is exactly right for the DECK IMAGE importer, whose poster cells are
+the clean renders the index was built from — which is where the 9/8 fix pays off and why
+that importer measures 83/83.
+
+**Ablated it to be sure, same day**: replaying the 400-read baseline through `identify()`
+with `colourRanked: []` instead of the recorded ranking scores **card_id 217/265 (vs 213)
+and name+version 316/400 (vs 319)** — colour is load-bearing on 3 rows and actively hurts
+on 4. So it is net NOTHING on camera reads, not a win to rip out and not a loss to keep;
+the opportunity there is the per-frame CPU, not accuracy. (Split by `identify()` source it
+is more interesting than the total: colour HELPS the `fusion` path 73→70 and HURTS the
+`name` path 228→232, so the leverage is in the fusion-vs-name routing, not in the signal.)
+Reproduce with `scripts/scanner/replay_common.mjs` — run `scoreRows` twice, once passing
+each row's `colour` and once passing `[]`.
+
+### The matcher has a regression guard — `node scripts/test_scanner_matcher.mjs` (2026-09-20)
+
+Replays **400 real recorded OCR reads** (`scripts/scanner/replay_baseline.json`, frozen out
+of `scan_samples`) through the REAL `scanner.js` `identify()`. Offline — no network, no
+photos, ~30s. Nothing guarded the matcher before this; every scanner edit was unverified.
+
+- **It pins the per-row PASS SET, not just the totals.** A change that fixes three cards and
+  breaks three others leaves every count identical, and that swap is exactly what is worth
+  catching. The test names each row that went from right to wrong, with its OCR read.
+- **It pins the DENOMINATORS too** — a row that stops producing any answer would otherwise
+  shrink the total and make the accuracy *ratio* look better.
+- Newly-correct rows are REPORTED, never failed; they are the reason to re-freeze.
+- **⚠ Re-freezing (`node scripts/scanner/freeze_replay_baseline.mjs`) re-baselines whatever
+  the matcher does TODAY**, so running it to silence a red test blesses the regression. Read
+  the named rows first. `python scripts/scanner/pull_replay_corpus.py` (needs `.env`) refreshes
+  the rows themselves from the table.
+- `replay_lines.mjs` stays the interactive A/B tool (diffs two builds, prints every changed
+  verdict); both share `scripts/scanner/replay_common.mjs` so they can't disagree about what
+  "correct" means.
+- Measured the day it landed, working tree vs v16b (`7fe3540`, the build the 98.2% came from):
+  **card_id-exact 189 → 213 of 265, name+version 297 → 319 of 400, 38 verdicts changed, 0
+  regressions.** So v17–v20 only moved forward. The baseline is pinned at those numbers.
+  ⚠ That corpus is review-weighted (rows a tester had to look at), so **80% here is not
+  comparable to the 98.2% precision figure** — different denominators, don't quote them together.
 
 ## Lore Tracker (Analytics » Lore Tracker)
 
@@ -3855,6 +3905,26 @@ BEFORE the digest for the same reason `catalog-watch.yml` tests its ack layer fi
 drifted constant or a blown embed limit fails by posting something wrong, not by failing.
 
 
+## The guards RUN now — `.github/workflows/guards.yml` (2026-09-21)
+
+The repo carries **52 guard tests** (35 `scripts/test_*.mjs`, 17 `scripts/test_*.py` +
+`scripts/elo/test_*.py`) and until this workflow **nothing executed a single one of them**
+— every one was "run it when you remember", which for a file this size means a silent
+regression ships between the day a guard is written and the day someone thinks to run it.
+It runs all 52 on every push and PR.
+
+- **All 52 were green when it landed**, so it starts from a true baseline rather than
+  normalising a red build — which is the failure this repo already names elsewhere ("a red
+  job everyone learns to ignore is worse than a script you run when you touch the catalog").
+- **⚠ Every guard is offline BY CONSTRUCTION, and that is the entry requirement.** No
+  network, no secrets. The nine Python guards that name `SUPABASE_*` set them via
+  `os.environ.setdefault()` with stub values. A guard needing a real key is one that goes
+  red for reasons nobody can fix from a PR, so don't add one.
+- **It reports EVERY failure, not the first.** Both steps loop, print the failing guard's
+  tail, emit a `::error` annotation, and exit non-zero at the end — stopping early means a
+  second broken guard hides behind the first for another round.
+- The Python step is `if: always()`, so a node failure doesn't hide the Python results.
+
 ## Ops
 
 ### ETL reliability (post 2026-05-24 rework)
@@ -4878,8 +4948,17 @@ the plain name says what the page is to somebody who has never seen it.
 product drops not tied to a set, Disney Lorcana Challenge weekends, Challenge
 Championship Qualifiers, plus every event at the stores you follow. List view and
 month grid, timeline, five filter chips, `.ics` + Google Calendar export.
-Guarded by `node scripts/test_calendar.mjs` (355 checks).
+Guarded by `node scripts/test_calendar.mjs` (507 checks).
 
+- **⚠ The page OPENS ON THE MONTH GRID** (2026-09-21, Zaven), as the home panel
+  has since 2026-09-20. Same flip, same trap: `mode` is persisted on every mount,
+  so a plain default change reaches NOBODY who has ever opened `/calendar` — the
+  home LAYOUT defaults' lesson. `calReadViewPref` is the one-shot stamp
+  (`packsink:cal:viewMonth`), and it is **STAMPED rather than coerced** so a later
+  deliberate pick of List sticks. **⚠ A `?cv=` link is checked BEFORE the stamp is
+  spent**, or sending somebody a list link would permanently cost them the new
+  default. Pinned in `test_calendar.mjs` beside the panel's copy — every way this
+  fails is silent.
 - **Two sources that NEVER mix.** `calendar_events` (migration 139) is curated by
   hand; `lorcana_events` is the live RPH feed and contributes **only** what you
   followed. There are ~17k upcoming events — a month grid carrying every Tuesday
@@ -5645,6 +5724,31 @@ saved events' — the lack of consistancy in cases. make it more visually asteti
   a STRUCTURAL label is uppercase with tracking** (it names a part of the chart,
   not a thing you press — a lane, a column head, a day-of-week). Initialisms keep
   their capitals on both sides (DLCs, CCQs, SCs, .ics).
+  - **⚠ SUPERSEDED FOR THIS PAGE 2026-09-21** (Zaven: *"make it all caps and match
+    the font — same with all text on this page actually, where it makes sense"*).
+    The sentence-case half only ever held in the SOURCE: the kind chips, the
+    Filters button and the region toggle were already set in **Cinzel**, whose
+    lowercase glyphs are drawn as small capitals, so they RENDERED as caps while
+    the mode buttons, the near chip, the header actions, Today, the day-of-week
+    row and the drawer's chips sat beside them in Nunito sentence case. One row,
+    three different-looking widgets. Every control and structural label on
+    `/calendar` now shares that face (one rule, declared under `.cal-near-chip` in
+    styles.css), which is why **"SCs near me" reads SCS NEAR ME with no
+    `text-transform`** — the stutter the lane-label note below worries about is a
+    `text-transform:uppercase` problem, and small caps do not have it.
+  - **⚠ CONTENT never joins in**, and that half of the old rule stands: event
+    titles, a followed shop's name, the lede, the search box and the prose links
+    inside sentences all stay in the body face. A shop's name is a proper noun set
+    as it is written — the same rule the timeline's lane names follow.
+  - **⚠ A NUMBER never joins in either.** A Cinzel numeral beside a Cinzel word
+    reads as part of the word rather than as a tally, so every count takes the body
+    face back — and that rule has to be declared AFTER the one it is taking it
+    from. `.cal-spans` ("6 mo / 12 mo / 24 mo") is two thirds numeral and is left
+    out of the Cinzel set entirely.
+  - Cinzel's small caps sit wider than Nunito at the same size, so the tightest
+    controls give ~1px back. Measured after: no horizontal overflow at 360 / 375 /
+    desktop, and "Follow a store" wraps to its own line at 375 rather than pushing
+    the row off the edge.
 - **"My stores + saved events" is now "My calendar"**, and it moved from a line of
   its own into the END of the filter row. It named two of the four things in the
   drawer (a pinned series and a hidden event are in there too), it was the longest
@@ -5657,6 +5761,14 @@ saved events' — the lack of consistancy in cases. make it more visually asteti
   uppercase, and "SCS NEAR ME" is an initialism the rule turns into a stutter. The
   chip that switches the lane on still says "SCs near me", and the exported
   picture's caption names the radius.
+- **"Follow a store" sits beside the "SCs near me" chip** (2026-09-21, Zaven). The
+  two are the same question answered opposite ways round — a radius applied once
+  against a shop added for good — so as a PAIR they explain each other. It opens
+  the same finder `onFindEvents()` the drawer's "Find & follow more stores" opens,
+  and the drawer keeps its copy: that is where you go to MANAGE the list, not to
+  add to it. **This does not reopen the name-alike problem the header note above
+  describes** — that was two controls both called some variant of "near me"; these
+  two say different things.
 - **The home panel's title is two lines in a 240px rail, on purpose.** "LORCANA
   CALENDAR" does not fit one line beside four tool buttons, and both alternatives
   are worse: wrapping the TOOLS costs more height than the second line, and

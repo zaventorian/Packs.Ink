@@ -1,0 +1,76 @@
+name: Guards
+
+# The repo carries ~52 guard tests and, until this workflow, NOTHING ran any of
+# them - every one was "run it when you remember". They are the things standing
+# between a silent regression and production: the matcher replay, the deck-poster
+# grid maths, the CSP header pins, the scope rules on scouting, the market index
+# vs its migration, and so on.
+#
+# Every guard here is offline by construction - no network, no secrets. The nine
+# Python ones that name SUPABASE_* do so via os.environ.setdefault() with stub
+# values, so CI needs no credentials. Keep it that way: a guard that needs a key
+# is a guard that goes red for reasons nobody can fix from a PR.
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: guards-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  guards:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: scripts/requirements.txt
+
+      # the guards import modules that import requests; nothing here calls out
+      - run: pip install -r scripts/requirements.txt
+
+      # Run EVERY guard and report EVERY failure - stopping at the first one
+      # means a second broken guard hides behind the first for another round.
+      - name: node guards
+        run: |
+          fails=0
+          for f in scripts/test_*.mjs; do
+            if node "$f" > /tmp/out.txt 2>&1; then
+              echo "PASS  $f"
+            else
+              fails=$((fails+1))
+              echo "::error file=$f::guard failed: $f"
+              echo "----- $f -----"; tail -40 /tmp/out.txt; echo "---------------"
+            fi
+          done
+          echo "node guards failed: $fails"
+          exit $((fails > 0))
+
+      - name: python guards
+        if: always()
+        run: |
+          fails=0
+          for f in scripts/test_*.py scripts/elo/test_*.py; do
+            [ -f "$f" ] || continue
+            if python "$f" > /tmp/out.txt 2>&1; then
+              echo "PASS  $f"
+            else
+              fails=$((fails+1))
+              echo "::error file=$f::guard failed: $f"
+              echo "----- $f -----"; tail -40 /tmp/out.txt; echo "---------------"
+            fi
+          done
+          echo "python guards failed: $fails"
+          exit $((fails > 0))
