@@ -316,11 +316,51 @@ shipped index: bit-reversing the query hash took correct matches from 30-47 down
 3-14, and fixed a real misread on the spot (Develop Your Brain, which had been
 reading as Prince John).
 
-**This changes the camera scanner's ranking too** — `searchCrop` re-ranks its top-25
-by `lambda * (ham/64)`, which was previously a near-constant offset plus noise. It
-should only help, but the scanner's 98.2% precision was measured WITH the broken
-hash, so that number is now unverified in either direction. Re-run the round-11
-photo-verify method if it matters.
+**The fix is CONFIRMED, and it does NOT move the camera scanner — measured 2026-09-20.**
+Replayed the shipped `dhash64` in Chromium against the shipped `dhash.bin` over 80 cards:
+
+| query image | dHash hamming to the truth card | colour top-1 |
+|---|---|---|
+| clean Lorcast art (`data/img/*.avif`) | median **9.5**, 79/80 ≤ 16 (reversed packing: **38**) | **70/80** |
+| the stored camera crop of the same card | median **33** — no signal | **0/40** |
+
+So the bit order is right (9.5 vs 38 settles it), and the 98.2% figure is **not** in
+doubt from this change after all — the earlier worry here is retired.
+
+**⚠ But the whole VISUAL path is inert on camera photos.** Colour goes 87.5% → 0% top-1
+and dHash lands *further* from the truth card than two random reference cards are from
+each other (median 33 vs a 21 random-pair baseline). A camera scan's identity is carried
+**entirely by OCR**; `searchCrop`'s `lambda * (ham/64)` re-rank is operating on noise
+there, and always was. Not a framing bug — insetting the crop 2–16% to drop the
+background margin was tried and changes nothing (top-1 stays 0–2/80 at every inset).
+The same machinery is exactly right for the DECK IMAGE importer, whose poster cells are
+the clean renders the index was built from — which is where the 9/8 fix pays off and why
+that importer measures 83/83.
+
+### The matcher has a regression guard — `node scripts/test_scanner_matcher.mjs` (2026-09-20)
+
+Replays **400 real recorded OCR reads** (`scripts/scanner/replay_baseline.json`, frozen out
+of `scan_samples`) through the REAL `scanner.js` `identify()`. Offline — no network, no
+photos, ~30s. Nothing guarded the matcher before this; every scanner edit was unverified.
+
+- **It pins the per-row PASS SET, not just the totals.** A change that fixes three cards and
+  breaks three others leaves every count identical, and that swap is exactly what is worth
+  catching. The test names each row that went from right to wrong, with its OCR read.
+- **It pins the DENOMINATORS too** — a row that stops producing any answer would otherwise
+  shrink the total and make the accuracy *ratio* look better.
+- Newly-correct rows are REPORTED, never failed; they are the reason to re-freeze.
+- **⚠ Re-freezing (`node scripts/scanner/freeze_replay_baseline.mjs`) re-baselines whatever
+  the matcher does TODAY**, so running it to silence a red test blesses the regression. Read
+  the named rows first. `python scripts/scanner/pull_replay_corpus.py` (needs `.env`) refreshes
+  the rows themselves from the table.
+- `replay_lines.mjs` stays the interactive A/B tool (diffs two builds, prints every changed
+  verdict); both share `scripts/scanner/replay_common.mjs` so they can't disagree about what
+  "correct" means.
+- Measured the day it landed, working tree vs v16b (`7fe3540`, the build the 98.2% came from):
+  **card_id-exact 189 → 213 of 265, name+version 297 → 319 of 400, 38 verdicts changed, 0
+  regressions.** So v17–v20 only moved forward. The baseline is pinned at those numbers.
+  ⚠ That corpus is review-weighted (rows a tester had to look at), so **80% here is not
+  comparable to the 98.2% precision figure** — different denominators, don't quote them together.
 
 ## Lore Tracker (Analytics » Lore Tracker)
 
