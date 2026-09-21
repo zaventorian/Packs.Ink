@@ -341,11 +341,22 @@ check("the row collapses when every render failed",
 // rail, so the rail's cards are now frankly thumbnails and the floor only has
 // to stop them collapsing to nothing. The phone, which is where a too-small
 // card would actually mislead, shows none at all.
+// The floor now lives in the GRID TRACK rather than on the card. They stopped
+// being flex items on 2026-09-21: with flex-grow a last row holding fewer cards
+// split the same width between fewer of them, so seven rendered as five small
+// over two big ("make these cards all same size", Zaven). Equal tracks cannot.
 check("the card still has a min-width floor",
-  /\.home-news-card\{[^}]*min-width:(\d+)px/.test(CSS)
-    && Number(/\.home-news-card\{[^}]*min-width:(\d+)px/.exec(CSS)[1]) >= 40, true);
-check("and the row wraps rather than squeezing",
-  /\.home-news-cards\{[^}]*flex-wrap:wrap/.test(CSS), true);
+  /\.home-news-cards\{[^}]*minmax\((\d+)px/.test(CSS)
+    && Number(/\.home-news-cards\{[^}]*minmax\((\d+)px/.exec(CSS)[1]) >= 40, true);
+// ⚠ The flex version needed `flex-wrap:wrap` or every card squeezed onto one
+// line. A grid cannot squeeze — it has N columns and the rest wrap by
+// construction — so what has to be guarded instead is that N stays BOUNDED:
+// an unbounded count is the same failure in a new shape (eight cards on one
+// line at 25px each). The tile halves the count, capped at 4.
+check("the row cannot squeeze onto one line",
+  /grid-template-columns:repeat\(var\(--news-cols,\s*\d+\)/.test(CSS), true);
+check("and the column count is capped",
+  /--news-cols"?:[\s\S]{0,40}?Math\.min\(4,/.test(SRC), true);
 
 // Two click targets, and BOTH land on the Coconut-filtered Cards page with the
 // card open (Zaven, 2026-09-15). The art used to call openCardsWithSearch, which
